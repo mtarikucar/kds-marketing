@@ -3,6 +3,36 @@ import { ResearchSourcesService } from './providers/research-sources.service';
 import { ResearchSpendService } from '../budget/research-spend.service';
 import { AgentRunService } from '../agents/agent-run.service';
 
+/** The terminal tool, exported so the worker can force it on a final turn when
+ *  the loop is about to end without a submission (otherwise the prospects it
+ *  gathered are silently dropped). Declared BEFORE RESEARCH_TOOLS because that
+ *  array references it — a `const` is not hoisted. */
+export const SUBMIT_CANDIDATES_TOOL: Anthropic.Tool = {
+  name: 'submit_candidates',
+  description: 'Finalize the qualified lead candidates. Call this exactly once when done. Each candidate MUST include externalRef, businessName, businessType, painPoint, evidence, pitch (in the profile language).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            externalRef: { type: 'string' }, businessName: { type: 'string' }, city: { type: 'string' }, region: { type: 'string' },
+            businessType: { type: 'string' }, phone: { type: 'string' }, instagram: { type: 'string' }, website: { type: 'string' }, email: { type: 'string' },
+            branchCount: { type: 'integer' }, currentSystem: { type: 'string' },
+            stage: { type: 'string', enum: ['GROWING', 'STRUGGLING', 'STABLE'] },
+            priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
+            painPoint: { type: 'string' }, evidence: { type: 'string' }, pitch: { type: 'string' }, score: { type: 'number' },
+          },
+          required: ['externalRef', 'businessName', 'businessType', 'painPoint', 'evidence', 'pitch'],
+        },
+      },
+    },
+    required: ['candidates'],
+  },
+};
+
 /**
  * The research agent's tools. Source tools (places/scrape/web/instagram) map to
  * the platform-keyed providers; `submit_candidates` is the terminal tool the
@@ -37,31 +67,7 @@ export const RESEARCH_TOOLS: Anthropic.Tool[] = [
     description: 'Look up a single Instagram business handle (bio, followers, external link) to confirm a reachable social channel.',
     input_schema: { type: 'object', properties: { handle: { type: 'string' } }, required: ['handle'] },
   },
-  {
-    name: 'submit_candidates',
-    description: 'Finalize the qualified lead candidates. Call this exactly once when done. Each candidate MUST include externalRef, businessName, businessType, painPoint, evidence, pitch (in the profile language).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        candidates: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              externalRef: { type: 'string' }, businessName: { type: 'string' }, city: { type: 'string' }, region: { type: 'string' },
-              businessType: { type: 'string' }, phone: { type: 'string' }, instagram: { type: 'string' }, website: { type: 'string' }, email: { type: 'string' },
-              branchCount: { type: 'integer' }, currentSystem: { type: 'string' },
-              stage: { type: 'string', enum: ['GROWING', 'STRUGGLING', 'STABLE'] },
-              priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
-              painPoint: { type: 'string' }, evidence: { type: 'string' }, pitch: { type: 'string' }, score: { type: 'number' },
-            },
-            required: ['externalRef', 'businessName', 'businessType', 'painPoint', 'evidence', 'pitch'],
-          },
-        },
-      },
-      required: ['candidates'],
-    },
-  },
+  SUBMIT_CANDIDATES_TOOL,
 ];
 
 export interface ResearchToolDeps {

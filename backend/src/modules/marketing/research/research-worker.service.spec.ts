@@ -20,8 +20,10 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
   const sources = {
     isEnabled: () => overrides.enabled ?? true,
     apify: { searchPlaces: jest.fn().mockResolvedValue([{ name: 'Cafe X', phone: '+905551112233' }]), lookupInstagram: jest.fn() },
-    firecrawl: { scrape: jest.fn(), searchWeb: jest.fn() },
+    firecrawl: { scrape: jest.fn(), searchWeb: jest.fn(), isConfigured: () => true },
+    native: { scrape: jest.fn(), searchWeb: jest.fn(), isConfigured: () => false },
   };
+  (sources.apify as any).isConfigured = () => true;
   const spend = { settle: jest.fn().mockResolvedValue(null) };
   const candidates = { stage: jest.fn().mockResolvedValue({ staged: 1, duplicates: 0 }) };
   const prisma = { researchProfile: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) } };
@@ -94,5 +96,59 @@ describe('ResearchWorkerService', () => {
     complete.mockRejectedValueOnce(new Error('anthropic down'));
     await expect(svc.runProfile(JOB)).rejects.toThrow('anthropic down');
     expect(credits.refund).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The loop can run out of iterations/tool-budget while the model is still
+ * gathering, and never call submit_candidates — silently dropping every
+ * prospect it found (observed live: 7 searches + 10 scrapes, 0 submits, "0
+ * qualified"). A forced final turn converts that research into candidates.
+ */
+describe('ResearchWorkerService — forced final submit', () => {
+  const good = {
+    externalRef: 'phone:+905551112233', businessName: 'Cafe X', businessType: 'CAFE',
+    painPoint: 'Slow booking', evidence: 'https://maps.example/x', pitch: 'Merhaba!',
+  };
+
+  it('forces a submit_candidates turn when the loop ends without one, recovering candidates', async () => {
+    // 8 iterations that only ever search — never submit — then the forced turn.
+    const searches = Array.from({ length: 8 }, (_v, i) => completion([toolUse(`s${i}`, 'search_places', { query: 'salon' })]));
+    const { svc, complete, candidates } = deps({
+      completions: [...searches, completion([toolUse('f1', 'submit_candidates', { candidates: [good] })])],
+    });
+
+    const r = await svc.runProfile(JOB);
+
+    // The final call is the FORCED one: only the submit tool, tool_choice pinned.
+    const forcedCall = complete.mock.calls[complete.mock.calls.length - 1][0];
+    expect(forcedCall.toolChoice).toEqual({ type: 'tool', name: 'submit_candidates' });
+    expect(forcedCall.tools).toHaveLength(1);
+    expect(forcedCall.tools[0].name).toBe('submit_candidates');
+    // The prospect the loop gathered is recovered, not dropped.
+    expect(candidates.stage).toHaveBeenCalledWith('ws1', 'p1', 'run1', [expect.objectContaining({ businessName: 'Cafe X' })]);
+    expect(r.researched).toBe(1);
+  });
+
+  it('does NOT force a submit when the model already submitted (even if empty)', async () => {
+    const { svc, complete } = deps({
+      completions: [
+        completion([toolUse('t1', 'search_places', { query: 'salon' })]),
+        completion([toolUse('t2', 'submit_candidates', { candidates: [] })]),
+      ],
+    });
+
+    await svc.runProfile(JOB);
+
+    // No forced third call — the last call carried no tool_choice.
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls.every((c: any[]) => !c[0].toolChoice)).toBe(true);
+  });
+
+  it('does NOT force a submit when the model never used a research tool (nothing gathered)', async () => {
+    // First turn returns no tool uses at all → loop breaks, toolCalls == 0.
+    const { svc, complete } = deps({ completions: [completion([])] });
+    await svc.runProfile(JOB);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 });
