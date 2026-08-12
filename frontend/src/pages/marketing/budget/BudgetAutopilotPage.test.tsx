@@ -351,3 +351,69 @@ describe('BudgetAutopilotPage', () => {
     });
   });
 });
+
+/**
+ * Approvals are WORKSPACE-scoped, but the Approvals tab lives inside the budget
+ * detail — so it vanishes with no budget, and again when the budget is armed.
+ * That was fine while the queue only held Autopilot's own proposals. The MCP
+ * broker now enqueues one for every gated tool a connected agent calls, and
+ * SPEND/DESTRUCTIVE stay gated in EVERY write mode — so those two cases left
+ * real approvals with no screen to decide them, expiring unseen after the TTL.
+ */
+describe('BudgetAutopilotPage — approvals must never be unreachable', () => {
+  const mcpApproval = {
+    id: 'ap-1',
+    kind: 'AI_SPEND',
+    summary: 'MCP agent requested "jeeta.synthesize_strategy"',
+    payload: { tool: 'jeeta.synthesize_strategy', args: {} },
+    createdAt: new Date().toISOString(),
+  };
+
+  it('surfaces a pending approval when there is NO growth budget', async () => {
+    (svc.listGrowthBudgets as any).mockResolvedValue([]);
+    (svc.listPendingApprovals as any).mockResolvedValue([mcpApproval]);
+
+    renderPage();
+
+    // The empty budget state still shows — but it is no longer the whole page.
+    expect(await screen.findByText('No growth budget yet')).toBeInTheDocument();
+    // The queue itself is what matters here; how one card renders is the
+    // ApprovalsTab's own concern and is covered by its existing tests.
+    expect(await screen.findByTestId('standalone-approvals')).toBeInTheDocument();
+  });
+
+  it('surfaces a pending approval when the budget is ARMED (tab is gone)', async () => {
+    const auto = { ...budget, autonomyLevel: 'AUTONOMOUS' as const };
+    (svc.listGrowthBudgets as any).mockResolvedValue([auto]);
+    (svc.getGrowthBudget as any).mockResolvedValue(auto);
+    (svc.listPendingApprovals as any).mockResolvedValue([mcpApproval]);
+
+    renderPage();
+
+    // Armed removes the tab; SPEND approvals still arrive, so the queue must
+    // appear at page level instead of silently disappearing.
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Approvals' })).not.toBeInTheDocument());
+    expect(await screen.findByTestId('standalone-approvals')).toBeInTheDocument();
+  });
+
+  it('does not render the standalone queue when nothing is waiting', async () => {
+    (svc.listGrowthBudgets as any).mockResolvedValue([]);
+    (svc.listPendingApprovals as any).mockResolvedValue([]);
+
+    renderPage();
+
+    expect(await screen.findByText('No growth budget yet')).toBeInTheDocument();
+    expect(screen.queryByTestId('standalone-approvals')).not.toBeInTheDocument();
+  });
+
+  it('leaves the tab in sole charge when an unarmed budget exists (no double render)', async () => {
+    (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+    (svc.getGrowthBudget as any).mockResolvedValue(budget);
+    (svc.listPendingApprovals as any).mockResolvedValue([mcpApproval]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+    expect(screen.queryByTestId('standalone-approvals')).not.toBeInTheDocument();
+  });
+});

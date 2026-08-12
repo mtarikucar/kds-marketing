@@ -58,6 +58,21 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
   const budgets = budgetsQ.data ?? [];
   const current = budgets[0]; // most recent period first (backend orders desc)
 
+  /**
+   * Approvals are WORKSPACE-scoped, but the Approvals tab lives inside
+   * BudgetDetail — so it disappears in exactly two cases: no growth budget, and
+   * an armed (AUTONOMOUS) budget. That was defensible while the queue only ever
+   * held Autopilot's own budget proposals. It is not any more: the MCP broker
+   * enqueues an ApprovalRequest for every gated tool a connected agent calls,
+   * and SPEND/DESTRUCTIVE stay gated in EVERY write mode, autonomous included.
+   *
+   * So a workspace with no budget (or an armed one) could receive approvals it
+   * had no screen to decide on, and they would expire unseen after the 24h TTL.
+   * Render the queue at page level for precisely those two cases — the tab
+   * still owns it whenever it exists, so nothing is shown twice.
+   */
+  const tabOwnsApprovals = !!current && current.autonomyLevel !== 'AUTONOMOUS';
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['growth-budgets'] });
     qc.invalidateQueries({ queryKey: ['growth-wallet'] });
@@ -102,6 +117,11 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
           <BudgetDetail budget={current} />
         )}
       </QueryStateBoundary>
+
+      {/* The only path to a pending approval when the tab that normally holds
+          it is absent. Self-hiding: ApprovalsTab renders nothing but its own
+          empty state, which this wrapper suppresses when the queue is clear. */}
+      {!tabOwnsApprovals && <StandaloneApprovals />}
 
       <BudgetDialog
         open={dialogOpen}
@@ -498,6 +518,28 @@ function AllocationTab({ budget, allocations, planned }: { budget: GrowthBudget;
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * The queue on its own, for the cases where no Approvals TAB exists to hold it
+ * (no growth budget, or an armed one). Stays silent until something is actually
+ * waiting: an empty "nothing to approve" card on a page about budgets would be
+ * noise, whereas a missed approval is a dead end.
+ */
+function StandaloneApprovals() {
+  const { t } = useTranslation('marketing');
+  const q = useQuery({ queryKey: ['pending-approvals'], queryFn: listPendingApprovals });
+  if (!q.data?.length) return null;
+
+  return (
+    <section className="space-y-3" data-testid="standalone-approvals">
+      <h2 className="text-lg font-semibold">
+        {t('budget.tab.approvals', 'Approvals')}
+        <span className="ml-2 text-sm font-normal text-muted-foreground">({q.data.length})</span>
+      </h2>
+      <ApprovalsTab />
+    </section>
   );
 }
 
