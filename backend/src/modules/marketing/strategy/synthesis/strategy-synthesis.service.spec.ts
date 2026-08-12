@@ -42,6 +42,7 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
     isEnabled: () => overrides.enabled ?? true,
     apify: { searchPlaces: jest.fn().mockResolvedValue([]), lookupInstagram: jest.fn(), isConfigured: () => true },
     firecrawl: { scrape: jest.fn(), searchWeb: jest.fn().mockResolvedValue([]), isConfigured: () => true },
+    native: { scrape: jest.fn(), searchWeb: jest.fn().mockResolvedValue([]), isConfigured: () => false },
   };
   const spend = { settle: jest.fn().mockResolvedValue(null) };
   const session = overrides.session === undefined ? { id: 'sess1', workspaceId: 'ws1', autoAnalysis: { product: 'Metin2 server' }, transcript: { qa: [{ questions: ['Budget?'], answers: ['$200/mo'] }] } } : overrides.session;
