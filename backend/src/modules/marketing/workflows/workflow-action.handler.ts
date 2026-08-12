@@ -256,16 +256,37 @@ export class WorkflowActionHandler {
       (await this.fallbackTaskOwner(ctx.workspaceId));
     if (!assignee) return 'skipped (no assignee for task)';
     const due = new Date(Date.now() + (step.dueInHours ?? 24) * 3600_000);
-    await this.prisma.marketingTask.create({
+    const title = this.interpolate(step.title, ctx).slice(0, 200);
+    const task = await this.prisma.marketingTask.create({
       data: {
         workspaceId: ctx.workspaceId,
-        title: this.interpolate(step.title, ctx).slice(0, 200),
+        title,
         type: 'FOLLOW_UP',
         dueDate: due,
         assignedToId: assignee,
         leadId: ctx.lead?.id ?? null,
       },
     });
+    // Tell the assignee. MarketingTasksService.create() notifies on every
+    // manual/API task, but this path writes the row directly (it has no human
+    // creator to attribute it to), so an AUTOMATED task — the one kind nobody
+    // is expecting — was the only kind that arrived silently. An automation
+    // whose whole purpose is "remind me to follow up" has to actually remind.
+    // Best-effort: a notification failure must not fail the automation.
+    await this.notifications
+      .create({
+        workspaceId: ctx.workspaceId,
+        userId: assignee,
+        type: 'TASK_ASSIGNED',
+        title: 'New task from an automation',
+        message: `Task: "${title}"`,
+        metadata: { taskId: task.id, source: 'workflow' },
+      })
+      .catch((e) =>
+        this.logger.warn(
+          `workflow create_task: notification failed for task ${task.id}: ${(e as Error)?.message ?? e}`,
+        ),
+      );
     return 'task created';
   }
 
