@@ -58,8 +58,12 @@ export class AdCampaignExecutor implements Executor {
     private readonly ads: AdManagementService,
   ) {}
 
-  async run(workspaceId: string, payload: unknown): Promise<{ resultRef?: string }> {
-    const p = this.parse(payload);
+  async run(
+    workspaceId: string,
+    payload: unknown,
+    action?: { title: string; rationale: string },
+  ): Promise<{ resultRef?: string }> {
+    const p = this.parse(payload, action);
 
     // A campaign shell needs a connected, write-capable Meta ad account.
     // `AdManagementService.create` is Meta-only, so we only look for META here.
@@ -96,12 +100,19 @@ export class AdCampaignExecutor implements Executor {
     return `Strategy — ${base}`.slice(0, 200);
   }
 
-  private parse(payload: unknown): AdCampaignPayload {
+  private parse(payload: unknown, action?: { title: string; rationale: string }): AdCampaignPayload {
     if (!payload || typeof payload !== 'object') {
       throw new BadRequestException('AD_CAMPAIGN payload must be an object with an objective');
     }
     const p = payload as Record<string, unknown>;
-    const objective = typeof p.objective === 'string' ? p.objective.trim() : '';
+    // The strategist rarely spells a Meta-shaped objective; metaObjective()
+    // already maps ANY free-form string (defaulting to OUTCOME_TRAFFIC), so a
+    // missing objective is not worth failing the action over — the action's
+    // own title is a perfectly good free-form objective, and the campaign is
+    // a PAUSED shell either way. Failing here killed a real, well-formed
+    // action whose payload carried kpi/strategy/platforms but no `objective`.
+    const objective =
+      (typeof p.objective === 'string' ? p.objective.trim() : '') || action?.title?.trim() || '';
     if (!objective) {
       throw new BadRequestException('AD_CAMPAIGN payload requires a non-empty objective');
     }

@@ -104,3 +104,30 @@ describe('AdCampaignExecutor', () => {
     await expect(svc.run('ws1', null)).rejects.toThrow(BadRequestException);
   });
 });
+
+/**
+ * Same contract-mismatch family as the CONTENT title bug: the strategist put
+ * the campaign's purpose in the action title and kpi/strategy fields, not in a
+ * literal `objective` key — and the executor failed a well-formed action over
+ * it. metaObjective() maps any free-form string anyway (OUTCOME_TRAFFIC
+ * default), so the action title is a perfectly good fallback objective.
+ */
+describe('AdCampaignExecutor — action-title objective fallback', () => {
+  it('provisions the paused shell from the action title when payload.objective is absent', async () => {
+    const { svc, ads } = deps();
+    const res = await svc.run(
+      'ws1',
+      { platforms: ['instagram'], targetCAC: '<₺1.000' },
+      { title: 'En iyi organik içeriği boost + Search testi', rationale: 'r' },
+    );
+    expect(res.resultRef).toMatch(/^campaign:/);
+    // Free-form title → the safe default objective.
+    expect(ads.create.mock.calls[0][2].objective).toBe('OUTCOME_TRAFFIC');
+    expect(ads.create.mock.calls[0][2].name).toContain('En iyi organik içeriği boost');
+  });
+
+  it('still refuses when neither payload nor action offers anything', async () => {
+    const { svc } = deps();
+    await expect(svc.run('ws1', {})).rejects.toThrow(/requires a non-empty objective/);
+  });
+});
