@@ -278,6 +278,7 @@ describe('MCP tool catalogue', () => {
     expect(names).toEqual(
       [
         'jeeta.call_tool',
+        'jeeta.list_team',
         'jeeta.get_funnel',
         'jeeta.search_brand_knowledge',
         'jeeta.search_leads',
@@ -369,7 +370,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(85);
+    expect(names).toHaveLength(86);
   });
 
   /**
@@ -448,8 +449,8 @@ describe('MCP tool catalogue', () => {
     // the dispatcher costs no domain tool its slot.
     expect(
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
-    ).toHaveLength(44);
-    expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(44 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(85);
+    ).toHaveLength(45);
+    expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(86);
   });
 });
