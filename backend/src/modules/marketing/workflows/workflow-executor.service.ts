@@ -194,7 +194,28 @@ export class WorkflowExecutorService implements OnModuleInit {
         await this.finish(runId, 'FAILED', `step ${stepIndex} (${step.type}): ${e?.message ?? e}`);
         return;
       }
-      await this.recordStep(run.workspaceId, runId, stepIndex, step.type, 'DONE', outcome.output ?? null);
+      // A leaf action that could not do its job says so in its output string
+      // rather than throwing (a missing assignee is not worth failing the whole
+      // automation over). Recording that as DONE made a no-op indistinguishable
+      // from success: an operator arms "create a follow-up task", the run
+      // reports DONE, every step shows green — and no task exists. Seen live:
+      // create_task skipped because the workspace has no rep to own the task,
+      // and nothing anywhere said so.
+      const result = (outcome.output as { result?: unknown } | null)?.result;
+      const skipped = typeof result === 'string' && result.startsWith('skipped');
+      if (skipped) {
+        this.logger.warn(
+          `workflow run ${runId} step ${stepIndex} (${step.type}) did nothing: ${result as string}`,
+        );
+      }
+      await this.recordStep(
+        run.workspaceId,
+        runId,
+        stepIndex,
+        step.type,
+        skipped ? 'SKIPPED' : 'DONE',
+        outcome.output ?? null,
+      );
 
       if (outcome.stop) {
         await this.persistContext(runId, ctx, stepIndex);

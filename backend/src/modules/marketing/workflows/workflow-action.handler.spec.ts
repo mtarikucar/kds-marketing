@@ -155,7 +155,8 @@ describe('WorkflowActionHandler assign_lead', () => {
   // auto-assign (the existing unresolved-user behavior).
   it('only resolves an ACTIVE REP (guards the user lookup) and falls back to auto-assign otherwise', async () => {
     const prisma = {
-      marketingUser: { findFirst: jest.fn().mockResolvedValue(null) }, // target is not an active REP
+      // Eligibility is read from the MEMBERSHIP (the only place role/status are updated).
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue(null) }, // target is not an active REP
       lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue('rep-fallback') };
@@ -163,8 +164,8 @@ describe('WorkflowActionHandler assign_lead', () => {
 
     await handler.execute({ type: 'assign_lead', strategy: 'user', userId: 'mgr-1' } as any, ctx);
 
-    expect(prisma.marketingUser.findFirst.mock.calls[0][0].where).toMatchObject({
-      id: 'mgr-1', workspaceId: 'ws-1', role: 'REP', status: 'ACTIVE',
+    expect(prisma.workspaceMembership.findFirst.mock.calls[0][0].where).toMatchObject({
+      userId: 'mgr-1', workspaceId: 'ws-1', role: 'REP', status: 'ACTIVE',
     });
     expect(autoAssigner.pickAssignee).toHaveBeenCalledWith('ws-1');
     expect(prisma.lead.updateMany.mock.calls[0][0].data.assignedToId).toBe('rep-fallback');
@@ -172,7 +173,7 @@ describe('WorkflowActionHandler assign_lead', () => {
 
   it('assigns directly when the target IS an active REP (no auto-assign fallback)', async () => {
     const prisma = {
-      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'rep-1' }) },
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue({ userId: 'rep-1' }) },
       lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const autoAssigner = { pickAssignee: jest.fn() };

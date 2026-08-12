@@ -201,4 +201,38 @@ describe('WorkflowExecutorService', () => {
     await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
     expect(h.status()).toBe('FAILED');
   });
+
+
+  /**
+   * A leaf action that cannot do its job reports it in its output string
+   * instead of throwing. Recording that as DONE made a no-op indistinguishable
+   * from success — seen live: an armed "create a follow-up task" automation
+   * ran, the run said DONE, every step showed green, and no task existed
+   * (the workspace had no rep to own it).
+   */
+  it('records a step that reported "skipped" as SKIPPED, not DONE', async () => {
+    const h = build([{ type: 'create_task', title: 't' }], [{ output: { result: 'skipped (no assignee for task)' } }]);
+
+    await h.executor.start(
+      { id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any,
+      { leadId: 'lead-1' },
+      {},
+    );
+
+    const step = h.prisma.workflowStepRun.create.mock.calls[0][0].data;
+    expect(step.status).toBe('SKIPPED');
+    expect(step.output.result).toContain('skipped');
+  });
+
+  it('still records DONE for an action that actually did something', async () => {
+    const h = build([{ type: 'create_task', title: 't' }], [{ output: { result: 'task created' } }]);
+
+    await h.executor.start(
+      { id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any,
+      { leadId: 'lead-1' },
+      {},
+    );
+
+    expect(h.prisma.workflowStepRun.create.mock.calls[0][0].data.status).toBe('DONE');
+  });
 });
