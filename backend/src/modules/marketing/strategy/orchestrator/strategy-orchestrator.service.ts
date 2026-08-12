@@ -145,7 +145,10 @@ export class StrategyOrchestrator {
     });
 
     try {
-      const { resultRef } = await executor.run(workspaceId, action.payload);
+      const { resultRef } = await executor.run(workspaceId, action.payload, {
+        title: action.title,
+        rationale: action.rationale,
+      });
       await this.prisma.strategyAction.update({
         where: { id: action.id },
         data: { status: 'DONE', resultRef: resultRef ?? null },
