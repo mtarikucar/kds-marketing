@@ -118,6 +118,12 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           MARKETING_POSTGRES_PASSWORD: ${{ secrets.MARKETING_POSTGRES_PASSWORD }}
           MARKETING_JWT_SECRET: ${{ secrets.MARKETING_JWT_SECRET }}
+          # Research sources (lead research, intake site crawl, strategist
+          # research tools). Absent, ResearchSourcesService is deliberately
+          # inert — every research run completes with zero candidates, which is
+          # exactly what prod silently did until 2026-08-12.
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           MARKETING_JWT_REFRESH_SECRET: ${{ secrets.MARKETING_JWT_REFRESH_SECRET }}
           PLATFORM_JWT_SECRET: ${{ secrets.PLATFORM_JWT_SECRET }}
           RESEARCH_ROUTINE_TOKEN: ${{ secrets.RESEARCH_ROUTINE_TOKEN }}
@@ -241,6 +247,9 @@ jobs:
           MARKETING_POSTGRES_PASSWORD=${MARKETING_POSTGRES_PASSWORD}
           # Distributed rate-limit store (the redis service in docker-compose.prod.yml).
           REDIS_URL=redis://redis:6379
+          # Research sources — see the env: block above for why these matter.
+          FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+          APIFY_TOKEN=${APIFY_TOKEN}
           MARKETING_JWT_SECRET=${MARKETING_JWT_SECRET}
           MARKETING_JWT_REFRESH_SECRET=${MARKETING_JWT_REFRESH_SECRET}
           PLATFORM_JWT_SECRET=${PLATFORM_JWT_SECRET}
