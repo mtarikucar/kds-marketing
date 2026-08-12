@@ -208,7 +208,14 @@ export class StrategySynthesisService {
               system: this.SYSTEM,
               messages,
               tools,
-              maxTokens: 4000,
+              // 8000, not 4000: submit_strategy emits the archetype + a COMPLETE
+              // brief + the ActionPlan in ONE tool call, and a thorough brief
+              // alone can approach 4k output tokens. At the old cap the model
+              // visibly self-rationed — it closed the JSON with "actions": []
+              // to fit, and the empty-plan bounce could not help because the
+              // resubmission faced the same budget. (Live: two consecutive
+              // syntheses produced rich briefs + raw=0 actions.)
+              maxTokens: 8000,
               tier: tierFor('strategy.turn'), workspaceId: workspaceId, action: 'strategy.turn',
               cacheSystem: true,
             });
@@ -445,7 +452,7 @@ export class StrategySynthesisService {
     'You are a senior marketing strategist inside a multi-tenant marketing-automation platform. ' +
     'Research the market, audience and competitors with the tools, then submit ONE strategy via submit_strategy. ' +
     'Classify the business into exactly one BusinessArchetype key (e.g. B2B_LOCAL_SERVICE, B2B_SAAS, B2C_ECOMMERCE, B2C_COMMUNITY_NICHE, CREATOR_MEDIA, LOCAL_RETAIL_FOOD, OTHER). ' +
-    'Produce a COMPLETE brief: identity (product/voice/positioning/usp), audience (ICP), channels (key + 0-1 fitScore + rationale), contentPillars (title/angle/formats/tone), goals (objective + kpis), budget, competitors. ' +
+    'Produce a COMPLETE but CONCISE brief: identity (product/voice/positioning/usp), audience (ICP), channels (key + 0-1 fitScore + rationale), contentPillars (title/angle/formats/tone), goals (objective + kpis), budget, competitors. Keep every field tight — the brief is read in a panel, not published — and always reserve enough output budget to finish the ActionPlan; a strategy that spends everything on prose and submits an empty plan is a failed submission. ' +
     'Then a prioritized ActionPlan of typed StrategyAction items (kind ∈ LEAD_HUNT|CONTENT|CHANNEL_SETUP|AD_CAMPAIGN|COMMUNITY_ENGAGE) with executor-ready payloads — the ActionPlan is REQUIRED, never empty: it is what the operator approves and the system executes. ' +
     'When a BRAND PROFILE is supplied, treat it as owner-confirmed fact: on any conflict with the auto-analysis, the interview or your own research, the BRAND PROFILE wins (it is newer, and the owner wrote it). Pay particular attention to its stated prices, product modes and to any channel the owner says has actually produced sales. ' +
     'If PRIORS are supplied for a suggested archetype, START from those channel fit-scores and probe angles, then adjust them with what your research finds. ' +
