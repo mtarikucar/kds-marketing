@@ -243,7 +243,17 @@ export class WorkflowActionHandler {
   }
 
   private async createTask(step: any, ctx: WorkflowContext): Promise<string> {
-    const assignee = ctx.lead?.assignedToId ?? (await this.autoAssigner.pickAssignee(ctx.workspaceId));
+    // A TASK is not a LEAD. Lead ownership is restricted to active REPs
+    // (commission integrity); task ownership is not — MarketingTask.assignedToId
+    // takes any member, and the panel/MCP happily assign tasks to an OWNER.
+    // Borrowing the lead rule here meant a workspace with no rep silently got
+    // NO follow-up tasks at all, which is every workspace on day one: the owner
+    // arms a follow-up automation and it does nothing. Fall back past the rep
+    // pool to whoever can actually action the task.
+    const assignee =
+      ctx.lead?.assignedToId ??
+      (await this.autoAssigner.pickAssignee(ctx.workspaceId)) ??
+      (await this.fallbackTaskOwner(ctx.workspaceId));
     if (!assignee) return 'skipped (no assignee for task)';
     const due = new Date(Date.now() + (step.dueInHours ?? 24) * 3600_000);
     await this.prisma.marketingTask.create({
@@ -257,6 +267,26 @@ export class WorkflowActionHandler {
       },
     });
     return 'task created';
+  }
+
+  /**
+   * Who owns a follow-up task when no rep exists: the workspace OWNER, else a
+   * MANAGER. Read from the MEMBERSHIP (role/status live there — the
+   * MarketingUser columns are frozen at creation), ACTIVE only, oldest first so
+   * the choice is stable across runs rather than varying per execution.
+   */
+  private async fallbackTaskOwner(workspaceId: string): Promise<string | null> {
+    // OWNER first — the account of last resort — then MANAGER. Oldest active
+    // membership in each tier, so the pick is stable across runs.
+    for (const role of ['OWNER', 'MANAGER'] as const) {
+      const m = await this.prisma.workspaceMembership.findFirst({
+        where: { workspaceId, status: 'ACTIVE', role },
+        orderBy: { createdAt: 'asc' },
+        select: { userId: true },
+      });
+      if (m) return m.userId;
+    }
+    return null;
   }
 
   private async assignLead(step: any, ctx: WorkflowContext): Promise<string> {
