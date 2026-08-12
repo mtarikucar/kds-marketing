@@ -1203,6 +1203,8 @@ export class MarketingModule {
     ads: AdManagementService,
     bookings: BookingService,
     entitlements: EntitlementsService,
+    // Powers jeeta.list_team — the assignedToId resolver the MCP surface lacked.
+    marketingUsers: MarketingUsersService,
     // Faz 5 D1 — the CRM write lane.
     principals: McpPrincipalService,
     activities: MarketingActivitiesService,
@@ -1250,7 +1252,7 @@ export class MarketingModule {
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
     registerSchedulingTools(registry, { bookings, entitlements });
-    registerWorkspaceTools(registry, { entitlements });
+    registerWorkspaceTools(registry, { entitlements, users: marketingUsers });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerCampaignWriteTools(registry, { campaigns, entitlements });
