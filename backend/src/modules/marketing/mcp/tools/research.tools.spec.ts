@@ -8,10 +8,15 @@ function build(features: Record<string, boolean> = { research: true }) {
     usage: jest.fn().mockResolvedValue({ used: 3, limit: 10, remaining: 7 }),
   };
   const runner = { enqueueNow: jest.fn().mockResolvedValue(undefined) };
+  const candidates = {
+    list: jest.fn().mockResolvedValue([{ id: 'c1', businessName: 'HTC Events', score: 0.72 }]),
+    accept: jest.fn().mockResolvedValue({ accepted: 1, ingest: { created: 1 } }),
+    reject: jest.fn().mockResolvedValue({ rejected: 1 }),
+  };
   const entitlements = { getEffective: jest.fn().mockResolvedValue({ features }) };
   const registry = new McpToolRegistry();
-  registerResearchTools(registry, { research, runner, entitlements } as unknown as ResearchToolDeps);
-  return { registry, research, runner, entitlements };
+  registerResearchTools(registry, { research, runner, candidates, entitlements } as unknown as ResearchToolDeps);
+  return { registry, research, runner, candidates, entitlements };
 }
 
 const CTX = { workspaceId: 'ws1', grantedScopes: [] as string[] };
@@ -20,15 +25,28 @@ const VALID_ICP =
   'Independent restaurants in Istanbul with 2 to 10 branches that still take phone orders on paper and have no POS integration.';
 
 describe('Faz 5 D4 — research/prospecting MCP tools', () => {
-  it('registers exactly the three research tools in the research domain', () => {
+  it('registers exactly the research tools in the research domain', () => {
     const { registry } = build();
-    const tools = registry.list(ALL);
+    const tools = registry.list([...ALL, 'leads.write']);
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['jeeta.list_research_profiles', 'jeeta.create_research_profile', 'jeeta.run_research'].sort(),
+      [
+        'jeeta.list_research_profiles',
+        'jeeta.create_research_profile',
+        'jeeta.run_research',
+        'jeeta.list_research_candidates',
+        'jeeta.accept_research_candidates',
+        'jeeta.reject_research_candidates',
+      ].sort(),
     );
     for (const t of tools) {
       expect(t.domain).toBe('research');
-      expect(t.scopes).toEqual(['settings.manage']);
+      // Configuring and reading the hunt is `settings.manage`; the two tools
+      // that decide whether a prospect becomes a LEAD are `leads.write`, so a
+      // settings-only grant cannot mint CRM rows through the research door.
+      const expected = /accept_research_candidates|reject_research_candidates/.test(t.name)
+        ? ['leads.write']
+        : ['settings.manage'];
+      expect(t.scopes).toEqual(expected);
     }
   });
 
@@ -113,5 +131,88 @@ describe('Faz 5 D4 — research/prospecting MCP tools', () => {
   it('advertises only the primary read', () => {
     const { registry } = build();
     expect(registry.listAdvertised(ALL).map((t) => t.name)).toEqual(['jeeta.list_research_profiles']);
+  });
+
+  /**
+   * The review queue was unreachable over MCP until v2.178.0: an agent could
+   * start a run that spends real credits and crawl money, then could not read a
+   * single result. These lock the loop shut end to end.
+   */
+  describe('the staged review queue', () => {
+    const WRITE = [...ALL, 'leads.write'];
+
+    it('lets an agent read what a run produced, with the allowance that clips accepting', async () => {
+      const { registry, candidates } = build();
+      const out = (await registry.get('jeeta.list_research_candidates')!.handler(CTX, {})) as {
+        candidates: unknown[];
+        dailyLeadQuota: { remaining: number };
+      };
+      // No status passed → the service default (PENDING) must survive, not be
+      // overwritten with an explicit undefined.
+      expect(candidates.list).toHaveBeenCalledWith('ws1', {});
+      expect(out.candidates).toHaveLength(1);
+      expect(out.dailyLeadQuota.remaining).toBe(7);
+    });
+
+    it('accepts only the ids passed and reports leads created', async () => {
+      const { registry, candidates } = build();
+      const out = (await registry.get('jeeta.accept_research_candidates')!.handler(CTX, {
+        candidateIds: ['c1'],
+      })) as { accepted: number; requested: number; message: string };
+      expect(candidates.accept).toHaveBeenCalledWith('ws1', ['c1']);
+      expect(out).toMatchObject({ accepted: 1, requested: 1 });
+      expect(out.message).toMatch(/now leads/i);
+    });
+
+    /**
+     * The silent-success trap this whole session kept turning up. `accept`
+     * deliberately leaves a quota-clipped candidate PENDING, so `accepted` can
+     * be lower than what was asked for. Returning the bare count would read as
+     * total success and the caller would never retry the remainder.
+     */
+    it('says so when the daily allowance clipped part of the batch', async () => {
+      const { registry, candidates } = build();
+      candidates.accept.mockResolvedValue({ accepted: 1, ingest: { created: 1 } });
+      const out = (await registry.get('jeeta.accept_research_candidates')!.handler(CTX, {
+        candidateIds: ['c1', 'c2', 'c3'],
+      })) as { accepted: number; requested: number; message: string };
+      expect(out).toMatchObject({ accepted: 1, requested: 3 });
+      expect(out.message).toMatch(/2/);
+      expect(out.message).toMatch(/PENDING/);
+    });
+
+    it('gates minting and dismissing behind approval, but never mere reading', () => {
+      const { registry } = build();
+      expect(registry.get('jeeta.list_research_candidates')!.requiresApproval).toBe(false);
+      expect(registry.get('jeeta.list_research_candidates')!.risk).toBe('READ');
+      for (const name of ['jeeta.accept_research_candidates', 'jeeta.reject_research_candidates']) {
+        expect(registry.get(name)!.requiresApproval).toBe(true);
+      }
+    });
+
+    it('refuses the whole queue when the research module is switched off', async () => {
+      const { registry } = build({ research: false });
+      for (const [name, args] of [
+        ['jeeta.list_research_candidates', {}],
+        ['jeeta.accept_research_candidates', { candidateIds: ['c1'] }],
+        ['jeeta.reject_research_candidates', { candidateIds: ['c1'] }],
+      ] as const) {
+        await expect(registry.get(name)!.handler(CTX, args as never)).rejects.toThrow(/research/i);
+      }
+    });
+
+    it('keeps the queue prunable so poor matches cannot bury the good ones', async () => {
+      const { registry, candidates } = build();
+      const out = await registry.get('jeeta.reject_research_candidates')!.handler(CTX, { candidateIds: ['c1'] });
+      expect(candidates.reject).toHaveBeenCalledWith('ws1', ['c1']);
+      expect(out).toMatchObject({ rejected: 1, requested: 1 });
+    });
+
+    it('needs leads.write to mint leads — settings.manage alone cannot', () => {
+      const { registry } = build();
+      const readOnly = registry.list(ALL).map((t) => t.name);
+      expect(readOnly).not.toContain('jeeta.accept_research_candidates');
+      expect(registry.list(WRITE).map((t) => t.name)).toContain('jeeta.accept_research_candidates');
+    });
   });
 });

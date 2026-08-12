@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
+import { ResearchCandidateService } from '../../research/research-candidate.service';
 import { ResearchRunnerService } from '../../research/research-runner.service';
 import { MarketingResearchService } from '../../services/marketing-research.service';
 import { assertFeature } from '../mcp-feature-gate';
@@ -10,6 +11,8 @@ export interface ResearchToolDeps {
   /** The "Run now" enqueue path — see `jeeta.run_research` for why the runner
    *  and not `ResearchWorkerService.runProfile` directly. */
   runner: ResearchRunnerService;
+  /** The staging queue every run writes into — read, accept, reject. */
+  candidates: ResearchCandidateService;
   entitlements: EntitlementsService;
 }
 
@@ -43,9 +46,25 @@ const LANGUAGES = ['en', 'tr', 'ru', 'uz', 'ar'] as const;
  *     clips beyond the grant.
  *
  * So research SPENDS (AI credits + firecrawl/apify money) but does not MINT.
- * Accepting candidates is deliberately not exposed as a tool in this wave: it
- * is the human review step the whole staging queue exists for, and it is the
- * step that consumes quota.
+ * Accepting is where quota is consumed and a lead first exists.
+ *
+ * ## Why the review queue IS exposed (revised)
+ * An earlier wave left the candidate queue off MCP entirely, reasoning that
+ * accepting is "the human review step the staging queue exists for". Running
+ * the pipeline end to end against a real workspace showed what that produced:
+ * research ran, staged its finds, and the agent driving that workspace could
+ * START a run costing real credits and crawl money yet could not READ one thing
+ * it paid for. Three qualified prospects sat PENDING while the same three
+ * businesses were re-entered by hand. Spending money and being structurally
+ * blind to the result is not a safety property.
+ *
+ * So the gate moved rather than disappeared. `list_research_candidates` is READ
+ * — seeing what you already bought needs no permission. `accept` and `reject`
+ * carry `requiresApproval`, so an APPROVAL-mode workspace still gets its human
+ * review step, and an AUTONOMOUS one (an owner's deliberate, revocable setting)
+ * lets its agent close the loop. Accept still routes through
+ * `ResearchCandidateService.accept` → `ingest` → `reserveQuota`, so the daily
+ * lead allowance clips an agent exactly as it clips the panel.
  *
  * ## Why the runner, not the worker
  * `ResearchWorkerService.runProfile` takes a fully-built `ResearchJob` and runs
@@ -162,6 +181,104 @@ export function registerResearchTools(registry: McpToolRegistry, deps: ResearchT
         message:
           'Research run queued. It runs in the background and is skipped silently if the brief is paused or the daily lead allowance is already used up. Results appear in the research review queue.',
       };
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.list_research_candidates',
+    description:
+      'List prospects the research agent found and staged for review — business name, contact details, the pain signal it spotted, the evidence behind it and a 0-1 score. These are NOT leads yet: nothing can be called, emailed or assigned until they are accepted. Read this after a run to see what the workspace paid for, then accept the good ones with jeeta.accept_research_candidates. Read-only.',
+    domain: 'research',
+    // Deferred (spec §3): read between runs, not per-turn.
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({
+      status: z
+        .enum(['PENDING', 'ACCEPTED', 'REJECTED'])
+        .optional()
+        .describe('Which slice of the queue (default PENDING — the ones still awaiting a decision).'),
+      profileId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Only candidates from this brief, from jeeta.list_research_profiles.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'research');
+      const rows = await deps.candidates.list(ctx.workspaceId, {
+        ...(args.status !== undefined ? { status: String(args.status) } : {}),
+        ...(args.profileId !== undefined ? { profileId: String(args.profileId) } : {}),
+      });
+      // Carry the allowance alongside: accepting is quota-clipped, so a model
+      // deciding WHICH candidates to accept needs to know how many it can.
+      const dailyLeadQuota = await deps.research.usage(ctx.workspaceId);
+      return { candidates: rows, dailyLeadQuota };
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.accept_research_candidates',
+    description:
+      "Accept staged prospects and turn them into real leads in the CRM. This is the step that consumes the workspace's daily lead allowance, and once accepted a prospect becomes a contactable lead that automations and agents can act on. Accepts only the ids you pass — review the evidence with jeeta.list_research_candidates first rather than accepting the whole queue blindly. Candidates beyond today's allowance stay PENDING and can be accepted tomorrow.",
+    domain: 'research',
+    defer: true,
+    scopes: ['leads.write'],
+    risk: 'WRITE',
+    // The human review step this queue exists for. AUTONOMOUS workspaces bypass
+    // it via the broker — that is the owner's setting, not this tool's call.
+    requiresApproval: true,
+    inputSchema: z.object({
+      candidateIds: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(200)
+        .describe('Ids of the candidates to accept, from jeeta.list_research_candidates.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'research');
+      const ids = (args.candidateIds ?? []) as string[];
+      const res = await deps.candidates.accept(ctx.workspaceId, ids);
+      // `accepted` can be lower than the ids passed — the quota clips, and a
+      // clipped candidate deliberately stays PENDING. Say so, rather than
+      // reporting a bare count a caller would read as full success.
+      const clipped = ids.length - res.accepted;
+      return {
+        ...res,
+        requested: ids.length,
+        message:
+          clipped > 0
+            ? `${res.accepted} of ${ids.length} became leads. The other ${clipped} were not accepted — usually today's lead allowance running out — and remain PENDING for a later run.`
+            : `${res.accepted} candidate(s) are now leads.`,
+      };
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.reject_research_candidates',
+    description:
+      'Dismiss staged prospects that are not a fit, removing them from the review queue without creating leads. Consumes no lead allowance. Use this to keep the queue meaningful — without it every poor match found by every nightly run accumulates forever and buries the good ones.',
+    domain: 'research',
+    defer: true,
+    scopes: ['leads.write'],
+    risk: 'WRITE',
+    // Dismissing a prospect the owner never saw is a judgement call, so it sits
+    // behind the same gate as accepting. The row is retained as REJECTED and
+    // stays readable, so this is reversible in the panel.
+    requiresApproval: true,
+    inputSchema: z.object({
+      candidateIds: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(200)
+        .describe('Ids of the candidates to dismiss, from jeeta.list_research_candidates.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'research');
+      const ids = (args.candidateIds ?? []) as string[];
+      const res = await deps.candidates.reject(ctx.workspaceId, ids);
+      return { ...res, requested: ids.length };
     },
   });
 }
