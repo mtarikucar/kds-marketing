@@ -27,6 +27,11 @@ const AUTONOMOUS = {
   writeMode: 'AUTONOMOUS' as const,
 };
 
+// The queue-side of every assertion below: SPEND moved out of the always-gated
+// set on 2026-08-12 (owner decision — see mcp-broker.service.ts), so APPROVAL
+// mode is now where queuing behavior lives.
+const APPROVAL = { ...AUTONOMOUS, writeMode: 'APPROVAL' as const };
+
 function build() {
   const registry = new McpToolRegistry();
   const strategy = {
@@ -68,10 +73,10 @@ function build() {
   return { broker, strategy, feedback, workflows, leadBulk, runner, enqueue, supersedePending };
 }
 
-describe('Faz 5 D4 — AUTONOMOUS cannot bypass the brain\'s SPEND tools', () => {
-  it('jeeta.approve_strategy_action is QUEUED under AUTONOMOUS — the action is not executed', async () => {
+describe("Faz 5 D4 — the brain's SPEND tools: queued in APPROVAL, inline in AUTONOMOUS", () => {
+  it('jeeta.approve_strategy_action is QUEUED under APPROVAL — the action is not executed', async () => {
     const { broker, strategy, enqueue } = build();
-    const res = await broker.invoke(AUTONOMOUS, 'jeeta.approve_strategy_action', { actionId: 'a1' });
+    const res = await broker.invoke(APPROVAL, 'jeeta.approve_strategy_action', { actionId: 'a1' });
     expect(res.status).toBe('PENDING_APPROVAL');
     expect(strategy.approveAction).not.toHaveBeenCalled();
     expect(enqueue).toHaveBeenCalledWith(
@@ -85,31 +90,46 @@ describe('Faz 5 D4 — AUTONOMOUS cannot bypass the brain\'s SPEND tools', () =>
     );
   });
 
-  it('jeeta.synthesize_strategy is QUEUED under AUTONOMOUS — no credits are reserved', async () => {
+  it('jeeta.synthesize_strategy is QUEUED under APPROVAL — no credits are reserved', async () => {
     const { broker, feedback, enqueue } = build();
-    const res = await broker.invoke(AUTONOMOUS, 'jeeta.synthesize_strategy', {});
+    const res = await broker.invoke(APPROVAL, 'jeeta.synthesize_strategy', {});
     expect(res.status).toBe('PENDING_APPROVAL');
     expect(feedback.refresh).not.toHaveBeenCalled();
     expect(enqueue).toHaveBeenCalledWith('ws1', expect.objectContaining({ kind: 'AI_SPEND' }));
   });
 
-  it('jeeta.run_research is QUEUED under AUTONOMOUS — no research job is enqueued', async () => {
+  it('jeeta.run_research is QUEUED under APPROVAL — no research job is enqueued', async () => {
     const { broker, runner, enqueue } = build();
-    const res = await broker.invoke(AUTONOMOUS, 'jeeta.run_research', { profileId: 'p1' });
+    const res = await broker.invoke(APPROVAL, 'jeeta.run_research', { profileId: 'p1' });
     expect(res.status).toBe('PENDING_APPROVAL');
     expect(runner.enqueueNow).not.toHaveBeenCalled();
     expect(enqueue).toHaveBeenCalledWith('ws1', expect.objectContaining({ kind: 'AI_SPEND' }));
   });
 
-  it('jeeta.trigger_workflow is QUEUED under AUTONOMOUS — not one lead is enrolled', async () => {
+  it('jeeta.trigger_workflow is QUEUED under APPROVAL — not one lead is enrolled', async () => {
     const { broker, leadBulk, enqueue } = build();
-    const res = await broker.invoke(AUTONOMOUS, 'jeeta.trigger_workflow', {
+    const res = await broker.invoke(APPROVAL, 'jeeta.trigger_workflow', {
       workflowId: 'w1',
       leadIds: ['l1', 'l2'],
     });
     expect(res.status).toBe('PENDING_APPROVAL');
     expect(leadBulk.bulkEnroll).not.toHaveBeenCalled();
     expect(enqueue).toHaveBeenCalledWith('ws1', expect.objectContaining({ kind: 'SEND' }));
+  });
+
+  it('jeeta.approve_strategy_action runs INLINE under AUTONOMOUS — that is what the mode means now', async () => {
+    const { broker, strategy, enqueue } = build();
+    const res = await broker.invoke(AUTONOMOUS, 'jeeta.approve_strategy_action', { actionId: 'a1' });
+    expect(res.status).toBe('OK');
+    expect(strategy.approveAction).toHaveBeenCalledWith('ws1', 'a1');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('jeeta.synthesize_strategy runs INLINE under AUTONOMOUS', async () => {
+    const { broker, feedback } = build();
+    const res = await broker.invoke(AUTONOMOUS, 'jeeta.synthesize_strategy', {});
+    expect(res.status).toBe('OK');
+    expect(feedback.refresh).toHaveBeenCalledWith('ws1');
   });
 
   it('the strategy action DOES run once a human approved it (the gate is a queue, not a wall)', async () => {
@@ -130,7 +150,7 @@ describe('Faz 5 D4 — AUTONOMOUS cannot bypass the brain\'s SPEND tools', () =>
    */
   it('supersedes a stale pending card for the same strategy action', async () => {
     const { broker, supersedePending } = build();
-    await broker.invoke(AUTONOMOUS, 'jeeta.approve_strategy_action', { actionId: 'a1' });
+    await broker.invoke(APPROVAL, 'jeeta.approve_strategy_action', { actionId: 'a1' });
     expect(supersedePending).toHaveBeenCalledWith('ws1', 'STRATEGY_ACTION', 'strategy_action', 'a1');
   });
 

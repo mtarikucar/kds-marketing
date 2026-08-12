@@ -26,31 +26,29 @@ const MAX_ARGS_BYTES = 32 * 1024;
 const MCP_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Faz 5 D2 — the risk classes an AUTONOMOUS workspace may NOT run unattended
- * (design spec §4: *"`SPEND` ve yeni `DESTRUCTIVE` sınıfı, `mcpWriteMode` ne
- * olursa olsun onay kuyruğuna düşer — otonom mod bile bunları geçemez."*).
+ * The one risk class an AUTONOMOUS workspace still may not run unattended.
  *
- * `mcpWriteMode: AUTONOMOUS` is a statement about SPEED — "stop making me
- * click approve on every send/publish" — not a blanket power of attorney. Two
- * classes of action are not recoverable by noticing them afterwards:
+ * This set used to be {SPEND, DESTRUCTIVE} (design spec §4), on the theory
+ * that money leaving the workspace is unrecoverable-by-audit. Live use proved
+ * the theory wrong in practice: the owner who flips AUTONOMOUS is saying
+ * "stop asking me", and being bounced to the panel for every synthesis,
+ * research run and generation made the mode meaningless for exactly the flows
+ * an agent is FOR — the owner's verdict, verbatim: "panelden izin alacaksak ne
+ * anlamı kaldı MCP'nin". SPEND is also not actually unbounded: every spend
+ * path in the product settles against the workspace's own metered credits and
+ * wallet, so the blast radius of a wrong agent turn is capped by balances the
+ * owner already controls — unlike a deletion.
  *
- * - `SPEND` — real money leaves the workspace (an ad budget change, a fal.ai
- *   generation). Money spent by a wrong agent turn is not refundable by
- *   reading the audit log an hour later.
- * - `DESTRUCTIVE` — a row is permanently removed. There is no undo table.
+ * `DESTRUCTIVE` stays gated in every mode: a permanently removed row has no
+ * undo table, no balance to bound it, and no way to notice-and-correct. That
+ * is a different kind of irreversible than "credits were used".
  *
- * Everything else (`READ`/`WRITE`, and the `SEND`/`PUBLISH` approval kinds,
- * which ride on `WRITE`) keeps the original bypass: risky, but a bad one is
- * visible and correctable. Keeping this as a risk-CLASS rule rather than a
- * per-tool opt-out is deliberate — a tool author cannot forget to set it, and
- * `mcp-broker.destructive.spec.ts` pins both directions.
- *
- * The gate is unconditional on write mode, but NOT on `approvedBy`: once a
- * human has approved a queued request, `McpApprovalExecutorService` re-enters
- * the broker with `approvedBy` set and the tool runs. That is the whole point
- * of the queue.
+ * Kept as a risk-CLASS rule rather than per-tool opt-outs — an author cannot
+ * forget to set it — and the gate stays unconditional on write mode but NOT on
+ * `approvedBy`: an approved queued request re-enters with `approvedBy` set and
+ * runs. That is the whole point of the queue.
  */
-const ALWAYS_APPROVED_RISKS: ReadonlySet<ToolRisk> = new Set<ToolRisk>(['SPEND', 'DESTRUCTIVE']);
+const ALWAYS_APPROVED_RISKS: ReadonlySet<ToolRisk> = new Set<ToolRisk>(['DESTRUCTIVE']);
 
 /**
  * The safe MCP broker (Faz 6) — the single choke point between an external agent
@@ -83,8 +81,8 @@ export class McpBrokerService {
     this.assertArgsSize(args);
 
     // High-risk ops never execute inline — they enqueue a human approval.
-    // AUTONOMOUS lifts that for the recoverable classes only; SPEND and
-    // DESTRUCTIVE are gated in EVERY mode (see ALWAYS_APPROVED_RISKS).
+    // AUTONOMOUS lifts that for everything except DESTRUCTIVE (see
+    // ALWAYS_APPROVED_RISKS for why spend is bounded but deletion is not).
     const autonomyMayBypass =
       ctx.writeMode === 'AUTONOMOUS' && !ALWAYS_APPROVED_RISKS.has(tool.risk);
     if (tool.requiresApproval && !autonomyMayBypass && !ctx.approvedBy) {

@@ -61,7 +61,7 @@ function build() {
   return { broker, social, media, enqueue };
 }
 
-describe('Faz 5 D2 — AUTONOMOUS cannot bypass the real DESTRUCTIVE/SPEND tools', () => {
+describe('Faz 5 D2 — DESTRUCTIVE stays gated in AUTONOMOUS; SPEND queues only in APPROVAL', () => {
   it('jeeta.delete_social_post is QUEUED under AUTONOMOUS — the post is not deleted', async () => {
     const { broker, social, enqueue } = build();
     const res = await broker.invoke(AUTONOMOUS, 'jeeta.delete_social_post', { postId: 'p1' });
@@ -74,13 +74,24 @@ describe('Faz 5 D2 — AUTONOMOUS cannot bypass the real DESTRUCTIVE/SPEND tools
   });
 
   it.each(['jeeta.generate_image', 'jeeta.generate_video'])(
-    '%s is QUEUED under AUTONOMOUS — no credits are reserved',
+    '%s is QUEUED under APPROVAL — no credits are reserved',
     async (tool) => {
       const { broker, media, enqueue } = build();
-      const res = await broker.invoke(AUTONOMOUS, tool, { prompt: 'a plate of manti' });
+      const res = await broker.invoke({ ...AUTONOMOUS, writeMode: 'APPROVAL' as const }, tool, { prompt: 'a plate of manti' });
       expect(res.status).toBe('PENDING_APPROVAL');
       expect(media.requestGeneration).not.toHaveBeenCalled();
       expect(enqueue).toHaveBeenCalledWith('ws1', expect.objectContaining({ kind: 'MEDIA_SPEND' }));
+    },
+  );
+
+  it.each(['jeeta.generate_image', 'jeeta.generate_video'])(
+    '%s runs INLINE under AUTONOMOUS — spend is bounded by workspace balances (owner decision, 2026-08-12)',
+    async (tool) => {
+      const { broker, media, enqueue } = build();
+      const res = await broker.invoke(AUTONOMOUS, tool, { prompt: 'a plate of manti' });
+      expect(res.status).toBe('OK');
+      expect(media.requestGeneration).toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
     },
   );
 

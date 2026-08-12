@@ -136,7 +136,7 @@ export function registerResearchTools(registry: McpToolRegistry, deps: ResearchT
   registry.register({
     name: 'jeeta.run_research',
     description:
-      "Run a prospect-research brief right now instead of waiting for tonight. The research agent searches the live web, which SPENDS this workspace's AI credits and real scraping money, so it always requires a human approval — in every write mode, including autonomous. The run is queued and takes a few minutes; the prospects it finds are staged in the review queue and only become leads once someone accepts them, against the daily lead allowance. Nothing happens if the brief is paused or the allowance is already exhausted.",
+      "Run a prospect-research brief right now instead of waiting for tonight. The research agent searches the live web, which SPENDS this workspace's AI credits and real scraping money — in APPROVAL mode this queues for a human; in AUTONOMOUS mode it runs immediately. The run is queued and takes a few minutes; the prospects it finds are staged in the review queue and only become leads once someone accepts them, against the daily lead allowance. Nothing happens if the brief is paused or the allowance is already exhausted.",
     domain: 'research',
     // Deferred (spec §3): expensive and occasional.
     defer: true,

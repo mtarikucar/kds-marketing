@@ -77,13 +77,27 @@ describe('McpBrokerService write mode', () => {
     expect(recordTool).toHaveBeenCalled();
   });
 
-  it('does NOT extend the AUTONOMOUS bypass to a SPEND tool (design spec §4)', async () => {
-    // Money is the one thing an audit log cannot undo. See
-    // mcp-broker.destructive.spec.ts for the full both-directions matrix.
+  it('extends the AUTONOMOUS bypass to a SPEND tool (owner decision, 2026-08-12)', async () => {
+    // SPEND used to sit beside DESTRUCTIVE in the always-gated set. It moved
+    // out because AUTONOMOUS became meaningless for the flows an agent is FOR
+    // (every synthesis/research/generation bounced to the panel), and because
+    // spend is bounded by the workspace's own metered credits and wallet —
+    // a wrong agent turn is capped by balances the owner already controls,
+    // unlike a deletion. DESTRUCTIVE stays gated in every mode.
+    const { registry, broker, enqueue } = deps();
+    const handler = jest.fn().mockResolvedValue({ ok: true });
+    registry.register(spendTool(handler));
+    const res = await broker.invoke(ctx('AUTONOMOUS'), 'jeeta.reallocate_budget', { amount: 100 });
+    expect(res.status).toBe('OK');
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('still QUEUES that same SPEND tool in APPROVAL mode — the bypass is the mode, not the class', async () => {
     const { registry, broker, enqueue } = deps();
     const handler = jest.fn();
     registry.register(spendTool(handler));
-    const res = await broker.invoke(ctx('AUTONOMOUS'), 'jeeta.reallocate_budget', { amount: 100 });
+    const res = await broker.invoke(ctx('APPROVAL'), 'jeeta.reallocate_budget', { amount: 100 });
     expect(res.status).toBe('PENDING_APPROVAL');
     expect(enqueue).toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();

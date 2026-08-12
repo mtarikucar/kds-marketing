@@ -3,22 +3,19 @@ import { McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry, McpTool, ToolRisk } from './mcp-tool-registry';
 
 /**
- * Faz 5 D2 — the `DESTRUCTIVE` risk class and the "no mode bypasses money or
- * deletion" rule (design spec §4).
+ * The `DESTRUCTIVE` risk class and the "no mode bypasses deletion" rule.
  *
- * The spec's risk table is explicit about which classes an AUTONOMOUS
- * workspace may run unattended:
+ * The current risk table for an AUTONOMOUS workspace:
  *
- *   READ / WRITE / SEND / PUBLISH → run (audited)
- *   SPEND / DESTRUCTIVE          → **approval in every mode**
+ *   READ / WRITE / SEND / PUBLISH / SPEND → run (audited)
+ *   DESTRUCTIVE                           → **approval in every mode**
  *
- * Before D2 the broker had a single gate — `requiresApproval && writeMode !==
- * 'AUTONOMOUS'` — so flipping a workspace to AUTONOMOUS let an agent spend
- * money and (once D2 shipped delete tools) permanently remove rows with no
- * human in the loop. These tests pin the corrected rule from both sides: the
- * always-gated classes stay queued under AUTONOMOUS, and the merely-risky
- * classes keep executing inline exactly as they did (that is what AUTONOMOUS
- * is FOR — see mcp-broker.writemode.spec.ts).
+ * SPEND sat in the always-gated row from D2 until 2026-08-12, when the owner
+ * moved it out: gating every synthesis/research/generation made AUTONOMOUS
+ * meaningless for the flows an agent exists for, and spend — unlike deletion —
+ * is bounded by the workspace's own metered credits and wallet. Deletion keeps
+ * the unconditional gate: no undo table, no balance to bound it. These tests
+ * pin the rule from both sides.
  */
 
 function deps() {
@@ -59,7 +56,7 @@ const ctx = (writeMode?: 'APPROVAL' | 'AUTONOMOUS') => ({
   writeMode,
 });
 
-describe('McpBrokerService — DESTRUCTIVE + SPEND are never bypassable', () => {
+describe('McpBrokerService — DESTRUCTIVE is never bypassable; SPEND queues only in APPROVAL', () => {
   it.each<[ToolRisk]>([['DESTRUCTIVE'], ['SPEND']])(
     'queues a %s tool in APPROVAL mode',
     async (risk) => {
@@ -73,20 +70,27 @@ describe('McpBrokerService — DESTRUCTIVE + SPEND are never bypassable', () => 
     },
   );
 
-  it.each<[ToolRisk]>([['DESTRUCTIVE'], ['SPEND']])(
-    'STILL queues a %s tool in AUTONOMOUS mode — autonomy does not buy a bypass',
-    async (risk) => {
-      const { registry, broker, enqueue } = deps();
-      const handler = jest.fn();
-      registry.register(toolWith(risk, handler));
-      const res = await broker.invoke(ctx('AUTONOMOUS'), 'jeeta.some_tool', {});
-      expect(res.status).toBe('PENDING_APPROVAL');
-      expect(res.approvalId).toBe('appr-1');
-      expect(enqueue).toHaveBeenCalled();
-      // The only assertion that actually matters: the side effect never ran.
-      expect(handler).not.toHaveBeenCalled();
-    },
-  );
+  it('STILL queues a DESTRUCTIVE tool in AUTONOMOUS mode — autonomy does not buy a delete', async () => {
+    const { registry, broker, enqueue } = deps();
+    const handler = jest.fn();
+    registry.register(toolWith('DESTRUCTIVE', handler));
+    const res = await broker.invoke(ctx('AUTONOMOUS'), 'jeeta.some_tool', {});
+    expect(res.status).toBe('PENDING_APPROVAL');
+    expect(res.approvalId).toBe('appr-1');
+    expect(enqueue).toHaveBeenCalled();
+    // The only assertion that actually matters: the side effect never ran.
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('runs a SPEND tool inline in AUTONOMOUS mode — spend is bounded by the workspace balances', async () => {
+    const { registry, broker, enqueue } = deps();
+    const handler = jest.fn().mockResolvedValue({ ok: true });
+    registry.register(toolWith('SPEND', handler));
+    const res = await broker.invoke(ctx('AUTONOMOUS'), 'jeeta.some_tool', {});
+    expect(res.status).toBe('OK');
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalled();
+  });
 
   it('supersedes a stale pending request for the same DESTRUCTIVE target under AUTONOMOUS too', async () => {
     const { registry, broker, supersedePending } = deps();

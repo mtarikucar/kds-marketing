@@ -120,7 +120,7 @@ export function registerStrategyTools(registry: McpToolRegistry, deps: StrategyT
   registry.register({
     name: 'jeeta.approve_strategy_action',
     description:
-      'Approve one PROPOSED strategy action AND run it immediately. Depending on the action this starts a paid prospect-research run, spends AI credits writing content, provisions a paused ad campaign, or posts live to a connected community — so it always requires a human approval, in every write mode including autonomous. Returns the action re-read after execution, so check its status (DONE/FAILED) and resultRef for the real outcome.',
+      'Approve one PROPOSED strategy action AND run it immediately. Depending on the action this starts a paid prospect-research run, spends AI credits writing content, provisions a paused ad campaign, or posts live to a connected community — so in APPROVAL mode this queues for a human, while in AUTONOMOUS mode it runs immediately. Returns the action re-read after execution, so check its status (DONE/FAILED) and resultRef for the real outcome.',
     domain: 'strategy',
     scopes: ['settings.manage'],
     risk: 'SPEND',
@@ -168,7 +168,7 @@ export function registerStrategyTools(registry: McpToolRegistry, deps: StrategyT
   registry.register({
     name: 'jeeta.synthesize_strategy',
     description:
-      "Re-run the strategist: research the market again, rewrite the brief and replace the ActionPlan, folding in what the previous plan's actions actually produced. This SPENDS AI credits and live web-scraping money, so it always requires a human approval, in every write mode including autonomous. It also DELETES the current ActionPlan and replaces it — any action not yet approved is lost.",
+      "Re-run the strategist: research the market again, rewrite the brief and replace the ActionPlan, folding in what the previous plan's actions actually produced. This SPENDS AI credits and live web-scraping money — in APPROVAL mode this queues for a human; in AUTONOMOUS mode it runs immediately. It also DELETES the current ActionPlan and replaces it — any action not yet approved is lost.",
     domain: 'strategy',
     // Deferred (spec §3): a heavyweight, occasional act (minutes of wall clock,
     // real money) — not a per-turn action.
