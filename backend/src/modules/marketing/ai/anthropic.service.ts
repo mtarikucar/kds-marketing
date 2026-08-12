@@ -9,6 +9,8 @@ export interface AiCallOpts {
   system: string;
   messages: Anthropic.MessageParam[];
   tools?: Anthropic.Tool[];
+  /** Force a specific tool (or `any`/`auto`) — e.g. a mandatory final submit. */
+  toolChoice?: Anthropic.MessageCreateParams['tool_choice'];
   maxTokens?: number;
   tier?: AiModelTier;
   /** Cache the (large, stable) system prompt across calls. */
@@ -105,6 +107,7 @@ export class AnthropicService {
       system: this.buildSystem(opts.system, opts.cacheSystem ?? false),
       messages: opts.messages,
       ...(opts.tools && opts.tools.length ? { tools: opts.tools } : {}),
+      ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
     });
 
     let text = '';

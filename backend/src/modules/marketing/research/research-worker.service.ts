@@ -7,7 +7,7 @@ import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { AgentRunService } from '../agents/agent-run.service';
 import { ResearchSourcesService } from './providers/research-sources.service';
 import { ResearchSpendService } from '../budget/research-spend.service';
-import { RESEARCH_TOOLS, dispatchResearchTool, ResearchToolCtx } from './research-toolset';
+import { RESEARCH_TOOLS, SUBMIT_CANDIDATES_TOOL, dispatchResearchTool, ResearchToolCtx } from './research-toolset';
 import { ResearchCandidateService, StagedCandidate } from './research-candidate.service';
 import { ResearchJob } from './research-job.service';
 import { EXTERNAL_REF_PATTERN } from '../dto/ingest-leads.dto';
@@ -22,6 +22,10 @@ export interface ResearchRunResult {
 }
 
 const MAX_ITERS = 8;
+// Grace window for the mandatory final submit() turn — the deadline bounds the
+// research loop, but the forced conversion of already-gathered prospects into
+// candidates is worth one call just past it.
+const FORCE_SUBMIT_GRACE_MS = 30_000;
 const MAX_TOOL_CALLS = 30;
 const MAX_WALL_MS = Number(process.env.RESEARCH_RUN_MAX_MS ?? 120_000);
 const STAGES = new Set(['GROWING', 'STRUGGLING', 'STABLE']);
@@ -78,6 +82,7 @@ export class ResearchWorkerService {
           const brand = await this.brandContext.summaryFor(job.workspaceId);
           const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(job, brand) }];
           let candidates: StagedCandidate[] = [];
+          let everSubmitted = false;
           let toolCalls = 0;
           const deadline = Date.now() + MAX_WALL_MS;
 
@@ -106,6 +111,7 @@ export class ResearchWorkerService {
                 candidates = this.validate((tu.input as { candidates?: unknown[] })?.candidates ?? []);
                 results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify({ received: candidates.length }) });
                 submitted = true;
+                everSubmitted = true;
               } else {
                 toolCalls += 1;
                 const out = await dispatchResearchTool(deps, ctx, tu.name, (tu.input ?? {}) as Record<string, unknown>);
@@ -115,6 +121,50 @@ export class ResearchWorkerService {
             messages.push({ role: 'assistant', content: res.toolUses as Anthropic.ContentBlockParam[] });
             messages.push({ role: 'user', content: results });
             if (submitted) break;
+          }
+
+          // Forced final submit: the loop can exhaust MAX_ITERS / MAX_TOOL_CALLS
+          // / the deadline while the model is still searching+scraping, and
+          // never call submit_candidates — so all the prospects it gathered are
+          // silently dropped and the run logs "0 qualified" (observed live: 7
+          // searches + 10 scrapes, 0 submits). One more turn, tool_choice
+          // forcing submit_candidates with NO research tools offered, converts
+          // the research already in context into candidates instead of wasting
+          // it. Only when nothing was submitted and we actually did some
+          // research; still credit-reserved and refunded like any turn.
+          // Only when the model NEVER submitted — an explicit empty submit means
+          // "genuinely none qualify" and must be respected, not overridden.
+          if (!everSubmitted && toolCalls > 0 && Date.now() < deadline + FORCE_SUBMIT_GRACE_MS) {
+            try {
+              await this.credits.reserve(job.workspaceId, creditCost('research.turn'));
+              turnsCharged += 1;
+              messages.push({
+                role: 'user',
+                content:
+                  'You are out of research budget. Call submit_candidates NOW with every prospect you have ' +
+                  'already gathered that meets the bar (reachable contact + concrete evidence). Return an empty ' +
+                  'list only if genuinely none qualify — but do not discard qualified prospects just because you ran out of turns.',
+              });
+              const forced = await this.anthropic.complete({
+                system: this.SYSTEM,
+                messages,
+                tools: [SUBMIT_CANDIDATES_TOOL],
+                toolChoice: { type: 'tool', name: 'submit_candidates' },
+                maxTokens: 4000,
+                tier: tierFor('research.turn'),
+                workspaceId: job.workspaceId,
+                action: 'research.turn',
+                cacheSystem: true,
+              });
+              turnsCompleted += 1;
+              const submitTu = forced.toolUses.find((t) => t.name === 'submit_candidates');
+              if (submitTu) {
+                candidates = this.validate((submitTu.input as { candidates?: unknown[] })?.candidates ?? []);
+                this.logger.log(`research run ${runId}: forced submit recovered ${candidates.length} candidate(s) (ws ${job.workspaceId})`);
+              }
+            } catch (e) {
+              this.logger.warn(`research run ${runId}: forced submit failed (ws ${job.workspaceId}): ${(e as Error)?.message ?? e}`);
+            }
           }
 
           // Bound volume relative to what can actually be accepted (cost guard).
