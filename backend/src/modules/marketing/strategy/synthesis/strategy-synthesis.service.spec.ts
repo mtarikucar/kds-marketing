@@ -321,3 +321,34 @@ describe('StrategySynthesisService — brand grounding + non-empty plan', () => 
     expect(complete).toHaveBeenCalledTimes(2); // exactly one bounce, no loop
   });
 });
+
+/**
+ * "0 actions" hides two different failures: the model proposed none, or it
+ * proposed several and normalization silently dropped every one (bad kind,
+ * missing title/rationale). The bounce must name which — telling a model that
+ * just sent 6 items "your plan is empty" teaches it nothing.
+ */
+describe('StrategySynthesisService — all-dropped bounce names the real problem', () => {
+  it('tells the model its kinds were rejected (not "empty") and lists the valid ones', async () => {
+    const badKinds = completion([
+      toolUse('t2', 'submit_strategy', {
+        archetype: 'B2C_ECOMMERCE',
+        brief: GOOD_BRIEF,
+        actions: [
+          { kind: 'SOCIAL_POST', title: 'x', rationale: 'y' },
+          { kind: 'SEO', title: 'x', rationale: 'y' },
+        ],
+      }),
+    ]);
+    const fixed = completion([toolUse('t3', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [ACTION] })]);
+    const { svc, complete } = deps({ completions: [badKinds, fixed] });
+
+    const r = await svc.synthesize('ws1', 'sess1');
+
+    expect(r.actionCount).toBe(1);
+    const bounce = JSON.stringify(complete.mock.calls[1][0].messages);
+    expect(bounce).toContain('EVERY one was rejected');
+    expect(bounce).toContain('LEAD_HUNT | CONTENT | CHANNEL_SETUP | AD_CAMPAIGN | COMMUNITY_ENGAGE');
+    expect(bounce).not.toContain('ActionPlan is empty');
+  });
+});

@@ -220,15 +220,33 @@ export class StrategySynthesisService {
             for (const tu of res.toolUses) {
               if (tu.name === 'submit_strategy') {
                 const candidate = (tu.input ?? {}) as typeof submission;
-                if (!emptyPlanBounced && this.normalizeActions(candidate?.actions).length === 0) {
+                const rawCount = Array.isArray(candidate?.actions) ? candidate.actions.length : 0;
+                const normalized = this.normalizeActions(candidate?.actions);
+                // Two distinct failure shapes hide behind "0 actions": the model
+                // genuinely proposed none, or it proposed several and every one
+                // was silently dropped (invalid kind / missing title/rationale).
+                // The bounce must name which — "your plan is empty" to a model
+                // that just sent 6 items teaches it nothing, and the log line is
+                // how prod tells us which case actually happened.
+                if (normalized.length === 0 && rawCount > 0) {
+                  this.logger.warn(
+                    `strategy synthesis ${runId}: ${rawCount} submitted action(s) ALL dropped by normalization (ws ${workspaceId}) — first raw kind: ${JSON.stringify((candidate!.actions as unknown[])[0])?.slice(0, 300)}`,
+                  );
+                }
+                if (!emptyPlanBounced && normalized.length === 0) {
                   emptyPlanBounced = true;
+                  this.logger.log(
+                    `strategy synthesis ${runId}: bouncing empty ActionPlan (raw=${rawCount}) back to the model (ws ${workspaceId})`,
+                  );
                   results.push({
                     type: 'tool_result',
                     tool_use_id: tu.id,
                     content: JSON.stringify({
                       received: false,
                       error:
-                        'Your ActionPlan is empty. The plan is what the operator approves and the system executes — a strategy without one changes nothing. Re-submit the SAME strategy WITH 3-8 prioritized actions (valid kinds only) covering your highest-fit channels; include at least one they can start this week.',
+                        rawCount > 0
+                          ? `You submitted ${rawCount} action(s) but EVERY one was rejected. Each action MUST have: kind — exactly one of LEAD_HUNT | CONTENT | CHANNEL_SETUP | AD_CAMPAIGN | COMMUNITY_ENGAGE (no other value is accepted) — plus a non-empty title AND a non-empty rationale. Example: {"kind":"CONTENT","title":"Reveal reel: photo to figure","rationale":"Kills the likeness objection with proof","priority":"HIGH","payload":{"channelKey":"instagram"}}. Re-submit the SAME strategy with your actions corrected to this shape.`
+                          : 'Your ActionPlan is empty. The plan is what the operator approves and the system executes — a strategy without one changes nothing. Re-submit the SAME strategy WITH 3-8 prioritized actions (kind ∈ LEAD_HUNT | CONTENT | CHANNEL_SETUP | AD_CAMPAIGN | COMMUNITY_ENGAGE, each with title + rationale) covering your highest-fit channels; include at least one they can start this week.',
                     }),
                   });
                   continue;
