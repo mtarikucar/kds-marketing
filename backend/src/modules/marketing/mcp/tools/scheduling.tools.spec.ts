@@ -191,3 +191,49 @@ describe('scheduling feature gate', () => {
     expect(d.bookings.book).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * create_booking and get_booking_availability both REQUIRE a calendarId, and
+ * nothing in the catalogue returned one — so booking a meeting with a lead was
+ * impossible over MCP. Third instance of the same shape as the missing
+ * list_team (assignedToId) and the missing channel-create.
+ */
+describe('jeeta.list_calendars', () => {
+  const ctx = { workspaceId: 'ws1', grantedScopes: ['tasks.read'] } as never;
+
+  function build(calendars: unknown[] = [], features: Record<string, boolean> = { funnels: true }) {
+    const registry = new McpToolRegistry();
+    const bookings = {
+      list: jest.fn().mockResolvedValue(calendars),
+      listBookings: jest.fn(),
+      availability: jest.fn(),
+      book: jest.fn(),
+    };
+    const entitlements = { getEffective: jest.fn().mockResolvedValue({ features }) };
+    registerSchedulingTools(registry, { bookings, entitlements } as never);
+    return { registry, bookings };
+  }
+
+  it('returns the ids every other scheduling tool needs', async () => {
+    const { registry } = build([
+      { id: 'cal-1', name: 'Demo', slug: 'demo', slotMinutes: 30, timezone: 'Europe/Istanbul', status: 'ACTIVE' },
+    ]);
+
+    const res = (await registry.get('jeeta.list_calendars')!.handler(ctx, {})) as Array<Record<string, unknown>>;
+
+    expect(res).toEqual([
+      { id: 'cal-1', name: 'Demo', slug: 'demo', slotMinutes: 30, timezone: 'Europe/Istanbul', status: 'ACTIVE' },
+    ]);
+  });
+
+  it('returns [] when no calendar exists — the honest "booking is impossible yet" state', async () => {
+    const { registry } = build([]);
+    expect(await registry.get('jeeta.list_calendars')!.handler(ctx, {})).toEqual([]);
+  });
+
+  it('makes the same funnels check the REST routes make', async () => {
+    const { registry, bookings } = build([], { funnels: false });
+    await expect(registry.get('jeeta.list_calendars')!.handler(ctx, {})).rejects.toThrow();
+    expect(bookings.list).not.toHaveBeenCalled();
+  });
+});
