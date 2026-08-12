@@ -598,10 +598,18 @@ export class ConversationAiEngineService implements OnModuleInit {
       );
       const missing = wanted.filter((f) => !have.has(f));
       if (missing.length) {
+        // Phrasing matters more than presence here. A soft "ask where it fits
+        // naturally" is read as permission to defer, and the model deferred
+        // indefinitely — two full turns of buying signals with no ask, so the
+        // visitor could finish the conversation and leave as an anonymous
+        // lead. Tie the ask to INTENT and to the end of the turn instead: one
+        // field, once the customer is clearly interested, before the thread
+        // can move on.
         parts.push(
-          `Still needed from this customer: ${missing.join(', ')}. Ask for ONE at a time, only where it fits ` +
-            'the conversation naturally (never as an interrogation), and call capture_lead_fields the moment ' +
-            'they give it.',
+          `Still needed from this customer: ${missing.join(', ')}. As soon as they show real buying intent ` +
+            '(they ask about price, timing, or how to start), ask for ONE of these at the end of your reply so ' +
+            'the team can follow up — a warm lead nobody can contact is a lost one. One field per turn, never a ' +
+            'list of questions, and call capture_lead_fields the moment they give it.',
         );
       }
     }

@@ -416,6 +416,10 @@ describe('ConversationAiEngineService.reply', () => {
       expect(system).toContain('Still needed from this customer');
       expect(system).toContain('phone');
       expect(system).toContain('email');
+      // Tied to buying intent + placed at the end of the reply: a soft
+      // "where it fits naturally" was read as permission to defer forever.
+      expect(system).toContain('real buying intent');
+      expect(system).toContain('One field per turn');
       // Already known — re-asking reads as not listening.
       expect(system).not.toMatch(/Still needed from this customer:[^\n]*name/);
     });
