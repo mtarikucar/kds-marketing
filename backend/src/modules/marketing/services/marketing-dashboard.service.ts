@@ -204,17 +204,31 @@ export class MarketingDashboardService {
   async getTopPerformers(workspaceId: string, limit = 10) {
     const { monthStart: firstDay } = await this.periodBounds(workspaceId);
 
-    // Single query: get reps with counts
+    // Single query: get reps with counts.
+    //
+    // Membership, not `MarketingUser.{workspaceId,role,status}` — those are
+    // stamped at row creation and never re-derived, so a teammate PROMOTED to
+    // REP never appeared on the leaderboard, while a demoted one kept showing
+    // up with their old numbers.
     const reps = await this.prisma.marketingUser.findMany({
-      where: { workspaceId, role: 'REP', status: 'ACTIVE' },
+      where: { memberships: { some: { workspaceId, role: 'REP', status: 'ACTIVE' } } },
       select: {
         id: true,
         firstName: true,
         lastName: true,
         _count: {
+          // Both counts are pinned to THIS workspace. They were previously
+          // scoped only implicitly, by the (frozen) workspaceId on the user
+          // row — so with membership as the filter, a rep who belongs to two
+          // workspaces would drag the other one's leads and activities into
+          // this leaderboard.
+          //
           // Count only ACTIVE leads toward the rep's total (a soft-deleted /
           // merged lead is hidden from the list, so it must not pad the widget).
-          select: { leads: { where: { ...ACTIVE_LEAD } }, activities: true },
+          select: {
+            leads: { where: { workspaceId, ...ACTIVE_LEAD } },
+            activities: { where: { lead: { workspaceId } } },
+          },
         },
       },
     });

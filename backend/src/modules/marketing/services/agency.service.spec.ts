@@ -343,20 +343,45 @@ describe('AgencyService — accessLocation (switch into a sub-account)', () => {
     id: 'owner-1', workspaceId: LOCATION_A1, role: 'OWNER', email: 'o@l.com',
     firstName: 'O', lastName: 'L', phone: null, avatar: null, tokenVersion: 0,
   };
+  /**
+   * The owner now resolves from the LOCATION's membership, not from
+   * `MarketingUser {workspaceId, role, status}` — frozen columns that would
+   * lock an agency out of its own location the moment ownership moved to
+   * someone whose account was created elsewhere.
+   */
+  const membershipFor = (owner: any) =>
+    owner === null
+      ? null
+      : {
+          role: owner.role ?? 'OWNER',
+          user: {
+            id: owner.id,
+            email: owner.email,
+            firstName: owner.firstName,
+            lastName: owner.lastName,
+            phone: owner.phone ?? null,
+            avatar: owner.avatar ?? null,
+            tokenVersion: owner.tokenVersion ?? 0,
+          },
+        };
   const arm = (prisma: any, over: { location?: any; owner?: any } = {}) => {
     (prisma.workspace.findUnique as jest.Mock).mockResolvedValue(agencyRow()); // assertIsAgency
     (prisma.workspace.findFirst as jest.Mock).mockResolvedValue(over.location ?? locationRow()); // assertAgencyOwns
-    (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValue('owner' in over ? over.owner : OWNER);
+    const owner = 'owner' in over ? over.owner : OWNER;
+    (prisma.workspaceMembership.findFirst as jest.Mock).mockResolvedValue(membershipFor(owner));
   };
 
   it('mints a session for the location ACTIVE owner and returns it with the location', async () => {
     const { prisma, svc, authService } = makeSvc();
     arm(prisma);
     const out: any = await svc.accessLocation(AGENCY_A, LOCATION_A1, 'agency-owner-1');
-    expect((prisma.marketingUser.findFirst as jest.Mock).mock.calls[0][0].where).toMatchObject({
+    expect((prisma.workspaceMembership.findFirst as jest.Mock).mock.calls[0][0].where).toMatchObject({
       workspaceId: LOCATION_A1, role: 'OWNER', status: 'ACTIVE',
     });
-    // Issued FOR the owner → MarketingGuard's wsp===user.workspaceId invariant holds.
+    // The frozen user mirror must not decide who owns a location.
+    expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
+    // Issued FOR the owner, scoped to the LOCATION (not the owner's home
+    // workspace) → MarketingGuard's wsp===user.workspaceId invariant holds.
     expect(authService.issueSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'owner-1', workspaceId: LOCATION_A1 }),
       { workspaceId: LOCATION_A1, role: 'OWNER' },
