@@ -4,7 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { localMsisdnVariants, normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import {
   IngestLeadCandidateDto,
   IngestLeadsDto,
@@ -178,10 +178,22 @@ export class MarketingLeadsIngestService {
     });
     const existingRefs = new Set(existingRows.map((r) => r.externalRef));
 
+    // Cross-path dedup. `mapToLeadData` writes phoneNormalized/emailNormalized
+    // precisely so an AI-researched lead collides with the same business
+    // arriving by form, webchat, import or manual entry — but nothing ever READ
+    // them here. Matching on externalRef alone meant a prospect already in the
+    // CRM under any other origin was minted a SECOND time (research is the only
+    // inbound path that skipped this check; meta-leadgen and voice-ai both do
+    // it), leaving two rows, two owners, and two reps calling one company.
+    //
+    // Tombstoned and merged-away leads are excluded: adopting one would attach
+    // a live prospect to a row the workspace has already hidden.
+    const adopted = await this.matchExistingByContact(workspaceId, dto.leads, existingRefs);
+
     const fresh: IngestLeadCandidateDto[] = [];
     const seenInBatch = new Set<string>();
     for (const c of dto.leads) {
-      if (existingRefs.has(c.externalRef) || seenInBatch.has(c.externalRef)) {
+      if (existingRefs.has(c.externalRef) || seenInBatch.has(c.externalRef) || adopted.has(c.externalRef)) {
         skipped++;
         continue;
       }
@@ -317,6 +329,65 @@ export class MarketingLeadsIngestService {
       remaining: limit === -1 ? -1 : Math.max(0, limit - used),
       periodKey,
     };
+  }
+
+  /**
+   * Find candidates that are already in the CRM under a different origin,
+   * matched on the canonical contact keys rather than on research's own
+   * externalRef.
+   *
+   * The matched lead is STAMPED with the candidate's externalRef when it has
+   * none. That is not bookkeeping: `ResearchCandidateService.accept` links a
+   * candidate to its lead by looking the ref up afterwards, so without the
+   * stamp an adopted candidate would find no lead, stay PENDING forever, and be
+   * re-offered by every future run — the queue would never drain. The stamp
+   * also makes the next run dedup on the cheap ref path directly.
+   */
+  private async matchExistingByContact(
+    workspaceId: string,
+    candidates: IngestLeadCandidateDto[],
+    alreadyMatchedRefs: ReadonlySet<string>,
+  ): Promise<Map<string, string>> {
+    const adopted = new Map<string, string>();
+    for (const c of candidates) {
+      if (alreadyMatchedRefs.has(c.externalRef) || adopted.has(c.externalRef)) continue;
+      const phoneNormalized = normalizePhone(c.phone);
+      const emailNormalized = normalizeEmail(c.email);
+      if (!phoneNormalized && !emailNormalized) continue;
+
+      const existing = await this.prisma.lead.findFirst({
+        where: {
+          workspaceId,
+          mergedIntoId: null,
+          deletedAt: null,
+          OR: [
+            ...(emailNormalized ? [{ emailNormalized }] : []),
+            // Every stored spelling (0- / bare / 90- / +90 / 00-): research
+            // yields E.164 while the same business's web form stored a
+            // 0-prefixed number, and an exact match would miss it.
+            ...(phoneNormalized ? [{ phoneNormalized: { in: localMsisdnVariants(phoneNormalized) } }] : []),
+          ],
+        },
+        select: { id: true, externalRef: true },
+      });
+      if (!existing) continue;
+
+      adopted.set(c.externalRef, existing.id);
+      if (existing.externalRef === null) {
+        // Conditional so a concurrent stamp cannot be overwritten, and
+        // best-effort so a losing race still dedups — the duplicate not being
+        // created matters more than the linkage.
+        await this.prisma.lead
+          .updateMany({
+            where: { id: existing.id, externalRef: null },
+            data: { externalRef: c.externalRef },
+          })
+          .catch((e) =>
+            this.logger.warn(`externalRef stamp failed for lead ${existing.id}: ${e?.message ?? e}`),
+          );
+      }
+    }
+    return adopted;
   }
 
   private mapToLeadData(c: IngestLeadCandidateDto) {

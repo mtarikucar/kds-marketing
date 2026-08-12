@@ -36,6 +36,10 @@ describe('MarketingLeadsIngestService — daily quota clipping', () => {
       },
       lead: {
         findMany: jest.fn().mockResolvedValue([]),
+        // Cross-path dedup probe: no pre-existing contact by default, so these
+        // quota cases keep exercising the create path they were written for.
+        findFirst: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         create: jest.fn().mockImplementation(async ({ data }: any) => ({
           id: `lead-${data.externalRef}`,
           ...data,
