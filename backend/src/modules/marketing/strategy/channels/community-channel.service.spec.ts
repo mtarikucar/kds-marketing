@@ -201,9 +201,15 @@ describe('CommunityChannelService', () => {
         expect(tokenInit.headers.Authorization).toMatch(/^Basic /);
         expect(String(tokenInit.body)).toContain('grant_type=authorization_code');
 
-        // sealed, not raw
+        // Sealed, not raw — asserted against the PLAINTEXT SHAPE, not the
+        // two-letter token. `not.toContain('AT')` over a random base64
+        // ciphertext fails whenever those two characters happen to land
+        // adjacent, which is often; that flake says nothing about sealing.
+        // What matters: the readable JSON never reaches the store, and the
+        // bundle still round-trips through openSecret.
         const sealed = store['ws1:REDDIT'].sealedSecret as string;
-        expect(sealed).not.toContain('AT');
+        expect(sealed).not.toContain('"access"');
+        expect(sealed).not.toContain('"refresh"');
         expect(JSON.parse(openSecret(sealed))).toMatchObject({ access: 'AT', refresh: 'RT' });
       });
 

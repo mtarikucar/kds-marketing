@@ -7,7 +7,7 @@ import { registerTasksTools } from './tasks.tools';
 import { registerContactsTools } from './contacts.tools';
 import { registerPipelineTools } from './pipeline.tools';
 import { registerCrmReadTools } from './crm-read.tools';
-import { registerInboxTools } from './inbox.tools';
+import { registerInboxTools, registerChannelWriteTools } from './inbox.tools';
 import { registerCampaignsTools } from './campaigns.tools';
 import { registerSocialTools } from './social.tools';
 import { registerAdsTools } from './ads.tools';
@@ -67,6 +67,12 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   });
   registerInboxTools(registry, {
     conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
+    channels: { create: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerChannelWriteTools(registry, {
+    conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
+    channels: { create: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
   registerCampaignsTools(registry, {
@@ -279,6 +285,7 @@ describe('MCP tool catalogue', () => {
       [
         'jeeta.call_tool',
         'jeeta.list_team',
+        'jeeta.create_webchat_channel',
         'jeeta.get_funnel',
         'jeeta.search_brand_knowledge',
         'jeeta.search_leads',
@@ -370,7 +377,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(86);
+    expect(names).toHaveLength(87);
   });
 
   /**
@@ -451,6 +458,6 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(86);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(87);
   });
 });

@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import { ConversationsService } from '../../channels/conversations.service';
+import { ChannelsService } from '../../channels/channels.service';
 import { assertFeature } from '../mcp-feature-gate';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 export interface InboxToolDeps {
   conversations: ConversationsService;
+  channels: ChannelsService;
   entitlements: EntitlementsService;
 }
 
@@ -106,6 +108,64 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
         String(args.conversationId ?? ''),
         String(args.body ?? ''),
       );
+    },
+  });
+}
+
+/**
+ * Channel provisioning, restricted to the one type that needs no credentials.
+ *
+ * The inbox tools could read and reply to conversations — but nothing in the
+ * catalogue could CREATE the channel those conversations arrive on, so a
+ * workspace with no channel had a permanently empty inbox and no agent-reply
+ * surface, and an agent had no way to change that. Every other channel type
+ * (WhatsApp/SMS/Instagram/Messenger/TikTok) genuinely requires provider
+ * credentials or an OAuth handshake and stays a panel job; WEBCHAT needs
+ * neither — `ChannelsService.create` mints its own widgetKey and the channel is
+ * ACTIVE immediately — so it is the one an agent can legitimately stand up.
+ *
+ * Deliberately narrow: type is not a parameter. Accepting one would invite
+ * secrets over the tool surface, and the credentialed types have their own
+ * validated flows (Embedded Signup, OAuth) that this must not shadow.
+ */
+export function registerChannelWriteTools(registry: McpToolRegistry, deps: InboxToolDeps): void {
+  registry.register({
+    name: 'jeeta.create_webchat_channel',
+    description:
+      'Create a WEB CHAT channel for this workspace — the website chat widget. It needs no credentials and ' +
+      'goes live immediately with its own widget key, so this is how a workspace with an empty inbox starts ' +
+      'receiving conversations. Optionally attach an AI agent profile to answer on it. Other channel types ' +
+      '(WhatsApp, SMS, Instagram, Messenger, TikTok) need provider credentials and are connected in the panel.',
+    domain: 'inbox',
+    // Deferred: a once-per-workspace setup call, which is exactly what the
+    // defer flag is for — and since jeeta.call_tool shipped, deferred tools are
+    // genuinely reachable rather than merely catalogued. Keeps the advertised
+    // surface at its ceiling without costing a per-turn tool its slot.
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      name: z
+        .string()
+        .min(1)
+        .max(120)
+        .describe('Display name for the channel, e.g. "Site sohbeti".'),
+      agentProfileId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe('AI agent profile that should answer on this channel (see the Agent Studio). Optional.'),
+    }),
+    handler: async (ctx, args) => {
+      // Same package boundary the REST channel routes enforce — without it the
+      // inbox could be switched on over MCP for a plan that excludes it.
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
+      return deps.channels.create(ctx.workspaceId, {
+        type: 'WEBCHAT',
+        name: String(args.name ?? '').trim(),
+        agentProfileId: typeof args.agentProfileId === 'string' ? args.agentProfileId : undefined,
+      } as never);
     },
   });
 }
