@@ -60,6 +60,11 @@ export class NativeWebProvider {
               type: 'web_search_20260209',
               name: 'web_search',
               max_uses: 1,
+              // The model invokes the tool directly. Without this, models that
+              // don't support programmatic (code-execution) tool calling — the
+              // cheap tier we use here — 400 with "does not support
+              // programmatic tool calling".
+              allowed_callers: ['direct'],
               user_location: { type: 'approximate', country: 'TR' },
             } as unknown as Anthropic.ToolUnion,
           ],
@@ -115,6 +120,9 @@ export class NativeWebProvider {
               type: 'web_fetch_20260209',
               name: 'web_fetch',
               max_uses: 1,
+              // Same as web_search: direct model invocation, required by the
+              // cheap model tier.
+              allowed_callers: ['direct'],
               allowed_domains: [host],
               // Bound the fetched document so a huge page cannot blow the turn.
               max_content_tokens: 8000,

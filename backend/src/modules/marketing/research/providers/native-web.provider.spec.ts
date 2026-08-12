@@ -61,6 +61,9 @@ describe('NativeWebProvider.searchWeb', () => {
     expect(tool.type).toBe('web_search_20260209');
     expect(tool.user_location).toEqual({ type: 'approximate', country: 'TR' });
     expect(tool.max_uses).toBe(1);
+    // Required by the cheap model tier — otherwise a 400 'does not support
+    // programmatic tool calling'.
+    expect(tool.allowed_callers).toEqual(['direct']);
   });
 
   it('returns [] when the search block is an error, not results', async () => {
@@ -109,6 +112,7 @@ describe('NativeWebProvider.scrape', () => {
     const tool = create.mock.calls[0][0].tools[0];
     expect(tool.type).toBe('web_fetch_20260209');
     expect(tool.allowed_domains).toEqual(['acme.example']);
+    expect(tool.allowed_callers).toEqual(['direct']);
   });
 
   it('returns null on a web_fetch error block', async () => {
