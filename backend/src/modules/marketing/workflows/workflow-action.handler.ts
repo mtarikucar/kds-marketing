@@ -270,11 +270,16 @@ export class WorkflowActionHandler {
       // (which a later notify_user would then address, and a deactivated owner
       // would silently orphan the lead). Falls back to auto-assign if it doesn't
       // resolve.
-      const u = await this.prisma.marketingUser.findFirst({
-        where: { id: step.userId, workspaceId: ctx.workspaceId, role: 'REP', status: 'ACTIVE' },
-        select: { id: true },
+      // Role/status come from the MEMBERSHIP. MarketingUsersService.update()
+      // writes them only there — the MarketingUser columns are frozen at
+      // creation — so reading those refused a promoted REP and accepted a
+      // demoted one. Fixed across the leads service and the auto-assigner in
+      // v2.173.1; this copy was missed because it lives in the workflow engine.
+      const m = await this.prisma.workspaceMembership.findFirst({
+        where: { userId: step.userId, workspaceId: ctx.workspaceId, role: 'REP', status: 'ACTIVE' },
+        select: { userId: true },
       });
-      to = u?.id ?? null;
+      to = m?.userId ?? null;
     }
     if (!to) to = await this.autoAssigner.pickAssignee(ctx.workspaceId);
     if (!to) return 'skipped (no assignee)';
