@@ -9,7 +9,7 @@ import { dispatchResearchTool } from './research-toolset';
 describe('dispatchResearchTool — meter only on provider success', () => {
   const ctx = { workspaceId: 'ws1', runId: 'run1', geo: { country: 'TR' }, budgetId: null };
 
-  function makeDeps(overrides: Partial<{ apifyConfigured: boolean; firecrawlConfigured: boolean }> = {}) {
+  function makeDeps(overrides: Partial<{ apifyConfigured: boolean; firecrawlConfigured: boolean; nativeConfigured: boolean }> = {}) {
     const sources = {
       apify: {
         isConfigured: jest.fn().mockReturnValue(overrides.apifyConfigured ?? true),
@@ -20,6 +20,11 @@ describe('dispatchResearchTool — meter only on provider success', () => {
         isConfigured: jest.fn().mockReturnValue(overrides.firecrawlConfigured ?? true),
         scrape: jest.fn().mockResolvedValue({ markdown: 'hi', meta: {} }),
         searchWeb: jest.fn().mockResolvedValue([]),
+      },
+      native: {
+        isConfigured: jest.fn().mockReturnValue(overrides.nativeConfigured ?? true),
+        scrape: jest.fn().mockResolvedValue({ markdown: 'native page', meta: {} }),
+        searchWeb: jest.fn().mockResolvedValue([{ url: 'https://n.example', title: 'n' }]),
       },
     };
     const spend = { settle: jest.fn().mockResolvedValue(null) };
@@ -56,5 +61,46 @@ describe('dispatchResearchTool — meter only on provider success', () => {
     sources.firecrawl.searchWeb.mockResolvedValue([]);
     await dispatchResearchTool(deps, ctx, 'search_web', { query: 'x' });
     expect(spend.settle).toHaveBeenCalledWith('ws1', expect.objectContaining({ unit: 'FIRECRAWL_PAGE' }));
+  });
+
+  /**
+   * The native fallback (Anthropic web_search/web_fetch, platform key) covers the
+   * SEARCH and SCRAPE slots when no Firecrawl key exists — so research is never
+   * fully inert. Firecrawl still WINS the slot when configured.
+   */
+  describe('dispatchResearchTool — native fallback for search/scrape', () => {
+    const ctx = { workspaceId: 'ws1', runId: 'run1', geo: { country: 'TR' }, budgetId: null };
+  
+    it('falls back to native scrape when firecrawl is not configured', async () => {
+      const { deps, sources, spend } = makeDeps({ firecrawlConfigured: false });
+      const res = await dispatchResearchTool(deps, ctx, 'scrape_page', { url: 'https://acme.example' });
+      expect(sources.firecrawl.scrape).not.toHaveBeenCalled();
+      expect(sources.native.scrape).toHaveBeenCalledWith('https://acme.example');
+      expect(res).toEqual({ markdown: 'native page', meta: {} });
+      expect(spend.settle).toHaveBeenCalledWith('ws1', expect.objectContaining({ unit: 'FIRECRAWL_PAGE' }));
+    });
+  
+    it('falls back to native search when firecrawl is not configured', async () => {
+      const { deps, sources } = makeDeps({ firecrawlConfigured: false });
+      const res = await dispatchResearchTool(deps, ctx, 'search_web', { query: 'etkinlik ajansı istanbul' });
+      expect(sources.firecrawl.searchWeb).not.toHaveBeenCalled();
+      expect(sources.native.searchWeb).toHaveBeenCalled();
+      expect(res).toEqual([{ url: 'https://n.example', title: 'n' }]);
+    });
+  
+    it('PREFERS firecrawl for scrape when both are configured', async () => {
+      const { deps, sources } = makeDeps();
+      await dispatchResearchTool(deps, ctx, 'scrape_page', { url: 'https://acme.example' });
+      expect(sources.firecrawl.scrape).toHaveBeenCalled();
+      expect(sources.native.scrape).not.toHaveBeenCalled();
+    });
+  
+    it('errors (no meter) when neither firecrawl nor native can scrape', async () => {
+      const { deps, sources, spend } = makeDeps({ firecrawlConfigured: false, nativeConfigured: false });
+      const res = await dispatchResearchTool(deps, ctx, 'scrape_page', { url: 'https://acme.example' });
+      expect(sources.native.scrape).not.toHaveBeenCalled();
+      expect((res as { error?: string }).error).toBeTruthy();
+      expect(spend.settle).not.toHaveBeenCalled();
+    });
   });
 });
