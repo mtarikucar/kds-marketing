@@ -79,6 +79,41 @@ export class MarketingLeadsService {
     if (!company) throw new BadRequestException('Company not found in this workspace');
   }
 
+  /**
+   * The assignment-eligibility read, from the CORRECT source of truth.
+   *
+   * `MarketingUsersService.update()` splits its dto and writes role/status ONLY
+   * to `WorkspaceMembership` — the `MarketingUser.role/status` columns are set
+   * at creation and never updated (its own `findOne` calls them
+   * "frozen-at-creation, now-stale"). Every assignment guard here used to read
+   * those columns, so a promotion or demotion never reached lead ownership:
+   * a promoted REP was refused ("Target must be a REP") while a DEMOTED one
+   * still passed — and on convert stamped a commission to someone who is no
+   * longer a rep, the precise harm the guards were written to prevent.
+   *
+   * Returns null when the user has no membership in this workspace, which is
+   * the same "not found" the cross-workspace check produced before.
+   */
+  private async membershipRep(
+    workspaceId: string,
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ id: string; role: string; status: string; firstName: string; lastName: string } | null> {
+    const db = tx ?? this.prisma;
+    const m = await db.workspaceMembership.findFirst({
+      where: { userId, workspaceId },
+      select: { role: true, status: true, user: { select: { id: true, firstName: true, lastName: true } } },
+    });
+    if (!m) return null;
+    return {
+      id: m.user.id,
+      role: m.role,
+      status: m.status,
+      firstName: m.user.firstName,
+      lastName: m.user.lastName,
+    };
+  }
+
   async create(workspaceId: string, dto: CreateLeadDto, userId: string, userRole: string) {
     // Idempotency: refuse to create a second OPEN lead for the same
     // email. Two reps logging the same prospect was the actual
@@ -132,10 +167,12 @@ export class MarketingLeadsService {
     if (dto.assignedToId) {
       // Cross-reference must stay in-workspace: a manager pasting a rep
       // id from another workspace must not silently leak the lead there.
-      const rep = await this.prisma.marketingUser.findFirst({
-        where: { id: dto.assignedToId, workspaceId },
-        select: { id: true, role: true, status: true },
-      });
+      // Role/status come from the MEMBERSHIP, which is the only place
+      // MarketingUsersService.update() writes them — the MarketingUser columns
+      // are frozen at creation. Reading those instead refused a legitimately
+      // promoted REP and, worse, ALLOWED a demoted one: exactly the
+      // non-REP commission stamp the guard below exists to prevent.
+      const rep = await this.membershipRep(workspaceId, dto.assignedToId);
       if (!rep) throw new NotFoundException('Sales rep not found');
       // Parity with assign()/bulkAssign(): a lead may only be OWNED by an ACTIVE
       // REP. Without this, create() could mint a lead assigned to a MANAGER or a
@@ -713,10 +750,8 @@ export class MarketingLeadsService {
     if (target) {
       // Scoped cross-reference: the target rep must live in the same
       // workspace as the lead, or the row simply "does not exist" here.
-      rep = await this.prisma.marketingUser.findFirst({
-        where: { id: target, workspaceId },
-        select: { id: true, role: true, status: true, firstName: true, lastName: true },
-      });
+      // Membership is the source of truth for role/status — see membershipRep().
+      rep = await this.membershipRep(workspaceId, target);
       if (!rep) throw new NotFoundException('Sales rep not found');
       if (rep.role !== 'REP') {
         throw new BadRequestException('Target must be a REP');
@@ -814,10 +849,8 @@ export class MarketingLeadsService {
       | null = null;
     if (target) {
       // Scoped cross-reference — same reasoning as single assign().
-      rep = await this.prisma.marketingUser.findFirst({
-        where: { id: target, workspaceId },
-        select: { id: true, role: true, status: true, firstName: true, lastName: true },
-      });
+      // Membership is the source of truth for role/status — see membershipRep().
+      rep = await this.membershipRep(workspaceId, target);
       if (!rep) throw new NotFoundException('Sales rep not found');
       if (rep.role !== 'REP') {
         throw new BadRequestException('Target must be a REP');
