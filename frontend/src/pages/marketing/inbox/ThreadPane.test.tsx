@@ -163,3 +163,74 @@ describe('ThreadPane — fax messages', () => {
     expect(screen.queryByText('Fax')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Internal notes + reopen were backend capabilities the panel never called:
+ * `GET/POST /conversations/:id/notes` and `POST /conversations/:id/reopen` had
+ * no frontend caller at all. So a note written over the API — including by an
+ * AI agent handing a thread over, which is exactly what the MCP tool advertises
+ * — was stored where no human could read it, and closing a thread was a one-way
+ * door unless the customer happened to write again.
+ */
+describe('ThreadPane — internal notes and reopen', () => {
+  it('shows the team-only notes once opened', async () => {
+    const user = userEvent.setup();
+    render(
+      <ThreadPane
+        {...(baseProps({
+          notes: [{ id: 'n1', body: 'Called, asked for a quote', createdAt: new Date().toISOString() }],
+        }) as never)}
+      />,
+    );
+    await user.click(screen.getByText('Internal notes'));
+    expect(screen.getByText('Called, asked for a quote')).toBeInTheDocument();
+  });
+
+  it('says plainly that the notes are team-only when there are none', async () => {
+    const user = userEvent.setup();
+    render(<ThreadPane {...(baseProps({ notes: [] }) as never)} />);
+    await user.click(screen.getByText('Internal notes'));
+    expect(screen.getByText(/only your team can see these/i)).toBeInTheDocument();
+  });
+
+  it('adds a note', async () => {
+    const user = userEvent.setup();
+    const onAddNote = vi.fn();
+    render(
+      <ThreadPane {...(baseProps({ notes: [], noteDraft: 'heads up', onAddNote }) as never)} />,
+    );
+    await user.click(screen.getByText('Internal notes'));
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    expect(onAddNote).toHaveBeenCalledTimes(1);
+  });
+
+  /** The double-submit guard the composer already has: a second press while the
+   *  first note is still saving would file it twice. */
+  it('disables Add while a note is in flight', async () => {
+    const user = userEvent.setup();
+    render(
+      <ThreadPane
+        {...(baseProps({ notes: [], noteDraft: 'heads up', isAddingNote: true }) as never)}
+      />,
+    );
+    await user.click(screen.getByText('Internal notes'));
+    expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled();
+  });
+
+  it('offers Reopen instead of Close on a closed thread', () => {
+    const onReopen = vi.fn();
+    render(
+      <ThreadPane
+        {...(baseProps({ convo: { id: 'c1', aiPaused: false, status: 'CLOSED' }, onReopen }) as never)}
+      />,
+    );
+    expect(screen.getByLabelText('Reopen')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Close')).not.toBeInTheDocument();
+  });
+
+  it('offers Close on an open thread', () => {
+    render(<ThreadPane {...(baseProps() as never)} />);
+    expect(screen.getByLabelText('Close')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Reopen')).not.toBeInTheDocument();
+  });
+});

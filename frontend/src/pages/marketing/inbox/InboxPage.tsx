@@ -89,6 +89,7 @@ export default function InboxPage() {
   const [draft, setDraft] = useState('');
   const [statusFilter, setStatusFilter] = useState('OPEN');
   const [showContext, setShowContext] = useState(false);
+  const [noteDraft, setNoteDraft] = useState('');
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -110,6 +111,17 @@ export default function InboxPage() {
     queryKey: ['marketing', 'conversation', selectedId],
     queryFn: () =>
       marketingApi.get(`/conversations/${selectedId}`).then((r) => r.data),
+    enabled: !!selectedId,
+  });
+
+  // Team-only notes. The thread payload deliberately does not carry them, and
+  // nothing in the panel used to fetch them — so notes written over the API (or
+  // by an AI agent handing a thread over) were stored where no human could read
+  // them.
+  const { data: notes } = useQuery<{ id: string; body: string; createdAt: string }[]>({
+    queryKey: ['marketing', 'conversation', selectedId, 'notes'],
+    queryFn: () =>
+      marketingApi.get(`/conversations/${selectedId}/notes`).then((r) => r.data),
     enabled: !!selectedId,
   });
 
@@ -200,6 +212,10 @@ export default function InboxPage() {
   // could be sent to the wrong person.
   useEffect(() => {
     setDraft('');
+    // Same reason for the note box: ThreadPane is prop-driven, not key-gated,
+    // so a half-typed internal note would otherwise follow the agent into the
+    // next customer's thread and be filed against the wrong lead.
+    setNoteDraft('');
   }, [selectedId]);
 
   // Mark read on open AND whenever a new inbound bumps the OPEN thread's unread
@@ -262,6 +278,27 @@ export default function InboxPage() {
     onSuccess: invalidate,
     onError: (e: any) =>
       toast.error(e.response?.data?.message ?? t('inbox.closeFailed', 'Could not close the conversation')),
+  });
+
+  const reopenConvo = useMutation({
+    mutationFn: () =>
+      marketingApi.post(`/conversations/${selectedId}/reopen`),
+    onSuccess: invalidate,
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.reopenFailed', 'Could not reopen the conversation')),
+  });
+
+  const addNote = useMutation({
+    mutationFn: (body: string) =>
+      marketingApi.post(`/conversations/${selectedId}/notes`, { body }),
+    onSuccess: () => {
+      setNoteDraft('');
+      queryClient.invalidateQueries({
+        queryKey: ['marketing', 'conversation', selectedId, 'notes'],
+      });
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.noteFailed', 'Could not save the note')),
   });
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -359,10 +396,20 @@ export default function InboxPage() {
               isSending={reply.isPending}
               isTogglingAi={toggleAi.isPending}
               isClosing={closeConvo.isPending}
+              isReopening={reopenConvo.isPending}
+              notes={notes ?? []}
+              noteDraft={noteDraft}
+              isAddingNote={addNote.isPending}
               onDraftChange={setDraft}
               onSend={() => draft.trim() && reply.mutate(draft.trim())}
               onToggleAi={() => convo && toggleAi.mutate(!convo.aiPaused)}
               onClose={() => closeConvo.mutate()}
+              onReopen={() => reopenConvo.mutate()}
+              onNoteDraftChange={setNoteDraft}
+              onAddNote={() => {
+                const body = noteDraft.trim();
+                if (body) addNote.mutate(body);
+              }}
               onBack={handleBack}
               onShowContext={() => setShowContext(true)}
             />
