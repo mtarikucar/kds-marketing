@@ -78,6 +78,29 @@ export interface ResearchToolCtx {
 }
 
 /**
+ * Try the PREFERRED provider (Firecrawl); if it throws — a configured-but-out-
+ * of-credits key 402s, a transient outage 5xxs — fall back to the SECONDARY
+ * (native). `ran: false` only when neither is available; if BOTH are present
+ * and both throw, the primary's error propagates (the caller's catch turns it
+ * into a model-readable string, unmetered). Either `fn` may be null when its
+ * provider is unconfigured.
+ */
+async function runWithFallback<T>(
+  primary: (() => Promise<T>) | null,
+  secondary: (() => Promise<T>) | null,
+): Promise<{ ran: boolean; result?: T }> {
+  if (primary) {
+    try {
+      return { ran: true, result: await primary() };
+    } catch (e) {
+      if (!secondary) throw e; // nothing to fall back to — surface the failure
+    }
+  }
+  if (secondary) return { ran: true, result: await secondary() };
+  return { ran: false };
+}
+
+/**
  * Executes one source tool: calls the provider, meters the cost into the RESEARCH
  * budget ONLY when the provider call actually succeeded, and records a
  * ToolCallLog. Never throws — a tool failure is returned as a string so the
@@ -116,38 +139,41 @@ export async function dispatchResearchTool(
         break;
       }
       case 'scrape_page': {
-        // Firecrawl wins the slot when configured; the native provider
-        // (Anthropic web_fetch, platform key) is the keyless fallback so
-        // scraping is never dead just because no vendor was bought.
-        const scraper = deps.sources.firecrawl.isConfigured()
-          ? deps.sources.firecrawl
-          : deps.sources.native.isConfigured()
-            ? deps.sources.native
-            : null;
-        if (!scraper) {
+        // Firecrawl wins the slot; the native provider (Anthropic web_fetch,
+        // platform key) is the keyless fallback. The fallback triggers on a
+        // configured-but-FAILING Firecrawl too, not just a missing key — a key
+        // with no credits is "configured" yet 402s on every call, and the
+        // pipeline must reach native for it (this is the exact live case that
+        // left figurunica finding nothing).
+        const url = String(args.url ?? '');
+        const attempt = await runWithFallback(
+          deps.sources.firecrawl.isConfigured() ? () => deps.sources.firecrawl.scrape(url) : null,
+          deps.sources.native.isConfigured() ? () => deps.sources.native.scrape(url) : null,
+        );
+        if (!attempt.ran) {
           ok = false;
           result = notConfigured('firecrawl');
           error = (result as { error: string }).error;
           break;
         }
-        result = await scraper.scrape(String(args.url ?? ''));
+        result = attempt.result;
         await meter('FIRECRAWL_PAGE');
         break;
       }
       case 'search_web': {
-        const searcher = deps.sources.firecrawl.isConfigured()
-          ? deps.sources.firecrawl
-          : deps.sources.native.isConfigured()
-            ? deps.sources.native
-            : null;
-        if (!searcher) {
+        const q = String(args.query ?? '');
+        const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 20);
+        const attempt = await runWithFallback(
+          deps.sources.firecrawl.isConfigured() ? () => deps.sources.firecrawl.searchWeb(q, limit) : null,
+          deps.sources.native.isConfigured() ? () => deps.sources.native.searchWeb(q, limit) : null,
+        );
+        if (!attempt.ran) {
           ok = false;
           result = notConfigured('firecrawl');
           error = (result as { error: string }).error;
           break;
         }
-        const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 20);
-        result = await searcher.searchWeb(String(args.query ?? ''), limit);
+        result = attempt.result;
         await meter('FIRECRAWL_PAGE');
         break;
       }
