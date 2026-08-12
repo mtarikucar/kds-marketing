@@ -1234,6 +1234,7 @@ export class MarketingModule {
     leadBulk: LeadBulkService,
     marketingResearch: MarketingResearchService,
     researchRunner: ResearchRunnerService,
+    researchCandidates: ResearchCandidateService,
     brandProfiles: BrandProfileService,
     // Faz 5 D5 — commerce & reputation.
     products: ProductsService,
@@ -1270,7 +1271,12 @@ export class MarketingModule {
     // Faz 5 D4 — the brain & automation wave.
     registerStrategyTools(registry, { strategy, feedback: strategyFeedback });
     registerWorkflowTools(registry, { workflows, leadBulk, principals, entitlements });
-    registerResearchTools(registry, { research: marketingResearch, runner: researchRunner, entitlements });
+    registerResearchTools(registry, {
+      research: marketingResearch,
+      runner: researchRunner,
+      candidates: researchCandidates,
+      entitlements,
+    });
     // Faz 5 D5 — commerce & reputation.
     registerCommerceTools(registry, {
       products,

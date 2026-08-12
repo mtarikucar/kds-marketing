@@ -166,6 +166,7 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerResearchTools(registry, {
     research: { list: jest.fn(), create: jest.fn(), usage: jest.fn() } as any,
     runner: { enqueueNow: jest.fn() } as any,
+    candidates: { list: jest.fn(), accept: jest.fn(), reject: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
   // Faz 5 D5 — commerce & reputation.
@@ -372,6 +373,9 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_research_profiles',
         'jeeta.create_research_profile',
         'jeeta.run_research',
+        'jeeta.list_research_candidates',
+        'jeeta.accept_research_candidates',
+        'jeeta.reject_research_candidates',
         'jeeta.get_brand_profile',
         'jeeta.update_brand_profile',
         // Faz 5 D5 — commerce & reputation (the final wave).
@@ -388,7 +392,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(92);
+    expect(names).toHaveLength(95);
   });
 
   /**
@@ -469,7 +473,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(92);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(95);
   });
 });
 
@@ -496,6 +500,7 @@ const EXTERNAL = 'EXTERNAL';
 const ID_SOURCES: Record<string, string> = {
   // leads / crm
   leadId: 'jeeta.search_leads',
+  leadIds: 'jeeta.search_leads',
   companyId: 'jeeta.list_companies',
   adAccountId: 'jeeta.list_ad_accounts',
   // A Meta/TikTok campaign or ad-set id. It lives in the ad provider's own
@@ -516,11 +521,13 @@ const ID_SOURCES: Record<string, string> = {
   // campaigns / content / social
   campaignId: 'jeeta.list_campaigns',
   postId: 'jeeta.list_scheduled_posts',
+  targetAccountIds: 'jeeta.list_social_accounts',
   assetId: 'jeeta.list_generated_media',
   emailTemplateId: 'jeeta.list_email_templates',
   // strategy / research / workflows
   actionId: 'jeeta.list_strategy_actions',
   profileId: 'jeeta.list_research_profiles',
+  candidateIds: 'jeeta.list_research_candidates',
   workflowId: 'jeeta.list_workflows',
   // commerce / reviews / courses
   invoiceId: 'jeeta.list_invoices',
@@ -545,7 +552,10 @@ describe('MCP catalogue — every required id must be discoverable', () => {
       // conversion threw into the catch.
       const json = z.toJSONSchema(tool.inputSchema as never) as { required?: string[] };
       for (const key of json.required ?? []) {
-        if (!/Id$/.test(key)) continue;
+        // `Ids?`, not `Id` — a bulk tool requiring `candidateIds: string[]` is
+        // exactly as impossible to call as one requiring `candidateId`, and the
+        // singular-only regex let the entire plural family through unchecked.
+        if (!/Ids?$/.test(key)) continue;
         const source = ID_SOURCES[key];
         if (!source) {
           undiscoverable.push(`${tool.name} requires "${key}" — no source declared in ID_SOURCES`);
