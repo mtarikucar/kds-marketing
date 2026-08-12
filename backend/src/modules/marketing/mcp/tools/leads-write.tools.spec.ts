@@ -18,8 +18,12 @@ function setup() {
     resolve: jest.fn().mockResolvedValue(SENTINEL),
     assertActiveMember: jest.fn().mockResolvedValue({ id: 'u2', role: 'REP' }),
   };
-  registerLeadsWriteTools(registry, { leads, activities, principals } as never);
-  return { registry, leads, activities, principals };
+  const dedupe = {
+    findDuplicates: jest.fn().mockResolvedValue([]),
+    merge: jest.fn().mockResolvedValue({ canonicalId: 'l1', merged: 2 }),
+  };
+  registerLeadsWriteTools(registry, { leads, activities, principals, dedupe } as never);
+  return { registry, leads, activities, principals, dedupe };
 }
 
 const KEY_CTX = { workspaceId: 'ws-a', grantedScopes: [] };
@@ -218,5 +222,81 @@ describe('jeeta.assign_lead', () => {
     await registry.get('jeeta.assign_lead')!.handler(KEY_CTX, { leadId: 'l1', assignedToId: null });
     expect(principals.assertActiveMember).not.toHaveBeenCalled();
     expect(leads.assign).toHaveBeenCalledWith('ws-a', 'l1', null, 'sys-1');
+  });
+});
+
+
+/**
+ * Deduplication was implemented, tested and wired to REST — and reachable from
+ * nowhere. The panel's only "duplicates" surface is the import wizard's
+ * skip/update POLICY, and the catalogue had no dedupe tool, so seven inbound
+ * creation paths could pile up duplicates a workspace could not consolidate.
+ */
+describe('lead deduplication', () => {
+  it('reports an empty result as a real answer, not a bare empty list', async () => {
+    const { registry, dedupe } = setup();
+    const out = (await registry.get('jeeta.list_duplicate_leads')!.handler(KEY_CTX, {})) as {
+      clusters: unknown[];
+      message: string;
+    };
+    expect(dedupe.findDuplicates).toHaveBeenCalledWith('ws-a');
+    expect(out.clusters).toEqual([]);
+    expect(out.message).toMatch(/no duplicate/i);
+  });
+
+  it('passes the caller workspace and returns the clusters for comparison', async () => {
+    const { registry, dedupe } = setup();
+    dedupe.findDuplicates.mockResolvedValue([
+      { suggestedCanonicalId: 'l1', leads: [{ id: 'l1' }, { id: 'l2' }] },
+    ]);
+    const out = (await registry.get('jeeta.list_duplicate_leads')!.handler(KEY_CTX, {})) as {
+      clusters: unknown[];
+      message: string;
+    };
+    expect(out.clusters).toHaveLength(1);
+    expect(out.message).toMatch(/1 possible duplicate/i);
+  });
+
+  it('merges through the shared service, scoped to the caller workspace', async () => {
+    const { registry, dedupe } = setup();
+    const out = (await registry.get('jeeta.merge_leads')!.handler(KEY_CTX, {
+      canonicalId: 'l1',
+      duplicateIds: ['l2', 'l3'],
+    })) as { merged: number; requested: number; message: string };
+    expect(dedupe.merge).toHaveBeenCalledWith('ws-a', 'l1', ['l2', 'l3']);
+    expect(out).toMatchObject({ merged: 2, requested: 2 });
+  });
+
+  /**
+   * The service silently drops ids that are already merged or belong to another
+   * workspace, so a bare count would read as "all of them".
+   */
+  it('says so when fewer were merged than asked for', async () => {
+    const { registry, dedupe } = setup();
+    dedupe.merge.mockResolvedValue({ canonicalId: 'l1', merged: 1 });
+    const out = (await registry.get('jeeta.merge_leads')!.handler(KEY_CTX, {
+      canonicalId: 'l1',
+      duplicateIds: ['l2', 'l3'],
+    })) as { message: string };
+    expect(out.message).toMatch(/1 of 2/);
+    expect(out.message).toMatch(/already merged|not leads of this workspace/i);
+  });
+
+  /**
+   * Merging rewrites a customer's history and hides rows everywhere at once, so
+   * it stays behind a human even in AUTONOMOUS mode — DESTRUCTIVE is the one
+   * risk class the broker never lets autonomy bypass.
+   */
+  it('classifies merge as DESTRUCTIVE and approval-gated, while listing stays a plain read', () => {
+    const { registry } = setup();
+    const merge = registry.get('jeeta.merge_leads')!;
+    expect(merge.risk).toBe('DESTRUCTIVE');
+    expect(merge.requiresApproval).toBe(true);
+    expect(merge.scopes).toEqual(['leads.write']);
+
+    const list = registry.get('jeeta.list_duplicate_leads')!;
+    expect(list.risk).toBe('READ');
+    expect(list.requiresApproval).toBe(false);
+    expect(list.scopes).toEqual(['leads.read']);
   });
 });

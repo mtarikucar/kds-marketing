@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CreateActivityDto } from '../../dto/create-activity.dto';
 import { BUSINESS_TYPE_PATTERN, CreateLeadDto, LeadPriority, LeadSource } from '../../dto/create-lead.dto';
 import { UpdateLeadDto } from '../../dto/update-lead.dto';
+import { LeadDedupeService } from '../../services/lead-dedupe.service';
 import { MarketingActivitiesService } from '../../services/marketing-activities.service';
 import { MarketingLeadsService } from '../../services/marketing-leads.service';
 import { McpPrincipalService } from '../mcp-principal.service';
@@ -11,6 +12,8 @@ export interface LeadsWriteToolDeps {
   leads: MarketingLeadsService;
   activities: MarketingActivitiesService;
   principals: McpPrincipalService;
+  /** Duplicate clustering + merge — see `jeeta.list_duplicate_leads`. */
+  dedupe: LeadDedupeService;
 }
 
 /** The stages `updateStatus` accepts. WON is absent on purpose — see below. */
@@ -247,6 +250,92 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
       const target = typeof args.assignedToId === 'string' && args.assignedToId.length > 0 ? args.assignedToId : null;
       if (target) await deps.principals.assertActiveMember(ctx.workspaceId, target);
       return deps.leads.assign(ctx.workspaceId, String(args.leadId), target, actor.id);
+    },
+  });
+
+  /**
+   * Deduplication — the product's answer to the one thing every inbound path
+   * can produce.
+   *
+   * `LeadDedupeService` is implemented, tested, and wired to
+   * `GET /marketing/leads/duplicates` + `POST /marketing/leads/merge`. Nothing
+   * called either: the panel's only "duplicates" surface is the import wizard's
+   * skip/update POLICY, and the catalogue had no dedupe tool at all. So a
+   * workspace could accumulate duplicates from seven different creation paths
+   * (research, webchat, public form, Meta lead ads, voice, import, manual) with
+   * no reachable way to consolidate them.
+   *
+   * Write-time dedup catches what it can — normalized phone/email — but cannot
+   * catch a lead with neither (an anonymous webchat contact), or the same
+   * business reached on two different numbers. Those are exactly the clusters
+   * this finder is for.
+   */
+  registry.register({
+    name: 'jeeta.list_duplicate_leads',
+    description:
+      'Find groups of leads that look like the same customer, matched on normalised phone and email across every source. Each group comes with a suggested canonical (a converted lead if there is one, otherwise the oldest) and the full records so you can compare before deciding. Nothing is changed. Read this before jeeta.merge_leads.',
+    domain: 'leads',
+    defer: true,
+    scopes: ['leads.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async (ctx) => {
+      const clusters = await deps.dedupe.findDuplicates(ctx.workspaceId);
+      // An empty list is a real answer ("no duplicates to consolidate"), not a
+      // failure — say so rather than returning a bare [].
+      return {
+        clusters,
+        message: clusters.length
+          ? `${clusters.length} possible duplicate group(s).`
+          : 'No duplicate groups found — every lead has a distinct phone and email.',
+      };
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.merge_leads',
+    description:
+      "Merge duplicate leads into one canonical record: their notes, tasks, deals, conversations and tags move across, and the duplicates are tombstoned so they stop appearing in lists. Get the ids from jeeta.list_duplicate_leads and check the records really are the same customer first — this rewrites someone's CRM history and is not a one-click undo. Refuses to merge away a converted customer, or a duplicate holding wallet credit.",
+    domain: 'leads',
+    defer: true,
+    scopes: ['leads.write'],
+    // DESTRUCTIVE, so the broker requires a human even in AUTONOMOUS mode:
+    // consolidating customer records is a judgement about who is who, and the
+    // tombstoned rows stop being visible everywhere at once.
+    risk: 'DESTRUCTIVE',
+    requiresApproval: true,
+    resourceType: 'lead',
+    resourceIdFrom: (args) => (typeof args.canonicalId === 'string' ? args.canonicalId : undefined),
+    inputSchema: z.object({
+      canonicalId: z
+        .string()
+        .min(1)
+        .describe('The lead to KEEP. Everything is moved onto this record; from jeeta.list_duplicate_leads.'),
+      duplicateIds: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(50)
+        .describe('The leads to fold into the canonical and tombstone. Must not contain the canonical id.'),
+    }),
+    handler: async (ctx, args) => {
+      const res = await deps.dedupe.merge(
+        ctx.workspaceId,
+        String(args.canonicalId),
+        (args.duplicateIds ?? []) as string[],
+      );
+      // `merged` counts what was actually folded in: ids already merged, or
+      // belonging to another workspace, drop out silently in the service. A
+      // bare count would read as "all of them".
+      const requested = ((args.duplicateIds ?? []) as string[]).length;
+      return {
+        ...res,
+        requested,
+        message:
+          res.merged === requested
+            ? `${res.merged} duplicate(s) merged into ${res.canonicalId}.`
+            : `${res.merged} of ${requested} merged into ${res.canonicalId}. The rest were already merged or are not leads of this workspace.`,
+      };
     },
   });
 }
