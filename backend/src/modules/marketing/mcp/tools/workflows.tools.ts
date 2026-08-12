@@ -57,7 +57,7 @@ const jsonObject = z.record(z.string(), z.unknown());
  * real: `WorkflowActionHandler` sends email/SMS/WhatsApp/web-chat, reserves AI
  * credits per generate/classify step and performs outbound HTTP — once per
  * enrolled lead. Money and messages both leave the workspace, so it is `SPEND`:
- * queued for a human in every write mode.
+ * queued for a human in APPROVAL mode, inline in AUTONOMOUS.
  */
 export function registerWorkflowTools(registry: McpToolRegistry, deps: WorkflowToolDeps): void {
   registry.register({
@@ -166,7 +166,7 @@ export function registerWorkflowTools(registry: McpToolRegistry, deps: WorkflowT
   registry.register({
     name: 'jeeta.trigger_workflow',
     description:
-      'Run an armed automation right now over a specific set of leads (manual enrolment). Each enrolled lead is processed for real: the automation may email or message them, spend AI credits and call external webhooks. Because that reaches real people and spends real money it always requires a human approval, in every write mode including autonomous. Enrolment runs in the background; a lead already in a live run of this automation is skipped.',
+      'Run an armed automation right now over a specific set of leads (manual enrolment). Each enrolled lead is processed for real: the automation may email or message them, spend AI credits and call external webhooks. Because that reaches real people and spends real money, in APPROVAL mode this queues for a human; in AUTONOMOUS mode it runs immediately. Enrolment runs in the background; a lead already in a live run of this automation is skipped.',
     domain: 'workflows',
     // Deferred (spec §3): the rare manual override next to event triggering.
     defer: true,

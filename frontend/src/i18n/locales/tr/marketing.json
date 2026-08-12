@@ -3819,9 +3819,9 @@
       "lockedTitle": "Sizde salt okunur",
       "locked": "Yazma modunu yalnızca \"ayarları yönet\" yetkisine sahip bir çalışma alanı sahibi değiştirebilir. Mevcut ayarı görebilir ama değiştiremezsiniz.",
       "confirmTitle": "İnsan onayı adımı kaldırılsın mı?",
-      "confirmDesc": "OTONOM modda Claude kimseye sormaz: bağlı bir istemci söylediği anda müşterilerinize mesaj gönderebilir, gönderi yayınlayabilir ve gerçek reklam bütçesini kaydırabilir. Hiçbir şey onaya düşmez. Dilediğiniz zaman geri alabilirsiniz.",
+      "confirmDesc": "OTONOM modda Claude artık kimseye sormaz: bağlı bir istemci söylediği anda müşterilerine mesaj atabilir, gönderi yayınlayabilir, AI kredisi harcayabilir ve gerçek reklam bütçesini oynatabilir. Yalnızca kalıcı silmeler onayına düşmeye devam eder. İstediğin an geri dönebilirsin.",
       "confirmCta": "Evet, otonom moda geç",
-      "autonomousToast": "Otonom — Claude artık sormadan mesaj gönderebilir, yayın yapabilir ve harcama yapabilir.",
+      "autonomousToast": "Otonom — Claude artık sormadan gönderir, yayınlar ve harcar.",
       "approvalToast": "Onay zorunlu — Claude'un denediği her yazma işlemi artık bir kişiyi bekler.",
       "error": "Yazma modu değiştirilemedi."
     },

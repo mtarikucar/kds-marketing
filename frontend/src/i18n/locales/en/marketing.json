@@ -2966,7 +2966,7 @@
       "lockedTitle": "Read-only for you",
       "locked": "Only a workspace owner with the \"manage settings\" permission can change the write mode. You can see the current setting but not change it.",
       "confirmTitle": "Remove the human approval gate?",
-      "confirmDesc": "In AUTONOMOUS mode Claude no longer asks anyone: it can message your customers, publish posts and move real ad budget the moment a connected client tells it to. Nothing will be queued for approval. You can switch back at any time.",
+      "confirmDesc": "In AUTONOMOUS mode Claude no longer asks anyone: it can message your customers, publish posts, spend AI credits and move real ad budget the moment a connected client tells it to. Only permanent deletions still queue for your approval. You can switch back at any time.",
       "confirmCta": "Yes, go autonomous",
       "autonomousToast": "Autonomous — Claude can now send, publish and spend without asking.",
       "approvalToast": "Approval required — every write Claude attempts now waits for a human.",

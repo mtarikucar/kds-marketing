@@ -115,7 +115,7 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
   registry.register({
     name: 'jeeta.generate_image',
     description:
-      'Generate an image with AI (fal.ai) for use in social content. This SPENDS the workspace\'s AI credits, so it always requires a human approval — in every write mode, including autonomous. Returns an assetId; poll jeeta.list_generated_media until its status is READY to get the URL.',
+      'Generate an image with AI (fal.ai) for use in social content. This SPENDS the workspace\'s AI credits — in APPROVAL mode this queues for a human; in AUTONOMOUS mode it runs immediately. Returns an assetId; poll jeeta.list_generated_media until its status is READY to get the URL.',
     domain: 'content',
     scopes: ['campaigns.send'],
     risk: 'SPEND',
@@ -158,7 +158,7 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
   registry.register({
     name: 'jeeta.generate_video',
     description:
-      `Generate a short video with AI (fal.ai) for use in social content, up to ${MAX_VIDEO_SEC} seconds. This SPENDS the workspace's AI credits (video is the most expensive action in the product), so it always requires a human approval — in every write mode, including autonomous. Returns an assetId; poll jeeta.list_generated_media until its status is READY.`,
+      `Generate a short video with AI (fal.ai) for use in social content, up to ${MAX_VIDEO_SEC} seconds. This SPENDS the workspace's AI credits (video is the most expensive action in the product) — in APPROVAL mode this queues for a human; in AUTONOMOUS mode it runs immediately. Returns an assetId; poll jeeta.list_generated_media until its status is READY.`,
     domain: 'content',
     // Deferred (spec §3): Expensive and rare next to jeeta.generate_image.
     defer: true,

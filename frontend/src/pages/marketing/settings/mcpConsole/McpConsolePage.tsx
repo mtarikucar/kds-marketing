@@ -357,7 +357,7 @@ function WriteModeSection() {
           title={t('mcpConsole.writeMode.confirmTitle', 'Remove the human approval gate?')}
           description={t(
             'mcpConsole.writeMode.confirmDesc',
-            'In AUTONOMOUS mode Claude no longer asks anyone: it can message your customers, publish posts and move real ad budget the moment a connected client tells it to. Nothing will be queued for approval. You can switch back at any time.',
+            'In AUTONOMOUS mode Claude no longer asks anyone: it can message your customers, publish posts, spend AI credits and move real ad budget the moment a connected client tells it to. Only permanent deletions still queue for your approval. You can switch back at any time.',
           )}
           confirmLabel={t('mcpConsole.writeMode.confirmCta', 'Yes, go autonomous')}
           cancelLabel={t('common.cancel', 'Cancel')}
