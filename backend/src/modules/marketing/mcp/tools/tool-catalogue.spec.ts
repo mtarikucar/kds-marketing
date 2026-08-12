@@ -48,6 +48,7 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     leads: { create: jest.fn(), update: jest.fn(), updateStatus: jest.fn(), assign: jest.fn() } as any,
     activities: { create: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    dedupe: { findDuplicates: jest.fn(), merge: jest.fn() } as any,
   });
   registerTasksTools(registry, {
     tasks: { findAll: jest.fn(), create: jest.fn(), complete: jest.fn() } as any,
@@ -322,6 +323,8 @@ describe('MCP tool catalogue', () => {
         'jeeta.set_lead_status',
         'jeeta.add_lead_note',
         'jeeta.assign_lead',
+        'jeeta.list_duplicate_leads',
+        'jeeta.merge_leads',
         'jeeta.list_tasks',
         'jeeta.create_task',
         'jeeta.complete_task',
@@ -392,7 +395,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(95);
+    expect(names).toHaveLength(97);
   });
 
   /**
@@ -473,7 +476,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(95);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(97);
   });
 });
 
@@ -501,6 +504,8 @@ const ID_SOURCES: Record<string, string> = {
   // leads / crm
   leadId: 'jeeta.search_leads',
   leadIds: 'jeeta.search_leads',
+  canonicalId: 'jeeta.list_duplicate_leads',
+  duplicateIds: 'jeeta.list_duplicate_leads',
   companyId: 'jeeta.list_companies',
   adAccountId: 'jeeta.list_ad_accounts',
   // A Meta/TikTok campaign or ad-set id. It lives in the ad provider's own

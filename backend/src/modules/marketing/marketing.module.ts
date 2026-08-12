@@ -1196,6 +1196,7 @@ export class MarketingModule {
     analytics: AnalyticsService,
     brand: BrandBrainService,
     leads: MarketingLeadsService,
+    leadDedupe: LeadDedupeService,
     conversations: ConversationsService,
     // Powers jeeta.create_webchat_channel — the credential-free way an agent can
     // give a workspace an inbox at all.
@@ -1249,7 +1250,7 @@ export class MarketingModule {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
     registerLeadsTools(registry, { leads });
-    registerLeadsWriteTools(registry, { leads, activities, principals });
+    registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
     registerTasksTools(registry, { tasks, principals });
     registerContactsTools(registry, { leads, companies, principals });
     registerPipelineTools(registry, { opportunities, pipelines, principals });
