@@ -27,6 +27,30 @@ export interface AdsToolDeps {
  */
 export function registerAdsTools(registry: McpToolRegistry, deps: AdsToolDeps): void {
   registry.register({
+    name: 'jeeta.list_ad_accounts',
+    description:
+      'List the ad accounts connected to this workspace (id, provider, display name, status, currency). ' +
+      'jeeta.reallocate_budget REQUIRES an adAccountId and nothing else returned one. Never returns tokens. ' +
+      'Read-only.',
+    domain: 'ads',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async (ctx) => {
+      const rows = (await deps.accounts.list(ctx.workspaceId)) as Array<Record<string, unknown>>;
+      return rows.map((a) => ({
+        id: a.id,
+        provider: a.provider,
+        displayName: a.displayName ?? null,
+        status: a.status ?? null,
+        currency: a.currency ?? null,
+      }));
+    },
+  });
+
+  registry.register({
     name: 'jeeta.get_ad_performance',
     description:
       'Get aggregated ad performance (spend, impressions, clicks, leads, revenue) for this workspace over a date range, totals + by-day + by-provider. Read-only.',

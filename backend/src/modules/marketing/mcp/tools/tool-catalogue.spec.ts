@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { McpToolRegistry, TOOL_DOMAINS } from '../mcp-tool-registry';
 import { registerAnalyticsTools } from './analytics.tools';
 import { registerBrandTools } from './brand.tools';
@@ -292,6 +293,8 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_team',
         'jeeta.create_webchat_channel',
         'jeeta.list_calendars',
+        'jeeta.list_companies',
+        'jeeta.list_ad_accounts',
         'jeeta.list_agents',
         'jeeta.update_agent',
         'jeeta.get_funnel',
@@ -385,7 +388,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(90);
+    expect(names).toHaveLength(92);
   });
 
   /**
@@ -466,6 +469,92 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(90);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(92);
+  });
+});
+
+/**
+ * The undiscoverable-prerequisite tripwire.
+ *
+ * Three separate bugs this session had one shape: a tool REQUIRED an id and
+ * nothing in the catalogue returned that id, so the operation was impossible —
+ * not awkward, impossible. create_task needed an assignedToId with no way to
+ * list users (v2.173.0); the inbox could read conversations but nothing could
+ * create the channel they arrive on (v2.174.0); create_booking needed a
+ * calendarId with no way to list calendars (v2.176.0). Each was found only by
+ * running the flow for real.
+ *
+ * So the rule is now enforced instead of remembered: every REQUIRED `*Id`
+ * parameter must name the tool a caller gets it from. Adding a tool with a new
+ * required id fails here until its source is declared — which is the moment to
+ * ask whether that source exists at all.
+ */
+/** Declares an id that legitimately has NO in-product source — it comes from
+ *  outside Jeeta — so the gap is a recorded decision, not an oversight. */
+const EXTERNAL = 'EXTERNAL';
+
+const ID_SOURCES: Record<string, string> = {
+  // leads / crm
+  leadId: 'jeeta.search_leads',
+  companyId: 'jeeta.list_companies',
+  adAccountId: 'jeeta.list_ad_accounts',
+  // A Meta/TikTok campaign or ad-set id. It lives in the ad provider's own
+  // console, never in Jeeta's tables, so no read tool here can supply it —
+  // the operator pastes it. Declared rather than left blank so the next
+  // reader knows this was decided, not missed.
+  entityId: EXTERNAL,
+  opportunityId: 'jeeta.list_opportunities',
+  taskId: 'jeeta.list_tasks',
+  assignedToId: 'jeeta.list_team',
+  // inbox
+  conversationId: 'jeeta.list_conversations',
+  agentId: 'jeeta.list_agents',
+  agentProfileId: 'jeeta.list_agents',
+  channelId: 'jeeta.list_conversations',
+  // scheduling
+  calendarId: 'jeeta.list_calendars',
+  // campaigns / content / social
+  campaignId: 'jeeta.list_campaigns',
+  postId: 'jeeta.list_scheduled_posts',
+  assetId: 'jeeta.list_generated_media',
+  emailTemplateId: 'jeeta.list_email_templates',
+  // strategy / research / workflows
+  actionId: 'jeeta.list_strategy_actions',
+  profileId: 'jeeta.list_research_profiles',
+  workflowId: 'jeeta.list_workflows',
+  // commerce / reviews / courses
+  invoiceId: 'jeeta.list_invoices',
+  productId: 'jeeta.list_products',
+  reviewId: 'jeeta.list_reviews',
+  courseId: 'jeeta.list_courses',
+  budgetId: 'jeeta.get_budget',
+};
+
+describe('MCP catalogue — every required id must be discoverable', () => {
+  it('names a source tool for each required *Id parameter, and that tool exists', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    const names = new Set(registry.list(ALL_SCOPES).map((t) => t.name));
+
+    const undiscoverable: string[] = [];
+    for (const tool of registry.list(ALL_SCOPES)) {
+      // No try/catch: a schema this test cannot read is a FINDING, not
+      // something to skip. Swallowing the failure is exactly what made the
+      // first version of this tripwire pass vacuously — it scanned 90 tools
+      // and saw zero id parameters because `z` was not imported and every
+      // conversion threw into the catch.
+      const json = z.toJSONSchema(tool.inputSchema as never) as { required?: string[] };
+      for (const key of json.required ?? []) {
+        if (!/Id$/.test(key)) continue;
+        const source = ID_SOURCES[key];
+        if (!source) {
+          undiscoverable.push(`${tool.name} requires "${key}" — no source declared in ID_SOURCES`);
+        } else if (source !== EXTERNAL && !names.has(source)) {
+          undiscoverable.push(`${tool.name} requires "${key}" — declared source ${source} is not in the catalogue`);
+        }
+      }
+    }
+
+    expect(undiscoverable).toEqual([]);
   });
 });
