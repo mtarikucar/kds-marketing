@@ -275,6 +275,7 @@ import { registerContactsTools } from './mcp/tools/contacts.tools';
 import { registerPipelineTools } from './mcp/tools/pipeline.tools';
 import { registerCrmReadTools } from './mcp/tools/crm-read.tools';
 import { registerInboxTools, registerChannelWriteTools } from './mcp/tools/inbox.tools';
+import { registerAgentTools } from './mcp/tools/agents.tools';
 import { registerSocialTools } from './mcp/tools/social.tools';
 import { registerAdsTools } from './mcp/tools/ads.tools';
 import { registerSchedulingTools } from './mcp/tools/scheduling.tools';
@@ -1199,6 +1200,8 @@ export class MarketingModule {
     // Powers jeeta.create_webchat_channel — the credential-free way an agent can
     // give a workspace an inbox at all.
     channelsService: ChannelsService,
+    // Powers jeeta.list_agents / jeeta.update_agent — Agent Studio over MCP.
+    agentProfiles: AgentProfileService,
     campaigns: CampaignsService,
     social: SocialPlannerService,
     adAccounts: AdAccountService,
@@ -1252,6 +1255,7 @@ export class MarketingModule {
     registerCrmReadTools(registry, { segments, tags });
     registerInboxTools(registry, { conversations, channels: channelsService, entitlements });
     registerChannelWriteTools(registry, { conversations, channels: channelsService, entitlements });
+    registerAgentTools(registry, { agents: agentProfiles, entitlements });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
