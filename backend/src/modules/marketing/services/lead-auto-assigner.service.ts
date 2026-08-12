@@ -34,11 +34,16 @@ export class LeadAutoAssignerService {
     });
     if (!cfg || cfg.strategy === 'DISABLED') return null;
 
-    const activeReps = await db.marketingUser.findMany({
+    // Role/status live on the MEMBERSHIP — MarketingUsersService.update()
+    // writes them only there, leaving the MarketingUser columns frozen at
+    // creation. Reading those meant a promoted REP never entered the
+    // round-robin and a demoted one never left it.
+    const memberships = await db.workspaceMembership.findMany({
       where: { workspaceId, role: 'REP', status: 'ACTIVE' },
-      select: { id: true },
+      select: { userId: true },
       orderBy: { createdAt: 'asc' },
     });
+    const activeReps = memberships.map((m) => ({ id: m.userId }));
     if (activeReps.length === 0) return null;
 
     if (cfg.strategy === 'ROUND_ROBIN') {
