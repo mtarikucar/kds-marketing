@@ -46,6 +46,28 @@ const LEAD_PRIORITIES = Object.values(LeadPriority) as [string, ...string[]];
  */
 export function registerContactsTools(registry: McpToolRegistry, deps: ContactsToolDeps): void {
   registry.register({
+    name: 'jeeta.list_companies',
+    description:
+      "List this workspace's B2B accounts (companies) with their id, name, domain and city. " +
+      'jeeta.create_contact REQUIRES a companyId and nothing else returned one, so start here — and search ' +
+      'before creating, or the same account gets added twice. Read-only.',
+    domain: 'contacts',
+    defer: true,
+    scopes: ['contacts.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({
+      search: z.string().max(200).optional().describe('Free-text match on company name.'),
+    }),
+    handler: async (ctx, args) => {
+      const rows = (await deps.companies.list(ctx.workspaceId, {
+        search: typeof args.search === 'string' ? args.search : undefined,
+      })) as Array<Record<string, unknown>>;
+      return rows.map((c) => ({ id: c.id, name: c.name, domain: c.domain ?? null, city: c.city ?? null }));
+    },
+  });
+
+  registry.register({
     name: 'jeeta.search_contacts',
     description:
       'Find people (contacts) in this workspace by name, phone or email — or list everyone attached to a given company by passing companyId. Read-only.',
