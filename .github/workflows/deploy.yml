@@ -231,7 +231,13 @@ jobs:
           NODE_ENV=production
           PORT=3000
           IMAGE_TAG=${VERSION}
-          DATABASE_URL=postgresql://marketing:${MARKETING_POSTGRES_PASSWORD}@postgres:5432/marketing?schema=public
+          # connection_limit 40 + pool_timeout 20: at Prisma's default (13 for
+          # this container's CPU count, 10s timeout) the top-of-hour scheduler
+          # fan-out exhausted the pool 26 times in 6h — every cron that fired
+          # in the storm failed with P2024 instead of queueing briefly. Postgres
+          # max_connections (100 default) comfortably covers 40 + the platform
+          # container + psql sessions.
+          DATABASE_URL=postgresql://marketing:${MARKETING_POSTGRES_PASSWORD}@postgres:5432/marketing?schema=public&connection_limit=40&pool_timeout=20
           MARKETING_POSTGRES_PASSWORD=${MARKETING_POSTGRES_PASSWORD}
           # Distributed rate-limit store (the redis service in docker-compose.prod.yml).
           REDIS_URL=redis://redis:6379
