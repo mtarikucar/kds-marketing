@@ -8,6 +8,10 @@ const action = (over: Record<string, unknown> = {}) => ({
   kind: 'CONTENT',
   status: 'APPROVED',
   priority: 'MEDIUM',
+  // Real rows always carry these (the submit schema requires them), and the
+  // dispatch forwards them to the executor as the payload-title fallback.
+  title: 'Weekly clips series',
+  rationale: 'Proof content converts best',
   payload: { title: 'Weekly clips' },
   ...over,
 });
@@ -68,7 +72,8 @@ function applyDeps(cfg: { strategy?: any; actions?: any[]; killSwitch?: boolean 
 }
 
 const proposed = (id: string, kind: string, over: Record<string, unknown> = {}) => ({
-  id, workspaceId: 'ws1', strategyId: 'strat1', kind, status: 'PROPOSED', priority: 'MEDIUM', payload: {}, ...over,
+  id, workspaceId: 'ws1', strategyId: 'strat1', kind, status: 'PROPOSED', priority: 'MEDIUM',
+  title: `${kind} action`, rationale: 'why it matters', payload: {}, ...over,
 });
 
 afterEach(() => {
@@ -80,7 +85,7 @@ describe('StrategyOrchestrator', () => {
     const { svc, prisma, content, leadHunt } = deps();
     const r = await svc.execute('ws1', 'a1');
 
-    expect(content.run).toHaveBeenCalledWith('ws1', { title: 'Weekly clips' });
+    expect(content.run).toHaveBeenCalledWith('ws1', { title: 'Weekly clips' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
     expect(leadHunt.run).not.toHaveBeenCalled();
     // RUNNING first, then DONE.
     expect(prisma.strategyAction.update).toHaveBeenNthCalledWith(1, { where: { id: 'a1' }, data: { status: 'RUNNING' } });
@@ -94,7 +99,7 @@ describe('StrategyOrchestrator', () => {
   it('routes LEAD_HUNT actions to the lead-hunt executor', async () => {
     const { svc, leadHunt, content } = deps({ action: action({ kind: 'LEAD_HUNT', payload: { icpDescription: 'salons' } }) });
     await svc.execute('ws1', 'a1');
-    expect(leadHunt.run).toHaveBeenCalledWith('ws1', { icpDescription: 'salons' });
+    expect(leadHunt.run).toHaveBeenCalledWith('ws1', { icpDescription: 'salons' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
     expect(content.run).not.toHaveBeenCalled();
   });
 
@@ -103,7 +108,7 @@ describe('StrategyOrchestrator', () => {
       action: action({ kind: 'COMMUNITY_ENGAGE', payload: { channelKey: 'reddit', community: 'r/Metin2', title: 'meme' } }),
     });
     const r = await svc.execute('ws1', 'a1');
-    expect(communityEngage.run).toHaveBeenCalledWith('ws1', { channelKey: 'reddit', community: 'r/Metin2', title: 'meme' });
+    expect(communityEngage.run).toHaveBeenCalledWith('ws1', { channelKey: 'reddit', community: 'r/Metin2', title: 'meme' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
     expect(content.run).not.toHaveBeenCalled();
     expect(leadHunt.run).not.toHaveBeenCalled();
     expect(prisma.strategyAction.update).toHaveBeenNthCalledWith(2, {
@@ -139,7 +144,7 @@ describe('StrategyOrchestrator', () => {
       action: action({ kind: 'AD_CAMPAIGN', payload: { objective: 'leads' } }),
     });
     const r = await svc.execute('ws1', 'a1');
-    expect(adCampaign.run).toHaveBeenCalledWith('ws1', { objective: 'leads' });
+    expect(adCampaign.run).toHaveBeenCalledWith('ws1', { objective: 'leads' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
     expect(content.run).not.toHaveBeenCalled();
     expect(leadHunt.run).not.toHaveBeenCalled();
     expect(prisma.strategyAction.update).toHaveBeenNthCalledWith(2, {
@@ -207,8 +212,8 @@ describe('StrategyOrchestrator.applyPlan (autonomy lanes)', () => {
     });
     const r = await svc.applyPlan('ws1');
     expect(r).toMatchObject({ lane: 'AUTONOMOUS', applied: 3, skipped: 0 });
-    expect(content.run).toHaveBeenCalledWith('ws1', { title: 't' });
-    expect(adCampaign.run).toHaveBeenCalledWith('ws1', { objective: 'leads' });
+    expect(content.run).toHaveBeenCalledWith('ws1', { title: 't' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
+    expect(adCampaign.run).toHaveBeenCalledWith('ws1', { objective: 'leads' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
     expect(communityEngage.run).toHaveBeenCalled();
     expect(store.a1.status).toBe('DONE');
     expect(store.a2.status).toBe('DONE');
@@ -226,7 +231,7 @@ describe('StrategyOrchestrator.applyPlan (autonomy lanes)', () => {
     expect(content.run).not.toHaveBeenCalled();
     expect(adCampaign.run).not.toHaveBeenCalled();
     expect(communityEngage.run).not.toHaveBeenCalled();
-    expect(leadHunt.run).toHaveBeenCalledWith('ws1', { icpDescription: 'salons' });
+    expect(leadHunt.run).toHaveBeenCalledWith('ws1', { icpDescription: 'salons' }, expect.objectContaining({ title: expect.any(String), rationale: expect.any(String) }));
     expect(store.a1.status).toBe('PROPOSED');
     expect(store.a2.status).toBe('PROPOSED');
     expect(store.a3.status).toBe('PROPOSED');

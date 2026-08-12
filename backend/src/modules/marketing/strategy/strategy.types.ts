@@ -41,7 +41,18 @@ export type BusinessArchetype =
  */
 export interface Executor {
   kind: ActionKind;
-  run(workspaceId: string, payload: unknown): Promise<{ resultRef?: string }>;
+  /**
+   * @param action the owning StrategyAction's own title/rationale. The
+   *   strategist writes the human-facing summary THERE (that is what the
+   *   submit schema asks for), so an executor that needs a title must fall
+   *   back to it rather than demand a duplicate inside the payload — that
+   *   contract mismatch failed real actions whose titles were perfectly good.
+   */
+  run(
+    workspaceId: string,
+    payload: unknown,
+    action?: { title: string; rationale: string },
+  ): Promise<{ resultRef?: string }>;
 }
 
 /** A channel the strategy recommends, with its archetype-adjusted fit score. */

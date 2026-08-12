@@ -31,8 +31,12 @@ export class ContentExecutor implements Executor {
     private readonly planner: SocialPlannerService,
   ) {}
 
-  async run(workspaceId: string, payload: unknown): Promise<{ resultRef?: string }> {
-    const p = this.parse(payload);
+  async run(
+    workspaceId: string,
+    payload: unknown,
+    action?: { title: string; rationale: string },
+  ): Promise<{ resultRef?: string }> {
+    const p = this.parse(payload, action);
 
     let body: string;
     try {
@@ -63,18 +67,25 @@ export class ContentExecutor implements Executor {
     return parts.length ? parts.join('\n') : undefined;
   }
 
-  private parse(payload: unknown): ContentPayload {
+  private parse(payload: unknown, action?: { title: string; rationale: string }): ContentPayload {
     if (!payload || typeof payload !== 'object') {
       throw new BadRequestException('CONTENT payload must be an object with a title');
     }
     const p = payload as Record<string, unknown>;
-    const title = typeof p.title === 'string' ? p.title.trim() : '';
+    // The strategist writes the human-facing title on the ACTION (that is what
+    // the submit schema asks of it); payload.title is an optional override.
+    // Demanding a duplicate inside the payload failed real actions whose
+    // titles were perfectly good — likewise the action's rationale is the
+    // natural angle when the payload doesn't carry one.
+    const title =
+      (typeof p.title === 'string' ? p.title.trim() : '') || action?.title?.trim() || '';
     if (!title) {
       throw new BadRequestException('CONTENT payload requires a non-empty title');
     }
+    const rawAngle = typeof p.angle === 'string' && p.angle.trim() ? p.angle.trim() : undefined;
     return {
       title,
-      angle: typeof p.angle === 'string' && p.angle.trim() ? p.angle.trim() : undefined,
+      angle: rawAngle ?? (action?.rationale?.trim() || undefined),
       formats: Array.isArray(p.formats) ? p.formats.filter((f): f is string => typeof f === 'string') : undefined,
       tone: typeof p.tone === 'string' && p.tone.trim() ? p.tone.trim() : undefined,
       channelKey: typeof p.channelKey === 'string' && p.channelKey.trim() ? p.channelKey.trim() : undefined,

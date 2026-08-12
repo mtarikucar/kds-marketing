@@ -68,3 +68,40 @@ describe('ContentExecutor', () => {
     await expect(svc.run('ws1', null)).rejects.toThrow(BadRequestException);
   });
 });
+
+/**
+ * The strategist writes the human-facing title on the ACTION — that is what the
+ * submit schema asks of it — so the executor must fall back to it instead of
+ * demanding a duplicate inside the payload. The old contract failed a real,
+ * perfectly-titled action with "CONTENT payload requires a non-empty title".
+ */
+describe('ContentExecutor — action title/rationale fallback', () => {
+  it('drafts from the action title when the payload has none', async () => {
+    const { svc: executor, content, planner } = deps({ post: { id: 'post-9', status: 'DRAFT' } });
+
+    const res = await executor.run(
+      'ws1',
+      { channelKey: 'instagram', format: 'reels' },
+      { title: 'Before/After foto→figür Reels serisi', rationale: 'Benzeyecek mi itirazını kanıtla yıkar' },
+    );
+
+    expect(res.resultRef).toBe('post:post-9');
+    const arg = content.compose.mock.calls[0][1];
+    // Title from the action; the rationale serves as the angle.
+    expect(arg.goal).toContain('Before/After foto→figür Reels serisi');
+    expect(arg.goal).toContain('Benzeyecek mi itirazını kanıtla yıkar');
+  });
+
+  it('payload.title still wins when both exist', async () => {
+    const { svc: executor, content } = deps();
+
+    await executor.run('ws1', { title: 'Payload başlığı' }, { title: 'Aksiyon başlığı', rationale: 'r' });
+
+    expect(content.compose.mock.calls[0][1].goal).toContain('Payload başlığı');
+  });
+
+  it('still refuses when neither the payload nor the action carries a title', async () => {
+    const { svc: executor } = deps();
+    await expect(executor.run('ws1', { channelKey: 'x' })).rejects.toThrow(/requires a non-empty title/);
+  });
+});
