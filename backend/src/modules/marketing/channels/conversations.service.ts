@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from './message-sender.service';
 import { ConversationStreamService } from './conversation-stream.service';
 
@@ -18,11 +19,74 @@ export interface ConversationListFilters {
  */
 @Injectable()
 export class ConversationsService {
+  private readonly logger = new Logger(ConversationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sender: MessageSenderService,
     private readonly stream: ConversationStreamService,
+    private readonly notifications: MarketingNotificationsService,
   ) {}
+
+  /**
+   * Resolve an assignee against the workspace's MEMBERSHIP, which is the source
+   * of truth for who belongs here and whether they are still active.
+   *
+   * Both assign paths used to read `MarketingUser {id, workspaceId}` instead.
+   * That mirror is stamped when the user row is created and never re-derived,
+   * so it fails in both directions: a teammate who joined this workspace by
+   * membership but was created in another one is rejected outright — you
+   * cannot hand them a thread at all — while someone whose membership was
+   * revoked still passes, because their user row keeps the old workspaceId.
+   * (Prod already has a membership whose user's home workspace differs.)
+   *
+   * Neither path checked STATUS at all, so a deactivated member could be handed
+   * live customer conversations: the thread leaves the unassigned queue and
+   * lands with someone who cannot log in, while the customer waits.
+   *
+   * Unlike a LEAD (REP-only, because conversion stamps a commission), a
+   * conversation may go to any ACTIVE member — owners and managers work the
+   * inbox too.
+   */
+  private async assertActiveMember(workspaceId: string, userId: string): Promise<void> {
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId, workspaceId },
+      select: { status: true },
+    });
+    if (!membership) throw new NotFoundException('Assignee not found');
+    if (membership.status !== 'ACTIVE') {
+      throw new BadRequestException('Assignee is not an active member of this workspace');
+    }
+  }
+
+  /**
+   * Tell the assignee a thread is now theirs. Lead assignment and task
+   * assignment both notify; the inbox — where a customer is actually waiting on
+   * the other end — was the one assignment verb that stayed silent, so a
+   * handed-off thread sat unseen until someone happened to open the inbox and
+   * filter by themselves. Best-effort: the assignment is the delivery, and a
+   * notification failure must not undo it.
+   */
+  private async notifyAssignee(
+    workspaceId: string,
+    conversationId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.notifications
+      .create({
+        workspaceId,
+        userId,
+        type: 'CONVERSATION_ASSIGNED',
+        title: 'A conversation was assigned to you',
+        message: 'A customer conversation is now waiting for your reply.',
+        metadata: { conversationId, source: 'inbox' },
+      })
+      .catch((e) =>
+        this.logger.warn(
+          `conversation ${conversationId}: assignee notification failed: ${(e as Error)?.message ?? e}`,
+        ),
+      );
+  }
 
   async list(workspaceId: string, filters: ConversationListFilters = {}) {
     const convos = await this.prisma.conversation.findMany({
@@ -130,17 +194,11 @@ export class ConversationsService {
 
   async assign(workspaceId: string, conversationId: string, assignedToId: string | null) {
     const target = assignedToId && assignedToId.length > 0 ? assignedToId : null;
-    if (target) {
-      // The assignee must belong to this workspace (no cross-tenant assign) —
-      // the same guard the bulk() path enforces; the single path was missing it,
-      // letting a foreign/unknown id be written as the conversation's owner.
-      const user = await this.prisma.marketingUser.findFirst({
-        where: { id: target, workspaceId },
-        select: { id: true },
-      });
-      if (!user) throw new NotFoundException('Assignee not found');
-    }
+    if (target) await this.assertActiveMember(workspaceId, target);
     await this.scopedUpdate(workspaceId, conversationId, { assignedToId: target });
+    // After the write: an assignment that threw must not have announced itself.
+    // Unassigning (target null) notifies nobody — there is no new owner.
+    if (target) await this.notifyAssignee(workspaceId, conversationId, target);
     return this.touch(workspaceId, conversationId);
   }
 
@@ -203,6 +261,7 @@ export class ConversationsService {
     if (ids.length === 0) return { updated: 0 };
 
     let data: Record<string, unknown>;
+    let assignTarget: string | null = null;
     switch (action) {
       case 'close':
         data = { status: 'CLOSED', closedAt: new Date() };
@@ -215,14 +274,8 @@ export class ConversationsService {
         break;
       case 'assign': {
         const target = payload.assignedToId && payload.assignedToId.length > 0 ? payload.assignedToId : null;
-        if (target) {
-          // The assignee must belong to this workspace (no cross-tenant assign).
-          const user = await this.prisma.marketingUser.findFirst({
-            where: { id: target, workspaceId },
-            select: { id: true },
-          });
-          if (!user) throw new NotFoundException('Assignee not found');
-        }
+        if (target) await this.assertActiveMember(workspaceId, target);
+        assignTarget = target;
         data = { assignedToId: target };
         break;
       }
@@ -233,6 +286,17 @@ export class ConversationsService {
       where: { id: { in: ids }, workspaceId },
       data,
     });
+    // One notification per thread actually handed over. Ids belonging to
+    // another workspace fell out of the updateMany above, so notify only for
+    // rows this workspace really owns — otherwise a bulk call padded with
+    // foreign ids would announce threads the assignee never received.
+    if (assignTarget && res.count > 0) {
+      const owned = await this.prisma.conversation.findMany({
+        where: { id: { in: ids }, workspaceId },
+        select: { id: true },
+      });
+      for (const c of owned) await this.notifyAssignee(workspaceId, c.id, assignTarget);
+    }
     return { updated: res.count };
   }
 

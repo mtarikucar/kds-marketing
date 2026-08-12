@@ -7,6 +7,7 @@ function makePrisma() {
   return {
     conversation: {
       findFirst: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     conversationNote: {
@@ -14,18 +15,21 @@ function makePrisma() {
       create: jest.fn().mockResolvedValue({ id: 'n1' }),
     },
     marketingUser: { findFirst: jest.fn() },
+    workspaceMembership: { findFirst: jest.fn() },
   };
 }
 
 describe('ConversationsService — notes + bulk', () => {
   let prisma: ReturnType<typeof makePrisma>;
   let stream: { push: jest.Mock };
+  let notifications: { create: jest.Mock };
   let svc: ConversationsService;
 
   beforeEach(() => {
     prisma = makePrisma();
     stream = { push: jest.fn() };
-    svc = new ConversationsService(prisma as any, {} as any, stream as any);
+    notifications = { create: jest.fn().mockResolvedValue({}) };
+    svc = new ConversationsService(prisma as any, {} as any, stream as any, notifications as any);
   });
 
   describe('addNote', () => {
@@ -55,17 +59,43 @@ describe('ConversationsService — notes + bulk', () => {
       expect(arg.data.closedAt).toBeInstanceOf(Date);
     });
 
-    it('assign validates the assignee belongs to the workspace', async () => {
-      prisma.marketingUser.findFirst.mockResolvedValue(null);
+    it('assign rejects someone with no membership in this workspace', async () => {
+      prisma.workspaceMembership.findFirst.mockResolvedValue(null);
       await expect(svc.bulk(WS, ['a'], 'assign', { assignedToId: 'foreign' })).rejects.toBeInstanceOf(NotFoundException);
       expect(prisma.conversation.updateMany).not.toHaveBeenCalled();
     });
 
-    it('assign with a valid user sets assignedToId', async () => {
-      prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u2' });
+    it('assign to an active member sets assignedToId', async () => {
+      prisma.workspaceMembership.findFirst.mockResolvedValue({ status: 'ACTIVE' });
       prisma.conversation.updateMany.mockResolvedValue({ count: 1 });
+      prisma.conversation.findMany.mockResolvedValue([{ id: 'a' }]);
       await svc.bulk(WS, ['a'], 'assign', { assignedToId: 'u2' });
       expect(prisma.conversation.updateMany.mock.calls[0][0].data).toEqual({ assignedToId: 'u2' });
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Ids from another workspace fall out of the scoped updateMany, so they
+     * must fall out of the announcements too — otherwise a bulk call padded
+     * with foreign ids tells the assignee about threads they never received.
+     */
+    it('notifies only for threads this workspace actually owns', async () => {
+      prisma.workspaceMembership.findFirst.mockResolvedValue({ status: 'ACTIVE' });
+      prisma.conversation.updateMany.mockResolvedValue({ count: 1 });
+      prisma.conversation.findMany.mockResolvedValue([{ id: 'a' }]);
+      await svc.bulk(WS, ['a', 'foreign-1', 'foreign-2'], 'assign', { assignedToId: 'u2' });
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+      expect(notifications.create.mock.calls[0][0]).toMatchObject({
+        metadata: { conversationId: 'a', source: 'inbox' },
+      });
+    });
+
+    it('close/reopen/markRead announce nothing — no owner changed', async () => {
+      prisma.conversation.updateMany.mockResolvedValue({ count: 2 });
+      for (const action of ['close', 'reopen', 'markRead'] as const) {
+        await svc.bulk(WS, ['a', 'b'], action);
+      }
+      expect(notifications.create).not.toHaveBeenCalled();
     });
 
     it('empty id set is a no-op', async () => {
