@@ -151,6 +151,19 @@ export class StrategySynthesisService {
     const session = await this.prisma.strategyIntakeSession.findFirst({ where: { id: sessionId, workspaceId } });
     if (!session) throw new NotFoundException('intake session not found');
 
+    // The workspace's Brand Brain, when it exists, OUTRANKS the intake session.
+    // The session is a snapshot — an auto-analysis of whatever the crawler saw
+    // plus interview answers, both frozen at intake time — while the brand
+    // profile is the owner-maintained live definition of the business (the
+    // whole product promise of "Marka Beyni" is that it shapes every piece of
+    // AI output). Synthesizing without it produced strategies that contradicted
+    // facts the owner had already corrected: wrong product mode, wrong prices,
+    // channels the business never sold through. Found live on a customer
+    // workspace whose re-synthesis repeated every mistake of v1 verbatim.
+    const brandProfile = await this.prisma.brandProfile
+      .findUnique({ where: { workspaceId } })
+      .catch(() => null);
+
     return this.runs.track(
       workspaceId,
       { agent: 'strategy-synthesis', goal: 'Synthesize marketing strategy', input: { sessionId } },
@@ -169,11 +182,19 @@ export class StrategySynthesisService {
           // otherwise the model would burn turns on tools that return nothing.
           const tools = researchEnabled ? [...RESEARCH_TOOLS, SUBMIT_STRATEGY_TOOL] : [SUBMIT_STRATEGY_TOOL];
           const messages: Anthropic.MessageParam[] = [
-            { role: 'user', content: this.buildBrief(session, extraContext, researchEnabled) },
+            { role: 'user', content: this.buildBrief(session, extraContext, researchEnabled, brandProfile) },
           ];
 
           let submission: { archetype?: unknown; brief?: unknown; actions?: unknown } | null = null;
           let toolCalls = 0;
+          // One bounce, not a loop: an empty ActionPlan is almost always the
+          // model treating actions as optional (both live syntheses for the
+          // first customer workspace submitted a full brief + zero actions,
+          // leaving the strategy console with nothing to approve). Push back
+          // once with an instructive tool_result; if the resubmission is STILL
+          // empty, accept it — a brief without a plan beats a hard failure,
+          // and the model has by then twice judged no action worth proposing.
+          let emptyPlanBounced = false;
           const deadline = Date.now() + MAX_WALL_MS;
 
           for (let i = 0; i < MAX_ITERS && Date.now() < deadline && toolCalls < MAX_TOOL_CALLS; i++) {
@@ -198,7 +219,21 @@ export class StrategySynthesisService {
             let submitted = false;
             for (const tu of res.toolUses) {
               if (tu.name === 'submit_strategy') {
-                submission = (tu.input ?? {}) as typeof submission;
+                const candidate = (tu.input ?? {}) as typeof submission;
+                if (!emptyPlanBounced && this.normalizeActions(candidate?.actions).length === 0) {
+                  emptyPlanBounced = true;
+                  results.push({
+                    type: 'tool_result',
+                    tool_use_id: tu.id,
+                    content: JSON.stringify({
+                      received: false,
+                      error:
+                        'Your ActionPlan is empty. The plan is what the operator approves and the system executes — a strategy without one changes nothing. Re-submit the SAME strategy WITH 3-8 prioritized actions (valid kinds only) covering your highest-fit channels; include at least one they can start this week.',
+                    }),
+                  });
+                  continue;
+                }
+                submission = candidate;
                 results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify({ received: true }) });
                 submitted = true;
               } else {
@@ -335,12 +370,32 @@ export class StrategySynthesisService {
     session: { autoAnalysis: unknown; transcript: unknown },
     extraContext?: string,
     researchEnabled = true,
+    brandProfile?: Record<string, unknown> | null,
   ): string {
     const qa = extractQa(session.transcript);
+    // Owner-maintained fact sheet. Serialized compactly and capped: the
+    // strategist needs the facts, not a token flood — 6000 chars comfortably
+    // holds a fully-filled profile while bounding the prompt.
+    const brand = brandProfile
+      ? JSON.stringify({
+          brandName: brandProfile.brandName,
+          tagline: brandProfile.tagline,
+          description: brandProfile.description,
+          valueProps: brandProfile.valueProps,
+          toneWords: brandProfile.toneWords,
+          voiceGuide: brandProfile.voiceGuide,
+          icpDescription: brandProfile.icpDescription,
+          audienceObjections: brandProfile.audienceObjections,
+          offerings: brandProfile.offerings,
+        }).slice(0, 6000)
+      : '';
     const closing = researchEnabled
       ? 'Research the market/audience/competitors with the tools, then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.'
       : 'Research tools are unavailable in this workspace — synthesize directly from the auto-analysis and interview answers above (use your own market knowledge to fill gaps), then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.';
     return [
+      brand
+        ? `BRAND PROFILE (owner-maintained ground truth — where it conflicts with the auto-analysis or interview below, the BRAND PROFILE wins; it is newer and owner-confirmed): ${brand}`
+        : '',
       `AUTO-ANALYSIS: ${JSON.stringify(session.autoAnalysis ?? {})}`,
       this.priorsLine(session.autoAnalysis),
       qa ? `INTERVIEW (operator answers):\n${qa}` : '',
@@ -373,7 +428,8 @@ export class StrategySynthesisService {
     'Research the market, audience and competitors with the tools, then submit ONE strategy via submit_strategy. ' +
     'Classify the business into exactly one BusinessArchetype key (e.g. B2B_LOCAL_SERVICE, B2B_SAAS, B2C_ECOMMERCE, B2C_COMMUNITY_NICHE, CREATOR_MEDIA, LOCAL_RETAIL_FOOD, OTHER). ' +
     'Produce a COMPLETE brief: identity (product/voice/positioning/usp), audience (ICP), channels (key + 0-1 fitScore + rationale), contentPillars (title/angle/formats/tone), goals (objective + kpis), budget, competitors. ' +
-    'Then a prioritized ActionPlan of typed StrategyAction items (kind ∈ LEAD_HUNT|CONTENT|CHANNEL_SETUP|AD_CAMPAIGN|COMMUNITY_ENGAGE) with executor-ready payloads. ' +
+    'Then a prioritized ActionPlan of typed StrategyAction items (kind ∈ LEAD_HUNT|CONTENT|CHANNEL_SETUP|AD_CAMPAIGN|COMMUNITY_ENGAGE) with executor-ready payloads — the ActionPlan is REQUIRED, never empty: it is what the operator approves and the system executes. ' +
+    'When a BRAND PROFILE is supplied, treat it as owner-confirmed fact: on any conflict with the auto-analysis, the interview or your own research, the BRAND PROFILE wins (it is newer, and the owner wrote it). Pay particular attention to its stated prices, product modes and to any channel the owner says has actually produced sales. ' +
     'If PRIORS are supplied for a suggested archetype, START from those channel fit-scores and probe angles, then adjust them with what your research finds. ' +
     'Be archetype-adaptive in HOW you drive growth: ' +
     'a B2B business (leadApproach B2B_PROSPECT) grows by prospecting named accounts — favour LEAD_HUNT actions on channels like linkedin/email/google-maps. ' +

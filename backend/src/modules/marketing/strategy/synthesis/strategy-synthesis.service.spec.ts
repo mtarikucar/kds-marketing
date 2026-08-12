@@ -2,6 +2,14 @@ import { NotFoundException } from '@nestjs/common';
 import { StrategySynthesisService } from './strategy-synthesis.service';
 import { creditCost } from '../../ai/ai-credit-costs';
 
+const ACTION = {
+  kind: 'CONTENT',
+  title: 'Reveal reel: photo -> figure',
+  rationale: 'Kills the likeness objection with proof',
+  priority: 'HIGH',
+  payload: { channelKey: 'instagram' },
+};
+
 const GOOD_BRIEF = {
   identity: { product: 'Private Metin2 server', voice: 'playful, nostalgic', positioning: 'The classic-era server', usp: 'Pre-2010 mechanics, no pay-to-win' },
   audience: 'Nostalgic Metin2 veterans, 20-35, EU',
@@ -49,6 +57,8 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
       update: jest.fn().mockResolvedValue({ id: 'strat1' }),
     },
     strategyAction: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    // No brand profile by default — tests that want grounding override this.
+    brandProfile: { findUnique: jest.fn().mockResolvedValue(null) },
   };
   const orchestrator = { applyPlan: jest.fn().mockResolvedValue({ lane: 'ASSISTED', applied: 0, skipped: 0 }) };
   // The strategy provisions the default agent itself — best-effort, never fails synthesis.
@@ -171,7 +181,7 @@ describe('StrategySynthesisService', () => {
   it('rejects + refunds + does NOT upsert on an invalid brief', async () => {
     const badBrief = { ...GOOD_BRIEF, channels: [] }; // channels min(1) violated
     const { svc, credits, prisma } = deps({
-      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [] })])],
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [ACTION] })])],
     });
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow(/invalid strategy brief/);
     // The single turn RAN — a real Opus call at maxTokens 4000 — so it stays
@@ -221,7 +231,7 @@ describe('StrategySynthesisService', () => {
 describe('StrategySynthesisService — default agent provisioning', () => {
   it('hands the validated brief to provisioning after persisting', async () => {
     const { svc, provisioning } = deps({
-      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [] })])],
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [ACTION] })])],
     });
     await svc.synthesize('ws1', 'sess1');
 
@@ -234,9 +244,80 @@ describe('StrategySynthesisService — default agent provisioning', () => {
   it('does not provision when the brief is rejected', async () => {
     const badBrief = { ...GOOD_BRIEF, channels: [] };
     const { svc, provisioning } = deps({
-      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [] })])],
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [ACTION] })])],
     });
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow();
     expect(provisioning.ensureDefaultAgent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The brain must read the brand brain. Synthesis used to see ONLY the intake
+ * session — an auto-analysis + interview frozen at intake time — so a
+ * re-synthesis happily repeated facts the owner had since corrected in the
+ * brand profile (wrong product mode, wrong prices, dead channels). And both
+ * live syntheses for the first customer workspace submitted a complete brief
+ * with an EMPTY ActionPlan, which sailed straight through — a strategy console
+ * with nothing to approve.
+ */
+describe('StrategySynthesisService — brand grounding + non-empty plan', () => {
+  it('injects the ACTIVE brand profile into the kickoff as overriding ground truth', async () => {
+    const { svc, complete, prisma } = deps({
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [ACTION] })])],
+    });
+    prisma.brandProfile = {
+      findUnique: jest.fn().mockResolvedValue({
+        brandName: 'Figurunica',
+        description: 'iki taraflı 3D pazaryeri',
+        offerings: [{ name: 'Fotoğraftan Özel Figür', price: '₺3.500 - ₺4.000' }],
+      }),
+    };
+
+    await svc.synthesize('ws1', 'sess1');
+
+    const kickoff = complete.mock.calls[0][0].messages[0].content as string;
+    expect(kickoff).toContain('BRAND PROFILE');
+    expect(kickoff).toContain('the BRAND PROFILE wins');
+    expect(kickoff).toContain('₺3.500 - ₺4.000');
+    // Ground truth precedes the stale snapshot it overrides.
+    expect(kickoff.indexOf('BRAND PROFILE')).toBeLessThan(kickoff.indexOf('AUTO-ANALYSIS'));
+  });
+
+  it('omits the brand block when the workspace has no profile', async () => {
+    const { svc, complete } = deps({
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [ACTION] })])],
+    });
+
+    await svc.synthesize('ws1', 'sess1');
+
+    const kickoff = complete.mock.calls[0][0].messages[0].content as string;
+    expect(kickoff).not.toContain('BRAND PROFILE');
+  });
+
+  it('bounces an empty ActionPlan back to the model once, then persists the retry', async () => {
+    const emptySubmit = completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [] })]);
+    const fullSubmit = completion([toolUse('t3', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [ACTION] })]);
+    const { svc, complete, prisma } = deps({ completions: [emptySubmit, fullSubmit] });
+
+    const r = await svc.synthesize('ws1', 'sess1');
+
+    expect(r.actionCount).toBe(1);
+    expect(complete).toHaveBeenCalledTimes(2);
+    // The bounce is a tool_result ERROR the model can read, not a silent accept.
+    const secondTurnMessages = complete.mock.calls[1][0].messages;
+    const bounce = JSON.stringify(secondTurnMessages);
+    expect(bounce).toContain('ActionPlan is empty');
+    expect(prisma.marketingStrategy.upsert ?? prisma.marketingStrategy.update ?? true).toBeTruthy();
+  });
+
+  it('accepts a STILL-empty plan on the second submission (brief beats hard failure)', async () => {
+    const emptySubmit = (id: string) =>
+      completion([toolUse(id, 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [] })]);
+    const { svc, complete } = deps({ completions: [emptySubmit('t2'), emptySubmit('t3')] });
+
+    const r = await svc.synthesize('ws1', 'sess1');
+
+    expect(r.actionCount).toBe(0);
+    expect(complete).toHaveBeenCalledTimes(2); // exactly one bounce, no loop
   });
 });
