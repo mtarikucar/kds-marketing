@@ -540,6 +540,8 @@ export class ConversationAiEngineService implements OnModuleInit {
       goals: string | null;
       guardrails: string | null;
       language: string;
+      /** Jsonb string[] — the contact details this agent should collect. */
+      captureFields?: unknown;
     },
     lead: { businessName?: string; contactPerson?: string; phone?: string | null; email?: string | null; city?: string | null; status?: string } | null,
     kb: Array<{ title: string; snippet: string }>,
@@ -573,6 +575,36 @@ export class ConversationAiEngineService implements OnModuleInit {
     parts.push(
       'When the customer shares contact or qualifying details, call capture_lead_fields. If they want a human or you cannot help safely, call request_human_handoff.',
     );
+    // The agent's CONFIGURED capture list. Without this the profile field was
+    // dead config: the panel let an operator choose which details to collect
+    // and the engine never read it, so the agent only recorded what a visitor
+    // happened to volunteer. Every web-chat thread then produced a lead named
+    // "Web chat contact / Unknown" with no phone or email — a lead the rest of
+    // the product (call, email, convert) cannot act on at all.
+    //
+    // Ask only for what is still MISSING: re-asking for a detail already on
+    // the record reads as not listening.
+    const wanted = Array.isArray(agent.captureFields)
+      ? (agent.captureFields as unknown[]).filter((f): f is string => typeof f === 'string' && !!f.trim())
+      : [];
+    if (wanted.length) {
+      const have = new Set(
+        ([
+          lead?.contactPerson ? 'name' : '',
+          lead?.phone ? 'phone' : '',
+          lead?.email ? 'email' : '',
+          lead?.city ? 'city' : '',
+        ] as string[]).filter(Boolean),
+      );
+      const missing = wanted.filter((f) => !have.has(f));
+      if (missing.length) {
+        parts.push(
+          `Still needed from this customer: ${missing.join(', ')}. Ask for ONE at a time, only where it fits ` +
+            'the conversation naturally (never as an interrogation), and call capture_lead_fields the moment ' +
+            'they give it.',
+        );
+      }
+    }
     return parts.filter(Boolean).join('\n');
   }
 

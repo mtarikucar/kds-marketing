@@ -92,6 +92,21 @@ export function registerAgentTools(registry: McpToolRegistry, deps: AgentToolDep
         .describe('What it must never do or claim — e.g. facts it may not invent, prices it may not quote.'),
       language: z.string().max(8).optional().describe('Reply language code, e.g. "tr".'),
       status: z.enum(['ACTIVE', 'PAUSED']).optional().describe('PAUSED stops it answering without deleting it.'),
+      captureFields: z
+        .array(z.enum(['name', 'phone', 'email', 'city']))
+        .max(4)
+        .optional()
+        .describe(
+          'Contact details the agent should work into the conversation and record. Without these, an inbound ' +
+            'chat produces an unnamed, uncontactable lead — nothing downstream (call, email, convert) can act on it.',
+        ),
+      maxRepliesPerConvoDaily: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe('Cap on AI replies per conversation per day — the runaway-loop guard.'),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');

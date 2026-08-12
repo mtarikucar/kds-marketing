@@ -399,4 +399,41 @@ describe('ConversationAiEngineService.reply', () => {
     expect(data.phone).toBe('+90 555 111 22 33');
     expect(data.phoneNormalized).toBe('905551112233');
   });
+
+  /**
+   * `AgentProfile.captureFields` was stored by the panel and NEVER read by the
+   * engine — dead configuration. The consequence showed up live: every web-chat
+   * thread produced a lead named "Web chat contact / Unknown" with no phone or
+   * email, which nothing downstream (call, email, convert) can act on.
+   */
+  describe('configured capture fields', () => {
+    it('tells the agent what is still missing, and not what the lead already has', async () => {
+      const h = build({ agent: { captureFields: ['name', 'phone', 'email'] } });
+      // The lead already has a contactPerson (the default fixture) but no phone/email.
+      await run(h);
+  
+      const system = h.anthropic.complete.mock.calls[0][0].system as string;
+      expect(system).toContain('Still needed from this customer');
+      expect(system).toContain('phone');
+      expect(system).toContain('email');
+      // Already known — re-asking reads as not listening.
+      expect(system).not.toMatch(/Still needed from this customer:[^\n]*name/);
+    });
+  
+    it('says nothing when every configured field is already known', async () => {
+      const h = build({ agent: { captureFields: ['name'] } });
+      await run(h);
+      const system = h.anthropic.complete.mock.calls[0][0].system as string;
+      expect(system).not.toContain('Still needed from this customer');
+    });
+  
+    it('says nothing when the agent has no captureFields configured (unchanged behaviour)', async () => {
+      const h = build();
+      await run(h);
+      const system = h.anthropic.complete.mock.calls[0][0].system as string;
+      expect(system).not.toContain('Still needed from this customer');
+      // The always-on instruction stays: capture what is volunteered.
+      expect(system).toContain('capture_lead_fields');
+    });
+  });
 });
