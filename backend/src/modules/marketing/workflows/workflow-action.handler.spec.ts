@@ -302,4 +302,70 @@ describe('WorkflowActionHandler tag actions', () => {
     expect(tags.unassignFromLead).not.toHaveBeenCalled();
     expect(res.output?.result).toContain('skipped');
   });
+
+/**
+ * A TASK is not a LEAD. Lead ownership is REP-only for commission integrity;
+ * task ownership is not (MarketingTask takes any member). Borrowing the lead
+ * rule meant a workspace with no rep — every workspace on day one — silently
+ * got NO follow-up tasks: the owner arms an automation and nothing happens.
+ * Seen live on the first customer workspace.
+ */
+describe('WorkflowActionHandler create_task assignee fallback', () => {
+  const mkTaskHandler = (prisma: any, autoAssigner: any) =>
+    new WorkflowActionHandler(
+      prisma, null as any, null as any, null as any,
+      autoAssigner, null as any, null as any, null as any, null as any,
+    );
+
+  const taskCtx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
+
+  it('falls back to the workspace OWNER when there is no rep', async () => {
+    const prisma: any = {
+      marketingTask: { create: jest.fn().mockResolvedValue({ id: 't1' }) },
+      workspaceMembership: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) =>
+          where.role === 'OWNER' ? { userId: 'owner-1' } : null,
+        ),
+      },
+    };
+    const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) }; // no REPs
+    const handler = mkTaskHandler(prisma, autoAssigner);
+
+    const res = await handler.execute({ type: 'create_task', title: 'Ara {{lead.businessName}}' } as any, taskCtx);
+
+    expect(res.output?.result).toBe('task created');
+    expect(prisma.marketingTask.create.mock.calls[0][0].data.assignedToId).toBe('owner-1');
+  });
+
+  it('prefers the lead owner, then a rep, before falling back', async () => {
+    const prisma: any = {
+      marketingTask: { create: jest.fn().mockResolvedValue({ id: 't1' }) },
+      workspaceMembership: { findFirst: jest.fn() },
+    };
+    const autoAssigner = { pickAssignee: jest.fn() };
+    const handler = mkTaskHandler(prisma, autoAssigner);
+
+    await handler.execute(
+      { type: 'create_task', title: 't' } as any,
+      { ...taskCtx, lead: { id: 'lead-1', assignedToId: 'rep-owner' } } as any,
+    );
+
+    expect(prisma.marketingTask.create.mock.calls[0][0].data.assignedToId).toBe('rep-owner');
+    expect(autoAssigner.pickAssignee).not.toHaveBeenCalled();
+    expect(prisma.workspaceMembership.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('still skips when the workspace has nobody active at all', async () => {
+    const prisma: any = {
+      marketingTask: { create: jest.fn() },
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const handler = mkTaskHandler(prisma, { pickAssignee: jest.fn().mockResolvedValue(null) });
+
+    const res = await handler.execute({ type: 'create_task', title: 't' } as any, taskCtx);
+
+    expect(res.output?.result).toContain('skipped');
+    expect(prisma.marketingTask.create).not.toHaveBeenCalled();
+  });
+});
 });
