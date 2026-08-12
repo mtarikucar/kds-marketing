@@ -193,11 +193,22 @@ describe('Faz 5 D1 — McpPrincipalService pins workspaceId into every Prisma fi
     member: { id: 'u2', role: 'REP', status: 'ACTIVE', firstName: 'A', lastName: 'B' },
   };
 
+  // Belonging/role/status now resolve from the membership (the MarketingUser
+  // copies are frozen at creation); the sentinel lane still reads the user row.
+  const membershipRow = (user: Record<string, unknown>, role = 'REP') => ({
+    role,
+    status: 'ACTIVE',
+    user: { ...user, role, status: 'ACTIVE', customRoleId: null },
+  });
+
   it.each([
     ['an OAuth session', { workspaceId: CALLER_WS, grantedScopes: [], userId: 'u9' }, rows.oauth],
     ['an API-key session', { workspaceId: CALLER_WS, grantedScopes: [] }, rows.sentinel],
   ])('resolve() on %s reads only rows of the caller workspace', async (_label, ctx, row) => {
-    const prisma = { marketingUser: { findFirst: jest.fn().mockResolvedValue(row) } };
+    const prisma = {
+      marketingUser: { findFirst: jest.fn().mockResolvedValue(row) },
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue(membershipRow(row)) },
+    };
     await new McpPrincipalService(prisma as never).resolve(ctx as never);
     const wheres = allWheres(prisma as never);
     expect(wheres.length).toBeGreaterThan(0);
@@ -205,7 +216,10 @@ describe('Faz 5 D1 — McpPrincipalService pins workspaceId into every Prisma fi
   });
 
   it('assertActiveMember() reads only rows of the caller workspace', async () => {
-    const prisma = { marketingUser: { findFirst: jest.fn().mockResolvedValue(rows.member) } };
+    const prisma = {
+      marketingUser: { findFirst: jest.fn().mockResolvedValue(rows.member) },
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue(membershipRow(rows.member)) },
+    };
     await new McpPrincipalService(prisma as never).assertActiveMember(CALLER_WS, 'u2');
     const wheres = allWheres(prisma as never);
     expect(wheres.length).toBeGreaterThan(0);
