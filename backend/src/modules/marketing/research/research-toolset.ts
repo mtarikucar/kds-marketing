@@ -116,25 +116,38 @@ export async function dispatchResearchTool(
         break;
       }
       case 'scrape_page': {
-        if (!deps.sources.firecrawl.isConfigured()) {
+        // Firecrawl wins the slot when configured; the native provider
+        // (Anthropic web_fetch, platform key) is the keyless fallback so
+        // scraping is never dead just because no vendor was bought.
+        const scraper = deps.sources.firecrawl.isConfigured()
+          ? deps.sources.firecrawl
+          : deps.sources.native.isConfigured()
+            ? deps.sources.native
+            : null;
+        if (!scraper) {
           ok = false;
           result = notConfigured('firecrawl');
           error = (result as { error: string }).error;
           break;
         }
-        result = await deps.sources.firecrawl.scrape(String(args.url ?? ''));
+        result = await scraper.scrape(String(args.url ?? ''));
         await meter('FIRECRAWL_PAGE');
         break;
       }
       case 'search_web': {
-        if (!deps.sources.firecrawl.isConfigured()) {
+        const searcher = deps.sources.firecrawl.isConfigured()
+          ? deps.sources.firecrawl
+          : deps.sources.native.isConfigured()
+            ? deps.sources.native
+            : null;
+        if (!searcher) {
           ok = false;
           result = notConfigured('firecrawl');
           error = (result as { error: string }).error;
           break;
         }
         const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 20);
-        result = await deps.sources.firecrawl.searchWeb(String(args.query ?? ''), limit);
+        result = await searcher.searchWeb(String(args.query ?? ''), limit);
         await meter('FIRECRAWL_PAGE');
         break;
       }

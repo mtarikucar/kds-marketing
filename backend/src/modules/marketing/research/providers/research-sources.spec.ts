@@ -1,6 +1,7 @@
 import { FirecrawlProvider } from './firecrawl.provider';
 import { ApifyProvider } from './apify.provider';
 import { ResearchSourcesService } from './research-sources.service';
+import { NativeWebProvider } from './native-web.provider';
 
 /** With no keys the whole research source layer must be provably inert. */
 describe('Research source providers (env-gated)', () => {
@@ -9,25 +10,36 @@ describe('Research source providers (env-gated)', () => {
     process.env = { ...OLD };
   });
 
-  it('reports disabled + returns inert results when no keys are set', async () => {
+  it('reports disabled + returns inert results when NO key at all is set (incl. Anthropic)', async () => {
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.APIFY_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY; // native is off too → truly inert
     const fc = new FirecrawlProvider();
     const ap = new ApifyProvider();
-    const sources = new ResearchSourcesService(fc, ap);
+    const sources = new ResearchSourcesService(fc, ap, new NativeWebProvider());
 
     expect(sources.isEnabled()).toBe(false);
-    expect(sources.status()).toEqual({ firecrawl: false, apify: false, enabled: false });
+    expect(sources.status()).toEqual({ firecrawl: false, apify: false, native: false, enabled: false });
     expect(await fc.scrape('https://example.com')).toBeNull();
     expect(await fc.searchWeb('coffee shops izmir')).toEqual([]);
     expect(await ap.searchPlaces({ query: 'kuaför', geo: { country: 'TR' }, limit: 10 })).toEqual([]);
     expect(await ap.lookupInstagram('@acme')).toBeNull();
   });
 
-  it('reports enabled when a key is present', () => {
+  it('is ENABLED by the native provider alone — the Anthropic key the platform already has', () => {
+    delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.APIFY_TOKEN;
+    process.env.ANTHROPIC_API_KEY = 'sk-test';
+    const sources = new ResearchSourcesService(new FirecrawlProvider(), new ApifyProvider(), new NativeWebProvider());
+    // No scraping vendor bought, yet research is not inert: search + scrape run.
+    expect(sources.isEnabled()).toBe(true);
+    expect(sources.status()).toMatchObject({ firecrawl: false, apify: false, native: true });
+  });
+
+  it('reports enabled when a paid key is present', () => {
     process.env.FIRECRAWL_API_KEY = 'fc-test';
     delete process.env.APIFY_TOKEN;
-    const sources = new ResearchSourcesService(new FirecrawlProvider(), new ApifyProvider());
+    const sources = new ResearchSourcesService(new FirecrawlProvider(), new ApifyProvider(), new NativeWebProvider());
     expect(sources.isEnabled()).toBe(true);
     expect(sources.status().firecrawl).toBe(true);
   });

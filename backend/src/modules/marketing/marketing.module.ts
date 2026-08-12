@@ -232,6 +232,7 @@ import { ConversationSpendService } from './budget/conversation-spend.service';
 import { ResearchSpendService } from './budget/research-spend.service';
 import { FirecrawlProvider } from './research/providers/firecrawl.provider';
 import { ApifyProvider } from './research/providers/apify.provider';
+import { NativeWebProvider } from './research/providers/native-web.provider';
 import { ResearchSourcesService } from './research/providers/research-sources.service';
 import { ResearchJobService } from './research/research-job.service';
 import { ResearchCandidateService } from './research/research-candidate.service';
@@ -928,6 +929,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ResearchSpendService,
     FirecrawlProvider,
     ApifyProvider,
+    NativeWebProvider,
     ResearchSourcesService,
     ResearchJobService,
     ResearchCandidateService,
