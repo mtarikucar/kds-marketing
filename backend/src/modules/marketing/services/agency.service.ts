@@ -378,21 +378,36 @@ export class AgencyService {
     // The location's primary owner. OWNER is provisioned at createLocation and
     // never deactivatable, but scope to ACTIVE + oldest to be robust against
     // later owner changes; a location with no active owner can't be entered.
-    const owner = await this.prisma.marketingUser.findFirst({
+    //
+    // That robustness is exactly what the old read could not deliver: it
+    // matched `MarketingUser {workspaceId, role, status}`, columns stamped when
+    // the user row is created and never re-derived. Hand a location to a new
+    // owner whose account was created in another workspace and this found
+    // nobody — the agency would be locked out of its own location with "no
+    // active owner to sign in as". Membership is the source of truth.
+    const ownerMembership = await this.prisma.workspaceMembership.findFirst({
       where: { workspaceId: locationId, role: 'OWNER', status: 'ACTIVE' },
       orderBy: { createdAt: 'asc' },
       select: {
-        id: true,
-        workspaceId: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        avatar: true,
         role: true,
-        tokenVersion: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            avatar: true,
+            tokenVersion: true,
+          },
+        },
       },
     });
+    // Session is scoped to the LOCATION and to the role the membership grants
+    // there — never to the owner's home workspace or their frozen role.
+    const owner = ownerMembership
+      ? { ...ownerMembership.user, workspaceId: locationId, role: ownerMembership.role }
+      : null;
     if (!owner) {
       throw new BadRequestException('Location has no active owner to sign in as');
     }

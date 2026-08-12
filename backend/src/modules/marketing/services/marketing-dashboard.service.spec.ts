@@ -66,6 +66,34 @@ describe('MarketingDashboardService — active-lead scoping', () => {
       expect(arg.where).toMatchObject({ deletedAt: null, mergedIntoId: null });
     }
   });
+
+  /**
+   * `MarketingUser.{workspaceId,role,status}` are stamped when the row is
+   * created and never re-derived, so filtering the leaderboard on them dropped
+   * a teammate PROMOTED to REP entirely, and kept showing a demoted one with
+   * their old numbers.
+   */
+  it('getTopPerformers picks reps by membership, not the frozen user columns', async () => {
+    (prisma.marketingUser.findMany as jest.Mock).mockResolvedValue([]);
+    await svc.getTopPerformers(WS);
+    const where = (prisma.marketingUser.findMany as jest.Mock).mock.calls[0][0].where;
+    expect(where).toEqual({
+      memberships: { some: { workspaceId: WS, role: 'REP', status: 'ACTIVE' } },
+    });
+  });
+
+  /**
+   * With membership as the filter the counts are no longer implicitly limited
+   * to one workspace by the user row, so a rep who belongs to two would drag
+   * the other one's leads and activities into this leaderboard.
+   */
+  it('getTopPerformers pins both relation counts to this workspace', async () => {
+    (prisma.marketingUser.findMany as jest.Mock).mockResolvedValue([]);
+    await svc.getTopPerformers(WS);
+    const sel = (prisma.marketingUser.findMany as jest.Mock).mock.calls[0][0].select;
+    expect(sel._count.select.leads.where).toMatchObject({ workspaceId: WS });
+    expect(sel._count.select.activities.where).toEqual({ lead: { workspaceId: WS } });
+  });
 });
 
 // The API runs in UTC, so `new Date().setHours(0,0,0,0)` yields UTC (not the

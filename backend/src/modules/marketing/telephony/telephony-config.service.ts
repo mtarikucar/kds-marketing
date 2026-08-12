@@ -213,7 +213,15 @@ export class TelephonyConfigService {
    */
   async listTeammateDahilis(workspaceId: string, excludeUserId: string) {
     return this.prisma.marketingUser.findMany({
-      where: { workspaceId, status: 'ACTIVE', dahili: { not: null }, id: { not: excludeUserId } },
+      where: {
+        // Membership decides who is still on this team; `MarketingUser
+        // .{workspaceId,status}` are stamped at creation and never re-derived,
+        // so the picker would keep offering a teammate whose access was
+        // revoked — transferring a LIVE call to someone who cannot answer.
+        memberships: { some: { workspaceId, status: 'ACTIVE' } },
+        dahili: { not: null },
+        id: { not: excludeUserId },
+      },
       select: { id: true, firstName: true, lastName: true, dahili: true },
       orderBy: { firstName: 'asc' },
     });

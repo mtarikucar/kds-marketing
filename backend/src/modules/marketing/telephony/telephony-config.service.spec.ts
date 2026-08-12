@@ -327,8 +327,16 @@ describe('TelephonyConfigService', () => {
       const rows = [{ id: 'rep-2', firstName: 'B', lastName: 'C', dahili: '105' }];
       prisma.marketingUser.findMany.mockResolvedValue(rows);
       const r = await new TelephonyConfigService(prisma, balanceClientMock()).listTeammateDahilis('ws', 'rep-1');
+      // Membership decides who is still on the team. The frozen
+      // MarketingUser.{workspaceId,status} would keep offering a teammate whose
+      // access was revoked — i.e. transfer a LIVE call to someone who cannot
+      // answer it.
       expect(prisma.marketingUser.findMany).toHaveBeenCalledWith({
-        where: { workspaceId: 'ws', status: 'ACTIVE', dahili: { not: null }, id: { not: 'rep-1' } },
+        where: {
+          memberships: { some: { workspaceId: 'ws', status: 'ACTIVE' } },
+          dahili: { not: null },
+          id: { not: 'rep-1' },
+        },
         select: { id: true, firstName: true, lastName: true, dahili: true },
         orderBy: { firstName: 'asc' },
       });

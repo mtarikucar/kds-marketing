@@ -206,12 +206,23 @@ export class RolesService {
     return (await this.resolvePermissions(user)).includes(permission);
   }
 
+  /**
+   * Permission check for a user who is NOT the request principal — the guard
+   * path takes role/customRoleId from `request.marketingUser`, which
+   * MarketingGuard already resolves from the membership.
+   *
+   * Has no callers today. It read role/customRoleId off the MarketingUser row —
+   * columns stamped at creation and never re-derived — so a demoted user would
+   * have kept passing checks and a promoted one kept failing them. Corrected
+   * rather than deleted: wired up as it stood, it would have quietly answered
+   * authorization questions from a frozen role.
+   */
   async userHasPermission(workspaceId: string, userId: string, permission: string) {
-    const user = await this.prisma.marketingUser.findFirst({
-      where: { id: userId, workspaceId },
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId, workspaceId, status: 'ACTIVE' },
       select: { role: true, customRoleId: true },
     });
-    if (!user) return false;
-    return this.hasPermission({ workspaceId, ...user }, permission);
+    if (!membership) return false;
+    return this.hasPermission({ workspaceId, ...membership }, permission);
   }
 }
