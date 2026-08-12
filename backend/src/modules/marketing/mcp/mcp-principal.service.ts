@@ -98,15 +98,24 @@ export class McpPrincipalService {
    */
   async resolve(ctx: McpToolContext): Promise<MarketingUserPayload> {
     if (ctx.userId) {
-      const user = await this.prisma.marketingUser.findFirst({
-        where: { id: ctx.userId, workspaceId: ctx.workspaceId, status: 'ACTIVE' },
-        select: PRINCIPAL_SELECT,
+      // Gate on the MEMBERSHIP, which is what the comment above has always
+      // claimed and what `McpInvokerService.roleFor` already enforces upstream.
+      // The old read hit `MarketingUser {workspaceId, status}` — a mirror frozen
+      // at row creation — so this defence-in-depth layer would have waved
+      // through exactly the removal it exists to catch, had the upstream check
+      // ever been bypassed.
+      const membership = await this.prisma.workspaceMembership.findFirst({
+        where: { userId: ctx.userId, workspaceId: ctx.workspaceId, status: 'ACTIVE' },
+        select: { role: true, user: { select: PRINCIPAL_SELECT } },
       });
-      if (!user) {
+      if (!membership) {
         throw new ForbiddenException(
           'the authorizing user is no longer an active member of this workspace',
         );
       }
+      // Membership carries the live role/status; the user row's copies are the
+      // frozen ones and must not leak back into attribution.
+      const user = { ...membership.user, role: membership.role, status: 'ACTIVE' };
       // The invoker resolved the role from the live membership moments ago;
       // prefer it so a demotion mid-session bites on the very next call.
       return { ...user, role: ctx.userRole ?? user.role };
@@ -136,18 +145,38 @@ export class McpPrincipalService {
     workspaceId: string,
     userId: string,
   ): Promise<{ id: string; role: string; status: string; firstName: string; lastName: string }> {
-    const member = await this.prisma.marketingUser.findFirst({
-      where: { id: userId, workspaceId, status: 'ACTIVE' },
-      select: { id: true, role: true, status: true, firstName: true, lastName: true },
+    // WorkspaceMembership, not the MarketingUser mirror. `MarketingUser
+    // .workspaceId/role/status` are stamped when the row is created and never
+    // re-derived, so reading them here failed in both directions: a teammate
+    // who joined THIS workspace by membership but was created in another one
+    // was refused outright (prod already contains such a membership), while a
+    // teammate whose membership was revoked still passed — every MCP tool that
+    // assigns work (create_lead, assign_lead, create_task, create_contact,
+    // create_opportunity, assign_conversation) would hand it to someone who can
+    // no longer log in. Same source of truth the leads, task and inbox assign
+    // guards use.
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId, workspaceId },
+      select: {
+        role: true,
+        status: true,
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
     });
-    if (!member) {
+    if (!membership || membership.status !== 'ACTIVE') {
       throw new BadRequestException(`user ${userId} is not an active member of this workspace`);
     }
-    if (member.role === MCP_ATTRIBUTION_PRINCIPAL_ROLE) {
+    if (membership.role === MCP_ATTRIBUTION_PRINCIPAL_ROLE) {
       throw new BadRequestException(
         `user ${userId} is the workspace automation principal and cannot be assigned work`,
       );
     }
-    return member;
+    return {
+      id: membership.user.id,
+      role: membership.role,
+      status: membership.status,
+      firstName: membership.user.firstName,
+      lastName: membership.user.lastName,
+    };
   }
 }

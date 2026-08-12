@@ -17,8 +17,35 @@ import {
  */
 function prismaMock() {
   return {
+    // The sentinel (API-key attribution) lane still resolves the workspace's
+    // SYSTEM user row — 3 prod sentinels have no membership at all, so that
+    // lookup must NOT move to memberships.
     marketingUser: {
       findFirst: jest.fn().mockResolvedValue(null),
+    },
+    // Belonging, role and status come from the membership: the user row's
+    // copies are frozen at creation.
+    workspaceMembership: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+  };
+}
+
+/** A membership row shaped as the service selects it. */
+function membership(role: string, status = 'ACTIVE', user: Record<string, unknown> = {}) {
+  return {
+    role,
+    status,
+    user: {
+      id: 'u9',
+      workspaceId: 'ws-a',
+      email: 'u9@example.com',
+      firstName: 'Real',
+      lastName: 'User',
+      role,
+      status,
+      customRoleId: null,
+      ...user,
     },
   };
 }
@@ -70,31 +97,26 @@ describe('visibilityPrincipal', () => {
 describe('McpPrincipalService.resolve', () => {
   it('resolves the REAL user on an OAuth session, pinned to this workspace and ACTIVE', async () => {
     const { svc: s, prisma } = svc();
-    prisma.marketingUser.findFirst.mockResolvedValue({
-      id: 'u9',
-      workspaceId: 'ws-a',
-      email: 'rep@x.com',
-      firstName: 'Ali',
-      lastName: 'Veli',
-      role: 'REP',
-      status: 'ACTIVE',
-      customRoleId: null,
-    });
+    prisma.workspaceMembership.findFirst.mockResolvedValue(
+      membership('REP', 'ACTIVE', { email: 'rep@x.com', firstName: 'Ali', lastName: 'Veli' }),
+    );
 
     const actor = await s.resolve({ workspaceId: 'ws-a', grantedScopes: [], userId: 'u9', userRole: 'REP' });
 
     expect(actor.id).toBe('u9');
     expect(actor.role).toBe('REP');
-    expect(prisma.marketingUser.findFirst.mock.calls[0][0].where).toEqual({
-      id: 'u9',
+    // Membership, not the frozen MarketingUser mirror.
+    expect(prisma.workspaceMembership.findFirst.mock.calls[0][0].where).toEqual({
+      userId: 'u9',
       workspaceId: 'ws-a',
       status: 'ACTIVE',
     });
+    expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
   });
 
   it("refuses when the OAuth user is not an active member of THIS workspace (cannot borrow another tenant's user)", async () => {
     const { svc: s, prisma } = svc();
-    prisma.marketingUser.findFirst.mockResolvedValue(null);
+    prisma.workspaceMembership.findFirst.mockResolvedValue(null);
     await expect(
       s.resolve({ workspaceId: 'ws-a', grantedScopes: [], userId: 'u-foreign' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -102,7 +124,7 @@ describe('McpPrincipalService.resolve', () => {
 
   it('prefers the invoker-resolved role over the stored row (a demotion bites immediately)', async () => {
     const { svc: s, prisma } = svc();
-    prisma.marketingUser.findFirst.mockResolvedValue({ ...SENTINEL, id: 'u9', role: 'MANAGER' });
+    prisma.workspaceMembership.findFirst.mockResolvedValue(membership('MANAGER'));
     const actor = await s.resolve({ workspaceId: 'ws-a', grantedScopes: [], userId: 'u9', userRole: 'REP' });
     expect(actor.role).toBe('REP');
   });
@@ -139,38 +161,55 @@ describe('McpPrincipalService.resolve', () => {
 });
 
 describe('McpPrincipalService.assertActiveMember', () => {
-  it('accepts an ACTIVE member of the caller workspace', async () => {
+  it('accepts an ACTIVE member, resolved from the membership not the frozen mirror', async () => {
     const { svc: s, prisma } = svc();
-    prisma.marketingUser.findFirst.mockResolvedValue({
-      id: 'u2',
-      role: 'REP',
-      status: 'ACTIVE',
-      firstName: 'A',
-      lastName: 'B',
-    });
-    await expect(s.assertActiveMember('ws-a', 'u2')).resolves.toMatchObject({ id: 'u2' });
-    expect(prisma.marketingUser.findFirst.mock.calls[0][0].where).toEqual({
-      id: 'u2',
+    prisma.workspaceMembership.findFirst.mockResolvedValue(membership('REP', 'ACTIVE', { id: 'u2' }));
+    await expect(s.assertActiveMember('ws-a', 'u2')).resolves.toMatchObject({ id: 'u2', role: 'REP' });
+    expect(prisma.workspaceMembership.findFirst.mock.calls[0][0].where).toEqual({
+      userId: 'u2',
       workspaceId: 'ws-a',
-      status: 'ACTIVE',
     });
+    expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
   });
 
-  it('rejects a user id from another workspace (the filter pins workspaceId)', async () => {
+  it('rejects someone with no membership in this workspace', async () => {
     const { svc: s, prisma } = svc();
-    prisma.marketingUser.findFirst.mockResolvedValue(null);
+    prisma.workspaceMembership.findFirst.mockResolvedValue(null);
     await expect(s.assertActiveMember('ws-a', 'u-foreign')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  /**
+   * The half the frozen mirror could never see: revoking a membership leaves
+   * `MarketingUser.status` ACTIVE and `workspaceId` unchanged, so the old read
+   * kept handing work to someone who can no longer log in.
+   */
+  it('rejects a member whose membership is no longer ACTIVE', async () => {
+    const { svc: s, prisma } = svc();
+    prisma.workspaceMembership.findFirst.mockResolvedValue(membership('REP', 'SUSPENDED'));
+    await expect(s.assertActiveMember('ws-a', 'u9')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  /**
+   * The other half: a teammate who joined THIS workspace by membership but was
+   * created in another one. Prod already contains such a row, and the old read
+   * refused them outright — you could not assign them anything at all.
+   */
+  it('accepts a member whose user row was created in a different workspace', async () => {
+    const { svc: s, prisma } = svc();
+    prisma.workspaceMembership.findFirst.mockResolvedValue(
+      membership('MANAGER', 'ACTIVE', { id: 'u-elsewhere', workspaceId: 'ws-OTHER' }),
+    );
+    await expect(s.assertActiveMember('ws-a', 'u-elsewhere')).resolves.toMatchObject({
+      id: 'u-elsewhere',
+      role: 'MANAGER',
+    });
   });
 
   it('rejects the automation principal as an assignment target — it can never log in to act on the work', async () => {
     const { svc: s, prisma } = svc();
-    prisma.marketingUser.findFirst.mockResolvedValue({
-      id: 'sys-1',
-      role: MCP_ATTRIBUTION_PRINCIPAL_ROLE,
-      status: 'ACTIVE',
-      firstName: 'AI',
-      lastName: 'Research',
-    });
+    prisma.workspaceMembership.findFirst.mockResolvedValue(
+      membership(MCP_ATTRIBUTION_PRINCIPAL_ROLE, 'ACTIVE', { id: 'sys-1' }),
+    );
     await expect(s.assertActiveMember('ws-a', 'sys-1')).rejects.toBeInstanceOf(BadRequestException);
   });
 });
