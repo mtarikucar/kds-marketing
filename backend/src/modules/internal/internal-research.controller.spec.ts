@@ -195,6 +195,9 @@ describe('InternalResearchController', () => {
       prisma,
       { pickAssignee: jest.fn().mockResolvedValue(null) } as any,
       quotaResolver as any,
+      // Researched leads now emit `lead.created` like every other inbound path,
+      // so automations filtered on source=AI_RESEARCH can finally fire.
+      { append: jest.fn().mockResolvedValue(undefined) } as any,
     );
     jobs = new ResearchJobService(prisma, ingest);
     ctrl = new InternalResearchController(jobs, ingest);

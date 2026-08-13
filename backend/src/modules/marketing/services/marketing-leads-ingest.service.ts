@@ -4,6 +4,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { OutboxService } from '../../outbox/outbox.service';
+import { MarketingEventTypes } from '../events/marketing-event-types';
 import { localMsisdnVariants, normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import {
   IngestLeadCandidateDto,
@@ -47,7 +49,41 @@ export class MarketingLeadsIngestService {
     private readonly prisma: PrismaService,
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly quotaResolver: LeadQuotaResolver,
+    private readonly outbox: OutboxService,
   ) {}
+
+  /**
+   * Fire the `lead.created` workflow trigger for a researched lead.
+   *
+   * Every other inbound path emits this — public forms, order forms, webchat/DM
+   * ingress, Meta lead ads, and `MarketingLeadsService.create` (whose own
+   * comment records the same bug being fixed for manually-created leads). This
+   * path did not, so a lead born from research ran NO automation, no Slack
+   * alert, no outbound webhook.
+   *
+   * The sharp edge: the flagship automation for this product is "new AI_RESEARCH
+   * lead → follow up within 24h", filtered on exactly `source = AI_RESEARCH`.
+   * Research leads were the one kind that could never trigger it — the
+   * automation only ever appeared to work because test leads were created by
+   * hand through the service that does emit.
+   *
+   * Emitted AFTER the transaction commits, so a rolled-back lead never
+   * announces itself, and best-effort: the lead is the delivery, and the
+   * idempotency key makes a retry safe.
+   */
+  private async emitLeadCreated(workspaceId: string, leadId: string, source: string): Promise<void> {
+    await this.outbox
+      .append({
+        type: MarketingEventTypes.LeadCreated,
+        idempotencyKey: `lead-created:${leadId}`,
+        payload: { workspaceId, leadId, source, occurredAt: new Date().toISOString() },
+      })
+      .catch((e) =>
+        this.logger.warn(
+          `lead.created outbox append failed for ${leadId}: ${(e as Error).message}`,
+        ),
+      );
+  }
 
   private async resolveSentinel(workspaceId: string): Promise<string> {
     const cached = this.sentinelIdByWorkspace.get(workspaceId);
@@ -225,6 +261,7 @@ export class MarketingLeadsIngestService {
             skipped++;
             continue;
           }
+          let newLeadId: string | null = null;
           await this.prisma.$transaction(async (tx) => {
             // Pick an owner via the configured distribution strategy
             // before insert so the row is born already assigned — keeps
@@ -237,6 +274,7 @@ export class MarketingLeadsIngestService {
                 ...(autoOwner ? { assignedToId: autoOwner } : {}),
               },
             });
+            newLeadId = lead.id;
             await tx.leadActivity.create({
               data: {
                 leadId: lead.id,
@@ -265,6 +303,8 @@ export class MarketingLeadsIngestService {
             }
           });
           created++;
+          // Announce only a COMMITTED lead, and only after the row exists.
+          if (newLeadId) await this.emitLeadCreated(workspaceId, newLeadId, 'AI_RESEARCH');
         } catch (e: any) {
           // P2002 on the lead unique = TOCTOU race with a concurrent
           // ingest (or a duplicate inside the same batch). Treat as skip.

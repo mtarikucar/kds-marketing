@@ -25,6 +25,7 @@ describe('MarketingLeadsIngestService — daily quota clipping', () => {
   let prisma: any;
   let autoAssigner: { pickAssignee: jest.Mock };
   let quotaResolver: { getDailyLeadQuota: jest.Mock };
+  let outbox: { append: jest.Mock };
   let svc: MarketingLeadsIngestService;
   let counterValue: number;
 
@@ -66,10 +67,12 @@ describe('MarketingLeadsIngestService — daily quota clipping', () => {
     };
     autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     quotaResolver = { getDailyLeadQuota: jest.fn().mockResolvedValue(3) };
+    outbox = { append: jest.fn().mockResolvedValue(undefined) };
     svc = new MarketingLeadsIngestService(
       prisma,
       autoAssigner as any,
       quotaResolver as any,
+      outbox as any,
     );
   });
 

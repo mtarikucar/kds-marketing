@@ -34,6 +34,7 @@ describe('MarketingLeadsIngestService — cross-path dedup', () => {
   }
 
   let prisma: any;
+  let outbox: { append: jest.Mock };
   let svc: MarketingLeadsIngestService;
 
   beforeEach(() => {
@@ -58,10 +59,12 @@ describe('MarketingLeadsIngestService — cross-path dedup', () => {
       $queryRawUnsafe: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
+    outbox = { append: jest.fn().mockResolvedValue(undefined) };
     svc = new MarketingLeadsIngestService(
       prisma,
       { pickAssignee: jest.fn().mockResolvedValue(null) } as never,
       { getDailyLeadQuota: jest.fn().mockResolvedValue(50) } as never,
+      outbox as never,
     );
   });
 
@@ -149,5 +152,95 @@ describe('MarketingLeadsIngestService — cross-path dedup', () => {
 
     expect(prisma.lead.create).not.toHaveBeenCalled();
     expect(res).toMatchObject({ created: 0, skipped: 1 });
+  });
+});
+
+
+/**
+ * The `lead.created` trigger.
+ *
+ * Public forms, order forms, webchat/DM ingress, Meta lead ads and
+ * MarketingLeadsService.create all emit it — this path did not, so a lead born
+ * from research ran NO automation, no Slack alert, no outbound webhook.
+ *
+ * Found live: figurunica's flagship automation is "new AI_RESEARCH lead →
+ * follow up within 24h", filtered on exactly `source = AI_RESEARCH`. The
+ * nightly run staged two prospects, accepting them created two leads, and no
+ * workflow run existed for either. The automation had only ever appeared to
+ * work because the test leads were created by hand through the service that
+ * does emit.
+ */
+describe('MarketingLeadsIngestService — lead.created trigger', () => {
+  const WS = 'ws-1';
+
+  function candidate(ref = 'phone:+905551112233') {
+    return {
+      externalRef: ref,
+      businessName: 'Yeni Aday',
+      businessType: 'ETKINLIK_AJANSI',
+      phone: '+90 555 111 22 33',
+      painPoint: 'p',
+      evidence: 'e',
+      pitch: 'pi',
+    } as never;
+  }
+
+  let prisma: any;
+  let outbox: { append: jest.Mock };
+  let svc: MarketingLeadsIngestService;
+
+  beforeEach(() => {
+    let counterValue = 0;
+    prisma = {
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sentinel-1' }) },
+      lead: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        create: jest.fn().mockImplementation(async ({ data }: any) => ({ id: 'lead-9', ...data })),
+      },
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      usageCounter: {
+        findUnique: jest.fn().mockImplementation(async () => (counterValue > 0 ? { value: counterValue } : null)),
+        upsert: jest.fn().mockImplementation(async (args: any) => {
+          if (args.update?.value?.increment !== undefined) counterValue += args.update.value.increment;
+          else if (args.create?.value !== undefined && counterValue === 0) counterValue = args.create.value;
+          return { value: counterValue };
+        }),
+      },
+      $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    outbox = { append: jest.fn().mockResolvedValue(undefined) };
+    svc = new MarketingLeadsIngestService(
+      prisma,
+      { pickAssignee: jest.fn().mockResolvedValue(null) } as never,
+      { getDailyLeadQuota: jest.fn().mockResolvedValue(50) } as never,
+      outbox as never,
+    );
+  });
+
+  it('emits lead.created so automations filtered on AI_RESEARCH can finally fire', async () => {
+    await svc.ingest(WS, { leads: [candidate()] } as never);
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+    expect(outbox.append.mock.calls[0][0]).toMatchObject({
+      idempotencyKey: 'lead-created:lead-9',
+      payload: { workspaceId: WS, leadId: 'lead-9', source: 'AI_RESEARCH' },
+    });
+  });
+
+  it('announces nothing for a candidate that was deduped, not created', async () => {
+    prisma.lead.findFirst.mockResolvedValue({ id: 'existing-1', externalRef: null });
+    await svc.ingest(WS, { leads: [candidate()] } as never);
+    expect(prisma.lead.create).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  /** The lead is the delivery; a broken outbox must not lose it. */
+  it('still creates the lead when the outbox append fails', async () => {
+    outbox.append.mockRejectedValue(new Error('outbox down'));
+    const res = await svc.ingest(WS, { leads: [candidate()] } as never);
+    expect(prisma.lead.create).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ created: 1, errors: [] });
   });
 });
