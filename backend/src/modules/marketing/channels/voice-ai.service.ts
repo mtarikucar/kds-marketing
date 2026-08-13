@@ -6,6 +6,8 @@ import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { KnowledgeService } from '../ai/knowledge.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { OutboxService } from '../../outbox/outbox.service';
+import { MarketingEventTypes } from '../events/marketing-event-types';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 
@@ -40,6 +42,7 @@ export class VoiceAiService {
     private readonly credits: AiCreditsService,
     private readonly knowledge: KnowledgeService,
     private readonly autoAssigner: LeadAutoAssignerService,
+    private readonly outbox: OutboxService,
   ) {}
 
   private gatherUrl(): string {
@@ -201,7 +204,10 @@ export class VoiceAiService {
     // duplicate, and a lead created WITHOUT phoneNormalized is invisible to İYS,
     // telephony and every other variant-keyed resolver.
     const phoneNormalized = normalizePhone(phone);
-    return this.prisma.$transaction(async (tx) => {
+    // Tracked outside the transaction so the `lead.created` event fires only
+    // for a lead this call actually MINTED, and only once it has committed.
+    let mintedLeadId: string | null = null;
+    const leadId = await this.prisma.$transaction(async (tx) => {
       const existing = phoneNormalized
         ? await tx.lead.findFirst({
             where: {
@@ -228,8 +234,26 @@ export class VoiceAiService {
           ...(autoOwner ? { assignedToId: autoOwner } : {}),
         },
       });
+      mintedLeadId = lead.id;
       return lead.id;
     });
+    // Every other inbound path announces a new lead (forms, order forms,
+    // webchat/DM, Meta lead ads, research ingest, manual create). An inbound
+    // CALLER is as real a prospect as any of them, so without this a workspace's
+    // automations, Slack alert and outbound webhooks all skipped the phone
+    // channel entirely. Best-effort: the lead is the delivery.
+    if (mintedLeadId) {
+      await this.outbox
+        .append({
+          type: MarketingEventTypes.LeadCreated,
+          idempotencyKey: `lead-created:${mintedLeadId}`,
+          payload: { workspaceId, leadId: mintedLeadId, source: 'PHONE', occurredAt: new Date().toISOString() },
+        })
+        .catch((e) =>
+          this.logger.warn(`lead.created outbox append failed for ${mintedLeadId}: ${(e as Error).message}`),
+        );
+    }
+    return leadId;
   }
 
   private async saveTurn(workspaceId: string, callId: string, role: string, text: string): Promise<void> {

@@ -14,6 +14,7 @@ describe('VoiceAiService', () => {
   let anthropic: any;
   let credits: any;
   let svc: VoiceAiService;
+  let outbox: { append: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -33,7 +34,8 @@ describe('VoiceAiService', () => {
     const knowledge = { search: jest.fn().mockResolvedValue([]) };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const config = { get: jest.fn().mockReturnValue('https://m.example') };
-    svc = new VoiceAiService(prisma as any, config as any, anthropic as any, credits as any, knowledge as any, autoAssigner as any);
+    outbox = { append: jest.fn().mockResolvedValue(undefined) };
+    svc = new VoiceAiService(prisma as any, config as any, anthropic as any, credits as any, knowledge as any, autoAssigner as any, outbox as any);
   });
 
   it('startCall greets + opens the mic + links a lead', async () => {
@@ -124,5 +126,39 @@ describe('VoiceAiService', () => {
     it('rejects a wrong token', () => {
       expect(validTwilioSignature('other', url, params, sign())).toBe(false);
     });
+  });
+
+  /**
+   * An inbound CALLER is as real a prospect as a form submission. Every other
+   * inbound path emits `lead.created`; the phone channel did not, so a
+   * workspace's automations, Slack alert and outbound webhooks skipped it.
+   */
+  it('announces a caller lead it actually minted', async () => {
+    prisma.lead.findFirst.mockResolvedValue(null);
+    prisma.lead.create.mockResolvedValue({ id: 'lead-call-1' });
+    await svc.startCall(
+      { id: 'ch1', workspaceId: WS, agentProfileId: 'ag1', configPublic: {} } as any,
+      '+15551112233',
+      '+15559999999',
+      'CA-new',
+    );
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: 'lead-created:lead-call-1',
+        payload: expect.objectContaining({ leadId: 'lead-call-1', source: 'PHONE' }),
+      }),
+    );
+  });
+
+  it('stays silent when the caller already had a lead (deduped, not minted)', async () => {
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-existing' });
+    await svc.startCall(
+      { id: 'ch1', workspaceId: WS, agentProfileId: 'ag1', configPublic: {} } as any,
+      '+15551112233',
+      '+15559999999',
+      'CA-dupe',
+    );
+    expect(prisma.lead.create).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
   });
 });
