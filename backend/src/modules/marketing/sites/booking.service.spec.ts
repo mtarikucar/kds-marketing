@@ -127,6 +127,39 @@ describe('BookingService', () => {
     expect(prisma.booking.create).toHaveBeenCalled();
   });
 
+  /**
+   * A booking-born lead is a genuine new prospect — this path even records its
+   * first-touch attribution. Every other inbound path announces one; booking
+   * did not, so its leads ran no automation, no Slack alert, no webhook.
+   */
+  it('announces a booking-born lead via lead.created, inside the transaction', async () => {
+    prisma.booking.findFirst.mockResolvedValue(null);
+    prisma.lead.findFirst.mockResolvedValue(null);
+    prisma.lead.create.mockResolvedValue({ id: 'lead-bk-1' });
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk_x', email: null });
+    await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada', email: 'ada@example.com' });
+    const leadEvent = (outbox.append as jest.Mock).mock.calls.find(
+      (c) => c[0]?.idempotencyKey === 'lead-created:lead-bk-1',
+    );
+    expect(leadEvent).toBeDefined();
+    expect(leadEvent[0].payload).toMatchObject({ leadId: 'lead-bk-1', source: 'WEBSITE' });
+    // Enrolled in the booking transaction, like BookingCreated — the event
+    // must not outlive a rolled-back lead.
+    expect(leadEvent[1]).toBeDefined();
+  });
+
+  it('does not announce a lead the booking merely reused', async () => {
+    prisma.booking.findFirst.mockResolvedValue(null);
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-existing' });
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk_x', email: null });
+    await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada', email: 'ada@example.com' });
+    expect(prisma.lead.create).not.toHaveBeenCalled();
+    const leadEvents = (outbox.append as jest.Mock).mock.calls.filter((c) =>
+      String(c[0]?.idempotencyKey ?? '').startsWith('lead-created:'),
+    );
+    expect(leadEvents).toHaveLength(0);
+  });
+
   it('takes a WORKSPACE-scoped advisory lock inside the tx (serializes concurrent reserves)', async () => {
     prisma.booking.findFirst.mockResolvedValue(null);
     prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk_x', email: null });

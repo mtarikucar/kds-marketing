@@ -748,6 +748,21 @@ export class BookingService implements OnModuleInit {
           },
         });
         leadId = lead.id;
+        // A booking-born lead is a genuine new prospect — this path even
+        // records its first-touch attribution below. Every other inbound path
+        // announces one (forms, order forms, webchat/DM, Meta lead ads,
+        // research ingest, manual create); without this, booking was a lead
+        // source whose leads ran no automation, no Slack alert, no webhook.
+        // Appended INSIDE the transaction, like BookingCreated below, so the
+        // event cannot outlive a rolled-back lead.
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.LeadCreated,
+            idempotencyKey: `lead-created:${lead.id}`,
+            payload: { workspaceId, leadId: lead.id, source: 'WEBSITE', occurredAt: new Date().toISOString() },
+          },
+          tx as any,
+        );
         // First-touch attribution (D10): tie a NEW booking-born lead to the
         // page it booked from. Existing (deduped) leads keep their original
         // first touch. Best-effort; enrolled in this tx.
