@@ -350,6 +350,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_generated_media',
         'jeeta.list_social_campaigns',
         'jeeta.create_social_campaign',
+        'jeeta.pause_social_campaign',
         // Faz 5 D3 — communications + progressive disclosure.
         'jeeta.find_tools',
         'jeeta.list_email_templates',
@@ -395,7 +396,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(97);
+    expect(names).toHaveLength(98);
   });
 
   /**
@@ -476,7 +477,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(97);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(98);
   });
 });
 

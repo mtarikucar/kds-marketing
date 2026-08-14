@@ -84,7 +84,7 @@ function buildRegistry() {
     entitlements: entitlements as never,
   });
   registerSocialCampaignTools(registry, {
-    socialCampaigns: rec.stub('socialCampaigns', ['list', 'create'], { id: 'sc1' }),
+    socialCampaigns: rec.stub('socialCampaigns', ['list', 'create', 'pause'], { id: 'sc1' }),
     principals: principals as never,
     entitlements: entitlements as never,
   });
@@ -122,6 +122,7 @@ const D2_CALLS: Array<[string, Record<string, unknown>]> = [
       mediaKinds: ['IMAGE'],
     },
   ],
+  ['jeeta.pause_social_campaign', { campaignId: FOREIGN_WS }],
 ];
 
 describe('Faz 5 D2 — workspace isolation across the whole wave', () => {
@@ -187,6 +188,9 @@ describe('Faz 5 D2 — workspace isolation across the whole wave', () => {
         'jeeta.delete_social_post:DESTRUCTIVE:DESTRUCTIVE',
         'jeeta.generate_image:SPEND:MEDIA_SPEND',
         'jeeta.generate_video:SPEND:MEDIA_SPEND',
+        // Stopping a publisher, not reaching an audience — its own kind so the
+        // approvals queue does not label a halt as a target change.
+        'jeeta.pause_social_campaign:WRITE:CAMPAIGN_PAUSE',
       ].sort(),
     );
   });

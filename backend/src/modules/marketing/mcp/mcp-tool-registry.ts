@@ -155,7 +155,8 @@ export interface McpTool {
     // what each means. This union mirrors that one; a kind added there must be
     // added here too or no tool can declare it.
     | 'AI_SPEND'
-    | 'STRATEGY_ACTION';
+    | 'STRATEGY_ACTION'
+    | 'CAMPAIGN_PAUSE';
   /**
    * Only meaningful when `requiresApproval` is true. `resourceType` is a
    * fixed label for what this tool acts on (e.g. `'conversation'`,
