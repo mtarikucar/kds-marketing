@@ -182,15 +182,32 @@ export function igImageNeedsJpeg(item: MediaItem): boolean {
 }
 
 /**
- * Ensure an Instagram image item is JPEG. Transcodes a non-JPEG image to
- * high-quality JPEG (≤1080px wide — Instagram's display width) and re-hosts it on
- * R2 so Meta can pull it. This mirrors what the Instagram mobile app does silently
- * (it re-encodes everything to JPEG); the Graph API does not, so we must. Videos
- * and already-JPEG images pass through. Any failure — or R2 not configured —
- * returns the original item, so behaviour is never worse than before.
+ * Prepare an Instagram image item: JPEG, and no wider than Instagram's own
+ * display width. Re-hosts the result on R2 so Meta can pull it.
+ *
+ * Two reasons an item needs work, and it used to only act on the first:
+ *
+ *  1. NOT JPEG. The Content Publishing API accepts only JPEG; a PNG/WebP
+ *     creates a container and then fails `media_publish`. The mobile app
+ *     re-encodes silently, the Graph API does not, so we must.
+ *  2. TOO WIDE. Instagram downscales feed images to 1080px anyway, and the
+ *     resize above was written for exactly that — but it sat behind an early
+ *     `if (!igImageNeedsJpeg(item)) return item`, so it only ever ran on images
+ *     that were being transcoded for reason 1. An already-JPEG image went to
+ *     Meta at whatever size it happened to be.
+ *
+ * That gap is not cosmetic. Meta fetches `image_url` itself, and a 2048×2048 /
+ * ~1MB JPEG handed over unresized came back with its bottom third decoded as
+ * flat grey — a truncated fetch, published and unrecoverable (Instagram has no
+ * "replace the image" edit). At 1080/q90 the same picture is 4–5× smaller,
+ * which is both the documented intent and a far smaller window for a short read.
+ *
+ * Videos pass through. Any failure — or R2 not configured — returns the
+ * original item, so behaviour is never worse than before.
  */
 async function ensureIgJpegImage(item: MediaItem, igId: string): Promise<MediaItem> {
-  if (!igImageNeedsJpeg(item)) return item;
+  if (isVideoItem(item)) return item;
+  const needsJpeg = igImageNeedsJpeg(item);
   const r2 = new R2StorageService();
   if (!r2.isConfigured()) return item;
   try {
@@ -199,14 +216,23 @@ async function ensureIgJpegImage(item: MediaItem, igId: string): Promise<MediaIt
     const src = await readCappedBytes(res, IG_IMAGE_FETCH_MAX_BYTES);
     if (!src || src.length === 0) return item;
     const img = await Jimp.read(src);
-    if (img.bitmap.width > IG_JPEG_MAX_WIDTH) img.resize(IG_JPEG_MAX_WIDTH, Jimp.AUTO);
+    const srcWidth = img.bitmap.width;
+    const tooWide = srcWidth > IG_JPEG_MAX_WIDTH;
+    // An already-JPEG image that is already within Instagram's width needs
+    // nothing: returning it untouched avoids a pointless re-encode and keeps
+    // the original asset URL on the post.
+    if (!needsJpeg && !tooWide) return item;
+    if (tooWide) img.resize(IG_JPEG_MAX_WIDTH, Jimp.AUTO);
     img.quality(90);
     const jpeg = await img.getBufferAsync(Jimp.MIME_JPEG);
     const up = await r2.upload(igId, { mimetype: 'image/jpeg', buffer: jpeg, size: jpeg.length });
-    logger.log(`IG image transcoded to JPEG (${item.mime ?? 'unknown'} → image/jpeg) for ${igId}`);
+    const why = [needsJpeg ? `${item.mime ?? 'unknown'} → image/jpeg` : null, tooWide ? `${srcWidth}px → ${IG_JPEG_MAX_WIDTH}px` : null]
+      .filter(Boolean)
+      .join(', ');
+    logger.log(`IG image prepared (${why}) for ${igId}`);
     return { url: up.url, mime: 'image/jpeg' };
   } catch (e: any) {
-    logger.warn(`IG image JPEG transcode failed (${igId}); using original: ${e?.message ?? e}`);
+    logger.warn(`IG image prepare failed (${igId}); using original: ${e?.message ?? e}`);
     return item;
   }
 }
