@@ -724,6 +724,105 @@ export class MarketingLeadsService {
     return updatedLead;
   }
 
+  /** Rewind a lead to NEW because its stage was entered in error.
+   *
+   *  ALLOWED_TRANSITIONS is deliberately forward-only, which is right for
+   *  ordinary pipeline movement but leaves no way to undo a wrong stage: a
+   *  demo that never happened or an offer that was never sent sits in the
+   *  funnel forever, and every number computed from it is wrong. Opening
+   *  backwards edges on updateStatus would fix that at too high a price —
+   *  anyone could then walk a deal up and down the stages and launder its
+   *  history. So the correction is this single jump straight to NEW:
+   *  manager-only, reason-required, and written to the activity timeline so
+   *  a rewind is always visible rather than silent.
+   *
+   *  Idempotent — a lead already at NEW is returned untouched, so this can
+   *  be applied to a set without the caller pre-filtering it.
+   */
+  async reopen(
+    workspaceId: string,
+    id: string,
+    reason: string,
+    userId: string,
+    userRole: string,
+  ) {
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    // Defence in depth: the route is already @MarketingRoles('MANAGER'), but a
+    // rep must never be able to rewind their own pipeline — that is exactly
+    // how a lost deal gets recycled to look like fresh work.
+    if (userRole === 'REP') {
+      throw new ForbiddenException('Only a manager can reopen a lead');
+    }
+    if (lead.convertedTenantId || lead.status === 'WON') {
+      throw new BadRequestException(
+        'A converted lead cannot be reopened — it owns a live tenant and commission',
+      );
+    }
+    if (lead.status === 'NEW') return lead;
+
+    // Same compound WHERE as updateStatus: it closes the window between the
+    // checks above and the write, so a concurrent stage move cannot be
+    // silently overwritten by this rewind.
+    const claim = await this.prisma.lead.updateMany({
+      where: { id, workspaceId, status: lead.status },
+      data: { status: 'NEW', lostReason: null },
+    });
+    if (claim.count === 0) {
+      throw new BadRequestException(
+        'Lead status changed concurrently — refresh and retry.',
+      );
+    }
+    const updatedLead = await this.prisma.lead.findUniqueOrThrow({ where: { id } });
+
+    await this.prisma.leadActivity.create({
+      data: {
+        type: 'STATUS_CHANGE',
+        title: `Reopened: ${lead.status} → NEW`,
+        description: `Reason: ${reason}`,
+        leadId: id,
+        createdById: userId,
+      },
+    });
+
+    if (updatedLead.assignedToId && updatedLead.assignedToId !== userId) {
+      await this.prisma.marketingNotification.create({
+        data: {
+          workspaceId,
+          userId: updatedLead.assignedToId,
+          type: 'INACTIVE_LEAD',
+          title: 'Lead reopened',
+          message: `${updatedLead.businessName}: ${lead.status} → NEW`,
+          metadata: { leadId: id, from: lead.status, to: 'NEW', reason },
+        },
+      });
+    }
+
+    // Workflows subscribed to lead.status_changed must see the rewind too,
+    // otherwise automations keep treating the lead as still late-stage.
+    // Best-effort, exactly as in updateStatus.
+    await this.outbox
+      .append({
+        type: MarketingEventTypes.LeadStatusChanged,
+        idempotencyKey: `lead-reopen:${id}:${lead.status}->NEW:${Date.now()}`,
+        payload: {
+          workspaceId,
+          leadId: id,
+          fromStatus: lead.status,
+          toStatus: 'NEW',
+          occurredAt: new Date().toISOString(),
+        },
+      })
+      .catch((e) =>
+        this.logger.warn(
+          `lead.reopen outbox append failed for ${id}: ${(e as Error).message}`,
+        ),
+      );
+
+    return updatedLead;
+  }
+
   async assign(
     workspaceId: string,
     id: string,

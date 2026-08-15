@@ -11,6 +11,7 @@ function setup() {
     create: jest.fn().mockResolvedValue({ id: 'l1' }),
     update: jest.fn().mockResolvedValue({ id: 'l1' }),
     updateStatus: jest.fn().mockResolvedValue({ id: 'l1' }),
+    reopen: jest.fn().mockResolvedValue({ id: 'l1', status: 'NEW' }),
     assign: jest.fn().mockResolvedValue({ id: 'l1' }),
   };
   const activities = { create: jest.fn().mockResolvedValue({ id: 'a1' }) };
@@ -37,6 +38,9 @@ describe('leads write MCP tools — registration metadata', () => {
     ['jeeta.add_lead_note', ['leads.write']],
     // Mirrors PATCH /marketing/leads/:id/assign — @RequirePermission('leads.manage').
     ['jeeta.assign_lead', ['leads.manage']],
+    // Manager-tier for the same reason as assign: rewinding a stage rewrites
+    // what the funnel reports, so it must not ride on a plain write scope.
+    ['jeeta.reopen_lead', ['leads.manage']],
   ])('registers %s as WRITE with scopes %p and no approval gate', (name, scopes) => {
     const { registry } = setup();
     const tool = registry.get(name)!;
@@ -165,6 +169,44 @@ describe('jeeta.update_lead / jeeta.set_lead_status', () => {
       (registry.get('jeeta.set_lead_status')!.inputSchema as { parse: (v: unknown) => unknown }).parse({
         leadId: 'l1',
         status: 'WON',
+      }),
+    ).toThrow();
+  });
+});
+
+describe('jeeta.reopen_lead', () => {
+  it('sends the lead back to NEW with the reason, as the resolved actor', async () => {
+    const { registry, leads } = setup();
+    await registry
+      .get('jeeta.reopen_lead')!
+      .handler(KEY_CTX, { leadId: 'l1', reason: 'demo was never held — stage set in error' });
+    expect(leads.reopen).toHaveBeenCalledWith(
+      'ws-a',
+      'l1',
+      'demo was never held — stage set in error',
+      'sys-1',
+      'SYSTEM',
+    );
+  });
+
+  it('will not accept a throwaway reason', () => {
+    const { registry } = setup();
+    const schema = registry.get('jeeta.reopen_lead')!.inputSchema as {
+      parse: (v: unknown) => unknown;
+    };
+    // A rewind with no explanation reads the same as someone quietly resetting
+    // the funnel, so the reason is the point of the tool, not decoration.
+    expect(() => schema.parse({ leadId: 'l1', reason: 'oops' })).toThrow();
+    expect(() => schema.parse({ leadId: 'l1' })).toThrow();
+  });
+
+  it('takes no target status — NEW is the only destination', () => {
+    const { registry } = setup();
+    expect(() =>
+      (registry.get('jeeta.reopen_lead')!.inputSchema as { parse: (v: unknown) => unknown }).parse({
+        leadId: 'l1',
+        reason: 'stage was entered in error',
+        status: 'CONTACTED',
       }),
     ).toThrow();
   });

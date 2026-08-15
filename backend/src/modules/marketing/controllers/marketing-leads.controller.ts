@@ -29,6 +29,7 @@ import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
 import { ConvertLeadDto } from '../dto/convert-lead.dto';
 import { UpdateLeadStatusDto } from '../dto/update-lead-status.dto';
+import { ReopenLeadDto } from '../dto/reopen-lead.dto';
 import { AssignLeadDto } from '../dto/assign-lead.dto';
 import { BulkAssignLeadDto } from '../dto/bulk-assign-lead.dto';
 import { BulkLeadIdsDto, BulkEnrollLeadsDto, EnrollByFilterDto } from '../dto/lead-bulk.dto';
@@ -194,6 +195,26 @@ export class MarketingLeadsController {
       actor.id,
       actor.role,
     );
+  }
+
+  /** Undo a stage that was entered by mistake. The pipeline is forward-only,
+   *  so this is the only route back to NEW — manager-only and reason-required
+   *  on purpose. */
+  @Post(':id/reopen')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
+  @Audit({
+    action: 'lead.reopen',
+    resourceType: 'lead',
+    resourceIdParam: 'id',
+    captureBody: ['reason'],
+  })
+  reopen(
+    @Param('id') id: string,
+    @Body() dto: ReopenLeadDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.leadsService.reopen(actor.workspaceId, id, dto.reason, actor.id, actor.role);
   }
 
   @Patch(':id/assign')

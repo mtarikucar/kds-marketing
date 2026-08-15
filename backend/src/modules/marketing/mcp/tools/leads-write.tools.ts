@@ -194,6 +194,38 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
   });
 
   registry.register({
+    name: 'jeeta.reopen_lead',
+    description:
+      'Send a lead back to NEW because its current stage is wrong — a demo that never happened, an offer that was never sent. The pipeline only moves forward, so this is the only way to correct a mistaken stage. Requires a reason, which is written to the lead timeline. Does not apply to a converted (WON) lead.',
+    domain: 'leads',
+    // Deferred: correcting a wrong stage is a rare, deliberate act, not part
+    // of the day-to-day lead surface. `jeeta.find_tools` surfaces it when
+    // someone actually needs it, and the advertised core keeps its budget.
+    defer: true,
+    scopes: ['leads.manage'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      leadId: z.string().min(1).describe('Id of the lead to send back to NEW.'),
+      reason: z
+        .string()
+        .min(10)
+        .max(500)
+        .describe('Why the current stage is wrong. Recorded on the timeline.'),
+    }),
+    handler: async (ctx, args) => {
+      const actor = await deps.principals.resolve(ctx);
+      return deps.leads.reopen(
+        ctx.workspaceId,
+        String(args.leadId),
+        String(args.reason),
+        actor.id,
+        actor.role,
+      );
+    },
+  });
+
+  registry.register({
     name: 'jeeta.add_lead_note',
     description:
       "Add an entry to a lead's activity timeline — a note, or a logged call/visit/meeting/email with its outcome. This is how an agent records what it learned or did about a customer.",
