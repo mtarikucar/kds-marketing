@@ -97,6 +97,13 @@ export function updateLeadStatus(id: string, status: string): Promise<void> {
   return marketingApi.patch(`/leads/${id}/status`, { status }).then(() => undefined);
 }
 
+/** POST /leads/:id/reopen — send a lead back to NEW when its stage was entered
+ *  in error. The pipeline is forward-only, so there is no `updateLeadStatus`
+ *  route back; manager-only, and the reason is recorded on the timeline. */
+export function reopenLead(id: string, reason: string): Promise<void> {
+  return marketingApi.post(`/leads/${id}/reopen`, { reason }).then(() => undefined);
+}
+
 /** PATCH /leads/:id — link/unlink the contact's B2B company ('' unlinks). */
 export function setLeadCompany(id: string, companyId: string): Promise<Lead> {
   return marketingApi.patch<Lead>(`/leads/${id}`, { companyId }).then((r) => r.data);

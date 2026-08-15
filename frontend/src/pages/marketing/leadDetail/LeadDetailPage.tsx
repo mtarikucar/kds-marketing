@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { ArrowLeft, Pencil, Trash2, CheckCircle2, Printer } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2, CheckCircle2, Printer, RotateCcw } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcrumbLabel';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
@@ -36,6 +36,7 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 import {
   getLead,
   updateLeadStatus,
+  reopenLead,
   createLeadActivity,
   createOffer,
   sendOffer,
@@ -55,6 +56,7 @@ import ActivityTimelineTab from './ActivityTimelineTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
 import ConvertDialog from './ConvertDialog';
+import { ReopenLeadDialog } from './ReopenLeadDialog';
 import { useConvertDialog } from './useConvertDialog';
 import SendFaxDialog from './SendFaxDialog';
 
@@ -77,6 +79,7 @@ export default function LeadDetailPage() {
 
   const convert = useConvertDialog();
   const [faxOpen, setFaxOpen] = useState(false);
+  const [reopenOpen, setReopenOpen] = useState(false);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
@@ -112,6 +115,16 @@ export default function LeadDetailPage() {
       toast.success('Status updated');
     },
     onError: () => toast.error('Failed to update status'),
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: (reason: string) => reopenLead(id!, reason),
+    onSuccess: () => {
+      setReopenOpen(false);
+      invalidate();
+      toast.success('Lead reopened');
+    },
+    onError: () => toast.error('Failed to reopen lead'),
   });
 
   const activityMutation = useMutation({
@@ -269,6 +282,16 @@ export default function LeadDetailPage() {
                 </SelectContent>
               </Select>
             )}
+            {/* The Select above only ever moves FORWARD, because that is all
+                ALLOWED_TRANSITIONS permits. A stage entered by mistake was
+                therefore permanent — this is the one way back, manager-only
+                and reason-logged. A converted lead is excluded: it owns a live
+                tenant. */}
+            {isManager && !lead.convertedTenantId && lead.status !== 'NEW' && lead.status !== 'WON' && (
+              <Button variant="outline" size="sm" onClick={() => setReopenOpen(true)}>
+                <RotateCcw className="h-4 w-4" /> Reopen
+              </Button>
+            )}
             {canConvert && (
               <Button
                 variant="primary"
@@ -311,6 +334,15 @@ export default function LeadDetailPage() {
             )}
           </div>
         }
+      />
+
+      <ReopenLeadDialog
+        open={reopenOpen}
+        onOpenChange={setReopenOpen}
+        currentStatus={lead.status}
+        statusLabel={LEAD_STATUS_LABELS[lead.status as keyof typeof LEAD_STATUS_LABELS] ?? lead.status}
+        onConfirm={(reason) => reopenMutation.mutate(reason)}
+        loading={reopenMutation.isPending}
       />
 
       <ConfirmDialog
