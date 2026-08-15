@@ -9,6 +9,7 @@ function build(features: Record<string, boolean> = { socialCampaigns: true }) {
     create: jest.fn().mockResolvedValue({ id: 'sc1', status: 'DRAFT' }),
     get: jest.fn().mockResolvedValue({ id: 'sc1' }),
     listItems: jest.fn().mockResolvedValue([]),
+    pause: jest.fn().mockResolvedValue({ id: 'sc1', status: 'PAUSED' }),
   };
   const principals = {
     resolve: jest.fn().mockResolvedValue({ id: 'sys-1', workspaceId: 'ws1', role: 'SYSTEM' }),
@@ -56,11 +57,38 @@ describe('Faz 5 D2 — social campaigns', () => {
     expect(tool.scopes).toEqual(['campaigns.write']);
   });
 
-  it('does NOT expose an activate tool — turning the engine on stays a panel decision', () => {
+  it('exposes pause but NOT activate/resume — an agent may narrow autonomy, never widen it', () => {
     const { registry } = build();
     const names = registry.list(['campaigns.read', 'campaigns.write', 'campaigns.send']).map((t) => t.name);
     expect(names).not.toContain('jeeta.activate_social_campaign');
-    expect(names.sort()).toEqual(['jeeta.create_social_campaign', 'jeeta.list_social_campaigns'].sort());
+    expect(names).not.toContain('jeeta.resume_social_campaign');
+    expect(names.sort()).toEqual(
+      [
+        'jeeta.create_social_campaign',
+        'jeeta.list_social_campaigns',
+        'jeeta.pause_social_campaign',
+      ].sort(),
+    );
+  });
+
+  it('jeeta.pause_social_campaign stops the engine behind a human approval', async () => {
+    const { registry, campaigns } = build();
+    const tool = registry.get('jeeta.pause_social_campaign')!;
+    expect(tool.risk).toBe('WRITE');
+    // Matches set_campaign_status, the messaging-campaign equivalent: a human
+    // confirms, but the agent can put the stop one click away.
+    expect(tool.requiresApproval).toBe(true);
+    expect(tool.scopes).toEqual(['campaigns.write']);
+    await tool.handler(ctx(), { campaignId: 'sc1' });
+    expect(campaigns.pause).toHaveBeenCalledWith('ws1', 'sc1');
+  });
+
+  it('gates pause on the entitlement before touching the service', async () => {
+    const { registry, campaigns } = build({ socialCampaigns: false });
+    await expect(
+      registry.get('jeeta.pause_social_campaign')!.handler(ctx(), { campaignId: 'sc1' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(campaigns.pause).not.toHaveBeenCalled();
   });
 
   it('creates with parsed dates and the resolved principal as author', async () => {

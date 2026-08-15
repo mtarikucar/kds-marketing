@@ -49,7 +49,24 @@ function parseDate(value: unknown, field: string): Date {
  * CRUD verb. Consequently the create tool is a plain `WRITE` — an inert draft
  * row — rather than PUBLISH or SPEND.
  *
- * Both tools sit behind the `socialCampaigns` package feature via
+ * ## Why pause, given the above
+ * The same reasoning that withholds `activate` argues FOR exposing `pause`.
+ * The line is direction, not the verb: an agent may narrow this workspace's
+ * autonomy, never widen it. Starting an unattended publisher is a decision;
+ * stopping one that is already misfiring is damage control, and it is
+ * reversible — `resume()` exists but stays panel-only, exactly like `activate`.
+ *
+ * The concrete failure this closes: a FULL_AUTO campaign with `endDate: null`
+ * kept generating a June seasonal theme into August, against a disconnected
+ * account, and an agent reading `list_social_campaigns` could see all of that
+ * and had no way to stop it. Being able to notice the bleeding without being
+ * able to stop it is the wrong asymmetry.
+ *
+ * It still carries `requiresApproval: true`, matching `set_campaign_status`
+ * (the messaging-campaign equivalent) — a human confirms, but the agent can put
+ * the stop one click away instead of leaving it to be discovered.
+ *
+ * All three tools sit behind the `socialCampaigns` package feature via
  * `assertFeature`, matching `@RequiresFeature('socialCampaigns')` on
  * `SocialCampaignsController`, and `SocialCampaign.createdById` is filled from
  * `McpPrincipalService.resolve` (a real FK — never a fabricated id).
@@ -166,6 +183,35 @@ export function registerSocialCampaignTools(
           : {}),
         createdById: actor.id,
       });
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.pause_social_campaign',
+    description:
+      'Pause a RUNNING AI social campaign: the planner is stopped and its scheduled plan job is cancelled, so no further items are generated or published. Nothing already published is affected. Resuming is deliberately NOT available here — restarting an unattended publisher stays a panel decision.',
+    domain: 'social',
+    defer: true,
+    scopes: ['campaigns.write'],
+    // Stopping a publisher spends nothing and publishes nothing; the risk it
+    // carries is the marketing it withholds, which a panel resume undoes.
+    risk: 'WRITE',
+    requiresApproval: true,
+    approvalKind: 'CAMPAIGN_PAUSE',
+    resourceType: 'social_campaign',
+    resourceIdFrom: (args) => (typeof args.campaignId === 'string' ? args.campaignId : undefined),
+    inputSchema: z.object({
+      campaignId: z
+        .string()
+        .min(1)
+        .describe('Social campaign id to pause, from jeeta.list_social_campaigns.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
+      // The service refuses anything that is not ACTIVE, so a DRAFT or an
+      // already-paused campaign comes back as a plain BadRequest rather than a
+      // silent no-op the caller would read as success.
+      return deps.socialCampaigns.pause(ctx.workspaceId, String(args.campaignId ?? ''));
     },
   });
 }

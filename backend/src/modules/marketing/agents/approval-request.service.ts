@@ -53,6 +53,12 @@ export type ApprovalKind =
   | 'MEDIA_SPEND'
   // Faz 5 D2 — a permanent removal (design spec §4's new DESTRUCTIVE class).
   | 'DESTRUCTIVE'
+  // Stopping an autonomous publisher, not changing what it aims at. Reusing
+  // `TARGET_CHANGE` (the autonomy-lane kind) would show "target change" to
+  // whoever is being asked to halt a campaign that is actively posting — the
+  // same mislabelling `MEDIA_SPEND` was added to avoid. Additive, like the
+  // others: the column is free-text and the UI falls back to the raw string.
+  | 'CAMPAIGN_PAUSE'
   // Faz 5 D4 — an autonomous AGENT RUN whose cost is AI credits PLUS live
   // third-party scraping money (firecrawl/apify): prospect research
   // (`research.qualify`) and strategy synthesis (`strategy.synthesize`).
