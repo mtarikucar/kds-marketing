@@ -83,7 +83,7 @@ export default function MarketingSidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHubId]);
 
-  const hubTarget = (h: NavHub) => h.path ?? h.children?.[0]?.path ?? '/dashboard';
+  const hubTarget = (h: NavHub) => h.path ?? h.children?.[0]?.path ?? '/home';
 
   const renderHub = (h: NavHub, opts?: { pinnable?: boolean }) => {
     const pinnable = opts?.pinnable ?? true;

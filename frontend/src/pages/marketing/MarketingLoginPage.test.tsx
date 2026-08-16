@@ -47,7 +47,7 @@ function renderPage(entry = '/login') {
     <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/login" element={<MarketingLoginPage />} />
-        <Route path="/dashboard" element={<div>Dashboard</div>} />
+        <Route path="/home" element={<div>Home</div>} />
         <Route path="/register" element={<div>Register</div>} />
         <Route path="/oauth/consent" element={<div>Consent screen</div>} />
       </Routes>
@@ -106,10 +106,10 @@ describe('MarketingLoginPage', () => {
     await waitFor(() => expect(screen.getByText('Consent screen')).toBeInTheDocument());
   });
 
-  it('ignores an off-site ?next= (protocol-relative open redirect) and lands on the dashboard', async () => {
+  it('ignores an off-site ?next= (protocol-relative open redirect) and lands on the home screen', async () => {
     renderPage('/login?next=%2F%2Fevil.example%2Fharvest');
     await signIn();
-    await waitFor(() => expect(screen.getByText('Dashboard')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Home')).toBeInTheDocument());
   });
 
   it('shows a register link', () => {

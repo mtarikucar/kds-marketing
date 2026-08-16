@@ -12,6 +12,8 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'ask_ai.question',
       'ask_ai.turn',
       'brand.analyze',
+      'command.request',
+      'command.turn',
       'content.compose',
       'conversation.followup',
       'conversation.reply',

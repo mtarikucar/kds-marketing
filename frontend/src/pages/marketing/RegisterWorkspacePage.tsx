@@ -80,7 +80,7 @@ export default function RegisterWorkspacePage() {
   // Guard AFTER all hooks (Rules of Hooks): an already-authenticated visitor is
   // redirected before the form renders, but the hook order stays stable.
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/home" replace />;
   }
 
   const onSubmit = async (values: RegisterValues) => {

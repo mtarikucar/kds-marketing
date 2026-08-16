@@ -117,6 +117,14 @@ export class AskAiDto {
   question: string;
 }
 
+export class CommandAiDto {
+  /** What the user wants done, in their own words. Longer than AskAiDto's
+   *  question because a command often carries the content to act on — a post
+   *  to draft, a message to send. */
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  command: string;
+}
+
 export class ComposeContentDto {
   @IsIn(['email', 'sms', 'social'])
   kind: 'email' | 'sms' | 'social';

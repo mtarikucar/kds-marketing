@@ -30,7 +30,7 @@ export default function FinalCta() {
               </h2>
               <p className="mx-auto mt-4 max-w-xl text-lg text-slate-300">{t('landing.finalCta.subtitle')}</p>
               <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-                <Btn to={isAuthenticated ? '/dashboard' : '/register'} variant="primary" size="lg" className="w-full sm:w-auto">
+                <Btn to={isAuthenticated ? '/home' : '/register'} variant="primary" size="lg" className="w-full sm:w-auto">
                   {isAuthenticated ? t('landing.nav.openApp') : t('landing.finalCta.cta')}
                   <ArrowRight className="h-4 w-4" />
                 </Btn>

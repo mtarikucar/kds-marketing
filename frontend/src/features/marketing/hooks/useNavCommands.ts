@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useEntitlements } from './useEntitlements';
 import { useWorkspaceProfile } from './useWorkspaceProfile';
-import { NAV_HUBS, visibleNav } from '../navigation';
+import { NAV_HUBS, UNLISTED_DESTINATIONS, visibleNav } from '../navigation';
 
 /** A single navigable destination the command palette can jump to. */
 export interface NavCommand {
@@ -61,6 +61,11 @@ export function useNavCommands(): NavCommand[] {
       } else if (hub.path) {
         push({ id: hub.path, label: hubLabel, hubLabel: null, path: hub.path, icon: hub.icon });
       }
+    }
+    // Pages that are routable but hold no sidebar slot. Appended last so a
+    // real hub always wins the dedupe if one ever adopts the same path.
+    for (const d of UNLISTED_DESTINATIONS) {
+      push({ id: d.path, label: t(d.labelKey, d.label), hubLabel: null, path: d.path, icon: d.icon });
     }
     return commands;
     // `has` and `isAgency` come from cached queries; include primitives that

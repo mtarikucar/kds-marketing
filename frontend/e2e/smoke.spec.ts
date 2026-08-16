@@ -34,7 +34,7 @@ base('an unauthenticated deep link is bounced to /login', async ({ page }) => {
  * on purpose — see the `workers` note in playwright.config.ts for the 5/60s
  * login budget.
  */
-base('signing in through the UI reaches the dashboard', async ({ page }) => {
+base('signing in through the UI reaches the home screen', async ({ page }) => {
   const saved = JSON.parse(
     fs.readFileSync(path.resolve(OWNER_STATE_FILE), 'utf8'),
   ) as OwnerState;
@@ -44,7 +44,11 @@ base('signing in through the UI reaches the dashboard', async ({ page }) => {
   await page.locator('input[type="password"]').fill(saved.password);
   await page.locator('button[type="submit"]').click();
 
-  await baseExpect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
+  // Signing in lands on the command centre, not the KPI board: the product's
+  // promise is that you say what you want, not that you read charts and act on
+  // them yourself. /dashboard is still routable and linked from here.
+  await baseExpect(page).toHaveURL(/\/home/, { timeout: 30_000 });
+  await baseExpect(page.getByTestId('command-bar')).toBeVisible();
 });
 
 // ── Authenticated surface (fresh workspace per test) ────────────────────────

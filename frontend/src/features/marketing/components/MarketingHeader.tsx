@@ -285,7 +285,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
       // wholesale (same posture as WorkspaceSwitcher's onSelect) rather than
       // invalidating query-key by query-key.
       queryClient.clear();
-      navigate('/dashboard');
+      navigate('/home');
       toast.success(
         t('workspace.createSuccess', {
           defaultValue: 'Workspace "{{name}}" created — you\'re now in it',
@@ -499,7 +499,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                 <DropdownMenuItem
                   onSelect={() => {
                     reopenOnboarding.mutate();
-                    navigate('/dashboard');
+                    navigate('/home');
                     // Confirm the action even when the workspace is fully set up
                     // (in which case the checklist stays hidden — nothing to do).
                     toast.success(t('onboarding.reopened', 'Setup guide reopened'));

@@ -21,7 +21,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
   it('a core-only REP sees the daily hubs + single-page hubs, advanced dropped', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: false, has: entitle() });
     const ids = hubs.map((h) => h.id);
-    expect(ids).toContain('dashboard');
+    expect(ids).toContain('home');
     expect(ids).toContain('tasks');
     expect(ids).toEqual(
       expect.arrayContaining(['contacts', 'calendar', 'sales', 'reports', 'settings']),
@@ -154,7 +154,7 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
 
 describe('findActiveHub — path → owning hub', () => {
   it('resolves single-page hubs', () => {
-    expect(findActiveHub(NAV_HUBS, '/dashboard')?.id).toBe('dashboard');
+    expect(findActiveHub(NAV_HUBS, '/home')?.id).toBe('home');
     expect(findActiveHub(NAV_HUBS, '/tasks')?.id).toBe('tasks');
     expect(findActiveHub(NAV_HUBS, '/inbox')?.id).toBe('inbox');
     expect(findActiveHub(NAV_HUBS, '/reports')?.id).toBe('reports');
@@ -188,11 +188,11 @@ describe('shouldAutoOpenAdvanced — persisted "More" collapse survives reload',
   });
 
   it('auto-opens on a genuine in-session navigation INTO an advanced hub', () => {
-    expect(shouldAutoOpenAdvanced('dashboard', 'automation', true)).toBe(true);
+    expect(shouldAutoOpenAdvanced('home', 'automation', true)).toBe(true);
   });
 
   it('does not auto-open when navigating into a NON-advanced hub', () => {
-    expect(shouldAutoOpenAdvanced('automation', 'dashboard', false)).toBe(false);
+    expect(shouldAutoOpenAdvanced('automation', 'home', false)).toBe(false);
   });
 
   it('does not auto-open when the hub did not change (re-render on the same advanced page)', () => {
@@ -207,7 +207,7 @@ describe('splitByTier — progressive disclosure', () => {
     const coreIds = core.map((h) => h.id);
     const advIds = advanced.map((h) => h.id);
     expect(coreIds).toEqual(
-      expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reports', 'studio']),
+      expect.arrayContaining(['home', 'contacts', 'calendar', 'sales', 'tasks', 'reports', 'studio']),
     );
     // Sites (funnels) and Memberships (memberships module) are both gated now,
     // so without those entitlements the remaining advanced pair tucks behind "More".
