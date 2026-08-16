@@ -4,6 +4,7 @@ import {
   CreateOpportunityDto,
   MoveOpportunityDto,
   OpportunityFilterDto,
+  UpdateOpportunityDto,
 } from '../../dto/opportunity.dto';
 import { OpportunitiesService } from '../../opportunities/opportunities.service';
 import { PipelinesService } from '../../opportunities/pipelines.service';
@@ -110,6 +111,72 @@ export function registerPipelineTools(registry: McpToolRegistry, deps: PipelineT
         await deps.principals.assertActiveMember(ctx.workspaceId, args.assignedToId);
       }
       return deps.opportunities.create(ctx.workspaceId, args as unknown as CreateOpportunityDto, actor);
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.update_opportunity',
+    description:
+      "Change a deal's details — name, value, currency, notes, owner, expected close date, or the lead it belongs to. Use jeeta.move_opportunity_stage to change its STAGE; this tool does not move deals.",
+    domain: 'pipeline',
+    // Deferred: correcting a deal's fields is occasional. The primary pipeline
+    // writes (create, move) stay advertised.
+    defer: true,
+    scopes: ['leads.write'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      opportunityId: z.string().min(1).describe('Id of the deal to update.'),
+      name: z.string().min(1).max(160).optional().describe('Deal name.'),
+      value: z.number().min(0).optional().describe('Deal value, in the deal currency.'),
+      currency: z.enum(['TRY', 'USD', 'EUR']).optional().describe('Currency code.'),
+      source: z.string().max(40).optional().describe('Where the deal came from.'),
+      notes: z.string().max(4000).optional().describe('Free-text notes.'),
+      assignedToId: z.string().optional().describe('Id of the rep who owns the deal.'),
+      leadId: z.string().optional().describe('Id of the lead this deal belongs to.'),
+      expectedCloseDate: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('Expected close date, ISO 8601. Pass null to clear it.'),
+    }),
+    handler: async (ctx, args) => {
+      const actor = await deps.principals.resolve(ctx);
+      if (typeof args.assignedToId === 'string' && args.assignedToId.length > 0) {
+        await deps.principals.assertActiveMember(ctx.workspaceId, args.assignedToId);
+      }
+      const { opportunityId, ...patch } = args as { opportunityId: string } & Record<string, unknown>;
+      return deps.opportunities.update(
+        ctx.workspaceId,
+        String(opportunityId),
+        patch as unknown as UpdateOpportunityDto,
+        actor,
+      );
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.delete_opportunity',
+    description:
+      'Permanently delete a deal. There is no undo and no archive — prefer moving it to a lost stage with jeeta.move_opportunity_stage, which keeps the history and the reason. Use this only for a deal that should never have existed, such as a duplicate or a test row.',
+    domain: 'pipeline',
+    defer: true,
+    scopes: ['leads.manage'],
+    // DESTRUCTIVE is the one risk class the broker gates in EVERY write mode,
+    // AUTONOMOUS included: a deleted row has no undo table and no balance to
+    // bound it. An agent may propose this; only a human completes it.
+    risk: 'DESTRUCTIVE',
+    requiresApproval: true,
+    approvalKind: 'DESTRUCTIVE',
+    resourceType: 'opportunity',
+    resourceIdFrom: (args) =>
+      typeof args.opportunityId === 'string' ? args.opportunityId : undefined,
+    inputSchema: z.object({
+      opportunityId: z.string().min(1).describe('Id of the deal to delete permanently.'),
+    }),
+    handler: async (ctx, args) => {
+      const actor = await deps.principals.resolve(ctx);
+      return deps.opportunities.remove(ctx.workspaceId, String(args.opportunityId), actor);
     },
   });
 

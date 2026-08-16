@@ -19,12 +19,31 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
   {
     key: 'workspace',
     label: 'Workspace',
-    paths: ['/branding', '/users', '/settings/roles', '/targets', '/settings/modules'],
+    // /booking configures the public booking page — workspace setup. The
+    // appointments it produces stay in the Calendar hub.
+    paths: [
+      '/branding',
+      '/users',
+      '/settings/roles',
+      '/targets',
+      '/settings/modules',
+      '/booking',
+    ],
   },
   {
     key: 'data',
     label: 'Data',
-    paths: ['/settings/custom-fields', '/custom-objects', '/research'],
+    // Segments/Tags/Import moved here from the Contacts hub (2026-08 rail cut):
+    // they SHAPE contact data rather than being contacts you work, which is
+    // the same reason Custom Fields already lived here.
+    paths: [
+      '/settings/custom-fields',
+      '/custom-objects',
+      '/research',
+      '/segments',
+      '/tags',
+      '/import',
+    ],
   },
   {
     key: 'connections',

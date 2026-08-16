@@ -413,6 +413,8 @@ import { GamificationService } from './memberships/gamification.service';
 // Epic G — analytics (read-only lead aggregations).
 import { AnalyticsController } from './analytics/analytics.controller';
 import { AnalyticsService } from './analytics/analytics.service';
+import { PageViewStatsController } from './analytics/page-view-stats.controller';
+import { PageViewStatsService } from './analytics/page-view-stats.service';
 import { AttributionService } from './analytics/attribution.service';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
@@ -713,6 +715,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     CoursesController,
     EnrollmentController,
     AnalyticsController,
+    PageViewStatsController,
     ComplianceController,
     TwoFactorController,
     SlackController,
@@ -1058,6 +1061,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     GamificationService,
     // Epic G — analytics.
     AnalyticsService,
+    PageViewStatsService,
     AttributionService,
     // Epic F (compliance).
     ComplianceService,

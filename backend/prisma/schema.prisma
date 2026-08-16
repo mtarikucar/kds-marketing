@@ -4812,3 +4812,32 @@ model McpOAuthToken {
   @@index([parentId])
   @@map("mcp_oauth_tokens")
 }
+
+/// Aggregated "does anyone open this page?" counter — one row per
+/// (workspace, route, month), never one row per visit.
+///
+/// The 2026-08 rail cut moved ~10 destinations out of the sidebar on an
+/// argument about what daily work looks like. That argument is reasonable but
+/// it is not evidence, and the next step — actually DELETING pages — must not
+/// be taken on taste. This is the evidence: a route with zero opens across
+/// every workspace for a couple of months is a route that can go.
+///
+/// Deliberately aggregate and anonymous. There is no userId and no timestamp
+/// per view, because "who looked at what, when" is surveillance of the
+/// customer's own staff and is not needed to answer the question. `route` is
+/// the react-router PATTERN (`/leads/:id`), never a real URL, so it carries no
+/// record ids and the row count stays bounded by the number of screens.
+model PageViewStat {
+  id          String   @id @default(uuid())
+  workspaceId String
+  /// Route pattern, e.g. `/leads/:id`. Never a concrete path or query string.
+  route       String
+  /// Calendar month, `YYYY-MM`, in UTC.
+  period      String
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, route, period])
+  @@index([period, route])
+  @@map("page_view_stats")
+}

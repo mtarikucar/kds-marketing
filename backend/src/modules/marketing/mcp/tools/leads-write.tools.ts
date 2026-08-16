@@ -46,7 +46,15 @@ const leadBodyShape = {
   branchCount: z.number().int().min(0).optional().describe('Number of branches.'),
   currentSystem: z.string().max(120).optional().describe('Competing/incumbent system in use today.'),
   notes: z.string().max(2000).optional().describe('Free-text notes stored on the lead record itself.'),
-  nextFollowUp: z.string().optional().describe('Next follow-up date, ISO 8601.'),
+  // Nullable, not just optional: omitting it LEAVES the existing date, so
+  // without an explicit null there is no way to say "there is no follow-up
+  // any more" — the service has always accepted null here, only this schema
+  // refused to carry it.
+  nextFollowUp: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('Next follow-up date, ISO 8601. Pass null to clear it.'),
   priority: z.enum(LEAD_PRIORITIES).optional().describe('Lead priority.'),
   companyId: z.string().max(64).optional().describe('Company (B2B account) id to attach this contact to.'),
   customFields: z

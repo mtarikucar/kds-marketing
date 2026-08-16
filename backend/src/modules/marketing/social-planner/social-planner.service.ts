@@ -398,6 +398,52 @@ export class SocialPlannerService implements OnModuleInit {
     return this.getPost(workspaceId, postId);
   }
 
+  /**
+   * Pull a SCHEDULED post back to DRAFT so it can be corrected.
+   *
+   * Editing refuses anything but a DRAFT, which is right — a post already in
+   * the publish queue must not change under the job that is about to send it.
+   * But it left no way to fix a scheduled post at all: the only escape was
+   * `deletePost`, which is DESTRUCTIVE, approval-gated, and throws away the
+   * copy, the media and the target accounts to fix a typo in a URL. That is
+   * the same "no way back" shape the lead pipeline had.
+   *
+   * This is the reversible alternative and it moves in the SAFE direction —
+   * it takes a post OUT of the publish queue, so it is ungated on purpose:
+   * the risky verb is scheduling, not unscheduling. The job is cancelled by
+   * the same dedupKey `schedulePost` created it with, so nothing is left
+   * behind to fire at the old time.
+   */
+  async unschedulePost(workspaceId: string, postId: string) {
+    const post = await this.prisma.socialPost.findFirst({
+      where: { id: postId, workspaceId },
+      select: { id: true, status: true },
+    });
+    if (!post) throw new NotFoundException('Social post not found');
+    if (post.status === 'DRAFT') return this.getPost(workspaceId, postId);
+    if (post.status !== 'SCHEDULED') {
+      throw new BadRequestException(
+        `Only a SCHEDULED post can be pulled back to draft (this one is ${post.status})`,
+      );
+    }
+
+    // Cancel the job FIRST. If the status write failed after the job was
+    // already gone, the post would sit SCHEDULED forever and never publish —
+    // silently. This order leaves only the opposite partial state: a DRAFT
+    // whose job is still queued, which is harmless BECAUSE publishDuePost now
+    // refuses to publish a DRAFT. It did not before this change; without that
+    // guard neither ordering was actually safe.
+    await this.scheduledJobs.cancel(SOCIAL_PUBLISH_KIND, `social-post-${postId}`);
+
+    await this.prisma.socialPost.update({
+      where: { id: postId },
+      data: { status: 'DRAFT', scheduledAt: null },
+    });
+
+    this.logger.log(`Unscheduled post ${postId} — back to DRAFT`);
+    return this.getPost(workspaceId, postId);
+  }
+
   // ────────────────────────────────────────────────────────────── Publish
 
   async publishDuePost(postId: string, workspaceId: string): Promise<void> {
@@ -410,6 +456,14 @@ export class SocialPlannerService implements OnModuleInit {
       return;
     }
     if (post.status === 'PUBLISHED') return; // idempotent
+    // A DRAFT is by definition not cleared to go out. The queue used to
+    // publish whatever the job pointed at, so a post pulled back to draft
+    // (unschedulePost) would still have gone live if its job outlived the
+    // cancel — and so would any post moved to DRAFT by any other route.
+    if (post.status === 'DRAFT') {
+      this.logger.warn(`publishDuePost: post ${postId} is a DRAFT — not publishing`);
+      return;
+    }
 
     await this.prisma.socialPost.update({
       where: { id: postId },

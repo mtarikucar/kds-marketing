@@ -13,11 +13,16 @@ import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
 import { NAV_HUBS, findActiveHub } from '../navigation';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
+import { usePageViewTracking } from '../hooks/usePageViewTracking';
 
 export default function MarketingLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const toggleCommandPalette = useCommandPaletteStore((s) => s.toggle);
+
+  // Which screens actually get opened — the evidence the next round of
+  // page-retiring has to rest on. Anonymous and aggregate; see the hook.
+  usePageViewTracking();
 
   // Area detection is structural (no gating needed) — the active hub's `area`.
   const isSettings = findActiveHub(NAV_HUBS, location.pathname)?.area === 'settings';

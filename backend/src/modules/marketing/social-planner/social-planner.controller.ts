@@ -250,6 +250,15 @@ export class SocialPlannerController {
     );
   }
 
+  /** Pull a scheduled post back to DRAFT so it can be corrected. The reverse
+   *  of `schedule`, and the only non-destructive way to fix a scheduled post. */
+  @Post('posts/:postId/unschedule')
+  @Audit({ action: 'social.post.unschedule', resourceType: 'social-post', resourceIdParam: 'postId' })
+  @RequirePermission('campaigns.send')
+  unschedulePost(@Param('postId') postId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.unschedulePost(u.workspaceId, postId);
+  }
+
   @Post('posts/:postId/publish-now')
   @Audit({ action: 'social.post.publish-now', resourceType: 'social-post', resourceIdParam: 'postId' })
   @RequirePermission('campaigns.send')

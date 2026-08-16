@@ -29,6 +29,8 @@ function setup() {
     create: jest.fn().mockResolvedValue({ id: 'o1' }),
     move: jest.fn().mockResolvedValue({ id: 'o1' }),
     get: jest.fn().mockResolvedValue({ id: 'o1', pipelineId: 'p1', stageId: 's1' }),
+    update: jest.fn().mockResolvedValue({ id: 'o1' }),
+    remove: jest.fn().mockResolvedValue({ message: 'Opportunity deleted' }),
   };
   const pipelines = {
     list: jest.fn().mockResolvedValue([PIPELINE]),
@@ -50,6 +52,7 @@ describe('pipeline MCP tools — registration metadata', () => {
     ['jeeta.list_opportunities', ['leads.read'], 'READ'],
     ['jeeta.create_opportunity', ['leads.write'], 'WRITE'],
     ['jeeta.move_opportunity_stage', ['leads.write'], 'WRITE'],
+    ['jeeta.update_opportunity', ['leads.write'], 'WRITE'],
   ])('registers %s with scopes %p as %s and no approval gate', (name, scopes, risk) => {
     const { registry } = setup();
     const tool = registry.get(name)!;
@@ -159,5 +162,79 @@ describe('jeeta.move_opportunity_stage', () => {
     await expect(
       registry.get('jeeta.move_opportunity_stage')!.handler(KEY_CTX, { opportunityId: 'o1' }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+
+describe('jeeta.update_opportunity', () => {
+  it('passes the deal id separately from the patch body', async () => {
+    const { registry, opportunities } = setup();
+    await registry
+      .get('jeeta.update_opportunity')!
+      .handler(KEY_CTX, { opportunityId: 'o1', value: 4990, notes: 'modül eklendi' });
+
+    expect(opportunities.update).toHaveBeenCalledWith(
+      'ws-a',
+      'o1',
+      expect.objectContaining({ value: 4990, notes: 'modül eklendi' }),
+      SENTINEL,
+    );
+    // `opportunityId` routes the call; it is not a column and must not leak
+    // into the patch.
+    expect(opportunities.update.mock.calls[0][2]).not.toHaveProperty('opportunityId');
+  });
+
+  it('accepts null to clear the expected close date', () => {
+    const { registry } = setup();
+    const schema = registry.get('jeeta.update_opportunity')!.inputSchema as {
+      parse: (v: unknown) => unknown;
+    };
+    // Omitting the field leaves the date alone, so without an explicit null
+    // there is no way to say "this deal has no expected close date any more".
+    expect(() => schema.parse({ opportunityId: 'o1', expectedCloseDate: null })).not.toThrow();
+  });
+
+  it('verifies a new owner is an active member of this workspace', async () => {
+    const { registry, principals } = setup();
+    await registry
+      .get('jeeta.update_opportunity')!
+      .handler(KEY_CTX, { opportunityId: 'o1', assignedToId: 'u2' });
+    expect(principals.assertActiveMember).toHaveBeenCalledWith('ws-a', 'u2');
+  });
+
+  it('does not move deals — that is move_opportunity_stage', () => {
+    const { registry } = setup();
+    expect(() =>
+      (registry.get('jeeta.update_opportunity')!.inputSchema as { parse: (v: unknown) => unknown }).parse({
+        opportunityId: 'o1',
+        stageId: 's2',
+      }),
+    ).toThrow();
+  });
+});
+
+describe('jeeta.delete_opportunity', () => {
+  it('is DESTRUCTIVE and approval-gated — the one class no write mode bypasses', () => {
+    const { registry } = setup();
+    const tool = registry.get('jeeta.delete_opportunity')!;
+    expect(tool.risk).toBe('DESTRUCTIVE');
+    expect(tool.requiresApproval).toBe(true);
+    // Manager-tier: destroying a deal is not something a coarse write key or a
+    // rep should reach.
+    expect(tool.scopes).toEqual(['leads.manage']);
+  });
+
+  it('names the deal it would destroy, so the approval card is reviewable', () => {
+    const { registry } = setup();
+    const tool = registry.get('jeeta.delete_opportunity')!;
+    expect(tool.resourceType).toBe('opportunity');
+    expect(tool.resourceIdFrom?.({ opportunityId: 'o1' })).toBe('o1');
+    expect(tool.resourceIdFrom?.({})).toBeUndefined();
+  });
+
+  it('deletes within the caller workspace when it does run', async () => {
+    const { registry, opportunities } = setup();
+    await registry.get('jeeta.delete_opportunity')!.handler(KEY_CTX, { opportunityId: 'o1' });
+    expect(opportunities.remove).toHaveBeenCalledWith('ws-a', 'o1', SENTINEL);
   });
 });

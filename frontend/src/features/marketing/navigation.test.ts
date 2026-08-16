@@ -161,8 +161,11 @@ describe('findActiveHub — path → owning hub', () => {
   });
 
   it('resolves a child path to its hub (not by URL prefix)', () => {
-    expect(findActiveHub(NAV_HUBS, '/tags')?.id).toBe('contacts');
-    expect(findActiveHub(NAV_HUBS, '/segments')?.id).toBe('contacts');
+    // Tags/Segments configure how contacts are shaped, so they moved to
+    // Settings (2026-08 rail cut) — they still resolve, just to a new owner.
+    expect(findActiveHub(NAV_HUBS, '/tags')?.id).toBe('settings');
+    expect(findActiveHub(NAV_HUBS, '/segments')?.id).toBe('settings');
+    expect(findActiveHub(NAV_HUBS, '/companies')?.id).toBe('contacts');
     expect(findActiveHub(NAV_HUBS, '/settings/custom-fields')?.id).toBe('settings');
     expect(findActiveHub(NAV_HUBS, '/voice/ivr')?.id).toBe('voice');
     expect(findActiveHub(NAV_HUBS, '/documents')?.id).toBe('sales');
@@ -207,12 +210,16 @@ describe('splitByTier — progressive disclosure', () => {
     const coreIds = core.map((h) => h.id);
     const advIds = advanced.map((h) => h.id);
     expect(coreIds).toEqual(
-      expect.arrayContaining(['home', 'contacts', 'calendar', 'sales', 'tasks', 'reports', 'studio']),
+      expect.arrayContaining(['home', 'contacts', 'calendar', 'sales', 'tasks', 'studio']),
     );
+    // Reading is not daily doing: Reports and Strategy review what happened,
+    // so they buy their way into "More" rather than a permanent rail slot.
+    expect(coreIds).not.toContain('reports');
+    expect(coreIds).not.toContain('strategy');
     // Sites (funnels) and Memberships (memberships module) are both gated now,
     // so without those entitlements the remaining advanced pair tucks behind "More".
     expect(advIds).toEqual(
-      expect.arrayContaining(['payments', 'automation']),
+      expect.arrayContaining(['payments', 'automation', 'reports', 'strategy']),
     );
     expect(advIds).not.toContain('memberships'); // module OFF by default
     // The two tiers never overlap.

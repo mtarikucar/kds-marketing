@@ -66,7 +66,14 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
   });
   registerPipelineTools(registry, {
-    opportunities: { list: jest.fn(), create: jest.fn(), move: jest.fn(), get: jest.fn() } as any,
+    opportunities: {
+      list: jest.fn(),
+      create: jest.fn(),
+      move: jest.fn(),
+      get: jest.fn(),
+      update: jest.fn(),
+      remove: jest.fn(),
+    } as any,
     pipelines: { list: jest.fn(), get: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
   });
@@ -108,6 +115,7 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
       updatePost: jest.fn(),
       deletePost: jest.fn(),
       schedulePost: jest.fn(),
+      unschedulePost: jest.fn(),
       listAccounts: jest.fn(),
     } as any,
   });
@@ -343,6 +351,8 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_opportunities',
         'jeeta.create_opportunity',
         'jeeta.move_opportunity_stage',
+        'jeeta.update_opportunity',
+        'jeeta.delete_opportunity',
         'jeeta.list_segments',
         'jeeta.list_tags',
         // Faz 5 D2 — content & social automation.
@@ -350,6 +360,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.get_social_post',
         'jeeta.update_social_post',
         'jeeta.schedule_social_post',
+        'jeeta.unschedule_social_post',
         'jeeta.delete_social_post',
         'jeeta.get_content_calendar',
         'jeeta.generate_image',
@@ -403,7 +414,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(99);
+    expect(names).toHaveLength(102);
   });
 
   /**
@@ -484,7 +495,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(99);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(102);
   });
 });
 
