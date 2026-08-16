@@ -118,7 +118,10 @@
     "voice": "Ovozli AI",
     "invoices": "Hisob-fakturalar",
     "branding": "Brend",
-    "home": "Bosh sahifa"
+    "home": "Bosh sahifa",
+    "group": {
+      "growth": "O'sish"
+    }
   },
   "common": {
     "save": "Save",

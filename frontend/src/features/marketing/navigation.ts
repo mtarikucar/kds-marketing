@@ -182,6 +182,7 @@ export const UNLISTED_DESTINATIONS: Array<{
   icon: IconType;
 }> = [
   { path: '/dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home },
+  { path: '/help', labelKey: 'nav.help', label: 'Help', icon: BookOpen },
 ];
 
 export const NAV_HUBS: NavHub[] = [
@@ -207,9 +208,6 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
       { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
-      { path: '/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
-      { path: '/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
-      { path: '/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
     ],
   },
   {
@@ -220,16 +218,12 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
       // Power Dialer is a tab inside Calls now.
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
-      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },
-      { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
-      { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
     ],
   },
   {
     id: 'calendar', labelKey: 'nav.group.calendar', label: 'Calendar', icon: Calendar,
     children: [
       { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
-      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
     ],
   },
@@ -246,15 +240,26 @@ export const NAV_HUBS: NavHub[] = [
     // AI Strategy Engine (Task 9): the always-on strategist console. First-run
     // onboarding lives at /onboarding/strategy (reached via the console's CTA).
     id: 'strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass,
-    path: '/studio/strategy', managerOnly: true, tier: 'core',
+    path: '/studio/strategy', managerOnly: true, tier: 'advanced',
   },
   {
     // Single-page hub: Ads / Performance / Analytics are tabs inside /reports.
     id: 'reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3, path: '/reports',
+    tier: 'advanced',
   },
-  { id: 'help', labelKey: 'nav.help', label: 'Help', icon: BookOpen, path: '/help' },
 
   // ——— advanced (behind "More") ———
+  {
+    // The vertical add-ons. Every one is entitlement-gated, so most workspaces
+    // never see them at all — they were spending three permanent rail slots to
+    // be invisible.
+    id: 'growth', labelKey: 'nav.group.growth', label: 'Growth', icon: Globe, tier: 'advanced',
+    children: [
+      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },
+      { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
+      { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
+    ],
+  },
   {
     id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap, tier: 'advanced',
     children: [
@@ -314,6 +319,13 @@ export const NAV_HUBS: NavHub[] = [
       // Data (Custom Objects deleted — 2026-07 trim: an island with no consumer
       // anywhere and no record-to-contact linking UI at all)
       { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
+      // Moved out of the Contacts hub (2026-08): these SHAPE contacts, they are
+      // not contacts you work. Same for Booking, which configures the public
+      // booking page — the appointments it produces stay in Calendar.
+      { path: '/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
+      { path: '/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
+      { path: '/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
+      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true, feature: 'research' },
       // Connections & domains (Account Center absorbed Settings→Connections)
       { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },

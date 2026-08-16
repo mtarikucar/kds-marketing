@@ -118,7 +118,10 @@
     "voice": "Голосовой ИИ",
     "invoices": "Счета",
     "branding": "Бренд",
-    "home": "Главная"
+    "home": "Главная",
+    "group": {
+      "growth": "Рост"
+    }
   },
   "common": {
     "save": "Save",
