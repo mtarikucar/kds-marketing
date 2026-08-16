@@ -163,7 +163,12 @@ export interface NavHub {
 }
 
 export const NAV_HUBS: NavHub[] = [
-  { id: 'dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home, path: '/dashboard' },
+  // Where everyone lands and where most work should start: say what you want,
+  // approve what is waiting, see what was done. Everything below this line is
+  // the manual fallback for when you need to go and look at something
+  // yourself — useful, but not the intended way to operate the product.
+  { id: 'home', labelKey: 'nav.home', label: 'Home', icon: Sparkles, path: '/home' },
+  { id: 'dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home, path: '/dashboard', tier: 'advanced' },
   {
     // Single-page hub: channels / canned responses / AI agents / knowledge are
     // tabs INSIDE the inbox now (`/inbox?tab=…`), not sibling pages.

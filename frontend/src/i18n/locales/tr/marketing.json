@@ -610,7 +610,8 @@
     "contentCalendar": "İçerik Takvimi",
     "personas": "UGC Personaları",
     "brandBrain": "Marka Beyni",
-    "brand": "Marka"
+    "brand": "Marka",
+    "home": "Ana ekran"
   },
   "common": {
     "save": "Kaydet",
@@ -3917,6 +3918,27 @@
       "title": "Aktif abonelik gerekiyor",
       "body": "Aboneliğin şu an bunu kapsamıyor. Paketi etkinleştirince açılır.",
       "cta": "Paketi gör"
+    }
+  },
+  "command": {
+    "greeting": "Merhaba {{name}}",
+    "greetingPlain": "Merhaba",
+    "subtitle": "Ne yapılması gerektiğini söyle, gerisini ben hallederim.",
+    "placeholder": "Ne yapmamı istersin?",
+    "label": "Ne yapmamı istersin?",
+    "send": "Çalıştır",
+    "working": "Çalışıyorum…",
+    "failed": "Komut çalıştırılamadı.",
+    "waitingOnYou": "Onayını bekliyor",
+    "whatIDid": "Neler yaptım",
+    "leads": "{{count}} lead",
+    "unassigned": "{{count}} atanmamış",
+    "tasks": "{{count}} açık görev"
+  },
+  "activity": {
+    "none": {
+      "title": "Henüz bir iş yapılmadı",
+      "desc": "Ajan bir şey yaptığında — gönderi, araştırma, takip — burada görürsün."
     }
   }
 }

@@ -355,7 +355,8 @@
     "ivr": "IVR Menus",
     "help": "Help",
     "appointments": "Appointments",
-    "brand": "Brand"
+    "brand": "Brand",
+    "home": "Home"
   },
   "common": {
     "save": "Save",
@@ -3064,6 +3065,27 @@
       "title": "Requires an active subscription",
       "body": "Your subscription does not cover this right now. Activate the plan to unlock it.",
       "cta": "View the plan"
+    }
+  },
+  "command": {
+    "greeting": "Hi {{name}}",
+    "greetingPlain": "Hi",
+    "subtitle": "Tell me what needs doing and I will handle the rest.",
+    "placeholder": "What would you like me to do?",
+    "label": "What would you like me to do?",
+    "send": "Run",
+    "working": "Working…",
+    "failed": "The command could not be run.",
+    "waitingOnYou": "Waiting on you",
+    "whatIDid": "What I did",
+    "leads": "{{count}} leads",
+    "unassigned": "{{count}} unassigned",
+    "tasks": "{{count}} open tasks"
+  },
+  "activity": {
+    "none": {
+      "title": "Nothing done yet",
+      "desc": "When the agent does something — a post, research, a follow-up — it shows up here."
     }
   }
 }

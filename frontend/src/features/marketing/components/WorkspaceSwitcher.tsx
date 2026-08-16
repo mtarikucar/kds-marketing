@@ -50,7 +50,7 @@ export function WorkspaceSwitcher() {
       // PREVIOUS workspace — clear the cache wholesale rather than trying to
       // invalidate it query-key by query-key.
       queryClient.clear();
-      navigate('/dashboard');
+      navigate('/home');
     } catch {
       toast.error('Could not switch workspace. Please try again.');
     } finally {

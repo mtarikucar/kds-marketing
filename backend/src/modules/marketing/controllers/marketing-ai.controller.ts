@@ -23,6 +23,7 @@ import { AgentProfileService } from '../ai/agent-profile.service';
 import { ContentAiService } from '../ai/content-ai.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { AskAiService } from '../ai/ask-ai.service';
+import { CommandAiService } from '../ai/command-ai.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
@@ -30,6 +31,7 @@ import {
   UpdateAgentDto,
   ComposeContentDto,
   AskAiDto,
+  CommandAiDto,
 } from '../dto/ai.dto';
 
 /**
@@ -49,6 +51,7 @@ export class MarketingAiController {
     private readonly content: ContentAiService,
     private readonly credits: AiCreditsService,
     private readonly askAi: AskAiService,
+    private readonly command: CommandAiService,
   ) {}
 
   // ---- Knowledge base (Agent Studio grounding docs) ----
@@ -182,6 +185,34 @@ export class MarketingAiController {
   @RequirePermission('leads.write')
   ask(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: AskAiDto) {
     return this.askAi.ask(actor.workspaceId, dto.question, { id: actor.id, role: actor.role });
+  }
+
+  // ---- Command bar (the home screen's "just tell it what you want") ----
+
+  /**
+   * Unlike `/ask`, this one ACTS.
+   *
+   * It deliberately carries no `@RequirePermission` of its own: authority is
+   * not a property of reaching this route, it is resolved per tool inside the
+   * service from the caller's own permissions and enforced by the MCP broker —
+   * the same choke point the external agent surface goes through. A REP may
+   * use the command bar; the broker simply refuses the tools a REP could not
+   * press a button for either.
+   */
+  @Post('command')
+  // Up to MAX_ITERS Opus turns per command, each carrying the advertised tool
+  // catalogue. Tighter burst cap than /ask because a turn here costs more.
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
+  @RequiresFeature('askAi')
+  runCommand(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: CommandAiDto,
+  ) {
+    return this.command.run(actor.workspaceId, dto.command, {
+      id: actor.id,
+      role: actor.role,
+      customRoleId: actor.customRoleId,
+    });
   }
 
   // ---- Credit meter (read-only; powers the billing gauge) ----

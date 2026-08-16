@@ -88,7 +88,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
       <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-e border-border bg-surface md:flex">
         <div className="border-b border-border px-4 py-4">
           <NavLink
-            to="/dashboard"
+            to="/home"
             className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="h-4 w-4" />

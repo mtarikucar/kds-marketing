@@ -117,7 +117,8 @@
     "reviews": "Sharhlar",
     "voice": "Ovozli AI",
     "invoices": "Hisob-fakturalar",
-    "branding": "Brend"
+    "branding": "Brend",
+    "home": "Bosh sahifa"
   },
   "common": {
     "save": "Save",
@@ -969,5 +970,26 @@
     "unread": "O'qilmagan suhbatlar",
     "pendingTasks": "Ochiq vazifalar",
     "openOffers": "Javob kutayotgan takliflar"
+  },
+  "command": {
+    "greeting": "Salom {{name}}",
+    "greetingPlain": "Salom",
+    "subtitle": "Nima qilish kerakligini ayting, qolganini men bajaraman.",
+    "placeholder": "Nima qilishimni xohlaysiz?",
+    "label": "Nima qilishimni xohlaysiz?",
+    "send": "Bajarish",
+    "working": "Ishlayapman…",
+    "failed": "Buyruqni bajarib bo'lmadi.",
+    "waitingOnYou": "Sizni kutmoqda",
+    "whatIDid": "Nima qildim",
+    "leads": "{{count}} lid",
+    "unassigned": "{{count}} biriktirilmagan",
+    "tasks": "{{count}} ochiq vazifa"
+  },
+  "activity": {
+    "none": {
+      "title": "Hozircha hech narsa qilinmadi",
+      "desc": "Agent biror ish qilganda — post, tadqiqot, kuzatuv — shu yerda ko'rinadi."
+    }
   }
 }

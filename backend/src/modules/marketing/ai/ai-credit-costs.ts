@@ -90,6 +90,13 @@ export const AI_CREDIT_COSTS = {
   // Firecrawl/apify money is metered separately via the RESEARCH SpendLedger.
   'strategy.synthesize': { credits: 3, tier: 'default' as AiModelTier },
   'strategy.turn': { credits: 8, tier: 'default' as AiModelTier },
+  // Command bar — the home screen's "just tell it what you want" loop. Same
+  // shape as ask_ai (base + per turn) but priced higher per turn: it carries
+  // the advertised MCP catalogue in every request, so input tokens are far
+  // larger than ask-ai's four hand-written tools, and maxTokens is 1200.
+  // MAX_ITERS=8 bounds the total.
+  'command.request': { credits: 1, tier: 'default' as AiModelTier },
+  'command.turn': { credits: 5, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

@@ -19,6 +19,7 @@ const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingL
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
 const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvitePage'));
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
+const CommandCenterPage        = lazy(() => import('./pages/marketing/command/CommandCenterPage'));
 const MarketingDashboardPage   = lazy(() => import('./pages/marketing/MarketingDashboardPage'));
 const InboxPage                = lazy(() => import('./pages/marketing/inbox/InboxPage'));
 const LeadsPage                = lazy(() => import('./pages/marketing/leads/LeadsPage'));
@@ -120,7 +121,7 @@ function S({ children }: { children: React.ReactNode }) {
 // else lands on the public marketing home rather than being bounced to /login.
 function CatchAllRedirect() {
   const isAuthenticated = useMarketingAuthStore((s) => s.isAuthenticated);
-  return <Navigate to={isAuthenticated ? '/dashboard' : '/'} replace />;
+  return <Navigate to={isAuthenticated ? '/home' : '/'} replace />;
 }
 
 /**
@@ -188,6 +189,11 @@ export default function App() {
             mid-authorization, leaving the connector waiting forever. */}
         <Route path="/oauth/consent" element={<S><McpConsentPage /></S>} />
         <Route element={<MarketingLayout />}>
+          {/* The home screen. `/dashboard` stays a real route — the KPI board is
+              still useful and is linked from here — but it is no longer where
+              someone lands, because landing on metrics implies you are the one
+              who has to act on them. */}
+          <Route path="/home"      element={<S><CommandCenterPage /></S>} />
           <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
           <Route path="/inbox"     element={<S><InboxPage /></S>} />
           <Route path="/leads"     element={<S><LeadsPage /></S>} />

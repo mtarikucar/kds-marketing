@@ -39,7 +39,7 @@ function safeNext(raw: string | null): string | null {
 export default function MarketingLoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const next = safeNext(searchParams.get('next')) ?? '/dashboard';
+  const next = safeNext(searchParams.get('next')) ?? '/home';
   const { t } = useTranslation('marketing');
   const { login, setMemberships, isAuthenticated } = useMarketingAuthStore();
 

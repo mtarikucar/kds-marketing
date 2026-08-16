@@ -77,7 +77,7 @@ export default function LandingNav({
           <LangToggle tone={onDark ? 'dark' : 'light'} className="hidden sm:inline-flex" />
 
           {isAuthenticated ? (
-            <Btn to="/dashboard" variant="primary" size="sm" className="hidden sm:inline-flex">
+            <Btn to="/home" variant="primary" size="sm" className="hidden sm:inline-flex">
               {t('landing.nav.openApp')}
               <ArrowRight className="h-4 w-4" />
             </Btn>
@@ -134,7 +134,7 @@ export default function LandingNav({
           >
             <LangToggle tone="light" />
             {isAuthenticated ? (
-              <Btn to="/dashboard" variant="primary" size="sm" onClick={() => setOpen(false)}>
+              <Btn to="/home" variant="primary" size="sm" onClick={() => setOpen(false)}>
                 {t('landing.nav.openApp')}
                 <ArrowRight className="h-4 w-4" />
               </Btn>

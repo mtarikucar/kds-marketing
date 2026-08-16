@@ -48,7 +48,7 @@ export default function MarketingProtectedRoute({
     // bare 403 from the API. REP trying to reach manager-only
     // routes (users, performance reports, commission approvals) lands
     // here.
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/home" replace />;
   }
 
   return <Outlet />;
