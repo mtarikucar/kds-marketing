@@ -286,6 +286,28 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
   });
 
   registry.register({
+    name: 'jeeta.unschedule_social_post',
+    description:
+      'Pull a SCHEDULED post back to DRAFT so its copy, media or targets can be corrected, then schedule it again. This is the only non-destructive way to fix a scheduled post — editing refuses anything but a draft, and deleting throws the post away. It takes the post OUT of the publish queue, so it never reaches anyone.',
+    domain: 'social',
+    // Deferred: correcting a scheduled post is occasional. draft/schedule/
+    // publish stay advertised.
+    defer: true,
+    scopes: ['campaigns.send'],
+    risk: 'WRITE',
+    // Ungated on purpose: this REMOVES a post from the publish queue. The
+    // verb that needs a human is scheduling, not unscheduling — gating the
+    // undo would mean the fastest way to stop a wrong post going out is to
+    // wait for an approval.
+    requiresApproval: false,
+    inputSchema: z.object({
+      postId: z.string().min(1).describe('Id of the scheduled post to pull back to draft.'),
+    }),
+    handler: async (ctx, args) =>
+      deps.social.unschedulePost(ctx.workspaceId, String(args.postId)),
+  });
+
+  registry.register({
     name: 'jeeta.schedule_social_post',
     description:
       'Schedule a draft post to publish automatically at a future time, to every attached target account. This reaches a real audience with no further human step, so it is queued for approval exactly like publishing now.',
