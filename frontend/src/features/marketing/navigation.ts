@@ -162,13 +162,40 @@ export interface NavHub {
   tier?: 'core' | 'advanced';
 }
 
+/**
+ * Routable pages that deliberately hold NO place in the sidebar.
+ *
+ * The rail is capped (see the lean-tree test) and, more importantly, every
+ * entry on it is a claim that this is a place you are meant to go. Some pages
+ * are worth keeping and not worth that claim — the KPI dashboard is the first:
+ * it lost its rail slot to the home screen, but a power user hitting the
+ * command palette should still land on it instead of discovering it is gone.
+ *
+ * `visibleNav` does not gate these, so only add pages every signed-in member
+ * may open. This is also the mechanism for retiring a page from the rail
+ * without breaking anyone who relies on it.
+ */
+export const UNLISTED_DESTINATIONS: Array<{
+  path: string;
+  labelKey: string;
+  label: string;
+  icon: IconType;
+}> = [
+  { path: '/dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home },
+];
+
 export const NAV_HUBS: NavHub[] = [
   // Where everyone lands and where most work should start: say what you want,
   // approve what is waiting, see what was done. Everything below this line is
   // the manual fallback for when you need to go and look at something
   // yourself — useful, but not the intended way to operate the product.
-  { id: 'home', labelKey: 'nav.home', label: 'Home', icon: Sparkles, path: '/home' },
-  { id: 'dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home, path: '/dashboard', tier: 'advanced' },
+  //
+  // This REPLACES the old Dashboard entry rather than sitting beside it. Two
+  // rail items both meaning "the start of the app" is the duplication this
+  // whole change exists to remove, and the rail is already at its 17-hub
+  // ceiling. `/dashboard` is still a route and is linked from the home screen
+  // for anyone who wants the KPI board.
+  { id: 'home', labelKey: 'nav.home', label: 'Home', icon: Home, path: '/home' },
   {
     // Single-page hub: channels / canned responses / AI agents / knowledge are
     // tabs INSIDE the inbox now (`/inbox?tab=…`), not sibling pages.

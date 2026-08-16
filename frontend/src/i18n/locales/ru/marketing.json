@@ -984,7 +984,8 @@
     "whatIDid": "Что я сделал",
     "leads": "{{count}} лидов",
     "unassigned": "{{count}} без владельца",
-    "tasks": "{{count}} открытых задач"
+    "tasks": "{{count}} открытых задач",
+    "fullDashboard": "Все показатели"
   },
   "activity": {
     "none": {

@@ -83,7 +83,7 @@ describe('WorkspaceSwitcher', () => {
     expect(screen.getByRole('menuitem', { name: /WS Three/i })).toBeInTheDocument();
   });
 
-  it('selecting a DIFFERENT workspace calls switchWorkspace(id) then clears the query cache and navigates to /dashboard', async () => {
+  it('selecting a DIFFERENT workspace calls switchWorkspace(id) then clears the query cache and navigates to /home', async () => {
     storeState = {
       memberships: [
         { workspaceId: 'ws1', workspaceName: 'WS One', role: 'OWNER' },
@@ -100,7 +100,7 @@ describe('WorkspaceSwitcher', () => {
 
     expect(switchWorkspaceMock).toHaveBeenCalledWith('ws2');
     expect(clearSpy).toHaveBeenCalledTimes(1);
-    expect(navigateMock).toHaveBeenCalledWith('/dashboard');
+    expect(navigateMock).toHaveBeenCalledWith('/home');
 
     // switchWorkspace must resolve BEFORE the cache is cleared / navigation fires.
     const switchOrder = switchWorkspaceMock.mock.invocationCallOrder[0];

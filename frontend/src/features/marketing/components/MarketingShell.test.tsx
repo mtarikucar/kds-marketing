@@ -104,12 +104,12 @@ describe('MarketingSidebar', () => {
     expect(document.querySelector('aside')).toBeTruthy();
   });
 
-  it('renders the Dashboard nav link', () => {
+  it('renders the Home nav link', () => {
     render(<SidebarWrapper qc={qc} />);
-    // Nav items use the inline `label` as i18n fallback — "Dashboard" is always present.
-    const dashboardLink = screen.getByRole('link', { name: /dashboard/i });
-    expect(dashboardLink).toBeInTheDocument();
-    expect(dashboardLink).toHaveAttribute('href', '/dashboard');
+    // Nav items use the inline `label` as i18n fallback — "Home" is always present.
+    const homeLink = screen.getByRole('link', { name: /home/i });
+    expect(homeLink).toBeInTheDocument();
+    expect(homeLink).toHaveAttribute('href', '/home');
   });
 
   it('shows the authenticated user\'s initials in the user card', () => {

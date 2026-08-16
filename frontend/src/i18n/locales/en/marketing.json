@@ -3080,7 +3080,8 @@
     "whatIDid": "What I did",
     "leads": "{{count}} leads",
     "unassigned": "{{count}} unassigned",
-    "tasks": "{{count}} open tasks"
+    "tasks": "{{count}} open tasks",
+    "fullDashboard": "Full dashboard"
   },
   "activity": {
     "none": {

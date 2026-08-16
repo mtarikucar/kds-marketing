@@ -121,7 +121,7 @@ describe('MarketingHeader — create workspace (self-serve second brand)', () =>
     expect(await screen.findByText(/new workspace/i)).toBeInTheDocument();
   });
 
-  it('submitting the dialog calls createWorkspace, clears the query cache, and navigates to /dashboard', async () => {
+  it('submitting the dialog calls createWorkspace, clears the query cache, and navigates to /home', async () => {
     vi.mocked(createWorkspaceApi).mockResolvedValue({
       user: { ...USER, workspaceId: 'ws-new', role: 'OWNER' },
       accessToken: 'new-access',
@@ -139,7 +139,7 @@ describe('MarketingHeader — create workspace (self-serve second brand)', () =>
       expect(createWorkspaceApi).toHaveBeenCalledWith({ workspaceName: 'Second Shop' }),
     );
     await waitFor(() => expect(clearSpy).toHaveBeenCalledTimes(1));
-    expect(navigateMock).toHaveBeenCalledWith('/dashboard');
+    expect(navigateMock).toHaveBeenCalledWith('/home');
     expect(toast.success).toHaveBeenCalled();
 
     // The store's real createWorkspace action ran end-to-end — token swap

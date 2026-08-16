@@ -3933,7 +3933,8 @@
     "whatIDid": "Neler yaptım",
     "leads": "{{count}} lead",
     "unassigned": "{{count}} atanmamış",
-    "tasks": "{{count}} açık görev"
+    "tasks": "{{count}} açık görev",
+    "fullDashboard": "Tüm göstergeler"
   },
   "activity": {
     "none": {

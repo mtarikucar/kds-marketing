@@ -984,7 +984,8 @@
     "whatIDid": "Nima qildim",
     "leads": "{{count}} lid",
     "unassigned": "{{count}} biriktirilmagan",
-    "tasks": "{{count}} ochiq vazifa"
+    "tasks": "{{count}} ochiq vazifa",
+    "fullDashboard": "Barcha ko'rsatkichlar"
   },
   "activity": {
     "none": {

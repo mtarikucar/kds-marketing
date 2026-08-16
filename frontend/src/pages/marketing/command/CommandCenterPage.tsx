@@ -113,6 +113,11 @@ export default function CommandCenterPage() {
             {t('command.tasks', '{{count}} açık görev', { count: stats?.pendingTasks ?? 0 })}
           </Link>
         )}
+        {/* The KPI board lost its sidebar entry to this page, so it has to be
+            reachable from here or it is orphaned. */}
+        <Link to="/dashboard" className="ml-auto hover:text-foreground">
+          {t('command.fullDashboard', 'Tüm göstergeler')}
+        </Link>
       </div>
     </div>
   );

@@ -984,7 +984,8 @@
     "whatIDid": "ما قمت به",
     "leads": "{{count}} عميل محتمل",
     "unassigned": "{{count}} غير مُسند",
-    "tasks": "{{count}} مهام مفتوحة"
+    "tasks": "{{count}} مهام مفتوحة",
+    "fullDashboard": "لوحة المؤشرات"
   },
   "activity": {
     "none": {
