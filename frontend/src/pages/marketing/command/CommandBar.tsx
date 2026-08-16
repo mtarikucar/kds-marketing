@@ -119,7 +119,7 @@ export function CommandBar() {
         </div>
       )}
 
-      <div className="relative">
+      <div className="relative" data-testid="command-bar">
         <Textarea
           ref={inputRef}
           rows={2}
