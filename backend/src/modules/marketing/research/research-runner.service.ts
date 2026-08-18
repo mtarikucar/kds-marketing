@@ -9,6 +9,25 @@ import { ResearchWorkerService } from './research-worker.service';
 export const RESEARCH_RUN_KIND = 'research.run';
 
 /**
+ * Hard ceilings on the UNATTENDED lane, independent of any customer's plan.
+ *
+ * `hasBackgroundHeadroom` below asks whether the WORKSPACE has allowance left,
+ * which is the right question for protecting the customer and the wrong one for
+ * protecting us: an unlimited plan answers "yes" forever, so on exactly the
+ * workspaces that run the most, the only brake on a nightly Opus tool-loop was
+ * the number of profiles somebody happened to create.
+ *
+ * Measured cost per research turn (AiUsageLog, 90 days): ~$0.094 on Opus, and a
+ * run is up to MAX_ITERS=8 turns — call it $0.75 a run. These defaults put the
+ * nightly worst case at roughly $30 rather than "however many profiles exist".
+ * Tune with real numbers from `jeeta.get_ai_usage` / GET /ai/usage/breakdown.
+ */
+const MAX_NIGHTLY_RUNS_PER_WORKSPACE = Number(
+  process.env.RESEARCH_NIGHTLY_MAX_PER_WORKSPACE ?? 10,
+);
+const MAX_NIGHTLY_RUNS_TOTAL = Number(process.env.RESEARCH_NIGHTLY_MAX_TOTAL ?? 40);
+
+/**
  * Drives the native AI Research engine: a nightly @Cron enqueues one
  * `research.run` ScheduledJob per active profile (deduped by profileId), and the
  * registered handler runs the bounded ResearchWorkerService for that profile.
@@ -53,11 +72,29 @@ export class ResearchRunnerService implements OnModuleInit {
     const jobs = await this.jobs.buildJobs();
     if (jobs.length === 0) return;
     let skipped = 0;
+    let cappedWorkspace = 0;
+    let cappedTotal = 0;
+    let enqueued = 0;
+    const perWorkspace = new Map<string, number>();
     for (const j of jobs) {
       if (!(await this.hasBackgroundHeadroom(j.workspaceId))) {
         skipped++;
         continue;
       }
+      // The plan-based check above cannot say no to an unlimited plan, so the
+      // absolute ceilings do. Skipped profiles are not lost — they are picked
+      // up on a later night, and "Run now" is unaffected.
+      if (enqueued >= MAX_NIGHTLY_RUNS_TOTAL) {
+        cappedTotal++;
+        continue;
+      }
+      const used = perWorkspace.get(j.workspaceId) ?? 0;
+      if (used >= MAX_NIGHTLY_RUNS_PER_WORKSPACE) {
+        cappedWorkspace++;
+        continue;
+      }
+      perWorkspace.set(j.workspaceId, used + 1);
+      enqueued++;
       await this.scheduledJob
         .schedule({
           workspaceId: j.workspaceId,
@@ -69,9 +106,17 @@ export class ResearchRunnerService implements OnModuleInit {
         })
         .catch((e) => this.logger.warn(`enqueue failed for profile ${j.profile.id}: ${e?.message ?? e}`));
     }
+    // Never let a cap truncate silently: a quietly halved research night looks
+    // exactly like "the engine found nothing".
     this.logger.log(
-      `research-nightly enqueued ${jobs.length - skipped} profile run(s)` +
-        (skipped ? `, skipped ${skipped} without credit headroom` : ''),
+      `research-nightly enqueued ${enqueued}/${jobs.length} profile run(s)` +
+        (skipped ? `, skipped ${skipped} without credit headroom` : '') +
+        (cappedWorkspace
+          ? `, deferred ${cappedWorkspace} over the ${MAX_NIGHTLY_RUNS_PER_WORKSPACE}/workspace cap`
+          : '') +
+        (cappedTotal
+          ? `, deferred ${cappedTotal} over the ${MAX_NIGHTLY_RUNS_TOTAL} nightly cap`
+          : ''),
     );
   }
 

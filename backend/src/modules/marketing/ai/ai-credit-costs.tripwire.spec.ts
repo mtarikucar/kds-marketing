@@ -49,7 +49,7 @@ describe('ai-credit-costs — cost table tripwire', () => {
     for (const [action, cfg] of Object.entries(AI_CREDIT_COSTS)) {
       expect(Number.isInteger(cfg.credits)).toBe(true);
       expect(cfg.credits).toBeGreaterThan(0);
-      expect(['default', 'light', 'conversation']).toContain(cfg.tier);
+      expect(['default', 'balanced', 'light', 'conversation']).toContain(cfg.tier);
       // guards against a typo'd action key being readable
       expect(action.length).toBeGreaterThan(0);
     }

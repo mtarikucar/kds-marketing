@@ -18,6 +18,14 @@ import { AiModelTier } from './anthropic.service';
  * the total. Single-call actions are priced from their `maxTokens` ceiling at
  * Opus 4.8 rates ($5/MTok in, $25/MTok out) rounded up — never under-charge.
  *
+ * TIERS (2026-08). There used to be nothing between Haiku and Opus, so every
+ * action needing more than a classifier landed on Opus — 19 of 26. The five
+ * moved to `balanced` (Sonnet) are drafting and Q&A over the workspace's own
+ * data, where the quality difference does not show. The ones left on Opus are
+ * the judgment-heavy runs: research, strategy, brand analysis, funnel drafting.
+ * Measured cost per action now lives in AiUsageLog — read it with
+ * `jeeta.get_ai_usage` before moving anything else.
+ *
  * CAVEAT worth knowing before re-tuning: these are derived from token
  * CEILINGS, not measurement. `anthropic.service.ts` returns real `usage` on
  * every call and every caller discards it. Logging that is the honest way to
@@ -30,19 +38,19 @@ export const AI_CREDIT_COSTS = {
   // Opus at maxTokens 1500 → ~$0.022.
   'content.compose': { credits: 3, tier: 'default' as AiModelTier },
   // Opus at maxTokens 800 → ~$0.014.
-  'workflow.ai_generate': { credits: 2, tier: 'default' as AiModelTier },
+  'workflow.ai_generate': { credits: 2, tier: 'balanced' as AiModelTier },
   // Haiku at maxTokens 16 → ~$0.0006. The most profitable row in the table.
   'workflow.ai_classify': { credits: 1, tier: 'light' as AiModelTier },
   // Base + per-turn: the loop runs up to MAX_ITERS Opus calls (ask-ai.service).
-  'ask_ai.question': { credits: 1, tier: 'default' as AiModelTier },
-  'ask_ai.turn': { credits: 3, tier: 'default' as AiModelTier },
+  'ask_ai.question': { credits: 1, tier: 'balanced' as AiModelTier },
+  'ask_ai.turn': { credits: 3, tier: 'balanced' as AiModelTier },
   // Opus at maxTokens 1500 → ~$0.022.
-  'workflow.draft': { credits: 3, tier: 'default' as AiModelTier },
+  'workflow.draft': { credits: 3, tier: 'balanced' as AiModelTier },
   // Opus at maxTokens 4000 → ~$0.081. Was 3 (≈$0.03) — under-priced 3x.
   'funnel.draft': { credits: 9, tier: 'default' as AiModelTier },
   // Opus at maxTokens 400 → ~$0.012.
-  'review.reply_draft': { credits: 2, tier: 'default' as AiModelTier },
-  'voice.turn': { credits: 2, tier: 'default' as AiModelTier },
+  'review.reply_draft': { credits: 2, tier: 'balanced' as AiModelTier },
+  'voice.turn': { credits: 2, tier: 'balanced' as AiModelTier },
   // Voice-AI Phase 5.2 cost decisions (were numeric literals in the services):
   'voice.analysis': { credits: 3, tier: 'default' as AiModelTier },
   // Speech-to-text (Deepgram/Whisper via STT_API_KEY — a JEETA-owned key).
