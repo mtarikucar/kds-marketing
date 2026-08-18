@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
+import { PlatformAiSpendService } from '../ai/platform-ai-spend.service';
 import { ResearchJobService } from './research-job.service';
 import { ResearchWorkerService } from './research-worker.service';
 
@@ -44,6 +45,7 @@ export class ResearchRunnerService implements OnModuleInit {
     private readonly jobs: ResearchJobService,
     private readonly worker: ResearchWorkerService,
     private readonly credits: AiCreditsService,
+    private readonly platformSpend: PlatformAiSpendService,
   ) {}
 
   onModuleInit(): void {
@@ -69,6 +71,12 @@ export class ResearchRunnerService implements OnModuleInit {
    */
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'research-nightly' })
   async nightly(): Promise<void> {
+    // OUR ceiling, checked before the customer's. Every other guard here asks
+    // whether the workspace has allowance left, which an unlimited plan always
+    // answers yes to — so this is the only thing standing between a nightly
+    // Opus fan-out and the vendor bill.
+    if (!(await this.platformSpend.mayRunBackground())) return;
+
     const jobs = await this.jobs.buildJobs();
     if (jobs.length === 0) return;
     let skipped = 0;

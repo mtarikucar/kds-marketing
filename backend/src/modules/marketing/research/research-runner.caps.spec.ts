@@ -11,7 +11,7 @@ import { ResearchRunnerService } from './research-runner.service';
 describe('ResearchRunnerService.nightly — absolute caps', () => {
   const UNLIMITED = { limit: -1, used: 0 };
 
-  function setup(jobs: Array<{ workspaceId: string; profileId: string }>) {
+  function setup(jobs: Array<{ workspaceId: string; profileId: string }>, platformOk = true) {
     const scheduledJob = { schedule: jest.fn().mockResolvedValue('job-1') };
     const svc = new ResearchRunnerService(
       scheduledJob as any,
@@ -23,6 +23,7 @@ describe('ResearchRunnerService.nightly — absolute caps', () => {
       } as any,
       {} as any,
       { usage: jest.fn().mockResolvedValue(UNLIMITED) } as any,
+      { mayRunBackground: jest.fn().mockResolvedValue(platformOk) } as any,
     );
     return { svc, scheduledJob };
   }
@@ -65,6 +66,15 @@ describe('ResearchRunnerService.nightly — absolute caps', () => {
     }, {});
     expect(byWs['ws-1']).toBe(10);
     expect(byWs['ws-2']).toBe(10);
+  });
+
+  it('does not start a single run once OUR platform cap is blown', async () => {
+    // The customer-side guards all pass here (unlimited plan, under the
+    // per-workspace cap). This is the only one that can say no on behalf of
+    // the vendor bill.
+    const { svc, scheduledJob } = setup(jobsFor('ws-1', 5), false);
+    await svc.nightly();
+    expect(scheduledJob.schedule).not.toHaveBeenCalled();
   });
 
   it('reports what it deferred — a silently halved night reads as "found nothing"', async () => {
