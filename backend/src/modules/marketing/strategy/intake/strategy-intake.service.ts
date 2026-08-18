@@ -135,7 +135,7 @@ export class StrategyIntakeService {
       const messages: Anthropic.MessageParam[] = [
         { role: 'user', content: this.buildKickoff(input, autoAnalysis) },
       ];
-      const turn = await this.interviewTurn(messages, deltas);
+      const turn = await this.interviewTurn(workspaceId, messages, deltas);
       if (turn.toolUse) messages.push({ role: 'assistant', content: [turn.toolUse] });
 
       const transcript: IntakeTranscript = {
@@ -201,7 +201,7 @@ export class StrategyIntakeService {
     try {
       const auto = (session.autoAnalysis ?? null) as unknown as StrategyAutoAnalysis | null;
       const deltas = auto?.suggestedArchetype ? archetypeMeta(auto.suggestedArchetype).interviewDeltas : [];
-      const turn = await this.interviewTurn(messages, deltas);
+      const turn = await this.interviewTurn(workspaceId, messages, deltas);
       if (turn.toolUse) messages.push({ role: 'assistant', content: [turn.toolUse] });
 
       const nextTurns = (t.turns ?? 1) + 1;
@@ -231,6 +231,7 @@ export class StrategyIntakeService {
   /** One interview turn: a single Anthropic call. Interprets the first tool_use —
    *  `intake_done` ends the interview; `ask_questions` returns the next batch. */
   private async interviewTurn(
+    workspaceId: string,
     messages: Anthropic.MessageParam[],
     deltas: string[],
   ): Promise<{ toolUse: Anthropic.ToolUseBlock | null; questions: string[]; done: boolean }> {
@@ -243,6 +244,11 @@ export class StrategyIntakeService {
       tools: INTAKE_TOOLS,
       maxTokens: 1024,
       tier: tierFor('strategy.interview'),
+      // Measured-usage attribution. Without both of these the call never
+      // reaches AiUsageLog: credits are still charged, but nothing records
+      // what the vendor billed, so a price can drift from its cost unseen.
+      workspaceId: workspaceId,
+      action: 'strategy.interview',
     });
     const tu = res.toolUses[0] ?? null;
     if (!tu || tu.name === 'intake_done') return { toolUse: tu, questions: [], done: true };
@@ -338,6 +344,11 @@ export class StrategyIntakeService {
       tools: ANALYSIS_TOOL,
       maxTokens: 1024,
       tier: tierFor('strategy.interview'),
+      // Measured-usage attribution. Without both of these the call never
+      // reaches AiUsageLog: credits are still charged, but nothing records
+      // what the vendor billed, so a price can drift from its cost unseen.
+      workspaceId: workspaceId,
+      action: 'strategy.interview',
     });
     const tu = res.toolUses.find((t) => t.name === 'submit_analysis');
     const a = (tu?.input ?? {}) as Record<string, unknown>;

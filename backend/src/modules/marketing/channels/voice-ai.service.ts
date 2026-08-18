@@ -192,7 +192,7 @@ export class VoiceAiService {
     // Ensure it starts with a user turn (greeting is an AI turn).
     while (messages.length && messages[0].role === 'assistant') messages.shift();
     if (!messages.length) messages.push({ role: 'user', content: customerText });
-    const res = await this.anthropic.complete({ system: parts.filter(Boolean).join('\n'), messages, maxTokens: 160, tier: tierFor('voice.turn') });
+    const res = await this.anthropic.complete({ system: parts.filter(Boolean).join('\n'), messages, maxTokens: 160, tier: tierFor('voice.turn'), workspaceId, action: 'voice.turn' });
     return res.text.trim() || 'Could you tell me a bit more?';
   }
 

@@ -636,6 +636,11 @@ export class SocialCampaignsService implements OnModuleInit {
         messages: [{ role: 'user', content: copy.slice(0, 2000) }],
         maxTokens: 4,
         tier: tierFor('workflow.ai_classify'),
+        // Measured-usage attribution. Without both of these the call never
+        // reaches AiUsageLog: credits are still charged, but nothing records
+        // what the vendor billed, so a price can drift from its cost unseen.
+        workspaceId: workspaceId,
+        action: 'workflow.ai_classify',
       });
       return !/BLOCK/i.test(res.text);
     } catch (e) {

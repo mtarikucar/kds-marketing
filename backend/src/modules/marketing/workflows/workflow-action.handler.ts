@@ -192,6 +192,11 @@ export class WorkflowActionHandler {
         messages: [{ role: 'user', content: this.interpolate(step.prompt, ctx) }],
         maxTokens: 800,
         tier: tierFor('workflow.ai_generate'),
+        // Measured-usage attribution. Without both of these the call never
+        // reaches AiUsageLog: credits are still charged, but nothing records
+        // what the vendor billed, so a price can drift from its cost unseen.
+        workspaceId: ctx.workspaceId,
+        action: 'workflow.ai_generate',
       });
       ctx.context[step.saveAs ?? 'ai_output'] = res.text;
       return { output: { [step.saveAs ?? 'ai_output']: res.text } };
@@ -211,6 +216,11 @@ export class WorkflowActionHandler {
         messages: [{ role: 'user', content: this.interpolate(step.prompt, ctx) }],
         maxTokens: 16,
         tier: tierFor('workflow.ai_classify'),
+        // Measured-usage attribution. Without both of these the call never
+        // reaches AiUsageLog: credits are still charged, but nothing records
+        // what the vendor billed, so a price can drift from its cost unseen.
+        workspaceId: ctx.workspaceId,
+        action: 'workflow.ai_classify',
       });
       const reply = res.text.trim().toLowerCase();
       const catList = step.categories as string[];

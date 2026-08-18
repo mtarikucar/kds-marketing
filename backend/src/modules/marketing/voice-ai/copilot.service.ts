@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost } from '../ai/ai-credit-costs';
+import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { KnowledgeService } from '../ai/knowledge.service';
 
 export interface CopilotSuggestion {
@@ -67,7 +67,9 @@ export class CopilotService {
         system: parts.filter(Boolean).join('\n'),
         messages: [{ role: 'user', content: transcriptSoFar }],
         maxTokens: 200,
-        tier: 'conversation',
+        tier: tierFor('voice.copilot'),
+        workspaceId,
+        action: 'voice.copilot',
       });
     } catch (err) {
       await this.credits.refund(workspaceId, cost);

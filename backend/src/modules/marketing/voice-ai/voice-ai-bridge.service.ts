@@ -3,7 +3,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost } from '../ai/ai-credit-costs';
+import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { KnowledgeService } from '../ai/knowledge.service';
 
 /** The VOICE channel row this bridge serves (shape we actually read). */
@@ -101,7 +101,15 @@ export class VoiceAiBridgeService {
     await this.credits.reserve(channel.workspaceId, creditCost('voice.turn'));
     let res: { text: string; usage: { input: number; output: number } };
     try {
-      res = await this.anthropic.complete({ system, messages, maxTokens: 160, tier: 'conversation' });
+      res = await this.anthropic.complete({
+        system,
+        messages,
+        maxTokens: 160,
+        // Realtime: keep the fast conversation tier (see netgsm-ivr).
+        tier: 'conversation',
+        workspaceId: channel.workspaceId,
+        action: 'voice.turn',
+      });
     } catch (e) {
       await this.credits.refund(channel.workspaceId, creditCost('voice.turn'));
       throw e;

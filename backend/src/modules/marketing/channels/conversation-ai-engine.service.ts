@@ -281,6 +281,11 @@ export class ConversationAiEngineService implements OnModuleInit {
         tools: TOOLS,
         maxTokens: 700,
         tier: tierFor('conversation.reply'),
+        // Measured-usage attribution. Without both of these the call never
+        // reaches AiUsageLog: credits are still charged, but nothing records
+        // what the vendor billed, so a price can drift from its cost unseen.
+        workspaceId: workspaceId,
+        action: 'conversation.reply',
         cacheSystem: true,
       });
       if (res.text) finalText = res.text;
@@ -327,6 +332,11 @@ export class ConversationAiEngineService implements OnModuleInit {
         messages,
         maxTokens: 700,
         tier: tierFor('conversation.reply'),
+        // Measured-usage attribution. Without both of these the call never
+        // reaches AiUsageLog: credits are still charged, but nothing records
+        // what the vendor billed, so a price can drift from its cost unseen.
+        workspaceId: workspaceId,
+        action: 'conversation.reply',
         cacheSystem: true,
       });
       if (final.text) finalText = final.text;
@@ -488,6 +498,11 @@ export class ConversationAiEngineService implements OnModuleInit {
         messages: this.buildHistory(history),
         maxTokens: 300,
         tier: tierFor('conversation.followup'),
+        // Measured-usage attribution. Without both of these the call never
+        // reaches AiUsageLog: credits are still charged, but nothing records
+        // what the vendor billed, so a price can drift from its cost unseen.
+        workspaceId: workspaceId,
+        action: 'conversation.followup',
       });
       const text = res.text.trim();
       if (text) {
