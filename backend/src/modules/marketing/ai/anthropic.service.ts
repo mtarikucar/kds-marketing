@@ -154,7 +154,7 @@ export class AnthropicService {
       else if (block.type === 'tool_use') toolUses.push(block);
     }
 
-    void this.recordUsage(opts, res.usage.input_tokens, res.usage.output_tokens);
+    void this.recordUsage(opts, res.usage);
 
     return {
       text,
@@ -175,12 +175,16 @@ export class AnthropicService {
    * caller did not identify itself — a log line with no workspace and no action
    * cannot be turned into a price.
    */
-  private async recordUsage(
-    opts: AiCallOpts,
-    inputTokens: number,
-    outputTokens: number,
-  ): Promise<void> {
+  private async recordUsage(opts: AiCallOpts, usage: Anthropic.Usage): Promise<void> {
     if (!opts.workspaceId || !opts.action) return;
+    // Cache tokens are reported OUTSIDE `input_tokens` and billed at their own
+    // rates (write 1.25x, read 0.1x). Once tool-schema caching is on, most of
+    // the input volume lives in these two fields — recording only
+    // `input_tokens` would report the saving as total instead of ~90%.
+    const inputTokens = usage.input_tokens;
+    const outputTokens = usage.output_tokens;
+    const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+    const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
     try {
       await this.prisma.aiUsageLog.create({
         data: {
@@ -189,6 +193,8 @@ export class AnthropicService {
           model: this.modelFor(opts.tier ?? 'default'),
           inputTokens,
           outputTokens,
+          cacheWriteTokens,
+          cacheReadTokens,
         },
       });
     } catch (e) {
