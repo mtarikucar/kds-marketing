@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import Anthropic from '@anthropic-ai/sdk';
 
-export type AiModelTier = 'default' | 'light' | 'conversation';
+export type AiModelTier = 'default' | 'balanced' | 'light' | 'conversation';
 
 export interface AiCallOpts {
   system: string;
@@ -93,6 +93,13 @@ export class AnthropicService {
   private modelFor(tier: AiModelTier): string {
     if (tier === 'light') {
       return this.config.get<string>('AI_MODEL_LIGHT') || 'claude-haiku-4-5';
+    }
+    if (tier === 'balanced') {
+      // Between Haiku and Opus there was nothing, so every action needing more
+      // than a classifier got Opus by default — 19 of the 26 metered actions.
+      // Sonnet is ~40% of Opus input and ~60% of output, and for drafting and
+      // Q&A over the workspace's own data the quality difference does not show.
+      return this.config.get<string>('AI_MODEL_BALANCED') || 'claude-sonnet-4-6';
     }
     if (tier === 'conversation') {
       // Inbound customer replies are short + KB-grounded — a fast/cheap tier
