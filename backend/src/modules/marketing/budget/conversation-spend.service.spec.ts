@@ -95,15 +95,37 @@ describe('ConversationSpendService', () => {
     await expect(svc.settleSms('ws1', { messageId: 'm1', text: 'hi' })).resolves.toBeTruthy();
   });
 
-  it('the unpriced (no-tariff) path logs at debug, never warn — a workspace with no SMS tariff must not warn-spam the logs on every send', async () => {
+  it('warns ONCE on the unpriced path, then stays quiet — seen without spamming every send', async () => {
+    // This used to log at debug specifically to avoid warn-spam on a
+    // high-volume send path. The intent was right and the effect was not:
+    // debug does not print in production, so unpriced carrier traffic was
+    // invisible and "could not charge" looked like "nothing happened".
+    // Throttling per workspace+unit keeps both properties.
     const { prisma, tariffs, ledger, wallet } = makeDeps({});
     const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
-    const debugSpy = jest.spyOn((svc as any).logger, 'debug').mockImplementation(() => undefined);
     const warnSpy = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
-    const r = await svc.settleSms('ws1', { messageId: 'm1', text: 'hi' });
-    expect(r).toBeNull();
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('no SMS tariff'));
-    expect(warnSpy).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 25; i++) {
+      await expect(svc.settleSms('ws1', { messageId: `m${i}`, text: 'hi' })).resolves.toBeNull();
+    }
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0][0])).toContain('UNPRICED SPEND');
+    expect(String(warnSpy.mock.calls[0][0])).toContain('SMS');
+  });
+
+  it('warns separately for a different workspace or channel', async () => {
+    const { prisma, tariffs, ledger, wallet } = makeDeps({});
+    const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
+    const warnSpy = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
+
+    await svc.settleSms('ws1', { messageId: 'm1', text: 'hi' });
+    await svc.settleSms('ws2', { messageId: 'm2', text: 'hi' });
+    await svc.settleVoice('ws1', { callId: 'c1', durationSec: 60 });
+
+    // Throttling must not hide a SECOND tenant or a second channel going
+    // unmetered — that is the case an operator most needs to see.
+    expect(warnSpy).toHaveBeenCalledTimes(3);
   });
 
   describe('settleCampaignSms', () => {

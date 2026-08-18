@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { UnpricedSpendWarner } from './unpriced-spend.warner';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChannelTariffService, TariffUnitType } from '../wallet/channel-tariff.service';
@@ -30,6 +31,7 @@ type WaCategory = 'MARKETING' | 'UTILITY' | 'SERVICE';
 @Injectable()
 export class ConversationSpendService {
   private readonly logger = new Logger(ConversationSpendService.name);
+  private readonly unpricedWarner = new UnpricedSpendWarner(this.logger);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -190,7 +192,9 @@ export class ConversationSpendService {
   }
 
   private unpriced(channel: string, workspaceId: string): null {
-    this.logger.debug(`no ${channel} tariff for workspace ${workspaceId}; skipping settlement`);
+    // Throttled: a send-per-message warning would bury the log, but debug
+    // never printed at all, so unpriced carrier traffic was invisible.
+    this.unpricedWarner.warn(workspaceId, channel, `no ${channel} tariff for workspace ${workspaceId}`);
     return null;
   }
 
