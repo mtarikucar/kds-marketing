@@ -38,7 +38,10 @@ import { registerReviewTools } from './reviews.tools';
  * this lives beside the tool modules it enumerates rather than a module spec.
  */
 function registerFullCatalogue(registry: McpToolRegistry): void {
-  registerAnalyticsTools(registry, { analytics: { funnel: jest.fn() } as any });
+  registerAnalyticsTools(registry, {
+    analytics: { funnel: jest.fn() } as any,
+    aiUsage: { breakdown: jest.fn(), daily: jest.fn() } as any,
+  });
   registerBrandTools(registry, {
     brand: { search: jest.fn() } as any,
     profiles: { get: jest.fn(), upsert: jest.fn() } as any,
@@ -314,6 +317,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_agents',
         'jeeta.update_agent',
         'jeeta.get_funnel',
+        'jeeta.get_ai_usage',
         'jeeta.search_brand_knowledge',
         'jeeta.search_leads',
         'jeeta.list_conversations',
@@ -414,7 +418,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(102);
+    expect(names).toHaveLength(103);
   });
 
   /**
@@ -495,7 +499,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(102);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(103);
   });
 });
 

@@ -97,6 +97,7 @@ export class ResearchWorkerService {
               system: this.SYSTEM,
               messages,
               tools: RESEARCH_TOOLS,
+              cacheTools: true,
               maxTokens: 4000,
               tier: tierFor('research.turn'), workspaceId: job.workspaceId, action: 'research.turn',
               cacheSystem: true,

@@ -120,6 +120,11 @@ export class CommandAiService {
           system: this.systemPrompt(writeMode),
           messages,
           tools,
+          // ~12.000 tokens of tool schema ride along on every turn and never
+          // change within a command. Without this the loop pays Opus input
+          // price for them up to MAX_ITERS times.
+          cacheSystem: true,
+          cacheTools: true,
           maxTokens: 1200,
           tier: tierFor('command.turn'),
           workspaceId,
