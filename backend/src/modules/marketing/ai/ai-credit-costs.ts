@@ -18,6 +18,20 @@ import { AiModelTier } from './anthropic.service';
  * the total. Single-call actions are priced from their `maxTokens` ceiling at
  * Opus 4.8 rates ($5/MTok in, $25/MTok out) rounded up — never under-charge.
  *
+ * RESEARCH ON SONNET (2026-08-18). Measured: research.turn was 99% of all AI
+ * spend, at ~$0.094/turn on Opus with an input:output ratio of 51:1 — the bill
+ * is crawled page text, not reasoning. Prompt caching barely helps it either;
+ * RESEARCH_TOOLS is only ~611 tokens against ~17.000 input tokens per call, so
+ * the cacheable prefix is under 4% of the spend.
+ *
+ * The task is extract-and-qualify from source material rather than open
+ * judgment, and its output is gated: candidates land PENDING and reach the
+ * lead pool only through an explicit accept. That bounds the downside of a
+ * marginally weaker extraction, which is what makes this the right lever —
+ * cutting the cost ~60% beats raising the price, since the customer pays the
+ * same and we pay less. At 7 credits it also stops being sold under cost
+ * (costRatio was 1.34 on Opus).
+ *
  * TIERS (2026-08). There used to be nothing between Haiku and Opus, so every
  * action needing more than a classifier landed on Opus — 19 of 26. The five
  * moved to `balanced` (Sonnet) are drafting and Q&A over the workspace's own
@@ -70,8 +84,8 @@ export const AI_CREDIT_COSTS = {
   // maxTokens 4000 with context growing every turn. A flat 3-credit per-RUN
   // reserve meant a long run cost Jeeta ~$1.00 and the customer $0.03.
   // Charged as a small base + per turn instead, so the meter tracks the work.
-  'research.qualify': { credits: 2, tier: 'default' as AiModelTier },
-  'research.turn': { credits: 7, tier: 'default' as AiModelTier },
+  'research.qualify': { credits: 2, tier: 'balanced' as AiModelTier },
+  'research.turn': { credits: 7, tier: 'balanced' as AiModelTier },
   // Social publishing — X (Twitter) is the ONLY network with a real per-post API
   // cost, so it's the only publish action metered into AI credits (Meta/IG/
   // LinkedIn/TikTok publishing is free and stays uncharged). X charges ~$0.015/plain
