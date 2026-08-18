@@ -413,6 +413,7 @@ import { GamificationService } from './memberships/gamification.service';
 // Epic G — analytics (read-only lead aggregations).
 import { AnalyticsController } from './analytics/analytics.controller';
 import { AnalyticsService } from './analytics/analytics.service';
+import { AiUsageStatsService } from './ai/ai-usage-stats.service';
 import { PageViewStatsController } from './analytics/page-view-stats.controller';
 import { PageViewStatsService } from './analytics/page-view-stats.service';
 import { AttributionService } from './analytics/attribution.service';
@@ -1061,6 +1062,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     GamificationService,
     // Epic G — analytics.
     AnalyticsService,
+    AiUsageStatsService,
     PageViewStatsService,
     AttributionService,
     // Epic F (compliance).
@@ -1252,8 +1254,9 @@ export class MarketingModule {
     courses: CoursesService,
     enrollments: EnrollmentService,
     reviews: ReviewsService,
+    aiUsage: AiUsageStatsService,
   ) {
-    registerAnalyticsTools(registry, { analytics });
+    registerAnalyticsTools(registry, { analytics, aiUsage });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
     registerLeadsTools(registry, { leads });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });

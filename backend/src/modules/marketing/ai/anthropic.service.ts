@@ -16,6 +16,20 @@ export interface AiCallOpts {
   /** Cache the (large, stable) system prompt across calls. */
   cacheSystem?: boolean;
   /**
+   * Cache the TOOL DEFINITIONS across the turns of one loop.
+   *
+   * A tool loop re-sends every schema on every turn, and schemas dwarf the
+   * conversation: the MCP command bar ships ~12.000 tokens of them per turn,
+   * so an 8-turn command paid Opus input price for ~98.000 tokens of text
+   * that never changed. Anthropic caches everything up to the breakpoint, so
+   * one `cache_control` on the LAST tool covers the whole block (and the
+   * system prompt before it) at 0.1x on every turn after the first.
+   *
+   * Only worth setting on multi-turn loops — a one-shot call pays the 1.25x
+   * cache-write premium for a cache nothing will read.
+   */
+  cacheTools?: boolean;
+  /**
    * Pass BOTH to record measured token usage (AiUsageLog). Optional so no call
    * site is forced to change, but every metered action should supply them:
    * without measurement every credit price in ai-credit-costs.ts stays a
@@ -89,6 +103,20 @@ export class AnthropicService {
     return this.config.get<string>('AI_MODEL_DEFAULT') || 'claude-opus-4-8';
   }
 
+  /**
+   * Stamp the cache breakpoint on the LAST tool. Anthropic caches the prefix
+   * up to and including the marked block, so one breakpoint at the end covers
+   * every tool — and the system prompt ahead of it — in a single cache entry.
+   * Marking each tool individually would burn the four-breakpoint budget for
+   * no extra benefit.
+   */
+  private buildTools(tools: Anthropic.Tool[], cache: boolean): Anthropic.Tool[] {
+    if (!cache || tools.length === 0) return tools;
+    return tools.map((t, i) =>
+      i === tools.length - 1 ? { ...t, cache_control: { type: 'ephemeral' as const } } : t,
+    );
+  }
+
   private buildSystem(system: string, cache: boolean): Anthropic.MessageCreateParams['system'] {
     if (!cache) return system;
     return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
@@ -106,7 +134,9 @@ export class AnthropicService {
       max_tokens: opts.maxTokens ?? 1024,
       system: this.buildSystem(opts.system, opts.cacheSystem ?? false),
       messages: opts.messages,
-      ...(opts.tools && opts.tools.length ? { tools: opts.tools } : {}),
+      ...(opts.tools && opts.tools.length
+        ? { tools: this.buildTools(opts.tools, opts.cacheTools ?? false) }
+        : {}),
       ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
     });
 

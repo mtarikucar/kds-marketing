@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { MarketingGuard } from '../guards/marketing.guard';
@@ -24,6 +25,7 @@ import { ContentAiService } from '../ai/content-ai.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { AskAiService } from '../ai/ask-ai.service';
 import { CommandAiService } from '../ai/command-ai.service';
+import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
@@ -52,6 +54,7 @@ export class MarketingAiController {
     private readonly credits: AiCreditsService,
     private readonly askAi: AskAiService,
     private readonly command: CommandAiService,
+    private readonly aiUsage: AiUsageStatsService,
   ) {}
 
   // ---- Knowledge base (Agent Studio grounding docs) ----
@@ -220,5 +223,26 @@ export class MarketingAiController {
   @Get('usage')
   usage(@CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.credits.usage(actor.workspaceId);
+  }
+
+  /**
+   * Where the AI money went — measured tokens and real vendor cost per action.
+   *
+   * The credit meter above says how much of an allowance is gone; it cannot say
+   * WHY, because credits are a price we set and the bill is a price the vendor
+   * sets. This reads the measured side. Manager-only: it is a spend view.
+   */
+  @Get('usage/breakdown')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('reports.read')
+  async usageBreakdown(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Query('days') days?: string,
+    @Query('daily') daily?: string,
+  ) {
+    const window = Number.isFinite(Number(days)) && Number(days) > 0 ? Number(days) : 30;
+    const breakdown = await this.aiUsage.breakdown(actor.workspaceId, window);
+    if (daily !== 'true') return breakdown;
+    return { ...breakdown, daily: await this.aiUsage.daily(actor.workspaceId, window) };
   }
 }
