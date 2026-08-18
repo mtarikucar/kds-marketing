@@ -4395,6 +4395,14 @@ model AiUsageLog {
   model        String
   inputTokens  Int
   outputTokens Int
+  /// Prompt-cache tokens, which Anthropic reports SEPARATELY from
+  /// `input_tokens` and bills at different rates: a write costs 1.25x the
+  /// input rate, a read 0.1x. Recording only `input_tokens` after caching was
+  /// switched on would make the saving look total instead of ~90%, and hide
+  /// cache-write cost entirely — a cost report that errs optimistic is worse
+  /// than none. Default 0 so pre-caching rows stay valid.
+  cacheWriteTokens Int @default(0)
+  cacheReadTokens  Int @default(0)
   createdAt    DateTime @default(now())
 
   @@index([workspaceId, createdAt])

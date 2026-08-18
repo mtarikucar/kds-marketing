@@ -9,6 +9,8 @@ export interface UsageRow {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
   usd: number;
   /** Credits billed for these calls, from the price table. */
   credits: number;
@@ -45,14 +47,26 @@ export class AiUsageStatsService {
       by: ['action', 'model'],
       where,
       _count: { _all: true },
-      _sum: { inputTokens: true, outputTokens: true },
+      _sum: {
+        inputTokens: true,
+        outputTokens: true,
+        cacheWriteTokens: true,
+        cacheReadTokens: true,
+      },
     });
 
     const rows: UsageRow[] = grouped.map((g) => {
       const inputTokens = g._sum.inputTokens ?? 0;
       const outputTokens = g._sum.outputTokens ?? 0;
+      const cacheWriteTokens = g._sum.cacheWriteTokens ?? 0;
+      const cacheReadTokens = g._sum.cacheReadTokens ?? 0;
       const calls = g._count._all;
-      const usd = usdFor(g.model, inputTokens, outputTokens);
+      const usd = usdFor(g.model, {
+        inputTokens,
+        outputTokens,
+        cacheWriteTokens,
+        cacheReadTokens,
+      });
       const perCall = AI_CREDIT_COSTS[g.action as AiAction]?.credits;
       const credits = perCall === undefined ? 0 : perCall * calls;
       return {
@@ -61,6 +75,8 @@ export class AiUsageStatsService {
         calls,
         inputTokens,
         outputTokens,
+        cacheWriteTokens,
+        cacheReadTokens,
         usd,
         credits,
         // 1 credit ≈ $0.01 (media-models.config's anchor).
@@ -70,7 +86,10 @@ export class AiUsageStatsService {
     rows.sort((a, b) => b.usd - a.usd);
 
     const totalUsd = Math.round(rows.reduce((n, r) => n + r.usd, 0) * 100) / 100;
-    const totalIn = rows.reduce((n, r) => n + r.inputTokens, 0);
+    const totalIn = rows.reduce(
+      (n, r) => n + r.inputTokens + r.cacheWriteTokens + r.cacheReadTokens,
+      0,
+    );
     const totalOut = rows.reduce((n, r) => n + r.outputTokens, 0);
 
     return {
@@ -94,7 +113,14 @@ export class AiUsageStatsService {
     const where = { createdAt: { gte: this.since(days) }, ...(workspaceId ? { workspaceId } : {}) };
     const logs = await this.prisma.aiUsageLog.findMany({
       where,
-      select: { createdAt: true, model: true, inputTokens: true, outputTokens: true },
+      select: {
+        createdAt: true,
+        model: true,
+        inputTokens: true,
+        outputTokens: true,
+        cacheWriteTokens: true,
+        cacheReadTokens: true,
+      },
     });
 
     const byDay = new Map<string, { day: string; calls: number; usd: number }>();
@@ -102,7 +128,7 @@ export class AiUsageStatsService {
       const day = l.createdAt.toISOString().slice(0, 10);
       const cur = byDay.get(day) ?? { day, calls: 0, usd: 0 };
       cur.calls += 1;
-      cur.usd += usdFor(l.model, l.inputTokens, l.outputTokens);
+      cur.usd += usdFor(l.model, l);
       byDay.set(day, cur);
     }
     return [...byDay.values()]
