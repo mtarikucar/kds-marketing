@@ -114,3 +114,32 @@ describe('ai-credit-costs — cost table tripwire', () => {
     expect(creditCost('brand.analyze')).toBe(15);
   });
 });
+
+/**
+ * The cost table is only defensible if the expensive rows can point at a
+ * measurement. These pin the two decisions taken on 2026-08-18 from AiUsageLog,
+ * so a future re-tier has to argue with the data rather than drift past it.
+ */
+describe('ai-credit-costs — decisions backed by measured spend', () => {
+  it('keeps research off Opus — it was 99% of spend at a 51:1 input ratio', () => {
+    // The work is extraction from crawled text, and its output is gated behind
+    // an explicit accept, so the cheaper model's downside is bounded.
+    expect(tierFor('research.turn')).toBe('balanced');
+    expect(tierFor('research.qualify')).toBe('balanced');
+  });
+
+  it('leaves genuine judgment work on the top tier', () => {
+    // Named individually rather than "everything else": each of these is a
+    // deliberate keep, not an oversight.
+    expect(tierFor('strategy.turn')).toBe('default');
+    expect(tierFor('strategy.synthesize')).toBe('default');
+    expect(tierFor('brand.analyze')).toBe('default');
+    expect(tierFor('funnel.draft')).toBe('default');
+  });
+
+  it('keeps realtime conversation on the fast tier', () => {
+    // A caller is on the line; latency beats model quality.
+    expect(tierFor('conversation.reply')).toBe('conversation');
+    expect(tierFor('voice.copilot')).toBe('conversation');
+  });
+});

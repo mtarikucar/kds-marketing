@@ -34,18 +34,31 @@ describe('PlatformAiSpendService', () => {
     },
   ];
 
+  /** One unlimited-plan workspace, which is the only thing the cap watches. */
+  const prismaWith = (rows: unknown, groupBy = jest.fn().mockResolvedValue(rows)) => ({
+    aiUsageLog: { groupBy },
+    workspaceSubscription: {
+      findMany: jest.fn().mockResolvedValue([{ workspaceId: 'ws-own', packageId: 'pkg-op' }]),
+    },
+    package: {
+      findMany: jest.fn().mockResolvedValue([{ id: 'pkg-op', limits: { aiCreditsMonthly: -1 } }]),
+    },
+  });
+
   const svcWith = (Cls: typeof PlatformAiSpendService, rows: unknown) =>
-    new Cls({ aiUsageLog: { groupBy: jest.fn().mockResolvedValue(rows) } } as any);
+    new Cls(prismaWith(rows) as any);
 
   it('sums the month across every workspace, cache tokens included', async () => {
     const Cls = load('250');
     const groupBy = jest.fn().mockResolvedValue(spendOf(40));
-    const svc = new Cls({ aiUsageLog: { groupBy } } as any);
+    const svc = new Cls(prismaWith(null, groupBy) as any);
 
     await expect(svc.monthToDateUsd(new Date('2026-08-18T00:00:00Z'))).resolves.toBe(40);
-    // No workspace filter: this is the operator's question, not a tenant's.
     const where = groupBy.mock.calls[0][0].where;
-    expect(where).not.toHaveProperty('workspaceId');
+    // Scoped to unlimited plans. A metered tenant cannot overspend anyway, and
+    // counting them would let a growing customer base trip a ceiling that then
+    // halts OUR internal work.
+    expect(where.workspaceId).toEqual({ in: ['ws-own'] });
     expect(where.createdAt.gte).toEqual(new Date('2026-08-01T00:00:00Z'));
     expect(groupBy.mock.calls[0][0]._sum).toHaveProperty('cacheReadTokens', true);
   });
@@ -85,11 +98,31 @@ describe('PlatformAiSpendService', () => {
     expect(s.spentUsd).toBe(999);
   });
 
+  it('ignores metered tenants entirely — their allowance already bounds them', async () => {
+    const Cls = load('100');
+    const groupBy = jest.fn().mockResolvedValue([]);
+    const svc = new Cls({
+      aiUsageLog: { groupBy },
+      workspaceSubscription: {
+        findMany: jest.fn().mockResolvedValue([{ workspaceId: 'ws-paying', packageId: 'pkg-scale' }]),
+      },
+      // SCALE: 6000 credits/month, a real number — reserve() throws at it.
+      package: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'pkg-scale', limits: { aiCreditsMonthly: 6000 } }]),
+      },
+    } as any);
+
+    await expect(svc.monthToDateUsd()).resolves.toBe(0);
+    // Not even queried: there is nothing here for this ceiling to protect.
+    expect(groupBy).not.toHaveBeenCalled();
+    await expect(svc.mayRunBackground()).resolves.toBe(true);
+  });
+
   it('fails OPEN when metering breaks — a hiccup must not halt everyone research', async () => {
     const Cls = load('100');
-    const svc = new Cls({
-      aiUsageLog: { groupBy: jest.fn().mockRejectedValue(new Error('db down')) },
-    } as any);
+    const svc = new Cls(
+      prismaWith(null, jest.fn().mockRejectedValue(new Error('db down'))) as any,
+    );
     await expect(svc.mayRunBackground()).resolves.toBe(true);
   });
 

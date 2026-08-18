@@ -3,12 +3,29 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { usdFor } from './ai-model-prices';
 
 /**
- * Jeeta's OWN monthly vendor ceiling, in USD. Not a customer allowance — this
- * is the Anthropic bill. Set AI_PLATFORM_MONTHLY_USD_CAP to change it; 0 or a
- * negative value disables the ceiling (and the guard says so out loud rather
- * than pretending to protect anything).
+ * Monthly vendor ceiling for UNLIMITED-PLAN workspaces only, in USD.
+ *
+ * A metered plan cannot overspend: `AiCreditsService.reserve` throws
+ * AI_CREDITS_EXHAUSTED at `aiCreditsMonthly`, and anything beyond that comes
+ * out of prepaid credits the customer already bought. seed-packages.ts sizes
+ * those allowances at 8-15% of each package's price on purpose, so a paying
+ * customer's AI cost is bounded by design and self-funding.
+ *
+ * `aiCreditsMonthly: -1` is the only hole, and today it belongs to OPERATOR —
+ * priced at 0. Unlimited spend against zero revenue: that is our own internal
+ * marketing, and it is the entire unbounded surface.
+ *
+ * So this cap deliberately scopes to unlimited plans. Counting paying tenants
+ * against it would be worse than useless: their spend is already bounded, and
+ * a growing customer base would eventually trip a ceiling that then halts OUR
+ * work as a punishment for their success.
+ *
+ * $50 default against measured internal use of roughly $5/month — enough
+ * headroom to never fire in normal operation, tight enough that a runaway
+ * nightly fan-out (~$30/night at the old unbounded settings) is stopped in a
+ * day or two rather than at the end of a billing month. 0 disables it.
  */
-const CAP_USD = Number(process.env.AI_PLATFORM_MONTHLY_USD_CAP ?? 250);
+const CAP_USD = Number(process.env.AI_PLATFORM_MONTHLY_USD_CAP ?? 50);
 
 /** Where the alerting steps up. Ratios of the cap. */
 export const WARN_AT = 0.5;
@@ -54,11 +71,40 @@ export class PlatformAiSpendService {
     return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   }
 
-  /** Real vendor spend so far this UTC month, across every workspace. */
+  /**
+   * Workspaces whose plan grants unlimited AI — the only ones this ceiling is
+   * about. Read fresh each check: it changes when a package is reassigned,
+   * which is rare, and a stale allow-list here would either over-block a
+   * customer or under-protect us.
+   */
+  async unlimitedWorkspaceIds(): Promise<string[]> {
+    const subs = await this.prisma.workspaceSubscription.findMany({
+      where: { status: { in: ['ACTIVE', 'TRIALING'] } },
+      select: { workspaceId: true, packageId: true },
+    });
+    if (subs.length === 0) return [];
+    const packages = await this.prisma.package.findMany({
+      where: { id: { in: [...new Set(subs.map((s) => s.packageId))] } },
+      select: { id: true, limits: true },
+    });
+    const unlimited = new Set(
+      packages
+        .filter((p) => (p.limits as { aiCreditsMonthly?: number } | null)?.aiCreditsMonthly === -1)
+        .map((p) => p.id),
+    );
+    return subs.filter((s) => unlimited.has(s.packageId)).map((s) => s.workspaceId);
+  }
+
+  /** Vendor spend this UTC month by unlimited-plan workspaces. */
   async monthToDateUsd(now = new Date()): Promise<number> {
+    const workspaceIds = await this.unlimitedWorkspaceIds();
+    if (workspaceIds.length === 0) return 0;
     const rows = await this.prisma.aiUsageLog.groupBy({
       by: ['model'],
-      where: { createdAt: { gte: PlatformAiSpendService.monthStart(now) } },
+      where: {
+        createdAt: { gte: PlatformAiSpendService.monthStart(now) },
+        workspaceId: { in: workspaceIds },
+      },
       _sum: {
         inputTokens: true,
         outputTokens: true,
