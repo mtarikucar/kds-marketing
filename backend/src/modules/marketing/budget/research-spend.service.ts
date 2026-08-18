@@ -5,6 +5,7 @@ import { ChannelTariffService, TariffUnitType } from '../wallet/channel-tariff.s
 import { GrowthWalletService } from '../wallet/growth-wallet.service';
 import { SpendLedgerService } from '../wallet/spend-ledger.service';
 import { growthAutopilotAutonomyEnabled } from './growth-autonomy.flag';
+import { UnpricedSpendWarner } from './unpriced-spend.warner';
 
 export type ResearchUnit = 'FIRECRAWL_PAGE' | 'APIFY_RUN' | 'RESEARCH_LEAD';
 
@@ -22,6 +23,7 @@ export type ResearchUnit = 'FIRECRAWL_PAGE' | 'APIFY_RUN' | 'RESEARCH_LEAD';
 @Injectable()
 export class ResearchSpendService {
   private readonly logger = new Logger(ResearchSpendService.name);
+  private readonly unpriced = new UnpricedSpendWarner(this.logger);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -39,7 +41,11 @@ export class ResearchSpendService {
     try {
       const priced = await this.tariffs.price(workspaceId, 'RESEARCH', opts.unit as TariffUnitType, qty);
       if (!priced) {
-        this.logger.debug(`No RESEARCH tariff for ${opts.unit} (ws ${workspaceId}) — spend not metered`);
+        this.unpriced.warn(
+          workspaceId,
+          opts.unit,
+          `no RESEARCH tariff for ${opts.unit} (ws ${workspaceId}, qty ${qty})`,
+        );
         return null;
       }
       const entry = await this.ledger.debit(workspaceId, {
