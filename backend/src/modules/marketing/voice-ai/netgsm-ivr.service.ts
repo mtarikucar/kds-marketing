@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { tierFor } from '../ai/ai-credit-costs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
@@ -318,7 +319,12 @@ export class NetgsmIvrService {
         system: parts.filter(Boolean).join('\n'),
         messages: [{ role: 'user', content: userPrompt }],
         maxTokens: 120,
+        // Realtime phone turn: stays on the fast conversation tier regardless of
+        // what voice.turn is priced at elsewhere. A caller is waiting on the
+        // line, and latency beats model quality here.
         tier: 'conversation',
+        workspaceId,
+        action: 'voice.turn',
       });
       return res.text.trim() || 'Bu konuda size yardımcı olabilmem için lütfen bir temsilciye bağlanmak üzere 2 tuşlayın.';
     } catch (e: any) {

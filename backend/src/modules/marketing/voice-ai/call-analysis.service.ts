@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost } from '../ai/ai-credit-costs';
+import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { SttService } from './stt.service';
 import { R2StorageService } from '../../../common/storage/r2-storage.service';
 
@@ -90,7 +90,9 @@ export class CallAnalysisService {
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: stt.text }],
         maxTokens: 600,
-        tier: 'default',
+        tier: tierFor('voice.analysis'),
+        workspaceId: call.workspaceId,
+        action: 'voice.analysis',
       });
       parsed = parseAnalysis(res.text);
     } catch (err) {
