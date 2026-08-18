@@ -7,9 +7,13 @@ import { WorkspacesAdminController } from './controllers/workspaces-admin.contro
 import { PaymentsAdminController } from './controllers/payments-admin.controller';
 import { PackagesAdminController } from './controllers/packages-admin.controller';
 import { RoutineAdminController } from './controllers/routine-admin.controller';
+import { AiCostsAdminController } from './controllers/ai-costs-admin.controller';
 import { PlatformAuthService } from './services/platform-auth.service';
 import { WorkspacesAdminService } from './services/workspaces-admin.service';
 import { PlatformGuard } from './guards/platform.guard';
+import { PrismaService } from '../../prisma/prisma.service';
+import { AiUsageStatsService } from '../marketing/ai/ai-usage-stats.service';
+import { PlatformAiSpendService } from '../marketing/ai/platform-ai-spend.service';
 
 /**
  * Platform (superadmin) realm: operator auth + cross-workspace
@@ -28,7 +32,18 @@ import { PlatformGuard } from './guards/platform.guard';
     PaymentsAdminController,
     PackagesAdminController,
     RoutineAdminController,
+    AiCostsAdminController,
   ],
-  providers: [PlatformAuthService, WorkspacesAdminService, PlatformGuard],
+  providers: [
+    PlatformAuthService,
+    WorkspacesAdminService,
+    PlatformGuard,
+    // Cost reporting reads AiUsageLog directly and holds no marketing state,
+    // so it is provided here rather than importing the whole MarketingModule
+    // (which would pull the entire tenant surface into the operator realm).
+    PrismaService,
+    AiUsageStatsService,
+    PlatformAiSpendService,
+  ],
 })
 export class PlatformModule {}
