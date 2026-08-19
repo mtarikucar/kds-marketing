@@ -11,6 +11,8 @@ export interface UsageRow {
   outputTokens: number;
   cacheWriteTokens: number;
   cacheReadTokens: number;
+  /** Server-tool requests, billed per call. */
+  webSearches: number;
   usd: number;
   /** Credits billed for these calls, from the price table. */
   credits: number;
@@ -52,6 +54,7 @@ export class AiUsageStatsService {
         outputTokens: true,
         cacheWriteTokens: true,
         cacheReadTokens: true,
+        webSearches: true,
       },
     });
 
@@ -60,12 +63,14 @@ export class AiUsageStatsService {
       const outputTokens = g._sum.outputTokens ?? 0;
       const cacheWriteTokens = g._sum.cacheWriteTokens ?? 0;
       const cacheReadTokens = g._sum.cacheReadTokens ?? 0;
+      const webSearches = g._sum.webSearches ?? 0;
       const calls = g._count._all;
       const usd = usdFor(g.model, {
         inputTokens,
         outputTokens,
         cacheWriteTokens,
         cacheReadTokens,
+        webSearches,
       });
       const perCall = AI_CREDIT_COSTS[g.action as AiAction]?.credits;
       const credits = perCall === undefined ? 0 : perCall * calls;
@@ -77,6 +82,7 @@ export class AiUsageStatsService {
         outputTokens,
         cacheWriteTokens,
         cacheReadTokens,
+        webSearches,
         usd,
         credits,
         // 1 credit ≈ $0.01 (media-models.config's anchor).
@@ -120,6 +126,7 @@ export class AiUsageStatsService {
         outputTokens: true,
         cacheWriteTokens: true,
         cacheReadTokens: true,
+        webSearches: true,
       },
     });
 

@@ -175,7 +175,29 @@ export class AnthropicService {
    * caller did not identify itself — a log line with no workspace and no action
    * cannot be turned into a price.
    */
-  private async recordUsage(opts: AiCallOpts, usage: Anthropic.Usage): Promise<void> {
+  /**
+   * Record a call this service did NOT make.
+   *
+   * `complete()` is meant to be the single LLM entry point, but a caller that
+   * needs Anthropic's SERVER tools (web_search) cannot express that through
+   * its options — so NativeWebProvider holds its own client, and every token
+   * and every billed search it spent was invisible. This is the narrow door
+   * that keeps such a caller inside the accounting instead of outside it.
+   */
+  async recordExternalUsage(
+    workspaceId: string,
+    action: string,
+    usage: Anthropic.Usage,
+    model: string,
+  ): Promise<void> {
+    await this.recordUsage({ workspaceId, action } as AiCallOpts, usage, model);
+  }
+
+  private async recordUsage(
+    opts: AiCallOpts,
+    usage: Anthropic.Usage,
+    modelOverride?: string,
+  ): Promise<void> {
     if (!opts.workspaceId || !opts.action) return;
     // Cache tokens are reported OUTSIDE `input_tokens` and billed at their own
     // rates (write 1.25x, read 0.1x). Once tool-schema caching is on, most of
@@ -185,16 +207,18 @@ export class AnthropicService {
     const outputTokens = usage.output_tokens;
     const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
     const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+    const webSearches = usage.server_tool_use?.web_search_requests ?? 0;
     try {
       await this.prisma.aiUsageLog.create({
         data: {
           workspaceId: opts.workspaceId,
           action: opts.action,
-          model: this.modelFor(opts.tier ?? 'default'),
+          model: modelOverride ?? this.modelFor(opts.tier ?? 'default'),
           inputTokens,
           outputTokens,
           cacheWriteTokens,
           cacheReadTokens,
+          webSearches,
         },
       });
     } catch (e) {

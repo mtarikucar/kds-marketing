@@ -77,7 +77,7 @@ describe('dispatchResearchTool — meter only on provider success', () => {
       const { deps, sources, spend } = makeDeps({ firecrawlConfigured: false });
       const res = await dispatchResearchTool(deps, ctx, 'scrape_page', { url: 'https://acme.example' });
       expect(sources.firecrawl.scrape).not.toHaveBeenCalled();
-      expect(sources.native.scrape).toHaveBeenCalledWith('https://acme.example');
+      expect(sources.native.scrape).toHaveBeenCalledWith('https://acme.example', 'ws1');
       expect(res).toEqual({ markdown: 'native page', meta: {} });
       expect(spend.settle).toHaveBeenCalledWith('ws1', expect.objectContaining({ unit: 'FIRECRAWL_PAGE' }));
     });
@@ -122,7 +122,7 @@ describe('dispatchResearchTool — meter only on provider success', () => {
       const res = await dispatchResearchTool(deps, ctx, 'scrape_page', { url: 'https://acme.example' });
   
       expect(sources.firecrawl.scrape).toHaveBeenCalled();
-      expect(sources.native.scrape).toHaveBeenCalledWith('https://acme.example');
+      expect(sources.native.scrape).toHaveBeenCalledWith('https://acme.example', 'ws1');
       expect(res).toEqual({ markdown: 'native page', meta: {} });
       // Metered once, for the call that actually succeeded.
       expect(spend.settle).toHaveBeenCalledTimes(1);

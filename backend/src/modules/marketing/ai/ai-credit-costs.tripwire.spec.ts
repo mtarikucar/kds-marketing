@@ -20,6 +20,8 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'funnel.draft',
       'media.image.generate',
       'media.video.generate',
+      'research.native_scrape',
+      'research.native_search',
       'research.qualify',
       'research.turn',
       'review.reply_draft',

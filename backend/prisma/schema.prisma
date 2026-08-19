@@ -4403,6 +4403,11 @@ model AiUsageLog {
   /// than none. Default 0 so pre-caching rows stay valid.
   cacheWriteTokens Int @default(0)
   cacheReadTokens  Int @default(0)
+  /// Anthropic SERVER-tool calls, billed per request rather than per token
+  /// ($10/1000 for web_search). Token columns cannot express them, so a
+  /// search-driven run would otherwise report only its (cheap) Haiku tokens
+  /// and look far cheaper than the invoice.
+  webSearches      Int @default(0)
   createdAt    DateTime @default(now())
 
   @@index([workspaceId, createdAt])
