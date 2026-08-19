@@ -125,6 +125,10 @@ export class CommandAiService {
           // price for them up to MAX_ITERS times.
           cacheSystem: true,
           cacheTools: true,
+          // Tool results are sliced to 6.000 chars and accumulate across up to
+          // MAX_ITERS turns; without this the whole transcript is re-billed
+          // every turn.
+          cacheConversation: true,
           maxTokens: 1200,
           tier: tierFor('command.turn'),
           workspaceId,

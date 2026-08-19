@@ -30,6 +30,23 @@ export interface AiCallOpts {
    */
   cacheTools?: boolean;
   /**
+   * Cache the CONVERSATION PREFIX between the turns of one loop.
+   *
+   * `cacheSystem`/`cacheTools` only cover the static header. In a tool loop
+   * that header is the small part: research re-sends every prior tool result
+   * on every turn, each sliced to 8.000 characters, so by turn eight the
+   * transcript dwarfs the ~611 tokens of tool schema. August's invoice shows
+   * it — 2,59M Opus input tokens against only 233k cache reads, i.e. 92% of
+   * the input paid full price for text the model had already been sent.
+   *
+   * Marking the last block of the final message makes everything before it a
+   * cache prefix, so the next turn reads the whole transcript at 0.1x and
+   * writes only its own increment at 1.25x. Anthropic ignores a breakpoint
+   * under the minimum cacheable length, so a short conversation simply gets
+   * nothing rather than an error.
+   */
+  cacheConversation?: boolean;
+  /**
    * Pass BOTH to record measured token usage (AiUsageLog). Optional so no call
    * site is forced to change, but every metered action should supply them:
    * without measurement every credit price in ai-credit-costs.ts stays a
@@ -124,6 +141,37 @@ export class AnthropicService {
     );
   }
 
+  /**
+   * Put one cache breakpoint at the very end of the conversation, which makes
+   * everything before it a reusable prefix on the NEXT turn.
+   *
+   * String content is promoted to a text block first — `cache_control` lives
+   * on a content block, and a plain string has nowhere to carry it. The input
+   * is copied rather than mutated: callers keep their own `messages` array
+   * across turns and a stray breakpoint left in it would accumulate, blowing
+   * the four-breakpoint budget after a few iterations.
+   */
+  private cachePrefix(
+    messages: Anthropic.MessageParam[],
+    cache: boolean,
+  ): Anthropic.MessageParam[] {
+    if (!cache || messages.length === 0) return messages;
+    const last = messages[messages.length - 1];
+    const blocks: Anthropic.ContentBlockParam[] =
+      typeof last.content === 'string'
+        ? [{ type: 'text', text: last.content }]
+        : [...(last.content as Anthropic.ContentBlockParam[])];
+    if (blocks.length === 0) return messages;
+
+    const tail = blocks[blocks.length - 1];
+    blocks[blocks.length - 1] = {
+      ...tail,
+      cache_control: { type: 'ephemeral' as const },
+    } as Anthropic.ContentBlockParam;
+
+    return [...messages.slice(0, -1), { ...last, content: blocks }];
+  }
+
   private buildSystem(system: string, cache: boolean): Anthropic.MessageCreateParams['system'] {
     if (!cache) return system;
     return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
@@ -140,7 +188,7 @@ export class AnthropicService {
       model: this.modelFor(opts.tier ?? 'default'),
       max_tokens: opts.maxTokens ?? 1024,
       system: this.buildSystem(opts.system, opts.cacheSystem ?? false),
-      messages: opts.messages,
+      messages: this.cachePrefix(opts.messages, opts.cacheConversation ?? false),
       ...(opts.tools && opts.tools.length
         ? { tools: this.buildTools(opts.tools, opts.cacheTools ?? false) }
         : {}),

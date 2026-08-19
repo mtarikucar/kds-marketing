@@ -98,6 +98,10 @@ export class ResearchWorkerService {
               messages,
               tools: RESEARCH_TOOLS,
               cacheTools: true,
+              // The transcript, not the header, is what this loop re-sends:
+              // every prior tool result (8.000 chars each) rides along on
+              // every turn.
+              cacheConversation: true,
               maxTokens: 4000,
               tier: tierFor('research.turn'), workspaceId: job.workspaceId, action: 'research.turn',
               cacheSystem: true,
