@@ -17,7 +17,8 @@
  * both 201).
  *
  * Per-test isolation does not come from separate identities; it comes from a
- * fresh workspace per test via the unthrottled POST /marketing/workspaces.
+ * fresh workspace per test via POST /marketing/workspaces, which production
+ * caps at MAX_OWNED_WORKSPACES_PER_USER — raised for the harness, see up.mjs.
  */
 import * as fs from 'fs';
 import * as path from 'path';

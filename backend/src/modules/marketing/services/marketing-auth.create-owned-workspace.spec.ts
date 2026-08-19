@@ -55,7 +55,7 @@ describe('MarketingAuthService — createOwnedWorkspace (F1)', () => {
         create: jest.fn(),
       },
       marketingDistributionConfig: { create: jest.fn().mockResolvedValue({}) },
-      workspaceMembership: { create: jest.fn().mockResolvedValue({}) },
+      workspaceMembership: { count: jest.fn().mockResolvedValue(0), create: jest.fn().mockResolvedValue({}) },
       package: {
         findUnique: jest.fn().mockResolvedValue({ id: 'pkg-trial', trialDays: 14 }),
       },
