@@ -45,6 +45,11 @@ function slugify(name: string): string {
   return base || 'workspace';
 }
 
+/** How many workspaces one identity may self-serve into existence. Each is a
+ *  free trial with its own credits, so this bounds what a single sign-up can
+ *  cost us. Agencies are not affected — see createOwnedWorkspace. */
+const MAX_OWNED_WORKSPACES = Number(process.env.MAX_OWNED_WORKSPACES_PER_USER ?? 5);
+
 @Injectable()
 export class MarketingAuthService {
   private readonly logger = new Logger(MarketingAuthService.name);
@@ -732,6 +737,23 @@ export class MarketingAuthService {
     const user = await this.prisma.marketingUser.findUnique({ where: { id: userId } });
     if (!user || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('User not found or inactive');
+    }
+
+    // Billing is PER WORKSPACE (WorkspaceSubscription.workspaceId is unique)
+    // and every workspace minted here lands on a free 14-day TRIAL with its
+    // own 300 AI credits. Without a ceiling one identity could mint them in a
+    // loop — each one real vendor spend on our side, none of it billable.
+    // Generous on purpose: this is meant to stop a loop, not a customer with a
+    // few brands. Agencies are unaffected; sub-accounts come through
+    // AgencyService.createLocation, which mints its own owner.
+    const owned = await this.prisma.workspaceMembership.count({
+      where: { userId: user.id, role: 'OWNER', status: 'ACTIVE' },
+    });
+    if (owned >= MAX_OWNED_WORKSPACES) {
+      throw new ForbiddenException(
+        `You already own ${owned} workspaces (limit ${MAX_OWNED_WORKSPACES}). ` +
+          'Contact support if you need more.',
+      );
     }
     // The research sentinel owns rows, never sessions. MarketingGuard already
     // refuses a SYSTEM token at the door, so this can't be reached in

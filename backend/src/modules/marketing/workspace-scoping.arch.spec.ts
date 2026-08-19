@@ -262,6 +262,12 @@ const SCOPED_METHODS = [
  * a standing exception auditors must re-justify.
  */
 const ALLOWED_GLOBAL: Record<string, string> = {
+  // The ownership cap asks "how many workspaces does this identity already
+  // own", which is a question ACROSS workspaces by definition — scoping it to
+  // one would always answer 1 and the cap would never bite. It reads a count
+  // only, never row data, and is keyed on the caller's own userId.
+  'services/marketing-auth.service.ts:workspaceMembership.count':
+    "createOwnedWorkspace: counts one identity's owned workspaces, deliberately cross-workspace",
   // Login/refresh resolve identity by globally-unique email/id BEFORE a
   // workspace context exists; registerWorkspace creates the workspace and
   // its first users in the same tx (workspaceId comes from tx-local rows).
