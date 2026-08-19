@@ -398,6 +398,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.trigger_workflow',
         'jeeta.list_research_profiles',
         'jeeta.create_research_profile',
+        'jeeta.pause_research_profile',
         'jeeta.run_research',
         'jeeta.list_research_candidates',
         'jeeta.accept_research_candidates',
@@ -418,7 +419,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(103);
+    expect(names).toHaveLength(104);
   });
 
   /**
@@ -499,7 +500,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(103);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(104);
   });
 });
 

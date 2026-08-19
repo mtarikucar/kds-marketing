@@ -105,6 +105,27 @@ export function registerResearchTools(registry: McpToolRegistry, deps: ResearchT
   });
 
   registry.register({
+    name: 'jeeta.pause_research_profile',
+    description:
+      'Stop a research brief from running. A brief is picked up by the nightly agent every night for as long as it is active, and each run spends real money on crawling and models — so an experiment left switched on keeps billing forever. Pausing takes it out of the nightly fan-out and changes nothing else; the brief, its history and its staged candidates are kept. Re-activating is a panel action.',
+    domain: 'research',
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'WRITE',
+    // Ungated: this only ever REDUCES spend. The verb that needs a human is
+    // switching a brief on, which is why re-activation stays in the panel —
+    // an agent may narrow its own reach, never widen it.
+    requiresApproval: false,
+    inputSchema: z.object({
+      profileId: z.string().min(1).describe('Id of the research brief to pause.'),
+    }),
+    handler: async (ctx, args) =>
+      deps.research.update(ctx.workspaceId, String(args.profileId), {
+        status: 'PAUSED',
+      } as never),
+  });
+
+  registry.register({
     name: 'jeeta.create_research_profile',
     description:
       'Create a prospect-research brief: describe who to find (the ideal customer, the pain signals to look for), optionally where geographically, in which language, and how to pitch them. Creating a brief costs nothing on its own; the nightly research agent will pick it up, and every prospect it finds is staged for human review before becoming a lead. The number of briefs is capped by the workspace plan.',

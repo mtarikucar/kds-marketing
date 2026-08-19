@@ -5,6 +5,7 @@ function build(features: Record<string, boolean> = { research: true }) {
   const research = {
     list: jest.fn().mockResolvedValue([{ id: 'p1', name: 'Istanbul restaurants' }]),
     create: jest.fn().mockResolvedValue({ id: 'p1', status: 'ACTIVE' }),
+    update: jest.fn().mockResolvedValue({ id: 'p1', status: 'PAUSED' }),
     usage: jest.fn().mockResolvedValue({ used: 3, limit: 10, remaining: 7 }),
   };
   const runner = { enqueueNow: jest.fn().mockResolvedValue(undefined) };
@@ -31,6 +32,7 @@ describe('Faz 5 D4 — research/prospecting MCP tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         'jeeta.list_research_profiles',
+        'jeeta.pause_research_profile',
         'jeeta.create_research_profile',
         'jeeta.run_research',
         'jeeta.list_research_candidates',
@@ -214,5 +216,42 @@ describe('Faz 5 D4 — research/prospecting MCP tools', () => {
       expect(readOnly).not.toContain('jeeta.accept_research_candidates');
       expect(registry.list(WRITE).map((t) => t.name)).toContain('jeeta.accept_research_candidates');
     });
+  });
+});
+
+/**
+ * A research brief is the only object in the product that spends real money on
+ * a schedule: the nightly agent picks up every ACTIVE one, forever. Creating
+ * them was reachable from the agent surface and stopping them was not, so an
+ * experiment switched on by an agent kept billing with no way back short of
+ * the panel — the same shape as a lead stuck in a stage or a scheduled post
+ * that could only be deleted.
+ */
+describe('jeeta.pause_research_profile', () => {
+  it('pauses within the caller workspace and touches nothing else', async () => {
+    const { registry, research } = build();
+    await registry
+      .get('jeeta.pause_research_profile')!
+      .handler(CTX, { profileId: 'p1' });
+
+    expect(research.update).toHaveBeenCalledWith('ws1', 'p1', { status: 'PAUSED' });
+  });
+
+  it('is ungated — the undo must not wait on an approval', () => {
+    const { registry } = build();
+    const tool = registry.get('jeeta.pause_research_profile')!;
+    // Pausing only ever reduces spend. Switching a brief back ON is the verb
+    // that needs a human, which is why it stays a panel action.
+    expect(tool.requiresApproval).toBe(false);
+    expect(tool.risk).toBe('WRITE');
+    expect(tool.scopes).toEqual(['settings.manage']);
+  });
+
+  it('cannot set any status other than paused', () => {
+    const { registry } = build();
+    const schema = registry.get('jeeta.pause_research_profile')!.inputSchema as {
+      parse: (v: unknown) => unknown;
+    };
+    expect(() => schema.parse({ profileId: 'p1', status: 'ACTIVE' })).toThrow();
   });
 });
