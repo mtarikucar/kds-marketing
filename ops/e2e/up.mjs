@@ -85,6 +85,10 @@ const env = {
   // look like broken auth, because the pages simply bounce to /login.
   // Production and ordinary dev runs are untouched; only this launcher sets it.
   THROTTLE_GLOBAL_LIMIT: process.env.E2E_THROTTLE_GLOBAL_LIMIT ?? '20000',
+  // The suite mints a fresh workspace per test from ONE identity, which is
+  // precisely what the production cap of 5 exists to stop. Same reasoning as
+  // the throttle above: the harness is not a customer.
+  MAX_OWNED_WORKSPACES_PER_USER: process.env.E2E_MAX_OWNED_WORKSPACES ?? '100000',
 };
 
 function run(cmd, args, opts = {}) {

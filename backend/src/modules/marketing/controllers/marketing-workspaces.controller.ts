@@ -1,5 +1,4 @@
 import { Controller, Get, Patch, Post, Body, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -36,9 +35,6 @@ export class MarketingWorkspacesController {
   constructor(private readonly authService: MarketingAuthService) {}
 
   @Post()
-  // Each create provisions a full workspace scaffold and a free trial, so a
-  // burst is expensive whether it is abuse or a stuck client retrying.
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Audit({ action: 'workspace.create', resourceType: 'workspace' })
   create(
     @CurrentMarketingUser() user: MarketingUserPayload,

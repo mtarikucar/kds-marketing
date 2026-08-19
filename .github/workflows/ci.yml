@@ -188,6 +188,11 @@ jobs:
       # 300/60s is sized for one human; ~40 browser tests each fanning out to a
       # dozen endpoints blow through it, and the 429s look like broken auth.
       THROTTLE_GLOBAL_LIMIT: '20000'
+      # The suite provisions a FRESH WORKSPACE PER TEST from one shared
+      # identity (see e2e/global-setup.ts), which is exactly the shape the
+      # production cap of 5 exists to stop. Same reasoning as the throttle
+      # above: the harness is not a customer.
+      MAX_OWNED_WORKSPACES_PER_USER: '100000'
       E2E_API_URL: http://localhost:3101/api
       E2E_APP_URL: http://localhost:5173
       VITE_API_URL: http://localhost:3101/api
