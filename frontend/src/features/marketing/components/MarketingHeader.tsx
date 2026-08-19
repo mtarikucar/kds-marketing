@@ -113,6 +113,14 @@ const PALETTE_SHORTCUT = isMac ? '⌘K' : 'Ctrl K';
 
 export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const { user, logout, updateUser, createWorkspace } = useMarketingAuthStore();
+  // Each workspace is billed separately, so an extra one is a separate
+  // purchase rather than something an account mints for itself. Offering the
+  // action to someone who already owns a workspace would just be a button
+  // that always fails — an identity that owns none (invited-only) still gets
+  // it, which is the one case self-serve still covers.
+  const ownsWorkspace = useMarketingAuthStore((s) =>
+    s.memberships.some((m) => m.role === 'OWNER'),
+  );
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
@@ -519,12 +527,15 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               <DropdownMenuItem onSelect={() => setShowChangePassword(true)}>
                 Change Password
               </DropdownMenuItem>
-              {/* Always visible (unlike WorkspaceSwitcher, which hides for
-                  single-workspace users) — this is the ONLY reachable path
-                  for a single-workspace user to create their 2nd workspace. */}
-              <DropdownMenuItem onSelect={() => setShowCreateWorkspace(true)}>
-                {t('workspace.newWorkspace', 'New workspace')}
-              </DropdownMenuItem>
+              {/* Only for an identity that owns NO workspace yet — someone
+                  who was invited into somebody else's and wants their own.
+                  A second workspace is a second subscription, so it is a
+                  sale, not a self-serve action. */}
+              {!ownsWorkspace && (
+                <DropdownMenuItem onSelect={() => setShowCreateWorkspace(true)}>
+                  {t('workspace.newWorkspace', 'New workspace')}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onSelect={handleLogout}
                 className="text-danger focus:bg-danger-subtle focus:text-danger"

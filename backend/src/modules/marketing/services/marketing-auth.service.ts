@@ -45,10 +45,17 @@ function slugify(name: string): string {
   return base || 'workspace';
 }
 
-/** How many workspaces one identity may self-serve into existence. Each is a
- *  free trial with its own credits, so this bounds what a single sign-up can
- *  cost us. Agencies are not affected — see createOwnedWorkspace. */
-const MAX_OWNED_WORKSPACES = Number(process.env.MAX_OWNED_WORKSPACES_PER_USER ?? 5);
+/** How many workspaces one identity may self-serve into existence.
+ *
+ *  ONE, by product decision: billing follows the workspace
+ *  (WorkspaceSubscription.workspaceId is unique), so a second workspace is a
+ *  second purchase — not something an existing account mints itself on a free
+ *  trial. Raising this via MAX_OWNED_WORKSPACES_PER_USER re-opens self-serve.
+ *
+ *  Being INVITED into other people's workspaces is unaffected: only ACTIVE
+ *  OWNER memberships count. Agencies are unaffected too — sub-accounts come
+ *  through AgencyService.createLocation, which never reaches this path. */
+const MAX_OWNED_WORKSPACES = Number(process.env.MAX_OWNED_WORKSPACES_PER_USER ?? 1);
 
 @Injectable()
 export class MarketingAuthService {
@@ -741,18 +748,18 @@ export class MarketingAuthService {
 
     // Billing is PER WORKSPACE (WorkspaceSubscription.workspaceId is unique)
     // and every workspace minted here lands on a free 14-day TRIAL with its
-    // own 300 AI credits. Without a ceiling one identity could mint them in a
-    // loop — each one real vendor spend on our side, none of it billable.
-    // Generous on purpose: this is meant to stop a loop, not a customer with a
-    // few brands. Agencies are unaffected; sub-accounts come through
-    // AgencyService.createLocation, which mints its own owner.
+    // own 300 AI credits. So an extra workspace is an extra SALE, not
+    // something an existing account gives itself — see MAX_OWNED_WORKSPACES.
     const owned = await this.prisma.workspaceMembership.count({
       where: { userId: user.id, role: 'OWNER', status: 'ACTIVE' },
     });
     if (owned >= MAX_OWNED_WORKSPACES) {
       throw new ForbiddenException(
-        `You already own ${owned} workspaces (limit ${MAX_OWNED_WORKSPACES}). ` +
-          'Contact support if you need more.',
+        MAX_OWNED_WORKSPACES === 1
+          ? 'Each workspace is billed separately, so an extra one is a separate purchase — ' +
+            'this account already owns a workspace. Contact us to add another.'
+          : `You already own ${owned} workspaces (limit ${MAX_OWNED_WORKSPACES}). ` +
+            'Contact us if you need more.',
       );
     }
     // The research sentinel owns rows, never sessions. MarketingGuard already

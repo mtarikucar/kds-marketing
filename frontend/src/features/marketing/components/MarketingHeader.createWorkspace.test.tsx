@@ -64,16 +64,20 @@ function makeQC() {
   });
 }
 
-function seedStore() {
+/** An identity that owns NO workspace — invited into somebody else's. This is
+ *  the only case self-serve still covers: a second workspace is a second
+ *  subscription, so it is a sale rather than a free trial an account mints
+ *  for itself. */
+function seedStore(owns = false) {
   useMarketingAuthStore.setState({
     user: USER,
     accessToken: 'old-access',
     refreshToken: 'old-refresh',
     isAuthenticated: true,
     agencyReturn: null,
-    // Single membership — the WorkspaceSwitcher-hidden case this affordance
-    // exists to cover.
-    memberships: [{ workspaceId: 'w1', workspaceName: 'Home Shop', role: 'OWNER' }],
+    memberships: [
+      { workspaceId: 'w1', workspaceName: 'Home Shop', role: owns ? 'OWNER' : 'REP' },
+    ],
   });
   useCommandPaletteStore.setState({ open: false });
 }
@@ -94,7 +98,7 @@ async function renderHeaderAndOpenCreateWorkspace(qc: QueryClient) {
   return user;
 }
 
-describe('MarketingHeader — create workspace (self-serve second brand)', () => {
+describe('MarketingHeader — create workspace (first workspace only)', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en');
     marketingApi.get.mockReset().mockResolvedValue({ data: {} });
@@ -186,5 +190,21 @@ describe('MarketingHeader — create workspace (self-serve second brand)', () =>
     expect(navigateMock).not.toHaveBeenCalled();
     expect(clearSpy).not.toHaveBeenCalled();
     expect(screen.getByLabelText(/workspace name/i)).toBeInTheDocument();
+  });
+
+  it('hides the action once the identity owns a workspace', async () => {
+    // Billing follows the workspace, so a second one is a second purchase.
+    // Showing the action here would be a button that always 403s.
+    seedStore(true);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={makeQC()}>
+        <MemoryRouter>
+          <MarketingHeader />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /Ada/i }));
+    expect(screen.queryByText('New workspace')).not.toBeInTheDocument();
   });
 });

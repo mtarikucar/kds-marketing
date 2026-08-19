@@ -29,10 +29,12 @@ describe('MarketingAuthService.createOwnedWorkspace — ownership cap', () => {
     return { svc, prisma };
   }
 
-  it('refuses once the identity is at the limit, before any provisioning', async () => {
-    const { svc, prisma } = svcWith(5);
+  it('refuses an identity that already owns a workspace, before any provisioning', async () => {
+    // One per account by product decision: a second workspace is a second
+    // subscription, so it is a sale — not a free trial an account gives itself.
+    const { svc, prisma } = svcWith(1);
     await expect(
-      svc.createOwnedWorkspace('u1', { workspaceName: 'Sixth brand' } as never),
+      svc.createOwnedWorkspace('u1', { workspaceName: 'Second brand' } as never),
     ).rejects.toThrow(ForbiddenException);
 
     // Nothing was scaffolded: no workspace row, no trial subscription.
@@ -40,7 +42,7 @@ describe('MarketingAuthService.createOwnedWorkspace — ownership cap', () => {
   });
 
   it('counts only ACTIVE OWNER memberships', async () => {
-    const { svc, prisma } = svcWith(5);
+    const { svc, prisma } = svcWith(1);
     await expect(
       svc.createOwnedWorkspace('u1', { workspaceName: 'x' } as never),
     ).rejects.toThrow(ForbiddenException);
@@ -52,15 +54,17 @@ describe('MarketingAuthService.createOwnedWorkspace — ownership cap', () => {
     });
   });
 
-  it('lets an identity under the limit through to provisioning', async () => {
-    const { svc, prisma } = svcWith(2);
+  it('lets an invited-only identity create their FIRST workspace', async () => {
+    // Someone invited into somebody else's workspace owns none of their own;
+    // that first one is exactly what self-serve still covers.
+    const { svc, prisma } = svcWith(0);
     prisma.$transaction.mockRejectedValue(new Error('stop here'));
 
     await expect(
-      svc.createOwnedWorkspace('u1', { workspaceName: 'Second brand' } as never),
+      svc.createOwnedWorkspace('u1', { workspaceName: 'My own workspace' } as never),
     ).rejects.toThrow('stop here');
 
-    // Reached the scaffold — the cap is a ceiling, not a wall.
+    // Reached the scaffold — owning none is the case that still passes.
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 
