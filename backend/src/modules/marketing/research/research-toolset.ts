@@ -154,7 +154,9 @@ export async function dispatchResearchTool(
         const url = String(args.url ?? '');
         const attempt = await runWithFallback(
           deps.sources.firecrawl.isConfigured() ? () => deps.sources.firecrawl.scrape(url) : null,
-          deps.sources.native.isConfigured() ? () => deps.sources.native.scrape(url) : null,
+          deps.sources.native.isConfigured()
+            ? () => deps.sources.native.scrape(url, ctx.workspaceId)
+            : null,
         );
         if (!attempt.ran) {
           ok = false;
@@ -171,7 +173,9 @@ export async function dispatchResearchTool(
         const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 20);
         const attempt = await runWithFallback(
           deps.sources.firecrawl.isConfigured() ? () => deps.sources.firecrawl.searchWeb(q, limit) : null,
-          deps.sources.native.isConfigured() ? () => deps.sources.native.searchWeb(q, limit) : null,
+          deps.sources.native.isConfigured()
+            ? () => deps.sources.native.searchWeb(q, limit, ctx.workspaceId)
+            : null,
         );
         if (!attempt.ran) {
           ok = false;

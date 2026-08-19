@@ -38,12 +38,21 @@ export function priceFor(model: string): ModelPrice {
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 export const CACHE_READ_MULTIPLIER = 0.1;
 
+/**
+ * Anthropic server tools bill PER REQUEST, not per token. $10/1000 searches at
+ * list price — invisible to every token column, and a real line on the invoice
+ * (118 of them in August alone).
+ */
+export const WEB_SEARCH_USD = 10 / 1000;
+
 export interface CallTokens {
   inputTokens: number;
   outputTokens: number;
   /** Anthropic reports these outside `input_tokens`; both default to 0. */
   cacheWriteTokens?: number;
   cacheReadTokens?: number;
+  /** Server-tool requests, priced per call rather than per token. */
+  webSearches?: number;
 }
 
 /**
@@ -61,6 +70,7 @@ export function usdFor(model: string, tokens: CallTokens): number {
       tokens.outputTokens * p.output +
       (tokens.cacheWriteTokens ?? 0) * p.input * CACHE_WRITE_MULTIPLIER +
       (tokens.cacheReadTokens ?? 0) * p.input * CACHE_READ_MULTIPLIER) /
-    1_000_000;
+      1_000_000 +
+    (tokens.webSearches ?? 0) * WEB_SEARCH_USD;
   return Math.round(usd * 1e6) / 1e6;
 }

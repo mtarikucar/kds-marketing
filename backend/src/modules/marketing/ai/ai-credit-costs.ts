@@ -117,6 +117,14 @@ export const AI_CREDIT_COSTS = {
   // the advertised MCP catalogue in every request, so input tokens are far
   // larger than ask-ai's four hand-written tools, and maxTokens is 1200.
   // MAX_ITERS=8 bounds the total.
+  // Anthropic's own web_search/web_fetch server tools (NativeWebProvider), the
+  // keyless research fallback. Cheap Haiku tokens PLUS $0.01 per search, which
+  // no token price can express — August's invoice carried 118 of them while
+  // the product recorded neither the tokens nor the searches. `tier` is
+  // informational here: the provider owns its own request because server tools
+  // cannot be expressed through complete().
+  'research.native_search': { credits: 2, tier: 'light' as AiModelTier },
+  'research.native_scrape': { credits: 1, tier: 'light' as AiModelTier },
   'command.request': { credits: 1, tier: 'default' as AiModelTier },
   'command.turn': { credits: 5, tier: 'default' as AiModelTier },
 } as const;

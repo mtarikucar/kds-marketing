@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { ScrapeResult, WebHit } from './research-source.provider';
+import { AnthropicService } from '../../ai/anthropic.service';
 
 const MODEL = process.env.NATIVE_RESEARCH_MODEL ?? 'claude-haiku-4-5-20251001';
 const TIMEOUT_MS = Number(process.env.NATIVE_RESEARCH_TIMEOUT_MS ?? 45_000);
@@ -27,6 +28,28 @@ export class NativeWebProvider {
   private readonly logger = new Logger(NativeWebProvider.name);
   private client: Anthropic | null = null;
 
+  /** Only used to report usage — this provider owns its own request because it
+   *  needs SERVER tools, which `complete()` cannot express. */
+  constructor(private readonly anthropic: AnthropicService) {}
+
+  /**
+   * Fire-and-forget usage reporting. The workspace is passed in per call
+   * rather than held on the instance: this provider is a singleton, so an
+   * ambient "current workspace" field would mis-attribute two research runs
+   * that overlap — and overlapping runs are the normal case for a nightly
+   * fan-out. Accounting also never fails a research step.
+   */
+  private report(
+    workspaceId: string | undefined,
+    action: string,
+    usage: Anthropic.Usage | undefined,
+  ): void {
+    if (!usage || !workspaceId) return;
+    void this.anthropic
+      .recordExternalUsage(workspaceId, action, usage, MODEL)
+      .catch((e) => this.logger.warn(`native usage record failed: ${(e as Error)?.message ?? e}`));
+  }
+
   /** Always available when the platform's own Anthropic key is present — this
    *  is what stops the research engine from being fully inert on a workspace
    *  that never bought a scraping vendor. */
@@ -46,7 +69,7 @@ export class NativeWebProvider {
    * chatty turn cannot fan out into many billed searches. TR is passed as the
    * user location so Turkish-language, Turkey-local results rank first.
    */
-  async searchWeb(query: string, limit = 8): Promise<WebHit[]> {
+  async searchWeb(query: string, limit = 8, workspaceId?: string): Promise<WebHit[]> {
     const client = this.getClient();
     if (!client || !query.trim()) return [];
     let res: Anthropic.Message;
@@ -92,10 +115,14 @@ export class NativeWebProvider {
         const row = r as { type?: string; url?: string; title?: string };
         if (row.type === 'web_search_result' && typeof row.url === 'string') {
           hits.push({ url: row.url, title: row.title });
-          if (hits.length >= limit) return hits;
+          if (hits.length >= limit) {
+            this.report(workspaceId, 'research.native_search', res.usage);
+            return hits;
+          }
         }
       }
     }
+    this.report(workspaceId, 'research.native_search', res.usage);
     return hits;
   }
 
@@ -104,7 +131,7 @@ export class NativeWebProvider {
    * pinned to the requested host so the model cannot be steered into fetching
    * some other site, and `max_uses: 1` bounds it to the single page asked for.
    */
-  async scrape(url: string): Promise<ScrapeResult | null> {
+  async scrape(url: string, workspaceId?: string): Promise<ScrapeResult | null> {
     const client = this.getClient();
     if (!client || !url.trim()) return null;
     const host = this.hostOf(url);
@@ -149,8 +176,12 @@ export class NativeWebProvider {
         | { type?: string; source?: { data?: string; media_type?: string } }
         | undefined;
       const markdown = this.textOf(doc);
-      if (markdown) return { markdown, meta: { url, source: 'anthropic-web_fetch' } };
+      if (markdown) {
+        this.report(workspaceId, 'research.native_scrape', res.usage);
+        return { markdown, meta: { url, source: 'anthropic-web_fetch' } };
+      }
     }
+    this.report(workspaceId, 'research.native_scrape', res.usage);
     return null;
   }
 

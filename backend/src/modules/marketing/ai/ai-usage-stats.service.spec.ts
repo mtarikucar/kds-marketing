@@ -30,6 +30,12 @@ describe('ai-model-prices', () => {
     );
   });
 
+  it('prices web searches per request — no token column can express them', () => {
+    // August's invoice: 118 searches = $1.18, alongside cheap Haiku tokens.
+    // Pricing only the tokens would have reported that run as nearly free.
+    expect(usdFor('claude-haiku-4-5', { inputTokens: 0, outputTokens: 0, webSearches: 118 })).toBeCloseTo(1.18, 4);
+  });
+
   it('prices cache writes at a premium and cache reads at a tenth', () => {
     // Anthropic reports these OUTSIDE input_tokens. Ignoring them would make a
     // cached loop look ~free and hide the write premium entirely — the report
@@ -72,13 +78,13 @@ describe('AiUsageStatsService', () => {
         action: 'command.turn',
         model: 'claude-opus-4-8',
         _count: { _all: 10 },
-        _sum: { inputTokens: 500_000, outputTokens: 5_000, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        _sum: { inputTokens: 500_000, outputTokens: 5_000, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
       },
       {
         action: 'conversation.reply',
         model: 'claude-haiku-4-5',
         _count: { _all: 40 },
-        _sum: { inputTokens: 40_000, outputTokens: 8_000, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        _sum: { inputTokens: 40_000, outputTokens: 8_000, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
       },
     ]);
 
@@ -101,7 +107,7 @@ describe('AiUsageStatsService', () => {
         action: 'command.turn',
         model: 'claude-opus-4-8',
         _count: { _all: 1 },
-        _sum: { inputTokens: 100_000, outputTokens: 1_000, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        _sum: { inputTokens: 100_000, outputTokens: 1_000, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
       },
     ]);
     const out = await svc.breakdown(WS, 30);
@@ -117,7 +123,7 @@ describe('AiUsageStatsService', () => {
         // After caching, almost all input volume moves into the cache fields.
         // Reading only inputTokens would report a 1:1 loop and hide the very
         // schema weight the ratio exists to expose.
-        _sum: { inputTokens: 1_000, outputTokens: 1_000, cacheWriteTokens: 12_000, cacheReadTokens: 84_000 },
+        _sum: { inputTokens: 1_000, outputTokens: 1_000, cacheWriteTokens: 12_000, cacheReadTokens: 84_000, webSearches: 0 },
       },
     ]);
     const out = await svc.breakdown(WS, 30);
@@ -130,7 +136,7 @@ describe('AiUsageStatsService', () => {
         action: 'some.retired.action',
         model: 'claude-opus-4-8',
         _count: { _all: 2 },
-        _sum: { inputTokens: 1000, outputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        _sum: { inputTokens: 1000, outputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
       },
     ]);
     const out = await svc.breakdown(WS, 30);
@@ -163,9 +169,9 @@ describe('AiUsageStatsService', () => {
 
   it('buckets the daily curve newest-first so a spike is the first row', async () => {
     prisma.aiUsageLog.findMany.mockResolvedValue([
-      { createdAt: new Date('2026-08-10T09:00:00Z'), model: 'claude-opus-4-8', inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
-      { createdAt: new Date('2026-08-12T09:00:00Z'), model: 'claude-opus-4-8', inputTokens: 200_000, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
-      { createdAt: new Date('2026-08-12T21:00:00Z'), model: 'claude-opus-4-8', inputTokens: 200_000, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
+      { createdAt: new Date('2026-08-10T09:00:00Z'), model: 'claude-opus-4-8', inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
+      { createdAt: new Date('2026-08-12T09:00:00Z'), model: 'claude-opus-4-8', inputTokens: 200_000, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
+      { createdAt: new Date('2026-08-12T21:00:00Z'), model: 'claude-opus-4-8', inputTokens: 200_000, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, webSearches: 0 },
     ]);
     const days = await svc.daily(WS, 30);
     expect(days[0]).toEqual({ day: '2026-08-12', calls: 2, usd: 2 });
