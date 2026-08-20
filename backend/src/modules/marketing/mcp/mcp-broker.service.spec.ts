@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import { McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry, McpTool } from './mcp-tool-registry';
@@ -144,8 +144,16 @@ describe('McpBrokerService', () => {
 
     it('does not call supersedePending when resourceIdFrom cannot resolve an id from the given args', async () => {
       const { registry, broker, supersedePending } = deps();
-      registry.register(sendTool(jest.fn()));
-      await broker.invoke(ctx(['contacts.write'], 'run-1'), 'jeeta.send_message', { body: 'hi' }); // no conversationId
+      // The id has to be absent while the args are still SCHEMA-VALID: a
+      // send_message missing its required conversationId no longer reaches the
+      // dedupe step at all, because assertArgs rejects it first. What this
+      // guards is the other case — a tool whose resourceIdFrom legitimately
+      // returns undefined for a well-formed call.
+      registry.register({
+        ...sendTool(jest.fn()),
+        inputSchema: z.object({ conversationId: z.string().optional(), body: z.string() }),
+      });
+      await broker.invoke(ctx(['contacts.write'], 'run-1'), 'jeeta.send_message', { body: 'hi' });
       expect(supersedePending).not.toHaveBeenCalled();
     });
   });
@@ -171,5 +179,122 @@ describe('McpBrokerService', () => {
     registry.register(spendTool(jest.fn()));
     expect(registry.list(['reports.read']).map((t) => t.name)).toEqual(['jeeta.get_campaign_performance']);
     expect(registry.list(['reports.read', 'settings.manage'])).toHaveLength(2);
+  });
+});
+
+/**
+ * Argument validation, and where it has to sit.
+ *
+ * The MCP SDK validates a LISTED tool's arguments at registerTool. Deferred
+ * tools are reached through `jeeta.call_tool`, whose `input` is an open record
+ * handed straight to dispatch — so nothing had ever compared it to the target's
+ * schema.
+ *
+ * That gap was worst on the approval path, which runs BEFORE the handler: a
+ * call with a misspelled argument was queued and shown to an owner as a
+ * decision to make, and approving it ran the handler with the field missing.
+ * A real case: `accept_research_candidates` reads `args.candidateIds ?? []`, so
+ * a payload saying `ids` accepted nothing and reported "0 candidate(s) are now
+ * leads" — a silent no-op a human had explicitly authorised.
+ */
+describe('McpBrokerService — argument validation', () => {
+  const strictTool = (handler: jest.Mock): McpTool => ({
+    name: 'jeeta.accept_research_candidates',
+    description: 'accept staged prospects',
+    scopes: ['leads.write'],
+    domain: 'research',
+    risk: 'WRITE',
+    requiresApproval: true,
+    inputSchema: z.object({ candidateIds: z.array(z.string().min(1)).min(1) }),
+    handler,
+  });
+
+  it('refuses a misspelled argument BEFORE enqueueing an approval', async () => {
+    const { broker, registry, enqueue } = deps();
+    const handler = jest.fn();
+    registry.register(strictTool(handler));
+
+    await expect(
+      broker.invoke(ctx(['leads.write']), 'jeeta.accept_research_candidates', { ids: ['c1'] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    // The whole point: no card reaches a human for a call that cannot work.
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('names the offending field so the caller can fix it in one turn', async () => {
+    const { broker, registry } = deps();
+    registry.register(strictTool(jest.fn()));
+
+    await expect(
+      broker.invoke(ctx(['leads.write']), 'jeeta.accept_research_candidates', { ids: ['c1'] }),
+    ).rejects.toThrow(/candidateIds/);
+  });
+
+  it('still enqueues when the arguments are valid', async () => {
+    const { broker, registry, enqueue } = deps();
+    registry.register(strictTool(jest.fn()));
+
+    const res = await broker.invoke(ctx(['leads.write']), 'jeeta.accept_research_candidates', {
+      candidateIds: ['c1'],
+    });
+
+    expect(res.status).toBe('PENDING_APPROVAL');
+    expect(enqueue).toHaveBeenCalled();
+  });
+
+  it('passes the ORIGINAL args through, not a schema-transformed copy', async () => {
+    const { broker, registry } = deps();
+    const handler = jest.fn().mockResolvedValue({ ok: true });
+    registry.register(readTool(handler));
+
+    // A passthrough read: extra keys are none of the broker's business, and
+    // rewriting args here would change behaviour for calls already working.
+    await broker.invoke(ctx(['reports.read']), 'jeeta.get_campaign_performance', { extra: 1 });
+
+    expect(handler).toHaveBeenCalledWith(expect.anything(), { extra: 1 });
+  });
+});
+
+/**
+ * The approval card's category chip.
+ *
+ * The fallback used to be `AD_SPEND`, so any approval-gated tool that declared
+ * no kind told the owner an ad platform's budget was moving — on the one screen
+ * whose entire job is informed consent. `merge_leads` and the research
+ * accept/reject pair were all mislabelled that way.
+ */
+describe('McpBrokerService — approval kind', () => {
+  const noKindTool = (handler: jest.Mock): McpTool => ({
+    name: 'jeeta.merge_leads',
+    description: 'merge two leads',
+    scopes: ['leads.write'],
+    domain: 'leads',
+    risk: 'WRITE',
+    requiresApproval: true,
+    inputSchema: z.object({}),
+    handler,
+  });
+
+  it('labels a kind-less tool AGENT_ACTION, not AD_SPEND', async () => {
+    const { broker, registry, enqueue } = deps();
+    registry.register(noKindTool(jest.fn()));
+
+    await broker.invoke(ctx(['leads.write']), 'jeeta.merge_leads', {});
+
+    expect(enqueue).toHaveBeenCalledWith('ws1', expect.objectContaining({ kind: 'AGENT_ACTION' }));
+  });
+
+  it('never overrides a kind the tool declared', async () => {
+    const { broker, registry, enqueue } = deps();
+    registry.register(spendTool(jest.fn()));
+
+    await broker.invoke(ctx(['settings.manage']), 'jeeta.reallocate_budget', { amount: 10 });
+
+    expect(enqueue).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({ kind: 'BUDGET_REALLOCATION' }),
+    );
   });
 });

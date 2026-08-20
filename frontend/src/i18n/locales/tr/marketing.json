@@ -3251,6 +3251,20 @@
       "title": "Bu yeniden dağıtım devreye alınsın mı?",
       "desc": "Onaylamak planı işler ve bağlı olan yerlerde yeni bütçeyi reklam platformunda canlıya alır — gerçek harcama hareket eder ve geri alınamaz.",
       "confirm": "Onayla ve canlıya al"
+    },
+    "kind": {
+      "AD_SPEND": "Reklam harcaması",
+      "AGENT_ACTION": "Ajan işlemi",
+      "AI_SPEND": "AI harcaması",
+      "BUDGET_REALLOCATION": "Bütçe aktarımı",
+      "CAMPAIGN_PAUSE": "Kampanya duraklatma",
+      "CHANNEL_LAUNCH": "Kanal açılışı",
+      "DESTRUCTIVE": "Kalıcı silme",
+      "MEDIA_SPEND": "Görsel/video üretimi",
+      "PUBLISH": "Yayınlama",
+      "SEND": "Mesaj gönderimi",
+      "STRATEGY_ACTION": "Strateji işlemi",
+      "TARGET_CHANGE": "Hedefleme değişikliği"
     }
   },
   "persona": {

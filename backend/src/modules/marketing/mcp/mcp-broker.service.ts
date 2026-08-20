@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { McpTool, McpToolContext, McpToolRegistry, ToolRisk } from './mcp-tool-registry';
 import { ApprovalRequestService } from '../agents/approval-request.service';
 import { AgentRunService } from '../agents/agent-run.service';
@@ -79,6 +85,7 @@ export class McpBrokerService {
 
     this.assertScopes(tool, ctx);
     this.assertArgsSize(args);
+    this.assertArgs(tool, args);
 
     // High-risk ops never execute inline — they enqueue a human approval.
     // AUTONOMOUS lifts that for everything except DESTRUCTIVE (see
@@ -86,7 +93,7 @@ export class McpBrokerService {
     const autonomyMayBypass =
       ctx.writeMode === 'AUTONOMOUS' && !ALWAYS_APPROVED_RISKS.has(tool.risk);
     if (tool.requiresApproval && !autonomyMayBypass && !ctx.approvedBy) {
-      const kind = tool.approvalKind ?? 'AD_SPEND';
+      const kind = tool.approvalKind ?? 'AGENT_ACTION';
       const resourceType = tool.resourceType;
       const resourceId = tool.resourceIdFrom?.(args);
       if (resourceType && resourceId) {
@@ -129,6 +136,48 @@ export class McpBrokerService {
     if (missing.length) {
       throw new ForbiddenException(`missing scope(s): ${missing.join(', ')}`);
     }
+  }
+
+  /**
+   * Validate against the tool's own `inputSchema` BEFORE anything else happens
+   * to the call.
+   *
+   * Listed tools were already checked by the MCP SDK, which validates at
+   * `registerTool`. Deferred tools reached through `jeeta.call_tool` were not:
+   * that wrapper types its `input` as an open record and hands it straight to
+   * `dispatch`, so nothing had ever compared it to the target's schema.
+   *
+   * The damage was worst on the approval path, which runs before the handler.
+   * A call with a misspelled argument was accepted, queued, and rendered to an
+   * owner as a decision to make — and approving it ran the handler with the
+   * field missing. `accept_research_candidates` reads `args.candidateIds ?? []`,
+   * so a payload that said `ids` accepted nothing and reported "0 candidate(s)
+   * are now leads": a silent no-op that a human had explicitly authorised.
+   *
+   * Deliberately validate-only: the ORIGINAL args are still what the handler
+   * receives, so this cannot change the behaviour of a call that was already
+   * correct — it only refuses one that never could be.
+   */
+  private assertArgs(tool: McpTool, args: Record<string, unknown>): void {
+    const parsed = tool.inputSchema.safeParse(args ?? {});
+    if (parsed.success) return;
+
+    // Unknown keys are NOT an error here. Zod 4 reports them by default, but
+    // callers have always been able to pass extra fields — handlers read what
+    // they need and ignore the rest — so rejecting them would break calls that
+    // work today, which is exactly what this guard promises not to do.
+    //
+    // The trade this accepts: a misspelled OPTIONAL field still slips through,
+    // because nothing distinguishes it from a deliberate extra. What it does
+    // catch is the case that actually caused harm — a misspelling that leaves a
+    // REQUIRED field missing, which is how `candidateIds` became `ids`.
+    const issues = parsed.error.issues.filter((i) => i.code !== 'unrecognized_keys');
+    if (!issues.length) return;
+
+    const detail = issues
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('; ');
+    throw new BadRequestException(`invalid arguments for "${tool.name}": ${detail}`);
   }
 
   private assertArgsSize(args: Record<string, unknown>): void {

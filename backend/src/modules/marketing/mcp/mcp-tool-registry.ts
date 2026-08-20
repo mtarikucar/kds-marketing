@@ -147,6 +147,7 @@ export interface McpTool {
     | 'PUBLISH'
     | 'SEND'
     | 'AD_SPEND'
+    | 'AGENT_ACTION'
     | 'TARGET_CHANGE'
     | 'CHANNEL_LAUNCH'
     | 'MEDIA_SPEND'
