@@ -152,3 +152,47 @@ describe('ResearchWorkerService — forced final submit', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * `validate` is the only thing standing between the model's JSON and the
+ * database. `stage` and `priority` were always checked against their enums;
+ * `score` was accepted as any finite number, and the review queue sorted on it.
+ * Runs came back on 0-100, 0-10 and 0-1 scales, so the ranking was noise.
+ */
+describe('ResearchWorkerService — score validation', () => {
+  const base = {
+    externalRef: 'phone:+905551112233',
+    businessName: 'Cafe X',
+    businessType: 'CAFE',
+    painPoint: 'p',
+    evidence: 'e',
+    pitch: 'pi',
+  };
+  const validate = (score: unknown) => {
+    const { svc } = deps({});
+    return (svc as any).validate([{ ...base, score }])[0];
+  };
+
+  it('keeps an in-range score', () => {
+    expect(validate(58).score).toBe(58);
+    expect(validate(0).score).toBe(0);
+    expect(validate(100).score).toBe(100);
+  });
+
+  it('drops a score outside 0-100 instead of storing it', () => {
+    // Rescaling would be a guess, and a guess here invents a ranking.
+    expect(validate(150).score).toBeUndefined();
+    expect(validate(-5).score).toBeUndefined();
+  });
+
+  it('drops a non-numeric score', () => {
+    expect(validate('high').score).toBeUndefined();
+    expect(validate(null).score).toBeUndefined();
+    expect(validate(undefined).score).toBeUndefined();
+  });
+
+  it('still accepts the candidate when the score is unusable', () => {
+    // The score is an ordering hint; losing it must not lose the prospect.
+    expect(validate(999).businessName).toBe('Cafe X');
+  });
+});

@@ -63,16 +63,44 @@ export class ResearchCandidateService {
     return { staged, duplicates };
   }
 
-  list(workspaceId: string, opts: { status?: string; profileId?: string } = {}) {
-    return this.prisma.researchCandidate.findMany({
+  /** URGENT first. `priority` is a String column, so SQL would sort it
+   *  alphabetically (MEDIUM > LOW > HIGH > URGENT) — hence the explicit rank. */
+  private static readonly PRIORITY_RANK: Record<string, number> = {
+    URGENT: 4,
+    HIGH: 3,
+    MEDIUM: 2,
+    LOW: 1,
+  };
+
+  /**
+   * The queue used to be ordered by `score` alone. Score comes straight from the
+   * research model, and different runs used different scales (0-100, 0-10, 0-1),
+   * so a 1-branch business that the model itself flagged as failing the ICP could
+   * outrank a HIGH-priority match purely because its run happened to score out of
+   * 100. Ordering now leads with `priority`, which has always been a constrained
+   * enum and is therefore comparable across runs; score only breaks ties within a
+   * band.
+   *
+   * The 200-row cut is taken by recency in SQL — a score-ordered cut would decide
+   * what a reviewer never sees using the same untrustworthy number.
+   */
+  async list(workspaceId: string, opts: { status?: string; profileId?: string } = {}) {
+    const rows = await this.prisma.researchCandidate.findMany({
       where: {
         workspaceId,
         status: opts.status ?? 'PENDING',
         ...(opts.profileId ? { profileId: opts.profileId } : {}),
       },
-      orderBy: [{ score: 'desc' }, { createdAt: 'desc' }],
+      orderBy: { createdAt: 'desc' },
       take: 200,
     });
+
+    const rank = (p: string | null | undefined) =>
+      ResearchCandidateService.PRIORITY_RANK[p ?? ''] ?? 0;
+
+    return rows.sort(
+      (a, b) => rank(b.priority) - rank(a.priority) || (b.score ?? -1) - (a.score ?? -1),
+    );
   }
 
   /** Accept: ingest the candidates as Leads (dedup + daily quota apply here), mark ACCEPTED. */
