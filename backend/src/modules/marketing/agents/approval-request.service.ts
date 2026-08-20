@@ -58,6 +58,13 @@ export type ApprovalKind =
   // whoever is being asked to halt a campaign that is actively posting — the
   // same mislabelling `MEDIA_SPEND` was added to avoid. Additive, like the
   // others: the column is free-text and the UI falls back to the raw string.
+  // An agent asked to run a tool that needs a human, and the tool declared no
+  // more specific kind. Previously the broker defaulted these to `AD_SPEND`,
+  // which told the owner an ad platform's budget was moving — on the one screen
+  // whose entire job is informed consent. `merge_leads` and the research
+  // accept/reject pair were all labelled that way. Same reasoning that added
+  // `MEDIA_SPEND` and `CAMPAIGN_PAUSE`: a wrong label is worse than a broad one.
+  | 'AGENT_ACTION'
   | 'CAMPAIGN_PAUSE'
   // Faz 5 D4 — an autonomous AGENT RUN whose cost is AI credits PLUS live
   // third-party scraping money (firecrawl/apify): prospect research

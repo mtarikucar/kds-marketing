@@ -3088,5 +3088,21 @@
       "title": "Nothing done yet",
       "desc": "When the agent does something — a post, research, a follow-up — it shows up here."
     }
+  },
+  "budget": {
+    "kind": {
+      "AD_SPEND": "Ad spend",
+      "AGENT_ACTION": "Agent action",
+      "AI_SPEND": "AI spend",
+      "BUDGET_REALLOCATION": "Budget move",
+      "CAMPAIGN_PAUSE": "Pause campaign",
+      "CHANNEL_LAUNCH": "Channel launch",
+      "DESTRUCTIVE": "Permanent deletion",
+      "MEDIA_SPEND": "Media generation",
+      "PUBLISH": "Publish",
+      "SEND": "Send message",
+      "STRATEGY_ACTION": "Strategy action",
+      "TARGET_CHANGE": "Targeting change"
+    }
   }
 }

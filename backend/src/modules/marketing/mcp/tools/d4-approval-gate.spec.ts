@@ -206,7 +206,11 @@ describe("Faz 5 D4 — the brain's SPEND tools: queued in APPROVAL, inline in AU
         'jeeta.set_strategy_autonomy',
         { level: 'AUTONOMOUS' },
       ),
-    ).rejects.toThrow(/AUTONOMOUS/);
+      // The broker now enforces the schema before the handler, so the refusal
+      // names the field and the values it does allow ("SHADOW"|"ASSISTED")
+      // rather than echoing the rejected one. Earlier refusal, same guarantee —
+      // and the assertion that matters is the next line.
+    ).rejects.toThrow(/level/);
     expect(strategy.setAutonomy).not.toHaveBeenCalled();
   });
 });
