@@ -132,3 +132,54 @@ describe('AccountCenterPage', () => {
     expect(screen.getByPlaceholderText(/NetGSM password/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * WhatsApp Business connect.
+ *
+ * `WhatsappSignupButton` was fully implemented but imported by NOTHING, so
+ * Embedded Signup — the only path that puts a REAL business number on Cloud
+ * API — was unreachable from the product. A workspace could therefore never
+ * move off whatever Meta test number the app was created with, and no test
+ * noticed because every test targeted the component in isolation.
+ *
+ * These assert the mount, not the button's internals (it has its own tests):
+ * the regression to prevent is the card silently disappearing from the page.
+ */
+describe('AccountCenterPage — WhatsApp connect', () => {
+  const entitled = (features: Record<string, boolean>) => ({
+    ...PAYLOAD,
+    entitlements: { features },
+  });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('offers WhatsApp connect when the workspace is entitled to conversationAi', async () => {
+    const api = (await import('../../../features/marketing/api/marketingApi')).default as any;
+    api.get.mockResolvedValue({ data: entitled({ conversationAi: true }) });
+
+    wrap();
+
+    expect(await screen.findByText('WhatsApp Business')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Connect WhatsApp/i })).toBeInTheDocument();
+  });
+
+  it('explains that a Meta test number is not usable with real customers', async () => {
+    const api = (await import('../../../features/marketing/api/marketingApi')).default as any;
+    api.get.mockResolvedValue({ data: entitled({ conversationAi: true }) });
+
+    wrap();
+
+    // The whole reason a tenant goes looking for this flow.
+    expect(await screen.findByText(/test number can only message/i)).toBeInTheDocument();
+  });
+
+  it('hides it from a workspace without conversationAi', async () => {
+    const api = (await import('../../../features/marketing/api/marketingApi')).default as any;
+    api.get.mockResolvedValue({ data: entitled({ conversationAi: false }) });
+
+    wrap();
+
+    await screen.findByText('Acme Clinic');
+    expect(screen.queryByText('WhatsApp Business')).toBeNull();
+  });
+});

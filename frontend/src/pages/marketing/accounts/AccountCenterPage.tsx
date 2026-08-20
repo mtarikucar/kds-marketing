@@ -26,6 +26,7 @@ import { WebchatChannelDialog } from './WebchatChannelDialog';
 import { TelephonyCard } from './TelephonyCard';
 import { VoiceAiCard } from './VoiceAiCard';
 import { NetgsmOnboardingCard } from './NetgsmOnboardingCard';
+import { WhatsappSignupButton } from '../WhatsappSignupButton';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
 import { CopyField } from './CopyField';
 import { FeatureGate } from '@/components/ui/access-gates';
@@ -421,6 +422,30 @@ export default function AccountCenterPage() {
                 <TelephonyCard />
               </div>
               <VoiceAiCard />
+              {/* WhatsApp Business. Embedded Signup is the ONLY path that puts a
+                  REAL number on Cloud API: this button was fully built but
+                  imported by nothing, so the flow was unreachable and a
+                  workspace stayed stuck on the app's Meta test number. Gated on
+                  `conversationAi` to match the controller; the button renders
+                  inert when the platform lacks META_APP_ID / CONFIG_ID. */}
+              <FeatureGate feature="conversationAi">
+                <Card>
+                  <CardContent className="space-y-3 p-4">
+                    <div>
+                      <p className="font-medium text-foreground">
+                        {t('accounts.waTitle', 'WhatsApp Business')}
+                      </p>
+                      <p className="text-caption text-muted-foreground">
+                        {t(
+                          'accounts.waSubtitle',
+                          'Connect your own business number through Meta. A Meta test number can only message a few pre-approved contacts — it cannot be used with real customers.',
+                        )}
+                      </p>
+                    </div>
+                    <WhatsappSignupButton />
+                  </CardContent>
+                </Card>
+              </FeatureGate>
             </div>
           </QueryStateBoundary>
         </TabsContent>
