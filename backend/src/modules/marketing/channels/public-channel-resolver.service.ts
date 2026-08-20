@@ -25,6 +25,24 @@ export class PublicChannelResolverService {
     });
   }
 
+  /**
+   * The same identity lookup, blind to `status` — for the REGISTRATION guard,
+   * never for routing.
+   *
+   * `byExternalId` filters ACTIVE, which is right for delivering a webhook but
+   * wrong for answering "is this identity already taken?". A DISABLED channel
+   * read as free, so a second workspace could register the same
+   * (type, externalId); once both rows were ACTIVE the `findFirst` above
+   * returned whichever row Postgres scanned first, and one tenant received
+   * another tenant's inbound messages.
+   */
+  async anyByExternalId(type: string, externalId: string) {
+    return this.prisma.channel.findFirst({
+      where: { type, externalId },
+      select: { id: true, workspaceId: true, status: true },
+    });
+  }
+
   /** NetGSM MO webhook → the channel by its id (carried, token-signed, in the
    *  callback URL). Cross-workspace by id here; the caller authenticates via the
    *  per-channel token and scopes all downstream work to the row's workspaceId. */
