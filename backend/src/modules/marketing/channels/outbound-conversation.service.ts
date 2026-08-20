@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MessageSenderService } from './message-sender.service';
 import { ChannelType, ContactKind, OutboundTemplate } from './channel-adapter.interface';
-import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { normalizeEmail, phoneIdentityVariants, toE164 } from '../utils/lead-normalize';
 
 /**
  * Which channels a conversation can be STARTED on, and what address each needs.
@@ -68,7 +68,17 @@ export class OutboundConversationService {
     private readonly sender: MessageSenderService,
   ) {}
 
-  /** The lead's address for this channel, normalized the same way ingress does. */
+  /**
+   * The lead's address for this channel, in the CANONICAL form ingress writes.
+   *
+   * This used to call `normalizePhone` — a lead MATCH KEY that keeps whatever
+   * shape the number arrived in — while NetGSM inbound writes E.164. So a
+   * thread started here on "05551112233" could never be matched by the reply
+   * arriving as "+905551112233": ingress found no identity and forked the
+   * customer into a second "SMS contact / Unknown" lead, leaving the thread you
+   * opened looking unanswered forever. "05551112233" is also not a valid `to`
+   * for the WhatsApp Cloud API, which the adapter forwards verbatim.
+   */
   private addressFor(
     type: ChannelType,
     lead: { phone: string | null; whatsapp: string | null; email: string | null },
@@ -78,7 +88,15 @@ export class OutboundConversationService {
     // reachable on WhatsApp at the same number far more often than not, and
     // refusing when `whatsapp` happens to be blank would be pedantic.
     const raw = type === 'WHATSAPP' ? (lead.whatsapp ?? lead.phone) : lead.phone;
-    return raw ? normalizePhone(raw) : null;
+    return raw ? toE164(raw) : null;
+  }
+
+  /** Every stored spelling this address could already be on file as: a phone
+   *  has several (see phoneIdentityVariants), an email exactly one. */
+  private candidateValues(type: ChannelType, address: string): string[] {
+    if (type === 'EMAIL') return [address];
+    const variants = phoneIdentityVariants(address);
+    return variants.length ? variants : [address];
   }
 
   async start(workspaceId: string, input: StartConversationInput) {
@@ -119,8 +137,16 @@ export class OutboundConversationService {
     // An identity is unique per (channel, address). If one already exists on
     // another lead, the same person is on file twice — sending would attach
     // this thread to the wrong record, so refuse and let a human merge them.
-    const existing = await this.prisma.contactIdentity.findUnique({
-      where: { channelId_value: { channelId: channel.id, value: address } },
+    const existing = await this.prisma.contactIdentity.findFirst({
+      // Across every spelling, not just the canonical one: an identity written
+      // before addressFor produced E.164 is stored as "0555…", and an exact
+      // match on "+90555…" would sail past this guard and attach the thread to
+      // the wrong lead — the exact outcome the guard exists to prevent.
+      where: {
+        workspaceId,
+        channelId: channel.id,
+        value: { in: this.candidateValues(channel.type as ChannelType, address) },
+      },
       select: { id: true, leadId: true },
     });
     if (existing && existing.leadId !== lead.id) {

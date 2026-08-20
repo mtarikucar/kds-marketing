@@ -1,9 +1,4 @@
-import {
-  normalizePhone,
-  normalizeEmail,
-  localMsisdnVariants,
-  toIysMsisdn,
-} from './lead-normalize';
+import { normalizePhone, normalizeEmail, localMsisdnVariants, toIysMsisdn, toE164, phoneIdentityVariants } from './lead-normalize';
 
 const LOCAL = '5551112233'; // bare 10-digit
 const ZERO = '05551112233'; // 0-prefixed 11-digit
@@ -56,5 +51,51 @@ describe('localMsisdnVariants — enumerate every stored spelling of one number'
 
   it('returns the input unchanged when it is not a recognizable TR mobile', () => {
     expect(localMsisdnVariants('12345')).toEqual(['12345']);
+  });
+});
+
+/**
+ * The canonical CHANNEL address form. Distinct from normalizePhone, which is a
+ * lead MATCH KEY and deliberately preserves whatever shape arrived. Conflating
+ * the two is what let an outbound thread be opened on "05551112233" while
+ * inbound wrote "+905551112233", so the customer's reply forked into a second
+ * lead.
+ */
+describe('toE164', () => {
+  it('reduces every Turkish spelling to one form', () => {
+    for (const raw of ['05551112233', '5551112233', '905551112233', '+905551112233', '0555 111 22 33', '00905551112233']) {
+      expect(toE164(raw)).toBe('+905551112233');
+    }
+  });
+
+  it('keeps a foreign number rather than refusing it', () => {
+    // Unlike toIysMsisdn, a channel address may legitimately be non-TR —
+    // refusing would put us straight back to mixed spellings.
+    expect(toE164('+49 30 123456')).toBe('+4930123456');
+  });
+
+  it('is null for input with no digits', () => {
+    expect(toE164('')).toBeNull();
+    expect(toE164(null)).toBeNull();
+    expect(toE164('abc')).toBeNull();
+  });
+});
+
+describe('phoneIdentityVariants', () => {
+  it('covers every spelling an identity may already be stored under', () => {
+    expect(phoneIdentityVariants('+905551112233').sort()).toEqual(
+      ['+05551112233', '+5551112233', '+905551112233', '05551112233', '5551112233', '905551112233'].sort(),
+    );
+  });
+
+  it('reaches the same set from any input spelling', () => {
+    const a = phoneIdentityVariants('05551112233').sort();
+    const b = phoneIdentityVariants('+90 555 111 22 33').sort();
+    expect(a).toEqual(b);
+  });
+
+  it('is empty for input with no digits, so a lookup is skipped rather than matching everything', () => {
+    expect(phoneIdentityVariants('')).toEqual([]);
+    expect(phoneIdentityVariants(null)).toEqual([]);
   });
 });
