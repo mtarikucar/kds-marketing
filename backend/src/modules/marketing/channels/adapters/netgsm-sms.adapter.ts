@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ChannelAdapterRegistry } from '../channel-adapter.registry';
 import { withRetry } from '../../../../common/retry.util';
 import { interpretNetgsmSend } from '../netgsm-send.util';
+import { toE164 } from '../../utils/lead-normalize';
 import { BalanceClient } from '../../../netgsm/balance/balance.client';
 import { SmsV2Client } from '../../../netgsm/sms/sms-v2.client';
 import {
@@ -216,11 +217,11 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
   /** Normalise a Turkish mobile to E.164 (+90…) so inbound senders and outbound
    *  recipients map to one ContactIdentity regardless of how the number arrived. */
   private normalizeMsisdn(raw: string): string {
-    let d = (raw ?? '').replace(/\D/g, '');
-    if (d.length === 12 && d.startsWith('90')) d = d.slice(2);
-    else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
-    if (d.length === 10) return `+90${d}`;
-    return d ? `+${d}` : '';
+    // Delegates to the shared canonical form. Two independent implementations
+    // of "the same" reduction is what produced the bug this now guards against:
+    // this one added a `+`, the outbound path's normalizePhone stripped it, and
+    // a customer's reply could never match the thread we had opened.
+    return toE164(raw) ?? '';
   }
 
   /** Live verify: presence check, then a real /balance auth probe (not

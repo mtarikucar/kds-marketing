@@ -7,7 +7,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ConversationStreamService } from './conversation-stream.service';
 import { ChannelType, InboundMessage } from './channel-adapter.interface';
-import { normalizePhone, normalizeEmail } from '../utils/lead-normalize';
+import { normalizePhone, normalizeEmail, phoneIdentityVariants } from '../utils/lead-normalize';
 
 export interface IngressChannel {
   id: string;
@@ -151,6 +151,44 @@ export class ConversationIngressService {
     return result;
   }
 
+  /**
+   * Resolve the sender's identity on this channel, across every spelling a
+   * phone number might be stored under.
+   *
+   * An exact match on the provider's spelling was not enough. Each side of the
+   * conversation normalizes differently — NetGSM inbound produces
+   * "+905551112233", WhatsApp inbound the wa_id "905551112233", and outbound
+   * threads were opened on whatever `normalizePhone` left behind ("05551112233")
+   * — so a reply to a thread WE started matched nothing. The miss is invisible:
+   * ingest simply creates a fresh "SMS contact / Unknown" lead and a second
+   * conversation, the customer's answer never appears in the thread, and the CRM
+   * gains a duplicate of a lead you already had.
+   *
+   * `addressFor` now writes canonical E.164, but rows written before that are
+   * still in the old shapes, so this searches rather than assuming. Same
+   * argument `localMsisdnVariants` makes for leads — it was simply never applied
+   * to channel identities.
+   */
+  private async findIdentity(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    channelId: string,
+    inbound: InboundMessage,
+  ) {
+    const exact = await tx.contactIdentity.findUnique({
+      where: { channelId_value: { channelId, value: inbound.externalUserId } },
+    });
+    if (exact) return exact;
+
+    if (inbound.kind !== 'PHONE' && inbound.kind !== 'WA') return null;
+    const variants = phoneIdentityVariants(inbound.externalUserId).filter(
+      (v) => v !== inbound.externalUserId,
+    );
+    if (!variants.length) return null;
+
+    return tx.contactIdentity.findFirst({ where: { workspaceId, channelId, value: { in: variants } } });
+  }
+
   private async ingestInTx(
     tx: Prisma.TransactionClient,
     channel: IngressChannel,
@@ -160,9 +198,7 @@ export class ConversationIngressService {
     const workspaceId = channel.workspaceId;
 
     // 1. Resolve (or create) the contact identity → lead.
-    let identity = await tx.contactIdentity.findUnique({
-      where: { channelId_value: { channelId: channel.id, value: inbound.externalUserId } },
-    });
+    let identity = await this.findIdentity(tx, workspaceId, channel.id, inbound);
     const createdNewLead = !identity;
 
     if (!identity) {

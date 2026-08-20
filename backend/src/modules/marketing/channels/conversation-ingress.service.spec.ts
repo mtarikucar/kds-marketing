@@ -34,6 +34,7 @@ describe('ConversationIngressService', () => {
       },
       contactIdentity: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
       lead: { create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
@@ -192,5 +193,99 @@ describe('ConversationIngressService', () => {
     // only the message.received event (no conversation.started for an existing thread)
     const types = outbox.append.mock.calls.map((c) => c[0].type);
     expect(types).toEqual(['marketing.conversation.message.received.v1']);
+  });
+});
+
+/**
+ * Matching a reply to the thread it belongs to.
+ *
+ * Every side of a conversation normalized differently: NetGSM inbound writes
+ * "+905551112233", WhatsApp inbound the wa_id "905551112233", and an
+ * outbound-started thread was opened on whatever normalizePhone left behind,
+ * "05551112233". The lookup was an exact match on one spelling, so a reply to a
+ * thread WE started matched nothing — and the miss is invisible: ingest just
+ * creates a fresh "SMS contact / Unknown" lead and a second conversation. The
+ * thread you opened stays unanswered forever and the CRM gains a duplicate of a
+ * lead you already had.
+ *
+ * addressFor now writes canonical E.164, but rows written before that are still
+ * in the old shapes, which is why this searches rather than assuming.
+ */
+describe('ConversationIngressService — phone identity matching', () => {
+  const WS = 'ws-1';
+  const channel = { id: 'ch-1', workspaceId: WS, type: 'SMS' };
+  let prisma: any;
+  let svc: ConversationIngressService;
+
+  const reply: InboundMessage = {
+    externalUserId: '+905551112233', // what NetGSM ingress produces
+    kind: 'PHONE',
+    externalMessageId: 'netgsm-mo:1',
+    text: 'evet ilgileniyorum',
+    displayName: '',
+  };
+
+  beforeEach(() => {
+    prisma = {
+      message: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+      },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      lead: { create: jest.fn().mockResolvedValue({ id: 'lead-new' }) },
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'conv-existing', status: 'OPEN' }),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sys-1' }) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    svc = new ConversationIngressService(
+      prisma as any,
+      { pickAssignee: jest.fn().mockResolvedValue(null) } as any,
+      { append: jest.fn().mockResolvedValue('evt') } as any,
+      { push: jest.fn() } as any,
+      { capture: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+  });
+
+  it('finds an identity stored in the old 0-prefixed shape and does NOT fork a new lead', async () => {
+    // The thread we opened before the fix: value "05551112233".
+    prisma.contactIdentity.findFirst.mockResolvedValue({ id: 'ci-old', leadId: 'lead-1' });
+
+    await svc.ingest(channel, reply);
+
+    expect(prisma.lead.create).not.toHaveBeenCalled();
+    expect(prisma.contactIdentity.create).not.toHaveBeenCalled();
+  });
+
+  it('searches the other spellings of the number', async () => {
+    await svc.ingest(channel, reply);
+
+    const where = prisma.contactIdentity.findFirst.mock.calls[0][0].where;
+    expect(where.value.in).toEqual(expect.arrayContaining(['05551112233', '905551112233']));
+    // The exact spelling was already tried by findUnique — re-querying it here
+    // would be dead weight in the IN list.
+    expect(where.value.in).not.toContain('+905551112233');
+  });
+
+  it('still creates a lead when the number is genuinely new', async () => {
+    await svc.ingest(channel, reply);
+
+    expect(prisma.lead.create).toHaveBeenCalled();
+  });
+
+  it('does not run a variant search for non-phone kinds', async () => {
+    await svc.ingest(channel, { ...reply, kind: 'EMAIL', externalUserId: 'a@b.com' });
+
+    // An email address has exactly one spelling; a fuzzy second lookup here
+    // could only ever attach a message to the wrong contact.
+    expect(prisma.contactIdentity.findFirst).not.toHaveBeenCalled();
   });
 });

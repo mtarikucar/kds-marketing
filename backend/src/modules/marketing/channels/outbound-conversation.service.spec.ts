@@ -24,6 +24,7 @@ describe('OutboundConversationService', () => {
       lead: { findFirst: jest.fn().mockResolvedValue(LEAD) },
       contactIdentity: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
       conversation: {
@@ -58,7 +59,7 @@ describe('OutboundConversationService', () => {
   });
 
   it('refuses to send to an address that belongs to another lead', async () => {
-    prisma.contactIdentity.findUnique.mockResolvedValue({ id: 'ci-9', leadId: 'someone-else' });
+    prisma.contactIdentity.findFirst.mockResolvedValue({ id: 'ci-9', leadId: 'someone-else' });
 
     await expect(
       svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' }),
@@ -134,5 +135,58 @@ describe('OutboundConversationService', () => {
     await expect(
       svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' }),
     ).rejects.toThrow(/DISABLED/);
+  });
+});
+
+/**
+ * Address canonicalisation.
+ *
+ * addressFor used to call normalizePhone — a lead MATCH KEY that keeps whatever
+ * shape the number arrived in. NetGSM inbound writes E.164, so a thread opened
+ * on "05551112233" could never be matched by the reply arriving as
+ * "+905551112233": ingress found no identity and forked the customer into a
+ * second "SMS contact / Unknown" lead. It is also not a valid `to` for the
+ * WhatsApp Cloud API, which the adapter forwards verbatim.
+ */
+describe('OutboundConversationService — address form', () => {
+  const WS = 'ws-1';
+  const LEAD = { id: 'lead-1', phone: '0555 111 22 33', whatsapp: null, email: 'a@b.com' };
+  let prisma: any;
+  let sender: { send: jest.Mock };
+  let svc: OutboundConversationService;
+
+  beforeEach(() => {
+    sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
+    prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1', type: 'SMS', status: 'ACTIVE' }) },
+      lead: { findFirst: jest.fn().mockResolvedValue(LEAD) },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+    svc = new OutboundConversationService(prisma, sender as any);
+  });
+
+  it('stores the identity in canonical E.164, the shape ingress writes', async () => {
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+    expect(prisma.contactIdentity.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ value: '+905551112233' }) }),
+    );
+  });
+
+  it('looks for an existing identity across every spelling, not just the canonical one', async () => {
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+    const where = prisma.contactIdentity.findFirst.mock.calls[0][0].where;
+    // Rows written before this fix are on file as "05551112233"; an exact match
+    // on "+90…" would sail past the wrong-lead guard.
+    expect(where.value.in).toEqual(expect.arrayContaining(['+905551112233', '05551112233']));
   });
 });
