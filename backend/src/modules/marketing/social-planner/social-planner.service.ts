@@ -198,14 +198,62 @@ export class SocialPlannerService implements OnModuleInit {
     return rows.map(maskAccount);
   }
 
+  /**
+   * Disconnect an account — which is not the same as erasing what it did.
+   *
+   * This used to be a bare `socialAccount.delete`. SocialPostTarget references
+   * the account with `onDelete: Restrict` (correctly — publish history and its
+   * metrics must survive a disconnect), so the database refused the delete for
+   * any account that had ever been a publish target, and the raw foreign-key
+   * error surfaced to the user as an opaque failure. The practical effect was
+   * that an account could be disconnected only until its first post, and never
+   * again.
+   *
+   * So the two cases are separated. An account that never published is deleted
+   * outright — nothing references it and leaving a husk behind is just
+   * clutter. An account with history is REVOKED instead: its sealed tokens are
+   * dropped, so nothing can ever publish as it again (which is what
+   * "disconnect" means), while the posts it sent stay attached and reportable.
+   */
   async disconnectAccount(workspaceId: string, accountId: string) {
     const existing = await this.prisma.socialAccount.findFirst({
       where: { id: accountId, workspaceId },
-      select: { id: true },
+      select: { id: true, network: true },
     });
     if (!existing) throw new NotFoundException('Social account not found');
-    await this.prisma.socialAccount.delete({ where: { id: accountId } });
-    return { deleted: true };
+
+    const publishedWith = await this.prisma.socialPostTarget.count({
+      // The account is already workspace-scoped above, so this filter is
+      // belt-and-braces — but an unscoped count is exactly the shape that
+      // becomes a cross-tenant read the day someone reuses this method.
+      where: { socialAccountId: accountId, workspaceId },
+    });
+
+    if (publishedWith === 0) {
+      try {
+        await this.prisma.socialAccount.delete({ where: { id: accountId } });
+        return { disconnected: true, deleted: true, postsKept: 0 };
+      } catch (e) {
+        // A target could be created between the count and the delete. Fall
+        // through to revoke rather than handing the user the FK error that
+        // started all this.
+        if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== 'P2003') throw e;
+      }
+    }
+
+    await this.prisma.socialAccount.update({
+      where: { id: accountId },
+      data: {
+        // Emptying the sealed tokens is the actual disconnect: every publish
+        // path opens accessToken, so there is nothing left to post with.
+        accessToken: '',
+        refreshToken: null,
+        tokenExpiresAt: null,
+        enabled: false,
+        lastError: 'disconnected',
+      },
+    });
+    return { disconnected: true, deleted: false, postsKept: publishedWith };
   }
 
   async networkStatus(workspaceId: string) {
