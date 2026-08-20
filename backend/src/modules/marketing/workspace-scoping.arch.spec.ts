@@ -262,6 +262,14 @@ const SCOPED_METHODS = [
  * a standing exception auditors must re-justify.
  */
 const ALLOWED_GLOBAL: Record<string, string> = {
+  // Already scoped through its parent: the ids come from a
+  // workspaceMembership.findMany that IS workspace-filtered, so this reads
+  // only that workspace's members. Filtering on MarketingUser.workspaceId
+  // instead would be wrong, not stricter — that column is the user's HOME
+  // workspace, so an owner whose home is elsewhere would silently drop off
+  // the morning brief.
+  'analytics/daily-digest.service.ts:marketingUser.findMany':
+    'recipients(): ids come from a workspace-scoped membership read; user.workspaceId is the home pointer, not membership',
   // The ownership cap asks "how many workspaces does this identity already
   // own", which is a question ACROSS workspaces by definition — scoping it to
   // one would always answer 1 and the cap would never bite. It reads a count
