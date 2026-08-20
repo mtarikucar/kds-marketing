@@ -161,6 +161,7 @@ import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
 import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
+import { OutboundConversationService } from './channels/outbound-conversation.service';
 import { ConversationIngressService } from './channels/conversation-ingress.service';
 import { MetaLeadgenIngestService } from './channels/meta-leadgen-ingest.service';
 import { ConversationStreamService } from './channels/conversation-stream.service';
@@ -870,6 +871,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ConversationIngressService,
     MetaLeadgenIngestService,
     ConversationsService,
+    OutboundConversationService,
     ConversationAiEngineService,
     PublicChannelResolverService,
     // NetGSM delivery reports are POLLED (not pushed): a per-minute, advisory-
@@ -1210,6 +1212,7 @@ export class MarketingModule {
     leads: MarketingLeadsService,
     leadDedupe: LeadDedupeService,
     conversations: ConversationsService,
+    outbound: OutboundConversationService,
     // Powers jeeta.create_webchat_channel — the credential-free way an agent can
     // give a workspace an inbox at all.
     channelsService: ChannelsService,
@@ -1268,8 +1271,8 @@ export class MarketingModule {
     registerContactsTools(registry, { leads, companies, principals });
     registerPipelineTools(registry, { opportunities, pipelines, principals });
     registerCrmReadTools(registry, { segments, tags });
-    registerInboxTools(registry, { conversations, channels: channelsService, entitlements });
-    registerChannelWriteTools(registry, { conversations, channels: channelsService, entitlements });
+    registerInboxTools(registry, { conversations, channels: channelsService, entitlements, outbound });
+    registerChannelWriteTools(registry, { conversations, channels: channelsService, entitlements, outbound });
     registerAgentTools(registry, { agents: agentProfiles, entitlements });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OutboundConversationService } from '../../channels/outbound-conversation.service';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import { ConversationsService } from '../../channels/conversations.service';
 import { ChannelsService } from '../../channels/channels.service';
@@ -6,6 +7,7 @@ import { assertFeature } from '../mcp-feature-gate';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 export interface InboxToolDeps {
+  outbound: OutboundConversationService;
   conversations: ConversationsService;
   channels: ChannelsService;
   entitlements: EntitlementsService;
@@ -76,6 +78,49 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
       return deps.conversations.thread(ctx.workspaceId, String(args.conversationId ?? ''));
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.message_lead',
+    description:
+      'Start a conversation with a lead you choose, on SMS, WhatsApp or email — the outbound counterpart to jeeta.send_message, which can only reply to a thread the customer already opened. Reuses the open thread if there is one. Instagram, Messenger and TikTok are NOT available here: those platforms only permit replying to someone who messaged you first. WhatsApp outside the 24h window needs an approved template.',
+    domain: 'inbox',
+    // Deferred: reaching out to one named lead is a deliberate act, not part
+    // of the default inbox surface.
+    defer: true,
+    scopes: ['contacts.write'],
+    risk: 'WRITE',
+    // Reaches a real person who did not write to us first, so it is gated
+    // exactly like send_message.
+    requiresApproval: true,
+    approvalKind: 'SEND',
+    resourceType: 'lead',
+    resourceIdFrom: (args) => (typeof args.leadId === 'string' ? args.leadId : undefined),
+    inputSchema: z.object({
+      leadId: z.string().min(1).describe('Id of the lead to reach.'),
+      channelId: z
+        .string()
+        .min(1)
+        .describe('Id of the connected channel to send on (SMS, WhatsApp or email).'),
+      text: z.string().max(4000).optional().describe('Message body.'),
+      template: z
+        .object({
+          name: z.string().min(1).max(200),
+          languageCode: z.string().min(2).max(10),
+          components: z.array(z.unknown()).optional(),
+        })
+        .optional()
+        .describe('Approved WhatsApp template, required outside the 24h session window.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
+      return deps.outbound.start(ctx.workspaceId, {
+        leadId: String(args.leadId),
+        channelId: String(args.channelId),
+        text: typeof args.text === 'string' ? args.text : undefined,
+        template: args.template as never,
+      });
     },
   });
 
