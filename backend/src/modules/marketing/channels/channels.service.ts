@@ -98,14 +98,22 @@ export class ChannelsService {
     return type === 'EMAIL' ? v.toLowerCase() : v;
   }
 
-  /** Reject registering a provider identity (type, externalId) another ACTIVE
-   *  channel already owns — even in another workspace. byExternalId is the
-   *  single sanctioned cross-workspace read; without this two tenants could
-   *  claim the same inbound address and the webhook would deliver to whichever
-   *  findFirst returns (cross-tenant mail). */
+  /** Reject registering a provider identity (type, externalId) another channel
+   *  already owns — even in another workspace, and REGARDLESS of that channel's
+   *  status. anyByExternalId is the sanctioned cross-workspace read; without
+   *  this two tenants could claim the same inbound address and the webhook
+   *  would deliver to whichever findFirst returns (cross-tenant mail).
+   *
+   *  This used to ask byExternalId, which filters ACTIVE. That made a DISABLED
+   *  channel's identity look free, and the whole sequence was reachable from
+   *  the public API: register the victim's (public) page/phone id — `secrets`
+   *  is optional, so no proof of control is needed — PATCH it to DISABLED so it
+   *  stops blocking, wait for the real owner to connect, then PATCH back to
+   *  ACTIVE. Two ACTIVE rows, one provider identity, and inbound messages land
+   *  in whichever tenant Postgres happens to scan first. */
   private async assertExternalIdFree(type: string, externalId: string | null, excludeId?: string) {
     if (!externalId) return;
-    const existing = await this.resolver.byExternalId(type, externalId);
+    const existing = await this.resolver.anyByExternalId(type, externalId);
     if (existing && existing.id !== excludeId) {
       throw new ConflictException('That provider identity is already connected to a channel');
     }
@@ -263,6 +271,14 @@ export class ChannelsService {
       const externalId = this.normalizeExternalId(existing.type, dto.externalId);
       await this.assertExternalIdFree(existing.type, externalId, existing.id);
       data.externalId = externalId;
+    } else if (dto.status === 'ACTIVE' && existing.status !== 'ACTIVE' && existing.externalId) {
+      // Re-activation is a registration too. The identity was NOT held while
+      // this row sat DISABLED, so someone else may legitimately have taken it
+      // in the meantime; coming back ACTIVE without re-checking is how two
+      // ACTIVE rows end up sharing one provider identity. Reached in normal
+      // use, not just by hand: completeWhatsappSignup re-connects an existing
+      // number with `update(ws, id, { secrets, status: 'ACTIVE' })`.
+      await this.assertExternalIdFree(existing.type, existing.externalId, existing.id);
     }
     if (dto.configPublic !== undefined) data.configPublic = dto.configPublic;
     if (dto.secrets && Object.keys(dto.secrets).length) {

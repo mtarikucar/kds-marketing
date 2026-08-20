@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ChannelsService } from './channels.service';
 import { isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 
@@ -321,7 +327,10 @@ describe('ChannelsService — create()/update() feature gate', () => {
       },
     } as any;
     const registry = { has: jest.fn().mockReturnValue(true) } as any;
-    const resolver = { byExternalId: jest.fn().mockResolvedValue(null) } as any;
+    const resolver = {
+      byExternalId: jest.fn().mockResolvedValue(null),
+      anyByExternalId: jest.fn().mockResolvedValue(null),
+    } as any;
     const iysClient = { registerWebhook: jest.fn() } as any;
     return {
       svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient),
@@ -511,5 +520,118 @@ describe('ChannelsService — registerIysWebhook()', () => {
     );
     await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(iysClient.registerWebhook).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Provider-identity uniqueness.
+ *
+ * A channel's `externalId` is the handle inbound webhooks route by, and it is
+ * SELF-ASSERTED: `secrets` is optional on create, so nothing proves the caller
+ * controls the page/phone id it claims. The only thing standing between that
+ * and cross-tenant delivery is this guard — which asked `byExternalId`, a
+ * routing lookup that filters ACTIVE.
+ *
+ * So a DISABLED channel's identity read as free, and the whole sequence was
+ * reachable from the public API by any MANAGER of any workspace:
+ *
+ *   1. register the victim's page/phone id (public information, no secrets)
+ *   2. PATCH it to DISABLED so it stops blocking the real owner
+ *   3. wait for the real owner to connect the number normally
+ *   4. PATCH back to ACTIVE — a status-only update, which skipped the check
+ *
+ * Two ACTIVE rows, one provider identity, and `byExternalId` is a `findFirst`
+ * with no ordering: inbound messages land in whichever tenant Postgres scans
+ * first. There was no coverage here at all — every existing case omitted
+ * `externalId`, so the guard returned at its first line.
+ */
+describe('ChannelsService — provider identity cannot be claimed twice', () => {
+  const OTHER = { id: 'ch-other', workspaceId: 'ws-2', status: 'DISABLED' };
+
+  function make(existing: any = null) {
+    const prisma = {
+      channel: {
+        create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data, id: 'new-ch' })),
+        update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: 'ch-1', ...data })),
+        findFirst: jest.fn().mockResolvedValue(existing),
+      },
+    } as any;
+    const registry = { has: jest.fn().mockReturnValue(true) } as any;
+    const resolver = {
+      byExternalId: jest.fn().mockResolvedValue(null),
+      anyByExternalId: jest.fn().mockResolvedValue(null),
+    } as any;
+    const iysClient = { registerWebhook: jest.fn() } as any;
+    const svc = new ChannelsService(prisma, registry, resolver, makeEntitlements(), iysClient);
+    return { svc, prisma, resolver };
+  }
+
+  it('refuses an identity a DISABLED channel in another workspace still holds', async () => {
+    const { svc, resolver, prisma } = make();
+    resolver.anyByExternalId.mockResolvedValue(OTHER);
+
+    await expect(
+      svc.create('ws-1', { type: 'WHATSAPP', name: 'x', externalId: 'PN-1' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.channel.create).not.toHaveBeenCalled();
+  });
+
+  it('asks the status-BLIND lookup, never the ACTIVE-only routing one', async () => {
+    const { svc, resolver } = make();
+
+    await svc.create('ws-1', { type: 'WHATSAPP', name: 'x', externalId: 'PN-1' });
+
+    expect(resolver.anyByExternalId).toHaveBeenCalledWith('WHATSAPP', 'PN-1');
+    // byExternalId filters ACTIVE — using it here is the defect itself.
+    expect(resolver.byExternalId).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the identity when a DISABLED channel is switched back to ACTIVE', async () => {
+    const { svc, resolver, prisma } = make({
+      id: 'ch-1',
+      workspaceId: 'ws-1',
+      type: 'WHATSAPP',
+      status: 'DISABLED',
+      externalId: 'PN-1',
+    });
+    resolver.anyByExternalId.mockResolvedValue({ id: 'ch-other', workspaceId: 'ws-2', status: 'ACTIVE' });
+
+    // Status-only PATCH: the branch that used to skip the check entirely.
+    await expect(svc.update('ws-1', 'ch-1', { status: 'ACTIVE' })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(prisma.channel.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a channel re-activate onto its OWN identity', async () => {
+    const { svc, resolver, prisma } = make({
+      id: 'ch-1',
+      workspaceId: 'ws-1',
+      type: 'WHATSAPP',
+      status: 'DISABLED',
+      externalId: 'PN-1',
+    });
+    // The row it finds is itself — excludeId has to make that a non-conflict,
+    // or nobody could ever re-enable their own channel.
+    resolver.anyByExternalId.mockResolvedValue({ id: 'ch-1', workspaceId: 'ws-1', status: 'DISABLED' });
+
+    await svc.update('ws-1', 'ch-1', { status: 'ACTIVE' });
+
+    expect(prisma.channel.update).toHaveBeenCalled();
+  });
+
+  it('does not re-check when a channel is being DISABLED', async () => {
+    const { svc, resolver } = make({
+      id: 'ch-1',
+      workspaceId: 'ws-1',
+      type: 'WHATSAPP',
+      status: 'ACTIVE',
+      externalId: 'PN-1',
+    });
+
+    await svc.update('ws-1', 'ch-1', { status: 'DISABLED' });
+
+    // Going quiet releases nothing and can conflict with nothing.
+    expect(resolver.anyByExternalId).not.toHaveBeenCalled();
   });
 });
