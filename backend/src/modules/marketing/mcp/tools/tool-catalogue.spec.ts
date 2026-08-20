@@ -86,11 +86,13 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   });
   registerInboxTools(registry, {
     conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
+    outbound: { start: jest.fn() } as any,
     channels: { create: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
   registerChannelWriteTools(registry, {
     conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
+    outbound: { start: jest.fn() } as any,
     channels: { create: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
@@ -323,6 +325,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_conversations',
         'jeeta.read_conversation',
         'jeeta.send_message',
+        'jeeta.message_lead',
         'jeeta.list_campaigns',
         'jeeta.get_campaign_performance',
         'jeeta.set_campaign_status',
@@ -419,7 +422,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(104);
+    expect(names).toHaveLength(105);
   });
 
   /**
@@ -500,7 +503,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(104);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(105);
   });
 });
 

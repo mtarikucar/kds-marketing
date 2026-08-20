@@ -23,6 +23,8 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { ConversationsService } from '../channels/conversations.service';
+import { OutboundConversationService } from '../channels/outbound-conversation.service';
+import { StartConversationDto } from '../dto/start-conversation.dto';
 import { ConversationStreamService } from '../channels/conversation-stream.service';
 import {
   ReplyDto,
@@ -46,7 +48,26 @@ export class MarketingConversationsController {
   constructor(
     private readonly conversations: ConversationsService,
     private readonly stream: ConversationStreamService,
+    private readonly outbound: OutboundConversationService,
   ) {}
+
+  /**
+   * Message a lead we chose, opening the thread if there is not one yet.
+   *
+   * Declared before the `:id` routes so the literal path wins. Everything else
+   * on this controller assumes a conversation already exists, which until now
+   * meant the customer had to move first.
+   */
+  @Post('start')
+  @UseGuards(...REST_GUARDS)
+  @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
+  start(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: StartConversationDto,
+  ) {
+    return this.outbound.start(actor.workspaceId, dto);
+  }
 
   /** Live inbox stream — every conversation event for the workspace. */
   @Sse('stream')

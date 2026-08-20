@@ -1,0 +1,183 @@
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { MessageSenderService } from './message-sender.service';
+import { ChannelType, ContactKind, OutboundTemplate } from './channel-adapter.interface';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+
+/**
+ * Which channels a conversation can be STARTED on, and what address each needs.
+ *
+ * This list is short because the platforms make it short, not because the
+ * adapters are missing. Instagram, Messenger and TikTok only permit a reply to
+ * someone who messaged you first, inside the window their API enforces — there
+ * is no endpoint that DMs an arbitrary user, so "message this lead on
+ * Instagram" cannot be built, only faked. LinkedIn here is engagement
+ * (comments on our own posts), not messaging. Webchat identities are browser
+ * visitors who only exist once they open the widget, and Voice is inbound.
+ *
+ * So an outbound-first conversation means SMS, WhatsApp or email: the three
+ * where we hold an address the lead gave us and the platform allows the first
+ * move.
+ */
+const INITIABLE: Record<string, { kind: ContactKind; label: string }> = {
+  SMS: { kind: 'PHONE', label: 'phone number' },
+  WHATSAPP: { kind: 'WA', label: 'WhatsApp number' },
+  EMAIL: { kind: 'EMAIL', label: 'email address' },
+};
+
+/** Why each excluded channel is excluded, so the refusal can say something useful. */
+const NOT_INITIABLE: Record<string, string> = {
+  INSTAGRAM:
+    'Instagram only allows replying to someone who messaged you first — there is no API to DM an arbitrary user.',
+  MESSENGER:
+    'Messenger only allows replying inside the window opened by the person messaging you first.',
+  TIKTOK: 'TikTok Business Messaging only allows replying to an inbound message.',
+  LINKEDIN: 'The LinkedIn channel handles engagement on your own posts, not direct messages.',
+  WEBCHAT: 'A webchat identity only exists once the visitor opens the widget on your site.',
+  VOICE: 'The voice channel answers inbound calls; use a call task to reach out by phone.',
+};
+
+export interface StartConversationInput {
+  leadId: string;
+  channelId: string;
+  text?: string;
+  /** Required on WhatsApp outside the 24h session window. */
+  template?: OutboundTemplate;
+}
+
+/**
+ * Starting a conversation with a lead we chose, rather than waiting to be
+ * messaged.
+ *
+ * Everything in the inbox until now began at ConversationIngressService: a
+ * customer wrote in, and a lead was born from their identity. The reverse —
+ * "message this lead" — had no path at all, in the product or over MCP;
+ * `jeeta.send_message` requires a conversationId that can only exist if the
+ * customer moved first. Campaigns could reach a list, but nothing could open a
+ * single thread with one person.
+ *
+ * This is that inverse: resolve the lead's address for a channel, find or open
+ * the thread, and hand off to MessageSenderService — which already owns quota,
+ * the adapter call, the Message row and spend settlement, so none of that is
+ * duplicated here.
+ */
+@Injectable()
+export class OutboundConversationService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sender: MessageSenderService,
+  ) {}
+
+  /** The lead's address for this channel, normalized the same way ingress does. */
+  private addressFor(
+    type: ChannelType,
+    lead: { phone: string | null; whatsapp: string | null; email: string | null },
+  ): string | null {
+    if (type === 'EMAIL') return lead.email ? normalizeEmail(lead.email) : null;
+    // WhatsApp falls back to the plain phone: a lead captured by phone is
+    // reachable on WhatsApp at the same number far more often than not, and
+    // refusing when `whatsapp` happens to be blank would be pedantic.
+    const raw = type === 'WHATSAPP' ? (lead.whatsapp ?? lead.phone) : lead.phone;
+    return raw ? normalizePhone(raw) : null;
+  }
+
+  async start(workspaceId: string, input: StartConversationInput) {
+    if (!input.text?.trim() && !input.template) {
+      throw new BadRequestException('Provide message text or a template');
+    }
+
+    const channel = await this.prisma.channel.findFirst({
+      where: { id: input.channelId, workspaceId },
+      select: { id: true, type: true, status: true },
+    });
+    if (!channel) throw new NotFoundException('Channel not found');
+    if (channel.status && channel.status !== 'ACTIVE') {
+      throw new BadRequestException(`Channel is ${channel.status}, not ACTIVE`);
+    }
+
+    const spec = INITIABLE[channel.type];
+    if (!spec) {
+      throw new BadRequestException(
+        NOT_INITIABLE[channel.type] ??
+          `A conversation cannot be started on a ${channel.type} channel.`,
+      );
+    }
+
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: input.leadId, workspaceId, deletedAt: null, mergedIntoId: null },
+      select: { id: true, phone: true, whatsapp: true, email: true },
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    const address = this.addressFor(channel.type as ChannelType, lead);
+    if (!address) {
+      throw new BadRequestException(
+        `This lead has no ${spec.label} on file, so there is nothing to send to.`,
+      );
+    }
+
+    // An identity is unique per (channel, address). If one already exists on
+    // another lead, the same person is on file twice — sending would attach
+    // this thread to the wrong record, so refuse and let a human merge them.
+    const existing = await this.prisma.contactIdentity.findUnique({
+      where: { channelId_value: { channelId: channel.id, value: address } },
+      select: { id: true, leadId: true },
+    });
+    if (existing && existing.leadId !== lead.id) {
+      throw new ConflictException(
+        'That address already belongs to a different lead on this channel — merge them first.',
+      );
+    }
+
+    const identity =
+      existing ??
+      (await this.prisma.contactIdentity.create({
+        data: {
+          workspaceId,
+          channelId: channel.id,
+          kind: spec.kind,
+          value: address,
+          leadId: lead.id,
+        },
+        select: { id: true, leadId: true },
+      }));
+
+    // Reuse an open thread rather than opening a second one beside it — the
+    // inbox would otherwise show the same person twice on the same channel.
+    const open = await this.prisma.conversation.findFirst({
+      where: { workspaceId, channelId: channel.id, contactIdentityId: identity.id, status: 'OPEN' },
+      select: { id: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const conversation =
+      open ??
+      (await this.prisma.conversation.create({
+        data: {
+          workspaceId,
+          channelId: channel.id,
+          leadId: lead.id,
+          contactIdentityId: identity.id,
+          status: 'OPEN',
+        },
+        select: { id: true },
+      }));
+
+    const message = await this.sender.send({
+      workspaceId,
+      conversationId: conversation.id,
+      text: input.text ?? '',
+      template: input.template,
+      authorType: 'AI',
+      authorId: null,
+    });
+
+    return {
+      conversationId: conversation.id,
+      leadId: lead.id,
+      channel: channel.type,
+      to: address,
+      reusedThread: Boolean(open),
+      message,
+    };
+  }
+}
