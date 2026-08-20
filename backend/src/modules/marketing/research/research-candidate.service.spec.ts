@@ -74,3 +74,72 @@ describe('ResearchCandidateService', () => {
     expect(r.rejected).toBe(2);
   });
 });
+
+/**
+ * Ordering the review queue.
+ *
+ * `score` is whatever the research model returned. Real runs in one workspace
+ * came back on three different scales in the same night — 58, 7.5 and 0.82 —
+ * so score-first ordering ranked candidates against numbers that did not mean
+ * the same thing. The worst case is not cosmetic: a 1-branch business whose own
+ * evidence text said it fails the ICP sat at the top of the queue, above a
+ * HIGH-priority match, because its run happened to score out of 100.
+ */
+describe('ResearchCandidateService.list — ordering', () => {
+  const row = (id: string, priority: string, score: number | null) =>
+    ({ id, priority, score }) as any;
+
+  it('ranks by priority before score, so scales cannot cross-contaminate', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      row('bulla', 'MEDIUM', 58), // scored 0-100
+      row('konyalilar', 'HIGH', 7.5), // scored 0-10
+      row('bulut', 'HIGH', 0.82), // scored 0-1
+      row('bicaksiz', 'LOW', 42),
+    ]);
+
+    const out = await svc.list('ws1');
+
+    expect(out.map((r: any) => r.id)).toEqual(['konyalilar', 'bulut', 'bulla', 'bicaksiz']);
+  });
+
+  it('sorts URGENT above HIGH — String columns sort alphabetically in SQL', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      row('a', 'MEDIUM', 0),
+      row('b', 'URGENT', 0),
+      row('c', 'LOW', 0),
+      row('d', 'HIGH', 0),
+    ]);
+
+    const out = await svc.list('ws1');
+
+    expect(out.map((r: any) => r.id)).toEqual(['b', 'd', 'a', 'c']);
+  });
+
+  it('takes the 200-row cut by recency, not by the untrusted score', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([]);
+
+    await svc.list('ws1');
+
+    // A score-ordered cut would decide what a reviewer never sees using the
+    // same number we just established is not comparable across runs.
+    expect(prisma.researchCandidate.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { createdAt: 'desc' }, take: 200 }),
+    );
+  });
+
+  it('puts a missing score last within its priority band', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      row('noscore', 'HIGH', null),
+      row('zero', 'HIGH', 0),
+    ]);
+
+    const out = await svc.list('ws1');
+
+    // 0 is a real "does not fit" verdict; null is the model declining to say.
+    expect(out.map((r: any) => r.id)).toEqual(['zero', 'noscore']);
+  });
+});

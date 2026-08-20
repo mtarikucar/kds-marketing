@@ -230,10 +230,27 @@ export class ResearchWorkerService {
         city: str(c.city), region: str(c.region), phone: str(c.phone), instagram: str(c.instagram),
         website: str(c.website), email: str(c.email), currentSystem: str(c.currentSystem),
         branchCount: Number.isFinite(Number(c.branchCount)) ? Number(c.branchCount) : undefined,
-        stage, priority, score: Number.isFinite(Number(c.score)) ? Number(c.score) : undefined,
+        stage, priority, score: this.clampScore(c.score),
       });
     }
     return out;
+  }
+
+  /**
+   * The schema asks for 0-100, but the model is the only thing enforcing it and
+   * runs have come back on 0-1 and 0-10 scales. Storing those verbatim made the
+   * review queue rank candidates against incomparable numbers. Out-of-range is
+   * dropped rather than rescaled: guessing which scale was meant would invent a
+   * ranking, and `priority` — which IS constrained — carries the real signal.
+   */
+  private clampScore(raw: unknown): number | undefined {
+    // Number(null) is 0 and Number('') is 0 — the old check let a candidate the
+    // model declined to score be stored as a hard "does not fit at all".
+    if (raw === null || raw === undefined || raw === '') return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    if (n < 0 || n > 100) return undefined;
+    return n;
   }
 
   private readonly SYSTEM =

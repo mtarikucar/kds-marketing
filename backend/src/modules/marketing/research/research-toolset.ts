@@ -23,7 +23,19 @@ export const SUBMIT_CANDIDATES_TOOL: Anthropic.Tool = {
             branchCount: { type: 'integer' }, currentSystem: { type: 'string' },
             stage: { type: 'string', enum: ['GROWING', 'STRUGGLING', 'STABLE'] },
             priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
-            painPoint: { type: 'string' }, evidence: { type: 'string' }, pitch: { type: 'string' }, score: { type: 'number' },
+            painPoint: { type: 'string' }, evidence: { type: 'string' }, pitch: { type: 'string' },
+            // Unbounded `number` let each run invent its own scale — one run
+            // returned 58, another 7.5, another 0.82 — and the review queue
+            // sorts on this, so candidates were ranked against numbers that
+            // did not mean the same thing. `stage` and `priority` were always
+            // constrained; this was the one free-form field.
+            score: {
+              type: 'integer',
+              minimum: 0,
+              maximum: 100,
+              description:
+                'Fit against the ICP, 0-100. 0 = does not match at all, 100 = perfect match. Always use this scale.',
+            },
           },
           required: ['externalRef', 'businessName', 'businessType', 'painPoint', 'evidence', 'pitch'],
         },
