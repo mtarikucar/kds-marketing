@@ -147,3 +147,86 @@ describe('SocialPlannerService.publishDuePost — draft guard', () => {
     expect(prisma.socialPost.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * "Publish now" on a DRAFT was a silent no-op.
+ *
+ * publishNow accepted DRAFT or SCHEDULED and handed straight to publishDuePost,
+ * which refuses a DRAFT — the guard added above, and rightly so: it is what
+ * stops a stale queue job from publishing a post someone pulled back. So the
+ * endpoint returned 200, the SPA showed "Publishing started", the post stayed
+ * DRAFT, no target was touched and no adapter was called. The same hole ran
+ * through MCP, where `jeeta.publish_social_post` is approval-gated: a human
+ * approved a publish that could not happen.
+ */
+describe('SocialPlannerService.publishNow — DRAFT', () => {
+  const WS = 'ws-1';
+  let prisma: MockPrismaClient;
+  let svc: SocialPlannerService;
+
+  const build = () =>
+    new SocialPlannerService(
+      prisma as any,
+      { schedule: jest.fn(), cancel: jest.fn().mockResolvedValue(true) } as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    );
+
+  beforeEach(() => {
+    prisma = mockPrismaClient();
+    prisma.socialPost.updateMany?.mockResolvedValue({ count: 1 } as any);
+    prisma.socialPost.update.mockResolvedValue({} as any);
+    svc = build();
+    jest.spyOn(svc, 'getPost').mockResolvedValue({} as never);
+  });
+
+  it('clears the draft before delegating, so the post actually goes out', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue({ id: 'p1', status: 'DRAFT' } as any);
+    const publish = jest.spyOn(svc, 'publishDuePost').mockResolvedValue(undefined as never);
+
+    await svc.publishNow(WS, 'p1');
+
+    expect(prisma.socialPost.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'p1', workspaceId: WS, status: 'DRAFT' },
+        data: expect.objectContaining({ status: 'SCHEDULED' }),
+      }),
+    );
+    expect(publish).toHaveBeenCalledWith('p1', WS);
+  });
+
+  it('scopes the clear to the caller workspace and to DRAFT only', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue({ id: 'p1', status: 'DRAFT' } as any);
+    jest.spyOn(svc, 'publishDuePost').mockResolvedValue(undefined as never);
+
+    await svc.publishNow(WS, 'p1');
+
+    // Two concurrent clicks must not both believe they cleared it.
+    const where = (prisma.socialPost.updateMany as jest.Mock).mock.calls[0][0].where;
+    expect(where.status).toBe('DRAFT');
+    expect(where.workspaceId).toBe(WS);
+  });
+
+  it('refuses when the row is no longer a DRAFT by the time it is claimed', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue({ id: 'p1', status: 'DRAFT' } as any);
+    prisma.socialPost.updateMany?.mockResolvedValue({ count: 0 } as any);
+    const publish = jest.spyOn(svc, 'publishDuePost').mockResolvedValue(undefined as never);
+
+    await expect(svc.publishNow(WS, 'p1')).rejects.toThrow(BadRequestException);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('leaves a SCHEDULED post alone — it is already cleared', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue({ id: 'p1', status: 'SCHEDULED' } as any);
+    const publish = jest.spyOn(svc, 'publishDuePost').mockResolvedValue(undefined as never);
+
+    await svc.publishNow(WS, 'p1');
+
+    expect(prisma.socialPost.updateMany).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledWith('p1', WS);
+  });
+
+  it('still refuses a post that already went out', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue({ id: 'p1', status: 'PUBLISHED' } as any);
+    await expect(svc.publishNow(WS, 'p1')).rejects.toThrow(BadRequestException);
+  });
+});

@@ -660,6 +660,28 @@ export class SocialPlannerService implements OnModuleInit {
       throw new BadRequestException(`Cannot publish a post in status: ${post.status}`);
     }
 
+    // publishDuePost refuses a DRAFT, and that guard has to stay: it is what
+    // stops a stale queue job from publishing a post someone pulled back.
+    // But "Publish now" is a person saying this IS cleared to go out, and
+    // delegating without first moving the post out of DRAFT meant the endpoint
+    // returned 200, the UI said "Publishing started", and nothing was ever
+    // sent. Same silent success through MCP, where `jeeta.publish_social_post`
+    // is approval-gated — a human approved a publish that could not happen.
+    //
+    // Clear it here, so the decision is recorded in the data, rather than
+    // teaching the queue to ignore its own guard.
+    if (post.status === 'DRAFT') {
+      const cleared = await this.prisma.socialPost.updateMany({
+        // Compound WHERE: two concurrent "publish now" clicks must not both
+        // believe they cleared it.
+        where: { id: postId, workspaceId, status: 'DRAFT' },
+        data: { status: 'SCHEDULED', scheduledAt: new Date() },
+      });
+      if (cleared.count === 0) {
+        throw new BadRequestException('This post is no longer a draft — reload and try again');
+      }
+    }
+
     await this.publishDuePost(postId, workspaceId);
     return this.getPost(workspaceId, postId);
   }
