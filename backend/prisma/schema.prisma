@@ -1742,7 +1742,12 @@ model Channel {
 
   @@index([workspaceId, type])
   @@index([workspaceId, status])
-  @@index([type, externalId])
+  /// The provider identity inbound webhooks route by. UNIQUE, not just indexed:
+  /// byExternalId resolves it with a findFirst and no ordering, so two ACTIVE
+  /// rows sharing one identity means a customer's messages land in whichever
+  /// tenant Postgres scans first. v2.203.0 closed the logic hole; this closes
+  /// the race in create()'s read-then-write.
+  @@unique([type, externalId])
   @@map("channels")
 }
 
