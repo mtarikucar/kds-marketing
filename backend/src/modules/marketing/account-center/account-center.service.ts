@@ -249,7 +249,17 @@ export class AccountCenterService {
       const g = ensure(provider, a.externalId, a.id, a.displayName, a.connectedVia === 'OAUTH' ? 'OAUTH' : 'MANUAL');
       addCap(g, 'PUBLISH');
       g.sources.push({ capability: 'PUBLISH', model: 'SocialAccount', id: a.id, status: a.enabled === false ? 'DISABLED' : 'ACTIVE' });
-      if (a.lastError === 'reauth_required') g.health = 'REAUTH_REQUIRED';
+      // An expired token is a reconnect prompt even when nothing has failed
+      // yet. Health only looked at lastError and enabled, so an account whose
+      // token had run out still rendered HEALTHY with no Reconnect button —
+      // and the account most likely to be in that state is the one the refresh
+      // cron never touches, because its due query requires a refreshToken
+      // (a Meta page token has none). It would sit there, dead, looking fine.
+      //
+      // `needsReconnect` in social.tools.ts:67 already folds `expired`, so the
+      // two views of the same account disagreed. This is the UI catching up.
+      const expired = a.tokenExpiresAt != null && new Date(a.tokenExpiresAt).getTime() <= Date.now();
+      if (a.lastError === 'reauth_required' || expired) g.health = 'REAUTH_REQUIRED';
       else if (a.enabled === false && g.health === 'HEALTHY') g.health = 'DISABLED';
     }
 
