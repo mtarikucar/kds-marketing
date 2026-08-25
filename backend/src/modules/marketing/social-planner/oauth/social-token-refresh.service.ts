@@ -41,7 +41,15 @@ export class SocialTokenRefreshService {
         },
         orderBy: { tokenExpiresAt: 'asc' },
         take: SocialTokenRefreshService.BATCH,
-        select: { id: true, workspaceId: true, network: true, refreshToken: true },
+        select: {
+          id: true,
+          workspaceId: true,
+          network: true,
+          refreshToken: true,
+          // Needed to tell "this refresh failed but the token is still good"
+          // from "we are out of runway" — see refreshOne's catch.
+          tokenExpiresAt: true,
+        },
       });
       for (const acc of due) {
         await this.refreshOne(acc);
@@ -54,6 +62,7 @@ export class SocialTokenRefreshService {
     workspaceId: string;
     network: string;
     refreshToken: string | null;
+    tokenExpiresAt: Date | null;
   }): Promise<void> {
     try {
       if (!acc.refreshToken || !isOAuthNetwork(acc.network)) return;
@@ -75,6 +84,26 @@ export class SocialTokenRefreshService {
       });
     } catch (e) {
       this.logger.warn(`social token refresh failed for ${acc.id}: ${(e as Error).message}`);
+
+      // A failure here is NOT proof that reauth is needed. Providers throw a
+      // plain Error with a message, so a 401 invalid_grant and a 503 or a
+      // socket timeout arrive identically — there is nothing to classify on.
+      //
+      // Disabling on the first failure was therefore a one-way door: the due
+      // query filters `enabled: true`, so a disabled account is never picked up
+      // again and a momentary network blip killed a healthy connection until a
+      // human noticed. Accounts enter this query REFRESH_WINDOW_MS (7 days)
+      // before expiry and the cron runs hourly, so first-failure disabling threw
+      // away ~167 retries out of 168.
+      //
+      // While the token is still valid a failed refresh costs nothing: leave the
+      // row completely untouched and let the next hourly tick retry. Deliberately
+      // no `lastError` either — `needsReconnect` folds Boolean(lastError), so
+      // writing one would tell the owner to reconnect an account that is working.
+      const expired = acc.tokenExpiresAt != null && acc.tokenExpiresAt.getTime() <= Date.now();
+      if (!expired) return;
+
+      // Out of runway: the token has actually expired and refresh still fails.
       // Same CAS guard: only disable if the row STILL holds the stale token we
       // tried. A concurrent reconnect (new token) must not be disabled by a
       // failed refresh of the old one.
