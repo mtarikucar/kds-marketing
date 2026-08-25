@@ -227,8 +227,16 @@ export class ResearchWorkerService {
       out.push({
         externalRef, businessName, businessType, painPoint: painPoint.slice(0, 1000),
         evidence: evidence.slice(0, 500), pitch: pitch.slice(0, 500),
-        city: str(c.city), region: str(c.region), phone: str(c.phone), instagram: str(c.instagram),
-        website: str(c.website), email: str(c.email), currentSystem: str(c.currentSystem),
+        city: str(c.city), region: str(c.region),
+        // The externalRef IS a contact detail in three of its five forms, and
+        // the model routinely fills it while leaving the matching field empty:
+        // 33 of 301 leads carrying a `phone:` ref had a null phone, so a number
+        // the researcher had already found and paid for was unreachable.
+        // Recover it rather than re-researching it.
+        phone: str(c.phone) ?? refContact(externalRef, 'phone'),
+        instagram: str(c.instagram) ?? refContact(externalRef, 'instagram'),
+        website: str(c.website) ?? refContact(externalRef, 'domain'),
+        email: str(c.email), currentSystem: str(c.currentSystem),
         branchCount: Number.isFinite(Number(c.branchCount)) ? Number(c.branchCount) : undefined,
         stage, priority, score: this.clampScore(c.score),
       });
@@ -286,4 +294,25 @@ export class ResearchWorkerService {
 function str(v: unknown): string | undefined {
   const s = v == null ? '' : String(v).trim();
   return s ? s : undefined;
+}
+
+/**
+ * Pull a contact detail back out of the externalRef.
+ *
+ * The ref is a dedup key, but three of its five forms — `phone:`, `instagram:`,
+ * `domain:` — are literally the contact itself, already validated by
+ * EXTERNAL_REF_PATTERN. The model fills the ref reliably (it is required) and
+ * the matching field only sometimes, so a number it had already found could
+ * land in the key and nowhere else. Used only as a FALLBACK: an explicit field
+ * always wins.
+ *
+ * `google:` and `hash:` carry no contact and yield nothing.
+ */
+function refContact(externalRef: string, kind: 'phone' | 'instagram' | 'domain'): string | undefined {
+  const prefix = `${kind}:`;
+  if (!externalRef.startsWith(prefix)) return undefined;
+  const value = externalRef.slice(prefix.length).trim();
+  if (!value) return undefined;
+  // A domain ref is a bare apex; make it usable as the website it stands for.
+  return kind === 'domain' ? `https://${value}` : value;
 }
