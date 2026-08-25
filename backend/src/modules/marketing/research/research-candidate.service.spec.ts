@@ -143,3 +143,81 @@ describe('ResearchCandidateService.list — ordering', () => {
     expect(out.map((r: any) => r.id)).toEqual(['zero', 'noscore']);
   });
 });
+
+/**
+ * A candidate that duplicates a lead already in the CRM.
+ *
+ * Ingest dedups on the CONTACT match keys as well as externalRef, so a
+ * phone-keyed candidate can be recognised as a duplicate of a lead that arrived
+ * from a form under a different externalRef. Linking back by externalRef alone
+ * missed exactly those: ingest reported them `skipped`, no lead was found, and
+ * they sat PENDING forever — re-offered at every review, impossible to accept
+ * because there is nothing left to create, and clogging the review queue. Four
+ * were stuck this way in production.
+ *
+ * The distinction that has to survive: "already in the CRM" (link it, ACCEPTED)
+ * versus "not ingested yet, quota clipped" (leave PENDING so it can be accepted
+ * tomorrow).
+ */
+describe('ResearchCandidateService.accept — duplicate of an existing lead', () => {
+  const CAND = {
+    id: 'c1', externalRef: 'phone:+905551112233', businessName: 'Cafe X', businessType: 'CAFE',
+    painPoint: 'p', evidence: 'e', pitch: 'pi', priority: 'HIGH',
+    city: null, region: null, phone: '+905551112233', instagram: null, website: null,
+    email: null, branchCount: null, currentSystem: null, stage: null,
+  };
+
+  const setup = (leadsByRef: any[], leadsByContact: any[]) => {
+    const { svc, prisma, ingest } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([CAND]);
+    (ingest.ingest as jest.Mock).mockResolvedValue({ created: 0, skipped: 1, clipped: 0, errors: [] });
+    (prisma.lead.findMany as jest.Mock)
+      .mockResolvedValueOnce(leadsByRef)      // by externalRef
+      .mockResolvedValueOnce(leadsByContact); // by contact keys
+    return { svc, prisma };
+  };
+
+  it('links a candidate to the existing lead it duplicates and marks it ACCEPTED', async () => {
+    const { svc, prisma } = setup([], [{ id: 'lead-form-1', phoneNormalized: '905551112233', emailNormalized: null }]);
+
+    const r = await svc.accept('ws1', ['c1']);
+
+    expect(r.accepted).toBe(1);
+    expect(prisma.researchCandidate.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'ACCEPTED', leadId: 'lead-form-1' }) }),
+    );
+  });
+
+  it('matches across phone spellings, not just the stored one', async () => {
+    // The lead came in as "05551112233"; the candidate carries E.164.
+    const { svc, prisma } = setup([], [{ id: 'lead-2', phoneNormalized: '05551112233', emailNormalized: null }]);
+
+    await svc.accept('ws1', ['c1']);
+
+    expect(prisma.researchCandidate.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ leadId: 'lead-2' }) }),
+    );
+  });
+
+  it('still leaves a quota-clipped candidate PENDING', async () => {
+    // No lead anywhere: nothing was created and nothing pre-existed, so this
+    // must stay acceptable tomorrow rather than vanishing as ACCEPTED with a
+    // null leadId.
+    const { svc, prisma } = setup([], []);
+
+    const r = await svc.accept('ws1', ['c1']);
+
+    expect(r.accepted).toBe(0);
+    expect(prisma.researchCandidate.update).not.toHaveBeenCalled();
+  });
+
+  it('prefers the externalRef match when there is one', async () => {
+    const { svc, prisma } = setup([{ id: 'lead-ref', externalRef: 'phone:+905551112233' }], []);
+
+    await svc.accept('ws1', ['c1']);
+
+    expect(prisma.researchCandidate.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ leadId: 'lead-ref' }) }),
+    );
+  });
+});
