@@ -19,10 +19,13 @@ import { normalizeEmail, phoneIdentityVariants, toE164 } from '../utils/lead-nor
  * where we hold an address the lead gave us and the platform allows the first
  * move.
  */
-const INITIABLE: Record<string, { kind: ContactKind; label: string }> = {
-  SMS: { kind: 'PHONE', label: 'phone number' },
-  WHATSAPP: { kind: 'WA', label: 'WhatsApp number' },
-  EMAIL: { kind: 'EMAIL', label: 'email address' },
+const INITIABLE: Record<
+  string,
+  { kind: ContactKind; label: string; supportsTemplate: boolean }
+> = {
+  SMS: { kind: 'PHONE', label: 'phone number', supportsTemplate: false },
+  WHATSAPP: { kind: 'WA', label: 'WhatsApp number', supportsTemplate: true },
+  EMAIL: { kind: 'EMAIL', label: 'email address', supportsTemplate: false },
 };
 
 /** Why each excluded channel is excluded, so the refusal can say something useful. */
@@ -130,6 +133,17 @@ export class OutboundConversationService {
       throw new BadRequestException(
         NOT_INITIABLE[channel.type] ??
           `A conversation cannot be started on a ${channel.type} channel.`,
+      );
+    }
+
+    // Only the WhatsApp adapter reads `template`; every other adapter
+    // destructures `{ config, to, text }` and drops it on the floor. The guard
+    // above accepts "text OR template", so a template-only send on SMS or email
+    // reached the adapter with text `''` — an empty message, and no error
+    // anywhere to say the template had been ignored.
+    if (!input.text?.trim() && !spec.supportsTemplate) {
+      throw new BadRequestException(
+        `A ${spec.label} message needs text — templates are a WhatsApp feature and are ignored on this channel.`,
       );
     }
 

@@ -279,3 +279,72 @@ describe('OutboundConversationService — opt-out', () => {
     expect(sender.send).toHaveBeenCalled();
   });
 });
+
+/**
+ * Templates are a WhatsApp feature.
+ *
+ * Only whatsapp-cloud.adapter reads `template`; every other adapter
+ * destructures `{ config, to, text }` and drops it. The entry guard accepts
+ * "text OR template", so a template-only send on SMS or email reached the
+ * adapter with text `''` — an empty message, with nothing anywhere reporting
+ * that the template had been ignored.
+ */
+describe('OutboundConversationService — template support', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let sender: { send: jest.Mock };
+  let svc: OutboundConversationService;
+
+  const build = (type: string) => {
+    sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
+    prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1', type, status: 'ACTIVE' }) },
+      lead: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'lead-1', phone: '05551112233', whatsapp: '05551112233', email: 'a@b.com',
+          emailOptOut: false, smsOptOut: false, waOptOut: false,
+        }),
+      },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+    svc = new OutboundConversationService(prisma, sender as any);
+  };
+
+  const TPL = { name: 'intro', language: 'tr' } as any;
+
+  it('refuses a template-only send on SMS instead of sending an empty message', async () => {
+    build('SMS');
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', template: TPL }),
+    ).rejects.toThrow(BadRequestException);
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a template-only send on email too', async () => {
+    build('EMAIL');
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', template: TPL }),
+    ).rejects.toThrow(BadRequestException);
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it('allows a template-only send on WhatsApp — the one adapter that reads it', async () => {
+    build('WHATSAPP');
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', template: TPL });
+    expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ template: TPL }));
+  });
+
+  it('still allows text plus a template on SMS — the text is what goes out', async () => {
+    build('SMS');
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba', template: TPL });
+    expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'merhaba' }));
+  });
+});

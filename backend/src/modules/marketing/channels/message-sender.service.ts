@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
@@ -53,6 +53,15 @@ export class MessageSenderService {
       where: { id: convo.channelId, workspaceId },
     });
     if (!channel) throw new NotFoundException('Channel not found');
+    // Disabling a channel silenced its INBOUND immediately — byExternalId only
+    // resolves ACTIVE rows — but left outbound working, so a disabled channel
+    // kept sending and kept burning message quota (reserve() is below) while
+    // nothing could come back. OutboundConversationService already refuses to
+    // OPEN a thread on a non-ACTIVE channel; replying on one was the gap.
+    // Same null-tolerance as there: fixtures and older rows carry no status.
+    if (channel.status && channel.status !== 'ACTIVE') {
+      throw new BadRequestException(`Channel is ${channel.status}, not ACTIVE`);
+    }
 
     const identity = convo.contactIdentityId
       ? await this.prisma.contactIdentity.findFirst({

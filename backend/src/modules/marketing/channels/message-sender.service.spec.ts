@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { MessageSenderService } from './message-sender.service';
 
 /**
@@ -136,5 +137,73 @@ describe('MessageSenderService.send', () => {
       await flush();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('SMS settlement failed'));
     });
+  });
+});
+
+/**
+ * A DISABLED channel must not keep sending.
+ *
+ * Disabling a channel silenced INBOUND immediately — PublicChannelResolver
+ * .byExternalId only resolves ACTIVE rows — but outbound kept working, so the
+ * channel went on sending and went on burning message quota (reserve() runs
+ * before the adapter call) while nothing could ever come back on it.
+ *
+ * OutboundConversationService already refused to OPEN a thread on a non-ACTIVE
+ * channel. Replying inside an existing thread was the gap, which is the more
+ * likely case: the channel gets disabled while conversations are already open.
+ */
+describe('MessageSenderService.send — channel status', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const input = { workspaceId: 'w1', conversationId: 'c1', text: 'hi', authorType: 'AGENT' as const, authorId: 'u1' };
+
+  const build = (status: string | null) => {
+    const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'x', status: 'SENT' }) };
+    const quota = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn() };
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1', workspaceId: 'w1', type: 'SMS', status, configSealed: 'x', configPublic: null,
+        }),
+      },
+      contactIdentity: { findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: '+905551112233' }) },
+      $transaction: jest.fn(async (cb: any) => cb({
+        message: { create: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+        conversation: { update: jest.fn().mockResolvedValue({}) },
+      })),
+    };
+    const svc = new MessageSenderService(
+      prisma,
+      { get: jest.fn().mockReturnValue(adapter), resolveConfig: jest.fn().mockReturnValue({ secrets: {} }) } as any,
+      quota as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) } as any,
+    );
+    return { svc, adapter, quota };
+  };
+
+  it('refuses to send on a DISABLED channel', async () => {
+    const { svc, adapter } = build('DISABLED');
+    await expect(svc.send(input)).rejects.toThrow(BadRequestException);
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it('refuses BEFORE reserving quota, so a dead channel cannot burn the allowance', async () => {
+    const { svc, quota } = build('DISABLED');
+    await expect(svc.send(input)).rejects.toThrow(BadRequestException);
+    expect(quota.reserve).not.toHaveBeenCalled();
+  });
+
+  it('sends normally on an ACTIVE channel', async () => {
+    const { svc, adapter } = build('ACTIVE');
+    await svc.send(input);
+    expect(adapter.send).toHaveBeenCalled();
+  });
+
+  it('tolerates a null status — older rows and fixtures carry none', async () => {
+    const { svc, adapter } = build(null);
+    await svc.send(input);
+    expect(adapter.send).toHaveBeenCalled();
   });
 });
