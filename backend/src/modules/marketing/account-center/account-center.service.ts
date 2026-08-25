@@ -4,6 +4,7 @@ import { ChannelsService } from '../channels/channels.service';
 import { AdAccountService } from '../ads/ad-account.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { SocialOAuthService } from '../social-planner/oauth/social-oauth.service';
+import { isOAuthNetwork } from '../social-planner/oauth/social-oauth.config';
 
 /**
  * Account Center (hesap merkezi) — a READ-MODEL that aggregates every external
@@ -191,9 +192,34 @@ export class AccountCenterService {
    * the identity's provider. The confirm step upserts on the existing unique keys,
    * so re-auth rotates tokens in place and clears `lastError` — no new plumbing.
    */
-  reauth(workspaceId: string, identityKey: string): { authorizeUrl: string } {
+  async reauth(workspaceId: string, identityKey: string): Promise<{ authorizeUrl: string }> {
     const provider = identityKey.split(':')[0] as Provider;
-    const network = PROVIDER_NETWORK[provider];
+
+    // Route by the ACCOUNT's own network, not by the bucket it is displayed in.
+    //
+    // SOCIAL_PROVIDER has no INSTAGRAM_LOGIN key, so those accounts fall
+    // through `?? 'META'` into the Meta bucket — and PROVIDER_NETWORK.META is
+    // 'FACEBOOK', which cannot rotate an Instagram-Login token: it is a
+    // separate Meta product with its own client id, secret and refresh call
+    // (social-oauth.config.ts:84). So Reconnect on one of those launched a flow
+    // that could never repair it, with no error to say so.
+    //
+    // The bucket is a DISPLAY grouping — Instagram under Meta is reasonable —
+    // and the identityKey prefix inherits it. The network is a fact about the
+    // account, so read it from the account.
+    // Split on the FIRST colon only: an externalId can contain them
+    // (`LINKEDIN:urn:li:org:1`), and slicing the wrong way silently looks up an
+    // account that does not exist and quietly falls back to the bucket.
+    const sep = identityKey.indexOf(':');
+    const externalId = sep >= 0 ? identityKey.slice(sep + 1) : '';
+    const accounts = (await this.socialPlanner.listAccounts(workspaceId)) as any[];
+    const account = accounts.find((a) => a.externalId === externalId);
+    let network: string | undefined =
+      account && isOAuthNetwork(account.network) ? account.network : undefined;
+
+    // Fall back to the bucket for identities with no SocialAccount behind them
+    // (an ads-only identity, or a manual provider), which is what this always did.
+    network ??= PROVIDER_NETWORK[provider];
     if (!network) {
       throw new BadRequestException('Reconnect is only available for OAuth providers');
     }
