@@ -33,6 +33,8 @@ describeRealDb('Conversation list snippet — real DB (e2e)', () => {
   const otherWorkspaceId = randomUUID();
   const channelId = randomUUID();
   const otherChannelId = randomUUID();
+  const leadId = randomUUID();
+  const otherLeadId = randomUUID();
   const convoA = randomUUID();
   const convoB = randomUUID();
   const convoOther = randomUUID();
@@ -50,13 +52,30 @@ describeRealDb('Conversation list snippet — real DB (e2e)', () => {
       });
     }
 
-    const convo = (id: string, ws: string, ch: string) =>
-      prisma.conversation.create({
-        data: { id, workspaceId: ws, channelId: ch, status: 'OPEN', lastMessageAt: new Date() },
+    // Conversation.leadId is NOT NULL, so every thread needs a real lead.
+    for (const [id, ws] of [
+      [leadId, workspaceId],
+      [otherLeadId, otherWorkspaceId],
+    ]) {
+      await prisma.lead.create({
+        data: {
+          id,
+          workspaceId: ws,
+          businessName: `biz-${id.slice(0, 6)}`,
+          contactPerson: 'Test',
+          businessType: 'CAFE',
+          source: 'OTHER',
+        },
       });
-    await convo(convoA, workspaceId, channelId);
-    await convo(convoB, workspaceId, channelId);
-    await convo(convoOther, otherWorkspaceId, otherChannelId);
+    }
+
+    const convo = (id: string, ws: string, ch: string, lead: string) =>
+      prisma.conversation.create({
+        data: { id, workspaceId: ws, channelId: ch, leadId: lead, status: 'OPEN', lastMessageAt: new Date() },
+      });
+    await convo(convoA, workspaceId, channelId, leadId);
+    await convo(convoB, workspaceId, channelId, leadId);
+    await convo(convoOther, otherWorkspaceId, otherChannelId, otherLeadId);
 
     const msg = (conversationId: string, ws: string, body: string, minutesAgo: number) =>
       prisma.message.create({
@@ -85,6 +104,7 @@ describeRealDb('Conversation list snippet — real DB (e2e)', () => {
     for (const ws of [workspaceId, otherWorkspaceId]) {
       await prisma.message.deleteMany({ where: { workspaceId: ws } });
       await prisma.conversation.deleteMany({ where: { workspaceId: ws } });
+      await prisma.lead.deleteMany({ where: { workspaceId: ws } });
       await prisma.channel.deleteMany({ where: { workspaceId: ws } });
     }
     await closeTestApp(app);
