@@ -196,3 +196,48 @@ describe('ResearchWorkerService — score validation', () => {
     expect(validate(999).businessName).toBe('Cafe X');
   });
 });
+
+/**
+ * The externalRef is a contact detail, not just a dedup key.
+ *
+ * Three of its five forms ARE the contact: `phone:`, `instagram:`, `domain:`.
+ * The model fills the ref reliably — it is required — and the matching field
+ * only sometimes. Measured on the live database: 33 of 301 leads carrying a
+ * `phone:` ref had a NULL phone, so a number the researcher had already found
+ * and paid for sat in the key and nowhere the product could use it. Those leads
+ * read as uncontactable.
+ */
+describe('ResearchWorkerService — contact recovery from externalRef', () => {
+  const base = {
+    businessName: 'Cafe X',
+    businessType: 'CAFE',
+    painPoint: 'p',
+    evidence: 'e',
+    pitch: 'pi',
+  };
+  const validate = (extra: Record<string, unknown>) => {
+    const { svc } = deps({});
+    return (svc as any).validate([{ ...base, ...extra }])[0];
+  };
+
+  it('recovers a phone from a phone: ref when the field is empty', () => {
+    const c = validate({ externalRef: 'phone:+905551112233' });
+    expect(c.phone).toBe('+905551112233');
+  });
+
+  it('recovers an instagram handle and turns a domain ref into a usable url', () => {
+    expect(validate({ externalRef: 'instagram:@cafex' }).instagram).toBe('@cafex');
+    expect(validate({ externalRef: 'domain:cafex.com.tr' }).website).toBe('https://cafex.com.tr');
+  });
+
+  it('never overrides a field the model actually supplied', () => {
+    const c = validate({ externalRef: 'phone:+905551112233', phone: '+902121112233' });
+    // The ref is only a fallback; an explicit field is the better evidence.
+    expect(c.phone).toBe('+902121112233');
+  });
+
+  it('yields nothing for refs that carry no contact', () => {
+    expect(validate({ externalRef: 'hash:' + 'a'.repeat(40) }).phone).toBeUndefined();
+    expect(validate({ externalRef: 'google:' + 'a'.repeat(21) }).phone).toBeUndefined();
+  });
+});
