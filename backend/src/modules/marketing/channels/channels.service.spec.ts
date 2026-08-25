@@ -635,3 +635,56 @@ describe('ChannelsService — provider identity cannot be claimed twice', () => 
     expect(resolver.anyByExternalId).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * VOICE channels have to be creatable.
+ *
+ * The inbound voice-AI path resolves a call to a Channel row — netgsm-ivr
+ * matches `type: 'VOICE'` on externalId, voice-ai-bridge loads it by id — and
+ * ChannelsService.create() is the ONLY code path in the product that writes a
+ * Channel. VOICE was missing from the DTO's CHANNEL_TYPES, so the row could not
+ * be created anywhere: the Account Center's Voice "Set up" 400'd on validation
+ * and the IVR lookup could only ever find nothing. A whole feature, wired end
+ * to end, resting on a row nothing could produce.
+ */
+describe('ChannelsService — VOICE channels', () => {
+  function make(features: Record<string, boolean>) {
+    const prisma = {
+      channel: {
+        create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data, id: 'ch-v' })),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    } as any;
+    const resolver = {
+      byExternalId: jest.fn().mockResolvedValue(null),
+      anyByExternalId: jest.fn().mockResolvedValue(null),
+    } as any;
+    const svc = new ChannelsService(
+      prisma,
+      { has: jest.fn().mockReturnValue(true) } as any,
+      resolver,
+      makeEntitlements(features),
+      { registerWebhook: jest.fn() } as any,
+    );
+    return { svc, prisma };
+  }
+
+  it('creates a VOICE channel for a telephony workspace', async () => {
+    const { svc, prisma } = make({ telephony: true, conversationAi: false });
+
+    await svc.create('ws-1', { type: 'VOICE', name: 'Santral', externalId: '+902121112233' });
+
+    expect(prisma.channel.create).toHaveBeenCalled();
+  });
+
+  it('gates VOICE on telephony, not conversationAi', async () => {
+    // The default branch would have let this through on conversationAi alone —
+    // a voice channel the workspace has no telephony to use.
+    const { svc, prisma } = make({ telephony: false, conversationAi: true });
+
+    await expect(
+      svc.create('ws-1', { type: 'VOICE', name: 'Santral', externalId: '+902121112233' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.channel.create).not.toHaveBeenCalled();
+  });
+});
