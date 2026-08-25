@@ -128,13 +128,49 @@ describe('AccountCenterService', () => {
   });
 
   describe('reauth', () => {
-    it('returns an authorize URL routed through the identity provider network', () => {
-      expect(svc.reauth(WS, 'META:P1')).toEqual({ authorizeUrl: 'https://fb/auth' });
+    it('returns an authorize URL routed through the identity provider network', async () => {
+      await expect(svc.reauth(WS, 'META:P1')).resolves.toEqual({ authorizeUrl: 'https://fb/auth' });
       expect(socialOAuth.start).toHaveBeenCalledWith(WS, 'FACEBOOK', 'account-center');
     });
 
-    it('rejects reauth for a non-OAuth provider', () => {
-      expect(() => svc.reauth(WS, 'SMS:x')).toThrow(BadRequestException);
+    it('rejects reauth for a non-OAuth provider', async () => {
+      await expect(svc.reauth(WS, 'SMS:x')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    /**
+     * SOCIAL_PROVIDER has no INSTAGRAM_LOGIN key, so those accounts fall
+     * through `?? 'META'` into the Meta bucket — and PROVIDER_NETWORK.META is
+     * 'FACEBOOK', which cannot rotate an Instagram-Login token: it is a
+     * separate Meta product with its own client id, secret and refresh call.
+     * Reconnect launched a flow that could never repair the account, with no
+     * error to say so.
+     */
+    it('routes an INSTAGRAM_LOGIN account through its OWN network, not the Meta bucket', async () => {
+      socialPlanner.listAccounts.mockResolvedValue([
+        { id: 'sa9', network: 'INSTAGRAM_LOGIN', externalId: 'IG9', displayName: 'figurunica', connectedVia: 'OAUTH', enabled: false, lastError: 'disconnected' },
+      ]);
+
+      await svc.reauth(WS, 'META:IG9');
+
+      expect(socialOAuth.start).toHaveBeenCalledWith(WS, 'INSTAGRAM_LOGIN', 'account-center');
+    });
+
+    it('splits the identityKey on the FIRST colon so a urn externalId survives', async () => {
+      socialPlanner.listAccounts.mockResolvedValue([
+        { id: 'sa8', network: 'LINKEDIN', externalId: 'urn:li:org:1', displayName: 'Acme', connectedVia: 'OAUTH', enabled: true, lastError: null },
+      ]);
+
+      await svc.reauth(WS, 'LINKEDIN:urn:li:org:1');
+
+      expect(socialOAuth.start).toHaveBeenCalledWith(WS, 'LINKEDIN', 'account-center');
+    });
+
+    it('still falls back to the bucket for an identity with no social account', async () => {
+      socialPlanner.listAccounts.mockResolvedValue([]);
+
+      await svc.reauth(WS, 'META:P1');
+
+      expect(socialOAuth.start).toHaveBeenCalledWith(WS, 'FACEBOOK', 'account-center');
     });
   });
 });
