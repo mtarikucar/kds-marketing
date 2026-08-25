@@ -91,6 +91,18 @@ export class OutboundConversationService {
     return raw ? toE164(raw) : null;
   }
 
+  /** Mirrors ConversationAiEngineService's check — same flags, same mapping, so
+   *  the two paths that reach a lead cannot drift apart on who is contactable. */
+  private hasOptedOut(
+    type: ChannelType,
+    lead: { emailOptOut?: boolean | null; smsOptOut?: boolean | null; waOptOut?: boolean | null },
+  ): boolean {
+    if (type === 'EMAIL') return !!lead.emailOptOut;
+    if (type === 'SMS') return !!lead.smsOptOut;
+    if (type === 'WHATSAPP') return !!lead.waOptOut;
+    return false;
+  }
+
   /** Every stored spelling this address could already be on file as: a phone
    *  has several (see phoneIdentityVariants), an email exactly one. */
   private candidateValues(type: ChannelType, address: string): string[] {
@@ -123,9 +135,31 @@ export class OutboundConversationService {
 
     const lead = await this.prisma.lead.findFirst({
       where: { id: input.leadId, workspaceId, deletedAt: null, mergedIntoId: null },
-      select: { id: true, phone: true, whatsapp: true, email: true },
+      select: {
+        id: true,
+        phone: true,
+        whatsapp: true,
+        email: true,
+        emailOptOut: true,
+        smsOptOut: true,
+        waOptOut: true,
+      },
     });
     if (!lead) throw new NotFoundException('Lead not found');
+
+    // Opt-out is honoured everywhere else that reaches a lead — campaigns
+    // suppress them, ConversationAiEngineService refuses to auto-reply, and
+    // esp-feedback sets the flag on a hard bounce or spam report. The one path
+    // that was NOT checking is the one whose entire purpose is contacting
+    // someone who has not asked to be contacted.
+    //
+    // This is the unambiguous half of the question: whatever the İYS position
+    // on a given recipient, a lead who said stop must not be messaged again.
+    if (this.hasOptedOut(channel.type as ChannelType, lead)) {
+      throw new BadRequestException(
+        `This lead opted out of ${spec.label === 'email address' ? 'email' : spec.label.replace(' number', '')} messages, so a conversation cannot be started.`,
+      );
+    }
 
     const address = this.addressFor(channel.type as ChannelType, lead);
     if (!address) {

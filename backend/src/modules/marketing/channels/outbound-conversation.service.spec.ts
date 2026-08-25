@@ -190,3 +190,92 @@ describe('OutboundConversationService — address form', () => {
     expect(where.value.in).toEqual(expect.arrayContaining(['+905551112233', '05551112233']));
   });
 });
+
+/**
+ * Opt-out on the initiating path.
+ *
+ * Campaigns suppress opted-out leads, ConversationAiEngineService refuses to
+ * auto-reply to them, and esp-feedback sets the flag on a hard bounce or spam
+ * report. The one path that was NOT checking is the one whose entire purpose is
+ * contacting someone who has not asked to be contacted — "find a lead's number
+ * and message them".
+ *
+ * Whatever the İYS position on a given recipient, a lead who said stop must not
+ * be messaged again.
+ */
+describe('OutboundConversationService — opt-out', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let sender: { send: jest.Mock };
+  let svc: OutboundConversationService;
+
+  const build = (lead: any, type = 'SMS') => {
+    sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
+    prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1', type, status: 'ACTIVE' }) },
+      lead: { findFirst: jest.fn().mockResolvedValue(lead) },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+    svc = new OutboundConversationService(prisma, sender as any);
+  };
+
+  const LEAD = {
+    id: 'lead-1',
+    phone: '05551112233',
+    whatsapp: '05551112233',
+    email: 'a@b.com',
+    emailOptOut: false,
+    smsOptOut: false,
+    waOptOut: false,
+  };
+
+  it('refuses to open an SMS thread with a lead who opted out of SMS', async () => {
+    build({ ...LEAD, smsOptOut: true });
+
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'ilgilenir misiniz?' }),
+    ).rejects.toThrow(BadRequestException);
+    expect(sender.send).not.toHaveBeenCalled();
+    // Refused before any identity or thread is written, so an opted-out lead
+    // does not accumulate half-built conversations.
+    expect(prisma.contactIdentity.create).not.toHaveBeenCalled();
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses WhatsApp on waOptOut and email on emailOptOut', async () => {
+    build({ ...LEAD, waOptOut: true }, 'WHATSAPP');
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' }),
+    ).rejects.toThrow(BadRequestException);
+
+    build({ ...LEAD, emailOptOut: true }, 'EMAIL');
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('checks the flag for the channel being used, not any flag', async () => {
+    // Opted out of email, contacted by SMS — a legitimate send.
+    build({ ...LEAD, emailOptOut: true }, 'SMS');
+
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+    expect(sender.send).toHaveBeenCalled();
+  });
+
+  it('still sends to a lead with no opt-out', async () => {
+    build(LEAD);
+
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+    expect(sender.send).toHaveBeenCalled();
+  });
+});
