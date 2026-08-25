@@ -207,3 +207,90 @@ describe('MessageSenderService.send — channel status', () => {
     expect(adapter.send).toHaveBeenCalled();
   });
 });
+
+/**
+ * What the thread shows has to be what the customer got.
+ *
+ * The WhatsApp adapter's precedence is template > media > text, and an approved
+ * template is rendered by Meta from a name + language — the rendered text never
+ * exists on our side. Persisting `text` therefore stored something the customer
+ * never received: empty for a template-only send (start() passes
+ * `text: input.text ?? ''`), and the IGNORED text when both were supplied. A rep
+ * opening the thread saw a blank outbound message, or copy that never went out.
+ */
+describe('MessageSenderService.send — template body', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const TPL = { name: 'intro', languageCode: 'tr' };
+
+  const build = () => {
+    const created: any[] = [];
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo), update: jest.fn() },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1', workspaceId: 'w1', type: 'WHATSAPP', status: 'ACTIVE', configSealed: 'x', configPublic: null,
+        }),
+      },
+      contactIdentity: { findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: '+905551112233' }) },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({
+          message: {
+            create: jest.fn(async (args: any) => {
+              created.push(args.data);
+              return { id: 'm1', status: 'SENT' };
+            }),
+          },
+          conversation: { update: jest.fn() },
+        }),
+      ),
+    };
+    const svc = new MessageSenderService(
+      prisma,
+      {
+        get: jest.fn().mockReturnValue({ send: jest.fn().mockResolvedValue({ externalMessageId: 'x', status: 'SENT' }) }),
+        resolveConfig: jest.fn().mockReturnValue({ secrets: {} }),
+      } as any,
+      { reserve: jest.fn(), refund: jest.fn() } as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue({ amount: 0, quantity: 0, unitCost: 0 }) } as any,
+    );
+    return { svc, created };
+  };
+
+  const base = { workspaceId: 'w1', conversationId: 'c1', authorType: 'AI' as const };
+
+  it('records the template that was sent instead of an empty body', async () => {
+    const { svc, created } = build();
+
+    await svc.send({ ...base, text: '', template: TPL as any });
+
+    expect(created[0].body).toBe('[template: intro (tr)]');
+  });
+
+  it('labels caller text as context rather than presenting it as the message', async () => {
+    const { svc, created } = build();
+
+    // The adapter sent the TEMPLATE; this text never reached the customer.
+    await svc.send({ ...base, text: 'merhaba', template: TPL as any });
+
+    expect(created[0].body).toBe('[template: intro (tr)] merhaba');
+  });
+
+  it('keeps the template identity queryable in meta', async () => {
+    const { svc, created } = build();
+
+    await svc.send({ ...base, text: '', template: TPL as any });
+
+    expect(created[0].meta).toEqual({ template: { name: 'intro', languageCode: 'tr' } });
+  });
+
+  it('leaves a plain text send exactly as it was', async () => {
+    const { svc, created } = build();
+
+    await svc.send({ ...base, text: 'merhaba' });
+
+    expect(created[0].body).toBe('merhaba');
+    expect(created[0].meta).toBeUndefined();
+  });
+});
