@@ -100,6 +100,44 @@ export class MarketingSchedulerService {
     return outcome;
   }
 
+  /**
+   * Delete OAuth hand-offs nobody came back for.
+   *
+   * A PendingSocialConnection holds a SEALED provider access token between the
+   * OAuth callback and the moment the user picks which assets to connect. The
+   * happy path deletes it, and each read rejects-and-deletes an expired row —
+   * but a flow the user abandons (closes the tab after the callback) is never
+   * read again, so nothing ever removed it. The row, and the token inside it,
+   * stayed for good.
+   *
+   * The delete is deliberately NOT scoped per workspace. Every other sweep in
+   * this file loops over ACTIVE workspaces, which is right for their data — but
+   * a secret left behind by a suspended or deleted workspace is exactly the one
+   * that should not be kept, and a per-workspace loop would skip it. `expiresAt`
+   * is the whole predicate: the row is already useless to every caller.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'marketing-pending-connection-sweep' })
+  async sweepExpiredPendingConnections(): Promise<{ deleted: number }> {
+    let outcome = { deleted: 0 };
+    await withAdvisoryLock(
+      this.prisma,
+      'marketing-pending-connection-sweep',
+      async () => {
+        const result = await this.prisma.pendingSocialConnection.deleteMany({
+          where: { expiresAt: { lt: new Date() } },
+        });
+        if (result.count > 0) {
+          this.logger.log(
+            `pending-connection-sweep: deleted ${result.count} abandoned OAuth hand-off(s)`,
+          );
+        }
+        outcome = { deleted: result.count };
+      },
+      this.logger,
+    );
+    return outcome;
+  }
+
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'marketing-notification-cleanup' })
   async cleanupOldNotifications(): Promise<{ deleted: number }> {
     let outcome = { deleted: 0 };
