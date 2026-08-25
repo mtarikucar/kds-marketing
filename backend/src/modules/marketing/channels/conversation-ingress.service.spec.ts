@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { ConversationIngressService } from './conversation-ingress.service';
 import { InboundMessage } from './channel-adapter.interface';
 
@@ -287,5 +288,67 @@ describe('ConversationIngressService — phone identity matching', () => {
     // An email address has exactly one spelling; a fuzzy second lookup here
     // could only ever attach a message to the wrong contact.
     expect(prisma.contactIdentity.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The P2002 backstop.
+ *
+ * The unique is now (workspaceId, externalMessageId), so a foreign tenant's
+ * identical id no longer blocks the insert. The handler's workspace scoping
+ * stays anyway — it is what makes the handler correct rather than merely lucky,
+ * and it is the difference between "deduped" and handing a caller someone
+ * else's conversation id.
+ */
+describe('ConversationIngressService — P2002 handling', () => {
+  const WS = 'ws-1';
+  const channel = { id: 'ch-1', workspaceId: WS, type: 'WHATSAPP' };
+  const inbound: InboundMessage = {
+    externalUserId: '+905551112233',
+    kind: 'WA',
+    externalMessageId: 'wamid.DUP',
+    text: 'merhaba',
+    displayName: 'Ayşe',
+  };
+
+  const build = (onConflictFinds: any) => {
+    const prisma: any = {
+      message: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
+      contactIdentity: { findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null) },
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sys-1' }) },
+      $transaction: jest.fn(async () => {
+        const err: any = new Error('unique');
+        err.constructor = { name: 'PrismaClientKnownRequestError' };
+        Object.setPrototypeOf(err, Prisma.PrismaClientKnownRequestError.prototype);
+        err.code = 'P2002';
+        throw err;
+      }),
+    };
+    // Second lookup (inside the catch) is what decides dedup vs re-throw.
+    prisma.message.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(onConflictFinds);
+    const svc = new ConversationIngressService(
+      prisma as any,
+      { pickAssignee: jest.fn().mockResolvedValue(null) } as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { capture: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+    return { svc, prisma };
+  };
+
+  it('reports deduped when the conflicting row is in THIS workspace', async () => {
+    const { svc } = build({ id: 'm-1', conversationId: 'conv-1' });
+
+    const res = await svc.ingest(channel, inbound);
+
+    expect(res).toMatchObject({ deduped: true, conversationId: 'conv-1' });
+  });
+
+  it('re-throws when the scoped lookup finds nothing — never hands back a foreign thread', async () => {
+    const { svc } = build(null);
+
+    await expect(svc.ingest(channel, inbound)).rejects.toThrow();
   });
 });

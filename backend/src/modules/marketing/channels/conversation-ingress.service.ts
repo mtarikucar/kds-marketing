@@ -123,8 +123,12 @@ export class ConversationIngressService {
         // Re-resolve workspace-scoped: only a SAME-workspace concurrent
         // double-delivery is a real dedup. A cross-tenant id collision finds
         // nothing here and re-throws (fail-closed) rather than leaking a foreign
-        // conversation id. (A composite (workspaceId, externalMessageId) unique
-        // would let the insert itself succeed — tracked as a follow-up.)
+        // conversation id.
+        //
+        // That cross-tenant case is now unreachable: the unique is
+        // (workspaceId, externalMessageId), so a foreign tenant's identical id
+        // no longer blocks the insert. The scoping here stays as the backstop —
+        // it is what makes this handler correct rather than merely lucky.
         const existing = await this.prisma.message.findFirst({
           where: { externalMessageId: inbound.externalMessageId, workspaceId },
           select: { id: true, conversationId: true },

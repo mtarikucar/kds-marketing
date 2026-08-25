@@ -1858,7 +1858,10 @@ model Message {
   /// MarketingUser id for AGENT-authored messages; null otherwise.
   authorId          String?
   body              String   @db.Text
-  externalMessageId String?  @unique
+  /// Provider message id. Unique PER WORKSPACE, not globally: providers only
+  /// guarantee uniqueness within a business/page/account, so a global unique
+  /// let one tenant's id collide with another's. See the @@unique below.
+  externalMessageId String?
   status            String   @default("SENT") // RECEIVED | SENT | DELIVERED | READ | FAILED
   error             String?
   meta              Json?
@@ -1870,6 +1873,7 @@ model Message {
 
   createdAt DateTime @default(now())
 
+  @@unique([workspaceId, externalMessageId])
   @@index([conversationId, createdAt])
   @@index([workspaceId, createdAt])
   @@map("messages")
