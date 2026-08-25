@@ -179,12 +179,29 @@ export class SocialPlannerService implements OnModuleInit {
         accessToken: sealed,
         tokenExpiresAt: dto.tokenExpiresAt ?? null,
         enabled: true,
+        lastError: null,
       },
       update: {
         displayName: dto.displayName,
         accessToken: sealed,
-        tokenExpiresAt: dto.tokenExpiresAt ?? null,
         enabled: true,
+        // A successful connect IS the repair, so the failure that prompted it
+        // has to be cleared. `needsReconnect` folds Boolean(lastError)
+        // (social.tools.ts:67), so leaving it behind meant an account you had
+        // just reconnected kept reporting "reconnect needed" forever — and
+        // disconnectAccount writes lastError='disconnected', so every
+        // disconnect/reconnect round trip landed in exactly that state.
+        lastError: null,
+        // Only overwrite the expiry when the caller actually knows one.
+        // `?? null` wiped it on every token rotation that did not carry a
+        // date, and the refresh cron's due query requires
+        // `tokenExpiresAt: { not: null }` — so a reconnected account silently
+        // left the refresh queue for good and died when its token ran out.
+        //
+        // Keeping a stale date is the recoverable choice: a past date matches
+        // `lt: dueBefore`, so the next tick refreshes it and writes the
+        // correct expiry back. Null is the only value nothing recovers from.
+        ...(dto.tokenExpiresAt !== undefined ? { tokenExpiresAt: dto.tokenExpiresAt } : {}),
       },
     });
     return maskAccount(row);

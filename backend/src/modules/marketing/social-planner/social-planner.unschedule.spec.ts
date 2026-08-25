@@ -230,3 +230,67 @@ describe('SocialPlannerService.publishNow — DRAFT', () => {
     await expect(svc.publishNow(WS, 'p1')).rejects.toThrow(BadRequestException);
   });
 });
+
+/**
+ * Reconnecting an account has to actually repair it.
+ *
+ * `needsReconnect` folds `enabled !== true || expired || Boolean(lastError)`
+ * (social.tools.ts:67). connectAccount's update branch re-enabled the row and
+ * rotated the token but never cleared lastError, so an account you had just
+ * reconnected kept reporting "reconnect needed" — and disconnectAccount writes
+ * lastError='disconnected', so every disconnect/reconnect round trip landed in
+ * exactly that state.
+ *
+ * It also did `tokenExpiresAt: dto.tokenExpiresAt ?? null`, wiping the expiry on
+ * any rotation that carried no date. The refresh cron's due query requires
+ * `tokenExpiresAt: { not: null }`, so the account silently left the refresh
+ * queue for good and died when its token ran out.
+ */
+describe('SocialPlannerService.connectAccount — repair semantics', () => {
+  const WS = 'ws-1';
+  let prisma: MockPrismaClient;
+  let svc: SocialPlannerService;
+
+  beforeEach(() => {
+    prisma = mockPrismaClient();
+    prisma.socialAccount.upsert?.mockResolvedValue({ id: 'a1', network: 'LINKEDIN' } as any);
+    svc = new SocialPlannerService(
+      prisma as any,
+      { schedule: jest.fn(), cancel: jest.fn() } as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    );
+  });
+
+  const base = {
+    network: 'LINKEDIN',
+    externalId: 'urn:li:org:1',
+    displayName: 'Acme',
+    accessToken: 'tok',
+  };
+
+  it('clears lastError, so a repaired account stops reporting needsReconnect', async () => {
+    await svc.connectAccount(WS, base);
+
+    const call = (prisma.socialAccount.upsert as jest.Mock).mock.calls[0][0];
+    expect(call.update.lastError).toBeNull();
+    expect(call.update.enabled).toBe(true);
+  });
+
+  it('does NOT wipe the expiry when the caller supplies none', async () => {
+    await svc.connectAccount(WS, base);
+
+    const call = (prisma.socialAccount.upsert as jest.Mock).mock.calls[0][0];
+    // Absent, not null: Prisma leaves the column alone. A null here would drop
+    // the row out of the refresh cron's `tokenExpiresAt: { not: null }` query
+    // permanently — the one value nothing recovers from.
+    expect('tokenExpiresAt' in call.update).toBe(false);
+  });
+
+  it('writes the expiry when the caller does supply one', async () => {
+    const at = new Date('2027-01-01T00:00:00.000Z');
+    await svc.connectAccount(WS, { ...base, tokenExpiresAt: at });
+
+    const call = (prisma.socialAccount.upsert as jest.Mock).mock.calls[0][0];
+    expect(call.update.tokenExpiresAt).toEqual(at);
+  });
+});
