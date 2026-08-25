@@ -50,3 +50,50 @@ describe('MarketingSchedulerService.fireFollowUpReminders', () => {
     });
   });
 });
+
+/**
+ * Abandoned OAuth hand-offs.
+ *
+ * A PendingSocialConnection holds a SEALED provider access token between the
+ * OAuth callback and the moment the user picks which assets to connect. The
+ * happy path deletes it, and each read rejects-and-deletes an expired row — but
+ * a flow the user abandons (closes the tab after the callback) is never read
+ * again, so nothing removed it. The row, and the token inside it, stayed for
+ * good. There was no sweeper anywhere in the repo.
+ */
+describe('MarketingSchedulerService.sweepExpiredPendingConnections', () => {
+  const build = (count = 3) => {
+    const prisma: any = {
+      pendingSocialConnection: { deleteMany: jest.fn().mockResolvedValue({ count }) },
+    };
+    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any) };
+  };
+
+  it('deletes only rows whose expiry has passed', async () => {
+    const { prisma, svc } = build();
+
+    const res = await svc.sweepExpiredPendingConnections();
+
+    const where = prisma.pendingSocialConnection.deleteMany.mock.calls[0][0].where;
+    expect(where.expiresAt.lt).toBeInstanceOf(Date);
+    expect(Object.keys(where)).toEqual(['expiresAt']);
+    expect(res).toEqual({ deleted: 3 });
+  });
+
+  it('does NOT scope the sweep per workspace', async () => {
+    const { prisma, svc } = build();
+
+    await svc.sweepExpiredPendingConnections();
+
+    // Every other sweep here loops ACTIVE workspaces, which is right for their
+    // data. A secret abandoned by a suspended or deleted workspace is exactly
+    // the one that must not be kept, and a per-workspace loop would skip it.
+    const where = prisma.pendingSocialConnection.deleteMany.mock.calls[0][0].where;
+    expect(where.workspaceId).toBeUndefined();
+  });
+
+  it('reports zero without failing when there is nothing to sweep', async () => {
+    const { svc } = build(0);
+    await expect(svc.sweepExpiredPendingConnections()).resolves.toEqual({ deleted: 0 });
+  });
+});
