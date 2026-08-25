@@ -7,7 +7,23 @@ import {
   MaxLength,
 } from 'class-validator';
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'EMAIL'];
+// VOICE belongs here even though its adapter never sends: the inbound voice-AI
+// path resolves a call to a Channel row (netgsm-ivr.service.ts matches
+// `type: 'VOICE'` on externalId, voice-ai-bridge.controller.ts loads it by id),
+// and channels.service.create() is the ONLY code path that writes a Channel.
+// Leaving VOICE out of this list meant the row could not be created anywhere in
+// the product — the Account Center's Voice "Set up" 400'd, and the IVR lookup
+// could only ever find nothing.
+const CHANNEL_TYPES = [
+  'WEBCHAT',
+  'WHATSAPP',
+  'SMS',
+  'INSTAGRAM',
+  'MESSENGER',
+  'TIKTOK',
+  'EMAIL',
+  'VOICE',
+];
 
 /**
  * Payload from the WhatsApp Embedded Signup flow: the short-lived OAuth `code`

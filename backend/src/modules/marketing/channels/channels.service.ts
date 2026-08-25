@@ -70,7 +70,13 @@ export class ChannelsService {
    * program); every other type keeps requiring `conversationAi`, unchanged.
    */
   private async assertChannelFeature(workspaceId: string, type: string): Promise<void> {
-    const feature: FeatureKey = type === 'SMS' ? 'sms' : 'conversationAi';
+    // VOICE is gated on `telephony`, the same key the /calls nav item, the
+    // webphone, the dialer and NetGSM onboarding all use — not on
+    // `conversationAi`. Falling through to the default would have let a
+    // workspace with conversationAi and no telephony create a voice channel it
+    // cannot use, while refusing one to a telephony workspace that has it.
+    const feature: FeatureKey =
+      type === 'SMS' ? 'sms' : type === 'VOICE' ? 'telephony' : 'conversationAi';
     await this.assertFeature(workspaceId, feature);
   }
 
