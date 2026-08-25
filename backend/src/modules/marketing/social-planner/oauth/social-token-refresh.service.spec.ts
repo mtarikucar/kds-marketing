@@ -50,9 +50,14 @@ describe('SocialTokenRefreshService', () => {
     expect(call.data.accessToken).not.toBe('newtok'); // sealed
   });
 
-  it('disables the account and flags reauth on refresh failure (CAS-guarded)', async () => {
+  it('disables the account and flags reauth once the token has EXPIRED and refresh still fails', async () => {
     prisma.socialAccount.findMany.mockResolvedValue([
-      { id: 'a2', network: 'TIKTOK', refreshToken: sealSecret('rt') },
+      {
+        id: 'a2',
+        network: 'TIKTOK',
+        refreshToken: sealSecret('rt'),
+        tokenExpiresAt: new Date(Date.now() - 60_000), // out of runway
+      },
     ]);
     providerForMock.mockReturnValue({
       refresh: jest.fn().mockRejectedValue(new Error('invalid_grant')),
@@ -62,6 +67,52 @@ describe('SocialTokenRefreshService', () => {
     expect(call.where).toMatchObject({ id: 'a2' });
     expect(call.where.refreshToken).toBeDefined();
     expect(call.data).toEqual({ enabled: false, lastError: 'reauth_required' });
+  });
+
+  /**
+   * Disabling on the FIRST failure was a one-way door: the due query filters
+   * `enabled: true`, so a disabled account is never picked up again. Providers
+   * throw a plain Error, so a 401 invalid_grant and a socket timeout are
+   * indistinguishable — meaning a momentary blip permanently killed a healthy
+   * connection until a human noticed.
+   *
+   * Accounts enter the query 7 days before expiry and the cron runs hourly, so
+   * there are ~168 attempts available. While the token is still valid, a failed
+   * refresh costs nothing.
+   */
+  it('leaves a still-valid account completely untouched when refresh fails', async () => {
+    prisma.socialAccount.findMany.mockResolvedValue([
+      {
+        id: 'a4',
+        network: 'TIKTOK',
+        refreshToken: sealSecret('rt'),
+        tokenExpiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days of runway
+      },
+    ]);
+    providerForMock.mockReturnValue({
+      refresh: jest.fn().mockRejectedValue(new Error('ETIMEDOUT')),
+    });
+
+    await svc.refreshExpiring();
+
+    // No write at all. Not even a lastError: `needsReconnect` folds
+    // Boolean(lastError), so writing one would tell the owner to reconnect an
+    // account that is working fine and will be retried within the hour.
+    expect(prisma.socialAccount.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not disable an account whose expiry is unknown', async () => {
+    prisma.socialAccount.findMany.mockResolvedValue([
+      { id: 'a5', network: 'TIKTOK', refreshToken: sealSecret('rt'), tokenExpiresAt: null },
+    ]);
+    providerForMock.mockReturnValue({
+      refresh: jest.fn().mockRejectedValue(new Error('boom')),
+    });
+
+    await svc.refreshExpiring();
+
+    // Null expiry is not evidence of expiry — fail open and retry.
+    expect(prisma.socialAccount.updateMany).not.toHaveBeenCalled();
   });
 
   it('skips a provider without a refresh method (non-refreshable token)', async () => {
