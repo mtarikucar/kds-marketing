@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
@@ -106,7 +107,24 @@ export class MessageSenderService {
             direction: 'OUTBOUND',
             authorType,
             authorId: input.authorId ?? null,
-            body: text,
+            // What actually went out. The WhatsApp adapter's precedence is
+            // template > media > text, and the template is rendered by Meta
+            // from a name + language, not by us — so persisting `text` for a
+            // template send stored something the customer never received:
+            // empty for a template-only send, and the ignored text when both
+            // were passed. A rep opening the thread saw a blank outbound
+            // message, or worse, copy that was never sent.
+            body: input.template ? templateBody(input.template, text) : text,
+            // The template identity itself, so the summary above stays
+            // human-facing and the raw truth is still queryable.
+            meta: input.template
+              ? ({
+                  template: {
+                    name: input.template.name,
+                    languageCode: input.template.languageCode,
+                  },
+                } as Prisma.InputJsonValue)
+              : undefined,
             externalMessageId: result.externalMessageId,
             status: result.status,
             error: result.error ?? null,
@@ -159,4 +177,20 @@ export class MessageSenderService {
 
     return message;
   }
+}
+
+/**
+ * A readable stand-in for a template send.
+ *
+ * Meta renders an approved template from a name + language + parameters; the
+ * rendered text never exists on our side, so there is nothing truthful to store
+ * as the body. This records WHAT was sent rather than pretending to quote it,
+ * and keeps any caller-supplied text as context — that text is not what the
+ * customer received (the adapter's precedence is template > media > text), so
+ * it is labelled rather than presented as the message.
+ */
+function templateBody(template: OutboundTemplate, text: string): string {
+  const head = `[template: ${template.name} (${template.languageCode})]`;
+  const note = text.trim();
+  return note ? `${head} ${note}` : head;
 }
