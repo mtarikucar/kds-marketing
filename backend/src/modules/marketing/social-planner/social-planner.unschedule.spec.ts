@@ -294,3 +294,62 @@ describe('SocialPlannerService.connectAccount — repair semantics', () => {
     expect(call.update.tokenExpiresAt).toEqual(at);
   });
 });
+
+/**
+ * A disconnected account is not a publish target.
+ *
+ * disconnectAccount leaves `enabled: false` with a blanked access token when
+ * the account has publish history — the row stays so the history is still
+ * readable (v2.199.0). attachTargets selected by id and workspace only, so one
+ * of those could still be attached, and the post was then guaranteed to fail:
+ * the adapter gets an empty token and the target lands FAILED at publish time,
+ * long after the user was told it was queued.
+ *
+ * Worse through social-campaigns, which claims the item PUBLISHED *before*
+ * handing off (a deliberate idempotency guard) — so the campaign reported a
+ * published item for a post that never went out.
+ */
+describe('SocialPlannerService — publish targets must be connected', () => {
+  const WS = 'ws-1';
+  let prisma: MockPrismaClient;
+  let svc: SocialPlannerService;
+
+  beforeEach(() => {
+    prisma = mockPrismaClient();
+    prisma.socialPostTarget.createMany?.mockResolvedValue({ count: 1 } as any);
+    svc = new SocialPlannerService(
+      prisma as any,
+      { schedule: jest.fn(), cancel: jest.fn() } as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    );
+  });
+
+  const attach = (ids: string[]) => (svc as any).attachTargets(WS, 'p1', ids);
+
+  it('queries only enabled accounts', async () => {
+    prisma.socialAccount.findMany.mockResolvedValue([{ id: 'a1', network: 'INSTAGRAM' }] as any);
+
+    await attach(['a1']);
+
+    expect(prisma.socialAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ enabled: true }) }),
+    );
+  });
+
+  it('still attaches the accounts that DO work when one has been disconnected', async () => {
+    // A campaign's stored targetAccountIds go stale over time; it should keep
+    // publishing to what is left rather than halting.
+    prisma.socialAccount.findMany.mockResolvedValue([{ id: 'a1', network: 'INSTAGRAM' }] as any);
+
+    await attach(['a1', 'disconnected-a2']);
+
+    expect(prisma.socialPostTarget.createMany).toHaveBeenCalled();
+  });
+
+  it('refuses when NO selected account is usable, instead of queueing a post that cannot publish', async () => {
+    prisma.socialAccount.findMany.mockResolvedValue([] as any);
+
+    await expect(attach(['disconnected-a2'])).rejects.toThrow(BadRequestException);
+    expect(prisma.socialPostTarget.createMany).not.toHaveBeenCalled();
+  });
+});

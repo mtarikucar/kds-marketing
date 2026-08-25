@@ -722,11 +722,26 @@ export class SocialPlannerService implements OnModuleInit {
     postId: string,
     accountIds: string[],
   ) {
+    // `enabled: false` is what disconnectAccount leaves behind when the account
+    // has publish history — token blanked, row kept so the history stays
+    // readable (v2.199.0). Attaching one as a target produced a post that could
+    // never go out: the adapter is handed an empty access token and the target
+    // lands FAILED at publish time, long after the user was told it was queued.
     const accounts = await this.prisma.socialAccount.findMany({
-      where: { workspaceId, id: { in: accountIds } },
+      where: { workspaceId, id: { in: accountIds }, enabled: true },
       select: { id: true, network: true },
     });
-    if (accounts.length === 0) return;
+
+    // Skipping the unusable ones silently would be its own trap: a campaign
+    // whose stored targetAccountIds go stale should keep publishing to the
+    // accounts that still work. But landing on ZERO usable targets means the
+    // post is guaranteed to publish nothing, so say so here rather than at
+    // publish time.
+    if (accounts.length === 0) {
+      throw new BadRequestException(
+        'None of the selected accounts are connected — reconnect one before publishing.',
+      );
+    }
 
     await this.prisma.socialPostTarget.createMany({
       data: accounts.map((a) => ({
