@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from './message-sender.service';
@@ -343,11 +344,28 @@ export class ConversationsService {
         where: { workspaceId, id: { in: channelIds } },
         select: { id: true, type: true, name: true },
       }),
-      this.prisma.message.findMany({
-        where: { workspaceId, conversationId: { in: convoIds } },
-        orderBy: { createdAt: 'desc' },
-        select: { conversationId: true, body: true, direction: true, createdAt: true },
-      }),
+      // One row per conversation, not every message of every conversation.
+      //
+      // This used to be a findMany over `conversationId IN (...)` with no
+      // `take`, sorted desc, keeping the first per conversation in JS. The list
+      // caps at 100 conversations and a thread is allowed to reach 500
+      // messages, so producing 100 snippets could pull 50,000 rows across the
+      // wire and discard 49,900 of them. It grows with conversation LENGTH,
+      // which is exactly the thing that grows once the inbox is really used.
+      //
+      // Prisma has no per-group limit, so this is DISTINCT ON — the Postgres
+      // feature for precisely this shape. workspaceId is in the predicate, so
+      // the raw query is scoped like every other read here.
+      this.prisma.$queryRaw<
+        Array<{ conversationId: string; body: string; direction: string; createdAt: Date }>
+      >`
+        SELECT DISTINCT ON ("conversationId")
+               "conversationId", "body", "direction", "createdAt"
+        FROM "messages"
+        WHERE "workspaceId" = ${workspaceId}
+          AND "conversationId" IN (${Prisma.join(convoIds)})
+        ORDER BY "conversationId", "createdAt" DESC
+      `,
     ]);
     const leadById = new Map(leads.map((l) => [l.id, l]));
     const channelById = new Map(channels.map((c) => [c.id, c]));
