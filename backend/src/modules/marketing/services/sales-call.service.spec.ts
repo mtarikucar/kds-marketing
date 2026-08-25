@@ -405,12 +405,24 @@ describe('SalesCallService', () => {
         recordingUrl: 'https://netgsm.example.com/token/abc',
       });
 
-      const res = await svc.getRecordingUrl(WS, 'call-1', MANAGER);
+      // The assertion below wants the root-relative shape, so make that TRUE
+      // rather than assuming it. This used to read "PUBLIC_BASE_URL is unset in
+      // this test env" — true on CI, false on any developer machine whose .env
+      // sets it, which turned a passing suite into a local failure that was
+      // easy to write off as noise.
+      const savedBase = process.env.PUBLIC_BASE_URL;
+      delete process.env.PUBLIC_BASE_URL;
+      let res: { url: string };
+      try {
+        res = await svc.getRecordingUrl(WS, 'call-1', MANAGER);
+      } finally {
+        if (savedBase === undefined) delete process.env.PUBLIC_BASE_URL;
+        else process.env.PUBLIC_BASE_URL = savedBase;
+      }
 
       // Shape: <base>/api/public/telephony/recording/<ws>/<callId>/<token>
-      // (base is empty here — PUBLIC_BASE_URL is unset in this test env —
-      // so the url is root-relative; that's fine, see recordingProxyUrl's
-      // own unit coverage for the base-URL-present case).
+      // (base empty → root-relative; recordingProxyUrl has its own unit
+      // coverage for the base-URL-present case).
       const match = res.url.match(/^\/api\/public\/telephony\/recording\/ws-1\/call-1\/(.+)$/);
       expect(match).not.toBeNull();
       const token = match![1];

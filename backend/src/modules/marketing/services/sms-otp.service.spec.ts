@@ -539,6 +539,20 @@ describe('SmsOtpService', () => {
   // load, independent of resetModules() calls made later.
   describe('fails closed when MARKETING_SECRET_KEY is unconfigured (guards hashCode\'s hard dependency)', () => {
     function freshSvc() {
+      // Deleting the env var is not enough to make the module see it gone: the
+      // fresh require chain re-reads the environment, and locally a developer's
+      // .env puts MARKETING_SECRET_KEY straight back. isSecretBoxConfigured()
+      // then returned TRUE and execution sailed past the guard under test to
+      // the NEXT one — issue() answered "No active NetGSM SMS channel", which
+      // is still ok:false, so the failure looked like a mismatched string
+      // rather than a test that never reached its subject.
+      //
+      // Mock the predicate instead. It is the exact condition the guard reads,
+      // and it behaves the same with or without a .env on disk.
+      jest.doMock('../../../common/crypto/secret-box.helper', () => ({
+        ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+        isSecretBoxConfigured: () => false,
+      }));
       const { SmsOtpService: FreshSmsOtpService } = require('./sms-otp.service');
       const prisma = mockPrismaClient();
       const channelRegistry = { resolveConfig: jest.fn() } as any;

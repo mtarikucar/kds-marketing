@@ -25,7 +25,16 @@ describe('TwoFactorService', () => {
     (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
     const out: any = await svc.beginEnroll('u1');
     expect(out.otpauthUri).toMatch(/^otpauth:\/\/totp\//);
-    expect((prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data.twoFactorSecret).toBe(out.secret);
+
+    // A secret was persisted. Deliberately NOT asserting it equals out.secret:
+    // that only holds when the secret box is unconfigured, so the assertion
+    // passed on CI and failed on any machine with MARKETING_SECRET_KEY in its
+    // .env — while quietly encoding the INSECURE path as the expectation.
+    // What is stored at rest is the "TOTP secret is SEALED at rest" block's
+    // job, and it asserts the sealing properly.
+    const stored = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data
+      .twoFactorSecret as string;
+    expect(stored).toBeTruthy();
   });
 
   it('beginEnroll renders the QR server-side as a data URI (no third-party QR service)', async () => {

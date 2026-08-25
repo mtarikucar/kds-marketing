@@ -11,7 +11,20 @@ jest.mock('./review-clients', () => {
 });
 import { fetchSourceReviews } from './review-clients';
 
-const ENV = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET'];
+// isGoogleOAuthConfigured() reads GOOGLE_OAUTH_CLIENT_ID/SECRET FIRST and only
+// falls back to the GOOGLE_CLIENT_* names (google-oauth-env.ts:11). Clearing
+// just the fallbacks left the primary pair set from a developer's .env, so
+// `anyReviewSyncConfigured()` returned true and these two cases failed locally
+// while passing on CI, where no .env exists. The list has to match what the
+// code actually reads — and the names it misses are the PRODUCTION ones.
+const ENV = [
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'META_APP_ID',
+  'META_APP_SECRET',
+];
 
 function makeSvc() {
   const prisma: any = {
