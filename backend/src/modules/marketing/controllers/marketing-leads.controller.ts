@@ -298,6 +298,6 @@ export class MarketingLeadsController {
   @MarketingRoles('MANAGER')
   @RequirePermission('leads.manage')
   delete(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
-    return this.leadsService.delete(actor.workspaceId, id);
+    return this.leadsService.delete(actor.workspaceId, id, actor.id, actor.role);
   }
 }

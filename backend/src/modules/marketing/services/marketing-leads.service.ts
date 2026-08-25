@@ -1414,7 +1414,7 @@ export class MarketingLeadsService {
     return res.count;
   }
 
-  async delete(workspaceId: string, id: string) {
+  async delete(workspaceId: string, id: string, userId: string, userRole: string) {
     // Workspace-safe id mutation: scoped pre-check, then update by id.
     const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) throw new NotFoundException('Lead not found');
@@ -1426,10 +1426,20 @@ export class MarketingLeadsService {
       throw new BadRequestException('A converted lead cannot be archived');
     }
 
-    await this.prisma.lead.update({
-      where: { id: lead.id },
-      data: { status: 'LOST', lostReason: 'archived_by_manager' },
-    });
+    // Archiving IS a LOST transition, so run the real one rather than writing
+    // the column by hand. The hand-written update skipped every side effect
+    // `updateStatus` owns for that identical state change: the timeline entry,
+    // the assignee notification, the `lead.status_changed` automation trigger,
+    // and the one with a daily cost — cancelling the lead's OPEN TASKS.
+    //
+    // updateStatus cancels them because "the rep would never act on them", and
+    // that is exactly as true here: the lead has vanished from every view while
+    // its follow-ups stayed sitting in the rep's list.
+    //
+    // The WON/converted guard above still runs first: ALLOWED_TRANSITIONS would
+    // refuse WON -> LOST anyway, but with a generic transition error instead of
+    // the specific reason a closed deal cannot be archived.
+    await this.updateStatus(workspaceId, id, 'LOST', 'archived_by_manager', userId, userRole);
     return { message: 'Lead archived successfully' };
   }
 }
