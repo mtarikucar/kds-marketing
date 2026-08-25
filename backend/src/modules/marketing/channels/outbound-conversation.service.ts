@@ -157,6 +157,8 @@ export class OutboundConversationService {
         emailOptOut: true,
         smsOptOut: true,
         waOptOut: true,
+        emailVerifiedStatus: true,
+        emailBouncedAt: true,
       },
     });
     if (!lead) throw new NotFoundException('Lead not found');
@@ -172,6 +174,24 @@ export class OutboundConversationService {
     if (this.hasOptedOut(channel.type as ChannelType, lead)) {
       throw new BadRequestException(
         `This lead opted out of ${spec.label === 'email address' ? 'email' : spec.label.replace(' number', '')} messages, so a conversation cannot be started.`,
+      );
+    }
+
+    // Address hygiene, on the same argument as opt-out. Campaigns, ad-audience
+    // sync and the bulk email tool all exclude a hard-bounced or MX-invalid
+    // address; individual sends did not, so the one path that reaches a
+    // stranger could still mail a address every other path had written off.
+    //
+    // esp-feedback sets emailOptOut alongside emailBouncedAt, so a hard bounce
+    // is already caught above — INVALID is the real gap, written independently
+    // by the hygiene check at lead create/update. It matters most exactly now:
+    // cold outreach runs from one domain, and mailing dead addresses is how
+    // that domain's sending reputation gets spent.
+    if (channel.type === 'EMAIL' && (lead.emailVerifiedStatus === 'INVALID' || lead.emailBouncedAt)) {
+      throw new BadRequestException(
+        lead.emailBouncedAt
+          ? 'This email address has hard-bounced, so a conversation cannot be started.'
+          : 'This email address failed verification, so a conversation cannot be started.',
       );
     }
 

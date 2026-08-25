@@ -348,3 +348,75 @@ describe('OutboundConversationService — template support', () => {
     expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'merhaba' }));
   });
 });
+
+/**
+ * Address hygiene on the initiating path.
+ *
+ * Campaigns exclude `emailBouncedAt` and `emailVerifiedStatus: 'INVALID'`,
+ * ad-audience sync drops them from hashes, and the bulk email tool filters
+ * them. Individual sends did not — so the one path that reaches a stranger
+ * could still mail an address every other path had written off.
+ *
+ * esp-feedback sets emailOptOut alongside emailBouncedAt, so a hard bounce was
+ * already caught by the opt-out check. INVALID is the real gap: it is written
+ * independently by the hygiene check at lead create/update.
+ */
+describe('OutboundConversationService — email hygiene', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let sender: { send: jest.Mock };
+  let svc: OutboundConversationService;
+
+  const build = (lead: any, type = 'EMAIL') => {
+    sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
+    prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1', type, status: 'ACTIVE' }) },
+      lead: { findFirst: jest.fn().mockResolvedValue(lead) },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+    svc = new OutboundConversationService(prisma, sender as any);
+  };
+
+  const LEAD = {
+    id: 'lead-1', phone: '05551112233', whatsapp: '05551112233', email: 'a@b.com',
+    emailOptOut: false, smsOptOut: false, waOptOut: false,
+    emailVerifiedStatus: 'VALID', emailBouncedAt: null,
+  };
+
+  it('refuses an address that failed MX verification', async () => {
+    build({ ...LEAD, emailVerifiedStatus: 'INVALID' });
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' }),
+    ).rejects.toThrow(BadRequestException);
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it('refuses an address that hard-bounced', async () => {
+    build({ ...LEAD, emailBouncedAt: new Date() });
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('does not block SMS on an unusable EMAIL address', async () => {
+    // The address is dead; the phone is not. Blocking here would lose a
+    // reachable lead over an unrelated channel.
+    build({ ...LEAD, emailVerifiedStatus: 'INVALID' }, 'SMS');
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
+    expect(sender.send).toHaveBeenCalled();
+  });
+
+  it('allows UNKNOWN — unverified is not the same as invalid', async () => {
+    build({ ...LEAD, emailVerifiedStatus: 'UNKNOWN' });
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
+    expect(sender.send).toHaveBeenCalled();
+  });
+});
