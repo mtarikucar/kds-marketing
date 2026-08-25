@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLeadsIngestService, IngestResult } from '../services/marketing-leads-ingest.service';
+import { normalizePhone, normalizeEmail, localMsisdnVariants } from '../utils/lead-normalize';
 
 /** A qualified candidate the research agent produced (matches IngestLeadCandidateDto). */
 export interface StagedCandidate {
@@ -103,6 +104,62 @@ export class ResearchCandidateService {
     );
   }
 
+  /**
+   * Resolve candidates to leads that already exist under a different
+   * externalRef, using the same normalized contact keys ingest dedups on.
+   *
+   * `localMsisdnVariants` is used rather than an exact match for the reason its
+   * own docstring gives: the same number is stored under different spellings
+   * depending on which path created the lead, so an exact lookup silently
+   * misses.
+   */
+  private async resolveByContact(
+    workspaceId: string,
+    rows: { id: string; phone: string | null; email: string | null }[],
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (rows.length === 0) return out;
+
+    const phones = rows.flatMap((r) => {
+      const p = normalizePhone(r.phone);
+      return p ? localMsisdnVariants(p) : [];
+    });
+    const emails = rows
+      .map((r) => normalizeEmail(r.email))
+      .filter((e): e is string => !!e);
+    if (phones.length === 0 && emails.length === 0) return out;
+
+    const leads = await this.prisma.lead.findMany({
+      where: {
+        workspaceId,
+        deletedAt: null,
+        mergedIntoId: null,
+        OR: [
+          ...(phones.length ? [{ phoneNormalized: { in: phones } }] : []),
+          ...(emails.length ? [{ emailNormalized: { in: emails } }] : []),
+        ],
+      },
+      select: { id: true, phoneNormalized: true, emailNormalized: true },
+    });
+    if (leads.length === 0) return out;
+
+    const byPhone = new Map<string, string>();
+    const byEmail = new Map<string, string>();
+    for (const l of leads) {
+      if (l.phoneNormalized && !byPhone.has(l.phoneNormalized)) byPhone.set(l.phoneNormalized, l.id);
+      if (l.emailNormalized && !byEmail.has(l.emailNormalized)) byEmail.set(l.emailNormalized, l.id);
+    }
+
+    for (const r of rows) {
+      const p = normalizePhone(r.phone);
+      const hit =
+        (p ? localMsisdnVariants(p).map((v) => byPhone.get(v)).find(Boolean) : undefined) ??
+        byEmail.get(normalizeEmail(r.email) ?? '');
+      if (hit) out.set(r.id, hit);
+    }
+    return out;
+  }
+
   /** Accept: ingest the candidates as Leads (dedup + daily quota apply here), mark ACCEPTED. */
   async accept(workspaceId: string, ids: string[]): Promise<{ accepted: number; ingest: IngestResult | null }> {
     const rows = await this.prisma.researchCandidate.findMany({
@@ -119,15 +176,33 @@ export class ResearchCandidateService {
       select: { id: true, externalRef: true },
     });
     const byRef = new Map(leads.map((l) => [l.externalRef, l.id]));
+
+    // Ingest dedups on the CONTACT match keys as well as externalRef (see
+    // marketing-leads-ingest's cross-path dedup), so a candidate can be
+    // recognised as a duplicate of a lead that is already in the CRM under a
+    // DIFFERENT externalRef — a phone-keyed candidate matching a lead that came
+    // in from a form, say. Linking back by externalRef alone missed exactly
+    // those: ingest reported them `skipped`, no lead was found here, and they
+    // sat PENDING forever — re-offered at every review, impossible to accept
+    // because there is nothing left to create, and clogging the queue the
+    // review flow depends on. Four were stuck this way in production.
+    const byContact = await this.resolveByContact(
+      workspaceId,
+      rows.filter((r) => !byRef.has(r.externalRef)),
+    );
+
     const now = new Date();
     let accepted = 0;
     for (const r of rows) {
-      const leadId = byRef.get(r.externalRef);
-      // Only mark ACCEPTED when ingest actually created/linked a Lead. A candidate
-      // CLIPPED by the daily lead quota (or one whose ingest errored) has no lead,
-      // so leave it PENDING — otherwise it would flip to ACCEPTED with leadId=null
-      // and vanish from the review queue forever, never becoming a lead and never
-      // re-acceptable after the quota resets (silent loss of a qualified prospect).
+      const leadId = byRef.get(r.externalRef) ?? byContact.get(r.id);
+      // Only mark ACCEPTED when a Lead actually exists for this candidate. One
+      // CLIPPED by the daily lead quota (or whose ingest errored) has no lead,
+      // so leave it PENDING — otherwise it would flip to ACCEPTED with
+      // leadId=null and vanish from the review queue forever, never becoming a
+      // lead and never re-acceptable after the quota resets (silent loss of a
+      // qualified prospect). That distinction is why the contact-key lookup
+      // above matters: it separates "already in the CRM" from "not ingested
+      // yet", which the externalRef-only check conflated.
       if (!leadId) continue;
       await this.prisma.researchCandidate.update({
         where: { id: r.id },
