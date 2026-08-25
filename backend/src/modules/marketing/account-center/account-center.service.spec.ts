@@ -138,3 +138,64 @@ describe('AccountCenterService', () => {
     });
   });
 });
+
+/**
+ * An expired token is a reconnect prompt, even when nothing has failed yet.
+ *
+ * Health only looked at `lastError` and `enabled`, so an account whose token
+ * had run out still rendered HEALTHY with no Reconnect button. The account most
+ * likely to be in that state is the one the refresh cron never touches: its due
+ * query requires a refreshToken, and a Meta page token has none. It sits there,
+ * dead, looking fine.
+ *
+ * `needsReconnect` (social.tools.ts:67) already folds `expired`, so the two
+ * views of the same account disagreed.
+ */
+describe('AccountCenterService — expired tokens surface as REAUTH_REQUIRED', () => {
+  const WS = 'ws-1';
+  const build = (account: any) => {
+    const socialPlanner = {
+      listAccounts: jest.fn().mockResolvedValue([account]),
+      networkStatus: jest.fn().mockResolvedValue({ secretBoxConfigured: true, FACEBOOK: true }),
+      disconnectAccount: jest.fn(),
+    };
+    return new AccountCenterService(
+      socialPlanner as any,
+      { list: jest.fn().mockResolvedValue([]) } as any,
+      { list: jest.fn().mockResolvedValue([]), status: jest.fn().mockReturnValue({ secretBoxConfigured: true }) } as any,
+      { getEffective: jest.fn().mockResolvedValue({ features: { conversationAi: true } }) } as any,
+      { start: jest.fn() } as any,
+    );
+  };
+  const base = {
+    id: 'a1', network: 'FACEBOOK', externalId: 'P1', displayName: 'Acme',
+    connectedVia: 'OAUTH', enabled: true, lastError: null,
+  };
+  const metaOf = (r: any) => r.providers.find((p: any) => p.provider === 'META');
+
+  it('flags an account whose token has already expired', async () => {
+    const svc = build({ ...base, tokenExpiresAt: new Date(Date.now() - 60_000) });
+
+    const r = await svc.getConnections(WS);
+
+    expect(metaOf(r).connections[0].health).toBe('REAUTH_REQUIRED');
+  });
+
+  it('leaves a token with time left alone', async () => {
+    const svc = build({ ...base, tokenExpiresAt: new Date(Date.now() + 7 * 24 * 3600_000) });
+
+    const r = await svc.getConnections(WS);
+
+    expect(metaOf(r).connections[0].health).toBe('HEALTHY');
+  });
+
+  it('treats an unknown expiry as healthy, not as expired', async () => {
+    // Null is "we were never told", which is the normal state for a
+    // non-expiring token — failing closed here would flag every one of them.
+    const svc = build({ ...base, tokenExpiresAt: null });
+
+    const r = await svc.getConnections(WS);
+
+    expect(metaOf(r).connections[0].health).toBe('HEALTHY');
+  });
+});
