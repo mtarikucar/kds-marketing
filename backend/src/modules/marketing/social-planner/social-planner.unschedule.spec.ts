@@ -1,3 +1,14 @@
+// connectAccount refuses outright when the secret box is unconfigured, and
+// MARKETING_SECRET_KEY is absent in CI but usually present in a developer's
+// .env — so without this the repair-semantics tests below pass locally and fail
+// on CI. Seal is a marker, not real crypto: these assert the SHAPE of the
+// upsert, never the ciphertext.
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: () => true,
+  sealSecret: (v: string) => `sealed:${v}`,
+}));
+
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SocialPlannerService } from './social-planner.service';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
