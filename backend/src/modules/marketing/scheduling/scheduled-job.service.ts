@@ -145,6 +145,27 @@ export class ScheduledJobService {
     });
   }
 
+  /**
+   * The recurring side of the same question.
+   *
+   * `list()` above reads one-off jobs. This reads the SCHEDULES: 20+ crons run
+   * through `withAdvisoryLock` — the morning brief, this queue's own runner, ad
+   * pulls, review sync, calendar sync, every NetGSM poller, the sweeps — and
+   * each now records when it last ran and whether it worked.
+   *
+   * Not workspace-scoped, and cannot be: a cron is platform-level and its rows
+   * carry no workspace. Nothing here is customer data — job names, timestamps
+   * and the last error string.
+   *
+   * The pair of timestamps is the whole point. `lastRunAt` well ahead of
+   * `lastOkAt` means the job is firing and failing; both stale means it is not
+   * firing at all. Those look identical from the outside and need opposite
+   * fixes.
+   */
+  async listCronHeartbeats() {
+    return this.prisma.cronHeartbeat.findMany({ orderBy: { lastRunAt: 'desc' } });
+  }
+
   async cancelById(id: string): Promise<boolean> {
     const res = await this.prisma.scheduledJob.updateMany({
       where: { id, status: 'PENDING' },

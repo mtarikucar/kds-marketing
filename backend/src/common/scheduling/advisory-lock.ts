@@ -43,19 +43,83 @@ export async function withAdvisoryLock(
   // to a single connection and releases at COMMIT/ROLLBACK — crash-safe, no
   // leak, no re-entrant double-entry. `run()` itself still executes its
   // queries on the normal pool; the transaction connection just holds the lock.
-  await prisma.$transaction(
-    async (tx) => {
-      const acquired = await tx.$queryRaw<{ locked: boolean }[]>`
-        SELECT pg_try_advisory_xact_lock(${lockId}) AS locked
-      `;
-      if (!acquired[0]?.locked) {
-        logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
-        return;
-      }
-      await run();
-    },
-    { maxWait: 5_000, timeout: LOCK_BODY_TIMEOUT_MS },
-  );
+  // Whether THIS replica did the work. The losers skip silently and must not
+  // write a heartbeat: three replicas ticking would otherwise report three runs
+  // for one execution, and a job that only ever loses the race would look busy.
+  let ranHere = false;
+  let failure: string | null = null;
+
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const acquired = await tx.$queryRaw<{ locked: boolean }[]>`
+          SELECT pg_try_advisory_xact_lock(${lockId}) AS locked
+        `;
+        if (!acquired[0]?.locked) {
+          logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
+          return;
+        }
+        ranHere = true;
+        await run();
+      },
+      { maxWait: 5_000, timeout: LOCK_BODY_TIMEOUT_MS },
+    );
+  } catch (e) {
+    failure = (e as Error)?.message ?? String(e);
+    throw e;
+  } finally {
+    // OUTSIDE the transaction on purpose: written in there, the heartbeat would
+    // roll back with the failure it exists to record, and the only tick worth
+    // knowing about would be the one that never got written.
+    if (ranHere) await recordHeartbeat(prisma, jobName, failure, logger);
+  }
+}
+
+/**
+ * Record that this job ran, and whether it worked.
+ *
+ * Every recurring thing this product does passes through withAdvisoryLock, and
+ * until now not one of them wrote down that it had run. A cron that silently
+ * stopped firing was indistinguishable from a cron with nothing to do — the
+ * same shape as every other failure in this codebase, where the evidence
+ * existed nowhere rather than somewhere unread.
+ *
+ * Never throws. A heartbeat is a note about the work, not the work; failing to
+ * write it must not fail a job that succeeded, and must not replace the real
+ * error of one that did not.
+ */
+async function recordHeartbeat(
+  prisma: PrismaService,
+  jobName: string,
+  failure: string | null,
+  logger?: Logger,
+): Promise<void> {
+  const now = new Date();
+  try {
+    await prisma.cronHeartbeat.upsert({
+      where: { jobName },
+      create: {
+        jobName,
+        lastRunAt: now,
+        lastOkAt: failure ? null : now,
+        lastError: failure ? failure.slice(0, 500) : null,
+        runs: 1,
+        failures: failure ? 1 : 0,
+      },
+      update: {
+        lastRunAt: now,
+        runs: { increment: 1 },
+        ...(failure
+          ? { lastError: failure.slice(0, 500), failures: { increment: 1 } }
+          : // Clear the error on success: a stale message next to a fresh
+            // lastOkAt reads as a live problem that has in fact been over for
+            // weeks, and that is how a status surface stops being believed.
+            { lastOkAt: now, lastError: null }),
+      },
+    });
+  } catch (e) {
+    logger?.warn(`heartbeat write failed for ${jobName}: ${(e as Error)?.message ?? e}`);
+  }
 }
 
 /** Deterministic 32-bit hash. Stable for the same input across processes. */

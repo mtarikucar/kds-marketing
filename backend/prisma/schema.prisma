@@ -4863,3 +4863,32 @@ model PageViewStat {
   @@index([period, route])
   @@map("page_view_stats")
 }
+
+/// One row per scheduled job, upserted by `withAdvisoryLock` on every tick the
+/// replica actually wins.
+///
+/// Every recurring thing this product does — 20+ crons: the morning brief, the
+/// job runner, ad pulls, review sync, IYS sync, calendar sync, every NetGSM
+/// poller, the sweeps — goes through that one function, and not one of them
+/// recorded that it had run. A cron that silently stopped firing looked exactly
+/// like a cron with nothing to do, which is the same shape as every other
+/// failure found in this codebase: the evidence was never written down.
+///
+/// Deliberately ONE ROW PER JOB, upserted rather than appended. The question is
+/// "is this still running, and did it work last time", not "show me a year of
+/// ticks" — so the table stays at ~20 rows forever and needs no retention job
+/// of its own (which would be one more unobserved cron).
+model CronHeartbeat {
+  jobName   String    @id
+  lastRunAt DateTime
+  /// Last tick that completed without throwing. A lastRunAt far ahead of this
+  /// means the job is firing and failing, which reads very differently from a
+  /// job that is not firing at all.
+  lastOkAt  DateTime?
+  lastError String?   @db.Text
+  runs      Int       @default(0)
+  failures  Int       @default(0)
+  updatedAt DateTime  @updatedAt
+
+  @@map("cron_heartbeats")
+}
