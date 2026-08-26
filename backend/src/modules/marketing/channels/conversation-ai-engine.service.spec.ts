@@ -440,4 +440,53 @@ describe('ConversationAiEngineService.reply', () => {
       expect(system).toContain('capture_lead_fields');
     });
   });
+
+  /**
+   * Why the AI stayed silent.
+   *
+   * Every gate in reply() used to be a bare `return`, so an engine that
+   * declined every message was indistinguishable from an engine nobody had
+   * messaged. On a live workspace `conversation.reply` had never been recorded
+   * once in 30 days of AI usage — four customers waiting since June — and
+   * working out WHICH gate closed meant reading the source and guessing,
+   * because nothing had written the reason down anywhere.
+   */
+  describe('declines say why', () => {
+    const runDecline = async (overrides: any) => {
+      const h = build(overrides);
+      const logger = { log: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
+      (h.engine as any).logger = logger;
+      await (h.engine as any).reply(WS, CONVO);
+      return logger.log.mock.calls.map((c: any[]) => String(c[0])).join(' | ');
+    };
+
+    it('names the gate when the conversation is closed', async () => {
+      expect(await runDecline({ convo: { status: 'CLOSED' } })).toMatch(/not OPEN/);
+    });
+
+    it('distinguishes a human takeover from a closed thread', async () => {
+      // Two very different situations that both used to produce silence.
+      expect(await runDecline({ convo: { aiPaused: true } })).toMatch(/AI paused/);
+    });
+
+    it('names the channel when no agent is attached', async () => {
+      expect(await runDecline({ channel: { agentProfileId: null } })).toMatch(
+        /no agent profile attached/,
+      );
+    });
+
+    it('says so when the agent profile is not active', async () => {
+      expect(await runDecline({ agent: { status: 'PAUSED' } })).toMatch(/not ACTIVE/);
+    });
+
+    it('says so when Anthropic is unconfigured', async () => {
+      expect(await runDecline({ enabled: false })).toMatch(/anthropic not configured/);
+    });
+
+    it('reports the cap it hit, with the number', async () => {
+      // "hit the cap" without the cap is half an answer.
+      expect(await runDecline({ claimed: 0 })).toMatch(/daily reply cap reached/);
+    });
+  });
+
 });
