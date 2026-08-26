@@ -149,12 +149,13 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
   registry.register({
     name: 'jeeta.list_scheduled_runs',
     description:
-      "List the platform's recurring jobs. Returns TWO lists: `registered` is every cron the scheduler " +
-      'actually has, with when it last fired in this process; `recorded` is the durable per-job history ' +
-      '— last run, last SUCCESS, and the error from the last failure. Use it to answer "did that ' +
-      'actually run": a lastRunAt well ahead of lastOkAt means the job is firing and failing, both ' +
-      'stale means it is not firing at all, and a job in `registered` with no `recorded` row is one ' +
-      'that never reaches the instrumented path. Read-only.',
+      "List the platform's recurring jobs. Returns TWO lists. `registered` is every cron the scheduler " +
+      'actually has, with `nextAt`, the next time it is due — a populated nextAt proves the schedule is ' +
+      'armed. `recorded` is the durable per-job history: last run, last SUCCESS, and the error from the ' +
+      'last failure — a lastRunAt well ahead of lastOkAt means the job is firing and failing, while ' +
+      'both being stale means it is not firing at all. IMPORTANT: the two lists use DIFFERENT naming ' +
+      'conventions (the cron `call-cdr-sync` records as `telephony:cdr-sync`), so never conclude a job ' +
+      'is uninstrumented just because its name is missing from the other list. Read-only.',
     domain: 'workspace',
     defer: true,
     scopes: ['reports.read'],
