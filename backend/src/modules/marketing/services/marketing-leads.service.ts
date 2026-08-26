@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { maskEmail } from '../../../common/helpers/pii-mask.helper';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EmailService } from '../../../common/services/email.service';
 import { OutboxService } from '../../outbox/outbox.service';
@@ -1232,7 +1233,11 @@ export class MarketingLeadsService {
         );
       } else {
         try {
-          await this.emailService.sendEmail({
+          // sendEmail RETURNS false on failure; it does not throw. The catch
+          // below was written to record a failed welcome mail and could never
+          // fire, so a new customer could be left without the credentials this
+          // message carries and nothing anywhere would say so.
+          const delivered = await this.emailService.sendEmail({
             to: dto.adminEmail,
             subject: appName ? `${appName} hesabınız hazır` : 'Hesabınız hazır',
             template: 'marketing-tenant-welcome',
@@ -1246,6 +1251,16 @@ export class MarketingLeadsService {
               loginUrl: `${appUrl}/login`,
             },
           });
+          if (!delivered) {
+            // Log only, like the catch: the tenant IS provisioned and failing
+            // the response now would be worse than a missing welcome mail. But
+            // it must be recorded — the customer can still recover through the
+            // core app's forgot-password flow, and someone has to know to tell
+            // them that.
+            this.logger.error(
+              `Welcome email after lead conversion was NOT delivered to ${maskEmail(dto.adminEmail)} — the customer has no credentials; point them at password recovery`,
+            );
+          }
         } catch (err) {
           // Log only; do not fail the response.
           this.logger.error('Failed to send welcome email after lead conversion', err as any);

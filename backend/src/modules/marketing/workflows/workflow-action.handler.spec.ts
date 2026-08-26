@@ -386,3 +386,44 @@ describe('WorkflowActionHandler create_task', () => {
     expect(prisma.marketingTask.create).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A workflow step must report what actually happened.
+ *
+ * Every other branch of send() already does — "skipped (no lead email)",
+ * "skipped (lead opted out of email)", "skipped (no active SMS channel)". The
+ * email branch returned "email sent" whether or not it was, because it ignored
+ * sendPlainEmail's return value. A workflow run could therefore show a customer
+ * as contacted when nothing reached them, which is worse than a visible
+ * failure: it stops anyone from trying again.
+ */
+describe('WorkflowActionHandler.send_email — honest result', () => {
+  const make = (sendOk: boolean) => {
+    const email = { sendPlainEmail: jest.fn().mockResolvedValue(sendOk) };
+    const handler = new WorkflowActionHandler(
+      {} as any, email as any, null as any, null as any,
+      null as any, null as any, null as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', email: 'x@y.com', emailOptOut: false },
+      trigger: {},
+      context: {},
+    };
+    return { handler, ctx, email };
+  };
+
+  it('says sent when it went', async () => {
+    const { handler, ctx } = make(true);
+    const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
+    expect(String(res.output?.result)).toBe('email sent');
+  });
+
+  it('says NOT sent when delivery failed', async () => {
+    const { handler, ctx, email } = make(false);
+    const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
+
+    expect(email.sendPlainEmail).toHaveBeenCalled();
+    expect(String(res.output?.result)).toContain('NOT sent');
+  });
+});

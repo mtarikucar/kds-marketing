@@ -109,8 +109,16 @@ export class WorkflowActionHandler {
       // precisely so "future sends" stop). The campaign sender already skips
       // opted-out recipients; this was the sibling send path that didn't.
       if (lead.emailOptOut) return 'skipped (lead opted out of email)';
-      await this.email.sendPlainEmail(lead.email, subject ?? 'Message', body);
-      return 'email sent';
+      // Every other branch here reports what actually happened — "skipped (no
+      // lead email)", "skipped (lead opted out)". This one said "email sent"
+      // whether or not it was, so a workflow run could show a customer as
+      // contacted when nothing reached them.
+      const delivered = await this.email.sendPlainEmail(
+        lead.email,
+        subject ?? 'Message',
+        body,
+      );
+      return delivered ? 'email sent' : 'email NOT sent (delivery failed)';
     }
     const channelType = type === 'send_sms' ? 'SMS' : type === 'send_whatsapp' ? 'WHATSAPP' : 'WEBCHAT';
     const channel = await this.prisma.channel.findFirst({
