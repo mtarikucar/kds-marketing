@@ -11,7 +11,7 @@ import {
   SendResult,
   StatusUpdate,
 } from '../channel-adapter.interface';
-import { metaGraphFetch } from '../../../../common/util/meta-graph.util';
+import { metaGraphFetch, metaWebhookSubscription } from '../../../../common/util/meta-graph.util';
 import { parseWaStatuses } from '../meta-status.util';
 
 /**
@@ -177,9 +177,72 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
     if (!r.ok) {
       return { ok: false, details: { error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300) } };
     }
+    const base = {
+      verifiedName: r.data?.verified_name ?? null,
+      qualityRating: r.data?.quality_rating ?? null,
+    };
+
+    // Can this number actually RECEIVE?
+    //
+    // A working token and a delivering webhook are independent, and on WhatsApp
+    // the gap is wider than elsewhere: Embedded Signup subscribes the app to the
+    // WABA in a separate best-effort call (channels.service.ts), so a failure
+    // there is logged and the channel is created anyway. Nothing looked again.
+    //
+    // The subscription lives on the WABA, and this channel stores only
+    // phoneNumberId — the WABA id is nowhere in our data, so it has to be
+    // resolved from the number first. That resolution may simply not be
+    // available to this token, which is exactly why the probe is three-valued:
+    // `null` means "could not find out", and an unanswered probe must never be
+    // allowed to condemn a number that is working. Only a clear "not
+    // subscribed" from Meta fails the channel.
+    const waba = await metaGraphFetch(`/${phoneNumberId}`, {
+      accessToken: token,
+      bearer: true,
+      method: 'GET',
+      query: { fields: 'whatsapp_business_account' },
+      timeoutMs: 10_000,
+    });
+    const wabaId: string | undefined = waba.ok
+      ? (waba.data?.whatsapp_business_account?.id as string | undefined)
+      : undefined;
+
+    if (!wabaId) {
+      return {
+        ok: true,
+        details: {
+          ...base,
+          webhookSubscribed: null,
+          webhookProbeError: waba.ok
+            ? 'could not resolve the WABA id from this phone number'
+            : String(waba.error?.message ?? `HTTP ${waba.status}`).slice(0, 300),
+        },
+      };
+    }
+
+    const sub = await metaWebhookSubscription(token, wabaId, { bearer: true });
+    if (sub.subscribed === false) {
+      return {
+        ok: false,
+        details: {
+          ...base,
+          wabaId,
+          webhookSubscribed: false,
+          error:
+            "Token is valid but this WhatsApp Business Account is not subscribed to the app's `messages` webhook — inbound messages are never delivered. Reconnect the channel to re-subscribe.",
+        },
+      };
+    }
+
     return {
       ok: true,
-      details: { verifiedName: r.data?.verified_name ?? null, qualityRating: r.data?.quality_rating ?? null },
+      details: {
+        ...base,
+        wabaId,
+        webhookSubscribed: sub.subscribed,
+        subscribedFields: sub.fields,
+        ...(sub.error ? { webhookProbeError: sub.error } : {}),
+      },
     };
   }
 }

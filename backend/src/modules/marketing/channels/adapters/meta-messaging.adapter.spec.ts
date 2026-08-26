@@ -1,6 +1,11 @@
 const mockFetch = jest.fn();
+const mockSub = jest.fn();
 jest.mock('../../../../common/util/meta-graph.util', () => ({
   metaGraphFetch: (...a: unknown[]) => mockFetch(...a),
+  // The parsing of subscribed_apps is unit-tested where it lives
+  // (meta-graph.util.spec.ts). What belongs here is the adapter's DECISION
+  // given an answer: fail on a plain "no", never fail on "could not find out".
+  metaWebhookSubscription: (...a: unknown[]) => mockSub(...a),
 }));
 
 import { MessengerAdapter, InstagramAdapter } from './meta-messaging.adapter';
@@ -9,7 +14,11 @@ const reg = () => ({ register: jest.fn() });
 const cfg = (secrets: any = { pageAccessToken: 'pat' }, externalId: any = 'page1') =>
   ({ channelId: 'c', workspaceId: 'w', type: 'MESSENGER', externalId, secrets, public: {} }) as any;
 
-beforeEach(() => mockFetch.mockReset());
+beforeEach(() => {
+  mockFetch.mockReset();
+  mockSub.mockReset();
+  mockSub.mockResolvedValue({ subscribed: true, fields: ['messages'] });
+});
 
 describe('MessengerAdapter.send', () => {
   it('sends text via /me/messages and returns SENT', async () => {
@@ -108,13 +117,10 @@ describe('MessengerAdapter parse + health', () => {
    * single error anywhere, which is exactly why healthCheck now asks.
    */
   const okMe = { ok: true, status: 200, data: { id: 'p', name: 'Page' }, error: null };
-  const subs = (apps: unknown[]) => ({ ok: true, status: 200, data: { data: apps }, error: null });
 
   it('healthCheck ok:true when the token works AND the page is subscribed', async () => {
-    process.env.META_APP_ID = 'app1';
-    mockFetch
-      .mockResolvedValueOnce(okMe)
-      .mockResolvedValueOnce(subs([{ id: 'app1', subscribed_fields: ['messages', 'messaging_postbacks'] }]));
+    mockFetch.mockResolvedValueOnce(okMe);
+    mockSub.mockResolvedValue({ subscribed: true, fields: ['messages', 'message_reads'] });
     const a = new MessengerAdapter(reg() as any);
 
     const res = await a.healthCheck(cfg());
@@ -122,12 +128,12 @@ describe('MessengerAdapter parse + health', () => {
     expect(res.ok).toBe(true);
     expect(res.details!.webhookSubscribed).toBe(true);
     // The node comes from /me (the token's own page), not from externalId.
-    expect(mockFetch.mock.calls[1][0]).toBe('/p/subscribed_apps');
+    expect(mockSub).toHaveBeenCalledWith('pat', 'p');
   });
 
   it('healthCheck ok:false when the token works but nothing is subscribed', async () => {
-    process.env.META_APP_ID = 'app1';
-    mockFetch.mockResolvedValueOnce(okMe).mockResolvedValueOnce(subs([]));
+    mockFetch.mockResolvedValueOnce(okMe);
+    mockSub.mockResolvedValue({ subscribed: false, fields: [] });
     const a = new MessengerAdapter(reg() as any);
 
     const res = await a.healthCheck(cfg());
@@ -138,32 +144,9 @@ describe('MessengerAdapter parse + health', () => {
     expect(res.details!.webhookSubscribed).toBe(false);
   });
 
-  it('healthCheck ok:false when another app is subscribed but ours is not', async () => {
-    process.env.META_APP_ID = 'app1';
-    mockFetch
-      .mockResolvedValueOnce(okMe)
-      .mockResolvedValueOnce(subs([{ id: 'someone-else', subscribed_fields: ['messages'] }]));
-    const a = new MessengerAdapter(reg() as any);
-
-    expect((await a.healthCheck(cfg())).ok).toBe(false);
-  });
-
-  it('healthCheck ok:false when our app is subscribed to other fields but not messages', async () => {
-    process.env.META_APP_ID = 'app1';
-    mockFetch
-      .mockResolvedValueOnce(okMe)
-      .mockResolvedValueOnce(subs([{ id: 'app1', subscribed_fields: ['feed', 'mention'] }]));
-    const a = new MessengerAdapter(reg() as any);
-
-    // Subscribed to the Page, deaf to messages. Same outcome for the customer.
-    expect((await a.healthCheck(cfg())).ok).toBe(false);
-  });
-
   it('does not condemn a working channel when the subscription probe cannot answer', async () => {
-    process.env.META_APP_ID = 'app1';
-    mockFetch
-      .mockResolvedValueOnce(okMe)
-      .mockResolvedValueOnce({ ok: false, status: 403, data: null, error: { message: 'no permission' } });
+    mockFetch.mockResolvedValueOnce(okMe);
+    mockSub.mockResolvedValue({ subscribed: null, fields: [], error: 'no permission' });
     const a = new MessengerAdapter(reg() as any);
 
     const res = await a.healthCheck(cfg());
@@ -173,19 +156,6 @@ describe('MessengerAdapter parse + health', () => {
     expect(res.ok).toBe(true);
     expect(res.details!.webhookSubscribed).toBeNull();
     expect(res.details!.webhookProbeError).toContain('no permission');
-  });
-
-  it('without META_APP_ID, answers only whether ANYTHING listens for messages', async () => {
-    delete process.env.META_APP_ID;
-    mockFetch
-      .mockResolvedValueOnce(okMe)
-      .mockResolvedValueOnce(subs([{ id: 'whoever', subscribed_fields: ['messages'] }]));
-    const a = new MessengerAdapter(reg() as any);
-
-    const res = await a.healthCheck(cfg());
-
-    expect(res.ok).toBe(true);
-    expect(res.details!.webhookSubscribed).toBe(true);
   });
 
   it('healthCheck ok:false without a call when token missing', async () => {
@@ -222,22 +192,22 @@ describe('InstagramAdapter', () => {
  */
 describe("Meta webhook probe targets the token's own node", () => {
   it('asks the page id from /me, not the Instagram account id', async () => {
-    process.env.META_APP_ID = 'app1';
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, status: 200, data: { id: 'page-77', name: 'HummyTummy' }, error: null })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        data: { data: [{ id: 'app1', subscribed_fields: ['messages'] }] },
-        error: null,
-      });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { id: 'page-77', name: 'HummyTummy' },
+      error: null,
+    });
+    mockSub.mockResolvedValue({ subscribed: true, fields: ['messages'] });
     const a = new InstagramAdapter(reg() as any);
 
-    const res = await a.healthCheck(
-      cfg({ pageAccessToken: 'pat' }, '17841446386025282'),
-    );
+    const res = await a.healthCheck(cfg({ pageAccessToken: 'pat' }, '17841446386025282'));
 
-    expect(mockFetch.mock.calls[1][0]).toBe('/page-77/subscribed_apps');
+    // Instagram's channel row stores the IG ACCOUNT id, but subscribed_apps
+    // only exists on the PAGE the account is attached to — asking the IG node
+    // returns "(#100) Tried accessing nonexisting field". Found by running the
+    // real probe against the live channel.
+    expect(mockSub).toHaveBeenCalledWith('pat', 'page-77');
     expect(res.details!.webhookSubscribed).toBe(true);
   });
 });

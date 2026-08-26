@@ -1,6 +1,8 @@
 const mockFetch = jest.fn();
+const mockSub = jest.fn();
 jest.mock('../../../../common/util/meta-graph.util', () => ({
   metaGraphFetch: (...a: unknown[]) => mockFetch(...a),
+  metaWebhookSubscription: (...a: unknown[]) => mockSub(...a),
 }));
 
 import { WhatsappCloudAdapter } from './whatsapp-cloud.adapter';
@@ -12,7 +14,10 @@ function adapter() {
 const cfg = (secrets: any = { accessToken: 'tok', phoneNumberId: 'PN' }, externalId: any = 'PN') =>
   ({ channelId: 'c', workspaceId: 'w', type: 'WHATSAPP', externalId, secrets, public: {} }) as any;
 
-beforeEach(() => mockFetch.mockReset());
+beforeEach(() => {
+  mockFetch.mockReset();
+  mockSub.mockReset();
+});
 
 describe('WhatsappCloudAdapter.send', () => {
   it('sends text and returns SENT with the wamid (Bearer auth, /PN/messages)', async () => {
@@ -124,12 +129,67 @@ describe('WhatsappCloudAdapter.parseStatusUpdates', () => {
 });
 
 describe('WhatsappCloudAdapter.healthCheck', () => {
+  const okNumber = (extra: Record<string, unknown> = {}) => ({
+    ok: true,
+    status: 200,
+    data: { verified_name: 'Acme', ...extra },
+    error: null,
+  });
+  const waba = { whatsapp_business_account: { id: 'WABA1' } };
+
   it('ok:true on a 200 probe (returns verified_name)', async () => {
-    mockFetch.mockResolvedValue({ ok: true, status: 200, data: { verified_name: 'Acme' }, error: null });
+    mockFetch.mockResolvedValue(okNumber());
+    mockSub.mockResolvedValue({ subscribed: true, fields: ['messages'] });
     const { a } = adapter();
     const h = await a.healthCheck(cfg());
     expect(h.ok).toBe(true);
     expect(h.details?.verifiedName).toBe('Acme');
+  });
+
+  /**
+   * On WhatsApp the gap between "token works" and "messages arrive" is wider
+   * than anywhere else: the subscription lives on the WABA, and the channel
+   * stores only phoneNumberId — so the WABA id is nowhere in our data and has to
+   * be resolved from the number before the question can even be asked.
+   */
+  it('resolves the WABA from the number, then asks whether it is subscribed', async () => {
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(okNumber(waba));
+    mockSub.mockResolvedValue({ subscribed: true, fields: ['messages'] });
+    const { a } = adapter();
+
+    const h = await a.healthCheck(cfg());
+
+    expect(mockFetch.mock.calls[1][1].query).toEqual({ fields: 'whatsapp_business_account' });
+    expect(mockSub).toHaveBeenCalledWith('tok', 'WABA1', { bearer: true });
+    expect(h.ok).toBe(true);
+    expect(h.details?.webhookSubscribed).toBe(true);
+    expect(h.details?.wabaId).toBe('WABA1');
+  });
+
+  it('ok:false when the WABA is resolved and plainly not subscribed', async () => {
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(okNumber(waba));
+    mockSub.mockResolvedValue({ subscribed: false, fields: [] });
+    const { a } = adapter();
+
+    const h = await a.healthCheck(cfg());
+
+    // A number that cannot receive is not healthy, however good its token.
+    expect(h.ok).toBe(false);
+    expect(h.details?.webhookSubscribed).toBe(false);
+  });
+
+  it('stays ok with webhookSubscribed:null when the WABA cannot be resolved', async () => {
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(okNumber());
+    const { a } = adapter();
+
+    const h = await a.healthCheck(cfg());
+
+    // Not knowing is not the same as being broken, and this resolution may
+    // simply not be available to the token — so it is reported as unknown and
+    // never used to fail a working number.
+    expect(h.ok).toBe(true);
+    expect(h.details?.webhookSubscribed).toBeNull();
+    expect(mockSub).not.toHaveBeenCalled();
   });
 
   it('ok:false on a revoked token (401), never throws', async () => {
