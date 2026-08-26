@@ -138,3 +138,62 @@ describe('withAdvisoryLock — heartbeat', () => {
     ).rejects.toThrow('the actual problem');
   });
 });
+
+/**
+ * The sibling helper needed the same heartbeat.
+ *
+ * Instrumenting only withAdvisoryLock left every routine trigger invisible.
+ * They are locked, so it was never a correctness problem — but
+ * `list_scheduled_runs` showed them registered with nothing recorded, which is
+ * exactly the shape of a job that is not firing. Two lock helpers with one of
+ * them instrumented is a surface that reports half the schedule while looking
+ * like it reports all of it.
+ */
+describe('withAdvisoryXactLock — heartbeat', () => {
+  const makeXactPrisma = (locked: boolean) => {
+    const tx = { $queryRaw: jest.fn().mockResolvedValue([{ locked }]) };
+    return {
+      $transaction: jest.fn().mockImplementation(async (cb: (t: typeof tx) => Promise<void>) => cb(tx)),
+      cronHeartbeat: { upsert: jest.fn().mockResolvedValue({}) },
+    };
+  };
+
+  it('records a run when this replica did the work', async () => {
+    const prisma = makeXactPrisma(true);
+
+    await withAdvisoryXactLock(prisma as any, 'routine:lead-scoring', async () => undefined);
+
+    expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].where).toEqual({
+      jobName: 'routine:lead-scoring',
+    });
+  });
+
+  it('records NOTHING when another replica holds the lock', async () => {
+    const prisma = makeXactPrisma(false);
+
+    await withAdvisoryXactLock(prisma as any, 'routine:lead-scoring', async () => undefined);
+
+    expect(prisma.cronHeartbeat.upsert).not.toHaveBeenCalled();
+  });
+
+  it('records the failure and still rethrows it', async () => {
+    const prisma = makeXactPrisma(true);
+
+    await expect(
+      withAdvisoryXactLock(prisma as any, 'routine:lead-scoring', async () => {
+        throw new Error('routine exploded');
+      }),
+    ).rejects.toThrow('routine exploded');
+
+    expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError).toBe('routine exploded');
+  });
+
+  it('does not let a heartbeat write failure break the run', async () => {
+    const prisma = makeXactPrisma(true);
+    prisma.cronHeartbeat.upsert.mockRejectedValue(new Error('table missing'));
+
+    await expect(
+      withAdvisoryXactLock(prisma as any, 'routine:lead-scoring', async () => undefined),
+    ).resolves.toBeUndefined();
+  });
+});
