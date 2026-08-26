@@ -67,6 +67,7 @@ export class DailyDigestService {
       dueFollowUps,
       unassigned,
       waitingReplies,
+      brokenAccounts,
       spend,
     ] = await Promise.all([
       this.prisma.lead.count({
@@ -133,6 +134,27 @@ export class DailyDigestService {
         `
         .then((r) => Number(r[0]?.count ?? 0))
         .catch(() => 0),
+      // Connected accounts that are supposed to be working and are not.
+      //
+      // Deliberately NARROWER than social.tools.ts's `needsReconnect`, which
+      // also folds in `enabled: false`. An account the owner disconnected on
+      // purpose — disconnectAccount writes lastError 'disconnected', and the
+      // mis-tagged-Page repair disabled its rows — is not a problem, and
+      // reporting it every morning forever is how a section trains people to
+      // stop reading it.
+      //
+      // So: 'reauth_required' (the refresher gave up, or a provider rejected
+      // the token) or a live account whose token has run out. Both mean
+      // something the owner switched ON has stopped working.
+      this.prisma.socialAccount.count({
+        where: {
+          workspaceId,
+          OR: [
+            { lastError: 'reauth_required' },
+            { enabled: true, tokenExpiresAt: { lt: new Date() } },
+          ],
+        },
+      }),
       this.usage.breakdown(workspaceId, 1).catch(() => null),
     ]);
 
@@ -160,6 +182,10 @@ export class DailyDigestService {
     // customer now appears at all.
     if (waitingReplies)
       needsYou.push(`${waitingReplies} konuşma yanıt bekliyor — müşteri en son yazan taraf`);
+    if (brokenAccounts)
+      needsYou.push(
+        `${brokenAccounts} bağlı hesabın yetkisi düşmüş — yeniden bağlanana kadar o kanaldan yayın/mesaj gitmez`,
+      );
 
     const today: string[] = [];
     if (dueTasks) today.push(`${dueTasks} görevin süresi bugün doluyor`);
