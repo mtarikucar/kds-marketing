@@ -9,7 +9,7 @@ function make() {
   const prisma = {
     researchCandidate: {
       createMany: jest.fn().mockResolvedValue({ count: 1 }),
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 2 }),
     },
@@ -219,5 +219,82 @@ describe('ResearchCandidateService.accept — duplicate of an existing lead', ()
     expect(prisma.researchCandidate.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ leadId: 'lead-ref' }) }),
     );
+  });
+});
+
+/**
+ * The same business, staged twice.
+ *
+ * The unique index is (workspaceId, profileId, externalRef), so a business
+ * found again under a different ref KIND is a different row. Live instance:
+ * "Louise Cafe Brasserie & Loft" appeared twice for one profile —
+ * google:ChIJZQVk… on 22 Aug and domain:louise.com.tr on 26 Aug — with the
+ * same phone and the same website.
+ *
+ * The reviewer sees it twice, and the researcher spent credits re-finding a
+ * business it had already staged. externalRef is one identity among several;
+ * the CONTACT keys are what actually identify a business — the same insight
+ * the accept path needed.
+ */
+describe('ResearchCandidateService.stage — same business, different ref', () => {
+  const base = {
+    businessName: 'Louise Cafe',
+    businessType: 'CAFE',
+    painPoint: 'p',
+    evidence: 'e',
+    pitch: 'pi',
+  };
+
+  it('skips a candidate whose phone already sits in the pending queue', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      { phone: '+905454475100', website: null },
+    ]);
+
+    const r = await svc.stage('ws1', 'p1', 'run1', [
+      { ...base, externalRef: 'domain:louise.com.tr', phone: '0545 447 51 00' } as never,
+    ]);
+
+    expect(r).toEqual({ staged: 0, duplicates: 1 });
+    expect(prisma.researchCandidate.createMany).not.toHaveBeenCalled();
+  });
+
+  it('collapses http://www.x/ and https://x to the same business', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      { phone: null, website: 'http://www.louise.com.tr/' },
+    ]);
+
+    const r = await svc.stage('ws1', 'p1', 'run1', [
+      { ...base, externalRef: 'google:abc', website: 'https://louise.com.tr' } as never,
+    ]);
+
+    expect(r).toEqual({ staged: 0, duplicates: 1 });
+  });
+
+  it('collapses a repeat inside the SAME batch, not just against the queue', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.createMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const r = await svc.stage('ws1', 'p1', 'run1', [
+      { ...base, externalRef: 'domain:louise.com.tr', phone: '+905454475100' } as never,
+      { ...base, externalRef: 'google:abc', phone: '+905454475100' } as never,
+    ]);
+
+    expect(r).toEqual({ staged: 1, duplicates: 1 });
+  });
+
+  it('still stages a genuinely different business', async () => {
+    const { svc, prisma } = make();
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      { phone: '+905454475100', website: 'louise.com.tr' },
+    ]);
+    (prisma.researchCandidate.createMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const r = await svc.stage('ws1', 'p1', 'run1', [
+      { ...base, businessName: 'Rose Cafe', externalRef: 'domain:rose.com.tr', phone: '+905551112233' } as never,
+    ]);
+
+    expect(r).toEqual({ staged: 1, duplicates: 0 });
   });
 });
