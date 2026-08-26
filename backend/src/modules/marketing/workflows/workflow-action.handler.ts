@@ -151,8 +151,20 @@ export class WorkflowActionHandler {
         ctx.workspaceId, channel.id, channelType === 'WHATSAPP' ? 'WA' : 'PHONE', value, lead.id,
       );
     }
-    await this.sender.send({ workspaceId: ctx.workspaceId, conversationId, text: body, authorType: 'SYSTEM' });
-    return `${channelType} sent`;
+    // Same as the send_email branch above: MessageSenderService returns a row
+    // whose status is SENT or FAILED and does NOT throw on a provider
+    // rejection, so reporting "sent" unconditionally records a customer as
+    // contacted when nothing reached them. SMS and WhatsApp refuse routinely —
+    // a number the carrier rejects, a WhatsApp 24-hour window that has closed.
+    const outbound = await this.sender.send({
+      workspaceId: ctx.workspaceId,
+      conversationId,
+      text: body,
+      authorType: 'SYSTEM',
+    });
+    return outbound?.status === 'SENT'
+      ? `${channelType} sent`
+      : `${channelType} NOT sent (delivery failed)`;
   }
 
   private async ensureConversation(
