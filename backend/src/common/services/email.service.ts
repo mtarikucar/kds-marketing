@@ -211,6 +211,19 @@ export class EmailService {
    * Use only for transactional system notices (status changes, etc.) where
    * a bespoke template would be overkill.
    */
+  /**
+   * Is there a real mailer behind this service?
+   *
+   * `sendPlainEmail` deliberately returns TRUE with no transporter — it logs an
+   * [EMAIL MOCK] line and reports success, which is right for dev and inert
+   * deploys (the inert-feature rule) and wrong for anything that needs to know
+   * whether a message actually left the building. A caller that must not claim
+   * a delivery it cannot make asks this first.
+   */
+  isConfigured(): boolean {
+    return !!this.transporter;
+  }
+
   async sendPlainEmail(
     to: string,
     subject: string,

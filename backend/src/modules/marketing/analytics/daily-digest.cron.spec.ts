@@ -35,7 +35,10 @@ describe('DailyDigestCron', () => {
       render: jest.fn().mockReturnValue('body'),
       recipients: jest.fn().mockResolvedValue(['owner@x.io', 'manager@x.io']),
     };
-    const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
+    const email = {
+      sendPlainEmail: jest.fn().mockResolvedValue(true),
+      isConfigured: jest.fn().mockReturnValue(true),
+    };
     const cron = new DailyDigestCron(prisma as never, digest as never, email as never);
     jest.spyOn((cron as any).logger, 'warn').mockImplementation(() => undefined);
     jest.spyOn((cron as any).logger, 'log').mockImplementation(() => undefined);
@@ -133,5 +136,92 @@ describe('DailyDigestCron', () => {
     expect(out.skipped).toBe(1);
     expect(email.sendPlainEmail).toHaveBeenCalled(); // the second one still went
     jest.useRealTimers();
+  });
+});
+
+/**
+ * The one failure that cannot report itself.
+ *
+ * Every other problem this brief knows about, it reports IN the brief. Its own
+ * non-delivery is the exception — and it was invisible twice over: the cron
+ * ignored sendPlainEmail's return value, so `sent++` ran whether or not
+ * anything left the building, and with no mailer configured that call logs an
+ * [EMAIL MOCK] line and returns TRUE, so an unconfigured deploy reported a
+ * successful send every single morning.
+ *
+ * It now fails the run, which puts the reason on the job's heartbeat — the
+ * surface that IS readable when email is not.
+ */
+describe('DailyDigestCron — undelivered briefs', () => {
+  const setup = (over: { sendOk?: boolean; configured?: boolean } = {}) => {
+    const email = {
+      sendPlainEmail: jest.fn().mockResolvedValue(over.sendOk ?? true),
+      isConfigured: jest.fn().mockReturnValue(over.configured ?? true),
+    };
+    const digest = {
+      build: jest.fn().mockResolvedValue({
+        workspaceName: 'W',
+        forDate: '2026-08-26',
+        empty: false,
+        needsYou: { title: 'x', items: ['a'] },
+      }),
+      recipients: jest.fn().mockResolvedValue(['owner@example.com']),
+      render: jest.fn().mockReturnValue('body'),
+    };
+    const prisma: any = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]),
+      cronHeartbeat: { upsert: jest.fn().mockResolvedValue({}) },
+      workspace: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'ws1', timezone: 'UTC', settings: null }]),
+      },
+      usageCounter: { create: jest.fn().mockResolvedValue({}) },
+    };
+    prisma.$transaction = jest.fn().mockImplementation(async (cb: any) => cb(prisma));
+    return { email, digest, prisma };
+  };
+
+  const atDigestHour = () => {
+    jest.spyOn(Date.prototype, 'getTime');
+    // DIGEST_HOUR defaults to 7 UTC; freeze the clock there.
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-26T07:30:00Z'));
+  };
+
+  afterEach(() => jest.useRealTimers());
+
+  it('records the failure on the heartbeat when a send does not go out', async () => {
+    atDigestHour();
+    const { email, digest, prisma } = setup({ sendOk: false });
+    const cron = new DailyDigestCron(prisma, digest as never, email as never);
+
+    await cron.tick();
+
+    const hb = prisma.cronHeartbeat.upsert.mock.calls[0][0];
+    expect(hb.update.lastError).toMatch(/undelivered/);
+  });
+
+  it('does not even try, and says so, when there is no mailer at all', async () => {
+    atDigestHour();
+    const { email, digest, prisma } = setup({ configured: false });
+    const cron = new DailyDigestCron(prisma, digest as never, email as never);
+
+    await cron.tick();
+
+    // The [EMAIL MOCK] path returns true, so without the guard this deploy
+    // would report a successful send every morning forever.
+    expect(email.sendPlainEmail).not.toHaveBeenCalled();
+    expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError).toMatch(
+      /not configured/,
+    );
+  });
+
+  it('still records a clean run when the mail actually goes', async () => {
+    atDigestHour();
+    const { email, digest, prisma } = setup();
+    const cron = new DailyDigestCron(prisma, digest as never, email as never);
+
+    await cron.tick();
+
+    expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
+    expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError).toBeNull();
   });
 });
