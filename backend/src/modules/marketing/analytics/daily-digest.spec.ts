@@ -44,6 +44,7 @@ describe('DailyDigestService', () => {
       // Waiting-reply count is a column comparison, so it is raw SQL. Default
       // to none; the cases that care override it.
       $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(0) },
     };
     svc = new DailyDigestService(prisma, usage as never);
   });
@@ -148,6 +149,7 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       workspaceMembership: { findMany: jest.fn() },
       marketingUser: { findMany: jest.fn() },
       $queryRaw: jest.fn().mockResolvedValue([{ count: waiting }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(0) },
     };
     svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never);
     return prisma;
@@ -185,5 +187,74 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
 
     // One unavailable number must not cost the owner the other four.
     await expect(svc.build(WS)).resolves.toBeTruthy();
+  });
+});
+
+/**
+ * An account that stopped working.
+ *
+ * Every reconnect this session — figurunica, the mis-tagged Page, the expired
+ * Meta ad tokens — was surfaced to the owner by someone reading the database
+ * and telling them. The morning brief never mentioned accounts at all: the
+ * words socialAccount, channel and needsReconnect appeared zero times in the
+ * service.
+ *
+ * The predicate is deliberately NARROWER than social.tools.ts's
+ * `needsReconnect`, which also folds in `enabled: false`. An account the owner
+ * disconnected on purpose is not a problem, and repeating it every morning
+ * forever is how a section trains people to stop reading it.
+ */
+describe('DailyDigestService — accounts that stopped working', () => {
+  const WS = 'ws-1';
+
+  const build = (broken: number) => {
+    const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS, name: 'HummyTummy' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(broken) },
+    };
+    const svc = new DailyDigestService(
+      prisma,
+      { breakdown: jest.fn().mockResolvedValue(null) } as never,
+    );
+    return { prisma, svc };
+  };
+
+  it('reports an account whose authorisation has lapsed', async () => {
+    const { svc } = build(2);
+
+    const d = await svc.build(WS);
+
+    expect(d!.needsYou.items.join(' | ')).toMatch(/2 bağlı hesabın yetkisi düşmüş/);
+  });
+
+  it('asks only about accounts that are supposed to be working', async () => {
+    const { prisma, svc } = build(0);
+
+    await svc.build(WS);
+
+    const where = prisma.socialAccount.count.mock.calls[0][0].where;
+    // A deliberate disconnect writes lastError 'disconnected' and enabled:false.
+    // Neither branch here matches that, so it never nags about it.
+    expect(where.OR).toEqual([
+      { lastError: 'reauth_required' },
+      { enabled: true, tokenExpiresAt: { lt: expect.any(Date) } },
+    ]);
+    expect(where.workspaceId).toBe(WS);
+  });
+
+  it('says nothing when every account is healthy', async () => {
+    const { svc } = build(0);
+
+    const d = await svc.build(WS);
+
+    expect(d!.needsYou.items.join(' | ')).not.toMatch(/yetkisi düşmüş/);
   });
 });
