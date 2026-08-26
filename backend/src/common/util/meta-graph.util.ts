@@ -164,3 +164,70 @@ async function runGraph(url: string, init: Record<string, unknown>): Promise<Met
   }
   return { ok: true, status: res.status, data: json, error: null };
 }
+
+/**
+ * Is our app actually subscribed to this node's `messages` webhook?
+ *
+ * A live token and a delivering webhook are INDEPENDENT. Embedded Signup
+ * subscribes the app as a separate call, and that call is best-effort — a
+ * failure there is logged and the channel is still created. Nothing afterwards
+ * ever looked again.
+ *
+ * So a channel can hold a perfectly valid token, pass verify, sit there ACTIVE,
+ * and never receive one inbound message for as long as it exists. That is the
+ * business's front door, and it fails without a single error anywhere.
+ *
+ * Three-valued on purpose. `false` means Meta told us plainly that nothing is
+ * subscribed; `null` means the probe itself did not answer (a permission the
+ * token lacks, a transport failure), and an unanswered probe must never be
+ * allowed to condemn a channel that is actually working.
+ */
+export async function metaWebhookSubscription(
+  token: string,
+  nodeId: string,
+  // WhatsApp Cloud authenticates with a bearer header; the Page-token call
+  // sites use the query param. Same edge either way.
+  opts: { bearer?: boolean } = {},
+): Promise<{ subscribed: boolean | null; fields: string[]; error?: string }> {
+  const r = await metaGraphFetch(`/${nodeId}/subscribed_apps`, {
+    accessToken: token,
+    ...(opts.bearer ? { bearer: true } : {}),
+    method: 'GET',
+    timeoutMs: 10_000,
+  });
+  if (!r.ok) {
+    return {
+      subscribed: null,
+      fields: [],
+      error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300),
+    };
+  }
+
+  // A 200 whose body is not the subscribed_apps shape is NOT evidence that
+  // nothing is subscribed — it means the call went somewhere else. Treating it
+  // as `false` would condemn a working channel on a misdirected request, which
+  // is precisely the mistake the Instagram probe was one step away from making.
+  if (!Array.isArray(r.data?.data)) {
+    return { subscribed: null, fields: [], error: 'unexpected subscribed_apps payload' };
+  }
+  const apps: Array<{ id?: unknown; subscribed_fields?: unknown }> = r.data.data;
+  // An EMPTY list is different: Meta answered the right question and the answer
+  // is that nothing at all is listening. Unambiguous, app id known or not.
+  if (!apps.length) return { subscribed: false, fields: [] };
+
+  const appId = process.env.META_APP_ID;
+  const fieldsOf = (a: { subscribed_fields?: unknown }) =>
+    Array.isArray(a.subscribed_fields) ? a.subscribed_fields.map(String) : [];
+
+  if (appId) {
+    const mine = apps.find((a) => String(a.id) === appId);
+    if (!mine) return { subscribed: false, fields: [] };
+    const fields = fieldsOf(mine);
+    return { subscribed: fields.includes('messages'), fields };
+  }
+
+  // Without META_APP_ID we cannot tell OUR app from someone else's, so the most
+  // we can honestly say is whether anything is subscribed to `messages`.
+  const any = apps.find((a) => fieldsOf(a).includes('messages'));
+  return { subscribed: !!any, fields: any ? fieldsOf(any) : [] };
+}
