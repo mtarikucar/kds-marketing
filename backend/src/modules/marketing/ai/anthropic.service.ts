@@ -109,7 +109,8 @@ export class AnthropicService {
 
   private modelFor(tier: AiModelTier): string {
     if (tier === 'light') {
-      return this.config.get<string>('AI_MODEL_LIGHT') || 'claude-haiku-4-5';
+      // Dated id, not the bare alias — see the conversation tier below.
+      return this.config.get<string>('AI_MODEL_LIGHT') || 'claude-haiku-4-5-20251001';
     }
     if (tier === 'balanced') {
       // Between Haiku and Opus there was nothing, so every action needing more
@@ -122,7 +123,19 @@ export class AnthropicService {
       // Inbound customer replies are short + KB-grounded — a fast/cheap tier
       // handles them well. Defaults to Haiku; override with AI_MODEL_CONVERSATION
       // (e.g. claude-sonnet-4-6 or claude-opus-4-8) to A/B without a code change.
-      return this.config.get<string>('AI_MODEL_CONVERSATION') || 'claude-haiku-4-5';
+      //
+      // `claude-haiku-4-5` is NOT a resolvable id. Opus and Sonnet publish bare
+      // aliases (claude-opus-4-8, claude-sonnet-4-6, both in use here and both
+      // working); Haiku 4.5 does not, and every call on this tier failed at the
+      // API before a token was billed.
+      //
+      // The proof was in this repo's own usage: 30 days of AiUsageLog show
+      // claude-opus-4-8, claude-sonnet-4-6 and claude-haiku-4-5-20251001 — the
+      // dated form, from NativeWebProvider, 106 successful calls — and not one
+      // call on the bare alias. Every action on the conversation and light
+      // tiers had zero recorded usage, including conversation.reply: the AI had
+      // never answered a customer, on any channel, ever.
+      return this.config.get<string>('AI_MODEL_CONVERSATION') || 'claude-haiku-4-5-20251001';
     }
     return this.config.get<string>('AI_MODEL_DEFAULT') || 'claude-opus-4-8';
   }
