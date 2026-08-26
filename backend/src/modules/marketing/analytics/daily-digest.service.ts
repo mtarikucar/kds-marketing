@@ -73,6 +73,7 @@ export class DailyDigestService {
       waitingReplies,
       brokenAccounts,
       deadJobs,
+      vendorRefused,
       agentlessWaiting,
       overdueDrafts,
       expiringSoon,
@@ -192,6 +193,32 @@ export class DailyDigestService {
       this.prisma.scheduledJob.count({
         where: { workspaceId, status: 'FAILED', completedAt: { gte: since } },
       }),
+      // The vendor refusing us outright, which is a different thing from us
+      // overspending — and the only one of the two nothing could report.
+      //
+      // PlatformAiSpendCron exists to "say something BEFORE the money is gone",
+      // but it compares our own RECORDED spend against our own cap. When the
+      // vendor account runs dry the calls fail and bill nothing, so recorded
+      // spend stays LOW and the watcher reads OK. It is structurally incapable
+      // of seeing an empty balance; it can only see us spending too much. And
+      // it announces to a log, which its own comment calls the same as no alert.
+      //
+      // Read-side detection instead: the vendor's refusal is already written to
+      // scheduled_jobs.lastError on every attempt. No new table, no new write,
+      // nothing added to the AI hot path.
+      //
+      // Matching the message is a bounded risk: if the wording changes this
+      // stops matching and the generic "jobs gave up" line above still fires,
+      // so a miss degrades to yesterday's behaviour rather than to silence.
+      this.prisma.scheduledJob
+        .count({
+          where: {
+            workspaceId,
+            lastError: { contains: 'credit balance', mode: 'insensitive' },
+            updatedAt: { gte: since },
+          },
+        })
+        .catch(() => 0),
       // Conversations waiting on a channel that has NO AI agent attached.
       //
       // Deliberately not "channels without an agent" — plenty of channels are
@@ -297,6 +324,10 @@ export class DailyDigestService {
     if (agentlessWaiting)
       needsYou.push(
         `${agentlessWaiting} kanalda müşteri bekliyor ama AI ajanı bağlı değil — oraya yalnızca bir insan yanıt verebilir`,
+      );
+    if (vendorRefused)
+      needsYou.push(
+        `AI sağlayıcısı çağrıları reddediyor: hesabın kredisi bitmiş — ${vendorRefused} iş bu yüzden düştü, yüklenene kadar AI kimseye yanıt veremez`,
       );
     if (deadJobs)
       needsYou.push(

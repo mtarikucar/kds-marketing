@@ -355,3 +355,78 @@ describe('DailyDigestService — connection health', () => {
     expect(where.enabled).toBe(true);
   });
 });
+
+/**
+ * The vendor refusing us is not the same as us overspending, and only one of
+ * the two was reportable.
+ *
+ * PlatformAiSpendCron exists to "say something BEFORE the money is gone", but
+ * it compares our own RECORDED spend against our own cap. When the account runs
+ * dry the calls fail and bill nothing, so recorded spend stays LOW and it reads
+ * OK — structurally blind to the one failure it was written for. It also
+ * announces to a log, which its own comment calls the same as no alert.
+ *
+ * Live, that is not hypothetical: the account had been running dry repeatedly
+ * since 16 August, every AI reply was failing on the vendor's own 400, and no
+ * surface said a word.
+ */
+describe('DailyDigestService — vendor refusal', () => {
+  const WS3 = 'ws-vendor';
+  const build = (refused: number, dead: number) => {
+    // Order matters: dead-jobs count is asked before the refusal count.
+    const scheduledJob = {
+      count: jest.fn().mockResolvedValueOnce(dead).mockResolvedValueOnce(refused),
+    };
+    const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS3, name: 'HummyTummy' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
+      scheduledJob,
+    };
+    return {
+      prisma,
+      svc: new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never),
+    };
+  };
+
+  it('names the cause instead of leaving it in a job record', async () => {
+    const { svc } = build(3, 3);
+
+    const d = await svc.build(WS3);
+
+    expect(d!.needsYou.items.join(' | ')).toMatch(/kredisi bitmiş/);
+  });
+
+  it('matches the refusal on the vendor error the queue already stores', async () => {
+    const { prisma, svc } = build(1, 1);
+    await svc.build(WS3);
+
+    const where = prisma.scheduledJob.count.mock.calls[1][0].where;
+    // Read-side detection: nothing is added to the AI hot path, because the
+    // vendor already told us and the queue already wrote it down.
+    expect(where.lastError).toEqual({ contains: 'credit balance', mode: 'insensitive' });
+    expect(where.workspaceId).toBe(WS3);
+  });
+
+  it('says nothing when the vendor is not refusing', async () => {
+    const { svc } = build(0, 2);
+
+    const d = await svc.build(WS3);
+    const items = d!.needsYou.items.join(' | ');
+
+    // Jobs can give up for many reasons; only this one means "top up the
+    // account", so it must not be claimed on the strength of a failure count.
+    expect(items).not.toMatch(/kredisi bitmiş/);
+    expect(items).toMatch(/2 arka plan işi/);
+  });
+});
