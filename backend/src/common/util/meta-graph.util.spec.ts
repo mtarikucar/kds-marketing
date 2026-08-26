@@ -241,3 +241,61 @@ describe('metaWebhookSubscription', () => {
     expect((await metaWebhookSubscription('tok', 'page1')).subscribed).toBe(true);
   });
 });
+
+/**
+ * The WABA form of the same edge.
+ *
+ * One endpoint, two payloads that look nothing alike:
+ *
+ *   Page:  { id, subscribed_fields: ['messages', ...] }
+ *   WABA:  { whatsapp_business_api_data: { id, name, link } }   <- no fields
+ *
+ * Reading the WABA form with the Page shape finds no `id` at the top level,
+ * matches nothing, and reports "not subscribed" — a false accusation against a
+ * working number, delivered with full confidence. Caught by running the live
+ * WhatsApp channel through it and disbelieving the answer.
+ */
+describe('metaWebhookSubscription — WABA payload shape', () => {
+  const APP = 'app1';
+  const prev = process.env.META_APP_ID;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.META_APP_ID;
+    else process.env.META_APP_ID = prev;
+  });
+
+  const wabaBody = (id: string) => ({
+    data: [{ whatsapp_business_api_data: { id, name: 'Jeeta', link: 'https://x' } }],
+  });
+
+  it('true when our app is listed, even though this shape reports no fields', async () => {
+    process.env.META_APP_ID = APP;
+    mockSafeFetch.mockResolvedValue(res(true, 200, wabaBody(APP)));
+
+    // Presence IS the subscription here; there is no field list to check.
+    expect((await metaWebhookSubscription('tok', 'WABA1')).subscribed).toBe(true);
+  });
+
+  it('false when only another app is listed', async () => {
+    process.env.META_APP_ID = APP;
+    mockSafeFetch.mockResolvedValue(res(true, 200, wabaBody('someone-else')));
+
+    expect((await metaWebhookSubscription('tok', 'WABA1')).subscribed).toBe(false);
+  });
+
+  it('null, not false, when we cannot attribute a fieldless entry', async () => {
+    delete process.env.META_APP_ID;
+    mockSafeFetch.mockResolvedValue(res(true, 200, wabaBody('whoever')));
+
+    // Something is subscribed and we can neither name it nor see its fields.
+    // That is not evidence of absence.
+    const out = await metaWebhookSubscription('tok', 'WABA1');
+    expect(out.subscribed).toBeNull();
+  });
+
+  it('still reports false for an empty list, which is a real answer', async () => {
+    process.env.META_APP_ID = APP;
+    mockSafeFetch.mockResolvedValue(res(true, 200, { data: [] }));
+
+    expect((await metaWebhookSubscription('tok', 'WABA1')).subscribed).toBe(false);
+  });
+});
