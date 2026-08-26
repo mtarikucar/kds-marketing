@@ -22,6 +22,67 @@ import { parseWaStatuses } from '../meta-status.util';
  * messages + delivery/read receipts both arrive on the shared Meta webhook.
  * Never throws on a provider error — returns FAILED.
  */
+/**
+ * Which WABA does this token speak for?
+ *
+ * The subscription that decides whether inbound messages are delivered lives on
+ * the WABA, and a WHATSAPP channel stores only `phoneNumberId` — the WABA id is
+ * nowhere in our data. The phone-number node does not carry it either: asking
+ * `GET /{phone-number-id}?fields=whatsapp_business_account` returns
+ * "(#100) Tried accessing nonexisting field", which is how the first attempt at
+ * this failed against the live channel.
+ *
+ * The documented route is the token itself. An Embedded Signup token is scoped
+ * to the WABAs it was granted, and `/debug_token` reports that as
+ * `granular_scopes[].target_ids`.
+ *
+ * Returns exactly one id or nothing. If the token covers SEVERAL WABAs there is
+ * no way from here to say which one this number belongs to, and guessing would
+ * put a confident wrong answer where an honest "unknown" belongs — the same
+ * mistake the three-valued probe exists to avoid.
+ */
+async function resolveWabaId(token: string): Promise<{ id?: string; error?: string }> {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
+    return { error: 'META_APP_ID / META_APP_SECRET are not configured on this platform' };
+  }
+  try {
+    const r = await metaGraphFetch('/debug_token', {
+      // BOTH tokens go in the query on purpose. Passing the app token as
+      // `accessToken` would make the client attach an appsecret_proof computed
+      // from the app token, which is not what this endpoint expects.
+      query: { input_token: token, access_token: `${appId}|${appSecret}` },
+      timeoutMs: 10_000,
+    });
+    if (!r.ok) {
+      return { error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300) };
+    }
+    const scopes: Array<{ scope?: unknown; target_ids?: unknown }> = Array.isArray(
+      r.data?.data?.granular_scopes,
+    )
+      ? r.data.data.granular_scopes
+      : [];
+    const targets = new Set<string>();
+    for (const sc of scopes) {
+      if (typeof sc?.scope !== 'string' || !sc.scope.startsWith('whatsapp_business')) continue;
+      for (const t of Array.isArray(sc.target_ids) ? sc.target_ids : []) targets.add(String(t));
+    }
+    if (targets.size === 1) return { id: [...targets][0] };
+    if (targets.size === 0) {
+      return { error: 'this token grants no whatsapp_business scope with a target account' };
+    }
+    return {
+      error: `this token covers ${targets.size} WhatsApp accounts; cannot tell which one this number belongs to`,
+    };
+  } catch {
+    // The ONE call in this file whose URL carries the app secret. A transport
+    // error can quote the URL it failed on, and these details are surfaced to
+    // callers and written to logs — so it never leaves here verbatim.
+    return { error: 'WABA lookup failed (transport error)' };
+  }
+}
+
 @Injectable()
 export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
   readonly type = 'WHATSAPP' as const;
@@ -196,29 +257,14 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
     // `null` means "could not find out", and an unanswered probe must never be
     // allowed to condemn a number that is working. Only a clear "not
     // subscribed" from Meta fails the channel.
-    const waba = await metaGraphFetch(`/${phoneNumberId}`, {
-      accessToken: token,
-      bearer: true,
-      method: 'GET',
-      query: { fields: 'whatsapp_business_account' },
-      timeoutMs: 10_000,
-    });
-    const wabaId: string | undefined = waba.ok
-      ? (waba.data?.whatsapp_business_account?.id as string | undefined)
-      : undefined;
-
-    if (!wabaId) {
+    const waba = await resolveWabaId(token);
+    if (!waba.id) {
       return {
         ok: true,
-        details: {
-          ...base,
-          webhookSubscribed: null,
-          webhookProbeError: waba.ok
-            ? 'could not resolve the WABA id from this phone number'
-            : String(waba.error?.message ?? `HTTP ${waba.status}`).slice(0, 300),
-        },
+        details: { ...base, webhookSubscribed: null, webhookProbeError: waba.error },
       };
     }
+    const wabaId = waba.id;
 
     const sub = await metaWebhookSubscription(token, wabaId, { bearer: true });
     if (sub.subscribed === false) {

@@ -135,7 +135,12 @@ describe('WhatsappCloudAdapter.healthCheck', () => {
     data: { verified_name: 'Acme', ...extra },
     error: null,
   });
-  const waba = { whatsapp_business_account: { id: 'WABA1' } };
+  const debugToken = (targets: string[], scope = 'whatsapp_business_messaging') => ({
+    ok: true,
+    status: 200,
+    data: { data: { granular_scopes: [{ scope, target_ids: targets }] } },
+    error: null,
+  });
 
   it('ok:true on a 200 probe (returns verified_name)', async () => {
     mockFetch.mockResolvedValue(okNumber());
@@ -152,22 +157,33 @@ describe('WhatsappCloudAdapter.healthCheck', () => {
    * stores only phoneNumberId — so the WABA id is nowhere in our data and has to
    * be resolved from the number before the question can even be asked.
    */
-  it('resolves the WABA from the number, then asks whether it is subscribed', async () => {
-    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(okNumber(waba));
+  it('resolves the WABA from the TOKEN, then asks whether it is subscribed', async () => {
+    process.env.META_APP_ID = 'app1';
+    process.env.META_APP_SECRET = 'sec';
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(debugToken(['WABA1']));
     mockSub.mockResolvedValue({ subscribed: true, fields: ['messages'] });
     const { a } = adapter();
 
     const h = await a.healthCheck(cfg());
 
-    expect(mockFetch.mock.calls[1][1].query).toEqual({ fields: 'whatsapp_business_account' });
+    // The phone-number node does not carry its WABA — asking it for
+    // `whatsapp_business_account` returns "(#100) nonexisting field", which is
+    // how the first attempt failed against the live channel. The token does
+    // carry it, as granular_scopes.
+    expect(mockFetch.mock.calls[1][0]).toBe('/debug_token');
+    expect(mockFetch.mock.calls[1][1].query.input_token).toBe('tok');
+    // Both tokens go in the query so the client does not attach an
+    // appsecret_proof computed from the APP token.
+    expect(mockFetch.mock.calls[1][1].accessToken).toBeUndefined();
     expect(mockSub).toHaveBeenCalledWith('tok', 'WABA1', { bearer: true });
-    expect(h.ok).toBe(true);
-    expect(h.details?.webhookSubscribed).toBe(true);
     expect(h.details?.wabaId).toBe('WABA1');
+    expect(h.details?.webhookSubscribed).toBe(true);
   });
 
   it('ok:false when the WABA is resolved and plainly not subscribed', async () => {
-    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(okNumber(waba));
+    process.env.META_APP_ID = 'app1';
+    process.env.META_APP_SECRET = 'sec';
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(debugToken(['WABA1']));
     mockSub.mockResolvedValue({ subscribed: false, fields: [] });
     const { a } = adapter();
 
@@ -178,18 +194,46 @@ describe('WhatsappCloudAdapter.healthCheck', () => {
     expect(h.details?.webhookSubscribed).toBe(false);
   });
 
-  it('stays ok with webhookSubscribed:null when the WABA cannot be resolved', async () => {
-    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(okNumber());
+  it('says unknown rather than guessing when the token covers several accounts', async () => {
+    process.env.META_APP_ID = 'app1';
+    process.env.META_APP_SECRET = 'sec';
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(debugToken(['WABA1', 'WABA2']));
     const { a } = adapter();
 
     const h = await a.healthCheck(cfg());
 
-    // Not knowing is not the same as being broken, and this resolution may
-    // simply not be available to the token — so it is reported as unknown and
-    // never used to fail a working number.
+    // Picking one would put a confident wrong answer where an honest unknown
+    // belongs — the exact failure the three-valued probe exists to prevent.
+    expect(h.ok).toBe(true);
+    expect(h.details?.webhookSubscribed).toBeNull();
+    expect(String(h.details?.webhookProbeError)).toContain('2 WhatsApp accounts');
+    expect(mockSub).not.toHaveBeenCalled();
+  });
+
+  it('stays ok with webhookSubscribed:null when the token grants no WABA', async () => {
+    process.env.META_APP_ID = 'app1';
+    process.env.META_APP_SECRET = 'sec';
+    mockFetch.mockResolvedValueOnce(okNumber()).mockResolvedValueOnce(debugToken([], 'pages_show_list'));
+    const { a } = adapter();
+
+    const h = await a.healthCheck(cfg());
+
     expect(h.ok).toBe(true);
     expect(h.details?.webhookSubscribed).toBeNull();
     expect(mockSub).not.toHaveBeenCalled();
+  });
+
+  it('does not even try the lookup when the platform has no app credentials', async () => {
+    delete process.env.META_APP_ID;
+    delete process.env.META_APP_SECRET;
+    mockFetch.mockResolvedValueOnce(okNumber());
+    const { a } = adapter();
+
+    const h = await a.healthCheck(cfg());
+
+    expect(h.ok).toBe(true);
+    expect(h.details?.webhookSubscribed).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it('ok:false on a revoked token (401), never throws', async () => {
