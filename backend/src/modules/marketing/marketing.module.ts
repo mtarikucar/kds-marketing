@@ -1214,6 +1214,7 @@ export class MarketingModule {
     analytics: AnalyticsService,
     brand: BrandBrainService,
     leads: MarketingLeadsService,
+    distribution: MarketingDistributionService,
     leadDedupe: LeadDedupeService,
     conversations: ConversationsService,
     outbound: OutboundConversationService,
@@ -1269,7 +1270,7 @@ export class MarketingModule {
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
-    registerLeadsTools(registry, { leads });
+    registerLeadsTools(registry, { leads, distribution });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
     registerTasksTools(registry, { tasks, principals });
     registerContactsTools(registry, { leads, companies, principals });

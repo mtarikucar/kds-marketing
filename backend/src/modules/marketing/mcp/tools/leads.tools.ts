@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { LeadFilterDto } from '../../dto/lead-filter.dto';
 import { MarketingLeadsService } from '../../services/marketing-leads.service';
+import { MarketingDistributionService } from '../../services/marketing-distribution.service';
 import { MCP_NON_REP_PRINCIPAL, visibilityPrincipal } from '../mcp-principal.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
@@ -27,6 +28,7 @@ export { MCP_NON_REP_PRINCIPAL };
 
 export interface LeadsToolDeps {
   leads: MarketingLeadsService;
+  distribution: MarketingDistributionService;
 }
 
 export function registerLeadsTools(registry: McpToolRegistry, deps: LeadsToolDeps): void {
@@ -74,4 +76,19 @@ export function registerLeadsTools(registry: McpToolRegistry, deps: LeadsToolDep
       );
     },
   });
+  registry.register({
+    name: 'jeeta.get_distribution_config',
+    description:
+      'How new leads get an owner: the assignment strategy, and who was assigned last. DISABLED means ' +
+      'nothing is auto-assigned — every lead the research agent ingests lands unowned and stays there ' +
+      'until a human picks it up. Read this before concluding that a pile of unassigned leads is a bug.',
+    domain: 'leads',
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async (ctx) => deps.distribution.get(ctx.workspaceId),
+  });
+
 }
