@@ -19,6 +19,7 @@ describe('ConversationAiEngineService.reply', () => {
     complete?: any;
     history?: any;
     claimed?: number;
+    sendStatus?: 'SENT' | 'FAILED';
   } = {}) {
     const convo = {
       id: CONVO,
@@ -69,7 +70,12 @@ describe('ConversationAiEngineService.reply', () => {
     };
     const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
     const knowledge = { search: jest.fn().mockResolvedValue([]) };
-    const sender = { send: jest.fn().mockResolvedValue({ id: 'out-1' }) };
+    // MessageSenderService returns the PERSISTED row, whose status is 'SENT' or
+    // 'FAILED' — it does not throw on a provider rejection. The engine reads
+    // that status, so the double must carry it.
+    const sender = {
+      send: jest.fn().mockResolvedValue({ id: 'out-1', status: overrides.sendStatus ?? 'SENT' }),
+    };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
     const runner = { registerHandler: jest.fn() };
     const stream = { push: jest.fn() };
@@ -489,4 +495,58 @@ describe('ConversationAiEngineService.reply', () => {
     });
   });
 
+  /**
+   * A reply the channel refused is not a reply.
+   *
+   * MessageSenderService does NOT throw when a provider rejects a message: it
+   * refunds the channel quota, logs, persists the row as FAILED and returns
+   * normally. The engine set `sent = true` regardless, which meant a rejected
+   * reply skipped the credit refund AND the daily-slot release, and still
+   * scheduled a proactive follow-up.
+   *
+   * So the customer got nothing, the workspace paid a credit, one of the day's
+   * replies was burned, and a nudge was queued for a conversation that had never
+   * been answered — all of it silent apart from one warn line inside the sender.
+   *
+   * On web chat a send effectively cannot fail. On the Meta channels it can and
+   * does: outside the 24-hour window, a revoked page token, a rejected template.
+   * Those are the channels the AI is about to start answering on.
+   */
+  describe('ConversationAiEngineService.reply — the channel refuses the send', () => {
+    const WS2 = 'ws-1';
+    const CONVO2 = 'convo-1';
+
+    it('refunds the credit and releases the daily slot', async () => {
+      const h = build({ sendStatus: 'FAILED' });
+      await (h.engine as never as { reply: (w: string, c: string) => Promise<void> }).reply(WS2, CONVO2);
+
+      expect(h.sender.send).toHaveBeenCalled();
+      expect(h.credits.refund).toHaveBeenCalled();
+      // The slot release is the conditional UPDATE in the finally block.
+      const releases = (h.prisma.$executeRaw as jest.Mock).mock.calls.filter((c) =>
+        String(c[0]).includes('GREATEST'),
+      );
+      expect(releases.length).toBe(1);
+    });
+
+    it('does NOT schedule a follow-up for a reply nobody received', async () => {
+      const h = build({ sendStatus: 'FAILED' });
+      await (h.engine as never as { reply: (w: string, c: string) => Promise<void> }).reply(WS2, CONVO2);
+
+      // A nudge on top of silence reads as a second unanswered message.
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('keeps the credit and schedules the follow-up when the send DID go', async () => {
+      const h = build({ sendStatus: 'SENT' });
+      await (h.engine as never as { reply: (w: string, c: string) => Promise<void> }).reply(WS2, CONVO2);
+
+      expect(h.credits.refund).not.toHaveBeenCalled();
+      // And the slot STAYS claimed: the reply really did use one of the day's.
+      const releases = (h.prisma.$executeRaw as jest.Mock).mock.calls.filter((c) =>
+        String(c[0]).includes('GREATEST'),
+      );
+      expect(releases).toHaveLength(0);
+    });
+  });
 });
