@@ -97,10 +97,94 @@ describe('MessengerAdapter parse + health', () => {
     ]);
   });
 
-  it('healthCheck ok:true on a 200 /me probe', async () => {
-    mockFetch.mockResolvedValue({ ok: true, status: 200, data: { id: 'p', name: 'Page' }, error: null });
+  /**
+   * A live token and a delivering webhook are INDEPENDENT.
+   *
+   * Embedded Signup subscribes the app in a separate, best-effort call — a
+   * failure there is logged and the channel is created anyway — and nothing
+   * afterwards ever looked again. So a channel could hold a perfectly valid
+   * token, pass verify, sit ACTIVE, and never receive one inbound message for
+   * as long as it existed. That is the business's front door failing without a
+   * single error anywhere, which is exactly why healthCheck now asks.
+   */
+  const okMe = { ok: true, status: 200, data: { id: 'p', name: 'Page' }, error: null };
+  const subs = (apps: unknown[]) => ({ ok: true, status: 200, data: { data: apps }, error: null });
+
+  it('healthCheck ok:true when the token works AND the page is subscribed', async () => {
+    process.env.META_APP_ID = 'app1';
+    mockFetch
+      .mockResolvedValueOnce(okMe)
+      .mockResolvedValueOnce(subs([{ id: 'app1', subscribed_fields: ['messages', 'messaging_postbacks'] }]));
     const a = new MessengerAdapter(reg() as any);
-    expect((await a.healthCheck(cfg())).ok).toBe(true);
+
+    const res = await a.healthCheck(cfg());
+
+    expect(res.ok).toBe(true);
+    expect(res.details!.webhookSubscribed).toBe(true);
+    expect(mockFetch.mock.calls[1][0]).toBe('/page1/subscribed_apps');
+  });
+
+  it('healthCheck ok:false when the token works but nothing is subscribed', async () => {
+    process.env.META_APP_ID = 'app1';
+    mockFetch.mockResolvedValueOnce(okMe).mockResolvedValueOnce(subs([]));
+    const a = new MessengerAdapter(reg() as any);
+
+    const res = await a.healthCheck(cfg());
+
+    // The old contract said ok:true here — the token IS fine — and that is the
+    // answer that let a deaf channel look healthy.
+    expect(res.ok).toBe(false);
+    expect(res.details!.webhookSubscribed).toBe(false);
+  });
+
+  it('healthCheck ok:false when another app is subscribed but ours is not', async () => {
+    process.env.META_APP_ID = 'app1';
+    mockFetch
+      .mockResolvedValueOnce(okMe)
+      .mockResolvedValueOnce(subs([{ id: 'someone-else', subscribed_fields: ['messages'] }]));
+    const a = new MessengerAdapter(reg() as any);
+
+    expect((await a.healthCheck(cfg())).ok).toBe(false);
+  });
+
+  it('healthCheck ok:false when our app is subscribed to other fields but not messages', async () => {
+    process.env.META_APP_ID = 'app1';
+    mockFetch
+      .mockResolvedValueOnce(okMe)
+      .mockResolvedValueOnce(subs([{ id: 'app1', subscribed_fields: ['feed', 'mention'] }]));
+    const a = new MessengerAdapter(reg() as any);
+
+    // Subscribed to the Page, deaf to messages. Same outcome for the customer.
+    expect((await a.healthCheck(cfg())).ok).toBe(false);
+  });
+
+  it('does not condemn a working channel when the subscription probe cannot answer', async () => {
+    process.env.META_APP_ID = 'app1';
+    mockFetch
+      .mockResolvedValueOnce(okMe)
+      .mockResolvedValueOnce({ ok: false, status: 403, data: null, error: { message: 'no permission' } });
+    const a = new MessengerAdapter(reg() as any);
+
+    const res = await a.healthCheck(cfg());
+
+    // An unanswered probe is UNKNOWN, not "broken" — surfaced as null rather
+    // than silently passing as healthy, and never used to fail the channel.
+    expect(res.ok).toBe(true);
+    expect(res.details!.webhookSubscribed).toBeNull();
+    expect(res.details!.webhookProbeError).toContain('no permission');
+  });
+
+  it('without META_APP_ID, answers only whether ANYTHING listens for messages', async () => {
+    delete process.env.META_APP_ID;
+    mockFetch
+      .mockResolvedValueOnce(okMe)
+      .mockResolvedValueOnce(subs([{ id: 'whoever', subscribed_fields: ['messages'] }]));
+    const a = new MessengerAdapter(reg() as any);
+
+    const res = await a.healthCheck(cfg());
+
+    expect(res.ok).toBe(true);
+    expect(res.details!.webhookSubscribed).toBe(true);
   });
 
   it('healthCheck ok:false without a call when token missing', async () => {
