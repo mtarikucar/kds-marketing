@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -35,38 +35,56 @@ export function AccountSelectDialog({ pendingId, onOpenChange, context = 'social
   const { t } = useTranslation('marketing');
   const { usePending, confirm } = useSocialConnect();
   const { data, isLoading, isError } = usePending(pendingId);
-  const [selected, setSelected] = useState<string[]>([]);
+  // null means "the user has not touched this yet", so the defaults below apply.
+  // Storing the override rather than the value is what removes the frame where
+  // the list has rendered and nothing is selected: an effect that sets the
+  // default runs AFTER that commit, so for one paint every checkbox was empty
+  // and "Connect selected" — disabled while the selection is empty — was greyed
+  // out on a dialog that had just finished loading. Derived during render, the
+  // list is never shown in a state the user did not choose.
+  const [selectedOverride, setSelected] = useState<string[] | null>(null);
   // externalIds of Pages/IG accounts the user also wants as a messaging Channel.
-  const [messaging, setMessaging] = useState<string[]>([]);
+  const [messagingOverride, setMessaging] = useState<string[] | null>(null);
 
-  // Default selection once assets load. From Social, pre-select everything (the
-  // point is publishing). From Channels, pre-select ONLY the messaging-eligible
-  // Meta assets (Page/IG) and pre-check their inbox — so we never silently connect
-  // ad accounts or WhatsApp numbers the user didn't come here for; they stay
-  // visible and opt-in-able.
+  // A different hand-off is a different question: drop anything the user picked
+  // for the previous one rather than carrying it over.
   useEffect(() => {
-    if (!data?.assets) return;
+    setSelected(null);
+    setMessaging(null);
+  }, [pendingId]);
+
+  // Defaults per entry point. From Social, pre-select everything (the point is
+  // publishing). From Channels, ONLY the messaging-eligible Meta assets
+  // (Page/IG) with their inbox pre-checked — so we never silently connect ad
+  // accounts or WhatsApp numbers the user didn't come here for; they stay
+  // visible and opt-in-able.
+  const defaults = useMemo(() => {
+    if (!data?.assets) return { selected: [] as string[], messaging: [] as string[] };
+    const all = data.assets.map((a) => a.externalId);
     const metaIds = data.assets
       .filter((a) => a.accountType === 'PAGE' || a.accountType === 'IG_BUSINESS')
       .map((a) => a.externalId);
-    if (context === 'channels') {
-      // Only the messaging-eligible Meta assets, inbox pre-checked.
-      setSelected(metaIds);
-      setMessaging(metaIds);
-    } else if (context === 'account-center') {
-      // Everything on: publish all assets AND enable the inbox for Meta ones.
-      setSelected(data.assets.map((a) => a.externalId));
-      setMessaging(metaIds);
-    } else {
-      setSelected(data.assets.map((a) => a.externalId));
-    }
+    if (context === 'channels') return { selected: metaIds, messaging: metaIds };
+    if (context === 'account-center') return { selected: all, messaging: metaIds };
+    return { selected: all, messaging: [] as string[] };
   }, [data, context]);
 
+  const selected = selectedOverride ?? defaults.selected;
+  const messaging = messagingOverride ?? defaults.messaging;
+
+  // Both toggles start from the EFFECTIVE list, not from the override: the
+  // first click must edit what the user can see, not an empty array.
   const toggle = (id: string) =>
-    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelected((prev) => {
+      const base = prev ?? defaults.selected;
+      return base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+    });
 
   const toggleMessaging = (id: string) =>
-    setMessaging((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setMessaging((prev) => {
+      const base = prev ?? defaults.messaging;
+      return base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+    });
 
   const handleConfirm = () => {
     if (!pendingId || selected.length === 0) return;
