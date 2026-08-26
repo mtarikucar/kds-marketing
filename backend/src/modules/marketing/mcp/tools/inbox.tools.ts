@@ -213,4 +213,48 @@ export function registerChannelWriteTools(registry: McpToolRegistry, deps: Inbox
       } as never);
     },
   });
+
+  registry.register({
+    name: 'jeeta.list_channels',
+    description:
+      'List every messaging channel this workspace has — type, name, status, and which provider identity ' +
+      'it is bound to. This is how you find out what the inbox can actually send and receive on before ' +
+      'promising a customer anything. Secrets are never returned; `configuredSecrets` only names which ' +
+      'credential fields are set.',
+    domain: 'inbox',
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async (ctx) => deps.channels.list(ctx.workspaceId),
+  });
+
+  registry.register({
+    name: 'jeeta.set_channel_status',
+    description:
+      'Enable or disable a channel. DISABLED silences the channel in BOTH directions — inbound webhooks ' +
+      'stop resolving to it and outbound sends are refused — so use it to take a channel out of service, ' +
+      'not to pause a campaign. Reversible: set it back to ACTIVE to resume.',
+    domain: 'inbox',
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'WRITE',
+    // Same authority the panel's channel settings already give a MANAGER, so
+    // no extra gate — but the description spells out the inbound consequence,
+    // because "disabled" reads like a pause and is not one.
+    requiresApproval: false,
+    inputSchema: z.object({
+      channelId: z.string().min(1).describe('Channel id, from jeeta.list_channels.'),
+      status: z
+        .enum(['ACTIVE', 'DISABLED'])
+        .describe('ACTIVE puts the channel back in service; DISABLED takes it out.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
+      return deps.channels.update(ctx.workspaceId, String(args.channelId), {
+        status: args.status as string,
+      } as never);
+    },
+  });
 }
