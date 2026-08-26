@@ -2,7 +2,7 @@
  * advisory-lock — unit tests for withAdvisoryXactLock.
  */
 
-import { withAdvisoryXactLock } from './advisory-lock';
+import { withAdvisoryLock, withAdvisoryXactLock } from './advisory-lock';
 
 function makePrisma(lockedResult: boolean) {
   const txMock = {
@@ -57,5 +57,84 @@ describe('withAdvisoryXactLock', () => {
       expect.any(Function),
       { timeout: 45_000 },
     );
+  });
+});
+
+/**
+ * The heartbeat.
+ *
+ * Every recurring thing this product does — the morning brief, the job runner,
+ * ad pulls, review sync, calendar sync, every NetGSM poller, the sweeps: 20+
+ * crons — passes through withAdvisoryLock, and not one of them wrote down that
+ * it had run. A cron that silently stopped firing was indistinguishable from a
+ * cron with nothing to do.
+ */
+describe('withAdvisoryLock — heartbeat', () => {
+  const makeLockPrisma = (locked: boolean) => {
+    const tx = { $queryRaw: jest.fn().mockResolvedValue([{ locked }]) };
+    return {
+      $transaction: jest.fn().mockImplementation(async (cb: (t: typeof tx) => Promise<void>) => cb(tx)),
+      cronHeartbeat: { upsert: jest.fn().mockResolvedValue({}) },
+    };
+  };
+
+  it('records a run when this replica did the work', async () => {
+    const prisma = makeLockPrisma(true);
+
+    await withAdvisoryLock(prisma as any, 'daily-digest', async () => undefined);
+
+    const arg = prisma.cronHeartbeat.upsert.mock.calls[0][0];
+    expect(arg.where).toEqual({ jobName: 'daily-digest' });
+    expect(arg.update.lastError).toBeNull();
+    expect(arg.update.lastOkAt).toBeInstanceOf(Date);
+  });
+
+  it('records NOTHING when another replica holds the lock', async () => {
+    const prisma = makeLockPrisma(false);
+
+    await withAdvisoryLock(prisma as any, 'daily-digest', async () => undefined);
+
+    // Three replicas ticking would otherwise report three runs for one
+    // execution, and a job that only ever loses the race would look busy.
+    expect(prisma.cronHeartbeat.upsert).not.toHaveBeenCalled();
+  });
+
+  it('records the failure AND still rethrows it', async () => {
+    const prisma = makeLockPrisma(true);
+    const boom = new Error('digest exploded');
+
+    await expect(
+      withAdvisoryLock(prisma as any, 'daily-digest', async () => {
+        throw boom;
+      }),
+    ).rejects.toThrow('digest exploded');
+
+    const arg = prisma.cronHeartbeat.upsert.mock.calls[0][0];
+    expect(arg.update.lastError).toBe('digest exploded');
+    expect(arg.update.failures).toEqual({ increment: 1 });
+    // lastOkAt is NOT touched on failure: a lastRunAt far ahead of it is what
+    // distinguishes "firing and failing" from "not firing at all".
+    expect(arg.update.lastOkAt).toBeUndefined();
+  });
+
+  it('does not let a heartbeat write failure break a job that succeeded', async () => {
+    const prisma = makeLockPrisma(true);
+    prisma.cronHeartbeat.upsert.mockRejectedValue(new Error('table missing'));
+    const run = jest.fn().mockResolvedValue(undefined);
+
+    // A heartbeat is a note about the work, not the work.
+    await expect(withAdvisoryLock(prisma as any, 'daily-digest', run)).resolves.toBeUndefined();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a heartbeat write failure replace the real error', async () => {
+    const prisma = makeLockPrisma(true);
+    prisma.cronHeartbeat.upsert.mockRejectedValue(new Error('table missing'));
+
+    await expect(
+      withAdvisoryLock(prisma as any, 'daily-digest', async () => {
+        throw new Error('the actual problem');
+      }),
+    ).rejects.toThrow('the actual problem');
   });
 });

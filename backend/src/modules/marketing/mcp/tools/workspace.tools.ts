@@ -130,4 +130,35 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
         limit: args.limit as number | undefined,
       }),
   });
+
+  /**
+   * Did the scheduled work run at all?
+   *
+   * The tool above reads one-off jobs. This reads the SCHEDULES, and it exists
+   * because that layer was the last one nothing could see. Everything recurring
+   * in this product — the morning brief, the job runner itself, ad pulls,
+   * review sync, calendar sync, every NetGSM poller, the sweeps — passes
+   * through one advisory-lock helper, and none of them recorded that they had
+   * run. A cron that silently stopped firing looked exactly like a cron with
+   * nothing to do.
+   *
+   * Read-only and deferred. Platform-level by nature: a cron belongs to the
+   * deployment, not to a workspace, and the rows carry job names, timestamps
+   * and error strings — no customer data.
+   */
+  registry.register({
+    name: 'jeeta.list_scheduled_runs',
+    description:
+      "List the platform's recurring jobs with when each last ran, when it last SUCCEEDED, and the " +
+      'error from its last failure. Use it to answer "did that actually run" — a lastRunAt well ahead ' +
+      'of lastOkAt means the job is firing and failing, while both being stale means it is not firing ' +
+      'at all. Read-only.',
+    domain: 'workspace',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async () => deps.jobs.listCronHeartbeats(),
+  });
 }

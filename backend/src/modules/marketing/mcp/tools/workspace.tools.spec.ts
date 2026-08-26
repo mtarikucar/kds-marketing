@@ -4,7 +4,7 @@ import { registerWorkspaceTools } from './workspace.tools';
 const deps = () => ({
   entitlements: { getEffective: jest.fn() } as any,
   users: { findAll: jest.fn().mockResolvedValue([]) } as any,
-  jobs: { list: jest.fn().mockResolvedValue([]) } as any,
+  jobs: { list: jest.fn().mockResolvedValue([]), listCronHeartbeats: jest.fn().mockResolvedValue([]) } as any,
 });
 
 describe('workspace MCP tools', () => {
@@ -86,6 +86,40 @@ describe('workspace MCP tools', () => {
         status: undefined,
         limit: undefined,
       });
+    });
+  });
+
+  /**
+   * The last layer nothing could see.
+   *
+   * Everything recurring in this product passes through one advisory-lock
+   * helper, and none of it recorded that it had run — so a cron that silently
+   * stopped firing looked exactly like a cron with nothing to do. Platform-level
+   * by nature: a schedule belongs to the deployment, not to a workspace.
+   */
+  describe('jeeta.list_scheduled_runs', () => {
+    it('is a deferred READ gated on reports.read', () => {
+      const registry = new McpToolRegistry();
+      registerWorkspaceTools(registry, deps());
+      const tool = registry.get('jeeta.list_scheduled_runs')!;
+      expect(tool.risk).toBe('READ');
+      expect(tool.defer).toBe(true);
+      expect(tool.scopes).toEqual(['reports.read']);
+      expect(registry.listAdvertised(['reports.read']).map((t) => t.name)).not.toContain(
+        'jeeta.list_scheduled_runs',
+      );
+    });
+
+    it('reads the platform schedules, which take no workspace', async () => {
+      const registry = new McpToolRegistry();
+      const d = deps();
+      registerWorkspaceTools(registry, d);
+
+      await registry
+        .get('jeeta.list_scheduled_runs')!
+        .handler({ workspaceId: 'ws1', grantedScopes: ['reports.read'] }, {});
+
+      expect(d.jobs.listCronHeartbeats).toHaveBeenCalledWith();
     });
   });
 });
