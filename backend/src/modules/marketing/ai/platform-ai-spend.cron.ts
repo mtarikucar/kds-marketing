@@ -3,12 +3,19 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PlatformAiSpendService, WARN_AT, CRITICAL_AT } from './platform-ai-spend.service';
 
 /**
- * Says something BEFORE the money is gone.
+ * Says something before WE overspend.
  *
- * Cost was previously discoverable only by going to look, and nothing pointed
- * anyone at it — so the first signal that the vendor balance was emptying was
- * the balance being empty. This runs hourly and escalates as the month's spend
- * climbs toward the platform cap.
+ * Read what this measures before trusting it: `spentUsd` is our own RECORDED
+ * spend against our own cap. It cannot see the vendor's balance, and in the one
+ * failure that matters most it reads the wrong way — when the account runs dry
+ * every call fails and bills nothing, so recorded spend stays low and this
+ * reports OK while the AI answers nobody. An empty balance is detected on the
+ * read side instead, from the refusals the queue already records, and reported
+ * in the daily brief.
+ *
+ * It also announces only to the log, which the note below calls the same as no
+ * alert — true of this one too. The escalation here is a tripwire for the
+ * platform operator, not something the workspace owner will ever see.
  *
  * It deliberately re-announces at CRITICAL and above rather than firing once:
  * a single line at 3am in a log nobody tails is the same as no alert, and
