@@ -150,15 +150,32 @@ export async function withAdvisoryXactLock(
   opts?: { timeoutMs?: number; logger?: Logger },
 ): Promise<void> {
   const lockId = djb2(jobName);
-  await prisma.$transaction(
-    async (tx) => {
-      const rows = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
-      if (!rows[0]?.locked) {
-        opts?.logger?.debug(`skip ${jobName}: advisory xact lock held elsewhere`);
-        return;
-      }
-      await run();
-    },
-    { timeout: opts?.timeoutMs ?? 45_000 },
-  );
+  // Same heartbeat as its sibling, for the same reason. Instrumenting only
+  // withAdvisoryLock left every routine trigger invisible — they are locked, so
+  // they were never a correctness problem, but `list_scheduled_runs` showed
+  // them registered with nothing recorded, which is the shape of a job that is
+  // not firing. Two lock helpers and one of them instrumented is a surface that
+  // reports half the schedule and looks like it reports all of it.
+  let ranHere = false;
+  let failure: string | null = null;
+
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const rows = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
+        if (!rows[0]?.locked) {
+          opts?.logger?.debug(`skip ${jobName}: advisory xact lock held elsewhere`);
+          return;
+        }
+        ranHere = true;
+        await run();
+      },
+      { timeout: opts?.timeoutMs ?? 45_000 },
+    );
+  } catch (e) {
+    failure = (e as Error)?.message ?? String(e);
+    throw e;
+  } finally {
+    if (ranHere) await recordHeartbeat(prisma, jobName, failure, opts?.logger);
+  }
 }
