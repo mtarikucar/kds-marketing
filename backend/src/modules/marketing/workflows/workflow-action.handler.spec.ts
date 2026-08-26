@@ -58,7 +58,11 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
       },
       conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'co-1' }) },
     };
-    const sender = { send: jest.fn().mockResolvedValue(undefined) };
+    // The sender returns the PERSISTED row; its status is what says whether the
+    // provider took the message. `undefined` here meant nothing ever asserted
+    // on it, which is how the handler got away with reporting every send as
+    // successful.
+    const sender = { send: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) };
     const handler = new WorkflowActionHandler(
       prisma as any, null as any, null as any, null as any,
       null as any, null as any, sender as any, null as any, null as any,
@@ -417,6 +421,35 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
     const { handler, ctx } = make(true);
     const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
     expect(String(res.output?.result)).toBe('email sent');
+  });
+
+  it('reports an SMS the provider refused as NOT sent', async () => {
+    // The channel branches had the same bug as the email branch one level up,
+    // and it bites harder here: SMS and WhatsApp refuse routinely — a number
+    // the carrier rejects, a WhatsApp 24-hour window that has closed.
+    const prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) },
+      contactIdentity: { findUnique: jest.fn().mockResolvedValue({ id: 'ci-1' }) },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'convo-1' }),
+        create: jest.fn().mockResolvedValue({ id: 'convo-1' }),
+      },
+    };
+    const sender = { send: jest.fn().mockResolvedValue({ id: 'm1', status: 'FAILED' }) };
+    const handler = new WorkflowActionHandler(
+      prisma as any, null as any, null as any, null as any,
+      null as any, null as any, sender as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', phone: '+905551112233', smsOptOut: false },
+      trigger: {},
+      context: {},
+    };
+
+    const res = await handler.execute({ type: 'send_sms', body: 'hi' } as any, ctx);
+
+    expect(String(res.output?.result)).toContain('NOT sent');
   });
 
   it('says NOT sent when delivery failed', async () => {
