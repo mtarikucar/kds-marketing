@@ -66,6 +66,7 @@ export class DailyDigestService {
       dueTasks,
       dueFollowUps,
       unassigned,
+      waitingReplies,
       spend,
     ] = await Promise.all([
       this.prisma.lead.count({
@@ -107,6 +108,31 @@ export class DailyDigestService {
           mergedIntoId: null,
         },
       }),
+      // Open conversations whose LAST message came from the customer.
+      //
+      // The brief covered approvals, candidates, tasks and leads but never
+      // conversations — the word appears once in this file, in the docstring
+      // listing what it covers. So the most time-sensitive item in the inbox
+      // was the one thing it could not tell you about: on this workspace a
+      // WhatsApp thread sat on "bilgi almak için dört gözle bekliyorum" for 46
+      // days with nothing anywhere reporting it.
+      //
+      // Raw SQL because the test is a COLUMN COMPARISON, which Prisma's where
+      // cannot express. Both columns are maintained on every write: ingress
+      // stamps lastInboundAt (and lastMessageAt), an outbound send moves only
+      // lastMessageAt — so lastInboundAt >= lastMessageAt is exactly "nobody
+      // has replied since they wrote".
+      this.prisma
+        .$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(*)::bigint AS count
+          FROM "conversations"
+          WHERE "workspaceId" = ${workspaceId}
+            AND "status" = 'OPEN'
+            AND "lastInboundAt" IS NOT NULL
+            AND ("lastMessageAt" IS NULL OR "lastInboundAt" >= "lastMessageAt")
+        `
+        .then((r) => Number(r[0]?.count ?? 0))
+        .catch(() => 0),
       this.usage.breakdown(workspaceId, 1).catch(() => null),
     ]);
 
@@ -129,6 +155,11 @@ export class DailyDigestService {
     if (candidates) needsYou.push(`${candidates} araştırma adayı incelenmeyi bekliyor`);
     if (overdueTasks) needsYou.push(`${overdueTasks} görev gecikmiş`);
     if (unassigned) needsYou.push(`${unassigned} yeni lead kimseye atanmamış`);
+    // First in the list once rendered would be nicer still, but order here
+    // follows the section's existing convention; what matters is that a waiting
+    // customer now appears at all.
+    if (waitingReplies)
+      needsYou.push(`${waitingReplies} konuşma yanıt bekliyor — müşteri en son yazan taraf`);
 
     const today: string[] = [];
     if (dueTasks) today.push(`${dueTasks} görevin süresi bugün doluyor`);
