@@ -56,6 +56,63 @@ async function metaSend(
   return { externalMessageId: r.data?.message_id ?? null, status: 'SENT' };
 }
 
+/**
+ * Is our app actually subscribed to this Page's `messages` webhook?
+ *
+ * A live token and a delivering webhook are INDEPENDENT. Embedded Signup
+ * subscribes the app as a separate call, and that call is best-effort — a
+ * failure there is logged and the channel is still created. Nothing afterwards
+ * ever looked again.
+ *
+ * So a channel can hold a perfectly valid token, pass verify, sit there ACTIVE,
+ * and never receive one inbound message for as long as it exists. That is the
+ * business's front door, and it fails without a single error anywhere.
+ *
+ * Three-valued on purpose. `false` means Meta told us plainly that nothing is
+ * subscribed; `null` means the probe itself did not answer (a permission the
+ * token lacks, a transport failure), and an unanswered probe must never be
+ * allowed to condemn a channel that is actually working.
+ */
+async function webhookSubscription(
+  token: string,
+  nodeId: string,
+): Promise<{ subscribed: boolean | null; fields: string[]; error?: string }> {
+  const r = await metaGraphFetch(`/${nodeId}/subscribed_apps`, {
+    accessToken: token,
+    method: 'GET',
+    timeoutMs: 10_000,
+  });
+  if (!r.ok) {
+    return {
+      subscribed: null,
+      fields: [],
+      error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300),
+    };
+  }
+
+  const apps: Array<{ id?: unknown; subscribed_fields?: unknown }> = Array.isArray(r.data?.data)
+    ? r.data.data
+    : [];
+  // Nothing at all is listening. Unambiguous, whether or not we know our app id.
+  if (!apps.length) return { subscribed: false, fields: [] };
+
+  const appId = process.env.META_APP_ID;
+  const fieldsOf = (a: { subscribed_fields?: unknown }) =>
+    Array.isArray(a.subscribed_fields) ? a.subscribed_fields.map(String) : [];
+
+  if (appId) {
+    const mine = apps.find((a) => String(a.id) === appId);
+    if (!mine) return { subscribed: false, fields: [] };
+    const fields = fieldsOf(mine);
+    return { subscribed: fields.includes('messages'), fields };
+  }
+
+  // Without META_APP_ID we cannot tell OUR app from someone else's, so the most
+  // we can honestly say is whether anything is subscribed to `messages`.
+  const any = apps.find((a) => fieldsOf(a).includes('messages'));
+  return { subscribed: !!any, fields: any ? fieldsOf(any) : [] };
+}
+
 async function metaHealthCheck(
   token: string | undefined,
   externalId: string | null,
@@ -72,7 +129,35 @@ async function metaHealthCheck(
   if (!r.ok) {
     return { ok: false, details: { error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300) } };
   }
-  return { ok: true, details: { id: r.data?.id ?? null, name: r.data?.name ?? null } };
+
+  const base = { id: r.data?.id ?? null, name: r.data?.name ?? null };
+  const sub = await webhookSubscription(token, externalId);
+
+  if (sub.subscribed === false) {
+    // The token works; the channel still cannot hear anyone. Saying "ok" here
+    // is what let this state persist unnoticed.
+    return {
+      ok: false,
+      details: {
+        ...base,
+        webhookSubscribed: false,
+        error:
+          "Token is valid but this Page is not subscribed to the app's `messages` webhook — inbound messages are never delivered. Reconnect the channel to re-subscribe.",
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    details: {
+      ...base,
+      // null = the probe could not answer; surfaced rather than hidden so an
+      // unanswerable probe is visible as unknown instead of passing as healthy.
+      webhookSubscribed: sub.subscribed,
+      subscribedFields: sub.fields,
+      ...(sub.error ? { webhookProbeError: sub.error } : {}),
+    },
+  };
 }
 
 function parseMetaMessaging(body: unknown, kind: ContactKind): InboundMessage[] {
