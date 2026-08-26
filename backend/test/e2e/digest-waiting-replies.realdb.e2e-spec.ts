@@ -36,8 +36,15 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
     ({ app, prisma } = await createRealDbTestApp());
     digest = app.get(DailyDigestService);
 
+    // slug is @unique and productName is required — the digest reads the row
+    // for the brief's title, so it has to exist.
     await prisma.workspace.create({
-      data: { id: workspaceId, name: 'Digest e2e', status: 'ACTIVE' } as never,
+      data: {
+        id: workspaceId,
+        slug: `digest-e2e-${workspaceId.slice(0, 8)}`,
+        name: 'Digest e2e',
+        productName: 'Digest e2e',
+      } as never,
     });
     await prisma.channel.create({
       data: { id: channelId, workspaceId, type: 'WEBCHAT', name: 'ch', status: 'ACTIVE' },
