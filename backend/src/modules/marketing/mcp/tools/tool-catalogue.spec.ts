@@ -314,6 +314,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_team',
         'jeeta.create_webchat_channel',
         'jeeta.list_channels',
+        'jeeta.get_distribution_config',
         'jeeta.set_channel_status',
         'jeeta.list_calendars',
         'jeeta.list_companies',
@@ -428,7 +429,7 @@ describe('MCP tool catalogue', () => {
     // so the advertised ceiling below is untouched — the agent could create a
     // webchat channel but could not see what channels existed or take one out
     // of service, which is a blind spot rather than a missing convenience.
-    expect(names).toHaveLength(107);
+    expect(names).toHaveLength(108);
   });
 
   /**
@@ -511,7 +512,7 @@ describe('MCP tool catalogue', () => {
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
     // 107 total, 45 advertised: the two channel tools added above are deferred,
     // so the ceiling asserted on the two lines above is what stayed fixed.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(107);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(108);
   });
 });
 
