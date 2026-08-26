@@ -366,3 +366,77 @@ describe('LeadDedupeService.merge', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Branches are not duplicates.
+ *
+ * Restaurants run several branches off one phone number, and a branch is named
+ * by adding the district to the parent name. Clustering on phone is still right
+ * — "look at these" — but merging them destroys a real prospect, and
+ * multi-branch operators are a segment this product actively prospects for.
+ *
+ * Found on the live workspace, where two of the three suggested clusters look
+ * like exactly this:
+ *
+ *   Kaleiçi Meyhanesi  /  Kaleiçi Meyhanesi Konyaaltı   (Antalya districts)
+ *   Kandemir Kafe      /  Kandemir Kafe Pasaport        (İzmir district)
+ */
+describe('LeadDedupeService.findDuplicates — branch caution', () => {
+  const lead = (id: string, businessName: string, phoneNormalized = '905456394263') => ({
+    id,
+    businessName,
+    contactPerson: businessName,
+    phone: `+${phoneNormalized}`,
+    email: null,
+    phoneNormalized,
+    emailNormalized: null,
+    status: 'NEW',
+    convertedTenantId: null,
+    createdAt: new Date(),
+  });
+
+  const run = async (leads: unknown[]) => {
+    const prisma: any = { lead: { findMany: jest.fn().mockResolvedValue(leads) } };
+    const svc = new LeadDedupeService(prisma, {} as never);
+    return svc.findDuplicates('ws1');
+  };
+
+  it('flags a name that is a whole-word extension of another', async () => {
+    const out = await run([
+      lead('a', 'Kaleiçi Meyhanesi'),
+      lead('b', 'Kaleiçi Meyhanesi Konyaaltı'),
+    ]);
+
+    expect(out).toHaveLength(1);
+    expect(out[0].possibleBranches).toBe(true);
+  });
+
+  it('still clusters them — the caution is a warning, not a filter', async () => {
+    // Only a human knows whether these are branches or one business recorded
+    // twice. Hiding the cluster would answer that question for them.
+    const out = await run([lead('a', 'Kandemir Kafe'), lead('b', 'Kandemir Kafe Pasaport')]);
+
+    expect(out[0].leads.map((l) => l.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('does NOT flag two records with the same name', async () => {
+    const out = await run([lead('a', 'Kandemir Kafe'), lead('b', 'kandemir  KAFE')]);
+
+    // Identical name and phone is the ordinary duplicate this list exists for.
+    expect(out[0].possibleBranches).toBeUndefined();
+  });
+
+  it('does NOT flag unrelated names that merely share a phone', async () => {
+    const out = await run([lead('a', 'jeena'), lead('b', 'Tarık')]);
+
+    expect(out[0].possibleBranches).toBeUndefined();
+  });
+
+  it('ignores punctuation and case when comparing, not word boundaries', async () => {
+    // "Kafe" must not count as an extension of "Kaf" — a shared prefix inside a
+    // word says nothing, and flagging on it would make the caution meaningless.
+    const out = await run([lead('a', 'Kaf'), lead('b', 'Kafe')]);
+
+    expect(out[0].possibleBranches).toBeUndefined();
+  });
+});
