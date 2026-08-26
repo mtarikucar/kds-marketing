@@ -257,4 +257,42 @@ export function registerChannelWriteTools(registry: McpToolRegistry, deps: Inbox
       } as never);
     },
   });
+
+  /**
+   * "Can this channel actually receive?"
+   *
+   * The check existed and nothing could reach it. Verify was a button on a
+   * panel screen, so the one question that matters about an inbox — is anyone
+   * actually going to hear a customer who writes in — could not be asked from
+   * anywhere else, including by whoever is trying to work out why the inbox has
+   * been quiet.
+   *
+   * That question got sharper teeth in the same change that added this tool:
+   * healthCheck used to call GET /me and stop, which proves the token is alive
+   * and says nothing about whether the app is subscribed to the Page's
+   * `messages` webhook. Those are independent, and a channel with a good token
+   * and no subscription is deaf while looking perfectly healthy.
+   *
+   * READ: it sends nothing, publishes nothing, and changes nothing about what
+   * the channel does. It runs one live probe against the provider and, on
+   * success only, stamps lastVerifiedAt — a diagnostic, not an act.
+   */
+  registry.register({
+    name: 'jeeta.verify_channel',
+    description:
+      'Run a live health check against a channel and report whether it can actually send AND receive. ' +
+      "For Messenger and Instagram this also asks Meta whether the app is subscribed to the Page's " +
+      '`messages` webhook — a valid token alone does not mean inbound messages arrive. Use it when an ' +
+      'inbox has gone quiet, before concluding that nobody has written. Read-only: nothing is sent or ' +
+      'published.',
+    domain: 'inbox',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({
+      channelId: z.string().min(1).describe('Channel id, from jeeta.list_channels.'),
+    }),
+    handler: async (ctx, args) => deps.channels.verify(ctx.workspaceId, String(args.channelId)),
+  });
 }
