@@ -70,6 +70,7 @@ export class DailyDigestService {
       brokenAccounts,
       deadJobs,
       agentlessWaiting,
+      overdueDrafts,
       spend,
     ] = await Promise.all([
       this.prisma.lead.count({
@@ -203,6 +204,27 @@ export class DailyDigestService {
         `
         .then((r) => Number(r[0]?.count ?? 0))
         .catch(() => 0),
+      // Campaigns whose moment has arrived while they are still drafts.
+      //
+      // Anchored on the date the owner themselves set, which is what keeps this
+      // from becoming noise: a draft with no date is just a draft and is never
+      // counted, and the moment someone either launches it or moves the date,
+      // the line clears itself.
+      //
+      // Found by sweeping the workspace: the one HummyTummy social campaign was
+      // a seasonal push dated 18 Aug - 30 Sep, sitting in DRAFT with eight days
+      // of its own window already spent. A season does not wait, and nothing
+      // anywhere said a word about it.
+      Promise.all([
+        this.prisma.socialCampaign.count({
+          where: { workspaceId, status: 'DRAFT', startDate: { lte: now } },
+        }),
+        this.prisma.campaign.count({
+          where: { workspaceId, status: 'DRAFT', scheduledAt: { lte: now } },
+        }),
+      ])
+        .then(([a, b]) => a + b)
+        .catch(() => 0),
       this.usage.breakdown(workspaceId, 1).catch(() => null),
     ]);
 
@@ -241,6 +263,10 @@ export class DailyDigestService {
     if (deadJobs)
       needsYou.push(
         `${deadJobs} arka plan işi tüm denemelerini tüketip başarısız oldu — sebebi işin kaydında yazıyor`,
+      );
+    if (overdueDrafts)
+      needsYou.push(
+        `${overdueDrafts} kampanyanın başlama zamanı geçmiş ama hâlâ taslakta — ya başlat ya tarihini ileri al`,
       );
 
     const today: string[] = [];

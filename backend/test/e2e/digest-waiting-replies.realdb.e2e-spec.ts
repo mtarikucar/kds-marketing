@@ -118,6 +118,7 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
     await prisma.lead.deleteMany({ where: { workspaceId } });
     await prisma.channel.deleteMany({ where: { workspaceId } });
     await prisma.agentProfile.deleteMany({ where: { workspaceId } });
+    await prisma.socialCampaign.deleteMany({ where: { workspaceId } });
     await prisma.workspace.deleteMany({ where: { id: { in: [workspaceId, otherWorkspaceId] } } });
     await closeTestApp(app);
   });
@@ -206,5 +207,79 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
     expect(later!.needsYou.items.join(' | ')).not.toMatch(/arka plan işi/);
 
     await prisma.scheduledJob.deleteMany({ where: { workspaceId } });
+  });
+
+  /**
+   * A campaign whose own start date has passed while it is still a draft.
+   *
+   * The anchor is the date the OWNER set, which is what keeps the line honest:
+   * a draft with no date is just a draft and must never be counted, or the
+   * section fills with every half-written idea and stops being read.
+   *
+   * The live workspace had exactly one HummyTummy social campaign — a seasonal
+   * push dated 18 Aug to 30 Sep — sitting in DRAFT with eight days of its own
+   * window already spent, and nothing anywhere said a word about it.
+   */
+  it('counts a draft whose start date has passed, and ignores one still in the future', async () => {
+    await prisma.socialCampaign.create({
+      data: {
+        workspaceId,
+        name: 'gecikmis',
+        brief: {},
+        automationMode: 'SEMI_AUTO',
+        planningMode: 'AI_PROPOSE',
+        cadence: {},
+        targetAccountIds: [],
+        mediaKinds: [],
+        createdById: leadId,
+        status: 'DRAFT',
+        startDate: t(60 * 24),
+      } as never,
+    });
+    await prisma.socialCampaign.create({
+      data: {
+        workspaceId,
+        name: 'henuz-zamani-gelmedi',
+        brief: {},
+        automationMode: 'SEMI_AUTO',
+        planningMode: 'AI_PROPOSE',
+        cadence: {},
+        targetAccountIds: [],
+        mediaKinds: [],
+        createdById: leadId,
+        status: 'DRAFT',
+        startDate: new Date(Date.now() + 7 * 24 * 3600_000),
+      } as never,
+    });
+
+    const d = await digest.build(workspaceId);
+    expect(d!.needsYou.items.join(' | ')).toMatch(/1 kampanyanın başlama zamanı geçmiş/);
+
+    await prisma.socialCampaign.deleteMany({ where: { workspaceId } });
+  });
+
+  it('stops counting once the campaign leaves DRAFT', async () => {
+    const c = await prisma.socialCampaign.create({
+      data: {
+        workspaceId,
+        name: 'baslatildi',
+        brief: {},
+        automationMode: 'SEMI_AUTO',
+        planningMode: 'AI_PROPOSE',
+        cadence: {},
+        targetAccountIds: [],
+        mediaKinds: [],
+        createdById: leadId,
+        status: 'DRAFT',
+        startDate: t(60 * 24),
+      } as never,
+    });
+
+    await prisma.socialCampaign.update({ where: { id: c.id }, data: { status: 'ACTIVE' } });
+
+    const d = await digest.build(workspaceId);
+    expect(d!.needsYou.items.join(' | ')).not.toMatch(/kampanyanın başlama zamanı geçmiş/);
+
+    await prisma.socialCampaign.deleteMany({ where: { workspaceId } });
   });
 });

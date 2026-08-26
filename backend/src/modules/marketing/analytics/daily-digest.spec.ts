@@ -46,6 +46,8 @@ describe('DailyDigestService', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
       socialAccount: { count: jest.fn().mockResolvedValue(0) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
     };
     svc = new DailyDigestService(prisma, usage as never);
   });
@@ -152,6 +154,8 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ count: waiting }]),
       socialAccount: { count: jest.fn().mockResolvedValue(0) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
     };
     svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never);
     return prisma;
@@ -222,6 +226,8 @@ describe('DailyDigestService — accounts that stopped working', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
       socialAccount: { count: jest.fn().mockResolvedValue(broken) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
     };
     const svc = new DailyDigestService(
       prisma,
