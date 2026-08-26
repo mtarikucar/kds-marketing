@@ -282,14 +282,35 @@ export class ConversationAiEngineService implements OnModuleInit {
       if (outcome.handoff) {
         await this.escalate(workspaceId, conversationId, outcome.handoffReason ?? 'agent requested handoff');
       } else if (outcome.text.trim()) {
-        await this.sender.send({ workspaceId, conversationId, text: outcome.text.trim(), authorType: 'AI' });
-        sent = true;
-        // BUG 1 FIX: scheduleFollowup is non-fatal — a throw here MUST NOT
-        // propagate after send() succeeds, which would cause onInbound() to
-        // schedule a retry and send a duplicate reply + charge a second credit.
-        await this.scheduleFollowup(workspaceId, conversationId, agent).catch((e) =>
-          this.logger.warn(`followup scheduling failed (non-fatal): ${(e as Error).message}`),
-        );
+        // MessageSenderService does NOT throw when the provider rejects the
+        // message: it refunds the channel quota, logs, persists the row as
+        // FAILED and returns normally. `sent = true` here regardless meant a
+        // rejected reply skipped the credit refund and the slot release below,
+        // and scheduled a follow-up — so the customer got nothing, the
+        // workspace paid a credit, a daily slot burned, and a nudge was queued
+        // for a conversation that had never been answered. On web chat a send
+        // effectively cannot fail; on Meta channels (24h window, revoked token,
+        // template rejected) it can and does.
+        const outbound = await this.sender.send({
+          workspaceId,
+          conversationId,
+          text: outcome.text.trim(),
+          authorType: 'AI',
+        });
+        sent = outbound?.status === 'SENT';
+        if (!sent) {
+          this.decline(
+            conversationId,
+            'the channel refused the reply — credit and daily slot released, no follow-up scheduled',
+          );
+        } else {
+          // BUG 1 FIX: scheduleFollowup is non-fatal — a throw here MUST NOT
+          // propagate after send() succeeds, which would cause onInbound() to
+          // schedule a retry and send a duplicate reply + charge a second credit.
+          await this.scheduleFollowup(workspaceId, conversationId, agent).catch((e) =>
+            this.logger.warn(`followup scheduling failed (non-fatal): ${(e as Error).message}`),
+          );
+        }
       }
     } finally {
       if (!sent) {
@@ -558,8 +579,21 @@ export class ConversationAiEngineService implements OnModuleInit {
       });
       const text = res.text.trim();
       if (text) {
-        await this.sender.send({ workspaceId, conversationId, text, authorType: 'AI' });
-        sent = true;
+        // Same as reply(): a provider rejection returns a FAILED row rather
+        // than throwing, and counting it as sent would keep the credit for a
+        // nudge nobody received.
+        const outbound = await this.sender.send({
+          workspaceId,
+          conversationId,
+          text,
+          authorType: 'AI',
+        });
+        sent = outbound?.status === 'SENT';
+        if (!sent) {
+          this.logger.log(
+            `followup not delivered convo=${conversationId}: the channel refused it — credit released`,
+          );
+        }
         // Post-send bookkeeping is non-fatal (mirrors reply()'s BUG 1 FIX): a
         // throw here would propagate with the message ALREADY delivered, the
         // ScheduledJob runner would retry the job, the un-persisted
