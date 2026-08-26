@@ -121,7 +121,8 @@ describe('MessengerAdapter parse + health', () => {
 
     expect(res.ok).toBe(true);
     expect(res.details!.webhookSubscribed).toBe(true);
-    expect(mockFetch.mock.calls[1][0]).toBe('/page1/subscribed_apps');
+    // The node comes from /me (the token's own page), not from externalId.
+    expect(mockFetch.mock.calls[1][0]).toBe('/p/subscribed_apps');
   });
 
   it('healthCheck ok:false when the token works but nothing is subscribed', async () => {
@@ -208,5 +209,35 @@ describe('InstagramAdapter', () => {
     const a = new InstagramAdapter(registry as any);
     a.onModuleInit();
     expect(registry.register).toHaveBeenCalledWith(a);
+  });
+});
+
+/**
+ * Instagram's channel row stores the IG ACCOUNT id, but `subscribed_apps` only
+ * exists on the PAGE the account is attached to — asking the IG node returns
+ * "(#100) Tried accessing nonexisting field (subscribed_apps)". Found by
+ * running the real probe against the live Instagram channel, which came back
+ * inconclusive for exactly that reason while Messenger came back with its
+ * field list.
+ */
+describe("Meta webhook probe targets the token's own node", () => {
+  it('asks the page id from /me, not the Instagram account id', async () => {
+    process.env.META_APP_ID = 'app1';
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { id: 'page-77', name: 'HummyTummy' }, error: null })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { data: [{ id: 'app1', subscribed_fields: ['messages'] }] },
+        error: null,
+      });
+    const a = new InstagramAdapter(reg() as any);
+
+    const res = await a.healthCheck(
+      cfg({ pageAccessToken: 'pat' }, '17841446386025282'),
+    );
+
+    expect(mockFetch.mock.calls[1][0]).toBe('/page-77/subscribed_apps');
+    expect(res.details!.webhookSubscribed).toBe(true);
   });
 });
