@@ -268,11 +268,28 @@ export class BillingWebhooksController {
       case 'invoice.paid':
         await this.onInvoicePaid(event);
         break;
-      case 'customer.subscription.deleted':
-        await this.settlement.cancelSubscriptionByProviderRef(
+      case 'customer.subscription.deleted': {
+        // Returns FALSE when no subscription of ours carries this providerRef.
+        // Often benign — another product on the same Stripe account, a test
+        // event — but the alternative reading is that the ref drifted and a
+        // customer has cancelled at Stripe while we still treat them as
+        // subscribed, keeping entitlements they no longer pay for.
+        //
+        // We answer `received: true` either way, so Stripe never re-sends it.
+        // Not throwing is deliberate: a retry loop on an event we can never
+        // match is worse than a miss. But it must not vanish silently — this
+        // log is what makes "they say they cancelled and still have access"
+        // answerable.
+        const cancelled = await this.settlement.cancelSubscriptionByProviderRef(
           event.data.object.id,
         );
+        if (!cancelled) {
+          this.logger.warn(
+            `Stripe customer.subscription.deleted for ${event.data.object.id} matched no local subscription — nothing was cancelled`,
+          );
+        }
         break;
+      }
       default:
         this.logger.debug(`Ignoring unhandled Stripe event ${event.type}`);
     }
