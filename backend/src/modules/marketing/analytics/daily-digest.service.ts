@@ -55,6 +55,10 @@ export class DailyDigestService {
 
     const since = new Date(now.getTime() - DAY_MS);
     const soon = new Date(now.getTime() + DAY_MS);
+    // A week is the window for "renew this before it stops working": long
+    // enough that a reconnect can wait for a working day, short enough that the
+    // line does not sit there for a month training people to ignore it.
+    const soon7 = new Date(now.getTime() + 7 * DAY_MS);
 
     const [
       newLeads,
@@ -71,6 +75,7 @@ export class DailyDigestService {
       deadJobs,
       agentlessWaiting,
       overdueDrafts,
+      expiringSoon,
       spend,
     ] = await Promise.all([
       this.prisma.lead.count({
@@ -149,15 +154,27 @@ export class DailyDigestService {
       // So: 'reauth_required' (the refresher gave up, or a provider rejected
       // the token) or a live account whose token has run out. Both mean
       // something the owner switched ON has stopped working.
-      this.prisma.socialAccount.count({
-        where: {
-          workspaceId,
-          OR: [
-            { lastError: 'reauth_required' },
-            { enabled: true, tokenExpiresAt: { lt: new Date() } },
-          ],
-        },
-      }),
+      //
+      // Ad accounts count too, and did not before. `TOKEN_EXPIRED` is written by
+      // our own code the moment a Meta/TikTok call comes back with an auth
+      // error, so it is never ambiguous and never accidental — and while it
+      // stands, insights stop syncing, spend reporting quietly goes stale and
+      // the budget autopilot cannot act. On the live workspace one of the three
+      // ad accounts has been sitting in that state with nothing reporting it.
+      Promise.all([
+        this.prisma.socialAccount.count({
+          where: {
+            workspaceId,
+            OR: [
+              { lastError: 'reauth_required' },
+              { enabled: true, tokenExpiresAt: { lt: new Date() } },
+            ],
+          },
+        }),
+        this.prisma.adAccount.count({ where: { workspaceId, status: 'TOKEN_EXPIRED' } }),
+      ])
+        .then(([a, b]) => a + b)
+        .catch(() => 0),
       // Background jobs that gave up.
       //
       // A FAILED row means the queue exhausted every attempt — there is no
@@ -225,6 +242,27 @@ export class DailyDigestService {
       ])
         .then(([a, b]) => a + b)
         .catch(() => 0),
+      // Tokens with an expiry date that is nearly here.
+      //
+      // The line above reports a connection that has ALREADY broken, which is
+      // the wrong moment: nobody can reconnect an account retroactively, so by
+      // then the posts that did not go out have not gone out. An expiry is one
+      // of the few failures that announces itself in advance, and the only
+      // reason it ever surprises anyone is that nothing was reading the date.
+      //
+      // Seven days, and only for connections that are currently live — an
+      // account already disabled or already expired belongs to the line above,
+      // not this one, and counting it in both would say the same thing twice.
+      Promise.all([
+        this.prisma.socialAccount.count({
+          where: { workspaceId, enabled: true, tokenExpiresAt: { gt: now, lte: soon7 } },
+        }),
+        this.prisma.adAccount.count({
+          where: { workspaceId, status: 'ACTIVE', tokenExpiresAt: { gt: now, lte: soon7 } },
+        }),
+      ])
+        .then(([a, b]) => a + b)
+        .catch(() => 0),
       this.usage.breakdown(workspaceId, 1).catch(() => null),
     ]);
 
@@ -263,6 +301,10 @@ export class DailyDigestService {
     if (deadJobs)
       needsYou.push(
         `${deadJobs} arka plan işi tüm denemelerini tüketip başarısız oldu — sebebi işin kaydında yazıyor`,
+      );
+    if (expiringSoon)
+      needsYou.push(
+        `${expiringSoon} bağlı hesabın yetkisi bir hafta içinde doluyor — şimdi yenilenmezse o kanal sessizce durur`,
       );
     if (overdueDrafts)
       needsYou.push(
