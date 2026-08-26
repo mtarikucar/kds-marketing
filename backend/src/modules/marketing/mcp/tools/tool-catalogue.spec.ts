@@ -313,6 +313,8 @@ describe('MCP tool catalogue', () => {
         'jeeta.call_tool',
         'jeeta.list_team',
         'jeeta.create_webchat_channel',
+        'jeeta.list_channels',
+        'jeeta.set_channel_status',
         'jeeta.list_calendars',
         'jeeta.list_companies',
         'jeeta.list_ad_accounts',
@@ -422,7 +424,11 @@ describe('MCP tool catalogue', () => {
         'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(105);
+    // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
+    // so the advertised ceiling below is untouched — the agent could create a
+    // webchat channel but could not see what channels existed or take one out
+    // of service, which is a blind spot rather than a missing convenience.
+    expect(names).toHaveLength(107);
   });
 
   /**
@@ -503,7 +509,9 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    expect(registry.list(ALL_SCOPES)).toHaveLength(105);
+    // 107 total, 45 advertised: the two channel tools added above are deferred,
+    // so the ceiling asserted on the two lines above is what stayed fixed.
+    expect(registry.list(ALL_SCOPES)).toHaveLength(107);
   });
 });
 
