@@ -41,6 +41,9 @@ describe('DailyDigestService', () => {
       marketingTask: { count: jest.fn() },
       workspaceMembership: { findMany: jest.fn() },
       marketingUser: { findMany: jest.fn() },
+      // Waiting-reply count is a column comparison, so it is raw SQL. Default
+      // to none; the cases that care override it.
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
     };
     svc = new DailyDigestService(prisma, usage as never);
   });
@@ -116,5 +119,71 @@ describe('DailyDigestService', () => {
     prisma.workspaceMembership.findMany.mockResolvedValue([]);
     await expect(svc.recipients(WS)).resolves.toEqual([]);
     expect(prisma.marketingUser.findMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A customer waiting for a reply.
+ *
+ * The brief covered approvals, candidates, tasks and leads but never
+ * conversations — the word appeared once in the whole service, in the docstring
+ * listing what it covers. So the most time-sensitive item in the inbox was the
+ * one thing the morning email could not tell you about. On the live workspace a
+ * WhatsApp thread sat on "bilgi almak icin dort gozle bekliyorum" for 46 days
+ * with nothing anywhere reporting it.
+ */
+describe('DailyDigestService — conversations waiting for a reply', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let svc: DailyDigestService;
+
+  const build = (waiting: bigint) => {
+    prisma = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS, name: 'HummyTummy' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: waiting }]),
+    };
+    svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never);
+    return prisma;
+  };
+
+  it('lists waiting conversations under "needs you"', async () => {
+    build(3n);
+
+    const d = await svc.build(WS);
+
+    expect(d!.needsYou.items.join(' | ')).toMatch(/3 konuşma yanıt bekliyor/);
+  });
+
+  it('is the only thing keeping an otherwise silent morning from being empty', async () => {
+    // Nothing happened, nothing else waits — but a customer is still hanging.
+    // Before this the digest would have gone out empty, i.e. not at all.
+    build(1n);
+
+    const d = await svc.build(WS);
+
+    expect(d!.empty).toBe(false);
+  });
+
+  it('says nothing when every thread has been answered', async () => {
+    build(0n);
+
+    const d = await svc.build(WS);
+
+    expect(d!.needsYou.items.join(' | ')).not.toMatch(/yanıt bekliyor/);
+  });
+
+  it('survives a failed count rather than losing the whole brief', async () => {
+    const p = build(0n);
+    p.$queryRaw.mockRejectedValue(new Error('db hiccup'));
+
+    // One unavailable number must not cost the owner the other four.
+    await expect(svc.build(WS)).resolves.toBeTruthy();
   });
 });
