@@ -1232,6 +1232,9 @@ export class MarketingModule {
     entitlements: EntitlementsService,
     // Powers jeeta.list_team — the assignedToId resolver the MCP surface lacked.
     marketingUsers: MarketingUsersService,
+    // Powers jeeta.list_background_jobs — the retry queue had no reader at all,
+    // so a job's lastError was written and never seen.
+    scheduledJobs: ScheduledJobService,
     // Faz 5 D1 — the CRM write lane.
     principals: McpPrincipalService,
     activities: MarketingActivitiesService,
@@ -1283,7 +1286,7 @@ export class MarketingModule {
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
     registerSchedulingTools(registry, { bookings, entitlements });
-    registerWorkspaceTools(registry, { entitlements, users: marketingUsers });
+    registerWorkspaceTools(registry, { entitlements, users: marketingUsers, jobs: scheduledJobs });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerCampaignWriteTools(registry, { campaigns, entitlements });

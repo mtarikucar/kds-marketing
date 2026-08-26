@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import { MarketingUsersService } from '../../services/marketing-users.service';
+import { ScheduledJobService } from '../../scheduling/scheduled-job.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 export interface WorkspaceToolDeps {
   entitlements: EntitlementsService;
   users: MarketingUsersService;
+  jobs: ScheduledJobService;
 }
 
 /**
@@ -73,5 +75,59 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
           status: u.status,
         }));
     },
+  });
+
+  /**
+   * The queue was unreadable, and that is what kept a broken feature broken.
+   *
+   * Every deferred thing in this product is a `scheduled_jobs` row — AI
+   * replies, follow-ups, campaign batches, lead imports, booking reminders —
+   * and each row records the error of its last attempt in `lastError`. Nothing
+   * anywhere returned it: no API route, no panel screen, no tool. A job could
+   * burn all five attempts, land in FAILED, and the only evidence was a log
+   * line on the box.
+   *
+   * The cost of that was concrete. The conversation engine catches a failed
+   * live reply and schedules a retry job precisely so the reason survives — and
+   * the reason did survive, in a column with no reader, while the AI answered
+   * nobody for weeks and every surface reported that it was working.
+   *
+   * Read-only and deferred: this is what you reach for when something should
+   * have happened and didn't, not part of the per-turn surface.
+   */
+  registry.register({
+    name: 'jeeta.list_background_jobs',
+    description:
+      "List this workspace's background jobs — AI replies, follow-ups, campaign batches, imports, " +
+      'reminders — with their status, attempt count and the error from the last attempt. This is the ' +
+      'place to look when something was supposed to happen and did not: a FAILED or repeatedly-retried ' +
+      'job here names the actual reason. Read-only.',
+    domain: 'workspace',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({
+      kind: z
+        .string()
+        .optional()
+        .describe(
+          "Filter to one job kind, e.g. 'conversation.ai_reply', 'conversation.followup', " +
+            "'campaign.batch', 'import.batch', 'booking.reminder'.",
+        ),
+      status: z
+        .enum(['PENDING', 'RUNNING', 'DONE', 'FAILED', 'CANCELLED'])
+        .optional()
+        .describe('Filter by status. Omit to see every state, newest first.'),
+      limit: z.number().int().min(1).max(100).optional().describe('Rows to return. Defaults to 20.'),
+    }),
+    // The registry hands every handler `Record<string, unknown>`; the zod schema
+    // above has already validated these three, so the casts are safe.
+    handler: async (ctx, args) =>
+      deps.jobs.list(ctx.workspaceId, {
+        kind: args.kind as string | undefined,
+        status: args.status as string | undefined,
+        limit: args.limit as number | undefined,
+      }),
   });
 }
