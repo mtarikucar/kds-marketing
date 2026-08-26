@@ -125,16 +125,19 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
   it('counts only the OPEN threads whose last message came from the customer', async () => {
     const d = await digest.build(workspaceId);
 
-    expect(d!.needsYou.items.join(' | ')).toMatch(/2 konuşma yanıt bekliyor/);
+    // Three: two on the agentless channel plus the one on the channel that has
+    // an agent. Whether an agent is attached does not change who is waiting —
+    // that distinction belongs to the separate line below, not to this count.
+    expect(d!.needsYou.items.join(' | ')).toMatch(/3 konuşma yanıt bekliyor/);
   });
 
   it('does not count a thread we answered after they wrote', async () => {
     const d = await digest.build(workspaceId);
 
-    // Three OPEN threads have an inbound; only two are still waiting. Getting
-    // the comparison backwards would report 3 here, and a mocked test could not
-    // tell the difference.
-    expect(d!.needsYou.items.join(' | ')).not.toMatch(/3 konuşma yanıt bekliyor/);
+    // Four OPEN threads have an inbound; only three are still waiting, because
+    // one of them we answered afterwards. Getting the comparison backwards
+    // would report 4 here, and a mocked test could not tell the difference.
+    expect(d!.needsYou.items.join(' | ')).not.toMatch(/4 konuşma yanıt bekliyor/);
   });
 
   /**
