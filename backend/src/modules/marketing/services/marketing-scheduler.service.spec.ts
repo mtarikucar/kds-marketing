@@ -97,3 +97,62 @@ describe('MarketingSchedulerService.sweepExpiredPendingConnections', () => {
     await expect(svc.sweepExpiredPendingConnections()).resolves.toEqual({ deleted: 0 });
   });
 });
+
+/**
+ * Approvals whose window has closed.
+ *
+ * PENDING -> EXPIRED happened in exactly one place: inside decide(), when a
+ * human clicked approve or reject on a card that had already lapsed. So an
+ * expired request nobody touched stayed PENDING for good — the queue offered
+ * it as actionable, the morning brief counted it every day, and clicking it
+ * only ever answered "request has expired".
+ *
+ * A count that can never reach zero is the line that teaches the owner to skip
+ * the section — and that section now carries "a customer is waiting".
+ */
+describe('MarketingSchedulerService.expireStaleApprovals', () => {
+  const WS = 'ws-1';
+
+  const build = (count = 2) => {
+    const prisma: any = {
+      workspace: { findMany: jest.fn().mockResolvedValue([{ id: WS }]) },
+      approvalRequest: { updateMany: jest.fn().mockResolvedValue({ count }) },
+    };
+    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any) };
+  };
+
+  it('retires only lapsed requests that are still PENDING', async () => {
+    const { prisma, svc } = build();
+
+    const res = await svc.expireStaleApprovals();
+
+    const call = prisma.approvalRequest.updateMany.mock.calls[0][0];
+    expect(call.where.status).toBe('PENDING');
+    expect(call.where.expiresAt.lt).toBeInstanceOf(Date);
+    expect(call.data).toEqual({ status: 'EXPIRED' });
+    expect(res).toEqual({ expired: 2 });
+  });
+
+  it('never clobbers a decision made in the same tick', async () => {
+    const { prisma, svc } = build();
+
+    await svc.expireStaleApprovals();
+
+    // Same guard decide() writes under: an APPROVED or REJECTED row is not
+    // PENDING, so it cannot be swept out from under the person who decided it.
+    expect(prisma.approvalRequest.updateMany.mock.calls[0][0].where.status).toBe('PENDING');
+  });
+
+  it('scopes the sweep per workspace', async () => {
+    const { prisma, svc } = build();
+
+    await svc.expireStaleApprovals();
+
+    expect(prisma.approvalRequest.updateMany.mock.calls[0][0].where.workspaceId).toBe(WS);
+  });
+
+  it('reports zero without failing when nothing has lapsed', async () => {
+    const { svc } = build(0);
+    await expect(svc.expireStaleApprovals()).resolves.toEqual({ expired: 0 });
+  });
+});

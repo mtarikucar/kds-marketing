@@ -101,6 +101,54 @@ export class MarketingSchedulerService {
   }
 
   /**
+   * Retire approval requests whose window has closed.
+   *
+   * PENDING -> EXPIRED happened in exactly one place: inside decide(), when a
+   * human clicked approve or reject on a card that had already lapsed. So an
+   * expired request NOBODY touched stayed PENDING for good — the approval
+   * queue offered it as actionable, the morning brief counted it in
+   * "N onay bekliyor" every day, and clicking it only ever answered
+   * "request has expired".
+   *
+   * A count that can never reach zero is worse than no count: it is the line
+   * that teaches the owner to skip the section, and the section it sits in is
+   * the one carrying "a customer is waiting for a reply".
+   *
+   * Hourly rather than daily. A stale card is misleading from the moment it
+   * lapses, and the MCP lane's TTL is 24h, so a daily sweep would leave a full
+   * day of them. Guarded on status PENDING, so a decision made in the same
+   * tick is never clobbered — the same condition decide() writes under.
+   */
+  @Cron(CronExpression.EVERY_HOUR, { name: 'marketing-approval-expiry' })
+  async expireStaleApprovals(): Promise<{ expired: number }> {
+    let outcome = { expired: 0 };
+    await withAdvisoryLock(
+      this.prisma,
+      'marketing-approval-expiry',
+      async () => {
+        const workspaces = await this.prisma.workspace.findMany({
+          where: { status: 'ACTIVE' },
+          select: { id: true },
+        });
+        let expired = 0;
+        for (const ws of workspaces) {
+          const res = await this.prisma.approvalRequest.updateMany({
+            where: { workspaceId: ws.id, status: 'PENDING', expiresAt: { lt: new Date() } },
+            data: { status: 'EXPIRED' },
+          });
+          expired += res.count;
+        }
+        if (expired > 0) {
+          this.logger.log(`approval-expiry: retired ${expired} lapsed request(s)`);
+        }
+        outcome = { expired };
+      },
+      this.logger,
+    );
+    return outcome;
+  }
+
+  /**
    * Delete OAuth hand-offs nobody came back for.
    *
    * A PendingSocialConnection holds a SEALED provider access token between the
