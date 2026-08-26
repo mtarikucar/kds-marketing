@@ -312,6 +312,7 @@ describe('MCP tool catalogue', () => {
       [
         'jeeta.call_tool',
         'jeeta.list_team',
+        'jeeta.list_background_jobs',
         'jeeta.create_webchat_channel',
         'jeeta.list_channels',
         'jeeta.get_distribution_config',
@@ -429,7 +430,10 @@ describe('MCP tool catalogue', () => {
     // so the advertised ceiling below is untouched — the agent could create a
     // webchat channel but could not see what channels existed or take one out
     // of service, which is a blind spot rather than a missing convenience.
-    expect(names).toHaveLength(108);
+    // 108 -> 109: jeeta.list_background_jobs, also deferred. Same shape of gap —
+    // the retry queue behind every deferred action had no reader at all, so a
+    // job's lastError was recorded and then unreachable from anywhere.
+    expect(names).toHaveLength(109);
   });
 
   /**
@@ -510,9 +514,10 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 107 total, 45 advertised: the two channel tools added above are deferred,
-    // so the ceiling asserted on the two lines above is what stayed fixed.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(108);
+    // 109 total, 45 advertised: list_background_jobs, like the channel tools
+    // before it, is deferred — so the ceiling asserted on the two lines above is
+    // what stayed fixed while the catalogue grew.
+    expect(registry.list(ALL_SCOPES)).toHaveLength(109);
   });
 });
 

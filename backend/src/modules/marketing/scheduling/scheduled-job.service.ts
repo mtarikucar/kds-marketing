@@ -101,6 +101,50 @@ export class ScheduledJobService {
     return res.count > 0;
   }
 
+  /**
+   * Read the queue.
+   *
+   * Everything deferred in this product runs through `scheduled_jobs` —
+   * AI replies, follow-ups, campaign batches, imports, booking reminders — and
+   * each row carries the `lastError` of its most recent attempt. Until this
+   * method there was no way to read any of that: no API route, no MCP tool, no
+   * panel screen. A job could fail its five attempts and land in FAILED and the
+   * only trace was a log line on the box.
+   *
+   * That is how a silent AI stays silent. The reply path deliberately schedules
+   * a retry job when a live reply throws, so the exception that stopped it was
+   * being captured correctly the whole time — into a column nobody could read.
+   *
+   * Workspace-scoped, newest first, and it returns `lastError` verbatim because
+   * a redacted error answers nothing.
+   */
+  async list(
+    workspaceId: string,
+    opts: { kind?: string; status?: string; limit?: number } = {},
+  ) {
+    return this.prisma.scheduledJob.findMany({
+      where: {
+        workspaceId,
+        ...(opts.kind ? { kind: opts.kind } : {}),
+        ...(opts.status ? { status: opts.status } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(opts.limit ?? 20, 1), 100),
+      select: {
+        id: true,
+        kind: true,
+        status: true,
+        runAt: true,
+        attempts: true,
+        maxAttempts: true,
+        lastError: true,
+        dedupKey: true,
+        createdAt: true,
+        completedAt: true,
+      },
+    });
+  }
+
   async cancelById(id: string): Promise<boolean> {
     const res = await this.prisma.scheduledJob.updateMany({
       where: { id, status: 'PENDING' },
