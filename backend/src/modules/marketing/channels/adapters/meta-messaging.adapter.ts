@@ -131,7 +131,20 @@ async function metaHealthCheck(
   }
 
   const base = { id: r.data?.id ?? null, name: r.data?.name ?? null };
-  const sub = await webhookSubscription(token, externalId);
+
+  // Probe the node the TOKEN belongs to, not the channel's externalId.
+  //
+  // For Messenger those are the same value. For Instagram they are not:
+  // externalId is the IG account id, `subscribed_apps` does not exist on that
+  // node, and asking it returns "(#100) Tried accessing nonexisting field".
+  // The subscription lives on the PAGE the IG account is attached to, which is
+  // exactly what /me just returned for a page access token.
+  //
+  // Verified live before this line was written: the same probe against the IG
+  // account id came back inconclusive, and against the page id came back with
+  // the real field list.
+  const node = (r.data?.id as string | undefined) || externalId;
+  const sub = await webhookSubscription(token, node);
 
   if (sub.subscribed === false) {
     // The token works; the channel still cannot hear anyone. Saying "ok" here
