@@ -21,7 +21,12 @@ export class BillingSchedulerService {
     private readonly entitlements: EntitlementsService,
   ) {}
 
-  @Cron(CronExpression.EVERY_HOUR)
+  // Named on purpose. @nestjs/schedule keys an unnamed @Cron by a UUID it
+  // regenerates on every boot, so this job showed up in the schedule listing as
+  // an opaque id that changed with each deploy — unreadable, and impossible to
+  // follow across restarts. Every other cron in this codebase is named; this was
+  // the only one that was not, and it happens to be the billing lifecycle sweep.
+  @Cron(CronExpression.EVERY_HOUR, { name: 'billing-lifecycle-sweep' })
   async sweepLifecycle(): Promise<void> {
     await withAdvisoryLock(
       this.prisma,
