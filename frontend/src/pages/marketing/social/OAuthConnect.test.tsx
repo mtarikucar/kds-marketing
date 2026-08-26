@@ -84,6 +84,14 @@ describe('AccountSelectDialog', () => {
     await waitFor(() => expect(screen.getByText('Acme')).toBeTruthy());
     expect(screen.getByText('@acme')).toBeTruthy();
 
+    // The selection must already be there in the SAME paint that first shows
+    // the list. It used to be applied by an effect one commit later, which left
+    // a frame where every box was empty and the primary action was disabled on
+    // a dialog that had just finished loading — and made this test flaky,
+    // because a click landing in that frame hit a disabled button and nothing
+    // was ever posted.
+    expect(screen.getByText(/Connect selected/i).closest('button')).not.toBeDisabled();
+
     fireEvent.click(screen.getByText(/Connect selected/i));
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(
