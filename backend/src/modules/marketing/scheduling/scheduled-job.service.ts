@@ -189,9 +189,12 @@ export class ScheduledJobService {
    * silently pair the wrong two rows — a confident wrong answer where two
    * honest lists will do.
    *
-   * `lastFiredAt` is per-process and resets on restart: it says the schedule is
-   * alive right now. The heartbeat says the work completed and survives a
-   * deploy. Neither replaces the other.
+   * `nextAt` is the field that carries weight here: populated, it proves the
+   * schedule is armed and due. `lastFiredAt` comes from the cron library's own
+   * bookkeeping and is mostly null in practice — read live it was populated for
+   * 3 of 41 jobs while 24 of them had just recorded a completed run — so it is
+   * returned for what it is worth and nothing is concluded from its absence.
+   * The heartbeat is what says the work actually happened.
    */
   private listRegisteredCrons() {
     const out: Array<{ name: string; lastFiredAt: Date | null; nextAt: Date | null }> = [];
