@@ -74,7 +74,12 @@ export class DailyDigestCron {
   @Cron(CronExpression.EVERY_HOUR, { name: 'daily-digest' })
   async tick(): Promise<{ sent: number; skipped: number }> {
     let outcome = { sent: 0, skipped: 0 };
-    await withAdvisoryLock(
+    // Caught here, NOT inside the lock. withAdvisoryLock records the failure on
+    // the job's heartbeat before rethrowing, so the error still reaches the one
+    // surface that can report it; swallowing it here only stops a cron tick
+    // from ending in an unhandled rejection.
+    try {
+      await withAdvisoryLock(
       this.prisma,
       'daily-digest',
       async () => {
@@ -84,6 +89,7 @@ export class DailyDigestCron {
         });
         let sent = 0;
         let skipped = 0;
+        const undelivered: string[] = [];
 
         for (const ws of workspaces) {
           try {
@@ -114,10 +120,24 @@ export class DailyDigestCron {
               skipped++;
               continue;
             }
+            // No mailer configured at all. sendPlainEmail would log an
+            // [EMAIL MOCK] line and return true, so without this the brief would
+            // be recorded as sent every morning forever on a deploy that cannot
+            // send anything.
+            if (!this.email.isConfigured()) {
+              undelivered.push(`${ws.id} → (mailer not configured)`);
+              skipped++;
+              continue;
+            }
             const body = this.digest.render(digest);
             const subject = `${digest.workspaceName} — günlük özet (${digest.forDate})`;
             for (const address of to) {
-              await this.email.sendPlainEmail(address, subject, body);
+              // The return value was ignored, so `sent++` ran whether or not
+              // anything left the building. A brief that fails to send is the
+              // one failure that cannot report itself by email, which is
+              // exactly why it has to surface somewhere else.
+              const ok = await this.email.sendPlainEmail(address, subject, body);
+              if (!ok) undelivered.push(`${ws.id} → ${address}`);
             }
             sent++;
           } catch (e) {
@@ -130,9 +150,23 @@ export class DailyDigestCron {
         if (sent || skipped) {
           this.logger.log(`daily-digest sent ${sent} brief(s), skipped ${skipped}`);
         }
-      },
-      this.logger,
-    );
+
+        // Thrown AFTER the loop, deliberately: one workspace's mail failure must
+        // not cost the others their morning, but the run itself is not a success
+        // and must not read as one. withAdvisoryLock records the error on the
+        // job's heartbeat, which is readable — so the brief that could not
+        // announce its own failure announces it there instead.
+        if (undelivered.length) {
+          throw new Error(
+            `digest undelivered for ${undelivered.length} recipient(s): ${undelivered.slice(0, 5).join(', ')}`,
+          );
+        }
+        },
+        this.logger,
+      );
+    } catch (e) {
+      this.logger.error(`daily-digest: ${(e as Error)?.message ?? e}`);
+    }
     return outcome;
   }
 }
