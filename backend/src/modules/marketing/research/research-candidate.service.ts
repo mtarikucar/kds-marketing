@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLeadsIngestService, IngestResult } from '../services/marketing-leads-ingest.service';
-import { normalizePhone, normalizeEmail, localMsisdnVariants } from '../utils/lead-normalize';
+import { normalizePhone, normalizeEmail, localMsisdnVariants, toE164 } from '../utils/lead-normalize';
 
 /** A qualified candidate the research agent produced (matches IngestLeadCandidateDto). */
 export interface StagedCandidate {
@@ -45,7 +45,45 @@ export class ResearchCandidateService {
   ): Promise<{ staged: number; duplicates: number }> {
     let staged = 0;
     let duplicates = 0;
+
+    // The unique index is (workspaceId, profileId, externalRef), so the SAME
+    // business staged under a different ref kind is a different row. That is
+    // not hypothetical: this workspace has "Louise Cafe Brasserie & Loft"
+    // twice for one profile — google:ChIJZQVk… on 22 Aug and
+    // domain:louise.com.tr on 26 Aug — same phone, same website.
+    //
+    // The reviewer sees it twice, and the researcher spent credits finding a
+    // business it had already staged. Same insight as the accept-path fix:
+    // externalRef is one identity among several, and the CONTACT keys are the
+    // ones that actually identify a business.
+    //
+    // Loaded once rather than per candidate: a run stages a batch, and this is
+    // a suggestion queue, not a hot path.
+    const pending = await this.prisma.researchCandidate.findMany({
+      where: { workspaceId, profileId, status: 'PENDING' },
+      select: { phone: true, website: true },
+    });
+    const seenPhones = new Set(
+      pending.map((p) => toE164(p.phone)).filter((v): v is string => !!v),
+    );
+    const seenSites = new Set(
+      pending.map((p) => normalizeSite(p.website)).filter((v): v is string => !!v),
+    );
+
     for (const c of candidates) {
+      // toE164, NOT normalizePhone: the latter is a raw digit-strip, so
+      // "0545 447 51 00" and "+905454475100" reduce to different strings and
+      // the duplicate sails through. That is the same spelling trap the
+      // outbound path and the lead match keys both had.
+      const phone = toE164(c.phone ?? null);
+      const site = normalizeSite(c.website ?? null);
+      if ((phone && seenPhones.has(phone)) || (site && seenSites.has(site))) {
+        duplicates += 1;
+        continue;
+      }
+      if (phone) seenPhones.add(phone);
+      if (site) seenSites.add(site);
+
       const res = await this.prisma.researchCandidate.createMany({
         data: [{
           workspaceId, profileId, agentRunId,
@@ -220,6 +258,22 @@ export class ResearchCandidateService {
     });
     return { rejected: res.count };
   }
+}
+
+/**
+ * A website reduced to the thing that identifies the business: scheme, `www.`,
+ * path and trailing slash all dropped. `http://www.louise.com.tr/` and
+ * `https://louise.com.tr` are the same company and must collapse.
+ */
+function normalizeSite(raw: string | null | undefined): string | undefined {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (!v) return undefined;
+  const host = v
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/^www\./, '')
+    .split('/')[0]
+    .trim();
+  return host || undefined;
 }
 
 function toIngestCandidate(c: {
