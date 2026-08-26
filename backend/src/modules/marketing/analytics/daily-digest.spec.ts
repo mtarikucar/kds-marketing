@@ -46,6 +46,7 @@ describe('DailyDigestService', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
       socialAccount: { count: jest.fn().mockResolvedValue(0) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
     };
@@ -154,6 +155,7 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ count: waiting }]),
       socialAccount: { count: jest.fn().mockResolvedValue(0) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
     };
@@ -226,6 +228,7 @@ describe('DailyDigestService — accounts that stopped working', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
       socialAccount: { count: jest.fn().mockResolvedValue(broken) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
     };
@@ -265,5 +268,90 @@ describe('DailyDigestService — accounts that stopped working', () => {
     const d = await svc.build(WS);
 
     expect(d!.needsYou.items.join(' | ')).not.toMatch(/yetkisi düşmüş/);
+  });
+});
+
+/**
+ * Connections that have broken, and connections about to.
+ *
+ * The brief only ever looked at SocialAccount. An AdAccount in TOKEN_EXPIRED —
+ * a state our own code writes the moment Meta or TikTok answers with an auth
+ * error — was invisible, while insights stopped syncing, spend reporting went
+ * stale and the budget autopilot could not act. One of the three ad accounts on
+ * the live workspace has been sitting like that.
+ *
+ * And reporting a broken connection is the wrong moment on its own: nobody can
+ * reconnect retroactively, so by then the posts that did not go out have not
+ * gone out. An expiry is one of the few failures that announces itself in
+ * advance; the only reason it surprises anyone is that nothing read the date.
+ */
+describe('DailyDigestService — connection health', () => {
+  const WS2 = 'ws-conn';
+  const build = (social: number, ad: number, socialSoon: number, adSoon: number) => {
+    const socialCount = jest
+      .fn()
+      .mockResolvedValueOnce(social)
+      .mockResolvedValueOnce(socialSoon);
+    const adCount = jest.fn().mockResolvedValueOnce(ad).mockResolvedValueOnce(adSoon);
+    const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS2, name: 'HummyTummy' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
+      socialAccount: { count: socialCount },
+      adAccount: { count: adCount },
+    };
+    return {
+      prisma,
+      svc: new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never),
+    };
+  };
+
+  it('counts a broken ad account alongside a broken social account', async () => {
+    const { svc } = build(1, 1, 0, 0);
+
+    const d = await svc.build(WS2);
+
+    expect(d!.needsYou.items.join(' | ')).toMatch(/2 bağlı hesabın yetkisi düşmüş/);
+  });
+
+  it('only TOKEN_EXPIRED ad accounts count — DISCONNECTED is a decision, not a fault', async () => {
+    const { prisma, svc } = build(0, 0, 0, 0);
+    await svc.build(WS2);
+
+    expect(prisma.adAccount.count.mock.calls[0][0].where.status).toBe('TOKEN_EXPIRED');
+  });
+
+  it('warns about a token expiring within the week, on its own line', async () => {
+    const { svc } = build(0, 0, 1, 1);
+
+    const d = await svc.build(WS2);
+    const items = d!.needsYou.items.join(' | ');
+
+    expect(items).toMatch(/2 bağlı hesabın yetkisi bir hafta içinde doluyor/);
+    // Distinct from the broken line: "will stop" and "has stopped" call for
+    // different actions and must not be collapsed into one number.
+    expect(items).not.toMatch(/bağlı hesabın yetkisi düşmüş/);
+  });
+
+  it('looks ahead, not behind — the window opens at now, not at the epoch', async () => {
+    const { prisma, svc } = build(0, 0, 1, 0);
+    const before = Date.now();
+    await svc.build(WS2);
+
+    const where = prisma.socialAccount.count.mock.calls[1][0].where;
+    // An ALREADY-expired token belongs to the broken line above; counting it
+    // here as well would report the same account twice with two different
+    // instructions.
+    expect(where.tokenExpiresAt.gt.getTime()).toBeGreaterThanOrEqual(before - 5_000);
+    expect(where.enabled).toBe(true);
   });
 });
