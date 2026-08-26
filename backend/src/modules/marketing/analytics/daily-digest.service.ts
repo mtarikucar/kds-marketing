@@ -68,6 +68,8 @@ export class DailyDigestService {
       unassigned,
       waitingReplies,
       brokenAccounts,
+      deadJobs,
+      agentlessWaiting,
       spend,
     ] = await Promise.all([
       this.prisma.lead.count({
@@ -155,6 +157,52 @@ export class DailyDigestService {
           ],
         },
       }),
+      // Background jobs that gave up.
+      //
+      // A FAILED row means the queue exhausted every attempt — there is no
+      // interpretation of that which is fine, which is what makes it safe to
+      // report unconditionally (unlike a disabled account or an unattached
+      // agent, both of which can be deliberate).
+      //
+      // This is the line that would have ended a month of guessing. AI replies
+      // were dying on a 400 from the vendor — "Your credit balance is too low"
+      // — and the reason was written to scheduled_jobs.lastError on every
+      // attempt. Nothing read that column, so the only observable was silence:
+      // the inbox looked normal, the panel looked normal, and customers waited.
+      //
+      // Windowed to the digest period so a fixed problem stops being reported.
+      this.prisma.scheduledJob.count({
+        where: { workspaceId, status: 'FAILED', completedAt: { gte: since } },
+      }),
+      // Conversations waiting on a channel that has NO AI agent attached.
+      //
+      // Deliberately not "channels without an agent" — plenty of channels are
+      // meant to be answered by people, and a line that fires every morning
+      // regardless of whether anything is wrong is how a section teaches people
+      // to skip it. The pairing is what makes it actionable: someone is waiting
+      // AND the AI structurally cannot pick it up, so it is on a human or
+      // nobody.
+      //
+      // This is the other half of the same month of silence. Every customer
+      // conversation still open from June and July sits on Instagram,
+      // Messenger or WhatsApp, and none of those three has ever had an agent
+      // attached — so the reply engine declined at that gate every single time,
+      // correctly and invisibly.
+      this.prisma
+        .$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(DISTINCT c."channelId")::bigint AS count
+          FROM "conversations" c
+          JOIN "channels" ch ON ch."id" = c."channelId"
+          WHERE c."workspaceId" = ${workspaceId}
+            AND c."status" = 'OPEN'
+            AND c."aiPaused" = false
+            AND c."lastInboundAt" IS NOT NULL
+            AND (c."lastMessageAt" IS NULL OR c."lastInboundAt" >= c."lastMessageAt")
+            AND ch."status" = 'ACTIVE'
+            AND ch."agentProfileId" IS NULL
+        `
+        .then((r) => Number(r[0]?.count ?? 0))
+        .catch(() => 0),
       this.usage.breakdown(workspaceId, 1).catch(() => null),
     ]);
 
@@ -185,6 +233,14 @@ export class DailyDigestService {
     if (brokenAccounts)
       needsYou.push(
         `${brokenAccounts} bağlı hesabın yetkisi düşmüş — yeniden bağlanana kadar o kanaldan yayın/mesaj gitmez`,
+      );
+    if (agentlessWaiting)
+      needsYou.push(
+        `${agentlessWaiting} kanalda müşteri bekliyor ama AI ajanı bağlı değil — oraya yalnızca bir insan yanıt verebilir`,
+      );
+    if (deadJobs)
+      needsYou.push(
+        `${deadJobs} arka plan işi tüm denemelerini tüketip başarısız oldu — sebebi işin kaydında yazıyor`,
       );
 
     const today: string[] = [];
