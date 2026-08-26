@@ -129,23 +129,72 @@ export class ConversationAiEngineService implements OnModuleInit {
 
   // ---- Core reply path -----------------------------------------------------
 
+  /**
+   * Why a reply did not happen.
+   *
+   * Every branch below used to be a bare `return`, so an engine that declined
+   * every message looked exactly like an engine nobody had messaged. That is
+   * not hypothetical: on one workspace `conversation.reply` had never been
+   * recorded once in 30 days of AI usage — four customers waiting since June —
+   * and working out WHICH gate closed meant reading the source and guessing,
+   * because nothing anywhere had written the reason down.
+   *
+   * Logged at `log`, not `debug`: a decline is the answer to "why is the AI
+   * silent", and production does not print debug.
+   */
+  private decline(conversationId: string, reason: string): void {
+    this.logger.log(`ai reply declined convo=${conversationId}: ${reason}`);
+  }
+
   private async reply(workspaceId: string, conversationId: string): Promise<void> {
-    if (!this.anthropic.isEnabled()) return;
+    if (!this.anthropic.isEnabled()) {
+      this.decline(conversationId, 'anthropic not configured (ANTHROPIC_API_KEY)');
+      return;
+    }
 
     const convo = await this.prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId },
     });
-    if (!convo || convo.status !== 'OPEN' || convo.aiPaused) return;
+    if (!convo) {
+      this.decline(conversationId, 'conversation not found in this workspace');
+      return;
+    }
+    if (convo.status !== 'OPEN') {
+      this.decline(conversationId, `conversation is ${convo.status}, not OPEN`);
+      return;
+    }
+    if (convo.aiPaused) {
+      this.decline(conversationId, 'AI paused on this conversation (a human took over)');
+      return;
+    }
 
     const channel = await this.prisma.channel.findFirst({
       where: { id: convo.channelId, workspaceId },
     });
-    if (!channel || channel.status !== 'ACTIVE' || !channel.agentProfileId) return;
+    if (!channel) {
+      this.decline(conversationId, 'channel not found');
+      return;
+    }
+    if (channel.status !== 'ACTIVE') {
+      this.decline(conversationId, `channel is ${channel.status}, not ACTIVE`);
+      return;
+    }
+    if (!channel.agentProfileId) {
+      this.decline(conversationId, `no agent profile attached to channel ${channel.type}`);
+      return;
+    }
 
     const agent = await this.prisma.agentProfile.findFirst({
       where: { id: channel.agentProfileId, workspaceId },
     });
-    if (!agent || agent.status !== 'ACTIVE') return;
+    if (!agent) {
+      this.decline(conversationId, 'attached agent profile no longer exists');
+      return;
+    }
+    if (agent.status !== 'ACTIVE') {
+      this.decline(conversationId, `agent profile is ${agent.status}, not ACTIVE`);
+      return;
+    }
 
     const today = new Date().toISOString().slice(0, 10);
 
@@ -207,7 +256,10 @@ export class ConversationAiEngineService implements OnModuleInit {
          WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
            AND ("aiRepliesDayKey" <> ${today} OR "aiRepliesDayKey" IS NULL OR "aiRepliesToday" < ${agent.maxRepliesPerConvoDaily})`;
       if (claimed === 0) {
-        this.logger.debug(`convo=${conversationId} hit daily AI reply cap (or lost race)`);
+        this.decline(
+          conversationId,
+          `daily reply cap reached (${agent.maxRepliesPerConvoDaily}/day) or lost the slot race`,
+        );
         return;
       }
       slotClaimed = true;
