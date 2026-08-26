@@ -186,6 +186,70 @@ export class MarketingSchedulerService {
     return outcome;
   }
 
+  /**
+   * Calls abandoned in INITIATED.
+   *
+   * SalesCallService already auto-cancels a stale INITIATED row — but only
+   * inside `dial()`, as a side effect of someone placing the NEXT call. If
+   * nobody dials again, nothing ever runs, and the row simply stays. On the live
+   * workspace one call has been sitting in INITIATED since 15 August: not
+   * because the cleanup is wrong, but because the only thing that triggers it
+   * never happened again.
+   *
+   * A row like that is a lie to every reader — the call list, the activity feed
+   * and any report that treats INITIATED as "in progress".
+   *
+   * The cutoff here is SIX HOURS, deliberately far longer than dial()'s 30
+   * minutes. That path runs while a rep is actively dialling, so it can afford
+   * a tight window; this one runs unattended against every workspace, where the
+   * only real risk is cancelling something still live or racing a CDR that is
+   * still on its way. Six hours makes both impossible in practice, and an
+   * abandoned row costs nothing by surviving a few extra hours.
+   *
+   * Scoped per ACTIVE workspace like the other sweeps in this file, rather
+   * than run globally: a suspended workspace's abandoned call row harms
+   * nobody, so there is no reason to widen the workspace-scoping exemption
+   * for it.
+   *
+   * `status: 'INITIATED'` in the where is REQUIRED, not decorative: it is what
+   * stops this write from regressing a row the CDR reconciler has already
+   * moved to CONNECTED, which would lose that call's duration and recording
+   * permanently. Same guard the dial path uses, for the same reason.
+   */
+  @Cron(CronExpression.EVERY_HOUR, { name: 'marketing-stale-call-sweep' })
+  async cancelAbandonedCalls(): Promise<{ cancelled: number }> {
+    let outcome = { cancelled: 0 };
+    await withAdvisoryLock(
+      this.prisma,
+      'marketing-stale-call-sweep',
+      async () => {
+        const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+        const workspaces = await this.prisma.workspace.findMany({
+          where: { status: 'ACTIVE' },
+          select: { id: true },
+        });
+        let cancelled = 0;
+        for (const ws of workspaces) {
+          const result = await this.prisma.salesCall.updateMany({
+            where: { workspaceId: ws.id, status: 'INITIATED', startedAt: { lt: cutoff } },
+            data: {
+              status: 'CANCELLED',
+              endedAt: new Date(),
+              notes: 'Auto-cancelled (stale — never logged)',
+            },
+          });
+          cancelled += result.count;
+        }
+        if (cancelled > 0) {
+          this.logger.log(`stale-call-sweep: cancelled ${cancelled} abandoned call(s)`);
+        }
+        outcome = { cancelled };
+      },
+      this.logger,
+    );
+    return outcome;
+  }
+
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'marketing-notification-cleanup' })
   async cleanupOldNotifications(): Promise<{ deleted: number }> {
     let outcome = { deleted: 0 };

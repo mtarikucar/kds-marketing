@@ -156,3 +156,58 @@ describe('MarketingSchedulerService.expireStaleApprovals', () => {
     await expect(svc.expireStaleApprovals()).resolves.toEqual({ expired: 0 });
   });
 });
+
+/**
+ * Calls abandoned in INITIATED.
+ *
+ * The lazy cleanup inside SalesCallService.dial() was never wrong — it just
+ * only runs when someone places the NEXT call. On the live workspace one row
+ * has been sitting in INITIATED since 15 August because nobody dialled again,
+ * and every reader that treats INITIATED as "in progress" has been believing
+ * it since.
+ */
+describe('MarketingSchedulerService.cancelAbandonedCalls', () => {
+  const make = (updated: number) => {
+    const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]),
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      workspace: { findMany: jest.fn().mockResolvedValue([{ id: 'ws1' }, { id: 'ws2' }]) },
+      salesCall: { updateMany: jest.fn().mockResolvedValue({ count: updated }) },
+    };
+    return { prisma, svc: new MarketingSchedulerService(prisma as never, {} as never) };
+  };
+
+  it('only ever touches rows that are still INITIATED', async () => {
+    const { prisma, svc } = make(1);
+    await svc.cancelAbandonedCalls();
+
+    for (const call of prisma.salesCall.updateMany.mock.calls) {
+      // Without this guard the write races the CDR reconciler and can regress a
+      // row it has already moved to CONNECTED — losing that call's duration and
+      // recording for good.
+      expect(call[0].where.status).toBe('INITIATED');
+      expect(call[0].data.status).toBe('CANCELLED');
+    }
+  });
+
+  it('scopes every write to one workspace', async () => {
+    const { prisma, svc } = make(1);
+    await svc.cancelAbandonedCalls();
+
+    const scopes = prisma.salesCall.updateMany.mock.calls.map((c) => c[0].where.workspaceId);
+    expect(scopes).toEqual(['ws1', 'ws2']);
+  });
+
+  it('uses a far longer cutoff than the dial path, and reports the total', async () => {
+    const { prisma, svc } = make(2);
+    const before = Date.now();
+    const out = await svc.cancelAbandonedCalls();
+
+    // dial() sweeps at 30 minutes because a rep is standing there; this one runs
+    // unattended, so it waits long enough that a live call or an in-flight CDR
+    // cannot be caught by it.
+    const cutoff = prisma.salesCall.updateMany.mock.calls[0][0].where.startedAt.lt.getTime();
+    expect(before - cutoff).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000 - 5_000);
+    expect(out).toEqual({ cancelled: 4 });
+  });
+});
