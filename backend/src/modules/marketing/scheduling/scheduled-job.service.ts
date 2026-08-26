@@ -1,3 +1,4 @@
+import { SchedulerRegistry } from '@nestjs/schedule';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -21,7 +22,10 @@ type Tx = Prisma.TransactionClient | PrismaService;
  */
 @Injectable()
 export class ScheduledJobService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly scheduler: SchedulerRegistry,
+  ) {}
 
   /**
    * Schedule a job. With a dedupKey, an existing PENDING job of the same
@@ -163,7 +167,60 @@ export class ScheduledJobService {
    * fixes.
    */
   async listCronHeartbeats() {
-    return this.prisma.cronHeartbeat.findMany({ orderBy: { lastRunAt: 'desc' } });
+    const [registered, recorded] = await Promise.all([
+      Promise.resolve(this.listRegisteredCrons()),
+      this.prisma.cronHeartbeat.findMany({ orderBy: { lastRunAt: 'desc' } }),
+    ]);
+    return { registered, recorded };
+  }
+
+  /**
+   * Every cron Nest actually has registered, straight from its own registry.
+   *
+   * The heartbeats alone are a surface that lies by omission. They are written
+   * from `withAdvisoryLock`, so a job that does not use the lock — or that
+   * returns early before reaching it, as the call-analysis sweep does when STT
+   * is unconfigured — simply never appears. A reader seeing 9 rows cannot tell
+   * "not instrumented" from "not firing", and those are opposite problems.
+   *
+   * Names deliberately are NOT joined against the heartbeats. A cron's @Cron
+   * name and its lock name are different strings by convention in this codebase
+   * (`call-cdr-sync` locks as `telephony:cdr-sync`), and a fuzzy match would
+   * silently pair the wrong two rows — a confident wrong answer where two
+   * honest lists will do.
+   *
+   * `lastFiredAt` is per-process and resets on restart: it says the schedule is
+   * alive right now. The heartbeat says the work completed and survives a
+   * deploy. Neither replaces the other.
+   */
+  private listRegisteredCrons() {
+    const out: Array<{ name: string; lastFiredAt: Date | null; nextAt: Date | null }> = [];
+    let jobs: Map<string, unknown>;
+    try {
+      jobs = this.scheduler.getCronJobs();
+    } catch {
+      return out;
+    }
+    for (const [name, job] of jobs) {
+      const j = job as { lastDate?: () => Date | null; nextDate?: () => unknown };
+      let lastFiredAt: Date | null = null;
+      let nextAt: Date | null = null;
+      try {
+        lastFiredAt = j.lastDate?.() ?? null;
+      } catch {
+        lastFiredAt = null;
+      }
+      try {
+        const n = j.nextDate?.();
+        // cron's nextDate() returns a Luxon DateTime on v3+, a Date on older
+        // builds. Take whichever without assuming, and never let it throw.
+        nextAt = n instanceof Date ? n : ((n as { toJSDate?: () => Date })?.toJSDate?.() ?? null);
+      } catch {
+        nextAt = null;
+      }
+      out.push({ name, lastFiredAt, nextAt });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async cancelById(id: string): Promise<boolean> {

@@ -22,7 +22,7 @@ describe('ScheduledJobService', () => {
         updateMany: jest.fn(),
       },
     };
-    svc = new ScheduledJobService(prisma as any);
+    svc = new ScheduledJobService(prisma as any, { getCronJobs: () => new Map() } as any);
   });
 
   it('creates a fresh job when there is no dedupKey', async () => {
@@ -142,5 +142,82 @@ describe('ScheduledJobService', () => {
       where: { id: 'job-x', status: 'PENDING' },
       data: { status: 'CANCELLED', completedAt: expect.any(Date) },
     });
+  });
+});
+
+/**
+ * "Did the scheduled work run at all?"
+ *
+ * The heartbeats alone are a surface that lies by omission. They are written
+ * from withAdvisoryLock, so a cron that does not use the lock — or returns
+ * early before reaching it, as the call-analysis sweep does when STT is
+ * unconfigured — never appears at all. Reading 9 rows against 37 registered
+ * crons, you cannot tell "not instrumented" from "not firing", and those are
+ * opposite problems with opposite fixes.
+ */
+describe('ScheduledJobService.listCronHeartbeats', () => {
+  const make = (jobs: Map<string, unknown>, rows: unknown[] = []) => {
+    const prisma: any = { cronHeartbeat: { findMany: jest.fn().mockResolvedValue(rows) } };
+    return new ScheduledJobService(prisma, { getCronJobs: () => jobs } as any);
+  };
+
+  it('returns what IS registered next to what has been recorded', async () => {
+    const jobs = new Map<string, unknown>([
+      ['daily-digest', { lastDate: () => new Date('2026-08-26T11:00:00Z'), nextDate: () => new Date('2026-08-26T12:00:00Z') }],
+      ['call-analysis-sweep', { lastDate: () => null, nextDate: () => null }],
+    ]);
+
+    const out = await make(jobs, [{ jobName: 'voice:call-analysis' }]).listCronHeartbeats();
+
+    expect(out.registered.map((r) => r.name)).toEqual(['call-analysis-sweep', 'daily-digest']);
+    expect(out.recorded).toHaveLength(1);
+  });
+
+  it('does not try to pair the two lists by name', async () => {
+    // A cron's @Cron name and its lock name are different strings by convention
+    // here — call-cdr-sync locks as telephony:cdr-sync — so a fuzzy match would
+    // confidently pair the wrong two rows. Two honest lists instead.
+    const jobs = new Map<string, unknown>([['call-cdr-sync', { lastDate: () => null, nextDate: () => null }]]);
+
+    const out = await make(jobs, [{ jobName: 'telephony:cdr-sync' }]).listCronHeartbeats();
+
+    expect(out.registered[0]).not.toHaveProperty('recorded');
+    expect(out.registered[0].name).toBe('call-cdr-sync');
+  });
+
+  it('survives a cron whose date accessors throw', async () => {
+    const jobs = new Map<string, unknown>([
+      ['angry', { lastDate: () => { throw new Error('nope'); }, nextDate: () => { throw new Error('nope'); } }],
+    ]);
+
+    const out = await make(jobs).listCronHeartbeats();
+
+    // A diagnostic that crashes while diagnosing is worse than no diagnostic.
+    expect(out.registered).toEqual([{ name: 'angry', lastFiredAt: null, nextAt: null }]);
+  });
+
+  it('accepts a Luxon-style nextDate as readily as a Date', async () => {
+    const when = new Date('2026-08-26T12:00:00Z');
+    const jobs = new Map<string, unknown>([
+      ['luxon', { lastDate: () => null, nextDate: () => ({ toJSDate: () => when }) }],
+    ]);
+
+    const out = await make(jobs).listCronHeartbeats();
+
+    expect(out.registered[0].nextAt).toEqual(when);
+  });
+
+  it('returns the recorded rows even when the registry is unavailable', async () => {
+    const prisma: any = { cronHeartbeat: { findMany: jest.fn().mockResolvedValue([{ jobName: 'x' }]) } };
+    const svc = new ScheduledJobService(prisma, {
+      getCronJobs: () => {
+        throw new Error('no scheduler here');
+      },
+    } as any);
+
+    const out = await svc.listCronHeartbeats();
+
+    expect(out.registered).toEqual([]);
+    expect(out.recorded).toHaveLength(1);
   });
 });
