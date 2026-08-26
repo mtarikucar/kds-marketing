@@ -104,9 +104,18 @@ export interface Cluster {
   possibleBranches?: boolean;
 }
 
-/** Loose compare for business names: case, spacing and punctuation are noise. */
+/**
+ * Loose compare for business names: case, spacing and punctuation are noise.
+ *
+ * A PARENTHETICAL is dropped entirely rather than flattened into words. It is
+ * an annotation someone typed about the record — "Jeena (sim)" — not part of
+ * the name, and keeping it made that pair read as a branch of "Jeena". Live,
+ * that single false positive flagged all three clusters, and a caution that
+ * fires on everything carries no information at all.
+ */
 function normalizeName(v: unknown): string {
   return String(v ?? '')
+    .replace(/\([^)]*\)/g, ' ')
     .toLocaleLowerCase('tr')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();

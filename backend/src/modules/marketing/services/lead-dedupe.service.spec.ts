@@ -432,6 +432,19 @@ describe('LeadDedupeService.findDuplicates — branch caution', () => {
     expect(out[0].possibleBranches).toBeUndefined();
   });
 
+  it('treats a parenthetical as an annotation, not a branch name', async () => {
+    // Live, this was the cluster that broke the signal: "Jeena (sim)" read as a
+    // branch of "jeena", so ALL THREE clusters came back flagged — and a caution
+    // that fires on everything carries no information.
+    const out = await run([
+      lead('a', 'Jeena (sim)'),
+      lead('b', 'jeena'),
+      lead('c', 'Tarık'),
+    ]);
+
+    expect(out[0].possibleBranches).toBeUndefined();
+  });
+
   it('ignores punctuation and case when comparing, not word boundaries', async () => {
     // "Kafe" must not count as an extension of "Kaf" — a shared prefix inside a
     // word says nothing, and flagging on it would make the caution meaningless.
