@@ -210,24 +210,47 @@ export async function metaWebhookSubscription(
   if (!Array.isArray(r.data?.data)) {
     return { subscribed: null, fields: [], error: 'unexpected subscribed_apps payload' };
   }
-  const apps: Array<{ id?: unknown; subscribed_fields?: unknown }> = r.data.data;
+  const raw: Array<Record<string, any>> = r.data.data;
   // An EMPTY list is different: Meta answered the right question and the answer
   // is that nothing at all is listening. Unambiguous, app id known or not.
-  if (!apps.length) return { subscribed: false, fields: [] };
+  if (!raw.length) return { subscribed: false, fields: [] };
+
+  // TWO shapes come back from this one edge, and they do not look alike.
+  //
+  //   Page:  { id, subscribed_fields: ['messages', ...] }
+  //   WABA:  { whatsapp_business_api_data: { id, name, link } }   ← no fields
+  //
+  // The WABA form nests the app and does not report fields at all: being in
+  // that list IS the subscription. Reading it with the Page shape finds no `id`
+  // at the top level, matches nothing, and concludes "not subscribed" — a false
+  // accusation against a working number, produced with full confidence.
+  const apps = raw.map((a) => {
+    const inner = (a.whatsapp_business_api_data ?? a) as Record<string, any>;
+    return {
+      id: inner?.id != null ? String(inner.id) : null,
+      // null (not []) when the payload carries no field list, so "subscribed to
+      // nothing" stays distinguishable from "this shape does not report fields".
+      fields: Array.isArray(a.subscribed_fields) ? a.subscribed_fields.map(String) : null,
+    };
+  });
 
   const appId = process.env.META_APP_ID;
-  const fieldsOf = (a: { subscribed_fields?: unknown }) =>
-    Array.isArray(a.subscribed_fields) ? a.subscribed_fields.map(String) : [];
 
   if (appId) {
-    const mine = apps.find((a) => String(a.id) === appId);
+    const mine = apps.find((a) => a.id === appId);
     if (!mine) return { subscribed: false, fields: [] };
-    const fields = fieldsOf(mine);
-    return { subscribed: fields.includes('messages'), fields };
+    // Listed, but this shape does not say to what. Presence is the answer here.
+    if (mine.fields === null) return { subscribed: true, fields: [] };
+    return { subscribed: mine.fields.includes('messages'), fields: mine.fields };
   }
 
-  // Without META_APP_ID we cannot tell OUR app from someone else's, so the most
-  // we can honestly say is whether anything is subscribed to `messages`.
-  const any = apps.find((a) => fieldsOf(a).includes('messages'));
-  return { subscribed: !!any, fields: any ? fieldsOf(any) : [] };
+  // Without META_APP_ID we cannot tell OUR app from someone else's.
+  const listening = apps.find((a) => a.fields?.includes('messages'));
+  if (listening) return { subscribed: true, fields: listening.fields ?? [] };
+  // Something is subscribed and we can neither attribute it nor see its fields.
+  // That is not evidence of absence.
+  if (apps.some((a) => a.fields === null)) {
+    return { subscribed: null, fields: [], error: 'cannot attribute the subscription without META_APP_ID' };
+  }
+  return { subscribed: false, fields: [] };
 }
