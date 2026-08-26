@@ -15,6 +15,7 @@ jest.mock('@anthropic-ai/sdk', () => {
 
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicService } from './anthropic.service';
+import { priceFor } from './ai-model-prices';
 
 const mockCtor = Anthropic as unknown as jest.Mock & {
   __create: jest.Mock;
@@ -140,5 +141,69 @@ describe('AnthropicService', () => {
       }
       expect(chunks).toEqual(['he', 'llo']);
     });
+  });
+});
+
+/**
+ * Model ids have to be RESOLVABLE, not merely plausible.
+ *
+ * The conversation and light tiers both defaulted to `claude-haiku-4-5`. Opus
+ * and Sonnet publish bare aliases — claude-opus-4-8 and claude-sonnet-4-6 are
+ * used here and both work — so a bare Haiku alias looked right by symmetry. It
+ * is not one, and every call on those two tiers failed at the API before a
+ * token was billed.
+ *
+ * The evidence was in the product's own AiUsageLog: 30 days showed
+ * claude-opus-4-8, claude-sonnet-4-6 and claude-haiku-4-5-20251001 (the dated
+ * form, from NativeWebProvider, 106 successful calls) — and not one call on the
+ * bare alias. Every action on the conversation and light tiers had zero
+ * recorded usage, conversation.reply included: the AI had never answered a
+ * customer on any channel.
+ *
+ * A wrong model id fails from the OUTSIDE of this service — an exception in the
+ * SDK, no usage row, no cost — so nothing in the product reports it. Pinned
+ * here because that silence is what let it survive.
+ */
+describe('AnthropicService — tier model ids are resolvable', () => {
+  const HAIKU = 'claude-haiku-4-5-20251001';
+
+  const modelSentFor = async (tier: string, env: Record<string, string> = {}) => {
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    const svc = new AnthropicService({
+      get: (k: string) => ({ ANTHROPIC_API_KEY: 'sk-x', ...env })[k],
+    } as never);
+    await svc.complete({
+      system: 's',
+      messages: [{ role: 'user', content: 'x' }],
+      tier: tier as never,
+    });
+    return mockCreate.mock.calls[0][0].model as string;
+  };
+
+  it('sends the conversation tier to the dated Haiku id, never the bare alias', async () => {
+    await expect(modelSentFor('conversation')).resolves.toBe(HAIKU);
+  });
+
+  it('sends the light tier to the dated Haiku id too', async () => {
+    await expect(modelSentFor('light')).resolves.toBe(HAIKU);
+  });
+
+  it('still lets the env override either tier', async () => {
+    await expect(
+      modelSentFor('conversation', { AI_MODEL_CONVERSATION: 'claude-sonnet-4-6' }),
+    ).resolves.toBe('claude-sonnet-4-6');
+  });
+
+  it('prices the dated id as Haiku rather than falling back to the dearest tier', () => {
+    // priceFor matches on substring and defaults UNKNOWN ids to the most
+    // expensive tier, so a dated id that stopped matching would silently
+    // inflate every cost report instead of failing.
+    expect(priceFor(HAIKU)).toEqual(priceFor('claude-haiku-4-5'));
+    expect(priceFor(HAIKU)).not.toEqual(priceFor('some-unknown-model'));
   });
 });
