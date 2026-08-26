@@ -81,6 +81,52 @@ const FILLABLE_FIELDS = [
 export interface Cluster {
   suggestedCanonicalId: string;
   leads: { id: string; [k: string]: unknown }[];
+  /**
+   * These may be BRANCHES of one business rather than duplicate records.
+   *
+   * Restaurants run several branches off one phone number, and a branch is
+   * usually named by adding the district to the parent name. Clustering on
+   * phone is still the right way to say "look at these" — but merging them
+   * would destroy a real prospect, and multi-branch operators are one of the
+   * segments this product is actively prospecting for.
+   *
+   * Set when one lead's business name properly contains another's, which is
+   * what a district suffix looks like:
+   *
+   *   Kaleiçi Meyhanesi  /  Kaleiçi Meyhanesi Konyaaltı
+   *   Kandemir Kafe      /  Kandemir Kafe Pasaport
+   *
+   * Deliberately a caution and not a filter. The names could equally be one
+   * business recorded twice, and only a human knows which — but a merge is not
+   * something to undo, so the doubt belongs in front of whoever is about to
+   * press the button.
+   */
+  possibleBranches?: boolean;
+}
+
+/** Loose compare for business names: case, spacing and punctuation are noise. */
+function normalizeName(v: unknown): string {
+  return String(v ?? '')
+    .toLocaleLowerCase('tr')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * True when one name is a whole-word extension of another — the shape a branch
+ * takes ("Kandemir Kafe" -> "Kandemir Kafe Pasaport"). Equal names are NOT
+ * flagged: two records with the identical name and phone are the ordinary
+ * duplicate this list exists to surface.
+ */
+function looksLikeBranchNames(names: string[]): boolean {
+  const norm = names.map(normalizeName).filter((n) => n.length > 0);
+  for (let i = 0; i < norm.length; i++) {
+    for (let j = 0; j < norm.length; j++) {
+      if (i === j || norm[i] === norm[j]) continue;
+      if (norm[j].startsWith(`${norm[i]} `)) return true;
+    }
+  }
+  return false;
 }
 
 @Injectable()
@@ -158,7 +204,12 @@ export class LeadDedupeService {
       if (group.length < 2) continue;
       const converted = group.find((l) => l.convertedTenantId);
       const suggestedCanonicalId = (converted ?? group[0]).id; // group is createdAt-asc
-      clusters.push({ suggestedCanonicalId, leads: group });
+      const possibleBranches = looksLikeBranchNames(group.map((l) => l.businessName));
+      clusters.push({
+        suggestedCanonicalId,
+        leads: group,
+        ...(possibleBranches ? { possibleBranches } : {}),
+      });
     }
     return clusters;
   }
