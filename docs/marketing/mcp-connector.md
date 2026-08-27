@@ -8,8 +8,9 @@ invoices, reviews, …) and, with a human in the loop by default, take actions
 (reply to a customer, launch a campaign, publish a social post, move ad budget,
 text an invoice, book an appointment).
 
-**The catalogue is 84 tools across 21 domains, of which 45 are advertised up
-front.** The rest are reachable through `jeeta.find_tools` — see
+**The catalogue is 114 tools across 21 domains, of which 45 are advertised up
+front.** The other 67 are reachable through `jeeta.find_tools` and
+`jeeta.call_tool` — see
 [Tool catalogue](#tool-catalogue).
 
 This guide is for the person setting the connector up for a workspace, not
@@ -30,7 +31,7 @@ for the engineer who built it.
   `mcp-tool-registry`. What has **not** been exercised is a live provider
   send: the test workspace used a WEBCHAT channel, so no message left the
   system to a real phone or inbox. The catalogue has since grown from 18 tools
-  to 84 across five waves (Faz 5 D1–D5); the waves are covered by unit and
+  to 114 across five waves (Faz 5 D1–D5) and the work after them; the waves are covered by unit and
   isolation specs, not by a repeat of that live run.
 - **Which clients can connect.** Two auth paths now exist, and the endpoint
   takes either on the same route:
@@ -111,7 +112,7 @@ After adding, check two things:
 1. **The tool list appears.** Ask Claude what Jeeta tools it has, or run
    whatever your client uses to list a server's tools. You will see the
    **advertised** subset of the [catalogue](#tool-catalogue) whose scopes the
-   key covers — at most 45 of the 84, and fewer for a narrow key.
+   key covers — at most 45 of the 114, and fewer for a narrow key.
    `McpServerFactoryService.build` filters the registry by the key's granted
    scopes per request, so a narrower key legitimately shows fewer tools, not an
    error. A tool you do not see is not necessarily unavailable: ask the model to
@@ -208,19 +209,27 @@ scopes** checklist or by passing the string in the API's `scopes` array (e.g.
 
 ## Tool catalogue
 
-**84 tools in 21 domains, 45 of them advertised.** They are registered in
+**114 tools in 21 domains, 45 of them advertised and 67 deferred.** They are registered in
 `backend/src/modules/marketing/mcp/tools/*.tools.ts`, wired in
 `marketing.module.ts`, and asserted by name and count in
 `backend/src/modules/marketing/mcp/tools/tool-catalogue.spec.ts` — a dropped
 registration fails CI rather than silently shrinking the surface.
 
-**Argument names are exact.** Every tool's schema is registered strict
-(`McpToolRegistry.register`), so an argument the tool does not declare is an
-error — `Unrecognized key: "query"` — rather than something quietly ignored.
-This matters most on optional filters: dropping one silently would widen the
-result set, and a search that answers with everything looks to an agent like a
-search that matched everything. Read the parameter names off `tools/list`,
-which advertises `additionalProperties: false` for the same reason.
+**Argument names are exact, and the two call paths differ.** Every tool's
+schema is registered strict (`McpToolRegistry.register`). Over the MCP
+transport (`tools/call`) the SDK validates against that strict schema, so an
+argument the tool does not declare is an error — `Unrecognized key: "query"`.
+Through `jeeta.call_tool` the broker deliberately does NOT reject it: callers
+have always been able to pass extra fields and handlers ignore what they do not
+need, so refusing them would break calls that work today. It is no longer
+silent about it — the response carries `ignoredArgs` and a warning saying the
+result is **not** filtered by those fields.
+
+Treat that warning as an error in your own client. This matters most on
+optional filters: a dropped one widens the result set, and a search that
+answers with everything looks to an agent exactly like a search that matched
+everything. Read the parameter names off `tools/list`, which advertises
+`additionalProperties: false` for the same reason.
 
 **No tool takes a `workspaceId` argument.** The workspace comes from the
 session, never from the caller. Each wave's `dN-isolation.spec.ts` drives every
@@ -241,6 +250,18 @@ the caller's scopes already permit, and returns each match with its **JSON input
 schema**, so a model can call a tool it has just discovered on the very next
 turn. It requires no scopes (it can only reveal what the caller could already
 call) and is never itself deferred.
+
+`limit` is capped at 60 while the catalogue is 114, so a broad listing is
+paged: the response carries `offset`, and `nextOffset` when there is more.
+Pass it back to walk the rest. `nextOffset` is **absent** on the last page
+rather than null, so its presence is itself the "there is more" signal.
+
+**`jeeta.find_tools` only finds; `jeeta.call_tool` runs.** A standard MCP
+client will not invoke a name it never saw in `tools/list`, so a deferred tool
+is reached by calling `jeeta.call_tool` with `{"name": "jeeta.…", "input":
+{…}}`. It applies the target tool's own scope, risk and approval rules — it is
+a transport, not a bypass — and returns `applied: false` with
+`status: "PENDING_APPROVAL"` when the target is gated.
 
 Deferral is an advertising decision, never a permission one. The ceiling on the
 advertised set is **45**, pinned in `tool-catalogue.spec.ts`; a wave that wants
@@ -298,6 +319,12 @@ audiences with nobody in the loop. See
 | `jeeta.update_brand_profile` | Rewrite the brand profile every piece of AI copy is written from | `settings.manage` | WRITE | — | no |
 | `jeeta.get_workspace_info` | Effective plan: package, subscription status, quotas/limits, enabled features | `reports.read` | READ | — | yes |
 | `jeeta.find_tools` | Search the FULL catalogue, deferred tools included, with their input schemas | *(none)* | READ | — | yes |
+| `jeeta.get_ai_usage` | Anthropic spend for this workspace: tokens and real cost per action and model, plus a daily curve | `reports.read` | READ | — | no |
+| `jeeta.get_vendor_spend` | Outside-vendor spend (NetGSM, Meta, fal.ai, Firecrawl, Apify) and which units have no tariff at all | `reports.read` | READ | — | no |
+| `jeeta.list_background_jobs` | This workspace's background jobs with status, attempts and the error from the last attempt | `reports.read` | READ | — | no |
+| `jeeta.list_scheduled_runs` | The deployment's recurring jobs: last run, last success, failure counts | `reports.read` | READ | — | no |
+| `jeeta.list_team` | List this workspace's team members with their user ids, names, role and status | `reports.read` | READ | — | yes |
+| `jeeta.verify_email_transport` | Check whether this deployment can actually send email: a live handshake with the configured SMTP host | `reports.read` | READ | — | no |
 
 #### Leads · Contacts · Tasks · Pipeline
 
@@ -322,6 +349,13 @@ audiences with nobody in the loop. See
 | `jeeta.list_opportunities` | List deals on a pipeline | `leads.read` | READ | — | yes |
 | `jeeta.create_opportunity` | Create a deal | `leads.write` | WRITE | — | yes |
 | `jeeta.move_opportunity_stage` | Advance a deal | `leads.write` | WRITE | — | yes |
+| `jeeta.delete_opportunity` | Permanently delete a deal | `leads.manage` | DESTRUCTIVE | **DESTRUCTIVE** | no |
+| `jeeta.get_distribution_config` | How new leads get an owner: the assignment strategy, and who was assigned last | `settings.manage` | READ | — | no |
+| `jeeta.list_companies` | List this workspace's B2B accounts (companies) with their id, name, domain and city | `contacts.read` | READ | — | no |
+| `jeeta.list_duplicate_leads` | Find groups of leads that look like the same customer, matched on normalised phone and email across every source | `leads.read` | READ | — | no |
+| `jeeta.merge_leads` | Merge duplicate leads into one record; notes, tasks, deals and conversations move across | `leads.write` | DESTRUCTIVE | yes | no |
+| `jeeta.reopen_lead` | Send a lead back to NEW when its stage is wrong; requires a manager and a reason | `leads.manage` | WRITE | — | no |
+| `jeeta.update_opportunity` | Change a deal's details — name, value, currency, notes, owner, expected close date, or the lead it belongs to | `leads.write` | WRITE | — | no |
 
 #### Inbox
 
@@ -335,6 +369,14 @@ Gated on the `conversationAi` package feature, matching the REST controller.
 | `jeeta.assign_conversation` | Route a thread to a teammate (internal) | `contacts.write` | WRITE | — | no |
 | `jeeta.close_conversation` | Close or reopen a thread (internal) | `contacts.write` | WRITE | — | no |
 | `jeeta.add_conversation_note` | Internal note on a thread; the customer never sees it | `contacts.write` | WRITE | — | no |
+| `jeeta.create_webchat_channel` | Create a WEB CHAT channel for this workspace — the website chat widget | `settings.manage` | WRITE | — | no |
+| `jeeta.get_agent` |  | `reports.read` | READ | — | no |
+| `jeeta.list_agents` | List this workspace\ + + | `reports.read` | READ | — | no |
+| `jeeta.list_channels` | List every messaging channel this workspace has — type, name, status, and which provider identity it is bound to | `settings.manage` | READ | — | no |
+| `jeeta.message_lead` | Start a conversation with a chosen lead on SMS, WhatsApp or email | `contacts.write` | WRITE | SEND | no |
+| `jeeta.set_channel_status` | Enable or disable a channel | `settings.manage` | WRITE | — | no |
+| `jeeta.update_agent` | Refine an AI agent's persona, tone, goals or guardrails | `settings.manage` | WRITE | — | no |
+| `jeeta.verify_channel` | Run a live health check against a channel and report whether it can actually send AND receive | `reports.read` | READ | — | no |
 
 See [MCP replies are AI-authored](#mcp-replies-are-ai-authored).
 
@@ -372,6 +414,8 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.generate_image` | AI image generation — **spends real money (fal.ai)** | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | yes |
 | `jeeta.generate_video` | AI video generation — **spends real money (fal.ai)** | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | no |
 | `jeeta.list_generated_media` | Previously generated assets | `campaigns.read` | READ | — | no |
+| `jeeta.pause_social_campaign` | Pause a RUNNING AI social campaign and cancel its scheduled plan job | `campaigns.write` | WRITE | CAMPAIGN_PAUSE | no |
+| `jeeta.unschedule_social_post` | Pull a SCHEDULED post back to DRAFT so its copy, media or targets can be corrected, then schedule it again | `campaigns.send` | WRITE | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 
@@ -382,6 +426,7 @@ Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 | `jeeta.get_ad_performance` | Spend/impressions/clicks/leads/revenue over a range, totals + by-day + by-provider | `reports.read` | READ | — | yes |
 | `jeeta.get_budget` | Growth Autopilot budget(s): amount, target ROAS/CAC, channel allocations | `reports.read` | READ | — | no |
 | `jeeta.reallocate_budget` | Change a live daily budget on a connected ad account — **spends real money** | `settings.manage` | **SPEND** | **`BUDGET_REALLOCATION`** | yes |
+| `jeeta.list_ad_accounts` | List the ad accounts connected to this workspace (id, provider, display name, status, currency) | `reports.read` | READ | — | no |
 
 #### Strategy · Workflows · Research
 
@@ -401,6 +446,10 @@ Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 | `jeeta.list_research_profiles` | Prospect-research briefs + today's remaining lead allowance | `settings.manage` | READ | — | yes |
 | `jeeta.create_research_profile` | Create a research brief (costs nothing on its own) | `settings.manage` | WRITE | — | no |
 | `jeeta.run_research` | Run a brief now — **burns AI credits + live scraping money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
+| `jeeta.accept_research_candidates` | Accept staged prospects and turn them into real leads in the CRM | `leads.write` | WRITE | yes | no |
+| `jeeta.list_research_candidates` | Prospects the research agent staged for review, with the pain signal it found | `settings.manage` | READ | — | no |
+| `jeeta.pause_research_profile` | Stop a research brief from running | `settings.manage` | WRITE | — | no |
+| `jeeta.reject_research_candidates` | Dismiss staged prospects that are not a fit, removing them from the review queue without creating leads | `leads.write` | WRITE | yes | no |
 
 Workflows gate on `workflows`; research on `research`.
 
@@ -413,6 +462,7 @@ Gated on the `funnels` package feature, matching the REST controller.
 | `jeeta.list_bookings` | Real bookings (not external busy blocks), by calendar/status/range | `tasks.read` | READ | — | yes |
 | `jeeta.get_booking_availability` | Bookable slot starts, honouring hours/buffers/notice/blackouts | `tasks.read` | READ | — | no |
 | `jeeta.create_booking` | Book a real appointment — **emails the attendee a confirmation + invite, mirrors it into the connected Google/Outlook calendar, creates a contact, takes a teammate's slot** | `settings.manage` | WRITE | `SEND` | no |
+| `jeeta.list_calendars` | List this workspace's booking calendars with their id, name, slug, slot length and timezone | `tasks.read` | READ | — | no |
 
 Cancel and reschedule are deliberately not tools: both message the attendee
 again and act on a commitment a human already made.
@@ -496,7 +546,7 @@ Design spec §7, enforced by absence and re-asserted per wave:
 
 ## Approval-gated tools
 
-**19 of the 84 tools are registered `requiresApproval: true`** — the ones that
+**30 of the 114 tools are registered `requiresApproval: true`** — the ones that
 reach a customer, speak to an audience, spend money or delete something. See
 the Gated column in [the catalogue](#the-catalogue) for the full list; the
 short version is:
@@ -848,8 +898,9 @@ answer the thread.
   result so the model can read the reason and adjust, rather than the whole
   MCP request failing.
 - **A tool you expect isn't in the list** — two possible reasons. It may be
-  **deferred**: only 45 of the 84 tools are advertised, and the rest are reached
-  by asking the model to call `jeeta.find_tools` (see
+  **deferred**: only 45 of the 114 tools are advertised, and the other 67 are
+  reached by asking the model to call `jeeta.find_tools` and then
+  `jeeta.call_tool` (see
   [Progressive disclosure](#progressive-disclosure)). Or the key's scopes may
   not cover it — the server only advertises tools the granted scopes fully
   satisfy (`McpToolRegistry.listAdvertised`), and `jeeta.find_tools` applies the

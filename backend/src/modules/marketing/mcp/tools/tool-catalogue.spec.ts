@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { z } from 'zod';
 import { McpToolRegistry, TOOL_DOMAINS } from '../mcp-tool-registry';
 import { registerAnalyticsTools } from './analytics.tools';
@@ -510,18 +512,23 @@ describe('MCP tool catalogue', () => {
       expect(registry.get(name)!.defer).toBe(true);
       expect(advertised.has(name)).toBe(false);
     }
-    // 44 DOMAIN tools advertised. `jeeta.call_tool` joins `jeeta.find_tools`
+    // 45 DOMAIN tools advertised. `jeeta.call_tool` joins `jeeta.find_tools`
     // outside that budget: they are the discovery MECHANISM, and charging them
     // against it would mean deferring a real tool to pay for the ability to
-    // reach deferred tools. D5 landed at 44 domain + find_tools = 45; adding
-    // the dispatcher costs no domain tool its slot.
+    // reach deferred tools; adding the dispatcher costs no domain tool its slot.
+    //
+    // The number below is the ceiling, and the rule it carries is that a wave
+    // which wants more must DEFER something rather than raise it. This prose
+    // said 44 while the assertion said 45 — the drift is worth naming, because
+    // a comment that disagrees with its own assertion is how the rule quietly
+    // stops being one.
     expect(
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 109 total, 45 advertised: list_background_jobs, like the channel tools
-    // before it, is deferred — so the ceiling asserted on the two lines above is
-    // what stayed fixed while the catalogue grew.
+    // 114 total, 45 advertised: everything a wave adds beyond the ceiling is
+    // deferred — which is exactly why the advertised count above stayed fixed
+    // while the catalogue grew past a hundred.
     expect(registry.list(ALL_SCOPES)).toHaveLength(114);
   });
 });
@@ -617,5 +624,43 @@ describe('MCP catalogue — every required id must be discoverable', () => {
     }
 
     expect(undiscoverable).toEqual([]);
+  });
+});
+
+/**
+ * The connector-doc tripwire.
+ *
+ * `docs/marketing/mcp-connector.md` is what an integrator reads instead of the
+ * registry, and it had drifted THIRTY tools behind: a third of the deferred
+ * surface did not exist as far as that reader was concerned, and the only
+ * mechanism for calling a deferred tool (`jeeta.call_tool`) was not mentioned in
+ * it anywhere — so the doc described a catalogue two thirds of which it also
+ * made unreachable.
+ *
+ * Nothing caught that, because a document cannot fail CI on its own. The
+ * assertions above pin the catalogue's SIZE; this pins its DESCRIPTION. Cost is
+ * one table row per new tool, which is the trade: the drift was silent, and the
+ * whole failure class on this codebase is silence.
+ */
+describe('mcp-connector.md keeps up with the registry', () => {
+  const docPath = join(process.cwd(), '..', 'docs', 'marketing', 'mcp-connector.md');
+
+  it('documents every registered tool', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    const doc = readFileSync(docPath, 'utf8');
+
+    const missing = registry
+      .list(ALL_SCOPES)
+      .map((t) => t.name)
+      .filter((name) => !doc.includes(`\`${name}\``));
+
+    expect(missing).toEqual([]);
+  });
+
+  it('explains how a deferred tool is actually called', () => {
+    // find_tools only FINDS. Without call_tool an integrator can see the other
+    // two thirds of the catalogue and reach none of it.
+    expect(readFileSync(docPath, 'utf8')).toContain('jeeta.call_tool');
   });
 });
