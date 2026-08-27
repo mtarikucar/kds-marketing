@@ -111,6 +111,33 @@ describe('workspace MCP tools', () => {
       );
     });
 
+    it('answers "is it still running" without the caller guessing at the clock', async () => {
+      const registry = new McpToolRegistry();
+      const d = deps();
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000);
+      d.jobs.listCronHeartbeats = jest.fn().mockResolvedValue({
+        registered: [],
+        recorded: [
+          { jobName: 'scheduled-job-runner', lastRunAt: fiveMinutesAgo, lastOkAt: fiveMinutesAgo, lastError: null, runs: 9, failures: 0 },
+        ],
+      });
+      registerWorkspaceTools(registry, d);
+
+      const out = (await registry
+        .get('jeeta.list_scheduled_runs')!
+        .handler({ workspaceId: 'ws1', grantedScopes: ['reports.read'] }, {})) as {
+        now: string;
+        recorded: Array<Record<string, unknown>>;
+      };
+
+      // The reference point the caller was missing: reading these rows from a
+      // different timezone made every daily job look hours overdue.
+      expect(typeof out.now).toBe('string');
+      expect(out.recorded[0].ageMinutes).toBe(5);
+      // `failing` covers the OTHER failure — it runs and errors. Both are needed.
+      expect(out.recorded[0].failing).toBe(false);
+    });
+
     it('strips the failure text, which is platform-wide and may name another tenant', async () => {
       const registry = new McpToolRegistry();
       const d = deps();

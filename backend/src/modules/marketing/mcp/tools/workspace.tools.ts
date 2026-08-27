@@ -155,7 +155,10 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
       'actually has, with `nextAt`, the next time it is due — a populated nextAt proves the schedule is ' +
       'armed. `recorded` is the durable per-job history: last run, last SUCCESS, run and failure counts, ' +
       'and `failing` — a lastRunAt well ahead of lastOkAt means the job is firing and failing, while ' +
-      'both being stale means it is not firing at all. The failure TEXT is deliberately not returned ' +
+      'both being stale means it is not firing at all. For that second case use `ageMinutes` (computed ' +
+      "against the deployment's own clock, echoed as `now`) rather than comparing timestamps to your " +
+      'own — but note that hourly and DAILY jobs sit in the same list, so a large age is only a problem ' +
+      'for a job you know runs often. The failure TEXT is deliberately not returned ' +
       '(see below); read it from the deployment logs. IMPORTANT: the two lists use DIFFERENT naming ' +
       'conventions (the cron `call-cdr-sync` records as `telephony:cdr-sync`), so never conclude a job ' +
       'is uninstrumented just because its name is missing from the other list. Read-only.',
@@ -183,11 +186,27 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
     // operator — who is allowed to see every tenant — can still reach it.
     handler: async () => {
       const { registered, recorded } = await deps.jobs.listCronHeartbeats();
+      // `now` and `ageMinutes` are here because the two failures this tool
+      // reports are opposite and only ONE of them was answerable: `failing`
+      // covers "it runs and errors", while "it stopped running" has to be read
+      // out of a timestamp — against a clock the caller does not share. Reading
+      // these rows from UTC+3 near midnight makes every daily job look hours
+      // overdue, which is a false alarm the tool was handing out.
+      //
+      // Deliberately NOT a staleness verdict: a job's expected period is not in
+      // these rows (hourly and daily jobs sit side by side), so any threshold
+      // here would be a guess, and a guessed alarm is worse than none. This
+      // gives the reader the reference point and nothing more.
+      const now = Date.now();
       return {
+        now: new Date(now).toISOString(),
         registered,
         recorded: recorded.map(({ lastError, ...row }) => ({
           ...row,
           failing: lastError !== null && lastError !== undefined,
+          ageMinutes: row.lastRunAt
+            ? Math.round((now - new Date(row.lastRunAt).getTime()) / 60000)
+            : null,
         })),
       };
     },
