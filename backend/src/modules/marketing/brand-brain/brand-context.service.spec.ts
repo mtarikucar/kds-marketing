@@ -108,3 +108,65 @@ describe('BrandContextService', () => {
     expect(cache.has('ws-0')).toBe(true);
   });
 });
+
+/**
+ * What we sell, and what it costs.
+ *
+ * `offerings` was the one field render() dropped, and it is the field that
+ * carries the price list. That put the agent in an impossible position: its
+ * goals tell it to say a paid module's price honestly, while the only prices
+ * reaching it were whichever ones happened to be written into a value prop.
+ * Asked "how much is the extra-branch module?", it could only refuse or invent.
+ *
+ * On this brand the whole pitch is that there are no traps and no hidden tiers —
+ * improvising a number is the single most damaging thing it could do.
+ */
+describe('BrandContextService.render — offerings', () => {
+  const build = (profile: Record<string, unknown>) => {
+    const prisma = {
+      brandProfile: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE', ...profile }) },
+    };
+    return new BrandContextService(prisma as never);
+  };
+
+  it('includes each offering with its price', async () => {
+    const svc = build({
+      brandName: 'HummyTummy',
+      offerings: [
+        { name: 'Çekirdek', price: 'Ücretsiz', blurb: 'POS, KDS, QR menü' },
+        { name: 'Ek Şube', price: '3.990₺/yıl' },
+      ],
+    });
+
+    const block = await svc.summaryFor('ws1');
+
+    expect(block).toContain('Ek Şube — 3.990₺/yıl');
+    expect(block).toContain('Çekirdek — Ücretsiz — POS, KDS, QR menü');
+  });
+
+  it('keeps an offering that has no price rather than dropping it', async () => {
+    const svc = build({ brandName: 'X', offerings: [{ name: 'Demo restoranı' }] });
+
+    // "We have this, price unstated" is still worth knowing; silence is not.
+    expect(await svc.summaryFor('ws1')).toContain('- Demo restoranı');
+  });
+
+  it('ignores malformed entries instead of rendering blanks', async () => {
+    const svc = build({
+      brandName: 'X',
+      offerings: [{ name: '  ' }, { price: '10₺' }, null, { name: 'Gerçek' }],
+    });
+
+    const block = await svc.summaryFor('ws1');
+
+    expect(block).toContain('- Gerçek');
+    expect(block).not.toContain('- 10₺');
+    expect(block!.split(String.fromCharCode(10)).filter((l) => l.startsWith('- '))).toHaveLength(1);
+  });
+
+  it('says nothing about offerings when there are none', async () => {
+    const svc = build({ brandName: 'X', offerings: [] });
+
+    expect(await svc.summaryFor('ws1')).not.toContain('Offerings');
+  });
+});
