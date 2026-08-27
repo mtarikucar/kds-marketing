@@ -50,6 +50,7 @@ describe('DailyDigestService', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     svc = new DailyDigestService(prisma, usage as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
   });
@@ -109,6 +110,32 @@ describe('DailyDigestService', () => {
     prisma.growthBudget.findFirst = jest.fn().mockResolvedValue(null);
     const d = await svc.build(WS, new Date('2026-08-27T06:00:00Z'));
     expect(d!.needsYou.items.some((l: string) => l.includes('dönemine ait'))).toBe(false);
+  });
+
+  it('says the distribution switch is off, not just that leads are unassigned', async () => {
+    counts({ unassigned: 363 });
+    prisma.marketingDistributionConfig.findUnique = jest.fn().mockResolvedValue({ strategy: 'DISABLED' });
+
+    const line = (await svc.build(WS))!.needsYou.items.find((l: string) => l.includes('363'));
+
+    expect(line).toContain('KAPALI');
+    // The half an owner cannot guess: pickAssignee runs at ingress only, so
+    // flipping the switch does not reach a lead already sitting there.
+    expect(line).toContain('bundan sonra gelenleri');
+  });
+
+  it('says something different when distribution is ON and leads are still unowned', async () => {
+    counts({ unassigned: 12 });
+    prisma.marketingDistributionConfig.findUnique = jest
+      .fn()
+      .mockResolvedValue({ strategy: 'ROUND_ROBIN' });
+
+    const line = (await svc.build(WS))!.needsYou.items.find((l: string) => l.includes('12'));
+
+    // Same count, opposite problem: these arrived by a path auto-assignment
+    // never covers, so "turn it on" is the wrong advice.
+    expect(line).toContain('ROUND_ROBIN');
+    expect(line).toContain('araştırma');
   });
 
   it('is empty when nothing happened and nothing waits', async () => {
@@ -217,6 +244,7 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
     return prisma;
@@ -291,6 +319,7 @@ describe('DailyDigestService — accounts that stopped working', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     const svc = new DailyDigestService(
       prisma,
@@ -368,6 +397,7 @@ describe('DailyDigestService — connection health', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       socialAccount: { count: socialCount },
       adAccount: { count: adCount },
     };
@@ -454,6 +484,7 @@ describe('DailyDigestService — vendor refusal', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       scheduledJob,
     };
     return {
@@ -521,6 +552,7 @@ describe('DailyDigestService — AI budget', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
     };
     return new DailyDigestService(

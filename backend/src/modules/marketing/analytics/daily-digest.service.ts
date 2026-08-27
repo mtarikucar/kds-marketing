@@ -102,6 +102,7 @@ export class DailyDigestService {
       overdueDrafts,
       expiringSoon,
       stalePeriodBudget,
+      distribution,
       aiBudget,
       spend,
     ] = await Promise.all([
@@ -339,6 +340,19 @@ export class DailyDigestService {
           orderBy: { periodKey: 'desc' },
         })
         .catch(soft('dönemi geçmiş bütçe', null)),
+      // How new leads get an owner — read to PAIR with the unassigned count.
+      //
+      // The count alone is a number; what makes it a decision is why nobody has
+      // one. LeadAutoAssignerService.pickAssignee runs at INGRESS only
+      // (conversation ingress, Meta lead-gen, voice) and the model's own
+      // docstring says "newly-created leads", so switching the strategy on does
+      // NOT reach a lead that is already sitting there — and leads created by
+      // research acceptance, import or the API never pass through it at all.
+      // An owner who turns distribution on and expects the backlog to clear
+      // would be waiting for something that cannot happen.
+      this.prisma.marketingDistributionConfig
+        .findUnique({ where: { workspaceId }, select: { strategy: true } })
+        .catch(soft('lead dağıtımı', null)),
       // The workspace's own monthly AI budget. Hitting it SUSPENDS unattended
       // work — nightly research stops finding leads — and a stop nobody
       // announced is the failure this brief exists to prevent.
@@ -369,7 +383,14 @@ export class DailyDigestService {
         `Brifingin ${unread.length} sinyali okunamadı (${unread.join(', ')}) — bu başlıklardaki sayılar eksik, "sorun yok" demek değil`,
       );
     if (overdueTasks) needsYou.push(`${overdueTasks} görev gecikmiş`);
-    if (unassigned) needsYou.push(`${unassigned} yeni lead kimseye atanmamış`);
+    if (unassigned) {
+      const off = !distribution || distribution.strategy === 'DISABLED';
+      needsYou.push(
+        off
+          ? `${unassigned} yeni lead kimseye atanmamış — otomatik dağıtım KAPALI; açmak yalnızca bundan sonra gelenleri atar, bekleyenleri elle dağıtmak gerekir`
+          : `${unassigned} yeni lead kimseye atanmamış — dağıtım açık (${distribution.strategy}), demek ki bunlar otomatik atamanın geçmediği bir yoldan geldi (araştırma, içe aktarma veya API)`,
+      );
+    }
     // First in the list once rendered would be nicer still, but order here
     // follows the section's existing convention; what matters is that a waiting
     // customer now appears at all.
