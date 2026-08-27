@@ -31,6 +31,8 @@ export interface EmailFrom {
 @Injectable()
 export class EmailService {
   private transporter: Transporter;
+  /** Reason the last sendPlainEmail threw — see consumeLastPlainSendError. */
+  private lastPlainSendError: string | null = null;
   private readonly logger = new Logger(EmailService.name);
   private readonly templatesPath: string;
   // Iter-98: cache compiled handlebars templates for the process
@@ -257,8 +259,33 @@ export class EmailService {
         `Failed to send plain email to ${maskEmail(to)}`,
         error instanceof Error ? error.stack : String(error),
       );
+      // Keep the reason where a caller can reach it. The boolean says a send
+      // failed; only this says WHY, and the difference between "email is
+      // broken" and "SMTP auth was rejected" is the difference between a guess
+      // and a fix. Overwritten each failure on purpose: this is a breadcrumb
+      // for the caller that just failed, not a log.
+      this.lastPlainSendError = error instanceof Error ? error.message : String(error);
       return false;
     }
+  }
+
+  /**
+   * Why the most recent sendPlainEmail failed, if one did.
+   *
+   * The SMTP error is caught inside sendPlainEmail and written only to the
+   * logger, so a caller that needs to REPORT the failure — the daily brief,
+   * which cannot announce its own non-delivery by email — had nothing but a
+   * false. Live, that produced "digest undelivered for 1 recipient" with no
+   * indication whether the mailbox rejected us, the password is wrong, or the
+   * host was unreachable.
+   *
+   * Cleared by `consume`: the reason belongs to one failure, and a stale one
+   * attached to a later, unrelated failure would be worse than none.
+   */
+  consumeLastPlainSendError(): string | null {
+    const e = this.lastPlainSendError;
+    this.lastPlainSendError = null;
+    return e ? e.slice(0, 300) : null;
   }
 
   /**
