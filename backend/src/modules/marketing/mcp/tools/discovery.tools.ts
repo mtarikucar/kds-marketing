@@ -94,17 +94,39 @@ export function registerDiscoveryTools(registry: McpToolRegistry, deps: Discover
         .max(60)
         .optional()
         .describe('Maximum tools to return (default 15, capped at 60).'),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Skip this many matches before returning. Use with `limit` to page through a result set larger than the cap: when `nextOffset` comes back, pass it here to get the rest.',
+        ),
     }),
+    // The cap is 60 and the catalogue is 114, so "omit query to list the entire
+    // catalogue" — which the query field above promises — could not be done:
+    // the caller got the same first 60 every time and the remaining 54 were
+    // unreachable by listing at all. The truncation was silent and, being
+    // registration-ordered, always cut the same tail, so the domains registered
+    // last simply did not appear. `offset` + `nextOffset` make the promise true
+    // without raising the cap, which exists to keep one response payload sane.
     handler: async (ctx, args) => {
       const limit = typeof args.limit === 'number' ? args.limit : 15;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
       const domain = typeof args.domain === 'string' ? args.domain : undefined;
       const matches = deps.registry
         .search(ctx.grantedScopes ?? [], typeof args.query === 'string' ? args.query : '')
         .filter((t) => (domain ? t.domain === domain : true));
+      const page = matches.slice(offset, offset + limit);
+      const nextOffset = offset + page.length;
       return {
         total: matches.length,
-        returned: Math.min(matches.length, limit),
-        tools: matches.slice(0, limit).map((t) => ({
+        returned: page.length,
+        offset,
+        // Absent when the page is the last one — its presence IS the "there is
+        // more" signal, so a caller never has to compare arithmetic to know.
+        ...(nextOffset < matches.length ? { nextOffset } : {}),
+        tools: page.map((t) => ({
           name: t.name,
           domain: t.domain,
           description: t.description,
