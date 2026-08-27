@@ -137,6 +137,14 @@ export class ResearchRunnerService implements OnModuleInit {
    */
   private async hasBackgroundHeadroom(workspaceId: string): Promise<boolean> {
     try {
+      // MONEY first, then credits. The credit question below is the right one
+      // for protecting the customer's allowance and the wrong one for
+      // protecting the bill: `limit === -1` returns true forever, so on exactly
+      // the workspaces that run the most there was no brake at all. Ten nightly
+      // runs at roughly $0.25 each is about $75 a month from a single
+      // workspace, and nothing anywhere said no.
+      if (!(await this.platformSpend.mayWorkspaceRunBackground(workspaceId))) return false;
+
       const { limit, used } = await this.credits.usage(workspaceId);
       if (limit === -1) return true;
       if (limit <= 0) return false;

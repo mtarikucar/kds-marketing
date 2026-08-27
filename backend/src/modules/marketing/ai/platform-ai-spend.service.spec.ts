@@ -132,3 +132,103 @@ describe('PlatformAiSpendService', () => {
     expect(s.period).toBe('2026-01');
   });
 });
+
+/**
+ * ONE workspace's monthly ceiling, in real money.
+ *
+ * The platform cap protects the aggregate; nothing protected us from a single
+ * workspace. The per-workspace guard that existed asked about CREDITS, and an
+ * unlimited plan answers "yes, forever" — so the only brake on one workspace's
+ * nightly research was how many profiles it happened to have. Ten runs a night
+ * at roughly $0.25 each is about $75 a month, from one workspace, silently.
+ *
+ * Measured live before writing this: a quiet day ran ~$0.45 and a busy stretch
+ * ~$2.40/day for four days — 60% of the month in four days. The average was
+ * never the problem; the peak was, and only a ceiling catches a peak.
+ */
+describe('PlatformAiSpendService — per-workspace budget', () => {
+  const OPUS2 = 'claude-opus-4-8';
+  const spend = (usd: number) => [
+    {
+      model: OPUS2,
+      _sum: {
+        inputTokens: 0,
+        outputTokens: (usd / 25) * 1_000_000,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+      },
+    },
+  ];
+
+  function load(cap?: string) {
+    jest.resetModules();
+    if (cap === undefined) delete process.env.AI_WORKSPACE_MONTHLY_USD_CAP;
+    else process.env.AI_WORKSPACE_MONTHLY_USD_CAP = cap;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('./platform-ai-spend.service')
+      .PlatformAiSpendService as typeof PlatformAiSpendService;
+  }
+
+  const make = (Cls: typeof PlatformAiSpendService, usd: number, groupBy = jest.fn()) => {
+    groupBy.mockResolvedValue(spend(usd));
+    return { svc: new Cls({ aiUsageLog: { groupBy } } as never), groupBy };
+  };
+
+  it('scopes the sum to the one workspace, and does not filter by plan', async () => {
+    const Cls = load('20');
+    const { svc, groupBy } = make(Cls, 5);
+
+    await expect(
+      svc.workspaceMonthToDateUsd('ws-1', new Date('2026-08-18T00:00:00Z')),
+    ).resolves.toBe(5);
+
+    const where = groupBy.mock.calls[0][0].where;
+    expect(where.workspaceId).toBe('ws-1');
+    // A metered plan has its own credit ceiling; this one is about money, so it
+    // must not silently exclude anybody.
+    expect(where).not.toHaveProperty('workspaceId.in');
+  });
+
+  it('lets background work run while the workspace is under budget', async () => {
+    const Cls = load('20');
+    const { svc } = make(Cls, 19.99);
+
+    await expect(svc.mayWorkspaceRunBackground('ws-1')).resolves.toBe(true);
+  });
+
+  it('stops unattended work once the workspace reaches its cap', async () => {
+    const Cls = load('20');
+    const { svc } = make(Cls, 20);
+
+    await expect(svc.mayWorkspaceRunBackground('ws-1')).resolves.toBe(false);
+  });
+
+  it('defaults the cap to $20 with no env set', async () => {
+    const Cls = load(undefined);
+    const { svc } = make(Cls, 21);
+
+    const s = await svc.workspaceStatus('ws-1');
+    expect(s.capUsd).toBe(20);
+    expect(s.overCap).toBe(true);
+  });
+
+  it('treats a zero or absent cap as "no ceiling" rather than "no budget"', async () => {
+    const Cls = load('0');
+    const { svc } = make(Cls, 999);
+
+    // Misreading this would suspend every workspace's research at once.
+    const s = await svc.workspaceStatus('ws-1');
+    expect(s.overCap).toBe(false);
+    await expect(svc.mayWorkspaceRunBackground('ws-1')).resolves.toBe(true);
+  });
+
+  it('fails OPEN when the meter itself errors', async () => {
+    const Cls = load('20');
+    const groupBy = jest.fn().mockRejectedValue(new Error('db down'));
+    const svc = new Cls({ aiUsageLog: { groupBy } } as never);
+
+    // A metering hiccup must not silently stop research for a workspace that is
+    // well inside its budget.
+    await expect(svc.mayWorkspaceRunBackground('ws-1')).resolves.toBe(true);
+  });
+});
