@@ -101,6 +101,7 @@ export class DailyDigestService {
       agentlessWaiting,
       overdueDrafts,
       expiringSoon,
+      stalePeriodBudget,
       aiBudget,
       spend,
     ] = await Promise.all([
@@ -315,6 +316,29 @@ export class DailyDigestService {
       ])
         .then(([a, b]) => a + b)
         .catch(soft('süresi dolan bağlantılar', 0)),
+      // An ad budget still pointing at a month that has ended.
+      //
+      // The period lock in BudgetAutopilotService is deliberate and correct: a
+      // stale-period budget must not independently commit the workspace-shared
+      // wallet, so it drops to the ASSISTED human gate. What nothing says is
+      // that it HAPPENED. The panel goes on showing AUTONOMOUS while the engine
+      // quietly stopped acting on its own and started queueing every step for
+      // approval — two very different products, and the owner is told neither.
+      //
+      // Self-clearing by construction: rolling the budget to the current month
+      // silences it, which is also the fix.
+      this.prisma.growthBudget
+        .findFirst({
+          where: {
+            workspaceId,
+            status: 'ACTIVE',
+            autonomyLevel: 'AUTONOMOUS',
+            periodKey: { not: now.toISOString().slice(0, 7) },
+          },
+          select: { periodKey: true },
+          orderBy: { periodKey: 'desc' },
+        })
+        .catch(soft('dönemi geçmiş bütçe', null)),
       // The workspace's own monthly AI budget. Hitting it SUSPENDS unattended
       // work — nightly research stops finding leads — and a stop nobody
       // announced is the failure this brief exists to prevent.
@@ -351,6 +375,10 @@ export class DailyDigestService {
     // customer now appears at all.
     if (waitingReplies)
       needsYou.push(`${waitingReplies} konuşma yanıt bekliyor — müşteri en son yazan taraf`);
+    if (stalePeriodBudget)
+      needsYou.push(
+        `Reklam bütçesi hâlâ ${stalePeriodBudget.periodKey} dönemine ait — motor AUTONOMOUS görünüyor ama bu ay kendi başına uygulamıyor, her adım onaya düşüyor`,
+      );
     if (brokenAccounts)
       needsYou.push(
         `${brokenAccounts} bağlı hesabın yetkisi düşmüş — yeniden bağlanana kadar o kanaldan yayın/mesaj gitmez`,

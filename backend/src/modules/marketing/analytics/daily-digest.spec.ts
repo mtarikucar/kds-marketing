@@ -49,6 +49,7 @@ describe('DailyDigestService', () => {
       adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     svc = new DailyDigestService(prisma, usage as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
   });
@@ -86,6 +87,28 @@ describe('DailyDigestService', () => {
     counts({ overdue: 1 });
     const d = await svc.build(WS);
     expect(d!.needsYou.items.some((l: string) => l.includes('okunamadı'))).toBe(false);
+  });
+
+  it('says when the ad budget still points at a month that has ended', async () => {
+    counts();
+    prisma.growthBudget.findFirst = jest.fn().mockResolvedValue({ periodKey: '2026-07' });
+
+    const d = await svc.build(WS, new Date('2026-08-27T06:00:00Z'));
+
+    const line = d!.needsYou.items.find((l: string) => l.includes('2026-07'));
+    // The panel keeps showing AUTONOMOUS; only the engine knows it dropped to
+    // the approval gate. Saying which month makes the fix obvious.
+    expect(line).toBeDefined();
+    expect(line).toContain('onaya düşüyor');
+  });
+
+  it('stays quiet when the budget is for the current month', async () => {
+    counts();
+    // The query itself filters on periodKey, so a current-month budget simply
+    // does not come back — the line must not fire on an empty result.
+    prisma.growthBudget.findFirst = jest.fn().mockResolvedValue(null);
+    const d = await svc.build(WS, new Date('2026-08-27T06:00:00Z'));
+    expect(d!.needsYou.items.some((l: string) => l.includes('dönemine ait'))).toBe(false);
   });
 
   it('is empty when nothing happened and nothing waits', async () => {
@@ -193,6 +216,7 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
     return prisma;
@@ -266,6 +290,7 @@ describe('DailyDigestService — accounts that stopped working', () => {
       adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const svc = new DailyDigestService(
       prisma,
@@ -342,6 +367,7 @@ describe('DailyDigestService — connection health', () => {
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       socialAccount: { count: socialCount },
       adAccount: { count: adCount },
     };
@@ -427,6 +453,7 @@ describe('DailyDigestService — vendor refusal', () => {
       adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       scheduledJob,
     };
     return {
@@ -493,6 +520,7 @@ describe('DailyDigestService — AI budget', () => {
       adAccount: { count: jest.fn().mockResolvedValue(0) },
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
     };
     return new DailyDigestService(
