@@ -137,7 +137,13 @@ export class DailyDigestCron {
               // one failure that cannot report itself by email, which is
               // exactly why it has to surface somewhere else.
               const ok = await this.email.sendPlainEmail(address, subject, body);
-              if (!ok) undelivered.push(`${ws.id} → ${address}`);
+              if (!ok) {
+                // Carry the SMTP reason, not just the fact. "Undelivered" tells
+                // the owner to look; "535 authentication failed" tells them what
+                // to fix.
+                const why = this.email.consumeLastPlainSendError();
+                undelivered.push(`${ws.id} → ${address}${why ? `: ${why}` : ''}`);
+              }
             }
             sent++;
           } catch (e) {

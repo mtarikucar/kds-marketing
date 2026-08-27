@@ -153,10 +153,11 @@ describe('DailyDigestCron', () => {
  * surface that IS readable when email is not.
  */
 describe('DailyDigestCron — undelivered briefs', () => {
-  const setup = (over: { sendOk?: boolean; configured?: boolean } = {}) => {
+  const setup = (over: { sendOk?: boolean; configured?: boolean; sendError?: string } = {}) => {
     const email = {
       sendPlainEmail: jest.fn().mockResolvedValue(over.sendOk ?? true),
       isConfigured: jest.fn().mockReturnValue(over.configured ?? true),
+      consumeLastPlainSendError: jest.fn().mockReturnValue(over.sendError ?? null),
     };
     const digest = {
       build: jest.fn().mockResolvedValue({
@@ -223,5 +224,32 @@ describe('DailyDigestCron — undelivered briefs', () => {
 
     expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
     expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError).toBeNull();
+  });
+
+  it('carries the SMTP reason, not just the fact of failure', async () => {
+    atDigestHour();
+    const { email, digest, prisma } = setup({
+      sendOk: false,
+      sendError: '535 5.7.8 Authentication credentials invalid',
+    });
+    const cron = new DailyDigestCron(prisma, digest as never, email as never);
+
+    await cron.tick();
+
+    // "Undelivered" tells the owner to look; the SMTP line tells them what to
+    // fix. Live, the first real failure said only the former.
+    expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError).toContain(
+      '535 5.7.8 Authentication credentials invalid',
+    );
+  });
+
+  it('still records the failure when no reason is available', async () => {
+    atDigestHour();
+    const { email, digest, prisma } = setup({ sendOk: false, sendError: undefined });
+    const cron = new DailyDigestCron(prisma, digest as never, email as never);
+
+    await cron.tick();
+
+    expect(prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError).toMatch(/undelivered/);
   });
 });
