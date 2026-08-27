@@ -138,6 +138,37 @@ describe('DailyDigestService', () => {
     expect(line).toContain('araştırma');
   });
 
+  it('does not report the credit refusals twice, as jobs AND as a vendor problem', async () => {
+    counts();
+    // Live shape: every dead job was a credit refusal. scheduledJob.count is
+    // called twice — deadJobs first, then the credit-error match.
+    prisma.scheduledJob.count = jest
+      .fn()
+      .mockResolvedValueOnce(6)
+      .mockResolvedValueOnce(6);
+
+    const items = (await svc.build(WS))!.needsYou.items as string[];
+
+    expect(items.some((l) => l.includes('kredisi bitmiş'))).toBe(true);
+    // The generic line explains nothing the line above has not, so it must go.
+    expect(items.some((l) => l.includes('tüm denemelerini tüketip'))).toBe(false);
+  });
+
+  it('still reports the dead jobs the vendor line does not explain', async () => {
+    counts();
+    prisma.scheduledJob.count = jest
+      .fn()
+      .mockResolvedValueOnce(9)
+      .mockResolvedValueOnce(6);
+
+    const items = (await svc.build(WS))!.needsYou.items as string[];
+
+    // 9 dead, 6 of them credit — the other 3 have some other cause and are
+    // exactly what this line is for.
+    expect(items.some((l) => l.includes('3 arka plan işi'))).toBe(true);
+    expect(items.some((l) => l.includes('kredisi bitmiş'))).toBe(true);
+  });
+
   it('is empty when nothing happened and nothing waits', async () => {
     counts();
     const d = await svc.build(WS);

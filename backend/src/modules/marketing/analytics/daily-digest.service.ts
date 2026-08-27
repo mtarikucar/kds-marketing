@@ -423,9 +423,20 @@ export class DailyDigestService {
       needsYou.push(
         `AI sağlayıcısı çağrıları reddediyor: hesabın kredisi bitmiş — ${vendorRefused} iş bu yüzden düştü, yüklenene kadar AI kimseye yanıt veremez`,
       );
-    if (deadJobs)
+    // The vendor-refusal line above already accounts for its own jobs, so this
+    // one reports only what it does NOT explain. Live, all six dead jobs were
+    // the same six credit refusals, and the brief listed them as two separate
+    // problems — the effect above its own cause. Double-counting one incident
+    // is not a cosmetic flaw: a reader who notices it has to start doubting
+    // every other number in the section, which is the whole section's value.
+    //
+    // Clamped rather than subtracted outright: vendorRefused matches on
+    // lastError at ANY status, so a job still retrying counts there while it is
+    // not yet dead here, and a naive subtraction would go negative.
+    const unexplainedDeadJobs = Math.max(0, deadJobs - vendorRefused);
+    if (unexplainedDeadJobs)
       needsYou.push(
-        `${deadJobs} arka plan işi tüm denemelerini tüketip başarısız oldu — sebebi işin kaydında yazıyor`,
+        `${unexplainedDeadJobs} arka plan işi tüm denemelerini tüketip başarısız oldu — sebebi işin kaydında yazıyor`,
       );
     if (expiringSoon)
       needsYou.push(
