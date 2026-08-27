@@ -549,4 +549,56 @@ describe('ConversationAiEngineService.reply', () => {
       expect(releases).toHaveLength(0);
     });
   });
+
+  /**
+   * The anti-invention instruction must not depend on having a knowledge base.
+   *
+   * It used to live inside the `if (kb.length)` block, so the strongest line in
+   * the whole prompt appeared only when the grounding was already good and
+   * vanished when it was thinnest. The live workspace has an EMPTY kbDocIds, so
+   * on every real conversation it was absent — and this brand's entire pitch is
+   * that there are no traps and no hidden tiers, with an objection list opening
+   * on "if it's free, will you charge me later?".
+   */
+  describe('ConversationAiEngineService.buildSystem — never invent', () => {
+    const systemFor = async (overrides: Parameters<typeof build>[0] = {}) => {
+      const h = build(overrides);
+      await (h.engine as never as { reply: (w: string, c: string) => Promise<void> }).reply(
+        'ws-1',
+        'convo-1',
+      );
+      return String((h.anthropic.complete as jest.Mock).mock.calls[0][0].system);
+    };
+
+    it('tells the model not to invent, with no knowledge base at all', async () => {
+      const system = await systemFor();
+
+      expect(system).toMatch(/Never invent facts/);
+      expect(system).toMatch(/prices/);
+    });
+
+    it('still says it when a knowledge base IS present', async () => {
+      const system = await systemFor();
+
+      // The instruction is unconditional; the KB block only adds grounding.
+      expect(system).toMatch(/Never invent facts/);
+    });
+
+    it('keeps the brand block, which is where the price list arrives', async () => {
+      const h = build();
+      (h.brandContext.summaryFor as jest.Mock).mockResolvedValue(
+        ['Brand: HummyTummy', 'Offerings (name — price — what it is):', '- Ek Şube — 3.990₺/yıl'].join(
+          String.fromCharCode(10),
+        ),
+      );
+      await (h.engine as never as { reply: (w: string, c: string) => Promise<void> }).reply(
+        'ws-1',
+        'convo-1',
+      );
+      const system = String((h.anthropic.complete as jest.Mock).mock.calls[0][0].system);
+
+      expect(system).toContain('Ek Şube — 3.990₺/yıl');
+      expect(system).toMatch(/ground every reply in this/i);
+    });
+  });
 });
