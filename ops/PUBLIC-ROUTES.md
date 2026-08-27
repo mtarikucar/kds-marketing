@@ -43,6 +43,56 @@ field on the SMS channel's API view (`GET /marketing/channels/:id`). It is null
 until both `MARKETING_SECRET_KEY` and `PUBLIC_BASE_URL` are set. Inbound MO
 replies do **not** consume the monthly outbound message quota.
 
+## Required for web chat: let `/widget` be framed
+
+The web-chat widget is an **iframe**: `widget.js` injects `<iframe
+src="https://jeetagrowth.com/widget?key=…">` into the customer's page. The host
+vhost currently adds `X-Frame-Options: SAMEORIGIN` to **every** response, so the
+browser refuses that iframe on any other origin and the customer sees an empty
+box. The loader runs, the URL is right, the channel is ACTIVE — the last step
+fails in the browser, which is why this looks like nothing being wrong.
+
+Verified 2026-08-27:
+
+```
+GET /widget?key=…   → X-Frame-Options: SAMEORIGIN
+GET /widget.js      → X-Frame-Options: SAMEORIGIN
+GET /               → X-Frame-Options: SAMEORIGIN
+```
+
+`X-Frame-Options` cannot express an allow-list, so it has to come **off this one
+route** and be replaced by CSP `frame-ancestors`, which can:
+
+```nginx
+# Web-chat iframe page → panel (SPA). Framed BY customer sites on purpose.
+location = /widget {
+    proxy_pass http://127.0.0.1:3210;
+    proxy_set_header Host $host;
+
+    # The vhost-wide XFO would otherwise win and refuse the frame.
+    proxy_hide_header X-Frame-Options;
+
+    # Name every origin allowed to embed the widget. NOT `*` — an open frame
+    # policy on a page that carries a session is a clickjacking target.
+    add_header Content-Security-Policy "frame-ancestors https://hummytummy.com https://*.hummytummy.com" always;
+}
+```
+
+**Scope this to `location = /widget` only.** The panel itself must keep
+`SAMEORIGIN`; the exact-match `=` is what stops the exception leaking to
+`/widget.js` (a script, which needs no framing) or to any other route.
+
+Verify from a machine that is not the server:
+
+```bash
+curl -sI "https://jeetagrowth.com/widget?key=<widgetKey>" | grep -i "frame"
+# want: content-security-policy: frame-ancestors https://hummytummy.com …
+# and NO x-frame-options line
+```
+
+Only after that does setting `NEXT_PUBLIC_WEBCHAT_WIDGET_KEY` on the landing
+site do anything — the embed code is already written and waiting.
+
 ## Optional: prettier customer-facing URLs
 
 For nicer shareable/SEO URLs on the campaign + funnel surfaces (e.g.
