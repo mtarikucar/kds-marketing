@@ -189,6 +189,24 @@ describe('DailyDigestCron — undelivered briefs', () => {
 
   afterEach(() => jest.useRealTimers());
 
+  it('never writes a recipient address or workspace id onto the heartbeat', async () => {
+    atDigestHour();
+    const { email, digest, prisma } = setup({ sendOk: false, sendError: '535 Authentication Failed' });
+    const cron = new DailyDigestCron(prisma, digest as never, email as never);
+
+    await cron.tick();
+
+    const lastError = prisma.cronHeartbeat.upsert.mock.calls[0][0].update.lastError as string;
+    // The heartbeat is a PLATFORM row every tenant can read through
+    // jeeta.list_scheduled_runs. Naming the mailbox there handed one
+    // workspace's owner address to every other workspace's agent.
+    expect(lastError).not.toContain('owner@example.com');
+    expect(lastError).not.toContain('ws1');
+    // The actionable half must survive: the reason, without the identity.
+    expect(lastError).toContain('535 Authentication Failed');
+    expect(lastError).toContain('1 recipient(s)');
+  });
+
   it('records the failure on the heartbeat when a send does not go out', async () => {
     atDigestHour();
     const { email, digest, prisma } = setup({ sendOk: false });

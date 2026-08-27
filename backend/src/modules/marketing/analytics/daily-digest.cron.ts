@@ -125,7 +125,7 @@ export class DailyDigestCron {
             // be recorded as sent every morning forever on a deploy that cannot
             // send anything.
             if (!this.email.isConfigured()) {
-              undelivered.push(`${ws.id} → (mailer not configured)`);
+              undelivered.push('(mailer not configured)');
               skipped++;
               continue;
             }
@@ -141,8 +141,17 @@ export class DailyDigestCron {
                 // Carry the SMTP reason, not just the fact. "Undelivered" tells
                 // the owner to look; "535 authentication failed" tells them what
                 // to fix.
+                // The REASON only. Not the address, and not the workspace id:
+                // this string ends up on the cron heartbeat, which is a
+                // PLATFORM-level row that every tenant can read through
+                // jeeta.list_scheduled_runs. Naming the recipient there put one
+                // workspace's owner/manager email addresses in front of every
+                // other workspace's agent. The SMTP reason is the actionable
+                // half and carries nobody's identity; which mailbox bounced is
+                // in the operator's own logs (logger.warn above), where it
+                // belongs.
                 const why = this.email.consumeLastPlainSendError();
-                undelivered.push(`${ws.id} → ${address}${why ? `: ${why}` : ''}`);
+                undelivered.push(why || '(no reason reported)');
               }
             }
             sent++;
@@ -163,8 +172,12 @@ export class DailyDigestCron {
         // job's heartbeat, which is readable — so the brief that could not
         // announce its own failure announces it there instead.
         if (undelivered.length) {
+          // Distinct reasons, not one line per recipient: five bounces from one
+          // dead mailbox are one problem, and de-duplicating keeps the count
+          // honest while the text stays short enough to survive truncation.
+          const reasons = [...new Set(undelivered)];
           throw new Error(
-            `digest undelivered for ${undelivered.length} recipient(s): ${undelivered.slice(0, 5).join(', ')}`,
+            `digest undelivered for ${undelivered.length} recipient(s): ${reasons.slice(0, 3).join(' | ')}`,
           );
         }
         },

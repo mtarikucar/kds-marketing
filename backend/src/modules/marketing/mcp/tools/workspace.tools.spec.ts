@@ -4,7 +4,7 @@ import { registerWorkspaceTools } from './workspace.tools';
 const deps = () => ({
   entitlements: { getEffective: jest.fn() } as any,
   users: { findAll: jest.fn().mockResolvedValue([]) } as any,
-  jobs: { list: jest.fn().mockResolvedValue([]), listCronHeartbeats: jest.fn().mockResolvedValue([]) } as any,
+  jobs: { list: jest.fn().mockResolvedValue([]), listCronHeartbeats: jest.fn().mockResolvedValue({ registered: [], recorded: [] }) } as any,
   email: { verifyTransport: jest.fn().mockResolvedValue({ ok: true, configured: true }) } as any,
 });
 
@@ -109,6 +109,41 @@ describe('workspace MCP tools', () => {
       expect(registry.listAdvertised(['reports.read']).map((t) => t.name)).not.toContain(
         'jeeta.list_scheduled_runs',
       );
+    });
+
+    it('strips the failure text, which is platform-wide and may name another tenant', async () => {
+      const registry = new McpToolRegistry();
+      const d = deps();
+      d.jobs.listCronHeartbeats = jest.fn().mockResolvedValue({
+        registered: [],
+        recorded: [
+          {
+            jobName: 'daily-digest',
+            lastRunAt: new Date('2026-08-27T07:00:00Z'),
+            lastOkAt: new Date('2026-08-26T07:00:00Z'),
+            lastError: 'undelivered: ws-other → owner@other-tenant.com: 535',
+            runs: 24,
+            failures: 2,
+          },
+        ],
+      });
+      registerWorkspaceTools(registry, d);
+
+      const out = (await registry
+        .get('jeeta.list_scheduled_runs')!
+        .handler({ workspaceId: 'ws1', grantedScopes: ['reports.read'] }, {})) as {
+        recorded: Array<Record<string, unknown>>;
+      };
+
+      const row = out.recorded[0];
+      // A single tenant must not read another tenant's data out of a
+      // deployment-level row through a READ tool that needs no approval.
+      expect(JSON.stringify(out)).not.toContain('other-tenant.com');
+      expect(row.lastError).toBeUndefined();
+      // What the tool exists to answer still answers.
+      expect(row.failing).toBe(true);
+      expect(row.jobName).toBe('daily-digest');
+      expect(row.failures).toBe(2);
     });
 
     it('reads the platform schedules, which take no workspace', async () => {

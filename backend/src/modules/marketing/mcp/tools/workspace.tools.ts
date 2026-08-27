@@ -153,9 +153,10 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
     description:
       "List the platform's recurring jobs. Returns TWO lists. `registered` is every cron the scheduler " +
       'actually has, with `nextAt`, the next time it is due — a populated nextAt proves the schedule is ' +
-      'armed. `recorded` is the durable per-job history: last run, last SUCCESS, and the error from the ' +
-      'last failure — a lastRunAt well ahead of lastOkAt means the job is firing and failing, while ' +
-      'both being stale means it is not firing at all. IMPORTANT: the two lists use DIFFERENT naming ' +
+      'armed. `recorded` is the durable per-job history: last run, last SUCCESS, run and failure counts, ' +
+      'and `failing` — a lastRunAt well ahead of lastOkAt means the job is firing and failing, while ' +
+      'both being stale means it is not firing at all. The failure TEXT is deliberately not returned ' +
+      '(see below); read it from the deployment logs. IMPORTANT: the two lists use DIFFERENT naming ' +
       'conventions (the cron `call-cdr-sync` records as `telephony:cdr-sync`), so never conclude a job ' +
       'is uninstrumented just because its name is missing from the other list. Read-only.',
     domain: 'workspace',
@@ -164,7 +165,32 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
     risk: 'READ',
     requiresApproval: false,
     inputSchema: z.object({}),
-    handler: async () => deps.jobs.listCronHeartbeats(),
+    // `lastError` is stripped here, and the reason is the one thing this tool
+    // cannot check: these rows are PLATFORM-level — a cron belongs to the
+    // deployment, not to a workspace — while the caller is a single tenant. Any
+    // cron may put tenant data in its error text, and one did: the morning brief
+    // recorded `<workspaceId> → <owner email>: 535 ...`, so every workspace's
+    // agent could read every other workspace's owner and manager addresses
+    // through a READ tool that needs no approval. That cron no longer names
+    // anyone, but the shape stays dangerous for the NEXT one (an SMS failure
+    // carrying a phone number, a bounce carrying an address), and sanitising
+    // arbitrary error text is not something to be confident about.
+    //
+    // What survives is what the tool was built to answer: is it firing, is it
+    // succeeding, how often has it failed. `failing` states the comparison the
+    // description explains, so the answer does not depend on reading two
+    // timestamps correctly. The text stays in the row and in the logs, where the
+    // operator — who is allowed to see every tenant — can still reach it.
+    handler: async () => {
+      const { registered, recorded } = await deps.jobs.listCronHeartbeats();
+      return {
+        registered,
+        recorded: recorded.map(({ lastError, ...row }) => ({
+          ...row,
+          failing: lastError !== null && lastError !== undefined,
+        })),
+      };
+    },
   });
 
   /**
