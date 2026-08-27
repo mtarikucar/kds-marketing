@@ -328,6 +328,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.update_agent',
         'jeeta.get_funnel',
         'jeeta.get_ai_usage',
+        'jeeta.get_vendor_spend',
         'jeeta.search_brand_knowledge',
         'jeeta.search_leads',
         'jeeta.list_conversations',
@@ -437,7 +438,7 @@ describe('MCP tool catalogue', () => {
     // 108 -> 109: jeeta.list_background_jobs, also deferred. Same shape of gap —
     // the retry queue behind every deferred action had no reader at all, so a
     // job's lastError was recorded and then unreachable from anywhere.
-    expect(names).toHaveLength(113);
+    expect(names).toHaveLength(114);
   });
 
   /**
@@ -521,7 +522,7 @@ describe('MCP tool catalogue', () => {
     // 109 total, 45 advertised: list_background_jobs, like the channel tools
     // before it, is deferred — so the ceiling asserted on the two lines above is
     // what stayed fixed while the catalogue grew.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(113);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(114);
   });
 });
 

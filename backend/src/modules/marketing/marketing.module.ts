@@ -220,6 +220,7 @@ import { SiteRendererService } from './sites/site-renderer.service';
 import { FormsService } from './sites/forms.service';
 import { LeadAttributionService } from './leads/lead-attribution.service';
 import { ChannelTariffService } from './wallet/channel-tariff.service';
+import { VendorSpendReportService } from './wallet/vendor-spend-report.service';
 import { SpendLedgerService } from './wallet/spend-ledger.service';
 import { GrowthWalletService } from './wallet/growth-wallet.service';
 import { AdSpendMirrorService } from './budget/ad-spend-mirror.service';
@@ -928,6 +929,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     FormsService,
     LeadAttributionService,
     ChannelTariffService,
+    VendorSpendReportService,
     SpendLedgerService,
     GrowthWalletService,
     AdSpendMirrorService,
@@ -1274,8 +1276,9 @@ export class MarketingModule {
     enrollments: EnrollmentService,
     reviews: ReviewsService,
     aiUsage: AiUsageStatsService,
+    vendorSpend: VendorSpendReportService,
   ) {
-    registerAnalyticsTools(registry, { analytics, aiUsage });
+    registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
     registerLeadsTools(registry, { leads, distribution });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
