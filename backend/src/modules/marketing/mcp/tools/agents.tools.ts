@@ -47,8 +47,8 @@ export function registerAgentTools(registry: McpToolRegistry, deps: AgentToolDep
     handler: async (ctx) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
       const rows = await deps.agents.list(ctx.workspaceId);
-      // Trim to what a model needs to decide; the full persona/guardrails text
-      // is available per-agent and would otherwise dominate the response.
+      // Trim to what a model needs to decide; the full text would otherwise
+      // dominate the response. jeeta.get_agent returns the rest.
       return rows.map((a) => ({
         id: a.id,
         name: a.name,
@@ -59,6 +59,45 @@ export function registerAgentTools(registry: McpToolRegistry, deps: AgentToolDep
         personaPreview: typeof a.persona === 'string' ? a.persona.slice(0, 400) : null,
         channels: a.channels ?? null,
       }));
+    },
+  });
+
+  /**
+   * The whole profile, including the parts that decide whether the AI ever
+   * answers at all.
+   *
+   * `handoffRules.keywords` is checked in reply() BEFORE the model runs: any
+   * match escalates to a human and returns. One over-broad word — "fiyat" on a
+   * brand whose agent is told to quote prices — silently converts every
+   * relevant conversation into an escalation, and the AI looks broken again.
+   *
+   * That field was write-only. It can be set through update_agent and the DTO,
+   * and the single place that READS it is the reply engine. Not the panel, not
+   * the tool catalogue, nowhere a human could look. Same for guardrails,
+   * captureFields, the follow-up policy, the daily reply cap and the attached
+   * knowledge docs: all of them shape what the customer receives, and none of
+   * them could be inspected.
+   */
+  registry.register({
+    name: 'jeeta.get_agent',
+    description:
+      "Read ONE agent profile in full: persona, guardrails, handoff rules, capture fields, follow-up " +
+      'policy, daily reply cap and attached knowledge docs. jeeta.list_agents trims these away. Reach for ' +
+      'this before concluding an agent is misbehaving — a handoff keyword matches BEFORE the model runs, ' +
+      'so an over-broad one silently escalates every conversation it touches. Read-only.',
+    // Same domain as its siblings in this file — the agent tools live under
+    // 'inbox' because that is where an agent's behaviour is observed.
+    domain: 'inbox',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({
+      agentId: z.string().min(1).describe('Agent profile id, from jeeta.list_agents.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
+      return deps.agents.get(ctx.workspaceId, String(args.agentId));
     },
   });
 
