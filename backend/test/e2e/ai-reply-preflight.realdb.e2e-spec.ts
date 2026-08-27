@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { AnthropicService } from '../../src/modules/marketing/ai/anthropic.service';
+import { AiCreditsService } from '../../src/modules/marketing/ai/ai-credits.service';
 import { ConversationAiEngineService } from '../../src/modules/marketing/channels/conversation-ai-engine.service';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
@@ -49,6 +50,14 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
       builder.overrideProvider(AnthropicService).useValue({
         isEnabled: () => true,
         complete,
+      });
+      // Billing is a separate concern with its own tests, and a bare test
+      // workspace has no plan — reserve() throws AI_CREDITS_EXHAUSTED before the
+      // model is ever reached. Stubbed so this spec measures what it is for:
+      // whether the four reply-path fixes compose.
+      builder.overrideProvider(AiCreditsService).useValue({
+        reserve: jest.fn().mockResolvedValue(undefined),
+        refund: jest.fn().mockResolvedValue(undefined),
       });
     }));
     engine = app.get(ConversationAiEngineService);
