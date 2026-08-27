@@ -8,7 +8,11 @@ import { CampaignSenderService } from './campaign-sender.service';
 describe('CampaignSenderService.batch', () => {
   const WS = 'ws-1';
   let prisma: any;
-  let email: { sendPlainEmail: jest.Mock; sendCampaignEmail: jest.Mock };
+  let email: {
+    sendPlainEmail: jest.Mock;
+    sendCampaignEmail: jest.Mock;
+    consumeLastPlainSendError: jest.Mock;
+  };
   let quota: { reserve: jest.Mock; refund: jest.Mock };
   let scheduledJobs: { schedule: jest.Mock };
   let conversationSpend: { settleCampaignSms: jest.Mock };
@@ -43,7 +47,11 @@ describe('CampaignSenderService.batch', () => {
         ),
       },
     };
-    email = { sendPlainEmail: jest.fn().mockResolvedValue(true), sendCampaignEmail: jest.fn().mockResolvedValue(true) };
+    email = {
+      sendPlainEmail: jest.fn().mockResolvedValue(true),
+      sendCampaignEmail: jest.fn().mockResolvedValue(true),
+      consumeLastPlainSendError: jest.fn().mockReturnValue(null),
+    };
     // A base URL is required now — the sender refuses to send without one (the
     // unsubscribe link is mandatory and built from PUBLIC_BASE_URL).
     const config = { get: jest.fn().mockReturnValue('https://m.test') };
@@ -85,6 +93,41 @@ describe('CampaignSenderService.batch', () => {
     expect(quota.reserve).toHaveBeenCalledWith(WS, 'EMAIL');
     // A delivered message is not refunded.
     expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A campaign writes its error onto EVERY recipient row.
+   *
+   * "email send failed" repeated three hundred times says only that something
+   * is wrong. When the mailer itself is down — as it is right now, live: 535
+   * Authentication Failed — all three hundred share ONE cause, and the
+   * provider's own line is what turns a wall of identical rows into a single
+   * fixable fact.
+   */
+  it('records the provider reason on the recipient, not a generic string', async () => {
+    email.sendPlainEmail.mockResolvedValue(false);
+    email.consumeLastPlainSendError.mockReturnValue(
+      'Invalid login: 535 Authentication Failed for admin@jeetagrowth.com',
+    );
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const errors = prisma.campaignRecipient.update.mock.calls
+      .map((c: any) => c[0].data.error)
+      .filter(Boolean);
+    expect(errors.join(' ')).toContain('535 Authentication Failed');
+  });
+
+  it('falls back to the generic string when no reason is available', async () => {
+    email.sendPlainEmail.mockResolvedValue(false);
+    email.consumeLastPlainSendError.mockReturnValue(null);
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const errors = prisma.campaignRecipient.update.mock.calls
+      .map((c: any) => c[0].data.error)
+      .filter(Boolean);
+    expect(errors).toContain('email send failed');
   });
 
   it('refunds the message quota when the email fails to send', async () => {

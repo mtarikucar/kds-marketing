@@ -468,7 +468,16 @@ export class CampaignSenderService implements OnModuleInit {
             ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
             : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
           if (!ok) await this.quota.refund(workspaceId, 'EMAIL');
-          return { ok, messageId: null, error: ok ? undefined : 'email send failed' };
+          // A campaign writes its error onto EVERY recipient row. "email send
+          // failed" repeated three hundred times says only that something is
+          // wrong; the provider's own line says WHICH thing — and when the
+          // mailer itself is down, all three hundred share one cause.
+          const why = ok ? undefined : this.email.consumeLastPlainSendError();
+          return {
+            ok,
+            messageId: null,
+            error: ok ? undefined : why ?? 'email send failed',
+          };
         } catch (e) {
           await this.quota.refund(workspaceId, 'EMAIL');
           throw e; // the outer catch turns this into { ok: false, error }
