@@ -2,12 +2,14 @@ import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import { MarketingUsersService } from '../../services/marketing-users.service';
 import { ScheduledJobService } from '../../scheduling/scheduled-job.service';
+import { EmailService } from '../../../../common/services/email.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 export interface WorkspaceToolDeps {
   entitlements: EntitlementsService;
   users: MarketingUsersService;
   jobs: ScheduledJobService;
+  email: EmailService;
 }
 
 /**
@@ -163,5 +165,36 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
     requiresApproval: false,
     inputSchema: z.object({}),
     handler: async () => deps.jobs.listCronHeartbeats(),
+  });
+
+  /**
+   * Can this deployment send email at all?
+   *
+   * The transporter is verified once at boot and the answer goes to the logger,
+   * so it exists for a moment and is then unreachable. That left exactly one
+   * way to find out whether mail works: wait for something to try to send.
+   *
+   * Live, that meant waiting for the 07:00 brief — which failed, and which by
+   * its nature could not announce its own failure by email. Between one morning
+   * and the next there was no way to ask the question, let alone check a fix.
+   *
+   * Platform-level and read-only: one live handshake with the mail host, no
+   * message sent, no credentials returned — only whether it worked and, if not,
+   * the provider's own words.
+   */
+  registry.register({
+    name: 'jeeta.verify_email_transport',
+    description:
+      'Check whether this deployment can actually send email: a live handshake with the configured SMTP ' +
+      'host. Returns whether a mailer is configured at all, whether the connection and credentials were ' +
+      'accepted, and the provider error when they were not. Nothing is sent. Use it after changing mail ' +
+      'settings, or when a brief or campaign reports an undelivered message. Read-only.',
+    domain: 'workspace',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async () => deps.email.verifyTransport(),
   });
 }
