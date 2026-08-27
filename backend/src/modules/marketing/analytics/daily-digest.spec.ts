@@ -53,6 +53,41 @@ describe('DailyDigestService', () => {
     svc = new DailyDigestService(prisma, usage as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
   });
 
+  it('says which signals it could not read, instead of reporting them as zero', async () => {
+    counts();
+    // The waiting-reply and agentless-channel counts both ride $queryRaw. A
+    // broken query used to render as "0 conversations waiting" — identical to
+    // genuinely nobody waiting, and the reassuring one of the two.
+    prisma.$queryRaw = jest.fn().mockRejectedValue(new Error('relation does not exist'));
+
+    const d = await svc.build(WS);
+
+    const line = d!.needsYou.items.find((l: string) => l.includes('okunamadı'));
+    expect(line).toBeDefined();
+    expect(line).toContain('yanıt bekleyen konuşmalar');
+    expect(line).toContain('ajansız kanallar');
+    // The point of the wording: a missing number is not an all-clear.
+    expect(line).toContain('"sorun yok" demek değil');
+  });
+
+  it('still delivers every signal that DID work when one fails', async () => {
+    counts({ overdue: 4 });
+    prisma.$queryRaw = jest.fn().mockRejectedValue(new Error('boom'));
+
+    const d = await svc.build(WS);
+
+    // One broken sub-query must not cost the owner the other seventeen.
+    expect(d!.needsYou.items.some((l: string) => l.includes('4 görev gecikmiş'))).toBe(true);
+    // And the caveat leads, so it qualifies the counts printed under it.
+    expect(d!.needsYou.items[0]).toContain('okunamadı');
+  });
+
+  it('adds no caveat when every signal reads cleanly', async () => {
+    counts({ overdue: 1 });
+    const d = await svc.build(WS);
+    expect(d!.needsYou.items.some((l: string) => l.includes('okunamadı'))).toBe(false);
+  });
+
   it('is empty when nothing happened and nothing waits', async () => {
     counts();
     const d = await svc.build(WS);

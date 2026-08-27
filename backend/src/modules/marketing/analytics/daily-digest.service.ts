@@ -56,6 +56,28 @@ export class DailyDigestService {
     if (!workspace) return null;
 
     const since = new Date(now.getTime() - DAY_MS);
+    // Signals that could not be read, by name.
+    //
+    // Every fallible query below used to end in `.catch(() => 0)`, which turns a
+    // broken signal into a reassuring one: "0 conversations waiting" and "could
+    // not check" render identically, and the second is the one that matters. A
+    // whole class of failure on this codebase has been exactly that shape, and
+    // this brief is the single surface through which any of it reaches anyone —
+    // so a silent zero here hides the very thing the brief exists to surface.
+    //
+    // Not rethrown: one broken sub-query must not cost the owner all eighteen
+    // signals. The brief still goes out with what it has and says what it could
+    // not read, which is the honest version of both options.
+    const unread: string[] = [];
+    const soft =
+      <T,>(label: string, fallback: T) =>
+      (e: unknown): T => {
+        unread.push(label);
+        this.logger.warn(
+          `digest signal "${label}" failed for ${workspaceId}: ${e instanceof Error ? e.message : e}`,
+        );
+        return fallback;
+      };
     const soon = new Date(now.getTime() + DAY_MS);
     // A week is the window for "renew this before it stops working": long
     // enough that a reconnect can wait for a working day, short enough that the
@@ -145,7 +167,7 @@ export class DailyDigestService {
             AND ("lastMessageAt" IS NULL OR "lastInboundAt" >= "lastMessageAt")
         `
         .then((r) => Number(r[0]?.count ?? 0))
-        .catch(() => 0),
+        .catch(soft('yanıt bekleyen konuşmalar', 0)),
       // Connected accounts that are supposed to be working and are not.
       //
       // Deliberately NARROWER than social.tools.ts's `needsReconnect`, which
@@ -178,7 +200,7 @@ export class DailyDigestService {
         this.prisma.adAccount.count({ where: { workspaceId, status: 'TOKEN_EXPIRED' } }),
       ])
         .then(([a, b]) => a + b)
-        .catch(() => 0),
+        .catch(soft('kopmuş bağlantılar', 0)),
       // Background jobs that gave up.
       //
       // A FAILED row means the queue exhausted every attempt — there is no
@@ -221,7 +243,7 @@ export class DailyDigestService {
             updatedAt: { gte: since },
           },
         })
-        .catch(() => 0),
+        .catch(soft('tedarikçi reddi', 0)),
       // Conversations waiting on a channel that has NO AI agent attached.
       //
       // Deliberately not "channels without an agent" — plenty of channels are
@@ -250,7 +272,7 @@ export class DailyDigestService {
             AND ch."agentProfileId" IS NULL
         `
         .then((r) => Number(r[0]?.count ?? 0))
-        .catch(() => 0),
+        .catch(soft('ajansız kanallar', 0)),
       // Campaigns whose moment has arrived while they are still drafts.
       //
       // Anchored on the date the owner themselves set, which is what keeps this
@@ -271,7 +293,7 @@ export class DailyDigestService {
         }),
       ])
         .then(([a, b]) => a + b)
-        .catch(() => 0),
+        .catch(soft('vakti geçmiş taslaklar', 0)),
       // Tokens with an expiry date that is nearly here.
       //
       // The line above reports a connection that has ALREADY broken, which is
@@ -292,12 +314,12 @@ export class DailyDigestService {
         }),
       ])
         .then(([a, b]) => a + b)
-        .catch(() => 0),
+        .catch(soft('süresi dolan bağlantılar', 0)),
       // The workspace's own monthly AI budget. Hitting it SUSPENDS unattended
       // work — nightly research stops finding leads — and a stop nobody
       // announced is the failure this brief exists to prevent.
-      this.spend.workspaceStatus(workspaceId, now).catch(() => null),
-      this.usage.breakdown(workspaceId, 1).catch(() => null),
+      this.spend.workspaceStatus(workspaceId, now).catch(soft('AI bütçesi', null)),
+      this.usage.breakdown(workspaceId, 1).catch(soft('AI harcaması', null)),
     ]);
 
     const didHappen: string[] = [];
@@ -317,6 +339,11 @@ export class DailyDigestService {
     const needsYou: string[] = [];
     if (approvals) needsYou.push(`${approvals} onay bekliyor — onaylanmadan hiçbiri uygulanmaz`);
     if (candidates) needsYou.push(`${candidates} araştırma adayı incelenmeyi bekliyor`);
+    // Deliberately FIRST: it qualifies every count under it.
+    if (unread.length)
+      needsYou.push(
+        `Brifingin ${unread.length} sinyali okunamadı (${unread.join(', ')}) — bu başlıklardaki sayılar eksik, "sorun yok" demek değil`,
+      );
     if (overdueTasks) needsYou.push(`${overdueTasks} görev gecikmiş`);
     if (unassigned) needsYou.push(`${unassigned} yeni lead kimseye atanmamış`);
     // First in the list once rendered would be nicer still, but order here
