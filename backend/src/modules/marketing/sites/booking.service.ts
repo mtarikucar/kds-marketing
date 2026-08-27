@@ -112,6 +112,28 @@ function memberCoversSlot(
 export class BookingService implements OnModuleInit {
   private readonly logger = new Logger(BookingService.name);
 
+  /**
+   * Booking mail is FIRE-AND-FORGET on purpose: sendMail waits up to 25s, and a
+   * customer submitting a booking must not sit through that. But
+   * `.catch(() => undefined)` also threw away the ANSWER — sendPlainEmail
+   * returns false rather than throwing, so a confirmation that never left was
+   * indistinguishable from one that did, in a path the customer is waiting on.
+   *
+   * Still not awaited; only the outcome is written down. `what` names the mail
+   * so a log line says which of the four this was.
+   */
+  private fireAndLog(what: string, p: Promise<boolean>): void {
+    void p
+      .then((ok) => {
+        if (!ok) {
+          const why = this.email.consumeLastPlainSendError();
+          this.logger.warn(`booking ${what} email NOT delivered${why ? `: ${why}` : ''}`);
+        }
+      })
+      .catch((e) => this.logger.warn(`booking ${what} email failed: ${(e as Error)?.message ?? e}`));
+  }
+
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly entitlements: EntitlementsService,
@@ -815,12 +837,13 @@ export class BookingService implements OnModuleInit {
       await this.afterConfirmed(workspaceId, cal, booking);
     } else if (booking.email) {
       const when = formatInTimeZone(booking.startAt, (cal as any).timezone || 'Europe/Istanbul');
-      this.email
-        .sendPlainEmail(
+      this.fireAndLog(
+        'received',
+        this.email.sendPlainEmail(
           booking.email, `Booking received: ${cal.name || 'Booking'}`,
           `Your booking request for ${when} is pending approval.`,
-        )
-        .catch(() => undefined);
+        ),
+      );
     }
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
@@ -925,9 +948,12 @@ export class BookingService implements OnModuleInit {
         description: booking.notes ?? undefined,
         joinUrl: meetingUrl ?? undefined,
       });
-      this.email
-        .sendPlainEmailWithIcs(booking.email, `Booking confirmed: ${cal.name || 'Booking'}`, body, ics)
-        .catch(() => undefined);
+      this.fireAndLog(
+        'confirmed',
+        this.email.sendPlainEmailWithIcs(
+          booking.email, `Booking confirmed: ${cal.name || 'Booking'}`, body, ics,
+        ),
+      );
     }
     // One reminder job per configured lead time (default: a single T-1h customer
     // email). dedupKey is per (booking, offset) so re-running approval is safe.
@@ -1147,12 +1173,13 @@ export class BookingService implements OnModuleInit {
     const joinLine = booking.meetingUrl ? `\nJoin: ${booking.meetingUrl}` : '';
 
     if ((aud === 'CUSTOMER' || aud === 'BOTH') && chans.includes('EMAIL') && booking.email) {
-      await this.email
-        .sendPlainEmail(
+      this.fireAndLog(
+        'customer reminder',
+        this.email.sendPlainEmail(
           booking.email, 'Reminder: your booking is soon',
           `This is a reminder for your booking at ${when}.${joinLine}`,
-        )
-        .catch(() => undefined);
+        ),
+      );
     }
     if ((aud === 'HOST' || aud === 'BOTH') && chans.includes('EMAIL') && booking.assigneeUserId) {
       const host = await this.prisma.marketingUser.findFirst({
@@ -1160,12 +1187,13 @@ export class BookingService implements OnModuleInit {
         select: { email: true },
       });
       if (host?.email) {
-        await this.email
-          .sendPlainEmail(
+        this.fireAndLog(
+          'host reminder',
+          this.email.sendPlainEmail(
             host.email, `Reminder: upcoming appointment with ${booking.name}`,
             `You have an appointment at ${when}.${joinLine}`,
-          )
-          .catch(() => undefined);
+          ),
+        );
       }
     }
     // SMS reminders (channels includes 'SMS') are delivered by the notification /
