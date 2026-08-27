@@ -173,6 +173,14 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
  * secrets over the tool surface, and the credentialed types have their own
  * validated flows (Embedded Signup, OAuth) that this must not shadow.
  */
+/**
+ * One provider handshake per channel per minute, however many times it is asked.
+ * In-memory and per-process, like UnpricedSpendWarner: this is a courtesy to the
+ * provider, not an accounting record, and a restart re-checking is harmless.
+ */
+const VERIFY_CACHE_MS = 60_000;
+const verifyCache = new Map<string, { at: number; result: Record<string, unknown> }>();
+
 export function registerChannelWriteTools(registry: McpToolRegistry, deps: InboxToolDeps): void {
   registry.register({
     name: 'jeeta.create_webchat_channel',
@@ -280,11 +288,12 @@ export function registerChannelWriteTools(registry: McpToolRegistry, deps: Inbox
   registry.register({
     name: 'jeeta.verify_channel',
     description:
-      'Run a live health check against a channel and report whether it can actually send AND receive. ' +
+      'Run a health check against a channel and report whether it can actually send AND receive. ' +
       "For Messenger and Instagram this also asks Meta whether the app is subscribed to the Page's " +
       '`messages` webhook — a valid token alone does not mean inbound messages arrive. Use it when an ' +
-      'inbox has gone quiet, before concluding that nobody has written. Read-only: nothing is sent or ' +
-      'published.',
+      'inbox has gone quiet, before concluding that nobody has written. The check AUTHENTICATES against ' +
+      "the workspace's own provider credentials, so the answer is cached for 60 seconds; `cached: true` " +
+      'with `checkedAt` tells you when it was actually taken. Read-only: nothing is sent or published.',
     domain: 'inbox',
     defer: true,
     scopes: ['reports.read'],
@@ -293,6 +302,29 @@ export function registerChannelWriteTools(registry: McpToolRegistry, deps: Inbox
     inputSchema: z.object({
       channelId: z.string().min(1).describe('Channel id, from jeeta.list_channels.'),
     }),
-    handler: async (ctx, args) => deps.channels.verify(ctx.workspaceId, String(args.channelId)),
+    // Cached HERE and not in ChannelsService on purpose: the panel's Verify
+    // button calls the same service, and an operator who has just corrected a
+    // token needs a fresh answer on the next click — a stale "still broken"
+    // there would be worse than the flooding this guards against.
+    //
+    // The flooding is real and it is not the platform's own mailbox this time:
+    // healthCheck authenticates with the WORKSPACE's provider credentials (the
+    // email adapter opens a full SMTP login; the Meta and NetGSM adapters call
+    // their APIs), so an agent asking "is this channel healthy?" in a loop is
+    // hammering a CUSTOMER's account, where the cost of being rate-limited or
+    // token-flagged lands on them. Same shape as verify_email_transport, wider
+    // blast radius.
+    handler: async (ctx, args) => {
+      const channelId = String(args.channelId);
+      const key = `${ctx.workspaceId}:${channelId}`;
+      const at = Date.now();
+      const hit = verifyCache.get(key);
+      if (hit && at - hit.at < VERIFY_CACHE_MS) {
+        return { ...hit.result, checkedAt: new Date(hit.at).toISOString(), cached: true };
+      }
+      const result = (await deps.channels.verify(ctx.workspaceId, channelId)) as Record<string, unknown>;
+      verifyCache.set(key, { at, result });
+      return { ...result, checkedAt: new Date(at).toISOString(), cached: false };
+    },
   });
 }
