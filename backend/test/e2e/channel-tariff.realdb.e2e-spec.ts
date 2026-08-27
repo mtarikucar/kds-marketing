@@ -132,9 +132,12 @@ describeRealDb('ChannelTariff resolution — real DB (e2e)', () => {
   });
 
   it('never resolves another tenant’s row', async () => {
-    // The only FAL_CREDIT row anywhere belongs to otherWorkspaceId, so this
-    // workspace must come back unpriced rather than borrowing it.
-    expect(await tariffs.resolve(workspaceId, 'CONTENT', 'FAL_CREDIT', 'TR')).toBeNull();
+    // otherWorkspaceId holds a 9.99 FAL_CREDIT row. This workspace must fall
+    // through to the platform default instead of borrowing it — silently
+    // billing one tenant at another's rate is the worst way this can fail.
+    const resolved = await tariffs.resolve(workspaceId, 'CONTENT', 'FAL_CREDIT', 'TR');
+    expect(resolved!.tariffId).not.toBe(foreignId);
+    expect(Number(resolved!.unitCost)).toBe(0.4);
   });
 
   it('prefers a country-matched row, and ignores it when no country is asked for', async () => {
@@ -160,9 +163,9 @@ describeRealDb('ChannelTariff resolution — real DB (e2e)', () => {
     expect(sms.scope).toBe('workspace');
     expect(sms.unitCost).toBe(0.2);
 
-    // fal.ai is the one unit no migration ever seeded, so it is the one the
-    // report must call out. Carriers must NOT appear here: they are priced,
-    // and reporting them as unmetered would be a false alarm.
-    expect(result.unmetered.map((u) => u.unitType)).toEqual(['FAL_CREDIT']);
+    // Every vendor unit now resolves to a price: the carriers and research
+    // units from the July seeds, and FAL_CREDIT from the one that closed the
+    // last gap. A regression that drops any tariff shows up right here.
+    expect(result.unmetered).toEqual([]);
   });
 });

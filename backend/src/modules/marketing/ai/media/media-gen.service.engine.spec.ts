@@ -31,7 +31,7 @@ function makeSvc(opts: { budget?: unknown; walletEntry?: unknown; asset?: unknow
     debit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }),
     credit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }),
   };
-  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any, wallet as any);
+  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any, wallet as any, { settle: jest.fn().mockResolvedValue(null) } as any);
   return { svc, prisma, credits, provider, jobs, wallet };
 }
 

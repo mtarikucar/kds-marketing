@@ -92,7 +92,13 @@ export class VendorSpendReportService {
 
     const [entries, rates] = await Promise.all([
       this.prisma.spendLedger.findMany({
-        where: { workspaceId, createdAt: { gte: from, lte: now } },
+        // Deliberately no upper bound. `createdAt` defaults to Postgres `now()`,
+        // so it is stamped by the DATABASE clock, while `now` here comes from
+        // the application clock — comparing the two drops rows written in the
+        // skew window between them. There is nothing above `now` to exclude
+        // anyway, and "the spend I just recorded is missing from the report"
+        // is a far worse failure than including a row a few milliseconds young.
+        where: { workspaceId, createdAt: { gte: from } },
         select: { channel: true, delta: true, quantity: true },
       }),
       this.rates(workspaceId, now, country),

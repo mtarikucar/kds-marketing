@@ -19,7 +19,7 @@ function makeSvc() {
   const jobs = { schedule: jest.fn().mockResolvedValue('job-1') };
   const r2 = { isConfigured: jest.fn().mockReturnValue(true) };
   const runner = { registerHandler: jest.fn() };
-  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any);
+  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any, undefined as any, { settle: jest.fn().mockResolvedValue(null) } as any);
   return { svc, prisma, credits, provider, jobs };
 }
 

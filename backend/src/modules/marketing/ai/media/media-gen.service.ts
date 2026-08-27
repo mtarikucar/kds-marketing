@@ -11,6 +11,7 @@ import {
 } from '../../scheduling/scheduled-job-runner.service';
 import { R2StorageService } from '../../../../common/storage/r2-storage.service';
 import { GrowthWalletService } from '../../wallet/growth-wallet.service';
+import { MediaSpendService } from '../../budget/media-spend.service';
 import { growthAutopilotAutonomyEnabled } from '../../budget/growth-autonomy.flag';
 import {
   MediaProvider, MEDIA_PROVIDER, MediaGenResult,
@@ -92,6 +93,7 @@ export class MediaGenService implements OnModuleInit {
     private readonly r2: R2StorageService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly wallet: GrowthWalletService,
+    private readonly mediaSpend: MediaSpendService,
   ) {}
 
   onModuleInit(): void {
@@ -295,6 +297,11 @@ export class MediaGenService implements OnModuleInit {
         // credit delta but keeps the wallet overcharged for capacity never used.
         const actualUsd = estimateMediaUsd(asset.model, primary.durationSec ?? asset.durationSec ?? undefined);
         await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, actualUsd);
+        // Record what fal actually cost US, on the SAME trued-up figure. This is
+        // the vendor-cost ledger, not the customer's credit meter above: every
+        // other vendor lands there and fal never did, so the spend report read 0
+        // for it while the invoices were real.
+        await this.mediaSpend.settle(asset.workspaceId, { assetId, credits: actual });
       } else {
         // Lost the finalize race (webhook + poll both completed the same asset):
         // the winner already stored its own object, so delete ours to avoid an

@@ -15,15 +15,31 @@ function makeSvc(asset: any) {
   const jobs = { schedule: jest.fn() };
   const r2 = { isConfigured: () => true, upload: jest.fn().mockResolvedValue({ url: 'https://r2/cat.png', key: 'social/ws-1/x.png', mime: 'image/png' }), deleteKeys: jest.fn().mockResolvedValue(undefined) };
   const runner = { registerHandler: jest.fn() };
-  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any);
+  const mediaSpend = { settle: jest.fn().mockResolvedValue(null) };
+  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any, undefined as any, mediaSpend as any);
   // stub the server-side download so no real network call
   (svc as any).download = jest.fn().mockResolvedValue({ buffer: buf(), size: 6 });
-  return { svc, prisma, credits, provider, r2 };
+  return { svc, prisma, credits, provider, r2, mediaSpend };
 }
 
 const QUEUED = { id: 'a1', workspaceId: WS, status: 'GENERATING', model: 'fal-ai/qwen-image', costCreditsReserved: 2, params: {}, type: 'IMAGE' };
 
 describe('MediaGenService.finalizeAsset', () => {
+  it('records what the generation cost US, on the trued-up credit count', async () => {
+    // fal was the last vendor whose cost never reached the spend ledger, and
+    // the gap was exactly this: nothing called a settle. Without an assertion
+    // on the wiring, deleting the call again would break no test.
+    const { svc, mediaSpend } = makeSvc({ ...QUEUED });
+    await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png' }] });
+    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, { assetId: 'a1', credits: 2 });
+  });
+
+  it('does not bill for a generation that failed', async () => {
+    const { svc, mediaSpend } = makeSvc({ ...QUEUED });
+    await svc.finalizeAsset('a1', { status: 'FAILED', error: 'provider said no' });
+    expect(mediaSpend.settle).not.toHaveBeenCalled();
+  });
+
   it('COMPLETED → downloads, uploads to R2, sets READY, reconciles credits', async () => {
     const { svc, prisma, r2 } = makeSvc({ ...QUEUED });
     await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png', width: 1024, height: 1024 }] });

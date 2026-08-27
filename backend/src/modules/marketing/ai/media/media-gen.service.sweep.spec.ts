@@ -14,7 +14,7 @@ function makeSvc(readyRows: any[], stuckRows: any[] = []) {
   const jobs = { schedule: jest.fn().mockResolvedValue('job-1') };
   const r2 = { isConfigured: () => true, deleteKeys: jest.fn().mockResolvedValue(undefined) };
   const runner = { registerHandler: jest.fn() };
-  const svc = new MediaGenService(prisma, credits as any, { isConfigured: () => true } as any, jobs as any, r2 as any, runner as any);
+  const svc = new MediaGenService(prisma, credits as any, { isConfigured: () => true } as any, jobs as any, r2 as any, runner as any, undefined as any, { settle: jest.fn().mockResolvedValue(null) } as any);
   return { svc, prisma, r2, runner, credits };
 }
 

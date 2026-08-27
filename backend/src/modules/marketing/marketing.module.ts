@@ -234,6 +234,7 @@ import { BudgetExecutorService } from './budget/budget-executor.service';
 import { BudgetManagementService } from './budget/budget-management.service';
 import { ConversationSpendService } from './budget/conversation-spend.service';
 import { ResearchSpendService } from './budget/research-spend.service';
+import { MediaSpendService } from './budget/media-spend.service';
 import { FirecrawlProvider } from './research/providers/firecrawl.provider';
 import { ApifyProvider } from './research/providers/apify.provider';
 import { NativeWebProvider } from './research/providers/native-web.provider';
@@ -943,6 +944,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     BudgetManagementService,
     ConversationSpendService,
     ResearchSpendService,
+    MediaSpendService,
     FirecrawlProvider,
     ApifyProvider,
     NativeWebProvider,
