@@ -50,7 +50,7 @@ describe('DailyDigestService', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
     };
-    svc = new DailyDigestService(prisma, usage as never);
+    svc = new DailyDigestService(prisma, usage as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
   });
 
   it('is empty when nothing happened and nothing waits', async () => {
@@ -159,7 +159,7 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       socialCampaign: { count: jest.fn().mockResolvedValue(0) },
       campaign: { count: jest.fn().mockResolvedValue(0) },
     };
-    svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never);
+    svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
     return prisma;
   };
 
@@ -235,6 +235,7 @@ describe('DailyDigestService — accounts that stopped working', () => {
     const svc = new DailyDigestService(
       prisma,
       { breakdown: jest.fn().mockResolvedValue(null) } as never,
+      { workspaceStatus: jest.fn().mockResolvedValue(null) } as never,
     );
     return { prisma, svc };
   };
@@ -311,7 +312,7 @@ describe('DailyDigestService — connection health', () => {
     };
     return {
       prisma,
-      svc: new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never),
+      svc: new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never),
     };
   };
 
@@ -395,7 +396,7 @@ describe('DailyDigestService — vendor refusal', () => {
     };
     return {
       prisma,
-      svc: new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never),
+      svc: new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never),
     };
   };
 
@@ -428,5 +429,77 @@ describe('DailyDigestService — vendor refusal', () => {
     // account", so it must not be claimed on the strength of a failure count.
     expect(items).not.toMatch(/kredisi bitmiş/);
     expect(items).toMatch(/2 arka plan işi/);
+  });
+});
+
+/**
+ * The workspace's own AI budget.
+ *
+ * Hitting it SUSPENDS unattended work — nightly research stops finding leads —
+ * and a stop nobody announced is exactly the failure this brief exists to
+ * prevent. Measured live before the cap existed: a quiet day ran ~$0.45 and a
+ * busy stretch ~$2.40/day for four days, which is ~$72/month from one
+ * workspace. The average was never the problem; the peak was.
+ */
+describe('DailyDigestService — AI budget', () => {
+  const WS4 = 'ws-budget';
+  const build = (aiBudget: unknown) => {
+    const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS4, name: 'W' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
+      scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+    };
+    return new DailyDigestService(
+      prisma,
+      { breakdown: jest.fn().mockResolvedValue(null) } as never,
+      { workspaceStatus: jest.fn().mockResolvedValue(aiBudget) } as never,
+    );
+  };
+
+  it('says research has stopped when the budget is spent', async () => {
+    const d = await build({ capUsd: 20, spentUsd: 20.4, ratio: 1.02, overCap: true }).build(WS4);
+
+    expect(d!.needsYou.items.join(' | ')).toMatch(/AI aylık bütçesi doldu/);
+  });
+
+  it('warns before it stops, not only after', async () => {
+    const d = await build({ capUsd: 20, spentUsd: 17, ratio: 0.85, overCap: false }).build(WS4);
+    const items = d!.needsYou.items.join(' | ');
+
+    // Nobody can un-spend a month; the useful moment is before the stop.
+    expect(items).toMatch(/%85'i harcandı/);
+    expect(items).not.toMatch(/bütçesi doldu/);
+  });
+
+  it('says nothing at all while the workspace is comfortably inside budget', async () => {
+    const d = await build({ capUsd: 20, spentUsd: 4, ratio: 0.2, overCap: false }).build(WS4);
+
+    expect(d!.needsYou.items.join(' | ')).not.toMatch(/bütçe/);
+  });
+
+  it('never reports both states for the same workspace', async () => {
+    const d = await build({ capUsd: 20, spentUsd: 25, ratio: 1.25, overCap: true }).build(WS4);
+    const items = d!.needsYou.items.join(' | ');
+
+    expect(items).toMatch(/doldu/);
+    expect(items).not.toMatch(/harcandı/);
+  });
+
+  it('stays quiet when the budget cannot be read', async () => {
+    const d = await build(null).build(WS4);
+
+    // A metering hiccup must not invent a budget line.
+    expect(d!.needsYou.items.join(' | ')).not.toMatch(/bütçe/);
   });
 });

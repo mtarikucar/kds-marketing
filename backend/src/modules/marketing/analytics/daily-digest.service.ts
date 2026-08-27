@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
+import { PlatformAiSpendService } from '../ai/platform-ai-spend.service';
 
 export interface DigestSection {
   title: string;
@@ -44,6 +45,7 @@ export class DailyDigestService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usage: AiUsageStatsService,
+    private readonly spend: PlatformAiSpendService,
   ) {}
 
   async build(workspaceId: string, now = new Date()): Promise<WorkspaceDigest | null> {
@@ -77,6 +79,7 @@ export class DailyDigestService {
       agentlessWaiting,
       overdueDrafts,
       expiringSoon,
+      aiBudget,
       spend,
     ] = await Promise.all([
       this.prisma.lead.count({
@@ -290,6 +293,10 @@ export class DailyDigestService {
       ])
         .then(([a, b]) => a + b)
         .catch(() => 0),
+      // The workspace's own monthly AI budget. Hitting it SUSPENDS unattended
+      // work — nightly research stops finding leads — and a stop nobody
+      // announced is the failure this brief exists to prevent.
+      this.spend.workspaceStatus(workspaceId, now).catch(() => null),
       this.usage.breakdown(workspaceId, 1).catch(() => null),
     ]);
 
@@ -325,6 +332,17 @@ export class DailyDigestService {
       needsYou.push(
         `${agentlessWaiting} kanalda müşteri bekliyor ama AI ajanı bağlı değil — oraya yalnızca bir insan yanıt verebilir`,
       );
+    // Over-cap first: it has a real consequence right now (research stopped),
+    // and reporting both states would say the same thing twice.
+    if (aiBudget?.overCap) {
+      needsYou.push(
+        `AI aylık bütçesi doldu ($${aiBudget.spentUsd} / $${aiBudget.capUsd}) — gece araştırması durdu, ay dönene kadar yeni lead gelmez`,
+      );
+    } else if (aiBudget && aiBudget.ratio !== null && aiBudget.ratio >= 0.8) {
+      needsYou.push(
+        `AI aylık bütçesinin %${Math.round(aiBudget.ratio * 100)}'i harcandı ($${aiBudget.spentUsd} / $${aiBudget.capUsd}) — dolunca gece araştırması durur`,
+      );
+    }
     if (vendorRefused)
       needsYou.push(
         `AI sağlayıcısı çağrıları reddediyor: hesabın kredisi bitmiş — ${vendorRefused} iş bu yüzden düştü, yüklenene kadar AI kimseye yanıt veremez`,
