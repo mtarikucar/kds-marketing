@@ -31,7 +31,7 @@ export interface EmailFrom {
 @Injectable()
 export class EmailService {
   private transporter: Transporter;
-  /** Reason the last sendPlainEmail threw — see consumeLastPlainSendError. */
+  /** Reason the last plain/campaign send threw — see consumeLastPlainSendError. */
   private lastPlainSendError: string | null = null;
   private readonly logger = new Logger(EmailService.name);
   private readonly templatesPath: string;
@@ -204,6 +204,10 @@ export class EmailService {
         `Failed to send campaign email to ${maskEmail(to)}`,
         error instanceof Error ? error.stack : String(error),
       );
+      // Same breadcrumb as the plain sender: a campaign writes its error onto
+      // EVERY recipient row, so without the reason a broken mailer produces
+      // hundreds of identical, causeless "email send failed" lines.
+      this.lastPlainSendError = error instanceof Error ? error.message : String(error);
       return false;
     }
   }
