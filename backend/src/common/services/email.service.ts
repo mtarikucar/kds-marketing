@@ -359,6 +359,10 @@ export class EmailService {
         `Failed to send ics email to ${maskEmail(to)}`,
         error instanceof Error ? error.stack : String(error),
       );
+      // Third and last sender to leave the breadcrumb: the booking-confirmed
+      // mail carries the calendar invite, so its silent loss is the one a
+      // customer notices — they simply never get the appointment.
+      this.lastPlainSendError = error instanceof Error ? error.message : String(error);
       return false;
     }
   }
