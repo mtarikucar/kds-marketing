@@ -34,12 +34,35 @@ export class BrandContextService {
 
   private render(p: any): string {
     const arr = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+    const offerings: Array<{ name?: string; blurb?: string; price?: string }> = Array.isArray(
+      p.offerings,
+    )
+      ? (p.offerings as Array<{ name?: string; blurb?: string; price?: string }>).filter(
+          (o) => o && typeof o.name === 'string' && o.name.trim(),
+        )
+      : [];
     const lines = [
       `Brand: ${p.brandName}`,
       p.description || '',
       arr(p.valueProps).length ? `Selling points: ${arr(p.valueProps).join('; ')}` : '',
       arr(p.toneWords).length ? `Voice: ${arr(p.toneWords).join(', ')}${p.voiceGuide ? ` — ${p.voiceGuide}` : ''}` : '',
       p.icpDescription ? `Ideal customer: ${p.icpDescription}` : '',
+      // WHAT WE SELL AND WHAT IT COSTS — omitted until now, which put the agent
+      // in an impossible position: its goals say "if a paid module is needed,
+      // say its price honestly", and the only prices reaching it were whichever
+      // ones happened to be written into a value prop. Asked "how much is the
+      // extra-branch module?", it could only refuse or invent. The whole pitch
+      // is that there are no traps and no hidden tiers; improvising a number is
+      // the one way to break that.
+      offerings.length
+        ? [
+            'Offerings (name — price — what it is):',
+            ...offerings.map(
+              (o) =>
+                `- ${o.name}${o.price ? ` — ${o.price}` : ''}${o.blurb ? ` — ${o.blurb}` : ''}`,
+            ),
+          ].join('\n')
+        : '',
       arr(p.audienceObjections).length ? `Common objections to preempt: ${arr(p.audienceObjections).join('; ')}` : '',
     ].filter(Boolean);
     return lines.join('\n');
