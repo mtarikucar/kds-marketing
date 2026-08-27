@@ -211,10 +211,13 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
   registry.register({
     name: 'jeeta.verify_email_transport',
     description:
-      'Check whether this deployment can actually send email: a live handshake with the configured SMTP ' +
-      'host. Returns whether a mailer is configured at all, whether the connection and credentials were ' +
-      'accepted, and the provider error when they were not. Nothing is sent. Use it after changing mail ' +
-      'settings, or when a brief or campaign reports an undelivered message. Read-only.',
+      'Check whether this deployment can actually send email: a handshake with the configured SMTP host. ' +
+      'Returns whether a mailer is configured at all, whether the connection and credentials were ' +
+      'accepted, and the provider error when they were not. Nothing is sent. The handshake AUTHENTICATES, ' +
+      'so the answer is cached for 60 seconds and `cached: true` with `checkedAt` tells you when it was ' +
+      'actually taken — calling this in a loop would be a login flood, and a mailbox under one starts ' +
+      'answering 535, which is the very fault this reports. After changing mail settings, wait out the ' +
+      'minute rather than retrying. Read-only.',
     domain: 'workspace',
     defer: true,
     scopes: ['reports.read'],

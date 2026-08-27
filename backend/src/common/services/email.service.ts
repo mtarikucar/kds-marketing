@@ -285,18 +285,50 @@ export class EmailService {
    * Same shape as a channel health check: a live probe, no message sent, and
    * the provider's own words on failure rather than a boolean.
    */
-  async verifyTransport(): Promise<{ ok: boolean; configured: boolean; error?: string }> {
-    if (!this.transporter) return { ok: false, configured: false };
+  /**
+   * `verify()` opens a connection and AUTHENTICATES. Every call is a real login
+   * attempt at the provider, and this is reachable from a READ tool that needs
+   * no approval — so an agent asking "is mail working?" in a loop is an agent
+   * hammering the mailbox with logins, which is how a healthy mailbox starts
+   * answering 535.
+   *
+   * Whether that is what happened here is not proven; what IS observed is the
+   * same tool returning ok:true and 535 on back-to-back calls, which makes the
+   * signal useless either way — an intermittent answer cannot tell you whether
+   * mail works. A short cache fixes both halves: the provider sees at most one
+   * login a minute, and repeated asks get one stable answer instead of a coin
+   * flip.
+   *
+   * `checkedAt` and `cached` are returned so the caller can see it is being
+   * given a recent answer rather than a fresh handshake — a cache that hides
+   * its own staleness is the failure this codebase keeps finding.
+   */
+  private lastVerify: { at: number; result: { ok: boolean; configured: boolean; error?: string } } | null = null;
+
+  async verifyTransport(
+    maxAgeMs = 60_000,
+    now: () => number = Date.now,
+  ): Promise<{ ok: boolean; configured: boolean; error?: string; checkedAt: string; cached: boolean }> {
+    if (!this.transporter) {
+      return { ok: false, configured: false, checkedAt: new Date(now()).toISOString(), cached: false };
+    }
+    const at = now();
+    if (this.lastVerify && at - this.lastVerify.at < maxAgeMs) {
+      return { ...this.lastVerify.result, checkedAt: new Date(this.lastVerify.at).toISOString(), cached: true };
+    }
+    let result: { ok: boolean; configured: boolean; error?: string };
     try {
       await this.transporter.verify();
-      return { ok: true, configured: true };
+      result = { ok: true, configured: true };
     } catch (e) {
-      return {
+      result = {
         ok: false,
         configured: true,
         error: (e instanceof Error ? e.message : String(e)).slice(0, 300),
       };
     }
+    this.lastVerify = { at, result };
+    return { ...result, checkedAt: new Date(at).toISOString(), cached: false };
   }
 
   /**
