@@ -5,6 +5,7 @@ const deps = () => ({
   entitlements: { getEffective: jest.fn() } as any,
   users: { findAll: jest.fn().mockResolvedValue([]) } as any,
   jobs: { list: jest.fn().mockResolvedValue([]), listCronHeartbeats: jest.fn().mockResolvedValue([]) } as any,
+  email: { verifyTransport: jest.fn().mockResolvedValue({ ok: true, configured: true }) } as any,
 });
 
 describe('workspace MCP tools', () => {
@@ -120,6 +121,53 @@ describe('workspace MCP tools', () => {
         .handler({ workspaceId: 'ws1', grantedScopes: ['reports.read'] }, {});
 
       expect(d.jobs.listCronHeartbeats).toHaveBeenCalledWith();
+    });
+  });
+
+  /**
+   * "Can we send email at all?"
+   *
+   * The transporter is verified once at boot and the answer goes to the logger,
+   * so it exists for a moment and is then unreachable. That left one way to
+   * find out: wait for something to try to send. Live, that meant waiting for
+   * the 07:00 brief — which failed, and which by its nature could not announce
+   * its own failure by email.
+   */
+  describe('jeeta.verify_email_transport', () => {
+    it('is a deferred READ that sends nothing', () => {
+      const registry = new McpToolRegistry();
+      registerWorkspaceTools(registry, deps());
+      const tool = registry.get('jeeta.verify_email_transport')!;
+
+      expect(tool.risk).toBe('READ');
+      expect(tool.defer).toBe(true);
+      expect(tool.requiresApproval).toBe(false);
+    });
+
+    it('reports the provider error rather than a bare false', async () => {
+      const registry = new McpToolRegistry();
+      const d = deps();
+      (d.email as unknown as { verifyTransport: jest.Mock }).verifyTransport.mockResolvedValue({
+        ok: false,
+        configured: true,
+        error: '535 5.7.8 Authentication credentials invalid',
+      });
+      registerWorkspaceTools(registry, d);
+
+      const out = (await registry
+        .get('jeeta.verify_email_transport')!
+        .handler({ workspaceId: 'ws1', grantedScopes: ['reports.read'] }, {})) as Record<
+        string,
+        unknown
+      >;
+
+      // "configured: true, ok: false" is the distinction that matters — a setup
+      // problem and a send problem need opposite fixes.
+      expect(out).toEqual({
+        ok: false,
+        configured: true,
+        error: '535 5.7.8 Authentication credentials invalid',
+      });
     });
   });
 });

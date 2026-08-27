@@ -270,6 +270,32 @@ export class EmailService {
   }
 
   /**
+   * Can this deployment send email AT ALL, right now?
+   *
+   * The transporter is verified once at boot and the result goes to the logger,
+   * so the answer exists for a moment and is then unreachable. That left one
+   * way to find out whether mail works: wait for something to try to send.
+   * Live, that meant waiting for the 07:00 brief — which failed, and could not
+   * announce its own failure by email.
+   *
+   * Same shape as a channel health check: a live probe, no message sent, and
+   * the provider's own words on failure rather than a boolean.
+   */
+  async verifyTransport(): Promise<{ ok: boolean; configured: boolean; error?: string }> {
+    if (!this.transporter) return { ok: false, configured: false };
+    try {
+      await this.transporter.verify();
+      return { ok: true, configured: true };
+    } catch (e) {
+      return {
+        ok: false,
+        configured: true,
+        error: (e instanceof Error ? e.message : String(e)).slice(0, 300),
+      };
+    }
+  }
+
+  /**
    * Why the most recent sendPlainEmail failed, if one did.
    *
    * The SMTP error is caught inside sendPlainEmail and written only to the

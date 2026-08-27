@@ -138,6 +138,7 @@ import { SalesTargetService } from './services/sales-target.service';
 // reminders, workflow waits) all enqueue onto.
 import { MarketingAiController } from './controllers/marketing-ai.controller';
 import { ScheduledJobService } from './scheduling/scheduled-job.service';
+import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiCreditsService } from './ai/ai-credits.service';
@@ -1235,6 +1236,9 @@ export class MarketingModule {
     // Powers jeeta.list_background_jobs — the retry queue had no reader at all,
     // so a job's lastError was written and never seen.
     scheduledJobs: ScheduledJobService,
+    // Powers jeeta.verify_email_transport — "can we send email at all" was
+    // answerable only by waiting for something to try.
+    emailService: EmailService,
     // Faz 5 D1 — the CRM write lane.
     principals: McpPrincipalService,
     activities: MarketingActivitiesService,
@@ -1286,7 +1290,12 @@ export class MarketingModule {
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
     registerSchedulingTools(registry, { bookings, entitlements });
-    registerWorkspaceTools(registry, { entitlements, users: marketingUsers, jobs: scheduledJobs });
+    registerWorkspaceTools(registry, {
+      entitlements,
+      users: marketingUsers,
+      jobs: scheduledJobs,
+      email: emailService,
+    });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerCampaignWriteTools(registry, { campaigns, entitlements });
