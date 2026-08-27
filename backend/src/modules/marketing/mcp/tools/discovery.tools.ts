@@ -201,7 +201,19 @@ export function registerDiscoveryTools(registry: McpToolRegistry, deps: Discover
           message: `"${name}" requires human approval and has NOT been applied. Approval id: ${res.approvalId}.`,
         };
       }
-      return { tool: name, applied: true, status: 'OK', result: res.result };
+      // call_tool is the ONLY way to reach a deferred tool, so if the broker
+      // ignored an argument this is the last place it can be said. Without it a
+      // dropped filter comes back as a plain OK and reads as a filtered answer.
+      return res.ignoredArgs?.length
+        ? {
+            tool: name,
+            applied: true,
+            status: 'OK',
+            result: res.result,
+            ignoredArgs: res.ignoredArgs,
+            warning: `bu argümanlar "${name}" şemasında yok ve YOK SAYILDI: ${res.ignoredArgs.join(', ')} — sonuç bu alanlara göre filtrelenmemiştir`,
+          }
+        : { tool: name, applied: true, status: 'OK', result: res.result };
     },
   });
 }

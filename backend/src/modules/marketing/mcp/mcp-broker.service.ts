@@ -13,6 +13,11 @@ export interface InvokeResult {
   status: 'OK' | 'PENDING_APPROVAL';
   result?: unknown;
   approvalId?: string;
+  /**
+   * Argument names the tool's schema does not define, which were accepted and
+   * then ignored. Present only when there were any. See `assertArgs`.
+   */
+  ignoredArgs?: string[];
 }
 
 const MAX_ARGS_BYTES = 32 * 1024;
@@ -85,7 +90,7 @@ export class McpBrokerService {
 
     this.assertScopes(tool, ctx);
     this.assertArgsSize(args);
-    this.assertArgs(tool, args);
+    const ignoredArgs = this.assertArgs(tool, args);
 
     // High-risk ops never execute inline — they enqueue a human approval.
     // AUTONOMOUS lifts that for everything except DESTRUCTIVE (see
@@ -123,7 +128,7 @@ export class McpBrokerService {
     try {
       const result = await tool.handler(ctx, args);
       await this.log(ctx, tool, args, result, true, undefined, Date.now() - startedAt);
-      return { status: 'OK', result };
+      return ignoredArgs.length ? { status: 'OK', result, ignoredArgs } : { status: 'OK', result };
     } catch (err) {
       await this.log(ctx, tool, args, undefined, false, String((err as Error)?.message ?? err), Date.now() - startedAt);
       throw err;
@@ -158,9 +163,9 @@ export class McpBrokerService {
    * receives, so this cannot change the behaviour of a call that was already
    * correct — it only refuses one that never could be.
    */
-  private assertArgs(tool: McpTool, args: Record<string, unknown>): void {
+  private assertArgs(tool: McpTool, args: Record<string, unknown>): string[] {
     const parsed = tool.inputSchema.safeParse(args ?? {});
-    if (parsed.success) return;
+    if (parsed.success) return [];
 
     // Unknown keys are NOT an error here. Zod 4 reports them by default, but
     // callers have always been able to pass extra fields — handlers read what
@@ -171,8 +176,20 @@ export class McpBrokerService {
     // because nothing distinguishes it from a deliberate extra. What it does
     // catch is the case that actually caused harm — a misspelling that leaves a
     // REQUIRED field missing, which is how `candidateIds` became `ids`.
+    //
+    // What that trade does NOT justify is staying quiet about it. A dropped
+    // OPTIONAL field is usually a FILTER, and a dropped filter turns "the Acme
+    // leads" into the whole workspace's first page — returned under status OK,
+    // which is the one shape a model has no way to doubt. The names are handed
+    // back so the caller can see its filter did not apply. Deliberately a
+    // report and not a rejection: the promise above still holds, and the two
+    // MCP paths disagreed here — the SDK transport rejects these outright, so
+    // silence made the same call behave differently depending on how it arrived.
+    const ignored = parsed.error.issues
+      .filter((i) => i.code === 'unrecognized_keys')
+      .flatMap((i) => (i as unknown as { keys?: string[] }).keys ?? []);
     const issues = parsed.error.issues.filter((i) => i.code !== 'unrecognized_keys');
-    if (!issues.length) return;
+    if (!issues.length) return ignored;
 
     const detail = issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
