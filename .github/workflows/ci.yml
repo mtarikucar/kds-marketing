@@ -125,8 +125,20 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma migrate deploy
-      # E2E_REAL_DB=1 turns on the real-DB harness (the lead-lifecycle suite);
-      # the other e2e suites keep their mocked Prisma seam and run unaffected.
+      # E2E_REAL_DB=1 turns on the real-DB harness — NINE suites now, not just
+      # lead-lifecycle: tariff resolution, research/conversation/media spend
+      # settlement, the AI reply pre-flight, knowledge search, conversation list
+      # and the digest's waiting-reply count. They exist because the unit tests
+      # mock `PrismaService`, and a mock accepts any `where` you hand it — so a
+      # query Prisma would REJECT at runtime passes every mocked spec. That is
+      # not hypothetical: `workspaceId: { in: [id, null] }` threw on every call
+      # for eight weeks with a green suite the whole time.
+      #
+      # --runInBand matters: each suite boots a full Nest app against the same
+      # database, and in parallel they contend on boot-time services.
+      #
+      # The unflagged `backend-e2e` job runs the same config with the real-DB
+      # suites SKIPPED (40 of them), which is what keeps that job fast.
       - run: npm run test:e2e:realdb
 
   frontend:
