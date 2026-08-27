@@ -90,6 +90,35 @@ curl -sI "https://jeetagrowth.com/widget?key=<widgetKey>" | grep -i "frame"
 # and NO x-frame-options line
 ```
 
+This block was verified end to end before being written down, not just read
+for plausibility — nginx will happily load a config that does the wrong thing.
+Reproduce it in about ten seconds, with no server and no deploy:
+
+```bash
+cat > /tmp/e2e.conf <<'EOF'
+# Fake panel origin: like the real one, sets XFO on every response.
+server {
+    listen 3210;
+    location / { add_header X-Frame-Options "SAMEORIGIN" always; return 200 "widget"; }
+}
+server {
+    listen 8080;
+    location = /widget {
+        proxy_pass http://127.0.0.1:3210;
+        proxy_hide_header X-Frame-Options;
+        add_header Content-Security-Policy "frame-ancestors https://hummytummy.com" always;
+    }
+    location / { proxy_pass http://127.0.0.1:3210; }
+}
+EOF
+docker run -d --rm -p 18080:8080 -v /tmp/e2e.conf:/etc/nginx/conf.d/e2e.conf:ro nginx:alpine
+curl -sI localhost:18080/widget | grep -i frame   # CSP frame-ancestors, NO x-frame-options
+curl -sI localhost:18080/panel  | grep -i frame   # x-frame-options: SAMEORIGIN — still protected
+```
+
+The second line is the one that matters: it proves the exact-match `=` keeps the
+exception on `/widget` and does not weaken the panel.
+
 Only after that does setting `NEXT_PUBLIC_WEBCHAT_WIDGET_KEY` on the landing
 site do anything — the embed code is already written and waiting.
 
