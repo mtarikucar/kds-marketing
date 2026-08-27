@@ -667,10 +667,24 @@ export class ConversationAiEngineService implements OnModuleInit {
       ].filter(Boolean);
       if (known.length) parts.push(`Known about this customer — ${known.join(', ')}.`);
     }
+    // ALWAYS, not only when there are knowledge docs.
+    //
+    // This lived inside the `if (kb.length)` block below, so the single
+    // strongest anti-invention instruction in the prompt appeared only when the
+    // grounding was already good — and vanished when it was thinnest. The live
+    // workspace has an empty kbDocIds, so on every real conversation it was
+    // absent.
+    //
+    // Prices are named explicitly because that is where invention costs most
+    // here: the brand's whole pitch is that there are no traps and no hidden
+    // tiers, and its own objection list opens with "if it's free, where do you
+    // make money — will you charge me later?". A made-up number answers that in
+    // the worst way available.
+    parts.push(
+      'Never invent facts — above all prices, plan limits, features or dates. If something is not stated above, say you will check and offer a handoff instead of guessing.',
+    );
     if (kb.length) {
-      parts.push(
-        'Ground your answers in this knowledge base. If the answer is not here and you are unsure, say so or hand off — do not invent facts:',
-      );
+      parts.push('Ground your answers in this knowledge base:');
       for (const d of kb) parts.push(`### ${d.title}\n${d.snippet}`);
     }
     parts.push(
