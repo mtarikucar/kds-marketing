@@ -601,4 +601,62 @@ describe('ConversationAiEngineService.reply', () => {
       expect(system).toMatch(/ground every reply in this/i);
     });
   });
+
+  /**
+   * The customer's name, once given, has to land.
+   *
+   * captureLeadFields fills only EMPTY contact fields — right, so the model
+   * cannot overwrite something a human corrected. But web-chat ingress opens
+   * every lead with contactPerson "Unknown", and "Unknown" is not an empty
+   * string. So the agent asked for a name (it is in captureFields), the
+   * customer gave it, the model called capture_lead_fields, and the write was
+   * silently skipped. The lead stayed "Web chat contact / Unknown" — the exact
+   * state buildSystem's own comment complains about, and a lead the rest of the
+   * product cannot call, email or convert.
+   */
+  describe('ConversationAiEngineService.captureLeadFields — the Unknown placeholder', () => {
+    const capture = async (existing: string | null, given = 'Ayşe Yılmaz') => {
+      const h = build({
+        complete: {
+          text: '',
+          toolUses: [{ id: 't1', name: 'capture_lead_fields', input: { name: given } }],
+          stopReason: 'tool_use',
+          usage: { input: 1, output: 1 },
+        },
+      });
+      (h.prisma.lead as unknown as { updateMany: jest.Mock }).updateMany = jest
+        .fn()
+        .mockResolvedValue({ count: 1 });
+      (h.prisma.lead.findFirst as jest.Mock).mockResolvedValue({
+        contactPerson: existing,
+        email: null,
+        phone: null,
+        city: null,
+        notes: null,
+      });
+      await (h.engine as never as { reply: (w: string, c: string) => Promise<void> }).reply(
+        'ws-1',
+        'convo-1',
+      );
+      const calls = (h.prisma.lead.updateMany as jest.Mock).mock.calls;
+      return calls.length ? calls[0][0].data : null;
+    };
+
+    it('writes the real name over the ingress placeholder', async () => {
+      expect(await capture('Unknown')).toMatchObject({ contactPerson: 'Ayşe Yılmaz' });
+    });
+
+    it('treats the placeholder case- and space-insensitively', async () => {
+      expect(await capture('  unknown ')).toMatchObject({ contactPerson: 'Ayşe Yılmaz' });
+    });
+
+    it('still writes when the field is genuinely empty', async () => {
+      expect(await capture(null)).toMatchObject({ contactPerson: 'Ayşe Yılmaz' });
+    });
+
+    it('does NOT overwrite a real name a human may have corrected', async () => {
+      const data = await capture('Mehmet Demir');
+      expect(data?.contactPerson).toBeUndefined();
+    });
+  });
 });

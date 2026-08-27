@@ -17,6 +17,7 @@ import {
 } from '../scheduling/scheduled-job-runner.service';
 import { MessageSenderService } from './message-sender.service';
 import { ConversationStreamService } from './conversation-stream.service';
+import { PLACEHOLDER_CONTACT_NAME } from './conversation-ingress.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 
@@ -439,9 +440,17 @@ export class ConversationAiEngineService implements OnModuleInit {
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const phoneRe = /^\+?[0-9 ()-]{6,20}$/;
     const empty = (v: string | null | undefined) => !v || !v.trim();
+    // The ingress placeholder OCCUPIES the name slot, so `empty()` alone refused
+    // every capture: the agent asks for a name (it is in captureFields), the
+    // customer gives it, the model calls capture_lead_fields — and the write was
+    // skipped because "Unknown" is not an empty string. The lead stayed
+    // "Web chat contact / Unknown" for good, which is exactly the state
+    // buildSystem's own comment complains about.
+    const nameIsUnset = (v: string | null | undefined) =>
+      empty(v) || v!.trim().toLowerCase() === PLACEHOLDER_CONTACT_NAME.toLowerCase();
 
     const data: any = {};
-    if (fields.name && empty(lead.contactPerson)) data.contactPerson = fields.name.slice(0, 200);
+    if (fields.name && nameIsUnset(lead.contactPerson)) data.contactPerson = fields.name.slice(0, 200);
     if (fields.email && empty(lead.email) && emailRe.test(fields.email.trim())) {
       data.email = fields.email.trim().slice(0, 200);
       // Set the NORMALIZED key too — every dedup path (forms/booking/import/
