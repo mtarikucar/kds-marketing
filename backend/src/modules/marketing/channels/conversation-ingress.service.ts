@@ -44,6 +44,18 @@ const SOURCE_BY_CHANNEL: Record<string, string> = {
  * resolves to the existing message (the @unique index is the backstop against
  * a concurrent double-delivery, caught as P2002 → deduped).
  */
+/**
+ * Stand-in name for a contact who arrived with none — a web-chat visitor, an
+ * SMS from an unknown number.
+ *
+ * Exported because it is not just a display string: the AI's capture path fills
+ * only EMPTY contact fields, so anything written here OCCUPIES the name slot.
+ * Left as a bare literal, the customer's real name — asked for, given, and
+ * passed to capture_lead_fields — was silently dropped, and the lead stayed
+ * "Unknown" for good.
+ */
+export const PLACEHOLDER_CONTACT_NAME = 'Unknown';
+
 @Injectable()
 export class ConversationIngressService {
   private readonly logger = new Logger(ConversationIngressService.name);
@@ -213,7 +225,7 @@ export class ConversationIngressService {
         data: {
           workspaceId,
           businessName: displayName || `${this.label(channel.type)} contact`,
-          contactPerson: displayName || 'Unknown',
+          contactPerson: displayName || PLACEHOLDER_CONTACT_NAME,
           businessType: 'OTHER',
           source: SOURCE_BY_CHANNEL[channel.type] ?? 'OTHER',
           status: 'NEW',
