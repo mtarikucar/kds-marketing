@@ -50,8 +50,16 @@ export class ChannelTariffService {
         unitType,
         active: true,
         effectiveFrom: { lte: now },
-        workspaceId: { in: [workspaceId, null] },
-        OR: [{ country: null }, ...(country ? [{ country }] : [])],
+        // `in: [workspaceId, null]` reads naturally and is REJECTED by Prisma:
+        // a nullable String filter takes a list of strings or the literal null,
+        // never a list containing null. It threw on every call, so price() threw,
+        // so settle() logged "failed" and returned null — no ledger row, and the
+        // no-tariff warning below it was never even reached. Two OR branches say
+        // the same thing in a form the query builder accepts.
+        AND: [
+          { OR: [{ workspaceId }, { workspaceId: null }] },
+          { OR: [{ country: null }, ...(country ? [{ country }] : [])] },
+        ],
       },
     });
     if (rows.length === 0) return null;

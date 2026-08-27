@@ -73,7 +73,21 @@ export class VendorSpendReportService {
     private readonly tariffs: ChannelTariffService,
   ) {}
 
-  async report(workspaceId: string, days = 30, now: Date = new Date()): Promise<VendorSpendReport> {
+  /**
+   * `country` defaults to 'TR' because that is what the spending callers pass
+   * (`ConversationSpendService` resolves with `opts.country ?? 'TR'`) and the
+   * seeded carrier tariffs carry `country = 'TR'`. Resolving with null here
+   * would skip every one of those rows and report SMS, voice and WhatsApp as
+   * unmetered while they are, in fact, priced — the exact false alarm this
+   * report exists to prevent. The RESEARCH rows are country-agnostic and match
+   * either way.
+   */
+  async report(
+    workspaceId: string,
+    days = 30,
+    now: Date = new Date(),
+    country: string | null = 'TR',
+  ): Promise<VendorSpendReport> {
     const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
     const [entries, rates] = await Promise.all([
@@ -81,7 +95,7 @@ export class VendorSpendReportService {
         where: { workspaceId, createdAt: { gte: from, lte: now } },
         select: { channel: true, delta: true, quantity: true },
       }),
-      this.rates(workspaceId, now),
+      this.rates(workspaceId, now, country),
     ]);
 
     const perChannel = new Map<
@@ -134,11 +148,11 @@ export class VendorSpendReportService {
     };
   }
 
-  private async rates(workspaceId: string, now: Date): Promise<VendorRate[]> {
+  private async rates(workspaceId: string, now: Date, country: string | null): Promise<VendorRate[]> {
     const resolved = await Promise.all(
       VENDOR_UNITS.map(async (unit) => ({
         unit,
-        tariff: await this.tariffs.resolve(workspaceId, unit.channel, unit.unitType, null, now),
+        tariff: await this.tariffs.resolve(workspaceId, unit.channel, unit.unitType, country, now),
       })),
     );
 
