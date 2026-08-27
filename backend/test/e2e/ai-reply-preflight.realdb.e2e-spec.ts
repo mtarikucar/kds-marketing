@@ -43,6 +43,7 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
   const agentId = randomUUID();
   const leadId = randomUUID();
   const conversationId = randomUUID();
+  const identityId = randomUUID();
 
   beforeAll(async () => {
     complete = jest.fn();
@@ -118,12 +119,28 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
         source: 'OTHER',
       },
     });
+    // A conversation with no contact identity CANNOT be delivered to, and the
+    // sender says so: `to` is null and the send is marked FAILED with "no
+    // recipient identity". Every live web-chat thread carries one. Leaving it
+    // out made the first draft of this spec fail — which is v2.254.0 doing its
+    // job: it refused to count a send that never happened.
+    await prisma.contactIdentity.create({
+      data: {
+        id: identityId,
+        workspaceId,
+        channelId,
+        leadId,
+        kind: 'WEBCHAT',
+        value: `visitor-${conversationId.slice(0, 8)}`,
+      },
+    });
     await prisma.conversation.create({
       data: {
         id: conversationId,
         workspaceId,
         channelId,
         leadId,
+        contactIdentityId: identityId,
         status: 'OPEN',
         lastInboundAt: new Date(),
         lastMessageAt: new Date(),
@@ -144,6 +161,7 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
   afterAll(async () => {
     await prisma.message.deleteMany({ where: { workspaceId } });
     await prisma.conversation.deleteMany({ where: { workspaceId } });
+    await prisma.contactIdentity.deleteMany({ where: { workspaceId } });
     await prisma.lead.deleteMany({ where: { workspaceId } });
     await prisma.channel.deleteMany({ where: { workspaceId } });
     await prisma.agentProfile.deleteMany({ where: { workspaceId } });
