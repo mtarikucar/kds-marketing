@@ -332,6 +332,14 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: |
           set -euo pipefail
+          # base64 so the value survives the trip. It is interpolated into a
+          # double-quoted ssh command and lands inside SINGLE quotes on the far
+          # side, so a password containing an apostrophe would close the quote
+          # early and write a corrupted EMAIL_PASSWORD line. The mail host then
+          # answers 535 — indistinguishable from simply having the wrong
+          # password, which is the worst way for this to fail. base64 output is
+          # [A-Za-z0-9+/=] and safe in any shell context.
+          EMAIL_PASSWORD_B64=$(printf '%s' "${EMAIL_PASSWORD:-}" | base64 -w0)
           scp -o ServerAliveInterval=15 .env.rendered \
             root@${{ env.SERVER_HOST }}:${{ env.DEPLOY_DIR }}/.env.rendered.new
           scp -o ServerAliveInterval=15 docker-compose.prod.yml \
@@ -346,12 +354,12 @@ jobs:
             # .env.shared so they win over core's admin@hummytummy.com EMAIL_*
             # (dotenv + docker compose env_file are both last-wins). secure is
             # derived from port===465 in the mailer, so 587 → STARTTLS.
-            if [ -n \"${EMAIL_PASSWORD}\" ]; then
+            if [ -n \"${EMAIL_PASSWORD_B64}\" ]; then
               echo 'EMAIL_HOST=smtpout.secureserver.net' >> .env.production.new
               echo 'EMAIL_PORT=587' >> .env.production.new
               echo 'EMAIL_USER=admin@jeetagrowth.com' >> .env.production.new
               echo 'EMAIL_FROM=admin@jeetagrowth.com' >> .env.production.new
-              echo 'EMAIL_PASSWORD=${EMAIL_PASSWORD}' >> .env.production.new
+              printf 'EMAIL_PASSWORD=%s\n' \"\$(printf %s '${EMAIL_PASSWORD_B64}' | base64 -d)\" >> .env.production.new
             fi
             rm .env.rendered.new
             chmod 600 .env.production.new
