@@ -26,6 +26,7 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { AskAiService } from '../ai/ask-ai.service';
 import { CommandAiService } from '../ai/command-ai.service';
 import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
+import { VendorSpendReportService } from '../wallet/vendor-spend-report.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
@@ -55,6 +56,7 @@ export class MarketingAiController {
     private readonly askAi: AskAiService,
     private readonly command: CommandAiService,
     private readonly aiUsage: AiUsageStatsService,
+    private readonly vendorSpend: VendorSpendReportService,
   ) {}
 
   // ---- Knowledge base (Agent Studio grounding docs) ----
@@ -244,5 +246,30 @@ export class MarketingAiController {
     const breakdown = await this.aiUsage.breakdown(actor.workspaceId, window);
     if (daily !== 'true') return breakdown;
     return { ...breakdown, daily: await this.aiUsage.daily(actor.workspaceId, window) };
+  }
+
+  /**
+   * The OTHER half of the bill: NetGSM, Meta, fal.ai, Firecrawl, Apify.
+   *
+   * The endpoint above covers Anthropic. Everything else the platform spends
+   * money on had no reader outside MCP at all, so the only way to see it was to
+   * ask an agent — which is not a thing an owner looking at a panel can do.
+   *
+   * `byChannel` is what was RECORDED; `rates`/`unmetered` are what CAN be
+   * recorded, and both halves are needed: an unpriced unit leaves no ledger row
+   * at all, so it reads as 0 TRY while still arriving on the vendor's invoice.
+   *
+   * Manager-only and permission-gated, matching usageBreakdown — same reason,
+   * it is a spend view.
+   */
+  @Get('usage/vendors')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('reports.read')
+  async vendorSpendReport(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Query('days') days?: string,
+  ) {
+    const window = Number.isFinite(Number(days)) && Number(days) > 0 ? Number(days) : 30;
+    return this.vendorSpend.report(actor.workspaceId, window);
   }
 }
