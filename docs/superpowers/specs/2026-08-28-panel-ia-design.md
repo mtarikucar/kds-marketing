@@ -53,7 +53,20 @@ Sağ sütun %62, sohbet.
 2. **Görevler** — `MarketingTask.dueDate`
 3. **Randevular** — rezervasyonlar ve takvim entegrasyonu
 4. **Kampanya/gönderi tarihleri** — `SocialCampaign`, `Campaign.scheduledAt`,
-   planlanmış gönderiler
+   planlanmış gönderiler.
+
+   Statü kuralı: **`CANCELLED` gösterilmez, `DRAFT` gösterilir.** Takvim "ne
+   gelecek" sorusuna cevap veriyor; iptal edilmiş bir kampanya tanımı gereği
+   gelmeyecek olan şey ve bu servis aynı mantıkla iptal edilmiş randevuyu
+   (`CONFIRMED` filtresi) ve iptal edilmiş görevi (`PENDING`/`IN_PROGRESS`
+   filtresi) zaten dışarıda bırakıyor. Aynı `Promise.all` içinde iki kaynakta
+   eleyip iki kaynakta almanın gerekçesi olmazdı.
+
+   `DRAFT` bunun tersi: tarihi gelmiş ama hâlâ taslak olan bir kampanya,
+   sahibinin görmesi gereken bir aksaklıktır — bugün canlıda 18 Ağustos'ta
+   başlayıp 30 Eylül'de biten sezon kampanyası tam olarak bu durumda ve hiçbir
+   ekran bunu söylemiyor. `SENT`/`PAUSED`/`COMPLETED` de kalır: geriye bakılan
+   bir pencerede meşru geçmiştir.
 
 Yeni uç: `GET /marketing/home/timeline?from=&to=`. Dört kaynağı sunucuda
 birleştirir ve her satıra bir `kind` ayırıcısı koyar (`system` | `task` |
