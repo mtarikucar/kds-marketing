@@ -1,6 +1,43 @@
 import { MarketingHomeController } from './marketing-home.controller';
 import { HomeTimelineService } from '../analytics/home-timeline.service';
+import { IS_MARKETING_ROUTE_KEY } from '../decorators/marketing-public.decorator';
+import { MARKETING_ROLES_KEY } from '../decorators/marketing-roles.decorator';
 import { MarketingUserPayload } from '../types';
+
+/**
+ * The two most consequential properties of this controller — where it answers,
+ * and that it gates on nothing — are both invisible to the behaviour tests
+ * below, which construct the class directly and never touch its decorators.
+ * Left unpinned, either breaks in total silence:
+ *
+ *  - a refactor to @Controller('home'), or a stray `marketing/` doubling against
+ *    the global 'api' prefix, 404s the panel with a green suite
+ *  - a class-level @MarketingRoles — plausible, since MarketingRolesGuard sits
+ *    in the chain looking load-bearing — locks REPs out of their own home screen
+ *
+ * Probe the SetMetadata the decorators write, no Nest context, matching the
+ * idiom in mcp/mcp-console.controller.spec.ts.
+ */
+describe('MarketingHomeController — wiring', () => {
+  it('answers at marketing/home in the marketing realm', () => {
+    expect(Reflect.getMetadata(IS_MARKETING_ROUTE_KEY, MarketingHomeController)).toBe(true);
+    // With app.setGlobalPrefix('api') this is /api/marketing/home/timeline. The
+    // 'marketing/' belongs HERE, not in a parent module — doubling it would
+    // still route, just nowhere the SPA looks.
+    expect(Reflect.getMetadata('path', MarketingHomeController)).toBe('marketing/home');
+  });
+
+  it('carries NO role gate — every role reads its own home calendar', () => {
+    // Deliberately `undefined`, not a permissive list: the calendar shows the
+    // caller their own tasks/bookings/campaigns and is not a spend view, so a
+    // REP must be able to fill the panel they can already open. If this fails,
+    // read the class comment before "fixing" it by loosening the assertion.
+    expect(Reflect.getMetadata(MARKETING_ROLES_KEY, MarketingHomeController)).toBeUndefined();
+    expect(
+      Reflect.getMetadata(MARKETING_ROLES_KEY, MarketingHomeController.prototype.timeline),
+    ).toBeUndefined();
+  });
+});
 
 /**
  * The window is the only logic this controller owns: everything else it does is
@@ -62,9 +99,11 @@ describe('MarketingHomeController — window defaulting', () => {
   it('honours a given `to` while `from` defaults to now', async () => {
     const before = Date.now();
     await controller.timeline(ACTOR, undefined, '2026-03-05T12:30:00.000Z');
+    const after = Date.now();
 
     const { from, to } = only();
     expect(from.getTime()).toBeGreaterThanOrEqual(before);
+    expect(from.getTime()).toBeLessThanOrEqual(after);
     expect(to.toISOString()).toBe('2026-03-05T12:30:00.000Z');
   });
 
