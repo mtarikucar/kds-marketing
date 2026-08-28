@@ -53,11 +53,22 @@ describeRealDb('Home timeline — real DB (e2e)', () => {
    * reached it, and the suite would begin flaking years after it was written.
    * Far out, so no cron can land inside it today either — leaving `items` made
    * of exactly the rows this spec seeded.
+   *
+   * Two assertions DEPEND on that emptiness: the exact-title set below and the
+   * neighbour's exact-title set in the isolation test. Shorten this offset and
+   * a real cron drifts into the window, and the failure presents as a bogus
+   * tenant-isolation bug rather than as what it is.
    */
   const from = new Date(Date.now() + 400 * 86_400_000);
   const to = new Date(from.getTime() + 7 * 86_400_000);
   const inside = new Date(from.getTime() + 86_400_000);
-  /** One day PAST `to` — the row that proves the window is a bound, not a hint. */
+  /**
+   * A day either side of the window. EVERY source gets a row at BOTH — with a
+   * row on only one side, deleting half a range filter (`lte` but not `gte`)
+   * passes the whole suite, and a source with no out-of-window row at all is
+   * simply unguarded. Eight rows for eight bounds.
+   */
+  const before = new Date(from.getTime() - 86_400_000);
   const outside = new Date(to.getTime() + 86_400_000);
 
   const titles = (items: Array<{ title: string }>) => items.map((i) => i.title);
@@ -106,20 +117,24 @@ describeRealDb('Home timeline — real DB (e2e)', () => {
         { workspaceId, assignedToId: userId, title: 'Bizim görev', type: 'CALL', status: 'PENDING', dueDate: inside },
         // Dropped by `status: { in: ['PENDING', 'IN_PROGRESS'] }`.
         { workspaceId, assignedToId: userId, title: 'Tamamlanan görev', type: 'CALL', status: 'COMPLETED', dueDate: inside },
-        // Dropped by the window: PENDING, but a day past `to`.
+        // Dropped by the window: PENDING, but a day either side of it.
         { workspaceId, assignedToId: userId, title: 'Pencere dışı görev', type: 'CALL', status: 'PENDING', dueDate: outside },
+        { workspaceId, assignedToId: userId, title: 'Pencere öncesi görev', type: 'CALL', status: 'PENDING', dueDate: before },
         // Another tenant's, otherwise identical to the kept one.
         { workspaceId: otherWorkspaceId, assignedToId: otherUserId, title: 'Yabancı görev', type: 'CALL', status: 'PENDING', dueDate: inside },
       ],
     });
 
-    // `calendarId` is a soft reference (no FK anywhere in the schema), so a bare
-    // uuid stands in for a calendar this spec never needs to read.
+    // `Booking.calendarId` carries no FK (unlike BookingCalendarMember's and
+    // BookingAvailability's, which do reference BookingCalendar), so a bare uuid
+    // stands in for a calendar this spec never needs to read.
     const calendarId = randomUUID();
     await prisma.booking.createMany({
       data: [
         { workspaceId, calendarId, name: 'Bizim randevu', startAt: inside, endAt: new Date(inside.getTime() + 1800_000), status: 'CONFIRMED', token: randomUUID() },
         { workspaceId, calendarId, name: 'İptal randevu', startAt: inside, endAt: new Date(inside.getTime() + 1800_000), status: 'CANCELLED', token: randomUUID() },
+        { workspaceId, calendarId, name: 'Pencere dışı randevu', startAt: outside, endAt: new Date(outside.getTime() + 1800_000), status: 'CONFIRMED', token: randomUUID() },
+        { workspaceId, calendarId, name: 'Pencere öncesi randevu', startAt: before, endAt: new Date(before.getTime() + 1800_000), status: 'CONFIRMED', token: randomUUID() },
         { workspaceId: otherWorkspaceId, calendarId, name: 'Yabancı randevu', startAt: inside, endAt: new Date(inside.getTime() + 1800_000), status: 'CONFIRMED', token: randomUUID() },
       ],
     });
@@ -138,6 +153,7 @@ describeRealDb('Home timeline — real DB (e2e)', () => {
         { ...social, workspaceId, name: 'Sosyal taslak', status: 'DRAFT', startDate: inside },
         { ...social, workspaceId, name: 'Sosyal iptal', status: 'CANCELLED', startDate: inside },
         { ...social, workspaceId, name: 'Sosyal pencere dışı', status: 'ACTIVE', startDate: outside },
+        { ...social, workspaceId, name: 'Sosyal pencere öncesi', status: 'ACTIVE', startDate: before },
         { ...social, workspaceId: otherWorkspaceId, createdById: otherUserId, name: 'Yabancı sosyal', status: 'ACTIVE', startDate: inside },
       ],
     });
@@ -146,6 +162,8 @@ describeRealDb('Home timeline — real DB (e2e)', () => {
       data: [
         { workspaceId, name: 'Taslak kampanya', channel: 'EMAIL', body: 'gövde', status: 'DRAFT', scheduledAt: inside },
         { workspaceId, name: 'İptal kampanya', channel: 'EMAIL', body: 'gövde', status: 'CANCELLED', scheduledAt: inside },
+        { workspaceId, name: 'Pencere dışı kampanya', channel: 'EMAIL', body: 'gövde', status: 'DRAFT', scheduledAt: outside },
+        { workspaceId, name: 'Pencere öncesi kampanya', channel: 'EMAIL', body: 'gövde', status: 'DRAFT', scheduledAt: before },
         // `scheduledAt` is nullable. An unscheduled campaign MUST be excluded by
         // the range filter — the mapper dereferences `scheduledAt!`, so one that
         // slipped through would not shorten the list, it would reject the whole
@@ -158,8 +176,13 @@ describeRealDb('Home timeline — real DB (e2e)', () => {
 
   afterAll(async () => {
     if (!realDbEnabled() || !prisma) return;
-    // FK-safe order (tasks hold a Restrict FK to users), each step tolerant so
-    // one failure can't strand the rest and leak rows into the shared DB.
+    // FK-safe order: tasks hold a Restrict FK to users, so they go first.
+    //
+    // Tolerance here buys "teardown never throws", NOT "no rows leak" — under
+    // that Restrict FK a failed task delete GUARANTEES the user delete fails
+    // too, and swallowing both makes the leak silent rather than preventing it.
+    // What actually keeps a stranded run harmless is that both workspace ids
+    // are freshly minted, so leftovers can never collide with a later run.
     const ids = { in: [workspaceId, otherWorkspaceId] };
     const del = async (fn: () => Promise<unknown>) => {
       try {
@@ -243,18 +266,43 @@ describeRealDb('Home timeline — real DB (e2e)', () => {
     expect(statuses['Taslak kampanya']).toBe('DRAFT');
   });
 
-  it('bounds the window at `to`, and excludes rows with no date at all', async () => {
+  it('bounds the window at BOTH ends for all four sources, and excludes rows with no date at all', async () => {
     const out = await svc.timeline(workspaceId, from, to);
     const seen = titles(out.items);
 
+    // One qualifying row per source a day PAST `to`…
     expect(seen).not.toContain('Pencere dışı görev');
+    expect(seen).not.toContain('Pencere dışı randevu');
     expect(seen).not.toContain('Sosyal pencere dışı');
-    expect(seen).not.toContain('Zamansız kampanya');
+    expect(seen).not.toContain('Pencere dışı kampanya');
+    // …and one per source a day BEFORE `from`. Both halves of all four ranges
+    // are pinned: with a row on one side only, dropping the other bound is a
+    // mutation the whole suite survives.
+    expect(seen).not.toContain('Pencere öncesi görev');
+    expect(seen).not.toContain('Pencere öncesi randevu');
+    expect(seen).not.toContain('Sosyal pencere öncesi');
+    expect(seen).not.toContain('Pencere öncesi kampanya');
 
-    // Widening past those rows lets them in — proof the exclusion above was the
-    // range doing its job and not the rows failing to seed.
-    const wide = await svc.timeline(workspaceId, from, new Date(outside.getTime() + 86_400_000));
-    expect(titles(wide.items)).toEqual(expect.arrayContaining(['Pencere dışı görev', 'Sosyal pencere dışı']));
+    // Widening past all eight lets every one of them in — proof the exclusions
+    // above are the range doing its job rather than the rows failing to seed.
+    // Absence asserted on its own is a tautology: a typo'd title satisfies it.
+    const wide = await svc.timeline(
+      workspaceId,
+      new Date(before.getTime() - 86_400_000),
+      new Date(outside.getTime() + 86_400_000),
+    );
+    expect(titles(wide.items)).toEqual(
+      expect.arrayContaining([
+        'Pencere dışı görev',
+        'Pencere dışı randevu',
+        'Sosyal pencere dışı',
+        'Pencere dışı kampanya',
+        'Pencere öncesi görev',
+        'Pencere öncesi randevu',
+        'Sosyal pencere öncesi',
+        'Pencere öncesi kampanya',
+      ]),
+    );
     // The unscheduled campaign stays out of ANY window — it has no date to be in.
     expect(titles(wide.items)).not.toContain('Zamansız kampanya');
     expect(wide.unread).toEqual([]);
