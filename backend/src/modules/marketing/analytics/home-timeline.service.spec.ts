@@ -119,14 +119,23 @@ describe('HomeTimelineService', () => {
     expect(out.unread).toEqual(['görevler', 'sosyal kampanyalar']);
   });
 
-  it('names a source that hit the row cap, and leaves alone one that did not', async () => {
-    const rows = (n: number, at: string) =>
-      Array.from({ length: n }, (_v, i) => ({ id: `x${i}`, name: 'Demo', startAt: new Date(at) }));
+  it('names a source with more rows behind the cap, and stays quiet about one that stopped exactly at it', async () => {
+    // The boundary is the whole point: a source that returned CAP rows and had
+    // nothing more is COMPLETE, and calling it truncated would be a false alarm
+    // — the same lie as a silent one, told the other way round.
     const { svc } = make({
-      booking: { findMany: jest.fn().mockResolvedValue(rows(CAP, '2026-08-28T14:00:00Z')) },
+      booking: {
+        findMany: jest.fn().mockResolvedValue(
+          Array.from({ length: CAP + 1 }, (_v, i) => ({
+            id: `b${i}`,
+            name: 'Demo',
+            startAt: new Date('2026-08-28T14:00:00Z'),
+          })),
+        ),
+      },
       marketingTask: {
         findMany: jest.fn().mockResolvedValue(
-          Array.from({ length: CAP - 1 }, (_v, i) => ({
+          Array.from({ length: CAP }, (_v, i) => ({
             id: `t${i}`,
             title: 'Ara',
             dueDate: new Date('2026-08-28T09:00:00Z'),
@@ -140,7 +149,9 @@ describe('HomeTimelineService', () => {
 
     expect(out.truncated).toEqual(['randevular']);
     expect(out.unread).toEqual([]);
-    expect(out.items).toHaveLength(CAP * 2 - 1);
+    // The extra row is trimmed, not rendered: CAP bookings + CAP tasks.
+    expect(out.items).toHaveLength(CAP * 2);
+    expect(out.items.filter((i) => i.kind === 'appointment')).toHaveLength(CAP);
   });
 
   it('calls a source that threw unread, never truncated', async () => {
@@ -154,22 +165,26 @@ describe('HomeTimelineService', () => {
     expect(out.truncated).toEqual([]);
   });
 
-  it('bounds every source at the cap and takes the earliest rows of the window', async () => {
-    // The cap only means something if it reaches Prisma. Mocked rows can show
-    // that truncation is REPORTED; only the call arguments show it was asked for.
+  it('asks each source for its own window, its own status filter, and one row past the cap', async () => {
+    // Everything here is a query argument, so mocked rows can never show it:
+    // a source that quietly stopped filtering by date or by status would still
+    // return whatever the mock hands back. Only the call arguments show it.
     const { svc, prisma } = make();
     await svc.timeline(WS, FROM, TO);
     const expected = {
-      marketingTask: { dueDate: 'asc' },
-      booking: { startAt: 'asc' },
-      socialCampaign: { startDate: 'asc' },
-      campaign: { scheduledAt: 'asc' },
+      marketingTask: { on: 'dueDate', status: { in: ['PENDING', 'IN_PROGRESS'] } },
+      booking: { on: 'startAt', status: 'CONFIRMED' },
+      socialCampaign: { on: 'startDate', status: { not: 'CANCELLED' } },
+      campaign: { on: 'scheduledAt', status: { not: 'CANCELLED' } },
     } as const;
-    for (const [model, orderBy] of Object.entries(expected)) {
+    for (const [model, e] of Object.entries(expected)) {
       const arg = (prisma as never as Record<string, { findMany: jest.Mock }>)[model].findMany.mock
         .calls[0][0];
-      expect(arg.take).toBe(CAP);
-      expect(arg.orderBy).toEqual(orderBy);
+      expect(arg.where[e.on]).toEqual({ gte: FROM, lte: TO });
+      expect(arg.where.status).toEqual(e.status);
+      expect(arg.orderBy).toEqual({ [e.on]: 'asc' });
+      // CAP + 1: one row past the cap is how "there is more" is detected.
+      expect(arg.take).toBe(CAP + 1);
     }
   });
 
@@ -185,5 +200,16 @@ describe('HomeTimelineService', () => {
 
     expect(out.unread).toEqual(['sistem işleri']);
     expect(out.items.map((i) => i.id)).toEqual(['b1']);
+  });
+
+  it('echoes back the window it was asked about', async () => {
+    // `from`/`to` are what tells a reader which window the rows beside them
+    // describe; an echo that drifts mislabels a correct list.
+    const { svc } = make();
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    expect(out.from).toBe(FROM.toISOString());
+    expect(out.to).toBe(TO.toISOString());
   });
 });
