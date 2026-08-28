@@ -2,6 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 
+/**
+ * Per-source row cap. The window comes from the caller, so an unbounded
+ * `findMany` here is one wide `from`/`to` away from loading a workspace's
+ * whole history into memory. 200 rows a source is far past what a day of
+ * calendar can render, and the `orderBy` on each query makes the cut fall on
+ * the LAST entries of the window rather than on an arbitrary 200.
+ */
+const CAP = 200;
+
 export type TimelineKind = 'system' | 'task' | 'appointment' | 'campaign';
 
 export interface TimelineItem {
@@ -28,6 +37,10 @@ export interface HomeTimeline {
  * reader, and this codebase has already paid for that once — the daily brief
  * swallowed eight queries into `catch(() => 0)` and reported "nothing to
  * report" for what was actually "the query threw" (fixed in v2.271.0).
+ *
+ * Cancelled work is left out of all four sources: the calendar answers "what is
+ * coming", and a cancelled campaign is by definition not coming. DRAFT stays —
+ * a draft whose date has arrived is exactly the anomaly its owner needs to see.
  */
 @Injectable()
 export class HomeTimelineService {
@@ -63,24 +76,40 @@ export class HomeTimelineService {
             status: { in: ['PENDING', 'IN_PROGRESS'] },
           },
           select: { id: true, title: true, dueDate: true, status: true },
+          orderBy: { dueDate: 'asc' },
+          take: CAP,
         })
         .catch(soft('görevler', [])),
       this.prisma.booking
         .findMany({
           where: { workspaceId, startAt: { gte: from, lte: to }, status: 'CONFIRMED' },
           select: { id: true, name: true, startAt: true },
+          orderBy: { startAt: 'asc' },
+          take: CAP,
         })
         .catch(soft('randevular', [])),
       this.prisma.socialCampaign
         .findMany({
-          where: { workspaceId, startDate: { gte: from, lte: to } },
+          where: {
+            workspaceId,
+            startDate: { gte: from, lte: to },
+            status: { not: 'CANCELLED' },
+          },
           select: { id: true, name: true, startDate: true, status: true },
+          orderBy: { startDate: 'asc' },
+          take: CAP,
         })
         .catch(soft('sosyal kampanyalar', [])),
       this.prisma.campaign
         .findMany({
-          where: { workspaceId, scheduledAt: { gte: from, lte: to } },
+          where: {
+            workspaceId,
+            scheduledAt: { gte: from, lte: to },
+            status: { not: 'CANCELLED' },
+          },
           select: { id: true, name: true, scheduledAt: true, status: true },
+          orderBy: { scheduledAt: 'asc' },
+          take: CAP,
         })
         .catch(soft('kampanyalar', [])),
     ]);
@@ -123,6 +152,9 @@ export class HomeTimelineService {
       })),
     ].sort((a, b) => a.at.localeCompare(b.at));
 
-    return { from: from.toISOString(), to: to.toISOString(), items, unread };
+    // Sorted, not push-ordered: `soft` appends from inside `.catch`, so the
+    // order follows which query rejected first. Two failures would otherwise
+    // swap places between refreshes and read as a bug in the list itself.
+    return { from: from.toISOString(), to: to.toISOString(), items, unread: unread.sort() };
   }
 }

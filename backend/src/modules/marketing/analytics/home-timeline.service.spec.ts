@@ -56,4 +56,63 @@ describe('HomeTimelineService', () => {
       expect(arg.where.workspaceId).toBe(WS);
     }
   });
+
+  it('asks the database for everything but CANCELLED, and keeps the DRAFT rows it gets back', async () => {
+    // The exclusion is a WHERE clause, so a mock can only prove we asked for it;
+    // what the mock CAN prove is the other half — that a DRAFT row coming back
+    // is not then dropped by some second guess in the mapping.
+    const { svc, prisma } = make({
+      campaign: { findMany: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Taslak', scheduledAt: new Date('2026-08-28T10:00:00Z'), status: 'DRAFT' }]) },
+      socialCampaign: { findMany: jest.fn().mockResolvedValue([{ id: 's1', name: 'Sosyal taslak', startDate: new Date('2026-08-28T11:00:00Z'), status: 'DRAFT' }]) },
+    });
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    const p = prisma as never as Record<string, { findMany: jest.Mock }>;
+    expect(p.campaign.findMany.mock.calls[0][0].where.status).toEqual({ not: 'CANCELLED' });
+    expect(p.socialCampaign.findMany.mock.calls[0][0].where.status).toEqual({ not: 'CANCELLED' });
+    expect(out.items.map((i) => i.status)).toEqual(['DRAFT', 'DRAFT']);
+  });
+
+  it('maps a social campaign onto the campaign lane', async () => {
+    const { svc } = make({
+      socialCampaign: { findMany: jest.fn().mockResolvedValue([{ id: 's1', name: 'Eylül serisi', startDate: new Date('2026-08-28T11:00:00Z'), status: 'ACTIVE' }]) },
+    });
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    expect(out.items).toEqual([
+      { kind: 'campaign', id: 's1', title: 'Eylül serisi', at: '2026-08-28T11:00:00.000Z', status: 'ACTIVE' },
+    ]);
+  });
+
+  it('drops a cron whose next run falls outside the window', async () => {
+    const { svc, jobs } = make();
+    jobs.listCronHeartbeats.mockResolvedValue({
+      registered: [
+        { name: 'in-window', nextAt: new Date('2026-08-28T03:00:00Z') },
+        { name: 'after-window', nextAt: new Date('2026-08-30T03:00:00Z') },
+        { name: 'before-window', nextAt: new Date('2026-08-27T03:00:00Z') },
+        { name: 'unscheduled', nextAt: null },
+      ],
+      recorded: [],
+    });
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    expect(out.items.map((i) => i.title)).toEqual(['in-window']);
+  });
+
+  it('reports failed sources in a stable order however the failures land', async () => {
+    const slow = () => new Promise((_r, rej) => setTimeout(() => rej(new Error('slow')), 5));
+    const { svc } = make({
+      socialCampaign: { findMany: jest.fn().mockRejectedValue(new Error('fast')) },
+      marketingTask: { findMany: jest.fn().mockImplementation(slow) },
+    });
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    // 'sosyal kampanyalar' rejects first but must not sort first.
+    expect(out.unread).toEqual(['görevler', 'sosyal kampanyalar']);
+  });
 });
