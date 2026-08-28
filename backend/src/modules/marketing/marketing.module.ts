@@ -425,6 +425,9 @@ import { PlatformAiSpendCron } from './ai/platform-ai-spend.cron';
 import { PageViewStatsController } from './analytics/page-view-stats.controller';
 import { PageViewStatsService } from './analytics/page-view-stats.service';
 import { AttributionService } from './analytics/attribution.service';
+// Home command centre — the calendar panel's read model + its endpoint.
+import { HomeTimelineService } from './analytics/home-timeline.service';
+import { MarketingHomeController } from './controllers/marketing-home.controller';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
@@ -725,6 +728,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     EnrollmentController,
     AnalyticsController,
     PageViewStatsController,
+    MarketingHomeController,
     ComplianceController,
     TwoFactorController,
     SlackController,
@@ -1080,6 +1084,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     PlatformAiSpendCron,
     PageViewStatsService,
     AttributionService,
+    HomeTimelineService,
     // Epic F (compliance).
     ComplianceService,
     // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.
