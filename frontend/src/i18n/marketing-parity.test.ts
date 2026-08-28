@@ -85,4 +85,16 @@ describe('marketing i18n — home left-column tabs', () => {
       expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
     }
   });
+
+  // The badge's whole content is the number, and it reaches a screen reader
+  // only through this placeholder. A translator dropping `{{count}}` costs
+  // nothing at runtime — i18next just renders the sentence without it — and
+  // leaves the tab announcing "başarısız iş" with no idea how many.
+  it('keeps the {{count}} placeholder in every failure label, in every locale', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const label = ((cat.command as Json).tabs as Json).failures as string;
+      expect({ locale, label }).toEqual({ locale, label: expect.stringContaining('{{count}}') });
+    }
+  });
 });
