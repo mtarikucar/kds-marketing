@@ -57,13 +57,13 @@ export function TimelinePanel() {
     >
       <div className="flex flex-col">
         {unread.length > 0 && (
-          <p data-testid="tl-unread" className="pb-1.5 text-xs text-warning">
+          <p data-testid="tl-unread" role="status" className="pb-1.5 text-xs text-warning">
             {t('timeline.unread', 'Okunamayan kaynaklar')}: {unread.join(', ')} —{' '}
             {t('timeline.unreadHint', 'bu listede eksik satırlar var, kaç tane olduğunu bilmiyoruz')}
           </p>
         )}
         {truncated.length > 0 && (
-          <p data-testid="tl-truncated" className="pb-1.5 text-xs text-muted-foreground">
+          <p data-testid="tl-truncated" role="status" className="pb-1.5 text-xs text-muted-foreground">
             {t('timeline.truncated', 'Sığmayan kaynaklar')}: {truncated.join(', ')} —{' '}
             {t('timeline.truncatedHint', 'bu pencerenin yalnızca en erken kayıtları gösteriliyor, devamı var')}
           </p>
@@ -79,7 +79,7 @@ export function TimelinePanel() {
             )}
           />
         ) : (
-          <ul>
+          <ul className="divide-y divide-border">
             {items.map((i) => {
               const machine = i.kind === 'system';
               return (
@@ -87,6 +87,11 @@ export function TimelinePanel() {
                   key={`${i.kind}-${i.id}`}
                   data-testid={`tl-${i.kind}-${i.id}`}
                   data-kind={i.kind}
+                  // The class string is Tailwind's to retune; `data-weight` is the
+                  // REQUIREMENT, and it is what the test asserts. Collapsing the
+                  // ternary below to one class list has to fail something, or the
+                  // one purely visual rule here is free to be simplified away.
+                  data-weight={machine ? 'recessive' : 'normal'}
                   className={
                     machine
                       ? 'flex items-baseline gap-2 py-1 text-xs text-muted-foreground opacity-60'

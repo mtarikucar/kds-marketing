@@ -36,4 +36,4 @@ export interface HomeTimeline {
 export const getHomeTimeline = () =>
   marketingApi
     .get<HomeTimeline>('/home/timeline')
-    .then((r: { data: HomeTimeline }) => r.data);
+    .then((r) => r.data);

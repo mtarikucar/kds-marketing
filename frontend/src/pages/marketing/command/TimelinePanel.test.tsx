@@ -48,16 +48,55 @@ describe('TimelinePanel', () => {
     expect(screen.getByTestId('tl-task-t1')).toHaveAttribute('data-kind', 'task');
   });
 
+  // Separating the two lanes by NAME is only half the requirement; the point is
+  // that machine work is present without competing with the operator's own. Four
+  // sources at equal weight is the unreadable column this panel exists to avoid.
+  //
+  // Asserted on `data-weight` rather than on the class string: a Tailwind retune
+  // that swaps `opacity-60` for a token would fail a class assertion while the
+  // requirement still holds (a false alarm), whereas collapsing the two branches
+  // into one — the real regression — fails this.
+  it('renders machine work recessively so it does not compete with human work', async () => {
+    getHomeTimeline.mockResolvedValue(
+      timeline({
+        items: [
+          { kind: 'system', id: 'research-nightly', title: 'research-nightly', at: '2026-08-29T03:00:00Z' },
+          { kind: 'task', id: 't1', title: 'Hasan Usta ara', at: '2026-08-29T09:00:00Z' },
+          { kind: 'appointment', id: 'b1', title: 'Showroom ziyareti', at: '2026-08-29T11:00:00Z' },
+          { kind: 'campaign', id: 'c1', title: 'Eylül indirimi', at: '2026-08-30T08:00:00Z' },
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-system-research-nightly')).toHaveAttribute(
+      'data-weight',
+      'recessive',
+    );
+    // Every non-system lane carries the operator's weight, not just tasks.
+    for (const testId of ['tl-task-t1', 'tl-appointment-b1', 'tl-campaign-c1']) {
+      expect(screen.getByTestId(testId)).toHaveAttribute('data-weight', 'normal');
+    }
+  });
+
   it('names a source it could not read', async () => {
     getHomeTimeline.mockResolvedValue(timeline({ unread: ['görevler'] }));
     renderPanel();
-    expect(await screen.findByTestId('tl-unread')).toHaveTextContent(/görevler/);
+    const unread = await screen.findByTestId('tl-unread');
+    expect(unread).toHaveTextContent(/görevler/);
+    // Both signals appear only AFTER the fetch, and again on the 60s refetch of
+    // an already-rendered panel. Without a live region a screen-reader user is
+    // simply never told the list they are reading is incomplete.
+    expect(unread).toHaveAttribute('role', 'status');
   });
 
   it('names a source that had more than it could show', async () => {
     getHomeTimeline.mockResolvedValue(timeline({ truncated: ['kampanyalar'] }));
     renderPanel();
-    expect(await screen.findByTestId('tl-truncated')).toHaveTextContent(/kampanyalar/);
+    const truncated = await screen.findByTestId('tl-truncated');
+    expect(truncated).toHaveTextContent(/kampanyalar/);
+    expect(truncated).toHaveAttribute('role', 'status');
   });
 
   // The two signals mean different things — "could not read it" vs "read it,
@@ -75,6 +114,8 @@ describe('TimelinePanel', () => {
     expect(unread).not.toHaveTextContent(/kampanyalar/);
     expect(truncated).toHaveTextContent(/kampanyalar/);
     expect(truncated).not.toHaveTextContent(/görevler/);
+    // Two live regions, not one merged line.
+    expect(screen.getAllByRole('status')).toHaveLength(2);
   });
 
   it('says the calendar is empty rather than showing a blank box', async () => {

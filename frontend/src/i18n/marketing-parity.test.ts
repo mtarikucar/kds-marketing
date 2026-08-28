@@ -43,10 +43,17 @@ describe('marketing i18n — MCP connector console (Faz 4)', () => {
 });
 
 describe('marketing i18n — home timeline panel', () => {
-  // The panel's t() calls all carry Turkish inline defaults, so a locale that
-  // is merely MISSING these keys does not throw or show a raw key — it quietly
-  // serves Turkish to an English, Russian, Arabic or Uzbek operator. That is a
-  // defect no runtime check can see, which is why it is pinned here.
+  // i18next resolves lng -> fallbackLng -> the call's inline defaultValue, and
+  // config.ts sets `fallbackLng: 'en'`. So a locale merely MISSING these keys
+  // neither throws nor shows a raw key: a ru/ar/uz operator is quietly served
+  // ENGLISH. TimelinePanel's Turkish inline defaults are reachable only if `en`
+  // lacks the key too — which is why the en catalogue is in the loop below
+  // rather than assumed.
+  //
+  // Silent English is exactly as invisible as a raw key is loud, and nothing
+  // else catches it: `missingKeyHandler` is dev-only (`saveMissing` is gated on
+  // import.meta.env.DEV, so prod is silent), and localeCompleteness's >=95%
+  // offer gate would not notice seven missing keys in a catalogue this size.
   it('every offered locale defines the timeline namespace, not just tr', async () => {
     const want = flat((tr as Json).timeline as Json).map((k) => `timeline.${k}`);
     expect(want.length).toBeGreaterThan(0);
