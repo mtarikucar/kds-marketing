@@ -1,4 +1,4 @@
-import { HomeTimelineService } from './home-timeline.service';
+import { CAP, HomeTimelineService } from './home-timeline.service';
 
 const WS = 'ws-1';
 const FROM = new Date('2026-08-28T00:00:00Z');
@@ -114,5 +114,40 @@ describe('HomeTimelineService', () => {
 
     // 'sosyal kampanyalar' rejects first but must not sort first.
     expect(out.unread).toEqual(['görevler', 'sosyal kampanyalar']);
+  });
+
+  it('names a source that hit the row cap, and leaves alone one that did not', async () => {
+    const rows = (n: number, at: string) =>
+      Array.from({ length: n }, (_v, i) => ({ id: `x${i}`, name: 'Demo', startAt: new Date(at) }));
+    const { svc } = make({
+      booking: { findMany: jest.fn().mockResolvedValue(rows(CAP, '2026-08-28T14:00:00Z')) },
+      marketingTask: {
+        findMany: jest.fn().mockResolvedValue(
+          Array.from({ length: CAP - 1 }, (_v, i) => ({
+            id: `t${i}`,
+            title: 'Ara',
+            dueDate: new Date('2026-08-28T09:00:00Z'),
+            status: 'PENDING',
+          })),
+        ),
+      },
+    });
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    expect(out.truncated).toEqual(['randevular']);
+    expect(out.unread).toEqual([]);
+    expect(out.items).toHaveLength(CAP * 2 - 1);
+  });
+
+  it('calls a source that threw unread, never truncated', async () => {
+    const { svc } = make({
+      marketingTask: { findMany: jest.fn().mockRejectedValue(new Error('boom')) },
+    });
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    expect(out.unread).toEqual(['görevler']);
+    expect(out.truncated).toEqual([]);
   });
 });

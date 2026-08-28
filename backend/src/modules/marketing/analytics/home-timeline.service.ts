@@ -9,7 +9,20 @@ import { ScheduledJobService } from '../scheduling/scheduled-job.service';
  * calendar can render, and the `orderBy` on each query makes the cut fall on
  * the LAST entries of the window rather than on an arbitrary 200.
  */
-const CAP = 200;
+export const CAP = 200;
+
+/**
+ * The user-facing name of each source, in one place. `unread` and `truncated`
+ * both report by name, and the same source drifting into two different names
+ * across the two lists would be its own small lie.
+ */
+const SOURCE = {
+  system: 'sistem işleri',
+  tasks: 'görevler',
+  bookings: 'randevular',
+  socials: 'sosyal kampanyalar',
+  campaigns: 'kampanyalar',
+} as const;
 
 export type TimelineKind = 'system' | 'task' | 'appointment' | 'campaign';
 
@@ -27,6 +40,15 @@ export interface HomeTimeline {
   items: TimelineItem[];
   /** Sources that could not be read, by name. Empty when all four answered. */
   unread: string[];
+  /**
+   * Sources that hit the row cap, by name. Their rows are the EARLIEST in the
+   * window, not an arbitrary slice — see CAP.
+   *
+   * Deliberately NOT merged into `unread`: "could not read this source" and
+   * "read it, there was more" are different failures needing different fixes,
+   * and a reader who cannot tell them apart is back where the daily brief was.
+   */
+  truncated: string[];
 }
 
 /**
@@ -67,7 +89,7 @@ export class HomeTimelineService {
       this.jobs
         .listCronHeartbeats()
         .then((r) => r.registered)
-        .catch(soft('sistem işleri', [] as Array<{ name: string; nextAt: Date | null }>)),
+        .catch(soft(SOURCE.system, [] as Array<{ name: string; nextAt: Date | null }>)),
       this.prisma.marketingTask
         .findMany({
           where: {
@@ -79,7 +101,7 @@ export class HomeTimelineService {
           orderBy: { dueDate: 'asc' },
           take: CAP,
         })
-        .catch(soft('görevler', [])),
+        .catch(soft(SOURCE.tasks, [])),
       this.prisma.booking
         .findMany({
           where: { workspaceId, startAt: { gte: from, lte: to }, status: 'CONFIRMED' },
@@ -87,7 +109,7 @@ export class HomeTimelineService {
           orderBy: { startAt: 'asc' },
           take: CAP,
         })
-        .catch(soft('randevular', [])),
+        .catch(soft(SOURCE.bookings, [])),
       this.prisma.socialCampaign
         .findMany({
           where: {
@@ -99,7 +121,7 @@ export class HomeTimelineService {
           orderBy: { startDate: 'asc' },
           take: CAP,
         })
-        .catch(soft('sosyal kampanyalar', [])),
+        .catch(soft(SOURCE.socials, [])),
       this.prisma.campaign
         .findMany({
           where: {
@@ -111,7 +133,7 @@ export class HomeTimelineService {
           orderBy: { scheduledAt: 'asc' },
           take: CAP,
         })
-        .catch(soft('kampanyalar', [])),
+        .catch(soft(SOURCE.campaigns, [])),
     ]);
 
     const items: TimelineItem[] = [
@@ -152,9 +174,30 @@ export class HomeTimelineService {
       })),
     ].sort((a, b) => a.at.localeCompare(b.at));
 
-    // Sorted, not push-ordered: `soft` appends from inside `.catch`, so the
-    // order follows which query rejected first. Two failures would otherwise
-    // swap places between refreshes and read as a bug in the list itself.
-    return { from: from.toISOString(), to: to.toISOString(), items, unread: unread.sort() };
+    // A source that FAILED fell back to [], which is under the cap, so it can
+    // never appear in both lists — it is unread, not truncated.
+    const truncated = (
+      [
+        [SOURCE.tasks, tasks.length],
+        [SOURCE.bookings, bookings.length],
+        [SOURCE.socials, socials.length],
+        [SOURCE.campaigns, campaigns.length],
+      ] as const
+    )
+      .filter(([, n]) => n >= CAP)
+      .map(([label]) => label as string)
+      .sort();
+
+    // Both lists are sorted, not push-ordered: `soft` appends from inside
+    // `.catch`, so its order follows which query rejected first. Two failures
+    // would otherwise swap places between refreshes and read as a bug in the
+    // list itself.
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      items,
+      unread: unread.sort(),
+      truncated,
+    };
   }
 }
