@@ -155,6 +155,16 @@ export interface NavChild {
   /** When true, ONLY an OWNER sees it (stricter than managerOnly). */
   ownerOnly?: boolean;
   /**
+   * Opt OUT of the Settings-area chrome for a page that lives in the settings
+   * hub (see MarketingLayout). One page needs it: the workflow builder is a
+   * `h-[calc(100vh-7rem)]` canvas, and the settings pane is a scroll container
+   * with no height beside a 240px sidebar — so it renders as a canvas jammed
+   * into a column. This is deliberately a per-ITEM escape hatch and not a
+   * regrouping: /automations stays a settings page in the nav, the palette and
+   * the frozen path set, and only its chrome differs.
+   */
+  fullBleed?: boolean;
+  /**
    * When true, only an AGENCY workspace sees it. Was a hub-level flag only,
    * until the Agency console's pages moved INTO Settings (2026-08 surface
    * merge) — without it here those three pages would have been shown to every
@@ -184,8 +194,13 @@ export interface NavHub {
   /**
    * Progressive-disclosure tier for main-area hubs. 'core' (default) is always
    * in the rail; 'advanced' is tucked behind a collapsed "More" section so the
-   * default view stays focused. Nothing is removed — the command palette and the
-   * "More" section still reach every advanced hub.
+   * default view stays focused.
+   *
+   * Currently inert: since the 2026-08 surface merge every hub is 'core', so
+   * `splitByTier` returns an empty advanced list and the sidebar's "More"
+   * section never renders. The field and its plumbing stay because they are a
+   * property of the hub LIST — marking one hub 'advanced' brings the section
+   * back with no component change.
    */
   tier?: 'core' | 'advanced';
 }
@@ -193,7 +208,8 @@ export interface NavHub {
 /**
  * Routable pages that deliberately hold NO place in the sidebar.
  *
- * The rail is capped (see the lean-tree test) and, more importantly, every
+ * The rail is three surfaces wide (see the rail test in navigation.test.ts)
+ * and, more importantly, every
  * entry on it is a claim that this is a place you are meant to go. Some pages
  * are worth keeping and not worth that claim — the KPI dashboard is the first:
  * it lost its rail slot to the home screen, but a power user hitting the
@@ -289,7 +305,9 @@ export const NAV_HUBS: NavHub[] = [
       // kind of thing: you tell it the plan and it runs; first-run onboarding
       // still lives at /onboarding/strategy behind the console's CTA.
       { path: '/studio/strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass, managerOnly: true },
-      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
+      // fullBleed: the builder (/automations/new, /automations/:id/edit) owns the
+      // viewport. See NavChild.fullBleed.
+      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true, fullBleed: true },
       { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
       // Products & billing
       // Tax Rates + Coupons are tabs inside Products now.
@@ -407,6 +425,24 @@ export function findActiveHub(hubs: NavHub[], pathname: string): NavHub | undefi
     }
   }
   return best?.hub;
+}
+
+/**
+ * The CHILD that owns `pathname`, by the same longest-prefix rule as
+ * {@link findActiveHub} — so `/automations/42/edit` resolves to the
+ * `/automations` item, not merely to the hub containing it. Undefined when the
+ * match is a single-page hub (which has no child) or nothing matches.
+ */
+export function findActiveChild(hubs: NavHub[], pathname: string): NavChild | undefined {
+  let best: { child: NavChild; len: number } | undefined;
+  for (const h of hubs) {
+    for (const c of h.children ?? []) {
+      if (pathname === c.path || pathname.startsWith(c.path + '/')) {
+        if (!best || c.path.length > best.len) best = { child: c, len: c.path.length };
+      }
+    }
+  }
+  return best?.child;
 }
 
 /**

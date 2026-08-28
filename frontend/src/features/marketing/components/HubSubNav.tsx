@@ -7,10 +7,15 @@ import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
 
 /**
- * Secondary navigation for the active hub — a horizontal tab strip of the hub's
- * sibling pages (GoHighLevel sub-tabs). Renders nothing for single-page hubs
- * (Dashboard/Tasks) or the Settings area (which has its own layout). Gating
- * mirrors the sidebar, so only visible children show.
+ * Secondary navigation for the active surface — a horizontal tab strip of its
+ * sibling pages (GoHighLevel sub-tabs). Since the 2026-08 surface merge this is
+ * where the retired hubs' pages actually live, so it carries most of the rail's
+ * old width: Inbox alone lists up to eleven.
+ *
+ * Renders nothing for a surface with no sub-nav to show — Home (a single-page
+ * hub) or a surface gated down to one visible child — nor in the Settings area,
+ * which has its own layout. Gating mirrors the sidebar, so only visible
+ * children show.
  */
 export default function HubSubNav() {
   const { t } = useTranslation('marketing');

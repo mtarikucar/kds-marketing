@@ -7,14 +7,12 @@ import CommandCenterPage from './CommandCenterPage';
 import * as commandService from '../../../features/marketing/api/command.service';
 import * as budgetService from '../../../features/marketing/api/growthBudget.service';
 import * as timelineService from '../../../features/marketing/api/homeTimeline.service';
-import marketingApi from '../../../features/marketing/api/marketingApi';
 
 vi.mock('../../../features/marketing/api/command.service');
 vi.mock('../../../features/marketing/api/growthBudget.service');
 // The left column mounts TimelinePanel, which fetches on its own. Stubbed so
 // this stays a test of the PAGE and not a second, weaker test of the panel.
 vi.mock('../../../features/marketing/api/homeTimeline.service');
-vi.mock('../../../features/marketing/api/marketingApi');
 vi.mock('../../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: (sel: any) => sel({ user: { firstName: 'Tarık', role: 'OWNER' } }),
 }));
@@ -42,7 +40,6 @@ beforeEach(() => {
   getHomeTimeline.mockResolvedValue({
     from: '', to: '', items: [], unread: [], truncated: [],
   });
-  vi.mocked(marketingApi.get).mockResolvedValue({ data: { totalLeads: 325 } } as never);
 });
 
 describe('CommandCenterPage', () => {
@@ -52,6 +49,25 @@ describe('CommandCenterPage', () => {
     // right testid is the mutation this test has to catch.
     expect(within(screen.getByTestId('home-left')).getByRole('tablist')).toBeInTheDocument();
     expect(within(screen.getByTestId('home-chat')).getByTestId('command-bar')).toBeInTheDocument();
+  });
+
+  // The one line this whole screen was defined by: the hook's count reaching
+  // the column. `failureCount={0}` typechecks, keeps every other test on this
+  // page green and is EXACTLY the failure LeftColumn's docblock warns about —
+  // a column that looks instrumented and reports nothing. Asserted end to end
+  // (a FAILED run in the API mock, a lit badge on screen) rather than by
+  // spying on the hook, because the wire is the thing under test.
+  it('carries a real failure from the API through to the badge on the tab strip', async () => {
+    listAgentRuns.mockResolvedValue([
+      {
+        id: 'r-bad', goal: 'reklam bütçesini artır', agent: 'growth', status: 'FAILED',
+        startedAt: new Date().toISOString(), toolCalls: [],
+      },
+    ] as never);
+    renderPage();
+
+    // The flow tab is not even mounted — that is the point of the badge.
+    expect(await screen.findByTestId('flow-badge')).toHaveTextContent('1');
   });
 
   // AgentActivity is the flow TAB's content now. Rendering it standalone as

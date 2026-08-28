@@ -24,7 +24,8 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     key: 'workspace',
     label: 'Workspace',
     // /booking configures the public booking page — workspace setup. The
-    // appointments it produces stay in the Calendar hub.
+    // appointments it produces stay in the Inbox surface, alongside the
+    // calendar they land on.
     paths: [
       '/branding',
       '/users',
