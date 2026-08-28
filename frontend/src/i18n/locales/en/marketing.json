@@ -164,6 +164,9 @@
     }
   },
   "settingsGroup": {
+    "automation": "Automation",
+    "billing": "Products & billing",
+    "agency": "Agency",
     "workspace": "Workspace",
     "team": "Team & access",
     "data": "Data",

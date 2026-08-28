@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -6,10 +6,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import CommandCenterPage from './CommandCenterPage';
 import * as commandService from '../../../features/marketing/api/command.service';
 import * as budgetService from '../../../features/marketing/api/growthBudget.service';
+import * as timelineService from '../../../features/marketing/api/homeTimeline.service';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 
 vi.mock('../../../features/marketing/api/command.service');
 vi.mock('../../../features/marketing/api/growthBudget.service');
+// The left column mounts TimelinePanel, which fetches on its own. Stubbed so
+// this stays a test of the PAGE and not a second, weaker test of the panel.
+vi.mock('../../../features/marketing/api/homeTimeline.service');
 vi.mock('../../../features/marketing/api/marketingApi');
 vi.mock('../../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: (sel: any) => sel({ user: { firstName: 'Tarık', role: 'OWNER' } }),
@@ -18,6 +22,7 @@ vi.mock('../../../store/marketingAuthStore', () => ({
 const runCommand = vi.mocked(commandService.runCommand);
 const listAgentRuns = vi.mocked(commandService.listAgentRuns);
 const listPendingApprovals = vi.mocked(budgetService.listPendingApprovals);
+const getHomeTimeline = vi.mocked(timelineService.getHomeTimeline);
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -34,10 +39,40 @@ beforeEach(() => {
   vi.resetAllMocks();
   listAgentRuns.mockResolvedValue([]);
   listPendingApprovals.mockResolvedValue([] as never);
+  getHomeTimeline.mockResolvedValue({
+    from: '', to: '', items: [], unread: [], truncated: [],
+  });
   vi.mocked(marketingApi.get).mockResolvedValue({ data: { totalLeads: 325 } } as never);
 });
 
 describe('CommandCenterPage', () => {
+  it('renders two columns: the tabbed left panel and the chat', () => {
+    renderPage();
+    // Asserted by CONTENT, not just by the wrapper: an empty <section> with the
+    // right testid is the mutation this test has to catch.
+    expect(within(screen.getByTestId('home-left')).getByRole('tablist')).toBeInTheDocument();
+    expect(within(screen.getByTestId('home-chat')).getByTestId('command-bar')).toBeInTheDocument();
+  });
+
+  // AgentActivity is the flow TAB's content now. Rendering it standalone as
+  // well would show the same list twice on one screen, which is exactly what
+  // the left column exists to stop.
+  it('shows the agent flow only inside the left column, never twice', async () => {
+    const user = userEvent.setup();
+    listAgentRuns.mockResolvedValue([
+      {
+        id: 'r1', goal: 'kampanya kur', agent: 'growth', status: 'DONE',
+        startedAt: new Date().toISOString(), toolCalls: [],
+      },
+    ] as never);
+    renderPage();
+
+    // Calendar tab is the default, so the flow is not on screen at all yet.
+    expect(screen.queryByText('kampanya kur')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: /Ak/ }));
+    expect(await screen.findAllByText('kampanya kur')).toHaveLength(1);
+  });
+
   it('runs a typed command and reports what it did', async () => {
     const user = userEvent.setup();
     runCommand.mockResolvedValue({

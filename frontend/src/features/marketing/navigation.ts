@@ -50,6 +50,26 @@ import {
 /**
  * Single source of truth for the workspace console's navigation.
  *
+ * 2026-08 SURFACE MERGE: fifteen hubs became THREE surfaces + Settings. The
+ * 2026-07 pass below cut the page count; it did not change the premise that you
+ * operate this product by picking a hub, and fifteen doors is not navigation,
+ * it is an inventory. The home screen is now where work starts (say what you
+ * want / approve what is waiting / see what happened), so what is left is a
+ * coarse answer to "where would I go to look at that myself":
+ *
+ *   - home    — /home only.
+ *   - inbox   — WORK: anything with a person attached (the old contacts, sales,
+ *               calendar, tasks and voice hubs).
+ *   - studio  — MAKE & MEASURE (the old reports and growth hubs).
+ *   - settings— SET UP: configure once, let it run (the old strategy,
+ *               automation, payments, sites, memberships and agency hubs).
+ *
+ * NOTHING was deleted. Every retired hub's items moved into a surviving
+ * surface, gates and all — the path set is frozen in navigation.test.ts and a
+ * dropped route fails there. Because a gate that used to hang on a hub now
+ * hangs on the item, `NavChild` grew `agencyOnly` and single-page hubs like
+ * Sites/Courses/Inbox became gated CHILDREN rather than gated surfaces.
+ *
  * 2026-07 IA simplification (user-driven): the previous 16-hub / ~70-page tree
  * still read as "everything piled up", so related pages were MERGED into
  * single tabbed surfaces and the tree cut to 9 core + 5 advanced hubs:
@@ -66,9 +86,10 @@ import {
  * exactly one home.
  *
  * Gating is per-child (and per-hub): `managerOnly` items show only to
- * OWNER/MANAGER; `feature` items only when the workspace is entitled
- * (see {@link useEntitlements}); the Agency hub only renders for an AGENCY
- * workspace. Empty hubs (all children gated out) drop from the menu.
+ * OWNER/MANAGER; `ownerOnly` only to an OWNER; `feature` items only when the
+ * workspace is entitled (see {@link useEntitlements}); `agencyOnly` items only
+ * in an AGENCY workspace. Empty hubs (all children gated out) drop from the
+ * menu. Packaging changed in 2026-08; gating did not.
  */
 
 /** Entitlement keys the backend's EntitlementsService exposes (subset used in nav). */
@@ -133,6 +154,13 @@ export interface NavChild {
   managerOnly?: boolean;
   /** When true, ONLY an OWNER sees it (stricter than managerOnly). */
   ownerOnly?: boolean;
+  /**
+   * When true, only an AGENCY workspace sees it. Was a hub-level flag only,
+   * until the Agency console's pages moved INTO Settings (2026-08 surface
+   * merge) — without it here those three pages would have been shown to every
+   * workspace, which is a permission change dressed up as a packaging change.
+   */
+  agencyOnly?: boolean;
 }
 
 export interface NavHub {
@@ -187,128 +215,65 @@ export const UNLISTED_DESTINATIONS: Array<{
 
 export const NAV_HUBS: NavHub[] = [
   // Where everyone lands and where most work should start: say what you want,
-  // approve what is waiting, see what was done. Everything below this line is
-  // the manual fallback for when you need to go and look at something
-  // yourself — useful, but not the intended way to operate the product.
+  // approve what is waiting, see what was done and what is coming. Everything
+  // below this line is the manual fallback for when you need to go and look at
+  // something yourself — useful, but not the intended way to operate.
   //
   // This REPLACES the old Dashboard entry rather than sitting beside it. Two
   // rail items both meaning "the start of the app" is the duplication this
-  // whole change exists to remove, and the rail is already at its 17-hub
-  // ceiling. `/dashboard` is still a route and is linked from the home screen
-  // for anyone who wants the KPI board.
-  { id: 'home', labelKey: 'nav.home', label: 'Home', icon: Home, path: '/home' },
+  // whole change exists to remove. `/dashboard` is still a route and is linked
+  // from the home screen for anyone who wants the KPI board.
+  { id: 'home', labelKey: 'nav.home', label: 'Home', icon: Home, path: '/home', tier: 'core' },
   {
-    // Single-page hub: channels / canned responses / AI agents / knowledge are
-    // tabs INSIDE the inbox now (`/inbox?tab=…`), not sibling pages.
-    id: 'inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox,
-    path: '/inbox', feature: 'conversationAi',
-  },
-  {
-    id: 'contacts', labelKey: 'nav.group.contacts', label: 'Contacts', icon: Users,
+    // WORK — everything that arrives with a person attached: the conversation,
+    // who it is with, what it is worth, when it happens, what you owe them.
+    // Absorbed the old `contacts`, `sales`, `calendar`, `tasks` and `voice`
+    // hubs; no `path` of its own, because `/inbox` is entitlement-gated and a
+    // rail item that lands on a page you cannot open is worse than one that
+    // lands on the first page you can (see `hubTarget` in MarketingSidebar).
+    id: 'inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, tier: 'core',
     children: [
+      // The gate moved WITH the item, not to the surface: gating the whole
+      // surface on conversationAi would have taken Leads and Pipeline away from
+      // every workspace without the entitlement.
+      { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, feature: 'conversationAi' },
       { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
       { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
-    ],
-  },
-  {
-    id: 'sales', labelKey: 'nav.group.sales', label: 'Sales', icon: DollarSign,
-    children: [
       { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Pipeline', icon: Target },
       // Offers + Estimates + Documents merged into one tabbed hub.
       { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
       // Power Dialer is a tab inside Calls now.
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
-    ],
-  },
-  {
-    id: 'calendar', labelKey: 'nav.group.calendar', label: 'Calendar', icon: Calendar,
-    children: [
       { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
       { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
+      { path: '/tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList },
+      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
+      { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
     ],
   },
-  { id: 'tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList, path: '/tasks' },
   {
-    // The unified Growth Studio — content calendar, Create (AI content +
-    // personas), campaigns (normal + social + planner), trends and the
-    // Autopilot as deep-linkable tabs (`/studio?tab=…&sub=…`) on one page.
-    // CORE tier: the product's flagship surface. Managers only (real spend).
-    id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles,
-    path: '/studio', managerOnly: true, tier: 'core',
-  },
-  {
-    // AI Strategy Engine (Task 9): the always-on strategist console. First-run
-    // onboarding lives at /onboarding/strategy (reached via the console's CTA).
-    id: 'strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass,
-    path: '/studio/strategy', managerOnly: true, tier: 'advanced',
-  },
-  {
-    // Single-page hub: Ads / Performance / Analytics are tabs inside /reports.
-    id: 'reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3, path: '/reports',
-    tier: 'advanced',
-  },
-
-  // ——— advanced (behind "More") ———
-  {
-    // The vertical add-ons. Every one is entitlement-gated, so most workspaces
-    // never see them at all — they were spending three permanent rail slots to
-    // be invisible.
-    id: 'growth', labelKey: 'nav.group.growth', label: 'Growth', icon: Globe, tier: 'advanced',
+    // MAKE & MEASURE — the outbound half of the product. Growth Studio itself
+    // (content calendar, Create, campaigns, trends, Autopilot as tabs), what it
+    // produced (Reports), and the vertical add-ons that feed it. Absorbed the
+    // old `reports` and `growth` hubs.
+    id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles, tier: 'core',
     children: [
+      { path: '/studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles, managerOnly: true },
+      // Single page: Ads / Performance / Analytics are tabs inside /reports.
+      { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
       { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },
       { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
       { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
     ],
   },
   {
-    id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap, tier: 'advanced',
-    children: [
-      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
-      { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
-    ],
-  },
-  {
-    id: 'payments', labelKey: 'nav.group.payments', label: 'Payments', icon: Banknote, tier: 'advanced',
-    children: [
-      // Tax Rates + Coupons are tabs inside Products now.
-      { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
-      { path: '/subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions', icon: Repeat, managerOnly: true },
-      { path: '/order-forms', labelKey: 'nav.orderForms', label: 'Order forms', icon: ShoppingCart, managerOnly: true },
-      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
-      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
-    ],
-  },
-  {
-    // Surveys + A/B Experiments were deleted (2026-07 trim: dead-end surfaces —
-    // no respondent renderer / no variant consumer ever existed).
-    id: 'sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, tier: 'advanced',
-    path: '/sites', feature: 'funnels', managerOnly: true,
-  },
-  {
-    // Communities + Leaderboard were deleted (2026-07 trim: they simulated a
-    // member experience no member could ever see — no member portal exists).
-    // Module OFF by default for new workspaces (feature 'memberships'); existing
-    // workspaces (activatedModules null) keep it. Switch on in Modules.
-    id: 'memberships', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, tier: 'advanced',
-    path: '/memberships/courses', managerOnly: true, feature: 'memberships',
-  },
-  {
-    id: 'voice', labelKey: 'nav.group.voice', label: 'Voice', icon: Mic, tier: 'advanced',
-    children: [
-      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
-      { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
-    ],
-  },
-  {
-    id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true, ownerOnly: true, tier: 'advanced',
-    children: [
-      { path: '/agency/locations', labelKey: 'nav.agencyLocations', label: 'Sub-accounts', icon: Building2, managerOnly: true },
-      { path: '/agency/snapshots', labelKey: 'nav.agencySnapshots', label: 'Snapshots', icon: Camera, managerOnly: true },
-      { path: '/agency/rebilling', labelKey: 'nav.agencyRebilling', label: 'Rebilling', icon: Receipt, managerOnly: true },
-    ],
-  },
-  {
-    id: 'settings', labelKey: 'nav.group.settings', label: 'Settings', icon: Settings, area: 'settings',
+    // SET UP — anything you configure once and then let run: the workspace
+    // itself, the automations, what you sell and bill, the public surfaces, the
+    // developer tooling. Absorbed the old `strategy`, `automation`, `payments`,
+    // `sites`, `memberships` and `agency` hubs. Renders in the gear area, so
+    // its size costs the rail nothing.
+    id: 'settings', labelKey: 'nav.group.settings', label: 'Settings', icon: Settings,
+    area: 'settings', tier: 'core',
     children: [
       // Workspace
       { path: '/branding', labelKey: 'nav.brand', label: 'Brand', icon: Palette, managerOnly: true },
@@ -316,16 +281,31 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: ShieldCheck, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
       { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
+      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
+      // Public surfaces you configure once (were their own single-page hubs).
+      { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
+      { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, feature: 'memberships', managerOnly: true },
+      // Set-and-forget automation. The AI Strategy Engine console is the same
+      // kind of thing: you tell it the plan and it runs; first-run onboarding
+      // still lives at /onboarding/strategy behind the console's CTA.
+      { path: '/studio/strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass, managerOnly: true },
+      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
+      { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
+      // Products & billing
+      // Tax Rates + Coupons are tabs inside Products now.
+      { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
+      { path: '/subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions', icon: Repeat, managerOnly: true },
+      { path: '/order-forms', labelKey: 'nav.orderForms', label: 'Order forms', icon: ShoppingCart, managerOnly: true },
+      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
+      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
       // Data (Custom Objects deleted — 2026-07 trim: an island with no consumer
       // anywhere and no record-to-contact linking UI at all)
       { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
       // Moved out of the Contacts hub (2026-08): these SHAPE contacts, they are
-      // not contacts you work. Same for Booking, which configures the public
-      // booking page — the appointments it produces stay in Calendar.
+      // not contacts you work.
       { path: '/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
       { path: '/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
       { path: '/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
-      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true, feature: 'research' },
       // Connections & domains (Account Center absorbed Settings→Connections)
       { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },
@@ -341,6 +321,12 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/inbound-webhooks', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
+      // Agency console — every /agency/* backend route is @MarketingRoles('OWNER'),
+      // and the pages only mean anything for an AGENCY workspace. Both gates ride
+      // on the items now that the hub they used to hang on is gone.
+      { path: '/agency/locations', labelKey: 'nav.agencyLocations', label: 'Sub-accounts', icon: Building2, managerOnly: true, ownerOnly: true, agencyOnly: true },
+      { path: '/agency/snapshots', labelKey: 'nav.agencySnapshots', label: 'Snapshots', icon: Camera, managerOnly: true, ownerOnly: true, agencyOnly: true },
+      { path: '/agency/rebilling', labelKey: 'nav.agencyRebilling', label: 'Rebilling', icon: Receipt, managerOnly: true, ownerOnly: true, agencyOnly: true },
     ],
   },
 ];
@@ -360,6 +346,7 @@ function childVisible(c: NavChild, opts: NavVisibilityOpts): boolean {
   return (
     (c.managerOnly ? opts.isManager : true) &&
     (c.ownerOnly ? !!opts.isOwner : true) &&
+    (c.agencyOnly ? !!opts.isAgency : true) &&
     opts.has(c.feature)
   );
 }

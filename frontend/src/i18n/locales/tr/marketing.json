@@ -368,6 +368,9 @@
     }
   },
   "settingsGroup": {
+    "automation": "Otomasyon",
+    "billing": "Ürünler ve faturalama",
+    "agency": "Ajans",
     "workspace": "Çalışma Alanı",
     "team": "Ekip ve erişim",
     "data": "Veri",

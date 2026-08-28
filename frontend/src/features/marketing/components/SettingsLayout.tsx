@@ -8,12 +8,16 @@ import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
 
 /**
- * Ordered sub-grouping for the Settings area — FOUR labelled clusters (2026-07
- * IA simplification), so the list reads as everyday admin up top and
- * developer/compliance tooling last instead of one undifferentiated grab-bag.
- * Brand is ONE page now (kit + brain are tabs inside /branding) and the
- * Account Center is THE connections surface. Paths not listed fall into
- * "Other".
+ * Ordered sub-grouping for the Settings area, so the list reads as everyday
+ * admin up top and developer/compliance tooling last instead of one
+ * undifferentiated grab-bag. Brand is ONE page now (kit + brain are tabs inside
+ * /branding) and the Account Center is THE connections surface.
+ *
+ * Grew from four clusters to seven with the 2026-08 surface merge: the retired
+ * Strategy / Automation / Payments / Sites / Courses / Agency hubs landed here,
+ * and thirteen unclustered pages would have made this exactly the grab-bag the
+ * grouping exists to prevent. Paths not listed fall into "Other" — which the
+ * test asserts stays EMPTY, so a new settings page has to be placed on purpose.
  */
 const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
   {
@@ -28,7 +32,24 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
       '/targets',
       '/settings/modules',
       '/booking',
+      // Public surfaces you configure once, absorbed from the Sites and
+      // Courses hubs — they are workspace setup, not somewhere you work daily.
+      '/sites',
+      '/memberships/courses',
     ],
+  },
+  {
+    key: 'automation',
+    label: 'Automation',
+    // Set-and-forget machinery, absorbed from the Strategy and Automation hubs:
+    // you configure the plan, the system runs it without you.
+    paths: ['/studio/strategy', '/automations', '/trigger-links'],
+  },
+  {
+    key: 'billing',
+    label: 'Products & billing',
+    // Absorbed from the Payments hub — what you sell and how you get paid.
+    paths: ['/products', '/subscriptions', '/order-forms', '/invoices', '/billing'],
   },
   {
     key: 'data',
@@ -62,6 +83,13 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
       '/settings/two-factor',
     ],
   },
+  {
+    key: 'agency',
+    label: 'Agency',
+    // Last, and invisible to everyone but an AGENCY workspace's owner (the
+    // gating rides on the items themselves — see navigation.ts).
+    paths: ['/agency/locations', '/agency/snapshots', '/agency/rebilling'],
+  },
 ];
 
 /**
@@ -76,7 +104,11 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const { isAgency } = useWorkspaceProfile();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
-  const hubs = visibleNav(NAV_HUBS, { isManager, has, isAgency });
+  // isOwner matters here now: the Agency console's three pages moved INTO this
+  // area (2026-08 surface merge) carrying their ownerOnly gate as items.
+  const hubs = visibleNav(NAV_HUBS, {
+    isManager, isOwner: user?.role === 'OWNER', has, isAgency,
+  });
   const items = hubs.find((h) => h.area === 'settings')?.children ?? [];
 
   // Bucket the visible settings items into ordered, labelled groups.
