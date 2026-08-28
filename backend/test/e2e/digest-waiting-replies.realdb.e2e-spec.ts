@@ -190,7 +190,12 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
         payload: {},
         status: 'FAILED',
         attempts: 5,
-        lastError: '400 credit balance too low',
+        // Deliberately NOT a credit-balance error. v2.280.0 made the generic
+        // dead-jobs line report only what the vendor-refusal line does not
+        // explain, so a credit failure is now counted THERE and this line
+        // correctly stays silent. Using that error here tested the vendor lane
+        // while claiming to test this one.
+        lastError: 'ECONNRESET talking to the channel provider',
         completedAt: t(60),
       },
     });
