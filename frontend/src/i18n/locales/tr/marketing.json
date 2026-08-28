@@ -3948,7 +3948,12 @@
     "leads": "{{count}} lead",
     "unassigned": "{{count}} atanmamış",
     "tasks": "{{count}} açık görev",
-    "fullDashboard": "Tüm göstergeler"
+    "fullDashboard": "Tüm göstergeler",
+    "tabs": {
+      "timeline": "Takvim",
+      "flow": "Akış",
+      "failures": "{{count}} başarısız iş"
+    }
   },
   "activity": {
     "none": {

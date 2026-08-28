@@ -988,7 +988,12 @@
     "leads": "{{count}} лидов",
     "unassigned": "{{count}} без владельца",
     "tasks": "{{count}} открытых задач",
-    "fullDashboard": "Все показатели"
+    "fullDashboard": "Все показатели",
+    "tabs": {
+      "timeline": "Календарь",
+      "flow": "Лента",
+      "failures": "{{count}} неудачных запусков"
+    }
   },
   "activity": {
     "none": {

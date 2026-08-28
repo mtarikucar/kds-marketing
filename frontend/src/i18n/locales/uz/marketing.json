@@ -988,7 +988,12 @@
     "leads": "{{count}} lid",
     "unassigned": "{{count}} biriktirilmagan",
     "tasks": "{{count}} ochiq vazifa",
-    "fullDashboard": "Barcha ko'rsatkichlar"
+    "fullDashboard": "Barcha ko'rsatkichlar",
+    "tabs": {
+      "timeline": "Taqvim",
+      "flow": "Oqim",
+      "failures": "{{count}} muvaffaqiyatsiz ish"
+    }
   },
   "activity": {
     "none": {

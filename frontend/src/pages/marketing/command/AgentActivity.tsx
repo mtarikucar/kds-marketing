@@ -11,8 +11,11 @@ import {
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 
 /** A run is worth a line only if it says what it DID. A goal-less run with no
- *  tool calls is bookkeeping, not news. */
-const isNewsworthy = (r: AgentRun) => Boolean(r.goal) || r.toolCalls.length > 0;
+ *  tool calls is bookkeeping, not news.
+ *
+ *  Exported so `useFailureCount` can badge exactly the set this panel lists —
+ *  a badge pointing at a run the tab would not draw is a dead end. */
+export const isNewsworthy = (r: AgentRun) => Boolean(r.goal) || r.toolCalls.length > 0;
 
 /**
  * What the agent has actually been doing, newest first.

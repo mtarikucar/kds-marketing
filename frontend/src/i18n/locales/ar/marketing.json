@@ -988,7 +988,12 @@
     "leads": "{{count}} عميل محتمل",
     "unassigned": "{{count}} غير مُسند",
     "tasks": "{{count}} مهام مفتوحة",
-    "fullDashboard": "لوحة المؤشرات"
+    "fullDashboard": "لوحة المؤشرات",
+    "tabs": {
+      "timeline": "التقويم",
+      "flow": "النشاط",
+      "failures": "{{count}} عملية فاشلة"
+    }
   },
   "activity": {
     "none": {

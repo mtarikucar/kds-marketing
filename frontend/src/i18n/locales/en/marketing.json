@@ -3081,7 +3081,12 @@
     "leads": "{{count}} leads",
     "unassigned": "{{count}} unassigned",
     "tasks": "{{count}} open tasks",
-    "fullDashboard": "Full dashboard"
+    "fullDashboard": "Full dashboard",
+    "tabs": {
+      "timeline": "Calendar",
+      "flow": "Activity",
+      "failures": "{{count}} failed runs"
+    }
   },
   "activity": {
     "none": {
