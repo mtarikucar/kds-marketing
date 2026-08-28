@@ -72,6 +72,9 @@ describe('HomeTimelineService', () => {
     expect(p.campaign.findMany.mock.calls[0][0].where.status).toEqual({ not: 'CANCELLED' });
     expect(p.socialCampaign.findMany.mock.calls[0][0].where.status).toEqual({ not: 'CANCELLED' });
     expect(out.items.map((i) => i.status)).toEqual(['DRAFT', 'DRAFT']);
+    // Concatenation puts socials (11:00) before campaigns (10:00); only the sort
+    // can produce this order, so the assertion is on id, not on two equal values.
+    expect(out.items.map((i) => i.id)).toEqual(['c1', 's1']);
   });
 
   it('maps a social campaign onto the campaign lane', async () => {
@@ -149,5 +152,38 @@ describe('HomeTimelineService', () => {
 
     expect(out.unread).toEqual(['görevler']);
     expect(out.truncated).toEqual([]);
+  });
+
+  it('bounds every source at the cap and takes the earliest rows of the window', async () => {
+    // The cap only means something if it reaches Prisma. Mocked rows can show
+    // that truncation is REPORTED; only the call arguments show it was asked for.
+    const { svc, prisma } = make();
+    await svc.timeline(WS, FROM, TO);
+    const expected = {
+      marketingTask: { dueDate: 'asc' },
+      booking: { startAt: 'asc' },
+      socialCampaign: { startDate: 'asc' },
+      campaign: { scheduledAt: 'asc' },
+    } as const;
+    for (const [model, orderBy] of Object.entries(expected)) {
+      const arg = (prisma as never as Record<string, { findMany: jest.Mock }>)[model].findMany.mock
+        .calls[0][0];
+      expect(arg.take).toBe(CAP);
+      expect(arg.orderBy).toEqual(orderBy);
+    }
+  });
+
+  it('names the cron source when it is the one that fails', async () => {
+    // Cron is the odd path — `.then(...).catch(...)` rather than a direct
+    // `.catch` — so its failure is the easiest one to wire up wrong.
+    const { svc, jobs } = make({
+      booking: { findMany: jest.fn().mockResolvedValue([{ id: 'b1', name: 'Demo', startAt: new Date('2026-08-28T14:00:00Z') }]) },
+    });
+    jobs.listCronHeartbeats.mockRejectedValue(new Error('registry gone'));
+
+    const out = await svc.timeline(WS, FROM, TO);
+
+    expect(out.unread).toEqual(['sistem işleri']);
+    expect(out.items.map((i) => i.id)).toEqual(['b1']);
   });
 });
