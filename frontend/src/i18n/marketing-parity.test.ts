@@ -41,3 +41,19 @@ describe('marketing i18n — MCP connector console (Faz 4)', () => {
     expect(trKeys.filter((k) => !enSet.has(k))).toEqual([]);
   });
 });
+
+describe('marketing i18n — home timeline panel', () => {
+  // The panel's t() calls all carry Turkish inline defaults, so a locale that
+  // is merely MISSING these keys does not throw or show a raw key — it quietly
+  // serves Turkish to an English, Russian, Arabic or Uzbek operator. That is a
+  // defect no runtime check can see, which is why it is pinned here.
+  it('every offered locale defines the timeline namespace, not just tr', async () => {
+    const want = flat((tr as Json).timeline as Json).map((k) => `timeline.${k}`);
+    expect(want.length).toBeGreaterThan(0);
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+});

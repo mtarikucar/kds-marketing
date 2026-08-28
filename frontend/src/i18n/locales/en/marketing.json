@@ -3089,6 +3089,17 @@
       "desc": "When the agent does something — a post, research, a follow-up — it shows up here."
     }
   },
+  "timeline": {
+    "failed": "Could not load the calendar.",
+    "unread": "Sources that could not be read",
+    "unreadHint": "rows are missing from this list and we cannot say how many",
+    "truncated": "Sources that did not fit",
+    "truncatedHint": "only the earliest entries in this window are shown, there are more",
+    "none": {
+      "title": "Nothing is scheduled",
+      "desc": "When a task, appointment or campaign is scheduled, you will see it here."
+    }
+  },
   "budget": {
     "kind": {
       "AD_SPEND": "Ad spend",

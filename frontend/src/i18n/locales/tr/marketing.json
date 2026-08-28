@@ -3955,5 +3955,16 @@
       "title": "Henüz bir iş yapılmadı",
       "desc": "Ajan bir şey yaptığında — gönderi, araştırma, takip — burada görürsün."
     }
+  },
+  "timeline": {
+    "failed": "Takvim yüklenemedi.",
+    "unread": "Okunamayan kaynaklar",
+    "unreadHint": "bu listede eksik satırlar var, kaç tane olduğunu bilmiyoruz",
+    "truncated": "Sığmayan kaynaklar",
+    "truncatedHint": "bu pencerenin yalnızca en erken kayıtları gösteriliyor, devamı var",
+    "none": {
+      "title": "Planlanmış bir şey yok",
+      "desc": "Bir görev, randevu ya da kampanya zamanlandığında burada görürsün."
+    }
   }
 }
