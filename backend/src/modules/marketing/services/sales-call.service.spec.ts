@@ -216,6 +216,39 @@ describe('SalesCallService', () => {
         expect(provider.prepareOutboundCall).not.toHaveBeenCalled();
       });
 
+      /**
+       * ORDER, not just outcome. The guard used to sit AFTER the rep lookup,
+       * the AES telephony-config resolve, the salesCall.findMany occupancy
+       * read and the stale-INITIATED sweep — so a busy line answered first and
+       * the rep was told "Sales line is busy" about a lead they were never
+       * allowed to ring at all. Clearing the line then produced a SECOND,
+       * different refusal. Consent does not depend on capacity, and it is the
+       * cheaper question: it is answered first.
+       */
+      it('refuses an opted-out lead even when the line is busy, without doing any of the work behind it', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...CALLABLE, smsOptOut: true } as any);
+        // The line is occupied by a FRESH call — the ConflictException path.
+        prisma.salesCall.findMany.mockResolvedValue([{ id: 'c0', startedAt: new Date() }] as any);
+        // …and the rep has a phone, so provider selection would otherwise reach
+        // the (AES-decrypting) telephony-config resolve.
+        prisma.marketingUser.findFirst.mockResolvedValue({ phone: '+905550000000', dahili: null } as any);
+        telephonyConfig.resolveForWorkspace.mockResolvedValue({
+          username: 'u', password: 'p', trunk: 't', pbxnum: 'n', recordCalls: false,
+        });
+
+        await expect(
+          svc.startCall(WS, REP, { toPhone: '05551234567', leadId: 'lead-1' } as any),
+        ).rejects.toMatchObject({
+          message: expect.stringContaining('opted out of phone contact'),
+        });
+
+        // The consent refusal is not masked by the busy-line ConflictException…
+        expect(telephonyConfig.resolveForWorkspace).not.toHaveBeenCalled();
+        expect(prisma.salesCall.findMany).not.toHaveBeenCalled();
+        expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
+        expect(prisma.salesCall.create).not.toHaveBeenCalled();
+      });
+
       it('refuses to dial a soft-deleted lead', async () => {
         prisma.lead.findFirst.mockResolvedValue({ ...CALLABLE, deletedAt: new Date() } as any);
         await expect(
