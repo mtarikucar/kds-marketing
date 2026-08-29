@@ -197,6 +197,32 @@ describe('OpportunitiesPage — lead deep links', () => {
     expect(post.mock.calls[0][1]).toEqual(expect.objectContaining({ leadId: undefined }));
   });
 
+  // `?leadId` is read at OPEN time, not at save time, and this is what says so.
+  // The param survives in the URL after useCreateParam strips only `create` —
+  // so a save-time read would attach that lead to every subsequent deal created
+  // on this board, silently filing other people's deals against one contact.
+  it('does not carry the lead into the NEXT deal created on the board', async () => {
+    const user = userEvent.setup();
+    renderAt('/opportunities?create=1&leadId=lead-7');
+
+    // First deal: from the deep link, so it belongs to the lead.
+    const first = await screen.findByRole('dialog');
+    await user.type(within(first).getByPlaceholderText(/Acme Corp/), 'Hasan Usta');
+    await user.click(within(first).getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+
+    // Second deal: opened from the board's own button, with `leadId` still in
+    // the URL. It belongs to nobody.
+    await user.click(screen.getByRole('button', { name: /new deal/i }));
+    const second = await screen.findByRole('dialog');
+    await user.type(within(second).getByPlaceholderText(/Acme Corp/), 'Başka fırsat');
+    await user.click(within(second).getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[0][1]).toEqual(expect.objectContaining({ leadId: 'lead-7' }));
+    expect(post.mock.calls[1][1]).toEqual(expect.objectContaining({ leadId: undefined }));
+  });
+
   // Resolved by id rather than by scanning the board: the board is OPEN-only
   // and one pipeline at a time, so a WON deal — or any deal outside the default
   // pipeline — would simply not be there, and the link would open a board that
