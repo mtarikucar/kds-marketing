@@ -4076,7 +4076,10 @@
       "threadsFailed": "Konuşmalar yüklenemedi",
       "threadsFailedHint": "bu kişinin bir konuşması olabilir; yeni bir tane açmadan önce yenile",
       "noThread": "Bu kişiyle henüz konuşulmadı",
-      "noThreadHint": "Mesaj ile ilk konuşmayı başlat"
+      "noThreadHint": "Mesaj ile ilk konuşmayı başlat",
+      "notesFailed": "İç notlar yüklenemedi",
+      "notesFailedHint": "bir ekip arkadaşının devir notu burada olabilir; okumadan devam etme",
+      "notesRetry": "Yeniden dene"
     },
     "card": {
       "title": "Kayıt",

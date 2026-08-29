@@ -3225,7 +3225,10 @@
       "threadsFailed": "Could not load conversations",
       "threadsFailedHint": "this person may already have one — refresh before starting a new one",
       "noThread": "No conversation with this person yet",
-      "noThreadHint": "use Message to start the first one"
+      "noThreadHint": "use Message to start the first one",
+      "notesFailed": "Could not load internal notes",
+      "notesFailedHint": "a teammate may have left a handover note here — do not carry on without reading it",
+      "notesRetry": "Try again"
     },
     "card": {
       "title": "Record",

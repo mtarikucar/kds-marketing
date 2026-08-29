@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { IconButton } from '@/components/ui/IconButton';
 import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
+import { fmtSlot } from '../../../features/marketing/utils/format';
 import LeadStream from '../../../features/marketing/components/LeadStream';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import marketingApi from '../../../features/marketing/api/marketingApi';
@@ -324,19 +325,67 @@ export function PersonPane({ person, className }: PersonPaneProps) {
           >
             <StickyNote className="h-4 w-4" />
             {t('inbox.internalNotes', 'İç notlar')}
+            {/* ThreadPane's count, restored. The panel is COLLAPSED by default,
+                so without it the only way to learn a teammate left a handover
+                note is to open a panel that is empty for most threads. */}
+            {(notes.data?.length ?? 0) > 0 && (
+              <Badge data-testid="person-pane-notes-count" size="sm">
+                {notes.data!.length}
+              </Badge>
+            )}
             <span className="ms-auto">{notesOpen ? '−' : '+'}</span>
           </button>
 
           {notesOpen && (
             <div className="mt-2 space-y-2">
-              {(notes.data ?? []).length === 0 && !notes.isLoading && (
-                <p className="text-xs text-muted-foreground">
-                  {t('inbox.noNotes', 'Henüz iç not yok. Bunları yalnızca ekibin görür.')}
-                </p>
+              {/* FAILED is not EMPTY, and this is the panel where the difference
+                  costs the most. react-query v5 gives an errored query
+                  `isLoading === false` and `data === undefined`, so the empty
+                  branch below would otherwise tell a rep the team wrote nothing
+                  down — in front of the customer whose handover note it just
+                  failed to fetch. Same shape as `person-pane-threads-failed`
+                  below, plus a retry: the notes are one request, and sending
+                  someone to reload the whole surface would throw away the
+                  draft they are holding. */}
+              {notes.isError ? (
+                <div data-testid="person-pane-notes-failed" role="status" className="space-y-1">
+                  <p className="text-xs text-danger">
+                    {t('surface.pane.notesFailed', 'İç notlar yüklenemedi')} —{' '}
+                    {t(
+                      'surface.pane.notesFailedHint',
+                      'bir ekip arkadaşının devir notu burada olabilir; okumadan devam etme',
+                    )}
+                  </p>
+                  <Button size="sm" variant="outline" onClick={() => notes.refetch()}>
+                    {t('surface.pane.notesRetry', 'Yeniden dene')}
+                  </Button>
+                </div>
+              ) : (
+                (notes.data ?? []).length === 0 &&
+                !notes.isLoading && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('inbox.noNotes', 'Henüz iç not yok. Bunları yalnızca ekibin görür.')}
+                  </p>
+                )
               )}
               {(notes.data ?? []).map((n) => (
-                <div key={n.id} className="rounded border border-border bg-surface p-2 text-xs">
+                <div
+                  key={n.id}
+                  data-testid={`person-pane-note-${n.id}`}
+                  className="rounded border border-border bg-surface p-2 text-xs"
+                >
                   <p className="whitespace-pre-wrap text-foreground">{n.body}</p>
+                  {/* ThreadPane's per-note timestamp, restored — an undated
+                      handover note cannot be told from a stale one. `fmtSlot`
+                      rather than ThreadPane's raw `toLocaleString`: the same
+                      compact form the stream above uses, and the locale comes
+                      from i18next instead of the operator's OS. */}
+                  <p
+                    data-testid={`person-pane-note-at-${n.id}`}
+                    className="mt-0.5 text-[10px] text-muted-foreground"
+                  >
+                    {fmtSlot(n.createdAt)}
+                  </p>
                 </div>
               ))}
               <div className="flex gap-2">

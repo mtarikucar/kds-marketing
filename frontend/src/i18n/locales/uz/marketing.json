@@ -1118,7 +1118,10 @@
       "threadsFailed": "Suhbatlar yuklanmadi",
       "threadsFailedHint": "bu odamda suhbat boʻlishi mumkin — yangisini boshlashdan oldin yangilang",
       "noThread": "Bu odam bilan hali yozishilmagan",
-      "noThreadHint": "birinchisini «Xabar» orqali boshlang"
+      "noThreadHint": "birinchisini «Xabar» orqali boshlang",
+      "notesFailed": "Ichki eslatmalarni yuklab boʻlmadi",
+      "notesFailedHint": "bu yerda hamkasbingizning topshiriq eslatmasi boʻlishi mumkin — oʻqimasdan davom etmang",
+      "notesRetry": "Qayta urinish"
     },
     "card": {
       "title": "Yozuv",

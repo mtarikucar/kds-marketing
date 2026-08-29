@@ -256,3 +256,106 @@ describe('PersonPane — the conversation half can fail on its own', () => {
     expect(screen.queryByLabelText('Yanıt yaz')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The internal notes panel, held to the rule the rest of this branch keeps: a
+ * query that FAILED is not a query that came back empty.
+ *
+ * Under react-query v5 an errored query has `isLoading === false` and `data ===
+ * undefined`, so a `GET /conversations/:id/notes` that 500s used to render
+ * "Henüz iç not yok. Bunları yalnızca ekibin görür." — a confident claim that
+ * the team wrote nothing, in the one panel whose whole content is what a
+ * teammate wrote down before handing the customer over. A rep reads that and
+ * starts the conversation from scratch in front of the customer.
+ */
+describe('PersonPane — a note nobody could fetch is not a note nobody wrote', () => {
+  const openNotes = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: /İç notlar/ }));
+  };
+
+  beforeEach(() => {
+    get.mockImplementation((url: string) =>
+      String(url).includes('/notes')
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve({ data: [] }),
+    );
+  });
+
+  it('says the notes could not be read instead of claiming there are none', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await openNotes(user);
+
+    expect(await screen.findByTestId('person-pane-notes-failed')).toHaveTextContent(
+      'İç notlar yüklenemedi',
+    );
+    expect(screen.queryByText(/Henüz iç not yok/)).not.toBeInTheDocument();
+  });
+
+  it('offers a retry, because the panel is the handover and a reload is the whole page', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await openNotes(user);
+    await screen.findByTestId('person-pane-notes-failed');
+
+    const calls = () => get.mock.calls.filter(([u]) => String(u).includes('/notes')).length;
+    const before = calls();
+    await user.click(screen.getByRole('button', { name: 'Yeniden dene' }));
+
+    await waitFor(() => expect(calls()).toBeGreaterThan(before));
+  });
+
+  it('still says "no notes yet" when the fetch actually succeeded and was empty', async () => {
+    const user = userEvent.setup();
+    get.mockResolvedValue({ data: [] });
+    renderPane();
+    await openNotes(user);
+
+    expect(await screen.findByText(/Henüz iç not yok/)).toBeInTheDocument();
+    expect(screen.queryByTestId('person-pane-notes-failed')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Two things ThreadPane's notes panel had and the rewrite dropped. Both answer
+ * the same question — "is this note still true?" — which is the only question
+ * anyone asks of a handover note.
+ */
+describe('PersonPane — a note carries its date, and the panel carries its count', () => {
+  const NOTES = [
+    { id: 'n1', body: 'Fiyat listesi gönderildi', createdAt: '2026-08-20T10:00:00Z' },
+    { id: 'n2', body: 'Muhasebeye devredildi', createdAt: '2026-08-21T11:30:00Z' },
+  ];
+
+  beforeEach(() => {
+    get.mockImplementation((url: string) =>
+      String(url).includes('/notes')
+        ? Promise.resolve({ data: NOTES })
+        : Promise.resolve({ data: [] }),
+    );
+  });
+
+  it('counts the notes on the closed panel, so nobody has to open it to find out', async () => {
+    const user = userEvent.setup();
+    renderPane();
+
+    // Open once to let the query run, close again: the count has to survive on
+    // the collapsed header, which is where it does its work.
+    const toggle = await screen.findByRole('button', { name: /İç notlar/ });
+    await user.click(toggle);
+    await screen.findByText('Fiyat listesi gönderildi');
+    await user.click(toggle);
+
+    expect(await screen.findByTestId('person-pane-notes-count')).toHaveTextContent('2');
+  });
+
+  it('dates each note — an undated handover note cannot be told from a stale one', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await user.click(await screen.findByRole('button', { name: /İç notlar/ }));
+
+    const note = await screen.findByTestId('person-pane-note-n1');
+    expect(note).toHaveTextContent('Fiyat listesi gönderildi');
+    expect(within(note).getByTestId('person-pane-note-at-n1')).not.toBeEmptyDOMElement();
+  });
+});
