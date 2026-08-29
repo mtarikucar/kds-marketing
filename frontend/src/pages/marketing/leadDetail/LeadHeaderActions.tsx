@@ -32,14 +32,35 @@ import {
 } from '../../../features/marketing/api/conversations.service';
 
 /**
- * Which channel types can OPEN a conversation, mirroring
- * OutboundConversationService's INITIABLE map. The list is short because the
- * platforms make it short: Instagram/Messenger/TikTok only permit a reply to
- * someone who wrote first, webchat identities exist only once the visitor opens
- * the widget, and voice is inbound. Offering any of them here would be offering
- * a button whose only possible outcome is the backend's refusal.
+ * Which channel types THIS DIALOG can open a conversation on.
+ *
+ * A SUBSET of OutboundConversationService's INITIABLE map, and deliberately so.
+ * The map's exclusions are platform rules — Instagram/Messenger/TikTok only
+ * permit a reply to someone who wrote first, webchat identities exist only once
+ * the visitor opens the widget, voice is inbound — and they apply here
+ * unchanged.
+ *
+ * WhatsApp is the one the backend allows and this dialog must not offer. It is
+ * INITIABLE with `supportsTemplate: true`, which is the backend saying "bring
+ * an approved template", not "free text is fine". This dialog has no template
+ * field, and it only ever opens when `listConversations({ leadId })` came back
+ * EMPTY — no status filter, so the lead has no WhatsApp thread of any kind and
+ * no inbound WhatsApp message was ever ingested for them. Meta's 24h session
+ * window is therefore shut, every time, and free text is refused.
+ *
+ * What makes that unacceptable rather than merely unlucky:
+ * MessageSenderService.send does not THROW when an adapter rejects a send — it
+ * records the Message FAILED, refunds the quota, logs, and returns. So
+ * `POST /conversations/start` answers 2xx, this dialog toasts "Mesaj
+ * gönderildi" and lands the rep on a thread whose only message never left the
+ * building. A button that fails when clicked is worse than no button; a button
+ * that reports success and sends nothing is worse than both.
+ *
+ * NOTE: nothing ties this list to the backend's — it is a hand-copy, and now a
+ * deliberately divergent one. Offering WhatsApp here again means giving the
+ * dialog a template picker first.
  */
-const INITIABLE_CHANNEL_TYPES = ['SMS', 'WHATSAPP', 'EMAIL'];
+const INITIABLE_CHANNEL_TYPES = ['SMS', 'EMAIL'];
 
 interface ChannelRow {
   id: string;
@@ -186,7 +207,7 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
               tone="warning"
               title={t(
                 'leadDetail.startConversation.noChannels',
-                'Konuşma başlatılabilecek bağlı kanal yok — SMS, WhatsApp veya e-posta bağla.',
+                'Konuşma başlatılabilecek bağlı kanal yok — SMS veya e-posta bağla.',
               )}
             />
           ) : (

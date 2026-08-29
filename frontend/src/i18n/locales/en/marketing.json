@@ -696,7 +696,7 @@
       "send": "Send",
       "sent": "Message sent",
       "failed": "Could not send the message",
-      "noChannels": "No connected channel can open a conversation — connect SMS, WhatsApp or email.",
+      "noChannels": "No connected channel can open a conversation — connect SMS or email.",
       "channelsFailed": "Could not load the channels."
     }
   },

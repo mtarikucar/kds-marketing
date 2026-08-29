@@ -355,7 +355,7 @@
       "send": "Yuborish",
       "sent": "Xabar yuborildi",
       "failed": "Xabarni yuborib bo'lmadi",
-      "noChannels": "Suhbat boshlash mumkin bo'lgan ulangan kanal yo'q — SMS, WhatsApp yoki e-pochtani ulang.",
+      "noChannels": "Suhbat boshlash mumkin bo'lgan ulangan kanal yo'q — SMS yoki e-pochtani ulang.",
       "channelsFailed": "Kanallarni yuklab bo'lmadi."
     }
   },

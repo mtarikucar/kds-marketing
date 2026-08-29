@@ -197,6 +197,39 @@ describe('LeadHeaderActions — Mesaj', () => {
     await waitFor(() => expect(onOpenConversations).toHaveBeenCalledTimes(1));
   });
 
+  /**
+   * WhatsApp is INITIABLE on the backend, and still must not be offered HERE.
+   *
+   * This dialog opens on exactly one condition: `listConversations({ leadId })`
+   * came back empty, and it passes no status filter — so the lead has no
+   * WhatsApp thread of ANY status, which means no inbound WhatsApp message has
+   * ever been ingested for them. Meta's 24h session window is therefore shut,
+   * and a free-text first contact needs an approved template this dialog has no
+   * field for (`supportsTemplate: true` is the backend saying "bring a
+   * template", not "text is fine here").
+   *
+   * What makes it a lie rather than merely a failure: MessageSenderService.send
+   * does NOT throw when the adapter rejects a send — it records the Message as
+   * FAILED, refunds the quota, logs a warning and RETURNS. So
+   * `POST /conversations/start` answers 2xx, this dialog toasts "Mesaj
+   * gönderildi" and drops the rep on a thread whose only message never left the
+   * building. SMS and email can fail that way too; WhatsApp is the one that
+   * does it every single time.
+   */
+  it('does not offer WhatsApp for a first message — the window is shut and this dialog has no template field', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderActions({ id: 'l1', phone: '+905551112233' });
+
+    await user.click(await readyMessageButton());
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('combobox'));
+    await screen.findByRole('listbox');
+
+    // Positive anchor: the list DID render its offerable channel.
+    expect(screen.getByRole('option', { name: /NetGSM/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /WhatsApp/ })).not.toBeInTheDocument();
+  });
+
   it('refuses to send without text — the backend rejects a textless, templateless start', async () => {
     const user = userEvent.setup({ delay: null });
     renderActions({ id: 'l1', phone: '+905551112233' });

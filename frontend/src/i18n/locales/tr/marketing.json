@@ -952,7 +952,7 @@
       "send": "Gönder",
       "sent": "Mesaj gönderildi",
       "failed": "Mesaj gönderilemedi",
-      "noChannels": "Konuşma başlatılabilecek bağlı kanal yok — SMS, WhatsApp veya e-posta bağla.",
+      "noChannels": "Konuşma başlatılabilecek bağlı kanal yok — SMS veya e-posta bağla.",
       "channelsFailed": "Kanallar yüklenemedi."
     }
   },
