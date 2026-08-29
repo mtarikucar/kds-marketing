@@ -52,6 +52,16 @@ vi.mock('../ChannelsSettingsPage', () => ({
 vi.mock('../settings/snippets', () => ({ default: () => <div>snippets-page</div> }));
 vi.mock('../AgentStudioPage', () => ({ default: () => <div>agents-page</div> }));
 vi.mock('../KnowledgeBasePage', () => ({ default: () => <div>knowledge-page</div> }));
+// The Kişiler half of the merged surface is a whole second page; every test in
+// THIS file is about the conversation half.
+vi.mock('../leads/LeadsPage', () => ({ default: () => <div>leads-surface</div> }));
+
+// Konuşmalar is gated on conversationAi now that `/leads` reaches this same
+// component, so these tests have to say which workspace they are. Entitled
+// here; the gate's other outcome is covered in MergedSurface.test.tsx.
+vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: (k?: string) => !k || k === 'conversationAi' }),
+}));
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -155,12 +165,17 @@ describe('InboxPage — composer draft isolation', () => {
 describe('InboxPage — config surfaces behind the gear menu (?tab=)', () => {
   beforeEach(setupApi);
 
-  it('shows the plain inbox with a single Inbox settings gear for a manager (no tab bar)', async () => {
+  it('shows the two surface tabs and a single Inbox settings gear for a manager', async () => {
     renderAt('/inbox');
-    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /inbox settings/i })).toBeInTheDocument();
-    // The real inbox body (mocked ConversationList) is what's mounted.
+    // The merged surface's strip is exactly two tabs. The four config surfaces
+    // stayed behind the gear — that is what the 2026-07 trim bought, and the
+    // Kişiler merge did not spend it back.
     expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((el) => el.textContent?.trim())).toEqual([
+      'Konuşmalar',
+      'Kişiler',
+    ]);
+    expect(screen.getByRole('button', { name: /inbox settings/i })).toBeInTheDocument();
   });
 
   it('opens a config surface from the gear menu', async () => {

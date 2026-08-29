@@ -569,7 +569,15 @@
       "confirmButton": "Enroll",
       "label": "Enroll in workflow"
     },
-    "emptyTitle": "No leads"
+    "emptyTitle": "No leads",
+    "queue": {
+      "label": "Work queue",
+      "waiting": "Waiting",
+      "waitingHint": "The customer wrote last and nobody has replied yet",
+      "unassigned": "Unassigned",
+      "all": "All",
+      "countFailed": "Count unavailable"
+    }
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -3175,6 +3183,12 @@
       "SEND": "Send message",
       "STRATEGY_ACTION": "Strategy action",
       "TARGET_CHANGE": "Targeting change"
+    }
+  },
+  "surface": {
+    "tab": {
+      "conversations": "Conversations",
+      "contacts": "Contacts"
     }
   }
 }

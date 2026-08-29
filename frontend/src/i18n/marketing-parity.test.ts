@@ -216,3 +216,58 @@ describe('marketing i18n — the click-to-dial affordance', () => {
     }
   });
 });
+
+describe('marketing i18n — the merged surface and its work queue', () => {
+  // These two words ARE the navigation of the merged surface, and the three
+  // chips below them are how anyone reaches the leads nobody has answered.
+  // Same trap as everywhere else in this file: `fallbackLng: 'en'` means a
+  // locale that simply lacks them neither throws nor shows a raw key — a
+  // ru/ar/uz operator is quietly served another language, and nothing at
+  // runtime notices (missingKeyHandler is DEV-only).
+  it('every offered locale names both tabs and all three work-queue chips', async () => {
+    const want = [
+      ...flat((tr as Json).surface as Json).map((k) => `surface.${k}`),
+      ...flat(((tr as Json).leads as Json).queue as Json).map((k) => `leads.queue.${k}`),
+    ];
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'surface.tab.conversations',
+        'surface.tab.contacts',
+        'leads.queue.waiting',
+        'leads.queue.unassigned',
+        'leads.queue.all',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // "Bekleyen" is the one chip whose meaning is not self-evident — it is not a
+  // lead status but "the customer wrote last and nobody replied". The hint is
+  // the only place that says so, and a count that cannot be fetched has to
+  // read as unknown rather than as zero, which is what countFailed is for.
+  it('every offered locale can explain Bekleyen and admit a missing count', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({
+        locale,
+        missing: ['leads.queue.waitingHint', 'leads.queue.countFailed'].filter((k) => !have.has(k)),
+      }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  it('uses the spec’s own words in Turkish', () => {
+    expect((tr as Json).surface).toMatchObject({
+      tab: { conversations: 'Konuşmalar', contacts: 'Kişiler' },
+    });
+    expect(((tr as Json).leads as Json).queue).toMatchObject({
+      waiting: 'Bekleyen',
+      unassigned: 'Atanmamış',
+      all: 'Hepsi',
+    });
+  });
+});

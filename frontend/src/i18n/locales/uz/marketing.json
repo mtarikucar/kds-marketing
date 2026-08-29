@@ -246,7 +246,15 @@
       "toolbar": "{{count}} ta lid tanlandi"
     },
     "emptyManager": "Hozircha lid yo'q. Qo'lda qo'shing yoki AI agentini kuting.",
-    "emptyUnassigned": "Biriktirilmagan lid yo'q — hammasi ishda."
+    "emptyUnassigned": "Biriktirilmagan lid yo'q — hammasi ishda.",
+    "queue": {
+      "label": "Ish navbati",
+      "waiting": "Javob kutmoqda",
+      "waitingHint": "Oxirgi marta mijoz yozgan va hali hech kim javob bermagan",
+      "unassigned": "Biriktirilmagan",
+      "all": "Hammasi",
+      "countFailed": "Son olinmadi"
+    }
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -1067,6 +1075,12 @@
       "close": "Yopish",
       "logged": "Qo‘ng‘iroq yozildi",
       "logFailed": "Qo‘ng‘iroqni yozib bo‘lmadi"
+    }
+  },
+  "surface": {
+    "tab": {
+      "conversations": "Suhbatlar",
+      "contacts": "Kontaktlar"
     }
   }
 }

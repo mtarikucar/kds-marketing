@@ -825,7 +825,15 @@
       "confirmButton": "Ekle",
       "label": "İş akışına ekle"
     },
-    "emptyTitle": "Lead listen boş"
+    "emptyTitle": "Lead listen boş",
+    "queue": {
+      "label": "İş kuyruğu",
+      "waiting": "Bekleyen",
+      "waitingHint": "Müşteri en son yazan taraf ve kimse yanıtlamadı",
+      "unassigned": "Atanmamış",
+      "all": "Hepsi",
+      "countFailed": "Sayı alınamadı"
+    }
   },
   "leadDetail": {
     "back": "Lead'lere dön",
@@ -4026,6 +4034,12 @@
     "none": {
       "title": "Planlanmış bir şey yok",
       "desc": "Bir görev, randevu ya da kampanya zamanlandığında burada görürsün."
+    }
+  },
+  "surface": {
+    "tab": {
+      "conversations": "Konuşmalar",
+      "contacts": "Kişiler"
     }
   }
 }

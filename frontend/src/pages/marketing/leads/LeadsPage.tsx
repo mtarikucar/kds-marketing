@@ -64,8 +64,16 @@ const LIMIT = 20;
  * Behavior (query keys, URL params, mutations, invalidations, pagination,
  * row navigation, bulk-assign) is preserved verbatim from the original
  * LeadsPage.tsx. Presentation is migrated to Console primitives.
+ *
+ * `embedded` renders it as the Kişiler tab of the merged surface: the host
+ * owns the one PageHeader, so this drops its own rather than stacking a second
+ * <h1>. The actions do NOT disappear with it — they move into a toolbar row,
+ * the arrangement ChannelsSettingsPage and SnippetsPage already use as
+ * embedded tabs of the same shell. They stay HERE rather than moving up into
+ * the host's header because Export CSV exports the current filters, and the
+ * filters live in this component.
  */
-export default function LeadsPage() {
+export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -284,27 +292,37 @@ export default function LeadsPage() {
       )
     : t('leads.empty', 'No leads found.');
 
+  const actions = (
+    <div className="flex items-center gap-2">
+      <Button variant="outline" size="md" onClick={() => exporting.mutate()} loading={exporting.isPending}>
+        <Download className="w-4 h-4" aria-hidden="true" />
+        {t('leads.export.button', { defaultValue: 'Export CSV' })}
+      </Button>
+      <Button asChild size="md">
+        <Link to="/leads/new">
+          <Plus className="w-4 h-4" aria-hidden="true" />
+          {t('leads.createButton')}
+        </Link>
+      </Button>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
-      {/* Page header */}
-      <PageHeader
-        title={t('leads.title')}
-        description={t('leads.subtitle')}
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="md" onClick={() => exporting.mutate()} loading={exporting.isPending}>
-              <Download className="w-4 h-4" aria-hidden="true" />
-              {t('leads.export.button', { defaultValue: 'Export CSV' })}
-            </Button>
-            <Button asChild size="md">
-              <Link to="/leads/new">
-                <Plus className="w-4 h-4" aria-hidden="true" />
-                {t('leads.createButton')}
-              </Link>
-            </Button>
-          </div>
-        }
-      />
+      {/* Page header — suppressed when this is the merged surface's Kişiler
+          tab, where the host already rendered one. The actions never go with
+          it; they move to the toolbar row below. */}
+      {!embedded && (
+        <PageHeader
+          title={t('leads.title')}
+          description={t('leads.subtitle')}
+          actions={actions}
+        />
+      )}
+
+      {/* Embedded (Kişiler tab): the header is the host's, so Export CSV and
+          Yeni Lead move into a toolbar row — the actions must never be lost. */}
+      {embedded && <div className="flex justify-end">{actions}</div>}
 
       {/* Filter bar */}
       <FilterBar

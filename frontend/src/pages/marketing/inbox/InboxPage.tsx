@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 import {
   PageHeader,
   Tabs,
+  TabsList,
+  TabsTrigger,
   TabsContent,
   Button,
   DropdownMenu,
@@ -16,6 +18,7 @@ import {
 import { Settings, ArrowLeft } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import { API_URL } from '../../../lib/env';
 import { RouteFallback } from '../../../components/RouteFallback';
 import { ConversationList } from './ConversationList';
@@ -24,13 +27,20 @@ import { LeadContextPane } from './LeadContextPane';
 
 // Lazy so a config tab's code only loads when opened — the inbox tab (the
 // default, real-time surface) must never pay for the config pages' bundles.
+// The contacts tab joins them for the same reason in reverse: /inbox must not
+// pay for the leads table, and /leads must not pay for it twice.
 const ChannelsSettingsPage = lazy(() => import('../ChannelsSettingsPage'));
 const SnippetsPage = lazy(() => import('../settings/snippets'));
 const AgentStudioPage = lazy(() => import('../AgentStudioPage'));
 const KnowledgeBasePage = lazy(() => import('../KnowledgeBasePage'));
+const LeadsPage = lazy(() => import('../leads/LeadsPage'));
 
-const TABS = ['inbox', 'channels', 'snippets', 'agents', 'knowledge'] as const;
+const TABS = ['inbox', 'contacts', 'channels', 'snippets', 'agents', 'knowledge'] as const;
 type InboxTab = (typeof TABS)[number];
+
+/** The two VISIBLE tabs; the rest are config surfaces behind the gear menu. */
+export type SurfaceTab = Extract<InboxTab, 'inbox' | 'contacts'>;
+const CONFIG_TABS: readonly InboxTab[] = ['channels', 'snippets', 'agents', 'knowledge'];
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
@@ -62,28 +72,59 @@ interface ConversationRow {
  * down on unmount / token change, and a 3 s timer reconnects if the stream
  * drops (matching EventSource's auto-reconnect).
  */
-export default function InboxPage() {
+export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: SurfaceTab } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const { accessToken, user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  const { has } = useEntitlements();
+
+  // `GET /conversations` and `GET /channels` are both
+  // @RequiresFeature('conversationAi'). navigation.ts gates `/inbox` on it and
+  // `/leads` on nothing — so now that both routes land HERE, an un-entitled
+  // workspace could reach a Konuşmalar tab whose only reachable state is an
+  // error. The gate moves WITH the item (navigation.ts's own rule, one level
+  // down): trigger and content together, and the gear menu with them, because
+  // the merge is what would have put it in front of them.
+  const canConverse = has('conversationAi');
 
   // ── URL-synced top tabs (?tab=) ────────────────────────────────────────────
-  // inbox (default) + the 4 conversation-domain config surfaces. The config
-  // tabs are manager-only: hidden from the bar AND deep links fall back to the
-  // inbox for reps. All inbox state/queries/SSE live in THIS component, so
-  // switching tabs never tears down the real-time stream or the open thread.
+  // Konuşmalar + Kişiler are the two visible tabs of ONE surface; `/inbox` and
+  // `/leads` render this same component and differ only in `defaultTab`. Both
+  // routes stay — they are in the frozen path set and in people's bookmarks.
+  // The 4 conversation-domain config surfaces stay behind the gear menu and
+  // are manager-only: hidden from the bar AND deep links fall back for reps.
+  // All inbox state/queries/SSE live in THIS component, so switching tabs
+  // never tears down the real-time stream or the open thread.
   const [params, setParams] = useSearchParams();
   const rawTab = params.get('tab');
   const requested: InboxTab = (TABS as readonly string[]).includes(rawTab ?? '')
     ? (rawTab as InboxTab)
-    : 'inbox';
-  const tab: InboxTab = isManager ? requested : 'inbox';
+    : defaultTab;
+  // Guard the CONTROLLED state, not just the render: if the trigger for the
+  // requested value has been gated away, Radix selects nothing and the page
+  // strands on a blank panel. Fall back to a tab that exists, however the
+  // state got here.
+  const tab: InboxTab =
+    CONFIG_TABS.includes(requested) && !(isManager && canConverse)
+      ? defaultTab
+      : requested;
+  const activeTab: InboxTab = tab === 'inbox' && !canConverse ? 'contacts' : tab;
   const setTab = (v: string) =>
     setParams((p) => {
       p.set('tab', v);
       return p;
     }, { replace: true });
+
+  // Someone filtering their contact list is not running a live inbox. The
+  // conversation poll and the SSE connection start when Konuşmalar is first
+  // opened and then stay up — latched, so going back to Kişiler does not tear
+  // down the stream or drop the open thread.
+  const [inboxOpened, setInboxOpened] = useState(activeTab === 'inbox');
+  useEffect(() => {
+    if (activeTab === 'inbox') setInboxOpened(true);
+  }, [activeTab]);
+  const conversationsLive = canConverse && (activeTab === 'inbox' || inboxOpened);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -105,6 +146,7 @@ export default function InboxPage() {
         .get('/conversations', { params: { status: statusFilter } })
         .then((r) => r.data),
     refetchInterval: 30_000,
+    enabled: conversationsLive,
   });
 
   const { data: thread } = useQuery({
@@ -128,7 +170,10 @@ export default function InboxPage() {
   // ── Live SSE stream ────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!accessToken) return;
+    // No token, no entitlement, or nobody has opened Konuşmalar yet: there is
+    // nothing for a stream to keep fresh, and on an un-entitled workspace the
+    // endpoint would only ever 403 in a reconnect loop.
+    if (!accessToken || !conversationsLive) return;
 
     const controller = new AbortController();
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -202,7 +247,7 @@ export default function InboxPage() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       controller.abort();
     };
-  }, [accessToken, queryClient]);
+  }, [accessToken, conversationsLive, queryClient]);
 
   // ── Side-effects ───────────────────────────────────────────────────────────
 
@@ -314,14 +359,26 @@ export default function InboxPage() {
 
   return (
     <div className="flex flex-col h-full gap-4">
+      {/* ONE header for the merged surface. Both halves used to render their
+          own PageHeader, and nesting them stacked two <h1>s. The title follows
+          the active tab so each route still reads the way it always did, and
+          the ACTIONS belong to the tab that owns them — the gear to Konuşmalar,
+          Export CSV + Yeni Lead to Kişiler (those two live inside the embedded
+          leads surface, which owns the filter state they act on; same
+          arrangement ChannelsSettingsPage and SnippetsPage already use as
+          embedded tabs here). */}
       <PageHeader
-        title={t('inbox.title')}
-        description={t('inbox.subtitle')}
+        title={activeTab === 'contacts' ? t('leads.title') : t('inbox.title')}
+        description={
+          activeTab === 'contacts' ? t('leads.subtitle') : t('inbox.subtitle')
+        }
         actions={
           // 2026-07 trim: the 4 one-time config surfaces no longer sit as
           // always-visible tabs on the daily messaging page — they live behind
           // ONE gear menu (deep links via ?tab= keep resolving unchanged).
-          isManager ? (
+          // Gated on conversationAi too: every one of them configures the
+          // conversation domain, and `/leads` never used to offer them.
+          isManager && canConverse ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -348,9 +405,27 @@ export default function InboxPage() {
         }
       />
 
-      <Tabs value={tab} onValueChange={setTab} className="flex-1 min-h-0 flex flex-col">
+      <Tabs value={activeTab} onValueChange={setTab} className="flex-1 min-h-0 flex flex-col">
+        {/* The merged surface: same data, different verb. Konuşmalar triages
+            what came in; Kişiler filters the whole contact list — including
+            the leads that have never had a conversation, which a
+            conversation-first single list would hide entirely. That is the
+            reason there are two tabs and not one merged feed. */}
+        {!CONFIG_TABS.includes(activeTab) && (
+          <TabsList className="shrink-0">
+            {canConverse && (
+              <TabsTrigger value="inbox">
+                {t('surface.tab.conversations', 'Konuşmalar')}
+              </TabsTrigger>
+            )}
+            <TabsTrigger value="contacts">
+              {t('surface.tab.contacts', 'Kişiler')}
+            </TabsTrigger>
+          </TabsList>
+        )}
+
         {/* On a config surface, one compact affordance leads back to the inbox. */}
-        {isManager && tab !== 'inbox' && (
+        {isManager && CONFIG_TABS.includes(activeTab) && (
           <div className="shrink-0">
             <Button variant="ghost" size="sm" onClick={() => setTab('inbox')}>
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -359,9 +434,14 @@ export default function InboxPage() {
           </div>
         )}
 
-        {/* Inbox — the pre-existing 3-pane layout, byte-for-byte. Its state,
-            queries and the SSE stream live in the page component above, so the
-            real-time behavior is identical whether or not the bar is shown. */}
+        {/* Konuşmalar — the pre-existing 3-pane layout, byte-for-byte. Its
+            state, queries and the SSE stream live in the page component above,
+            so the open thread survives a trip to Kişiler and back (Radix
+            unmounts the inactive panel; only state held ABOVE the tabs
+            survives). Trigger and content are gated TOGETHER: gating only the
+            trigger leaves a dead panel `setTab` can still reach, and gating
+            only the content leaves a trigger that blanks the page. */}
+        {canConverse && (
         <TabsContent
           value="inbox"
           className="flex-1 min-h-0 flex gap-0 sm:gap-4 mt-0"
@@ -424,6 +504,17 @@ export default function InboxPage() {
               onClose={() => setShowContext(false)}
             />
           )}
+        </TabsContent>
+        )}
+
+        {/* Kişiler — the leads list, unchanged: its own filters, table,
+            pagination, bulk actions and CSV export, plus the work-queue chips.
+            Embedded so the header above is the only one; it keeps its own
+            actions in a toolbar row, the arrangement the config tabs here
+            already use. Not entitlement-gated — /leads never was, and
+            marketing-leads.controller gates only its two smsOtp endpoints. */}
+        <TabsContent value="contacts" className="flex-1 min-h-0 overflow-y-auto mt-4">
+          <Lazy><LeadsPage embedded /></Lazy>
         </TabsContent>
 
         {/* Config tabs — manager-only, lazy, scroll independently of the shell. */}

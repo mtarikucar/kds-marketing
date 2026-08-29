@@ -21,8 +21,10 @@ const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvi
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
 const CommandCenterPage        = lazy(() => import('./pages/marketing/command/CommandCenterPage'));
 const MarketingDashboardPage   = lazy(() => import('./pages/marketing/MarketingDashboardPage'));
+// The merged surface (spec §1). Serves BOTH /inbox and /leads; the leads list
+// is lazy-loaded inside it as the Kişiler tab, so it is no longer imported
+// here.
 const InboxPage                = lazy(() => import('./pages/marketing/inbox/InboxPage'));
-const LeadsPage                = lazy(() => import('./pages/marketing/leads/LeadsPage'));
 const CreateLeadPage           = lazy(() => import('./pages/marketing/CreateLeadPage'));
 const LeadDetailPage           = lazy(() => import('./pages/marketing/leadDetail/LeadDetailPage'));
 const TasksPage                = lazy(() => import('./pages/marketing/tasks/TasksPage'));
@@ -195,8 +197,13 @@ export default function App() {
               who has to act on them. */}
           <Route path="/home"      element={<S><CommandCenterPage /></S>} />
           <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
+          {/* One surface, two tabs, two routes. Both paths are members of the
+              frozen 50-path set and both are in people's bookmarks, so neither
+              is retired; they render the SAME component and differ only in
+              which tab opens. ?tab= still reaches either half from either
+              path. */}
           <Route path="/inbox"     element={<S><InboxPage /></S>} />
-          <Route path="/leads"     element={<S><LeadsPage /></S>} />
+          <Route path="/leads"     element={<S><InboxPage defaultTab="contacts" /></S>} />
           <Route path="/leads/new" element={<S><CreateLeadPage /></S>} />
           <Route path="/leads/:id" element={<S><LeadDetailPage /></S>} />
           <Route path="/leads/:id/edit" element={<S><CreateLeadPage /></S>} />
