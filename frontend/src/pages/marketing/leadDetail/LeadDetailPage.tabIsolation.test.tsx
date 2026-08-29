@@ -62,6 +62,17 @@ vi.mock('../../../features/marketing/hooks/useBreadcrumbLabel', () => ({
 vi.mock('../../../features/marketing/components', () => ({
   LeadStatusBadge: () => null,
   AssignCell: () => null,
+  // The header's Ara mounts this; the fixture lead has no phone so it is not
+  // rendered today, but leaving it out of the mock means `undefined` and a
+  // React throw the moment someone adds a phone to LEAD.
+  ClickToDialButton: () => <div data-testid="click-to-dial" />,
+}));
+
+// Without this the header's entitlement read reaches real axios. It resolves
+// to "not entitled" either way here — nothing in this file touches Mesaj — but
+// a test should not be making network calls to decide that.
+vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: (k?: string) => k === 'conversationAi' }),
 }));
 vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
