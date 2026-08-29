@@ -359,3 +359,49 @@ describe('PersonPane — a note carries its date, and the panel carries its coun
     expect(within(note).getByTestId('person-pane-note-at-n1')).not.toBeEmptyDOMElement();
   });
 });
+
+/**
+ * The thread picker exists because selecting a PERSON no longer selects a
+ * channel. Labelling it by `channel.type` alone works right up until the two
+ * threads are on the same channel — and then it draws two identical `SMS`
+ * buttons with nothing whatsoever to choose between them, which is the failure
+ * the picker was added to prevent, one level down: the rep picks one at random
+ * and answers the wrong thread.
+ */
+describe('PersonPane — two threads on one channel are still two threads', () => {
+  it('tells same-channel threads apart by when they were last spoken on', async () => {
+    listConversations.mockResolvedValue([
+      thread({ id: 'c-new', channel: { type: 'SMS' }, lastMessageAt: '2026-08-20T10:00:00Z' }),
+      thread({ id: 'c-old', channel: { type: 'SMS' }, lastMessageAt: '2026-06-05T10:00:00Z' }),
+    ]);
+
+    renderPane();
+
+    const picker = await screen.findByRole('group', { name: 'Konuşma' });
+    const [newer, older] = within(picker).getAllByRole('button');
+    // Both still say what channel they are.
+    expect(newer).toHaveTextContent('SMS');
+    expect(older).toHaveTextContent('SMS');
+    // And they are no longer the same button twice.
+    expect(newer.textContent).not.toEqual(older.textContent);
+  });
+
+  it('marks a closed thread, so nobody replies into one by accident', async () => {
+    listConversations.mockResolvedValue([
+      thread({ id: 'c-open', channel: { type: 'SMS' }, lastMessageAt: '2026-08-20T10:00:00Z' }),
+      thread({
+        id: 'c-done',
+        status: 'CLOSED',
+        channel: { type: 'SMS' },
+        lastMessageAt: '2026-06-05T10:00:00Z',
+      }),
+    ]);
+
+    renderPane();
+
+    const picker = await screen.findByRole('group', { name: 'Konuşma' });
+    const [, closed] = within(picker).getAllByRole('button');
+    expect(closed).toHaveTextContent('Kapalı');
+    expect(within(picker).getAllByRole('button')[0]).not.toHaveTextContent('Kapalı');
+  });
+});

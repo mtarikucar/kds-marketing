@@ -302,6 +302,20 @@ export function PersonPane({ person, className }: PersonPaneProps) {
               onClick={() => setPickedThreadId(c.id)}
             >
               {channelOf(c)}
+              {/* The channel alone is not an identity. Two SMS threads with one
+                  person render as the same button twice, and the picker exists
+                  precisely so a rep does not answer the wrong thread — so the
+                  two things that actually differ ride along. `fmtSlot` is the
+                  stream's own formatter: compact, and locale from i18next
+                  rather than the operator's OS. */}
+              {c.lastMessageAt && (
+                <span className="text-[10px] opacity-70">{fmtSlot(c.lastMessageAt)}</span>
+              )}
+              {c.status === 'CLOSED' && (
+                <Badge tone="neutral" size="sm">
+                  {t('inbox.closed', 'Kapalı')}
+                </Badge>
+              )}
               {c.unreadCount > 0 && (
                 <Badge tone="primary" size="sm">
                   {c.unreadCount}
