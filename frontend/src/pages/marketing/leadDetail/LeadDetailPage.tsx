@@ -321,8 +321,26 @@ export default function LeadDetailPage() {
             </div>
             {/* Ara + Mesaj (spec §3). Both reuse paths that already existed:
                 ClickToDialButton with this lead's id, and POST
-                /conversations/start — which had no frontend caller until now. */}
-            <LeadHeaderActions lead={lead} onOpenConversations={() => setTab('conversations')} />
+                /conversations/start — which had no frontend caller until now.
+
+                `key` is load-bearing, not cosmetic. This page early-returns on
+                `isLoading`, and React Query's isLoading is `isPending &&
+                isFetching` — FALSE when the next lead is already CACHED. So
+                /leads/A → cached /leads/B re-renders this subtree instead of
+                unmounting it, and every useState seeded from a prop keeps the
+                previous lead's value: ClickToDialButton's number
+                (`useState(defaultPhone || '')`, which never re-runs) and the
+                start-conversation draft. Pressing Ara then dialled lead A's
+                number carrying lead B's id — wrong person rung, activity
+                mirrored onto the wrong lead. Same bug class WalletPanel,
+                TasksTab and ActivityTimelineTab each guard against; keying is
+                the right answer HERE because every piece of this component's
+                state is per-lead, so there is nothing worth preserving. */}
+            <LeadHeaderActions
+              key={lead.id}
+              lead={lead}
+              onOpenConversations={() => setTab('conversations')}
+            />
             {has('fax') && (
               <Button variant="outline" size="sm" onClick={() => setFaxOpen(true)}>
                 <Printer className="h-4 w-4" /> {t('fax.action', 'Send fax')}
