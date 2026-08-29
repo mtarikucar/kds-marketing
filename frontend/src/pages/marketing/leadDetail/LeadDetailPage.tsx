@@ -390,7 +390,9 @@ export default function LeadDetailPage() {
         <div className="lg:col-span-2">
           <Tabs defaultValue="activities">
             <TabsList>
-              <TabsTrigger value="activities">Activities</TabsTrigger>
+              <TabsTrigger value="activities">
+                {t('leadDetail.tabs.activities', 'Etkinlik')}
+              </TabsTrigger>
               {/* The lead and the conversation about the lead used to live on
                   two separate screens; these two tabs put the whole person on
                   one record. Both fetch their own data (neither rides on the
@@ -400,8 +402,12 @@ export default function LeadDetailPage() {
                 {t('leadDetail.tabs.conversations', 'Konuşmalar')}
               </TabsTrigger>
               <TabsTrigger value="sales">{t('leadDetail.tabs.sales', 'Satış')}</TabsTrigger>
-              <TabsTrigger value="offers">Offers ({lead.offers?.length || 0})</TabsTrigger>
-              <TabsTrigger value="tasks">Tasks ({lead.tasks?.length || 0})</TabsTrigger>
+              <TabsTrigger value="offers">
+                {t('leadDetail.tabs.offers', 'Teklifler')} ({lead.offers?.length || 0})
+              </TabsTrigger>
+              <TabsTrigger value="tasks">
+                {t('leadDetail.tabs.tasks', 'Görevler')} ({lead.tasks?.length || 0})
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="activities">

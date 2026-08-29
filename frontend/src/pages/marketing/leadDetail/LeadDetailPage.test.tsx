@@ -40,6 +40,8 @@ vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
 vi.mock('./CompanyPanel', () => ({ CompanyPanel: () => null }));
 vi.mock('./ActivityTimelineTab', () => ({ default: () => null }));
+vi.mock('./ConversationsTab', () => ({ default: () => null }));
+vi.mock('./SalesTab', () => ({ default: () => null }));
 vi.mock('./OffersTab', () => ({ default: () => null }));
 vi.mock('./TasksTab', () => ({ default: () => null }));
 vi.mock('./ConvertDialog', () => ({ default: () => null }));
