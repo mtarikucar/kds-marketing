@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
@@ -422,36 +422,94 @@ describe('The person surface — config surfaces behind the gear (?tab=)', () =>
 });
 
 /**
- * The leads TABLE, as a second view of the same people rather than a second
- * object. It is where bulk assign, bulk delete, bulk enrol and CSV export live,
- * and they exist nowhere else in the product — see InboxPage's docstring, where
- * this deviation from "one list, no tabs" is recorded.
+ * The leads TABLE. It is where bulk assign, bulk delete, bulk enrol and CSV
+ * export live, and they exist nowhere else in the product — see InboxPage's
+ * docstring, where this deviation from "one list, no tabs" is recorded.
+ *
+ * Its ENTRY POINT is behind the gear. Rendered as a full-weight outline button
+ * in the header, shown to reps, at the same visual weight as the primary
+ * chrome, it read as a peer VIEW — which is the second list the owner objected
+ * to, wearing a different word. Its whole justification is manager tooling
+ * (`LeadsPage` gates the checkbox column and the bulk toolbar on `isManager`),
+ * so it sits where the other manager-only surfaces already sit.
  */
-describe('The person surface — the table is a view, not the default', () => {
+describe('The person surface — the table is behind the gear, not beside the title', () => {
   it('opens the three columns, not the table, on both routes', async () => {
     renderAt('/leads');
     expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
     expect(screen.queryByTestId('leads-table')).not.toBeInTheDocument();
   });
 
-  it('reaches the table on request, embedded so the header stays single', async () => {
+  it('is not page chrome — nothing in the header competes with the surface', async () => {
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+
+    // The gear is the only action. A button labelled Tablo standing beside the
+    // title is the framing this moved away from.
+    expect(screen.queryByRole('button', { name: /Tablo/ })).not.toBeInTheDocument();
+  });
+
+  it('reaches the table from the gear, embedded so the header stays single', async () => {
     const user = userEvent.setup();
     renderAt('/leads');
     await screen.findByTestId('person-surface');
 
-    await user.click(screen.getByRole('button', { name: /Tablo/ }));
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /Tablo/ }));
 
     expect(await screen.findByTestId('leads-table')).toHaveTextContent('leads-embedded:true');
     expect(screen.queryByTestId('person-surface')).not.toBeInTheDocument();
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
   });
 
-  it('honours ?view=table as a deep link, and comes back', async () => {
+  it('honours ?view=table as a deep link, and the gear brings you back', async () => {
     const user = userEvent.setup();
     renderAt('/leads?view=table');
 
     expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Liste/ }));
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /Liste/ }));
     expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+  });
+
+  /**
+   * A rep is offered nothing — but their deep link still works, and that is
+   * deliberate rather than an oversight. Unlike `?tab=`, which opens surfaces
+   * that CONFIGURE the workspace and whose render is therefore guarded, the
+   * table is the same people a rep already sees in the left column; the tools
+   * that are manager-only are gated inside `LeadsPage` itself. Bouncing a
+   * pasted link would take away a view without taking away a permission.
+   */
+  it('offers a rep no way in, and still opens their pasted link', async () => {
+    auth.role = 'REP';
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+    expect(screen.queryByRole('button', { name: /inbox settings/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Tablo/ })).not.toBeInTheDocument();
+
+    cleanup();
+    renderAt('/leads?view=table');
+    expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
+  });
+
+  /**
+   * The gear exists for the table alone when the four config surfaces are not
+   * available. `?tab=` is gated on `conversationAi` — every one of those pages
+   * configures that domain — and the table is not: `/leads` carries no
+   * entitlement at all. Folding the table into the same condition would have
+   * deleted a manager's bulk assign for a workspace that never bought the
+   * conversation add-on.
+   */
+  it('still gives a manager the table when the conversation add-on is missing', async () => {
+    const user = userEvent.setup();
+    FEATURES = new Set();
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    expect(screen.queryByRole('menuitem', { name: 'AI Agents' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('menuitem', { name: /Tablo/ }));
+
+    expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
   });
 });

@@ -115,11 +115,30 @@ Ama eski Kişiler sekmesindeki lead **tablosu** silinmedi. Toplu atama, toplu
 silme, toplu iş akışına alma ve CSV dışa aktarım yalnızca orada var; yeni
 listeye yeniden yazmak bu görevin kapsamı dışındaydı ve bir yöneticinin toplu
 atamasını yerleşim uğruna sessizce kaldırmak daha kötü bir cevap olurdu.
-Tablo `?view=table` ile açılıyor, başlıktaki tek düğmeyle gidilip geliniyor.
+Tablo `?view=table` ile açılıyor.
+
+**Nereden giriliyor:** dişli menüsünden, `?tab=` yüzeylerinin yanında, ve
+**yalnızca yöneticiye**. İlk sürümde başlıkta, birincil kabuğun ağırlığında,
+temsilcilere de görünen bir `Tablo`/`Liste` düğmesiydi — o çerçeveleme tabloyu
+yüzeyin **eş görünümü** yapıyordu, yani sahibin itiraz ettiği ikinci listenin
+başka bir adı. Varlık sebebi baştan beri yönetici aracı (`LeadsPage` onay kutusu
+sütununu ve toplu araç çubuğunu `isManager` ile kapatıyor), o yüzden diğer
+yönetici yüzeylerinin zaten durduğu yere taşındı.
+
+İki parametre **bilerek farklı** korunuyor. `?tab=` workspace'i **yapılandıran**
+sayfaları açar, bu yüzden temsilcinin derin bağlantısı yüzeye düşürülür.
+`?view=table` ise temsilcinin sol sütunda zaten gördüğü aynı kişileri gösterir
+ve yönetici araçları `LeadsPage`'in kendi içinde kapalıdır — bu yüzden bağlantı
+kime verilirse ona çalışmaya devam eder, yalnızca **giriş noktası** yöneticiye
+özeldir. Tablo maddesi ayrıca config maddeleri gibi `conversationAi`'ye bağlı
+değildir: `/leads` hiçbir yetkilendirme taşımaz, ve aynı koşula katlamak
+konuşma eklentisini hiç almamış her workspace'te yöneticinin toplu atamasını
+silerdi.
 
 Bu bir **görünüm**, ikinci bir nesne değil: aynı kişiler, aynı kuyruklar, hiçbir
 varsayılan oraya götürmüyor. Sahip "tablo da gitsin" derse silinecek yer tek bir
-dal — `InboxPage`'in `tableView` kolu ve `LeadsPage` importu.
+dal — `InboxPage`'in `tableView` kolu, dişlideki tek madde ve `LeadsPage`
+importu.
 
 ## Kapsam dışı
 

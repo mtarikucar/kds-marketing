@@ -83,6 +83,23 @@ function Lazy({ children }: { children: ReactNode }) {
  * list, and deleting a manager's bulk-assign to satisfy a layout would be a
  * worse answer than a second VIEW of the same set of people. It is a view, not a
  * second object: same people, same queues, no default that lands anyone there.
+ *
+ * Its ENTRY POINT is the gear, beside the four config surfaces, and not a
+ * button in the header. As page chrome — full-weight, always visible, offered
+ * to reps — it read as a peer VIEW of the surface, which is the second list the
+ * owner objected to under another name. Its whole justification is manager
+ * tooling (`LeadsPage` gates the checkbox column and the bulk toolbar on
+ * `isManager`), so it belongs where the other manager-only surfaces already are.
+ *
+ * The two parameters are guarded DIFFERENTLY, on purpose. `?tab=` opens pages
+ * that CONFIGURE the workspace, so a rep's deep link is bounced to the surface.
+ * `?view=table` shows the same people a rep already sees in the left column,
+ * with the manager tools gated inside `LeadsPage` itself — so the link keeps
+ * working for anyone who is handed one, and only the affordance is manager-only.
+ * And the table item does NOT ride on `conversationAi` the way the config items
+ * do: `/leads` carries no entitlement, and folding it into the same condition
+ * would delete a manager's bulk assign for every workspace that never bought
+ * the conversation add-on.
  */
 export default function InboxPage() {
   const { t } = useTranslation('marketing');
@@ -99,6 +116,10 @@ export default function InboxPage() {
   // /billing/summary is in flight, which would blink the menu (and bounce a
   // `?tab=` deep link off its own page) for one render.
   const offersConfig = isManager && (canConverse || entitlementsLoading);
+  // The gear itself. The TABLE item alone earns it: that one is manager-only
+  // but not conversation-gated, so a manager on a workspace without the add-on
+  // must still have a way in. See the file docstring.
+  const offersGear = isManager;
 
   const [params, setParams] = useSearchParams();
   const requestedTab = params.get('tab');
@@ -279,50 +300,48 @@ export default function InboxPage() {
         title={t('surface.title', 'Kişiler')}
         description={t('surface.subtitle', 'Herkes tek listede — konuşanı da, sessizi de.')}
         actions={
-          <div className="flex items-center gap-2">
-            {/* The leads table, as a VIEW of the same people. See the file
-                docstring: it is where bulk assign, bulk delete, bulk enrol and
-                CSV export live, and they exist nowhere else. */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setView(tableView ? 'list' : 'table')}
-            >
-              {tableView ? (
-                <List className="h-4 w-4" aria-hidden="true" />
-              ) : (
-                <Table2 className="h-4 w-4" aria-hidden="true" />
-              )}
-              {tableView
-                ? t('surface.view.list', 'Liste')
-                : t('surface.view.table', 'Tablo')}
-            </Button>
+          offersGear ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Settings className="h-4 w-4" aria-hidden="true" />
+                  {t('inbox.settings', 'Inbox settings')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {/* The leads table, as a VIEW of the same people. See the file
+                    docstring: it is where bulk assign, bulk delete, bulk enrol
+                    and CSV export live, and they exist nowhere else. */}
+                <DropdownMenuItem onClick={() => setView(tableView ? 'list' : 'table')}>
+                  {tableView ? (
+                    <List className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Table2 className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {tableView
+                    ? t('surface.view.list', 'Liste')
+                    : t('surface.view.table', 'Tablo')}
+                </DropdownMenuItem>
 
-            {offersConfig && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    <Settings className="h-4 w-4" aria-hidden="true" />
-                    {t('inbox.settings', 'Inbox settings')}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => setTab('channels')}>
-                    {t('inbox.tab.channels', 'Channels')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setTab('snippets')}>
-                    {t('inbox.tab.snippets', 'Canned Responses')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setTab('agents')}>
-                    {t('inbox.tab.agents', 'AI Agents')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setTab('knowledge')}>
-                    {t('inbox.tab.knowledge', 'Knowledge')}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
+                {offersConfig && (
+                  <>
+                    <DropdownMenuItem onClick={() => setTab('channels')}>
+                      {t('inbox.tab.channels', 'Channels')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setTab('snippets')}>
+                      {t('inbox.tab.snippets', 'Canned Responses')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setTab('agents')}>
+                      {t('inbox.tab.agents', 'AI Agents')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setTab('knowledge')}>
+                      {t('inbox.tab.knowledge', 'Knowledge')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null
         }
       />
 
