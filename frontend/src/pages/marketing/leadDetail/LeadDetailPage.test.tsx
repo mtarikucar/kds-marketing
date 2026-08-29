@@ -30,6 +30,12 @@ vi.mock('../../../features/marketing/hooks/useBreadcrumbLabel', () => ({
   useBreadcrumbLabel: vi.fn(),
 }));
 
+// Mesaj is gated on conversationAi (and fax on `fax`); this workspace has the
+// former and not the latter.
+vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: (k?: string) => k === 'conversationAi' }),
+}));
+
 // The side panels/tabs fire their own queries and are irrelevant to the
 // header-level delete flow under test — stub them out.
 vi.mock('../../../features/marketing/components', () => ({

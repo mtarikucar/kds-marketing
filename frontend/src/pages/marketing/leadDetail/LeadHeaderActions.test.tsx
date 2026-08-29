@@ -79,11 +79,23 @@ async function readyMessageButton() {
   return btn;
 }
 
+/** Entitlements come from the same `/billing/summary` read the rest of the app
+ *  uses (useEntitlements shares its query key), so the mock dispatches on URL
+ *  rather than answering every GET with channels. */
+let entitled = true;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  entitled = true;
   listConversations.mockResolvedValue([]);
   startConversation.mockResolvedValue({ conversationId: 'c-new' } as never);
-  apiGet.mockResolvedValue({ data: CHANNELS } as never);
+  apiGet.mockImplementation((url: string) =>
+    Promise.resolve(
+      url === '/billing/summary'
+        ? { data: { entitlements: { features: { conversationAi: entitled } } } }
+        : { data: CHANNELS },
+    ),
+  );
 });
 
 describe('LeadHeaderActions — Ara', () => {
@@ -130,7 +142,7 @@ describe('LeadHeaderActions — Ara', () => {
 
 describe('LeadHeaderActions — Mesaj', () => {
   it('opens the lead’s existing threads rather than starting a new one', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     listConversations.mockResolvedValue([thread('c1')]);
     const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
 
@@ -143,7 +155,7 @@ describe('LeadHeaderActions — Mesaj', () => {
   });
 
   it('opens the start flow when there is no thread yet, and posts to the existing start endpoint', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     listConversations.mockResolvedValue([]);
     const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
 
@@ -164,7 +176,7 @@ describe('LeadHeaderActions — Mesaj', () => {
 
     await user.type(
       within(dialog).getByLabelText(/İlk mesaj/),
-      'Merhaba, teklifi ilettim.',
+      'Merhaba',
     );
     await user.click(within(dialog).getByRole('button', { name: 'Gönder' }));
 
@@ -172,7 +184,7 @@ describe('LeadHeaderActions — Mesaj', () => {
       expect(startConversation).toHaveBeenCalledWith({
         leadId: 'l1',
         channelId: 'ch-sms',
-        text: 'Merhaba, teklifi ilettim.',
+        text: 'Merhaba',
       }),
     );
     // Once the thread exists, land the user on it.
@@ -180,7 +192,7 @@ describe('LeadHeaderActions — Mesaj', () => {
   });
 
   it('refuses to send without text — the backend rejects a textless, templateless start', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderActions({ id: 'l1', phone: '+905551112233' });
 
     await user.click(await readyMessageButton());
@@ -195,7 +207,7 @@ describe('LeadHeaderActions — Mesaj', () => {
   });
 
   it('surfaces the backend’s refusal instead of pretending the message went out', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     startConversation.mockRejectedValue({
       response: { data: { message: 'This lead opted out of SMS messages, so a conversation cannot be started.' } },
     });
@@ -212,5 +224,20 @@ describe('LeadHeaderActions — Mesaj', () => {
     await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringContaining('opted out')));
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(onOpenConversations).not.toHaveBeenCalled();
+  });
+});
+
+describe('LeadHeaderActions — the conversationAi gate', () => {
+  it('does not offer Mesaj at all to a workspace without the feature', async () => {
+    entitled = false;
+    renderActions({ id: 'l1', phone: '+905551112233' });
+
+    // Positive anchor: Ara is up, so the component has rendered.
+    await screen.findByTestId('click-to-dial');
+    expect(screen.queryByRole('button', { name: 'Mesaj' })).not.toBeInTheDocument();
+    // …and it did not go asking for threads it is not allowed to read. Both
+    // halves of Mesaj sit behind @RequiresFeature('conversationAi'), so the
+    // query would 403 as reliably as the button would.
+    expect(listConversations).not.toHaveBeenCalled();
   });
 });

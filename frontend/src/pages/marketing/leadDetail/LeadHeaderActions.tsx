@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/Select';
 import { ClickToDialButton } from '../../../features/marketing/components';
+import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
   listConversations,
@@ -74,6 +75,14 @@ const errMsg = (e: unknown, fallback: string) =>
 export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHeaderActionsProps) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
+  const { has } = useEntitlements();
+  // Both halves of Mesaj — `GET /conversations` and `POST /conversations/start`
+  // — sit behind @RequiresFeature('conversationAi'). Without it the button
+  // could only ever 403, which is the same "fails when clicked" that keeps Ara
+  // off a lead with no number. (useEntitlements reuses the billing-summary
+  // query the page already holds, so this costs no request, and it fails
+  // CLOSED while that loads — same as the nav.)
+  const canMessage = has('conversationAi');
   const [startOpen, setStartOpen] = useState(false);
   const [channelId, setChannelId] = useState('');
   const [text, setText] = useState('');
@@ -89,6 +98,7 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
   const threads = useQuery<ConversationSummary[]>({
     queryKey: ['marketing', 'conversations', 'lead', lead.id],
     queryFn: () => listConversations({ leadId: lead.id }),
+    enabled: canMessage,
   });
 
   const channels = useQuery<ChannelRow[]>({
@@ -132,6 +142,7 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
     <>
       {callable && <ClickToDialButton leadId={lead.id} defaultPhone={phone} />}
 
+      {canMessage && (
       <Button
         variant="outline"
         size="sm"
@@ -143,6 +154,7 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
       >
         <MessageSquare className="h-4 w-4" /> {t('leadDetail.actions.message', 'Mesaj')}
       </Button>
+      )}
 
       <Dialog open={startOpen} onOpenChange={setStartOpen}>
         <DialogContent>
