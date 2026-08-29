@@ -30,10 +30,14 @@ vi.mock('../../../features/marketing/hooks/useBreadcrumbLabel', () => ({
   useBreadcrumbLabel: vi.fn(),
 }));
 
-// Mesaj is gated on conversationAi (and fax on `fax`); this workspace has the
-// former and not the latter.
+// Mesaj AND the Konuşmalar tab are gated on conversationAi (fax on `fax`,
+// Ara on `telephony`). Mutable so the same page can be rendered for an
+// entitled and an un-entitled workspace — the gate's two outcomes are
+// different renders, not different files. Read at call time, never inside the
+// hoisted factory, so there is no TDZ.
+let FEATURES = new Set<string>();
 vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
-  useEntitlements: () => ({ has: (k?: string) => k === 'conversationAi' }),
+  useEntitlements: () => ({ has: (k?: string) => !k || FEATURES.has(k) }),
 }));
 
 // The side panels/tabs fire their own queries and are irrelevant to the
@@ -57,7 +61,11 @@ vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
 vi.mock('./CompanyPanel', () => ({ CompanyPanel: () => null }));
 vi.mock('./ActivityTimelineTab', () => ({ default: () => null }));
-vi.mock('./ConversationsTab', () => ({ default: () => null }));
+// Rendered (not null) so the gated CONTENT is an assertable element, not an
+// absence that is trivially true.
+vi.mock('./ConversationsTab', () => ({
+  default: () => <div data-testid="conversations-panel" />,
+}));
 vi.mock('./SalesTab', () => ({ default: () => null }));
 vi.mock('./OffersTab', () => ({ default: () => null }));
 vi.mock('./TasksTab', () => ({ default: () => null }));
@@ -86,19 +94,28 @@ const LEAD = {
   createdAt: '2026-06-01T00:00:00Z',
 };
 
+const tree = (qc: QueryClient) => (
+  <QueryClientProvider client={qc}>
+    <MemoryRouter initialEntries={['/leads/l1']}>
+      <Routes>
+        <Route path="/leads" element={<div data-testid="leads-list" />} />
+        <Route path="/leads/:id" element={<LeadDetailPage />} />
+      </Routes>
+    </MemoryRouter>
+  </QueryClientProvider>
+);
+
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/leads/l1']}>
-        <Routes>
-          <Route path="/leads" element={<div data-testid="leads-list" />} />
-          <Route path="/leads/:id" element={<LeadDetailPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+  const r = render(tree(qc));
+  return { ...r, rerenderPage: () => r.rerender(tree(qc)) };
 }
+
+beforeEach(() => {
+  // Default: a fully-entitled workspace, so an individual test only has to say
+  // what it takes AWAY.
+  FEATURES = new Set(['conversationAi', 'telephony']);
+});
 
 // Deleting a lead is destructive and must be gated by the design-system
 // ConfirmDialog (not window.confirm), firing only on the explicit confirm.
@@ -157,7 +174,7 @@ describe('LeadDetailPage — the tab strip', () => {
     listConversations.mockResolvedValue([]);
   });
 
-  it('offers exactly the five lead tabs, in the spec’s order', async () => {
+  it('offers exactly the five lead tabs, in the spec’s order, for an entitled workspace', async () => {
     renderPage();
     // Positive anchor first: the page is SETTLED before any list is measured.
     // `getAllByRole('tab')` against a still-loading page returns [] and would
@@ -166,6 +183,61 @@ describe('LeadDetailPage — the tab strip', () => {
 
     const tabs = screen.getAllByRole('tab').map((el) => el.textContent?.trim());
     expect(tabs).toEqual(['Etkinlik', 'Konuşmalar', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
+  });
+
+  // The other half of the same rule. `GET /conversations` is behind
+  // @RequiresFeature('conversationAi'), so for an un-entitled workspace this
+  // tab's ONLY reachable state is "Konuşmalar yüklenemedi." — navigation.ts's
+  // own words: the gate moves WITH the item, and a tab that lands on a page you
+  // cannot open is worse than one that lands on the first page you can.
+  //
+  // Satış deliberately stays: marketing-opportunities.controller.ts carries no
+  // RequiresFeature at all and /opportunities is permission-gated on
+  // leads.read, so the argument does not transfer to it.
+  it('drops Konuşmalar entirely for a workspace without conversationAi', async () => {
+    FEATURES = new Set(['telephony']);
+    renderPage();
+    // Anchor on a tab that survives the gate, so the count below is measured
+    // against a rendered strip rather than an empty one.
+    await screen.findByRole('tab', { name: 'Satış' });
+
+    const tabs = screen.getAllByRole('tab').map((el) => el.textContent?.trim());
+    expect(tabs).toEqual(['Etkinlik', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
+    // Trigger AND content: a gate on the trigger alone leaves a reachable dead
+    // panel behind `setTab`, and the panel is what would 403.
+    expect(screen.queryByTestId('conversations-panel')).not.toBeInTheDocument();
+  });
+
+  // Guarding the CONTROLLED STATE, not just the render. `tab` is page state
+  // that `onOpenConversations` (and any future deep link) can set to
+  // 'conversations'; if the trigger for that value no longer exists, Radix
+  // selects nothing and the page strands on a blank panel. Simulated by
+  // selecting the tab while entitled and then taking the entitlement away —
+  // the same end state a deep link into an un-entitled workspace produces.
+  it('falls back to Etkinlik rather than stranding on a tab that no longer exists', async () => {
+    const user = userEvent.setup();
+    // A thread exists, so Mesaj SELECTS the tab instead of opening the start
+    // dialog — that selection is the state this test then invalidates.
+    listConversations.mockResolvedValue([{ id: 'c1', status: 'OPEN', aiPaused: false, unreadCount: 0 }]);
+    const { rerenderPage } = renderPage();
+
+    const message = await screen.findByRole('button', { name: /Mesaj/ });
+    await waitFor(() => expect(message).toBeEnabled());
+    await user.click(message);
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Konuşmalar' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+
+    FEATURES = new Set(['telephony']);
+    rerenderPage();
+
+    await waitFor(() =>
+      expect(screen.queryByRole('tab', { name: 'Konuşmalar' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('tab', { name: 'Etkinlik' })).toHaveAttribute('aria-selected', 'true');
   });
 });
 

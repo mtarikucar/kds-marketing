@@ -87,6 +87,22 @@ export default function LeadDetailPage() {
   // forward — there is no per-thread URL in this app, so "open the
   // conversation" is "show me this lead's threads".
   const [tab, setTab] = useState('activities');
+  // `GET /conversations` is behind @RequiresFeature('conversationAi'), so for
+  // an un-entitled workspace this tab's ONLY reachable state is "Konuşmalar
+  // yüklenemedi." — navigation.ts's rule, applied one level down: the gate
+  // moves WITH the item, and a tab that lands on a page you cannot open is
+  // worse than one that lands on the first page you can.
+  //
+  // Satış is deliberately NOT gated alongside it:
+  // marketing-opportunities.controller.ts carries no RequiresFeature and
+  // /opportunities is permission-gated on leads.read, not entitlement-gated.
+  const canConverse = has('conversationAi');
+  // The controlled state is guarded too, not just the render. `tab` is state
+  // that Mesaj — and any future deep link — can set to 'conversations'; if the
+  // trigger for that value has been gated away, Radix would select nothing and
+  // strand the page on a blank panel. Falling back keeps the page on a tab that
+  // exists no matter how the state got there.
+  const activeTab = tab === 'conversations' && !canConverse ? 'activities' : tab;
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
@@ -415,7 +431,7 @@ export default function LeadDetailPage() {
 
         {/* Right: Tabs */}
         <div className="lg:col-span-2">
-          <Tabs value={tab} onValueChange={setTab}>
+          <Tabs value={activeTab} onValueChange={setTab}>
             <TabsList>
               <TabsTrigger value="activities">
                 {t('leadDetail.tabs.activities', 'Etkinlik')}
@@ -425,9 +441,11 @@ export default function LeadDetailPage() {
                   one record. Both fetch their own data (neither rides on the
                   lead payload), so neither can show a count in the tab strip
                   without a second query firing before the tab is ever opened. */}
-              <TabsTrigger value="conversations">
-                {t('leadDetail.tabs.conversations', 'Konuşmalar')}
-              </TabsTrigger>
+              {canConverse && (
+                <TabsTrigger value="conversations">
+                  {t('leadDetail.tabs.conversations', 'Konuşmalar')}
+                </TabsTrigger>
+              )}
               <TabsTrigger value="sales">{t('leadDetail.tabs.sales', 'Satış')}</TabsTrigger>
               <TabsTrigger value="offers">
                 {t('leadDetail.tabs.offers', 'Teklifler')} ({lead.offers?.length || 0})
@@ -446,9 +464,14 @@ export default function LeadDetailPage() {
               />
             </TabsContent>
 
-            <TabsContent value="conversations">
-              <ConversationsTab leadId={lead.id} fmtDate={fmtDate} />
-            </TabsContent>
+            {/* Trigger and content are gated TOGETHER: gating only the trigger
+                leaves a dead panel that `setTab` can still reach, and gating
+                only the content leaves a trigger that blanks the page. */}
+            {canConverse && (
+              <TabsContent value="conversations">
+                <ConversationsTab leadId={lead.id} fmtDate={fmtDate} />
+              </TabsContent>
+            )}
 
             <TabsContent value="sales">
               <SalesTab leadId={lead.id} fmtDate={fmtDate} />
