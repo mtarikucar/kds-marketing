@@ -20,6 +20,40 @@ import { PrismaService } from '../../../prisma/prisma.service';
  *
  * Cost: the two page-scoped reads take the ids of ONE page (<= 100 leads), so
  * they are two queries per request, never one per row.
+ *
+ * ## Measured, because this is now the default surface's hot path
+ *
+ * `workspaceLastMessageAt` and `workspaceLastActivityAt` below are not page-
+ * scoped and cannot be: they feed the `lastActivityAt` ORDER, and an order has
+ * to be settled across the whole filtered set before a page can be cut from it
+ * (see MarketingLeadsService.findAll's `sortByActivity` branch). That branch is
+ * what `/inbox` and `/leads` — the app's default surface — sort by, so it runs
+ * on essentially every list request.
+ *
+ * Against local Postgres at 50 000 leads / 20 000 conversations / 200 000
+ * messages, the same 2000x-the-real-workload fixture `waiting-reply-leads.ts`
+ * documents its own numbers against:
+ *
+ *   - the message aggregate (`workspaceLastMessageAt`)   ~147 ms
+ *   - the activity aggregate (`workspaceLastActivityAt`)  ~41 ms
+ *   - the candidate id scan                               ~12 ms
+ *   - plus hydrating 50 000 rows into Node and sorting them in JS
+ *
+ * Deliberately NOT optimised. This product's live figure is ~400 leads, where
+ * the whole branch is noise; a covering index or a materialised
+ * `lastActivityAt` column would be work spent on a workload nobody has, and the
+ * reason the ORDER is in JS at all is that moving it into SQL means a SECOND
+ * copy of the lead filter — the divergence that once made the CSV export
+ * disagree with the on-screen list. The numbers are here so that the day
+ * someone DOES have 50 000 leads, the measurement already exists instead of
+ * having to be discovered from a support ticket.
+ *
+ * The multiplier to know about when reading them: neither `PeopleList` nor
+ * `LeadsPage` debounces its search input — both are a plain
+ * `onChange -> setSearch`, which is a new query key and therefore a new request
+ * per KEYSTROKE. At 400 leads that is invisible. Whoever raises the ceiling
+ * should fix the debounce first; it is one hook and it divides all of the above
+ * by the length of what someone types.
  */
 
 /**

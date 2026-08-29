@@ -146,10 +146,11 @@ export class MarketingLeadsController {
    * The person's ONE stream: messages and lead activities on a single time
    * axis, each item carrying a KIND discriminator.
    *
-   * Named /timeline, not /stream, although the design calls it the person's
-   * akış: this API already has a  and it is Server-Sent Events
-   * (). A second  that answers
-   * plain JSON is one EventSource away from a bug report.
+   * Named `/timeline`, not `/stream`, although the design calls it the person's
+   * akış: this API already has a `/conversations/stream` and it is Server-Sent
+   * Events (`@Sse('stream')` in MarketingConversationsController, answering
+   * `text/event-stream`). A second `/stream` that answers plain JSON is one
+   * `new EventSource(...)` away from a bug report.
    *
    * Deliberately NOT behind @RequiresFeature('conversationAi') even though
    * half of what it returns is. A route-level gate answers 403 and takes the
