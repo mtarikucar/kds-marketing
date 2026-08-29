@@ -851,10 +851,26 @@
     },
     "tabs": {
       "activities": "Etkinlik",
+      "stream": "Akış",
       "offers": "Teklifler",
       "tasks": "Görevler",
       "conversations": "Konuşmalar",
       "sales": "Satış"
+    },
+    "stream": {
+      "failed": "Akış yüklenemedi.",
+      "unread": "okunamadı",
+      "unreadHint": "bu akışta eksik satırlar var, kaç tane olduğunu bilmiyoruz",
+      "truncated": "kırpıldı",
+      "truncatedHint": "yalnızca en yeni kayıtlar gösteriliyor, daha eski kayıtlar var",
+      "gated": "paketine dahil değil",
+      "gatedHint": "bu kaynak aboneliğinde yok; eklendiğinde geçmişiyle birlikte burada görünür",
+      "messageFailed": "Gönderilemedi",
+      "min": "dk",
+      "empty": {
+        "title": "Bu kişiyle henüz bir şey yaşanmadı",
+        "desc": "Bir mesaj, arama ya da not eklendiğinde bu kişinin akışında burada görürsün."
+      }
     },
     "summary": {
       "contactInfo": "İletişim",

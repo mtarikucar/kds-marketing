@@ -260,10 +260,26 @@
     "back": "Back to leads",
     "tabs": {
       "activities": "Activity",
+      "stream": "Oqim",
       "offers": "Offers",
       "tasks": "Tasks",
       "conversations": "Suhbatlar",
       "sales": "Savdo"
+    },
+    "stream": {
+      "failed": "Oqimni yuklab bo‘lmadi.",
+      "unread": "o‘qib bo‘lmadi",
+      "unreadHint": "bu oqimda yetishmayotgan yozuvlar bor, nechtaligini bilmaymiz",
+      "truncated": "qirqildi",
+      "truncatedHint": "faqat eng yangi yozuvlar ko‘rsatilmoqda, undan eskilari ham bor",
+      "gated": "tarifingizga kirmaydi",
+      "gatedHint": "bu manba obunangizda yo‘q; qo‘shilganda tarixi bilan shu yerda ko‘rinadi",
+      "messageFailed": "Yuborilmadi",
+      "min": "daq",
+      "empty": {
+        "title": "Bu odam bilan hali hech nima bo‘lmagan",
+        "desc": "Xabar, qo‘ng‘iroq yoki eslatma qo‘shilganda uni shu odamning oqimida ko‘rasiz."
+      }
     },
     "summary": {
       "contactInfo": "Contact",

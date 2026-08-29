@@ -595,10 +595,26 @@
     },
     "tabs": {
       "activities": "Activity",
+      "stream": "Stream",
       "offers": "Offers",
       "tasks": "Tasks",
       "conversations": "Conversations",
       "sales": "Sales"
+    },
+    "stream": {
+      "failed": "Could not load the stream.",
+      "unread": "could not be read",
+      "unreadHint": "rows are missing from this stream and we cannot say how many",
+      "truncated": "was truncated",
+      "truncatedHint": "only the most recent records are shown; there are older ones",
+      "gated": "is not part of your plan",
+      "gatedHint": "this source is not in your subscription; add it and its history appears here",
+      "messageFailed": "Not sent",
+      "min": "min",
+      "empty": {
+        "title": "Nothing has happened with this person yet",
+        "desc": "When a message, call or note is added you will see it here in this person's stream."
+      }
     },
     "summary": {
       "contactInfo": "Contact",

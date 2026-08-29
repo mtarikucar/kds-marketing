@@ -143,6 +143,51 @@ describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
   });
 });
 
+describe('marketing i18n — lead detail: the Akış stream', () => {
+  // The whole merged stream: its tab name, its three source signals, its
+  // per-message failure line and its empty state. Same trap as everywhere else
+  // in this file — `fallbackLng: 'en'` means a locale that simply lacks these
+  // neither throws nor shows a raw key, so a ru/ar/uz operator is quietly
+  // served another language and nothing at runtime notices.
+  it('every offered locale defines the stream namespace, not just tr', async () => {
+    const want = flat((tr as Json).leadDetail as Json)
+      .filter((k) => /^(stream\.|tabs\.stream$)/.test(k))
+      .map((k) => `leadDetail.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'leadDetail.tabs.stream',
+        'leadDetail.stream.failed',
+        'leadDetail.stream.unread',
+        'leadDetail.stream.truncated',
+        'leadDetail.stream.gated',
+        'leadDetail.stream.messageFailed',
+        'leadDetail.stream.empty.title',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // The three signals mean three different things — could not READ it / read
+  // it, there was MORE / your PLAN does not include it — and LeadStream.tsx is
+  // held to keeping them apart. But that component test runs against the inline
+  // Turkish defaults, so it can only police one language. A translator who
+  // renders `gated` with the same words as `unread` re-collapses the
+  // distinction in a locale no other test looks at, and sends a billing
+  // question to support.
+  it('never says a gated source failed, in any locale', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const s = (cat.leadDetail as Json).stream as Record<string, string>;
+      expect({ locale, collides: s.gated === s.unread }).toEqual({ locale, collides: false });
+      expect({ locale, collides: s.gated === s.truncated }).toEqual({ locale, collides: false });
+    }
+  });
+});
+
 describe('marketing i18n — lead header: Ara + Mesaj', () => {
   // The lead header's two new actions and the whole start-conversation dialog.
   // `fallbackLng: 'en'` means a locale that simply lacks these neither throws
