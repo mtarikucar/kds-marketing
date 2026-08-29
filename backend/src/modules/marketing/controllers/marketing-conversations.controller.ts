@@ -89,8 +89,9 @@ export class MarketingConversationsController {
     @Query('status') status?: string,
     @Query('channelId') channelId?: string,
     @Query('assignedToId') assignedToId?: string,
+    @Query('leadId') leadId?: string,
   ) {
-    return this.conversations.list(actor.workspaceId, { status, channelId, assignedToId });
+    return this.conversations.list(actor.workspaceId, { status, channelId, assignedToId, leadId });
   }
 
   @Get(':id')

@@ -9,6 +9,8 @@ export interface ConversationListFilters {
   status?: string;
   channelId?: string;
   assignedToId?: string;
+  /** Narrow the inbox to one lead's threads (the lead detail page's feed). */
+  leadId?: string;
   limit?: number;
 }
 
@@ -96,6 +98,7 @@ export class ConversationsService {
         ...(filters.status ? { status: filters.status } : {}),
         ...(filters.channelId ? { channelId: filters.channelId } : {}),
         ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),
+        ...(filters.leadId ? { leadId: filters.leadId } : {}),
       },
       orderBy: { lastMessageAt: 'desc' },
       take: Math.min(filters.limit ?? 50, 100),
