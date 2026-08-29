@@ -1033,5 +1033,8 @@
       "title": "Rejalashtirilgan hech narsa yo'q",
       "desc": "Vazifa, uchrashuv yoki kampaniya rejalashtirilganda shu yerda ko'rasiz."
     }
+  },
+  "opportunities": {
+    "dealNotFound": "Bitimni ochib bo'lmadi"
   }
 }

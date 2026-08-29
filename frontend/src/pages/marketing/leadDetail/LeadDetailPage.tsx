@@ -54,6 +54,7 @@ import { WalletPanel } from './WalletPanel';
 import { CompanyPanel } from './CompanyPanel';
 import ActivityTimelineTab from './ActivityTimelineTab';
 import ConversationsTab from './ConversationsTab';
+import SalesTab from './SalesTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
 import ConvertDialog from './ConvertDialog';
@@ -398,6 +399,7 @@ export default function LeadDetailPage() {
               <TabsTrigger value="conversations">
                 {t('leadDetail.tabs.conversations', 'Konuşmalar')}
               </TabsTrigger>
+              <TabsTrigger value="sales">{t('leadDetail.tabs.sales', 'Satış')}</TabsTrigger>
               <TabsTrigger value="offers">Offers ({lead.offers?.length || 0})</TabsTrigger>
               <TabsTrigger value="tasks">Tasks ({lead.tasks?.length || 0})</TabsTrigger>
             </TabsList>
@@ -413,6 +415,10 @@ export default function LeadDetailPage() {
 
             <TabsContent value="conversations">
               <ConversationsTab leadId={lead.id} fmtDate={fmtDate} />
+            </TabsContent>
+
+            <TabsContent value="sales">
+              <SalesTab leadId={lead.id} fmtDate={fmtDate} />
             </TabsContent>
 
             <TabsContent value="offers">

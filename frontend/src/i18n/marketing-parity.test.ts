@@ -129,4 +129,16 @@ describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
       expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
     }
   });
+
+  // The Satış tab's rows deep-link into the board with `?deal=`, and a deal
+  // that cannot be opened has to say so out loud rather than dropping the user
+  // on a pipeline. That toast is the only thing distinguishing a dead link from
+  // a working one, so it may not silently degrade to English.
+  it('every offered locale can say a deal could not be opened', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, has: have.has('opportunities.dealNotFound') }).toEqual({ locale, has: true });
+    }
+  });
 });

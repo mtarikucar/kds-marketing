@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, TrendingUp, ChevronDown } from 'lucide-react';
 import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
@@ -9,6 +9,7 @@ import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam
 import {
   getBoard,
   getForecast,
+  getOpportunity,
   listPipelines,
   createOpportunity,
   updateOpportunity,
@@ -57,6 +58,9 @@ function money(value: string | number, currency: string): string {
 
 interface OppFormState {
   id?: string;
+  /** The contact this deal belongs to. Set only by the lead detail page's
+   *  `?leadId=` deep link — a deal created from the board itself has none. */
+  leadId?: string;
   name: string;
   value: string;
   currency: string;
@@ -98,7 +102,12 @@ export default function OpportunitiesPage() {
   const user = useMarketingAuthStore((s) => s.user);
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
-  const [pipelineId, setPipelineId] = useState<string | undefined>(undefined);
+  // The lead detail page's Satış tab links in with `?pipelineId=` so a deal
+  // outside the default pipeline lands on the board that actually holds it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [pipelineId, setPipelineId] = useState<string | undefined>(
+    () => searchParams.get('pipelineId') ?? undefined,
+  );
   const [dragId, setDragId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -147,6 +156,10 @@ export default function OpportunitiesPage() {
             name: f.name,
             pipelineId: activePipelineId,
             stageId: f.stageId,
+            // Carried from `?leadId=`. Without it a deal created from a lead's
+            // Satış tab is filed against nobody: the board looks right and the
+            // contact's record still reads "no deal for this contact".
+            leadId: f.leadId,
             value: f.value === '' ? undefined : Number(f.value),
             currency: f.currency,
             notes: f.notes || undefined,
@@ -221,13 +234,16 @@ export default function OpportunitiesPage() {
   const forecastCurrency = forecast && forecast.currencies.length === 1 ? forecast.currencies[0] : '';
   const fmtForecast = (n: number) => (forecastCurrency ? money(n, forecastCurrency) : n.toLocaleString());
 
-  const openNew = (stageId?: string) => {
-    setForm({ ...EMPTY_FORM, stageId });
+  const openNew = (stageId?: string, leadId?: string) => {
+    setForm({ ...EMPTY_FORM, stageId, leadId });
     setDialogOpen(true);
   };
 
-  // Honor ?create=1 from the global "+ Create" menu / command palette.
-  useCreateParam(() => openNew());
+  // Honor ?create=1 from the global "+ Create" menu / command palette — and,
+  // from a lead's Satış tab, the `?leadId=` that says who the deal is for. Read
+  // into form state at open time rather than at save time, so the param lingering
+  // in the URL cannot silently attach that lead to the NEXT deal created here.
+  useCreateParam(() => openNew(undefined, searchParams.get('leadId') ?? undefined));
   const openEdit = (o: Opportunity) => {
     setForm({
       id: o.id,
@@ -240,6 +256,40 @@ export default function OpportunitiesPage() {
     });
     setDialogOpen(true);
   };
+
+  // ── `?deal=` — open one deal, from anywhere ────────────────────────────────
+  // The Satış tab's rows link here. Resolved by ID rather than by scanning the
+  // board on purpose: the board is OPEN-only and renders ONE pipeline, so a WON
+  // deal (or one in another pipeline) is not on it — a board-scan would leave
+  // the dialog silently unopened on a page that otherwise looks fine.
+  const dealParam = searchParams.get('deal');
+  const deepLink = useQuery({
+    queryKey: ['marketing', 'opportunity', dealParam],
+    queryFn: () => getOpportunity(dealParam!),
+    enabled: !!dealParam,
+  });
+  const openedDealRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!dealParam || !deepLink.data) return;
+    if (openedDealRef.current === dealParam) return;
+    openedDealRef.current = dealParam;
+    openEdit(deepLink.data);
+    // Strip the param so a refresh or a back-navigation does not re-open it.
+    setSearchParams(
+      (p) => {
+        p.delete('deal');
+        return p;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dealParam, deepLink.data]);
+  // A deal that cannot be fetched must SAY so. Falling through to the board
+  // would answer "here is your pipeline" to "open this deal", and the user
+  // would have no way to tell the link was dead.
+  useEffect(() => {
+    if (deepLink.isError) toast.error(t('opportunities.dealNotFound', 'Fırsat açılamadı'));
+  }, [deepLink.isError, t]);
 
   const onDrop = (stageId: string) => {
     setOverStage(null);

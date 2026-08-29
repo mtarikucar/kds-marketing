@@ -1204,7 +1204,8 @@
     "stageDeleteError": "Aşama kullanımda veya son aşama — silinemez",
     "probability": "Kazanma %",
     "wonFlag": "Kazanıldı",
-    "lostFlag": "Kaybedildi"
+    "lostFlag": "Kaybedildi",
+    "dealNotFound": "Fırsat açılamadı"
   },
   "offers": {
     "title": "Teklifler",
