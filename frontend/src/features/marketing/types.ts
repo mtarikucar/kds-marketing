@@ -136,6 +136,28 @@ export interface Lead {
   createdAt: string;
   updatedAt: string;
   _count?: { activities: number; offers: number; tasks: number };
+
+  // ── Conversation fields, stitched on by GET /marketing/leads ──────────────
+  // The data half of "one object, the person; a conversation is a field of the
+  // person". `conversations` has no foreign key to `leads`, so the backend
+  // computes these with raw SQL and attaches them to the page
+  // (lead-activity-enrichment.ts). Optional here because every OTHER producer
+  // of a Lead — the create response, the detail payload, a cached row — has
+  // never carried them.
+
+  /** Newest message across ALL of this person's threads; null when they have
+   *  none, or have a thread nothing has been said in yet. */
+  lastMessageAt?: string | null;
+  /** One flattened line of that message's body, <= 161 chars. */
+  lastMessagePreview?: string | null;
+  /** Summed across the person's threads. Never null — 0 is a real answer. */
+  unreadCount?: number;
+  /**
+   * The newest of `lastMessageAt`, the newest lead activity, and the lead's own
+   * `createdAt` — so it is NEVER null, and a person nothing has happened to
+   * still sorts by when they arrived. This is the person list's default order.
+   */
+  lastActivityAt?: string;
 }
 
 export interface LeadActivityAssignmentMetadata {

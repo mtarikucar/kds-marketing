@@ -1092,6 +1092,15 @@
     "tab": {
       "conversations": "Suhbatlar",
       "contacts": "Kontaktlar"
+    },
+    "people": {
+      "search": "Odam qidirish",
+      "loadFailed": "Odamlar yuklanmadi.",
+      "silent": "Hali suhbat boʻlmagan",
+      "empty": {
+        "title": "Bu navbatda hech kim yoʻq",
+        "desc": "Boshqa navbatni tanlang yoki qidiruvni tozalang."
+      }
     }
   }
 }

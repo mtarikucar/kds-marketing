@@ -3200,6 +3200,15 @@
     "tab": {
       "conversations": "Conversations",
       "contacts": "Contacts"
+    },
+    "people": {
+      "search": "Search people",
+      "loadFailed": "Could not load people.",
+      "silent": "No conversation yet",
+      "empty": {
+        "title": "Nobody in this queue",
+        "desc": "Pick another queue or clear the search."
+      }
     }
   }
 }

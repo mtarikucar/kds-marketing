@@ -4051,6 +4051,15 @@
     "tab": {
       "conversations": "Konuşmalar",
       "contacts": "Kişiler"
+    },
+    "people": {
+      "search": "Kişi ara",
+      "loadFailed": "Kişiler yüklenemedi.",
+      "silent": "Henüz konuşulmadı",
+      "empty": {
+        "title": "Bu kuyrukta kimse yok",
+        "desc": "Başka bir kuyruk seç ya da aramayı temizle."
+      }
     }
   }
 }
