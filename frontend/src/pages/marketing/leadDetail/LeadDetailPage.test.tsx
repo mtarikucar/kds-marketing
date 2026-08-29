@@ -122,3 +122,28 @@ describe('LeadDetailPage — delete confirmation', () => {
     expect(deleteLead).not.toHaveBeenCalled();
   });
 });
+
+// The five tabs ARE the lead record's shape — spec §2 fixes both the set and
+// the order (Hareketler | Konuşmalar | Satış | Teklifler | Görevler). Stubbing
+// the tab components (above) proves nothing about the strip itself: with only
+// those stubs, deleting `<TabsTrigger value="conversations">` or swapping two
+// triggers fails no test at all. This asserts the ORDERED list of accessible
+// names, not mere presence, because a strip that silently reorders itself
+// moves the default tab out from under every muscle-memory click.
+describe('LeadDetailPage — the tab strip', () => {
+  beforeEach(() => {
+    getLead.mockReset();
+    getLead.mockResolvedValue(LEAD);
+  });
+
+  it('offers exactly the five lead tabs, in the spec’s order', async () => {
+    renderPage();
+    // Positive anchor first: the page is SETTLED before any list is measured.
+    // `getAllByRole('tab')` against a still-loading page returns [] and would
+    // satisfy a naive length assertion instantly.
+    await screen.findByRole('tab', { name: 'Konuşmalar' });
+
+    const tabs = screen.getAllByRole('tab').map((el) => el.textContent?.trim());
+    expect(tabs).toEqual(['Etkinlik', 'Konuşmalar', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
+  });
+});
