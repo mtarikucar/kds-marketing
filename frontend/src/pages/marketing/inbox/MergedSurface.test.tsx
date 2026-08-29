@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import InboxPage from './InboxPage';
+import { MERGED_SURFACE_ROUTES } from '../../../App';
 
 /**
  * The merged surface (spec §1): `/inbox` and `/leads` render the SAME
@@ -12,6 +12,13 @@ import InboxPage from './InboxPage';
  * Both routes stay — they are members of the frozen 50-path set
  * (navigation.test.ts) and they are in people's bookmarks. What merges is the
  * page, not the URL space.
+ *
+ * These tests mount THE SHIPPED ROUTE TABLE, imported from App.tsx, not a
+ * hand-copy of it. The copy is why this file used to prove nothing about the
+ * wiring: deleting `defaultTab="contacts"` from App.tsx left all eleven tests
+ * green while `/leads` opened on the wrong tab, because the fixture still
+ * carried the prop the app had lost. Only Playwright noticed — a browser and
+ * several minutes too late for a one-word mistake.
  */
 
 const get = vi.fn();
@@ -21,6 +28,22 @@ vi.mock('../../../features/marketing/api/marketingApi', () => ({
     get: (...a: unknown[]) => get(...a),
     post: (...a: unknown[]) => post(...a),
   },
+}));
+
+// App.tsx's eager imports. Its ~100 page imports are `lazy()`, so importing the
+// module loads none of them — but the layout/guard shells are real imports, and
+// the components barrel drags the SIP.js webphone (ClickToDialButton) into
+// jsdom. None of them is under test here: this file mounts two route ELEMENTS,
+// not the app shell.
+vi.mock('../../../features/marketing/components', () => ({
+  MarketingLayout: () => null,
+  MarketingProtectedRoute: () => null,
+}));
+vi.mock('../../../features/platform/components/PlatformLayout', () => ({
+  default: () => null,
+}));
+vi.mock('../../../features/marketing/hooks/useReferralCapture', () => ({
+  useReferralCapture: () => {},
 }));
 
 vi.mock('../../../store/marketingAuthStore', () => ({
@@ -86,9 +109,10 @@ function renderAt(path: string) {
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          {/* The real route table: same element, one prop apart. */}
-          <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/leads" element={<InboxPage defaultTab="contacts" />} />
+          {/* THE route table, imported — not a second copy of it. */}
+          {MERGED_SURFACE_ROUTES.map((r) => (
+            <Route key={r.path} path={r.path} element={r.element} />
+          ))}
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
