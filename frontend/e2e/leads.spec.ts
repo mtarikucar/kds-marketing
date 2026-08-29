@@ -22,6 +22,9 @@
  *   - /leads is the person-primary SURFACE since 2026-08-29; the table with its
  *     columns, filters and bulk actions lives at /leads?view=table, and the
  *     column assertions below use it deliberately rather than being deleted.
+ *     Its in-app entry point is the gear menu and is manager-only; the deep
+ *     link below is deliberately NOT gated, so these navigations are the same
+ *     for any role.
  *   - every Turkish string below comes from src/i18n/locales/tr/marketing.json:
  *     surface.title, surface.people.empty.title, leads.emptyManager,
  *     surface.card.open, createLead.titleNew,
