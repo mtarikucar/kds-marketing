@@ -427,6 +427,7 @@ import { PageViewStatsService } from './analytics/page-view-stats.service';
 import { AttributionService } from './analytics/attribution.service';
 // Home command centre — the calendar panel's read model + its endpoint.
 import { HomeTimelineService } from './analytics/home-timeline.service';
+import { LeadStreamService } from './services/lead-stream.service';
 import { MarketingHomeController } from './controllers/marketing-home.controller';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
@@ -1085,6 +1086,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     PageViewStatsService,
     AttributionService,
     HomeTimelineService,
+    // The person-primary surface's one stream (messages + lead activities).
+    LeadStreamService,
     // Epic F (compliance).
     ComplianceService,
     // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.

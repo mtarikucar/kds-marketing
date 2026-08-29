@@ -164,6 +164,16 @@ describeRealDb('Leads list — conversation enrichment + lastActivityAt sort, re
         { workspaceId, conversationId: convoA, direction: 'INBOUND', authorType: 'CUSTOMER', body: LONG_BODY, status: 'RECEIVED', createdAt: t(2) },
         // Next door's message on OUR lead id. Never ours.
         { workspaceId: otherWorkspaceId, conversationId: convoSpoof, direction: 'INBOUND', authorType: 'CUSTOMER', body: 'KOMSUNUN MESAJI', status: 'RECEIVED', createdAt: t(1) },
+        // The enrichment SQL scopes the CONVERSATION and the MESSAGE
+        // separately, and `messages` has no foreign key to `conversations`
+        // either (a bare `conversationId String`), so each predicate needs its
+        // own way in or one of them can be deleted with the suite still green.
+        //
+        // Their thread, OUR stamp: only `c."workspaceId"` keeps it out.
+        { workspaceId, conversationId: convoSpoof, direction: 'INBOUND', authorType: 'CUSTOMER', body: 'CAPRAZ MESAJ BIZIM WS', status: 'RECEIVED', createdAt: t(1) },
+        // OUR thread, their stamp — and NEWER than the legitimate newest
+        // message, so if `m."workspaceId"` goes, it takes over the preview.
+        { workspaceId: otherWorkspaceId, conversationId: convoA, direction: 'INBOUND', authorType: 'CUSTOMER', body: 'CAPRAZ MESAJ KOMSU WS', status: 'RECEIVED', createdAt: t(1) },
         { workspaceId: otherWorkspaceId, conversationId: convoForeign, direction: 'INBOUND', authorType: 'CUSTOMER', body: 'yabanci', status: 'RECEIVED', createdAt: t(1) },
       ],
     });
@@ -215,6 +225,9 @@ describeRealDb('Leads list — conversation enrichment + lastActivityAt sort, re
     // The newest message across BOTH threads, not the newest of one of them.
     expect(chatty.lastMessagePreview.startsWith('sipariş sipariş')).toBe(true);
     expect(chatty.lastMessagePreview).not.toContain('eski mesaj');
+    // A newer row on OUR thread stamped with the NEIGHBOUR's workspace must
+    // not become this person's preview.
+    expect(chatty.lastMessagePreview).not.toContain('CAPRAZ');
     // Truncated, and it SAYS it was truncated rather than silently ending.
     expect(chatty.lastMessagePreview.endsWith('…')).toBe(true);
     expect(chatty.lastMessagePreview.length).toBeLessThanOrEqual(161);
