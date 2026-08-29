@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Activity, FileText, MessageSquare, Phone, RefreshCw, Sparkles, User } from 'lucide-react';
+import { Activity, FileText, MessageSquare, Mic, Phone, RefreshCw, Sparkles, User } from 'lucide-react';
+import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { getLeadStream, type LeadStreamItem } from '../api/leadStream.service';
@@ -42,10 +43,52 @@ const EVENT_ICON: Record<string, React.ElementType> = {
   activity: Activity,
 };
 
+/**
+ * Which assignments earn a badge, and what it says.
+ *
+ * 'manual' is deliberately absent: a person reassigning a lead is the ordinary
+ * case, and badging the ordinary case badges every row. What a reader needs to
+ * spot is the two they did NOT do by hand.
+ */
+const ASSIGNMENT_LABEL: Record<string, [key: string, fallback: string] | undefined> = {
+  auto: ['leadDetail.stream.assignment.auto', 'Otomatik'],
+  bulk: ['leadDetail.stream.assignment.bulk', 'Toplu'],
+};
+
 const AUTHOR_ICON: Record<string, React.ElementType> = {
   AI: Sparkles,
   AGENT: User,
 };
+
+type TFn = (key: string, defaultValue: string) => string;
+
+/**
+ * The provider payload on a message, narrowed to the two fields anything here
+ * reads. `unknown` in, a shape or nothing out — a message with no `meta`, a
+ * `meta` that is a string, and a `meta.raw` that is an array all answer the
+ * same way rather than throwing halfway down an optional chain.
+ */
+function providerRaw(meta: unknown): { kind?: string; audioUrl?: unknown; documentUrl?: unknown } {
+  if (!meta || typeof meta !== 'object') return {};
+  const raw = (meta as { raw?: unknown }).raw;
+  if (!raw || typeof raw !== 'object') return {};
+  return raw as { kind?: string; audioUrl?: unknown; documentUrl?: unknown };
+}
+
+/**
+ * The backend names a failed / cut / withheld source in its own words —
+ * `mesajlar`, `hareketler`, `yazarlar`. Those tokens are a WIRE format, not a
+ * sentence: printed verbatim they drop a Turkish word into the middle of an
+ * Arabic, Russian or Uzbek line, and it is the one word that says WHAT is
+ * missing.
+ *
+ * A token with no key falls back to itself. A source added to the backend
+ * tomorrow reads oddly in four locales; rendering nothing would turn "X could
+ * not be read" into " could not be read", which reads like a bug in the app
+ * rather than a gap in the catalogue.
+ */
+const sourceNames = (sources: string[], t: TFn) =>
+  sources.map((s) => t(`leadDetail.stream.source.${s}`, s)).join(', ');
 
 export interface LeadStreamProps {
   /** Whose stream. The component owns its own query off this id — it is not
@@ -131,7 +174,7 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
       <div className={className} data-testid="lead-stream">
         {unread.length > 0 && (
           <p data-testid="stream-unread" role="status" className="pb-1.5 text-xs text-warning">
-            <span className="font-medium">{unread.join(', ')}</span>{' '}
+            <span className="font-medium">{sourceNames(unread, t)}</span>{' '}
             {t('leadDetail.stream.unread', 'okunamadı')} —{' '}
             {t(
               'leadDetail.stream.unreadHint',
@@ -145,7 +188,7 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
             role="status"
             className="pb-1.5 text-xs text-muted-foreground"
           >
-            <span className="font-medium">{truncated.join(', ')}</span>{' '}
+            <span className="font-medium">{sourceNames(truncated, t)}</span>{' '}
             {t('leadDetail.stream.truncated', 'kırpıldı')} —{' '}
             {t(
               'leadDetail.stream.truncatedHint',
@@ -155,7 +198,7 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
         )}
         {gated.length > 0 && (
           <p data-testid="stream-gated" role="status" className="pb-1.5 text-xs text-info">
-            <span className="font-medium">{gated.join(', ')}</span>{' '}
+            <span className="font-medium">{sourceNames(gated, t)}</span>{' '}
             {t('leadDetail.stream.gated', 'paketine dahil değil')} —{' '}
             {t(
               'leadDetail.stream.gatedHint',
@@ -189,13 +232,25 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
   );
 }
 
-type TFn = (key: string, defaultValue: string) => string;
-
 /** A message: a bubble, on the side its direction puts it. */
 function messageRow(i: LeadStreamItem, t: TFn) {
   const outbound = i.direction === 'OUTBOUND';
   const failed = i.deliveryStatus === 'FAILED';
   const AuthorIcon = i.authorType ? AUTHOR_ICON[i.authorType] : undefined;
+  // A voicemail and a fax arrive as ordinary inbound messages; `meta.raw.kind`
+  // is the only thing that says otherwise, and the media link is the only
+  // thing that makes them useful. ThreadPane read both, and this stream stands
+  // where ThreadPane stood.
+  const raw = providerRaw(i.meta);
+  const isVoicemail = raw.kind === 'VOICEMAIL';
+  const isFax = raw.kind === 'FAX';
+  const audioUrl = typeof raw.audioUrl === 'string' ? raw.audioUrl : null;
+  // ThreadPane's guard, kept: the URL is the provider's, so anything that is
+  // not https is refused rather than rendered as something to click.
+  const documentUrl =
+    typeof raw.documentUrl === 'string' && raw.documentUrl.startsWith('https://')
+      ? raw.documentUrl
+      : null;
 
   return (
     <li
@@ -221,7 +276,40 @@ function messageRow(i: LeadStreamItem, t: TFn) {
           {i.channelType && <span>· {i.channelType}</span>}
           <span>· {fmtSlot(i.at)}</span>
         </div>
+        {isVoicemail && (
+          <Badge tone="neutral" size="sm" className="mb-1 gap-1">
+            <Mic className="h-3 w-3" aria-hidden="true" />
+            {t('leadDetail.stream.voicemail', 'Sesli mesaj')}
+          </Badge>
+        )}
+        {isFax && (
+          <Badge tone="neutral" size="sm" className="mb-1 gap-1">
+            <FileText className="h-3 w-3" aria-hidden="true" />
+            {t('leadDetail.stream.fax', 'Faks')}
+          </Badge>
+        )}
         <div className="whitespace-pre-wrap break-words">{i.body}</div>
+        {isVoicemail && audioUrl && (
+          <audio
+            data-testid={`stream-voicemail-${i.id}`}
+            controls
+            preload="none"
+            src={audioUrl}
+            className="mt-1.5 h-8 max-w-full"
+          />
+        )}
+        {isFax && documentUrl && (
+          <a
+            data-testid={`stream-fax-${i.id}`}
+            href={documentUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1.5 inline-flex items-center gap-1 text-xs underline underline-offset-2"
+          >
+            <FileText className="h-3 w-3" aria-hidden="true" />
+            {t('leadDetail.stream.faxOpen', 'Belgeyi aç')}
+          </a>
+        )}
         {/* The Inbox's own treatment (ThreadPane.tsx:344), one line longer: the
             provider's reason rides along, because this surface is where someone
             comes back HOURS later to find out why a customer never answered,
@@ -262,7 +350,22 @@ function eventRow(i: LeadStreamItem, t: TFn) {
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{i.title}</p>
+        <p className="truncate font-medium">
+          {i.title}
+          {/* Restores what died with ActivityTimeline. Only 'auto' and 'bulk'
+              are badged: a manual assignment is a person doing their job, and
+              a badge on the ordinary case is a badge on every row. */}
+          {ASSIGNMENT_LABEL[i.assignment ?? ''] && (
+            <Badge
+              data-testid={`stream-assignment-${i.id}`}
+              tone={i.assignment === 'auto' ? 'primary' : 'warning'}
+              size="sm"
+              className="ms-1.5 align-middle"
+            >
+              {t(...ASSIGNMENT_LABEL[i.assignment ?? '']!)}
+            </Badge>
+          )}
+        </p>
         {i.body && <p className="mt-0.5 text-muted-foreground">{i.body}</p>}
         {meta.length > 0 && (
           <p className="mt-0.5 text-xs text-muted-foreground">{meta.join(' · ')}</p>

@@ -608,7 +608,19 @@
       "empty": {
         "title": "Nothing has happened with this person yet",
         "desc": "When a message, call or note is added you will see it here in this person's stream."
-      }
+      },
+      "source": {
+        "mesajlar": "messages",
+        "hareketler": "activities",
+        "yazarlar": "authors"
+      },
+      "assignment": {
+        "auto": "Automatic",
+        "bulk": "Bulk"
+      },
+      "voicemail": "Voicemail",
+      "fax": "Fax",
+      "faxOpen": "Open document"
     },
     "summary": {
       "contactInfo": "Contact",

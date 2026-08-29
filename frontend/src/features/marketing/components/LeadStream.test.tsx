@@ -10,11 +10,21 @@ import type { LeadStream as LeadStreamPayload, LeadStreamItem } from '../api/lea
 // the SERVICE MODULE by path and drive it through `vi.mocked`.
 vi.mock('../api/leadStream.service');
 
+/**
+ * `t` normally answers with the inline Turkish default, which is what every
+ * assertion below reads. `I18N.mode = 'keys'` flips it to answer with the KEY
+ * instead - the only way to prove a string goes THROUGH the catalogue rather
+ * than being printed verbatim, because for a Turkish-defaulted key the two are
+ * the same characters.
+ */
+const I18N = vi.hoisted(() => ({ mode: 'defaults' as 'defaults' | 'keys' }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string | string[], opts?: { defaultValue?: string } | string) =>
-      (typeof opts === 'string' ? opts : opts?.defaultValue) ??
-      (Array.isArray(key) ? key[0] : key),
+    t: (key: string | string[], opts?: { defaultValue?: string } | string) => {
+      const k = Array.isArray(key) ? key[0] : key;
+      if (I18N.mode === 'keys') return k;
+      return (typeof opts === 'string' ? opts : opts?.defaultValue) ?? k;
+    },
     i18n: { language: 'tr' },
   }),
 }));
@@ -38,9 +48,11 @@ const item = (
   channelType: null,
   deliveryStatus: null,
   error: null,
+  meta: null,
   activityType: null,
   outcome: null,
   durationMinutes: null,
+  assignment: null,
   authorId: null,
   authorName: null,
   ...over,
@@ -62,6 +74,7 @@ function renderStream(node: ReactNode = <LeadStream leadId="l1" />) {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  I18N.mode = 'defaults';
   getLeadStream.mockResolvedValue(stream());
 });
 
@@ -362,5 +375,216 @@ describe('LeadStream — composition', () => {
     expect(screen.getByTestId('stream-item-a1')).toHaveAttribute('data-weight', 'recessive');
     expect(screen.getByTestId('stream-item-a3')).toHaveAttribute('data-weight', 'recessive');
     expect(screen.getByTestId('stream-item-a2')).toHaveAttribute('data-weight', 'normal');
+  });
+});
+
+/**
+ * The backend names a failed / cut / withheld source in ITS OWN language:
+ * `mesajlar`, `hareketler`, `yazarlar`. Printing that token verbatim drops a
+ * Turkish word into the middle of an Arabic, Russian or Uzbek sentence — and
+ * it is the one part of these three lines an operator has to read to know WHAT
+ * is missing.
+ */
+describe('LeadStream — the missing source is named in the reader’s language', () => {
+  const named = (over: Partial<LeadStreamPayload>) =>
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [item({ kind: 'note', id: 'a1', at: '2026-08-01T09:00:00Z', title: 'Not' })],
+        ...over,
+      }),
+    );
+
+  it('translates the source token on all three lines', async () => {
+    I18N.mode = 'keys';
+    named({ unread: ['mesajlar'], truncated: ['hareketler'], gated: ['yazarlar'] });
+
+    renderStream();
+
+    // The KEY, not the Turkish token — which is exactly what a verbatim
+    // `join(', ')` renders, identically, in every locale.
+    expect(await screen.findByTestId('stream-unread')).toHaveTextContent(
+      'leadDetail.stream.source.mesajlar',
+    );
+    expect(screen.getByTestId('stream-truncated')).toHaveTextContent(
+      'leadDetail.stream.source.hareketler',
+    );
+    expect(screen.getByTestId('stream-gated')).toHaveTextContent(
+      'leadDetail.stream.source.yazarlar',
+    );
+  });
+
+  it('still prints a source it has no name for, rather than an empty sentence', async () => {
+    // A source added to the backend tomorrow must not turn "X could not be
+    // read" into " could not be read".
+    I18N.mode = 'keys';
+    named({ unread: ['kartvizitler'] });
+
+    renderStream();
+
+    expect(await screen.findByTestId('stream-unread')).toHaveTextContent('kartvizitler');
+  });
+
+  it('still reads as Turkish for a Turkish operator', async () => {
+    named({ unread: ['mesajlar'] });
+
+    renderStream();
+
+    expect(await screen.findByTestId('stream-unread')).toHaveTextContent('mesajlar');
+  });
+});
+
+/**
+ * The regression this restores. `LeadActivity.metadata` is the only thing
+ * separating an auto-distribution from a bulk assign from a manual one — all
+ * three are STATUS_CHANGE rows whose titles begin with the same word. The old
+ * ActivityTimeline badged them apart; Akış lost the badge along with the
+ * metadata the endpoint never carried.
+ */
+describe('LeadStream — how someone got assigned', () => {
+  const assigned = (assignment: LeadStreamItem['assignment'], title: string) =>
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [item({ kind: 'status', id: 'a1', at: '2026-08-01T09:00:00Z', title, assignment })],
+      }),
+    );
+
+  it('badges an automatic assignment apart from a manual one', async () => {
+    assigned('auto', 'Auto-assigned on ingest');
+    renderStream();
+
+    expect(await screen.findByTestId('stream-assignment-a1')).toHaveTextContent('Otomatik');
+  });
+
+  it('badges a bulk assignment as bulk', async () => {
+    assigned('bulk', 'Assigned to Ayşe');
+    renderStream();
+
+    expect(await screen.findByTestId('stream-assignment-a1')).toHaveTextContent('Toplu');
+  });
+
+  it('leaves a manual assignment unbadged — a person did it, that is the norm', async () => {
+    assigned('manual', 'Reassigned: Ayşe → Mehmet');
+    renderStream();
+
+    // Anchor on the row before asserting the badge is absent: a queryBy
+    // against a still-loading component finds nothing and passes for free.
+    await screen.findByTestId('stream-item-a1');
+    expect(screen.queryByTestId('stream-assignment-a1')).not.toBeInTheDocument();
+  });
+
+  it('never badges a plain stage move', async () => {
+    assigned(null, 'NEW -> CONTACTED');
+    renderStream();
+
+    await screen.findByTestId('stream-item-a1');
+    expect(screen.queryByTestId('stream-assignment-a1')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A voicemail and a fax arrive as ordinary inbound MESSAGES tagged in
+ * `meta.raw.kind` — a Message has no channel column of its own. The inbox's
+ * thread pane rendered the audio player and the document link off that
+ * payload; this stream replaces that pane, so it renders them or they vanish
+ * with no error anywhere.
+ */
+describe('LeadStream — a voicemail is not a text message', () => {
+  it('plays a voicemail rather than showing its transcript alone', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          item({
+            kind: 'message',
+            id: 'm1',
+            at: '2026-08-01T09:00:00Z',
+            body: 'Sesli mesaj metni',
+            direction: 'INBOUND',
+            authorType: 'CUSTOMER',
+            meta: { raw: { kind: 'VOICEMAIL', audioUrl: 'https://p.test/vm.mp3', durationSec: 31 } },
+          }),
+        ],
+      }),
+    );
+
+    renderStream();
+
+    const bubble = await screen.findByTestId('stream-item-m1');
+    expect(bubble).toHaveTextContent('Sesli mesaj');
+    expect(within(bubble).getByTestId('stream-voicemail-m1')).toHaveAttribute(
+      'src',
+      'https://p.test/vm.mp3',
+    );
+  });
+
+  it('links a fax to its document', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          item({
+            kind: 'message',
+            id: 'm2',
+            at: '2026-08-01T09:00:00Z',
+            body: 'Faks alındı',
+            direction: 'INBOUND',
+            meta: { raw: { kind: 'FAX', documentUrl: 'https://p.test/fax.pdf' } },
+          }),
+        ],
+      }),
+    );
+
+    renderStream();
+
+    expect(await screen.findByTestId('stream-fax-m2')).toHaveAttribute(
+      'href',
+      'https://p.test/fax.pdf',
+    );
+  });
+
+  // ThreadPane's own guard, kept verbatim: the URL comes from a provider
+  // payload nobody here controls, so anything that is not https is refused
+  // rather than rendered as a document to click.
+  it('refuses a fax link that is not https', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          item({
+            kind: 'message',
+            id: 'm3',
+            at: '2026-08-01T09:00:00Z',
+            body: 'Faks',
+            direction: 'INBOUND',
+            meta: { raw: { kind: 'FAX', documentUrl: 'javascript:alert(1)' } },
+          }),
+        ],
+      }),
+    );
+
+    renderStream();
+
+    const bubble = await screen.findByTestId('stream-item-m3');
+    expect(bubble).toHaveTextContent('Faks');
+    expect(within(bubble).queryByTestId('stream-fax-m3')).not.toBeInTheDocument();
+  });
+
+  it('leaves an ordinary message plain', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          item({
+            kind: 'message',
+            id: 'm4',
+            at: '2026-08-01T09:00:00Z',
+            body: 'Merhaba',
+            direction: 'INBOUND',
+          }),
+        ],
+      }),
+    );
+
+    renderStream();
+
+    const bubble = await screen.findByTestId('stream-item-m4');
+    expect(within(bubble).queryByTestId('stream-voicemail-m4')).not.toBeInTheDocument();
+    expect(within(bubble).queryByTestId('stream-fax-m4')).not.toBeInTheDocument();
   });
 });

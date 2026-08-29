@@ -278,7 +278,19 @@
       "empty": {
         "title": "Bu odam bilan hali hech nima bo‘lmagan",
         "desc": "Xabar, qo‘ng‘iroq yoki eslatma qo‘shilganda uni shu odamning oqimida ko‘rasiz."
-      }
+      },
+      "source": {
+        "mesajlar": "xabarlar",
+        "hareketler": "harakatlar",
+        "yazarlar": "mualliflar"
+      },
+      "assignment": {
+        "auto": "Avtomatik",
+        "bulk": "Ommaviy"
+      },
+      "voicemail": "Ovozli xabar",
+      "fax": "Faks",
+      "faxOpen": "Hujjatni ochish"
     },
     "summary": {
       "contactInfo": "Contact",

@@ -39,11 +39,29 @@ export interface LeadStreamItem {
   deliveryStatus: string | null;
   /** Provider/adapter reason on a FAILED message. */
   error: string | null;
+  /**
+   * `Message.meta`, verbatim from the provider. `meta.raw.kind` is the ONLY
+   * marker of an inbound voicemail or fax — a Message carries no channel
+   * column of its own — and `audioUrl` / `documentUrl` are the only place
+   * their media lives. Typed as `unknown` because the shape is the provider's,
+   * not ours; the reader narrows it (`providerRaw` in LeadStream.tsx).
+   */
+  meta: unknown | null;
 
   // ── activities only (null on every message) ──────────────────────────────
   activityType: string | null;
   outcome: string | null;
   durationMinutes: number | null;
+  /**
+   * How an assignment happened, when this activity IS one; null on everything
+   * else, a plain stage move included.
+   *
+   * Derived server-side from `LeadActivity.metadata`, which is the only thing
+   * separating an auto-distribution on ingest from a manager's bulk assign
+   * from a single manual reassignment — the titles cannot, since all three are
+   * STATUS_CHANGE rows beginning with the same word.
+   */
+  assignment: 'auto' | 'bulk' | 'manual' | null;
 
   // ── both, when there is a person behind it ───────────────────────────────
   authorId: string | null;
