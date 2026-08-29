@@ -1100,10 +1100,6 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "Suhbatlar",
-      "contacts": "Kontaktlar"
-    },
     "people": {
       "search": "Odam qidirish",
       "loadFailed": "Odamlar yuklanmadi.",
@@ -1133,6 +1129,12 @@
       "city": "Shahar",
       "created": "Qoʻshilgan",
       "open": "Yozuvni ochish"
+    },
+    "title": "Odamlar",
+    "subtitle": "Hamma bitta roʻyxatda — yozayotgani ham, jim turgani ham.",
+    "view": {
+      "list": "Roʻyxat",
+      "table": "Jadval"
     }
   }
 }

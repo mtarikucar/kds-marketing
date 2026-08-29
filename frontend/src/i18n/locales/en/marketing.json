@@ -3207,10 +3207,6 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "Conversations",
-      "contacts": "Contacts"
-    },
     "people": {
       "search": "Search people",
       "loadFailed": "Could not load people.",
@@ -3240,6 +3236,12 @@
       "city": "City",
       "created": "Added",
       "open": "Open record"
+    },
+    "title": "People",
+    "subtitle": "Everyone in one list — the ones talking and the quiet ones.",
+    "view": {
+      "list": "List",
+      "table": "Table"
     }
   }
 }

@@ -146,7 +146,7 @@ describe('PeopleList — selecting is not navigating', () => {
     const before = seenPath;
     await user.click(await screen.findByTestId('person-row-p1'));
 
-    expect(onSelect).toHaveBeenCalledWith('p1');
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }));
     expect(seenPath).toBe(before);
   });
 
@@ -197,7 +197,7 @@ describe('PeopleList — selecting is not navigating', () => {
     renderList({ onSelect });
 
     await user.click(await screen.findByTestId('person-row-silent'));
-    expect(onSelect).toHaveBeenCalledWith('silent');
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'silent' }));
   });
 });
 

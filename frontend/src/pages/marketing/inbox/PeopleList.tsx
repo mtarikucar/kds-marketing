@@ -29,8 +29,14 @@ const LIMIT = 25;
 export interface PeopleListProps {
   /** Who is open in the other two columns; null before anyone is picked. */
   selectedId: string | null;
-  /** A SELECTION, never a navigation. See the file docstring. */
-  onSelect: (leadId: string) => void;
+  /**
+   * A SELECTION, never a navigation. See the file docstring.
+   *
+   * The whole record rather than an id: the list has just rendered this row
+   * from the server's own payload, and making the surface look the person up
+   * again would put a second answer to "who is this" beside the first.
+   */
+  onSelect: (person: Lead) => void;
   className?: string;
 }
 
@@ -221,7 +227,7 @@ function PersonRow({
 }: {
   person: Lead;
   selected: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (person: Lead) => void;
   silentLabel: string;
 }) {
   const name = person.contactPerson || person.businessName;
@@ -235,7 +241,7 @@ function PersonRow({
       // showing", not a toggle. Published either way so the three columns can
       // be asserted to agree about who is open.
       aria-current={selected}
-      onClick={() => onSelect(person.id)}
+      onClick={() => onSelect(person)}
       className={`w-full px-3 py-2.5 text-start transition-colors hover:bg-surface-muted ${
         selected ? 'bg-primary/5' : ''
       }`}

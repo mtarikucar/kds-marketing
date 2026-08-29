@@ -4058,10 +4058,6 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "Konuşmalar",
-      "contacts": "Kişiler"
-    },
     "people": {
       "search": "Kişi ara",
       "loadFailed": "Kişiler yüklenemedi.",
@@ -4091,6 +4087,12 @@
       "city": "Şehir",
       "created": "Kayıt",
       "open": "Kaydı aç"
+    },
+    "title": "Kişiler",
+    "subtitle": "Herkes tek listede — konuşanı da, sessizi de.",
+    "view": {
+      "list": "Liste",
+      "table": "Tablo"
     }
   }
 }

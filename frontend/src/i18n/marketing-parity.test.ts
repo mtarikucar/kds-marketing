@@ -263,27 +263,36 @@ describe('marketing i18n — the click-to-dial affordance', () => {
   });
 });
 
-describe('marketing i18n — the merged surface and its work queue', () => {
-  // These two words ARE the navigation of the merged surface, and the three
-  // chips below them are how anyone reaches the leads nobody has answered.
+describe('marketing i18n — the person surface and its work queue', () => {
+  // The whole of the person-primary surface: its title, its three columns and
+  // the chips that are how anyone reaches the leads nobody has answered. The
+  // two tab names that used to be anchored here are deliberately gone with the
+  // tabs — there is one list now, and one object in it.
+  //
   // Same trap as everywhere else in this file: `fallbackLng: 'en'` means a
   // locale that simply lacks them neither throws nor shows a raw key — a
   // ru/ar/uz operator is quietly served another language, and nothing at
   // runtime notices (missingKeyHandler is DEV-only).
-  it('every offered locale names both tabs and all three work-queue chips', async () => {
+  it('every offered locale names all three columns and all three work-queue chips', async () => {
     const want = [
       ...flat((tr as Json).surface as Json).map((k) => `surface.${k}`),
       ...flat(((tr as Json).leads as Json).queue as Json).map((k) => `leads.queue.${k}`),
     ];
     expect(want).toEqual(
       expect.arrayContaining([
-        'surface.tab.conversations',
-        'surface.tab.contacts',
+        'surface.title',
+        // the list column, the stream column, the record card
+        'surface.people.search',
+        'surface.pane.reply',
+        'surface.card.open',
         'leads.queue.waiting',
         'leads.queue.unassigned',
         'leads.queue.all',
       ]),
     );
+    // The tabs are gone; a stale key left behind is a string nobody renders
+    // and a translator still pays for.
+    expect(want).not.toContain('surface.tab.conversations');
     for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
       const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
       const have = new Set(flat(cat));
@@ -307,9 +316,10 @@ describe('marketing i18n — the merged surface and its work queue', () => {
   });
 
   it('uses the spec’s own words in Turkish', () => {
-    expect((tr as Json).surface).toMatchObject({
-      tab: { conversations: 'Konuşmalar', contacts: 'Kişiler' },
-    });
+    // The spec's own word for the object on this surface. Not "leads" and not
+    // "conversations" — those were the two lists, and the correction was that
+    // there is only ever one, of people.
+    expect((tr as Json).surface).toMatchObject({ title: 'Kişiler' });
     expect(((tr as Json).leads as Json).queue).toMatchObject({
       waiting: 'Bekleyen',
       unassigned: 'Atanmamış',

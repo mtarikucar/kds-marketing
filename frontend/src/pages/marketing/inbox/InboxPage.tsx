@@ -1,188 +1,169 @@
-import { lazy, Suspense, useState, useEffect, type ReactNode } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { ArrowLeft, ChevronLeft, List, Settings, Table2, Users } from 'lucide-react';
 import {
   PageHeader,
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
   Button,
+  IconButton,
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui';
-import { Settings, ArrowLeft } from 'lucide-react';
-import marketingApi from '../../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import { API_URL } from '../../../lib/env';
 import { RouteFallback } from '../../../components/RouteFallback';
-import { ConversationList } from './ConversationList';
-import { ThreadPane } from './ThreadPane';
+import type { Lead } from '../../../features/marketing/types';
+import { PeopleList } from './PeopleList';
+import { PersonPane } from './PersonPane';
 import { LeadContextPane } from './LeadContextPane';
 
-// Lazy so a config tab's code only loads when opened — the inbox tab (the
-// default, real-time surface) must never pay for the config pages' bundles.
-// The contacts tab joins them for the same reason in reverse: /inbox must not
-// pay for the leads table, and /leads must not pay for it twice.
+// Lazy so a config surface's code only loads when opened — the daily surface
+// must never pay for the config pages' bundles, and the leads TABLE is a
+// deliberate second view that most sessions never open.
 const ChannelsSettingsPage = lazy(() => import('../ChannelsSettingsPage'));
 const SnippetsPage = lazy(() => import('../settings/snippets'));
 const AgentStudioPage = lazy(() => import('../AgentStudioPage'));
 const KnowledgeBasePage = lazy(() => import('../KnowledgeBasePage'));
 const LeadsPage = lazy(() => import('../leads/LeadsPage'));
 
-const TABS = ['inbox', 'contacts', 'channels', 'snippets', 'agents', 'knowledge'] as const;
-type InboxTab = (typeof TABS)[number];
-
-/** The two VISIBLE tabs; the rest are config surfaces behind the gear menu. */
-export type SurfaceTab = Extract<InboxTab, 'inbox' | 'contacts'>;
-const CONFIG_TABS: readonly InboxTab[] = ['channels', 'snippets', 'agents', 'knowledge'];
+/** The conversation-domain config surfaces, reachable at `?tab=`. */
+const CONFIG_TABS = ['channels', 'snippets', 'agents', 'knowledge'] as const;
+type ConfigTab = (typeof CONFIG_TABS)[number];
+const isConfigTab = (v: string | null): v is ConfigTab =>
+  (CONFIG_TABS as readonly string[]).includes(v ?? '');
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }
 
-interface ConversationRow {
-  id: string;
-  status: string;
-  aiPaused: boolean;
-  unreadCount: number;
-  lastMessageAt?: string | null;
-  lead?: { businessName?: string; contactPerson?: string } | null;
-  channel?: { type?: string; name?: string } | null;
-  lastMessage?: { body?: string; direction?: string } | null;
-}
-
 /**
- * Omnichannel Inbox — 3 panes: conversation list, the live thread + composer,
- * and the lead context card. A single authenticated SSE stream (fetch + Bearer
- * header) to the workspace keeps everything live (any event re-fetches the
- * affected queries). An agent reply pauses the AI (human takeover); the AI can
- * be resumed per thread.
+ * The person-primary surface. `/inbox` and `/leads` both render it, identically.
  *
- * We deliberately do NOT use EventSource: the native EventSource API cannot
- * set request headers, so the only way to authenticate it is to put the access
- * token in the query string — leaking the bearer token into logs and history.
- * Instead we open the stream with fetch() + an Authorization header and parse
- * the text/event-stream frames by hand. An AbortController tears the connection
- * down on unmount / token change, and a 3 s timer reconnects if the stream
- * drops (matching EventSource's auto-reconnect).
+ * ## What this replaces, and why
+ *
+ * v2.283.0 put the inbox and the lead list on one page as two tabs. Clicking a
+ * person in the Kişiler tab still went to `/leads/:id`, so the conversation list
+ * and the contact list stayed two objects with two behaviours. The owner's
+ * verdict was that the tab had merely been moved. It had.
+ *
+ * There is one object here: the **person**. A conversation is a field of theirs.
+ * Three columns — list (~34%) · stream · record card (~26%) — and selecting a
+ * row selects. The single navigation on the page is the record card's link into
+ * `/leads/:id`, where the four-tab detail does the deep work.
+ *
+ * ## What this component owns, and what it does not
+ *
+ * It owns exactly three things: WHO is selected, the live stream that keeps the
+ * three columns fresh, and the chrome (one header, the gear menu, the small-
+ * screen collapse). The list owns its queue and filters, the middle column owns
+ * writing back, the card owns the one link. That split is why a broken column
+ * cannot blank its neighbours — nobody is holding anybody else's data.
+ *
+ * `key={selected.id}` on the middle column is load-bearing, not tidy. Every
+ * piece of that component's state is per-person (the reply draft, the note
+ * draft, which thread is in hand) and this branch has already shipped the other
+ * outcome once: a header kept lead A's phone number and dialled it under lead
+ * B's id. Keying is the whole mechanism — there is no second reset-on-change
+ * effect, because two mechanisms means one of them can rot unnoticed.
+ *
+ * ## Two URL parameters survive from the surface this replaces
+ *
+ * `?tab=channels|snippets|agents|knowledge` still opens the four conversation-
+ * domain config surfaces behind the gear (manager-only, and gated on
+ * `conversationAi` because every one of them configures that domain).
+ *
+ * `?view=table` opens the leads TABLE — filters, bulk assign, bulk delete, bulk
+ * enrol, CSV export. This is a deliberate deviation from "one list, no tabs" and
+ * it is recorded rather than smuggled: those are manager tools that exist
+ * nowhere else in the product, the brief forbade rebuilding them onto the new
+ * list, and deleting a manager's bulk-assign to satisfy a layout would be a
+ * worse answer than a second VIEW of the same set of people. It is a view, not a
+ * second object: same people, same queues, no default that lands anyone there.
  */
-export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: SurfaceTab } = {}) {
+export default function InboxPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const { accessToken, user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const { has, isLoading: entitlementsLoading } = useEntitlements();
 
-  // `GET /conversations` and `GET /channels` are both
-  // @RequiresFeature('conversationAi'). navigation.ts gates `/inbox` on it and
-  // `/leads` on nothing — so now that both routes land HERE, an un-entitled
-  // workspace could reach a Konuşmalar tab whose only reachable state is an
-  // error. The gate moves WITH the item (navigation.ts's own rule, one level
-  // down): trigger and content together, and the gear menu with them, because
-  // the merge is what would have put it in front of them.
+  // A RESOLVED yes before anything is FETCHED: `GET /conversations` and the SSE
+  // endpoint are both @RequiresFeature('conversationAi'), and `/leads` — which
+  // lands here too — carries no entitlement at all.
   const canConverse = has('conversationAi');
-  // Only a RESOLVED "no" takes the tab away. useEntitlements fails CLOSED while
-  // `/billing/summary` is in flight, which is right for a nav rail — an item
-  // that appears a beat late beats one that 403s — and wrong here: it would
-  // open /inbox on Kişiler for the first render, mounting the leads table and
-  // firing its three requests, then flip back the moment billing answered.
-  // Nothing is FETCHED in that window either way; `conversationsLive` below
-  // still demands a resolved yes.
-  const offersConversations = canConverse || entitlementsLoading;
+  // The gear is chrome, not a request. `useEntitlements` fails closed while
+  // /billing/summary is in flight, which would blink the menu (and bounce a
+  // `?tab=` deep link off its own page) for one render.
+  const offersConfig = isManager && (canConverse || entitlementsLoading);
 
-  // ── URL-synced top tabs (?tab=) ────────────────────────────────────────────
-  // Konuşmalar + Kişiler are the two visible tabs of ONE surface; `/inbox` and
-  // `/leads` render this same component and differ only in `defaultTab`. Both
-  // routes stay — they are in the frozen path set and in people's bookmarks.
-  // The 4 conversation-domain config surfaces stay behind the gear menu and
-  // are manager-only: hidden from the bar AND deep links fall back for reps.
-  // All inbox state/queries/SSE live in THIS component, so switching tabs
-  // never tears down the real-time stream or the open thread.
   const [params, setParams] = useSearchParams();
-  const rawTab = params.get('tab');
-  const requested: InboxTab = (TABS as readonly string[]).includes(rawTab ?? '')
-    ? (rawTab as InboxTab)
-    : defaultTab;
-  // Guard the CONTROLLED state, not just the render: if the trigger for the
-  // requested value has been gated away, Radix selects nothing and the page
-  // strands on a blank panel. Fall back to a tab that exists, however the
-  // state got here.
-  const tab: InboxTab =
-    CONFIG_TABS.includes(requested) && !(isManager && offersConversations)
-      ? defaultTab
-      : requested;
-  const activeTab: InboxTab =
-    tab === 'inbox' && !offersConversations ? 'contacts' : tab;
+  const requestedTab = params.get('tab');
+  // Guard the RENDER, not just the menu: a deep link to a config surface a rep
+  // may not open has to land on the surface rather than on a blank panel.
+  const configTab: ConfigTab | null =
+    isConfigTab(requestedTab) && offersConfig ? requestedTab : null;
+  const tableView = params.get('view') === 'table';
+
   const setTab = (v: string) =>
-    setParams((p) => {
-      p.set('tab', v);
-      return p;
-    }, { replace: true });
+    setParams(
+      (p) => {
+        p.set('tab', v);
+        return p;
+      },
+      { replace: true },
+    );
 
-  // Someone filtering their contact list is not running a live inbox. The
-  // conversation poll and the SSE connection start when Konuşmalar is first
-  // opened and then stay up — latched, so going back to Kişiler does not tear
-  // down the stream or drop the open thread.
-  const [inboxOpened, setInboxOpened] = useState(activeTab === 'inbox');
+  const setView = (v: 'list' | 'table') =>
+    setParams(
+      (p) => {
+        if (v === 'table') p.set('view', 'table');
+        else p.delete('view');
+        return p;
+      },
+      { replace: true },
+    );
+
+  // The whole row, not just the id: the middle and right columns read this
+  // person's fields, and re-fetching a record the list already returned would
+  // be a third source of truth about who this is.
+  const [selected, setSelected] = useState<Lead | null>(null);
+  // Below lg the record card cannot sit beside the other two, so it arrives as
+  // a sheet on request.
+  const [cardOpen, setCardOpen] = useState(false);
+
+  // ── The live stream ────────────────────────────────────────────────────────
+  //
+  // Kept verbatim from the Inbox, including why it is fetch() and not
+  // EventSource: the native API cannot set request headers, so authenticating
+  // it means putting the access token in the query string and leaking a bearer
+  // token into logs and history. An AbortController tears it down; a 3s timer
+  // reconnects, matching EventSource's own behaviour.
+  //
+  // What changed is what a frame REFRESHES. Previously it invalidated the
+  // conversation list and the open thread. The middle column is no longer a
+  // thread — it is `LeadStream`, keyed under ['marketing','lead',id,'stream'] —
+  // so on the old wiring an inbound message landed in the database and nothing
+  // on screen moved until a reload. Three keys now:
+  //
+  //   1. the conversation prefix (thread lists, the pane's channel picker)
+  //   2. the people LIST, so the row's preview, unread and position update
+  //   3. the selected person's STREAM, so the message itself appears
+  //
+  // (3) fires for every workspace event rather than only this person's, because
+  // ConversationStreamEvent carries `conversationId` and no `leadId` — the
+  // client cannot tell whose it is. One extra timeline fetch per event is the
+  // honest price; the cheaper fix is a `leadId` on the event, which is a backend
+  // contract change and is deliberately not smuggled into this commit.
+  //
+  // The chip COUNTS are excluded by predicate. They sit under the same
+  // ['marketing','leads'] prefix and refetching three of them per frame would
+  // turn one inbound message into six requests.
   useEffect(() => {
-    if (activeTab === 'inbox') setInboxOpened(true);
-  }, [activeTab]);
-  const conversationsLive = canConverse && (activeTab === 'inbox' || inboxOpened);
-
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  const [statusFilter, setStatusFilter] = useState('OPEN');
-  const [showContext, setShowContext] = useState(false);
-  const [noteDraft, setNoteDraft] = useState('');
-
-  // ── Queries ────────────────────────────────────────────────────────────────
-
-  const {
-    data: conversations,
-    isLoading: conversationsLoading,
-    isError: conversationsError,
-    refetch: refetchConversations,
-  } = useQuery<ConversationRow[]>({
-    queryKey: ['marketing', 'conversations', statusFilter],
-    queryFn: () =>
-      marketingApi
-        .get('/conversations', { params: { status: statusFilter } })
-        .then((r) => r.data),
-    refetchInterval: 30_000,
-    enabled: conversationsLive,
-  });
-
-  const { data: thread } = useQuery({
-    queryKey: ['marketing', 'conversation', selectedId],
-    queryFn: () =>
-      marketingApi.get(`/conversations/${selectedId}`).then((r) => r.data),
-    enabled: !!selectedId,
-  });
-
-  // Team-only notes. The thread payload deliberately does not carry them, and
-  // nothing in the panel used to fetch them — so notes written over the API (or
-  // by an AI agent handing a thread over) were stored where no human could read
-  // them.
-  const { data: notes } = useQuery<{ id: string; body: string; createdAt: string }[]>({
-    queryKey: ['marketing', 'conversation', selectedId, 'notes'],
-    queryFn: () =>
-      marketingApi.get(`/conversations/${selectedId}/notes`).then((r) => r.data),
-    enabled: !!selectedId,
-  });
-
-  // ── Live SSE stream ────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    // No token, no entitlement, or nobody has opened Konuşmalar yet: there is
-    // nothing for a stream to keep fresh, and on an un-entitled workspace the
-    // endpoint would only ever 403 in a reconnect loop.
-    if (!accessToken || !conversationsLive) return;
+    if (!accessToken || !canConverse) return;
 
     const controller = new AbortController();
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -194,16 +175,18 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
         .filter((line) => line.startsWith('data:'))
         .map((line) => line.slice(5).trimStart());
       if (dataLines.length === 0) return;
-      const payload = dataLines.join('\n');
       try {
-        const data = JSON.parse(payload);
+        const data = JSON.parse(dataLines.join('\n'));
         if (data?.kind === 'heartbeat') return;
         queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
-        if (data?.conversationId) {
-          queryClient.invalidateQueries({
-            queryKey: ['marketing', 'conversation', data.conversationId],
-          });
-        }
+        queryClient.invalidateQueries({
+          predicate: (q) =>
+            q.queryKey[0] === 'marketing' &&
+            q.queryKey[1] === 'leads' &&
+            q.queryKey[2] !== 'queue-count',
+        });
+        if (selected)
+          queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', selected.id] });
       } catch {
         /* ignore malformed frame */
       }
@@ -228,8 +211,8 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          // Normalize CRLF → LF so the `\n\n` frame split works regardless of
-          // whether the server emits `\n\n` or `\r\n\r\n` boundaries.
+          // Normalize CRLF -> LF so the `\n\n` frame split works whichever
+          // boundary the server emits.
           buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
           let sep: number;
           while ((sep = buffer.indexOf('\n\n')) !== -1) {
@@ -256,294 +239,178 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
       if (reconnectTimer) clearTimeout(reconnectTimer);
       controller.abort();
     };
-  }, [accessToken, conversationsLive, queryClient]);
+  }, [accessToken, canConverse, queryClient, selected]);
 
-  // ── Side-effects ───────────────────────────────────────────────────────────
-
-  // Reset the composer whenever the open conversation changes — `draft` is a
-  // single shared state (cleared only on a successful send), so without this a
-  // half-typed reply would carry from one customer's thread into the next and
-  // could be sent to the wrong person.
-  useEffect(() => {
-    setDraft('');
-    // Same reason for the note box: ThreadPane is prop-driven, not key-gated,
-    // so a half-typed internal note would otherwise follow the agent into the
-    // next customer's thread and be filed against the wrong lead.
-    setNoteDraft('');
-  }, [selectedId]);
-
-  // Mark read on open AND whenever a new inbound bumps the OPEN thread's unread
-  // count back up: an SSE message frame refetches the list, so a message landing
-  // while the agent is still reading would otherwise re-surface (and keep
-  // climbing) a badge on the very thread in focus. Keyed on the selected
-  // conversation's unreadCount so it re-fires on a new message but only POSTs
-  // when there is actually something unread — no redundant POST on every list
-  // refetch, and no loop (the POST zeroes the count, settling the effect).
-  const selectedUnread = conversations?.find((c) => c.id === selectedId)?.unreadCount ?? 0;
-  useEffect(() => {
-    if (selectedId && selectedUnread > 0)
-      marketingApi
-        .post(`/conversations/${selectedId}/read`)
-        .then(() => queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] }))
-        .catch(() => undefined);
-  }, [selectedId, selectedUnread, queryClient]);
-
-  // ── Mutations ──────────────────────────────────────────────────────────────
-
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
-    if (selectedId)
-      queryClient.invalidateQueries({
-        queryKey: ['marketing', 'conversation', selectedId],
-      });
-  };
-
-  const reply = useMutation({
-    mutationFn: async (text: string) => {
-      const convoId = selectedId;
-      await marketingApi.post(`/conversations/${convoId}/reply`, { text });
-      return convoId;
-    },
-    onSuccess: (convoId) => {
-      // Only clear the composer if the agent is STILL on the thread we sent to —
-      // a slow send that resolves after they switched threads must not wipe the
-      // new thread's in-progress draft.
-      if (convoId === selectedId) setDraft('');
-      invalidate();
-    },
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message ?? t('inbox.sendFailed', 'Send failed')),
-  });
-
-  const toggleAi = useMutation({
-    mutationFn: (paused: boolean) =>
-      marketingApi.post(`/conversations/${selectedId}/ai-pause`, { paused }),
-    onSuccess: invalidate,
-    // Without feedback an agent who clicked "pause AI" assumes it worked and
-    // starts replying while the AI keeps answering — double replies on a live
-    // customer channel. Surface the failure so they know the AI is still on.
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message ?? t('inbox.aiToggleFailed', 'Could not change the AI status')),
-  });
-
-  const closeConvo = useMutation({
-    mutationFn: () =>
-      marketingApi.post(`/conversations/${selectedId}/close`),
-    onSuccess: invalidate,
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message ?? t('inbox.closeFailed', 'Could not close the conversation')),
-  });
-
-  const reopenConvo = useMutation({
-    mutationFn: () =>
-      marketingApi.post(`/conversations/${selectedId}/reopen`),
-    onSuccess: invalidate,
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message ?? t('inbox.reopenFailed', 'Could not reopen the conversation')),
-  });
-
-  const addNote = useMutation({
-    mutationFn: (body: string) =>
-      marketingApi.post(`/conversations/${selectedId}/notes`, { body }),
-    onSuccess: () => {
-      setNoteDraft('');
-      queryClient.invalidateQueries({
-        queryKey: ['marketing', 'conversation', selectedId, 'notes'],
-      });
-    },
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message ?? t('inbox.noteFailed', 'Could not save the note')),
-  });
-
-  // ── Derived ────────────────────────────────────────────────────────────────
-
-  const convo = thread?.conversation;
-  const lead = thread?.lead;
-  const messages = thread?.messages ?? [];
-
-  const handleBack = () => {
-    setSelectedId(null);
-    setShowContext(false);
+  const onSelect = (person: Lead) => {
+    setSelected(person);
+    setCardOpen(false);
   };
 
   return (
-    <div className="flex flex-col h-full gap-4">
-      {/* ONE header for the merged surface. Both halves used to render their
-          own PageHeader, and nesting them stacked two <h1>s. The title follows
-          the active tab so each route still reads the way it always did, and
-          the ACTIONS belong to the tab that owns them — the gear to Konuşmalar,
-          Export CSV + Yeni Lead to Kişiler (those two live inside the embedded
-          leads surface, which owns the filter state they act on; same
-          arrangement ChannelsSettingsPage and SnippetsPage already use as
-          embedded tabs here). */}
+    <div className="flex h-full flex-col gap-4">
+      {/* ONE header. Both halves of the old surface rendered their own and
+          nesting them stacked two <h1>s. */}
       <PageHeader
-        title={activeTab === 'contacts' ? t('leads.title') : t('inbox.title')}
-        description={
-          activeTab === 'contacts' ? t('leads.subtitle') : t('inbox.subtitle')
-        }
+        title={t('surface.title', 'Kişiler')}
+        description={t('surface.subtitle', 'Herkes tek listede — konuşanı da, sessizi de.')}
         actions={
-          // 2026-07 trim: the 4 one-time config surfaces no longer sit as
-          // always-visible tabs on the daily messaging page — they live behind
-          // ONE gear menu (deep links via ?tab= keep resolving unchanged).
-          // Gated on conversationAi too: every one of them configures the
-          // conversation domain, and `/leads` never used to offer them.
-          isManager && offersConversations ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Settings className="h-4 w-4" aria-hidden="true" />
-                  {t('inbox.settings', 'Inbox settings')}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setTab('channels')}>
-                  {t('inbox.tab.channels', 'Channels')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTab('snippets')}>
-                  {t('inbox.tab.snippets', 'Canned Responses')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTab('agents')}>
-                  {t('inbox.tab.agents', 'AI Agents')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTab('knowledge')}>
-                  {t('inbox.tab.knowledge', 'Knowledge')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            {/* The leads table, as a VIEW of the same people. See the file
+                docstring: it is where bulk assign, bulk delete, bulk enrol and
+                CSV export live, and they exist nowhere else. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setView(tableView ? 'list' : 'table')}
+            >
+              {tableView ? (
+                <List className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Table2 className="h-4 w-4" aria-hidden="true" />
+              )}
+              {tableView
+                ? t('surface.view.list', 'Liste')
+                : t('surface.view.table', 'Tablo')}
+            </Button>
+
+            {offersConfig && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Settings className="h-4 w-4" aria-hidden="true" />
+                    {t('inbox.settings', 'Inbox settings')}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setTab('channels')}>
+                    {t('inbox.tab.channels', 'Channels')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setTab('snippets')}>
+                    {t('inbox.tab.snippets', 'Canned Responses')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setTab('agents')}>
+                    {t('inbox.tab.agents', 'AI Agents')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setTab('knowledge')}>
+                    {t('inbox.tab.knowledge', 'Knowledge')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         }
       />
 
-      <Tabs value={activeTab} onValueChange={setTab} className="flex-1 min-h-0 flex flex-col">
-        {/* The merged surface: same data, different verb. Konuşmalar triages
-            what came in; Kişiler filters the whole contact list — including
-            the leads that have never had a conversation, which a
-            conversation-first single list would hide entirely. That is the
-            reason there are two tabs and not one merged feed. */}
-        {!CONFIG_TABS.includes(activeTab) && (
-          <TabsList className="shrink-0">
-            {offersConversations && (
-              <TabsTrigger value="inbox">
-                {t('surface.tab.conversations', 'Konuşmalar')}
-              </TabsTrigger>
-            )}
-            <TabsTrigger value="contacts">
-              {t('surface.tab.contacts', 'Kişiler')}
-            </TabsTrigger>
-          </TabsList>
-        )}
-
-        {/* On a config surface, one compact affordance leads back to the inbox. */}
-        {isManager && CONFIG_TABS.includes(activeTab) && (
+      {configTab ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
           <div className="shrink-0">
-            <Button variant="ghost" size="sm" onClick={() => setTab('inbox')}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setParams(
+                  (p) => {
+                    p.delete('tab');
+                    return p;
+                  },
+                  { replace: true },
+                )
+              }
+            >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               {t('inbox.backToInbox', 'Back to inbox')}
             </Button>
           </div>
-        )}
-
-        {/* Konuşmalar — the pre-existing 3-pane layout, byte-for-byte. Its
-            state, queries and the SSE stream live in the page component above,
-            so the open thread survives a trip to Kişiler and back (Radix
-            unmounts the inactive panel; only state held ABOVE the tabs
-            survives). Trigger and content are gated TOGETHER: gating only the
-            trigger leaves a dead panel `setTab` can still reach, and gating
-            only the content leaves a trigger that blanks the page. */}
-        {offersConversations && (
-        <TabsContent
-          value="inbox"
-          className="flex-1 min-h-0 flex gap-0 sm:gap-4 mt-0"
-        >
-          {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
-          <div className={selectedId ? 'hidden sm:flex' : 'flex w-full sm:w-auto'}>
-            <ConversationList
-              conversations={conversations}
-              // Also loading while the entitlement answer is still in
-              // flight: the query is not enabled yet, so `isLoading` is false
-              // and the list would flash "no conversations" at a workspace
-              // that has plenty.
-              isLoading={conversationsLoading || !conversationsLive}
-              isError={conversationsError}
-              selectedId={selectedId}
-              statusFilter={statusFilter}
-              isManager={isManager}
-              onSelect={(id) => setSelectedId(id)}
-              onStatusFilter={setStatusFilter}
-              onRetry={() => refetchConversations()}
-            />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <Lazy>
+              {configTab === 'channels' ? (
+                <ChannelsSettingsPage embedded />
+              ) : configTab === 'snippets' ? (
+                <SnippetsPage embedded />
+              ) : configTab === 'agents' ? (
+                <AgentStudioPage embedded />
+              ) : (
+                <KnowledgeBasePage embedded />
+              )}
+            </Lazy>
           </div>
-
-          {/* Pane 2 — thread + composer (full-width on phone when a conversation is open) */}
+        </div>
+      ) : tableView ? (
+        <div data-testid="surface-table" className="min-h-0 flex-1 overflow-y-auto">
+          <Lazy>
+            <LeadsPage embedded />
+          </Lazy>
+        </div>
+      ) : (
+        <div data-testid="person-surface" className="flex min-h-0 flex-1 gap-0 md:gap-4">
+          {/* Left — people. Full width until someone is picked on a phone;
+              the existing inbox's own answer to the same problem. */}
           <div
+            data-testid="surface-list"
             className={`${
-              selectedId ? 'flex' : 'hidden sm:flex'
-            } w-full sm:w-auto sm:flex-1 min-w-0`}
+              selected ? 'hidden md:flex' : 'flex w-full'
+            } min-h-0 md:w-[34%] md:max-w-sm md:shrink-0`}
           >
-            <ThreadPane
-              convo={convo}
-              lead={lead}
-              channel={thread?.channel}
-              messages={messages}
-              draft={draft}
-              isSending={reply.isPending}
-              isTogglingAi={toggleAi.isPending}
-              isClosing={closeConvo.isPending}
-              isReopening={reopenConvo.isPending}
-              notes={notes ?? []}
-              noteDraft={noteDraft}
-              isAddingNote={addNote.isPending}
-              onDraftChange={setDraft}
-              onSend={() => draft.trim() && reply.mutate(draft.trim())}
-              onToggleAi={() => convo && toggleAi.mutate(!convo.aiPaused)}
-              onClose={() => closeConvo.mutate()}
-              onReopen={() => reopenConvo.mutate()}
-              onNoteDraftChange={setNoteDraft}
-              onAddNote={() => {
-                const body = noteDraft.trim();
-                if (body) addNote.mutate(body);
-              }}
-              onBack={handleBack}
-              onShowContext={() => setShowContext(true)}
+            <PeopleList
+              selectedId={selected?.id ?? null}
+              onSelect={onSelect}
+              className="w-full"
             />
           </div>
 
-          {/* Pane 3 — lead context: inline at lg+, sheet below lg */}
-          <LeadContextPane lead={lead} />
-          {showContext && (
-            <LeadContextPane
-              lead={lead}
-              asSheet
-              onClose={() => setShowContext(false)}
+          {/* Middle — the person's stream and the composer. */}
+          <div
+            data-testid="surface-pane"
+            className={`${
+              selected ? 'flex' : 'hidden md:flex'
+            } min-h-0 w-full min-w-0 flex-1 flex-col gap-2`}
+          >
+            {/* Below lg the other two columns are not both on screen; these are
+                the way back to the list and forward to the record. */}
+            {selected && (
+              <div className="flex shrink-0 items-center justify-between lg:hidden">
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('inbox.back', 'Geri')}
+                  onClick={() => setSelected(null)}
+                  className="md:hidden"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </IconButton>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('surface.card.title', 'Kayıt')}
+                  onClick={() => setCardOpen(true)}
+                  className="ms-auto"
+                >
+                  <Users className="h-5 w-5" />
+                </IconButton>
+              </div>
+            )}
+            {/* `key` is the ONE reset mechanism for per-person state. See the
+                file docstring — this branch has already dialled the wrong
+                number once by leaving it out. */}
+            <PersonPane
+              key={selected?.id ?? 'none'}
+              person={selected}
+              className="min-h-0 flex-1"
             />
+          </div>
+
+          {/* Right — the record card, inline at lg+ only. */}
+          <div
+            data-testid="surface-card"
+            className="hidden min-h-0 lg:flex lg:w-[26%] lg:max-w-xs lg:shrink-0"
+          >
+            <LeadContextPane lead={selected} className="w-full" />
+          </div>
+          {cardOpen && (
+            <LeadContextPane lead={selected} asSheet onClose={() => setCardOpen(false)} />
           )}
-        </TabsContent>
-        )}
-
-        {/* Kişiler — the leads list, unchanged: its own filters, table,
-            pagination, bulk actions and CSV export, plus the work-queue chips.
-            Embedded so the header above is the only one; it keeps its own
-            actions in a toolbar row, the arrangement the config tabs here
-            already use. Not entitlement-gated — /leads never was, and
-            marketing-leads.controller gates only its two smsOtp endpoints. */}
-        <TabsContent value="contacts" className="flex-1 min-h-0 overflow-y-auto mt-4">
-          <Lazy><LeadsPage embedded /></Lazy>
-        </TabsContent>
-
-        {/* Config tabs — manager-only, lazy, scroll independently of the shell. */}
-        <TabsContent value="channels" className="flex-1 min-h-0 overflow-y-auto">
-          <Lazy><ChannelsSettingsPage embedded /></Lazy>
-        </TabsContent>
-        <TabsContent value="snippets" className="flex-1 min-h-0 overflow-y-auto">
-          <Lazy><SnippetsPage embedded /></Lazy>
-        </TabsContent>
-        <TabsContent value="agents" className="flex-1 min-h-0 overflow-y-auto">
-          <Lazy><AgentStudioPage embedded /></Lazy>
-        </TabsContent>
-        <TabsContent value="knowledge" className="flex-1 min-h-0 overflow-y-auto">
-          <Lazy><KnowledgeBasePage embedded /></Lazy>
-        </TabsContent>
-      </Tabs>
+        </div>
+      )}
     </div>
   );
 }
