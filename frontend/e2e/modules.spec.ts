@@ -108,7 +108,7 @@ test('switching a module off drops its PAGE from the surface — not the surface
   // and prove nothing about the live cache. This is still the same JS heap
   // that issued the write.
   await inboxSurface.click();
-  await expect(app.getByRole('heading', { level: 1, name: "Lead'ler" })).toBeVisible();
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
 
   // The PAGE is gone from the sub-nav, and from the rail's target with it…
   await expect(routesToInbox).toHaveCount(0);
@@ -123,7 +123,7 @@ test('switching a module off drops its PAGE from the surface — not the surface
   // that the server-side entitlements cache was invalidated — not that a tab
   // merely vanished from a client-side cache for 30 seconds.
   await app.reload();
-  await expect(app.getByRole('heading', { level: 1, name: "Lead'ler" })).toBeVisible();
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
   await expect(routesToInbox).toHaveCount(0);
   await expect(inboxSurface).toBeVisible();
 
