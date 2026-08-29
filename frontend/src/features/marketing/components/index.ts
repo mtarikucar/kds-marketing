@@ -9,6 +9,15 @@ export { default as LeadStatusBadge } from './LeadStatusBadge';
 export { default as LeadStream } from './LeadStream';
 export type { LeadStreamProps } from './LeadStream';
 export { default as AssignCell } from './AssignCell';
+// The work-queue chips, shared by the person-primary surface's list column and
+// the leads table. One definition of `Bekleyen`, because it has to keep meaning
+// exactly what the morning digest means.
+export {
+  LeadQueueChips,
+  useLeadQueueCounts,
+  LEAD_QUEUE_PARAMS,
+} from './LeadQueueChips';
+export type { LeadQueue, LeadQueueBase, LeadQueueCount } from './LeadQueueChips';
 export { default as BulkActionToolbar } from './BulkActionToolbar';
 export { default as DistributionConfigCard } from './DistributionConfigCard';
 export { default as ClickToDialButton } from './ClickToDialButton';
