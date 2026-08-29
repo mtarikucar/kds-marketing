@@ -53,6 +53,7 @@ import ContactInfo from './ContactInfo';
 import { WalletPanel } from './WalletPanel';
 import { CompanyPanel } from './CompanyPanel';
 import ActivityTimelineTab from './ActivityTimelineTab';
+import ConversationsTab from './ConversationsTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
 import ConvertDialog from './ConvertDialog';
@@ -389,6 +390,14 @@ export default function LeadDetailPage() {
           <Tabs defaultValue="activities">
             <TabsList>
               <TabsTrigger value="activities">Activities</TabsTrigger>
+              {/* The lead and the conversation about the lead used to live on
+                  two separate screens; these two tabs put the whole person on
+                  one record. Both fetch their own data (neither rides on the
+                  lead payload), so neither can show a count in the tab strip
+                  without a second query firing before the tab is ever opened. */}
+              <TabsTrigger value="conversations">
+                {t('leadDetail.tabs.conversations', 'Konuşmalar')}
+              </TabsTrigger>
               <TabsTrigger value="offers">Offers ({lead.offers?.length || 0})</TabsTrigger>
               <TabsTrigger value="tasks">Tasks ({lead.tasks?.length || 0})</TabsTrigger>
             </TabsList>
@@ -400,6 +409,10 @@ export default function LeadDetailPage() {
                 onSubmit={(data) => activityMutation.mutate(data)}
                 isPending={activityMutation.isPending}
               />
+            </TabsContent>
+
+            <TabsContent value="conversations">
+              <ConversationsTab leadId={lead.id} fmtDate={fmtDate} />
             </TabsContent>
 
             <TabsContent value="offers">

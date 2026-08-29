@@ -588,7 +588,9 @@
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "conversations": "Conversations",
+      "sales": "Sales"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -662,6 +664,26 @@
     "deleteConfirm": {
       "title": "Delete this lead?",
       "desc": "The lead and its timeline are removed from your workspace. This cannot be undone."
+    },
+    "conversations": {
+      "failed": "Could not load the conversations.",
+      "unknownChannel": "Unknown channel",
+      "aiPaused": "AI off",
+      "noMessage": "No messages",
+      "openInbox": "Open the inbox",
+      "empty": {
+        "title": "No conversation with this contact yet",
+        "desc": "When the first message arrives — WhatsApp, email or any other channel — you will see it here."
+      }
+    },
+    "sales": {
+      "failed": "Could not load the deals.",
+      "unknownStage": "Unknown stage",
+      "newDeal": "Create a deal for this contact",
+      "empty": {
+        "title": "No deal for this contact yet",
+        "desc": "Open a deal to track this contact in the pipeline and see its stage here."
+      }
     }
   },
   "createLead": {

@@ -253,7 +253,9 @@
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "conversations": "Переписка",
+      "sales": "Продажи"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -321,7 +323,27 @@
     "sentOffer": "Offer sent",
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
-    "convertError": "Couldn't convert the lead"
+    "convertError": "Couldn't convert the lead",
+    "conversations": {
+      "failed": "Не удалось загрузить переписку.",
+      "unknownChannel": "Неизвестный канал",
+      "aiPaused": "ИИ выключен",
+      "noMessage": "Сообщений нет",
+      "openInbox": "Открыть входящие",
+      "empty": {
+        "title": "С этим контактом ещё не общались",
+        "desc": "Когда придёт первое сообщение — WhatsApp, почта или другой канал — вы увидите его здесь."
+      }
+    },
+    "sales": {
+      "failed": "Не удалось загрузить сделки.",
+      "unknownStage": "Неизвестный этап",
+      "newDeal": "Создать сделку для этого контакта",
+      "empty": {
+        "title": "По этому контакту ещё нет сделок",
+        "desc": "Откройте сделку, чтобы вести контакт по воронке и видеть его этап здесь."
+      }
+    }
   },
   "createLead": {
     "titleNew": "New lead",

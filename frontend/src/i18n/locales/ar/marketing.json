@@ -253,7 +253,9 @@
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "conversations": "المحادثات",
+      "sales": "المبيعات"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -321,7 +323,27 @@
     "sentOffer": "Offer sent",
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
-    "convertError": "Couldn't convert the lead"
+    "convertError": "Couldn't convert the lead",
+    "conversations": {
+      "failed": "تعذّر تحميل المحادثات.",
+      "unknownChannel": "قناة غير معروفة",
+      "aiPaused": "الذكاء الاصطناعي متوقف",
+      "noMessage": "لا توجد رسائل",
+      "openInbox": "افتح صندوق الوارد",
+      "empty": {
+        "title": "لا توجد محادثة مع جهة الاتصال هذه بعد",
+        "desc": "عند وصول أول رسالة — واتساب أو بريد إلكتروني أو أي قناة أخرى — ستراها هنا."
+      }
+    },
+    "sales": {
+      "failed": "تعذّر تحميل الصفقات.",
+      "unknownStage": "مرحلة غير معروفة",
+      "newDeal": "أنشئ صفقة لجهة الاتصال هذه",
+      "empty": {
+        "title": "لا توجد صفقة لجهة الاتصال هذه بعد",
+        "desc": "افتح صفقة لتتبّع جهة الاتصال في المسار وترى مرحلتها هنا."
+      }
+    }
   },
   "createLead": {
     "titleNew": "New lead",

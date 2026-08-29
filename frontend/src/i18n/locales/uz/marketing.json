@@ -253,7 +253,9 @@
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "conversations": "Suhbatlar",
+      "sales": "Savdo"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -321,7 +323,27 @@
     "sentOffer": "Offer sent",
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
-    "convertError": "Couldn't convert the lead"
+    "convertError": "Couldn't convert the lead",
+    "conversations": {
+      "failed": "Suhbatlarni yuklab bo'lmadi.",
+      "unknownChannel": "Noma'lum kanal",
+      "aiPaused": "AI o'chiq",
+      "noMessage": "Xabar yo'q",
+      "openInbox": "Kiruvchi qutini ochish",
+      "empty": {
+        "title": "Bu kishi bilan hali gaplashilmagan",
+        "desc": "Birinchi xabar kelganda — WhatsApp, e-pochta yoki boshqa kanal — shu yerda ko'rasiz."
+      }
+    },
+    "sales": {
+      "failed": "Bitimlarni yuklab bo'lmadi.",
+      "unknownStage": "Noma'lum bosqich",
+      "newDeal": "Bu kishi uchun bitim yarating",
+      "empty": {
+        "title": "Bu kishi uchun hali bitim yo'q",
+        "desc": "Bitim ochsangiz, kishini quvurda kuzatasiz va bosqichini shu yerda ko'rasiz."
+      }
+    }
   },
   "createLead": {
     "titleNew": "New lead",

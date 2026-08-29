@@ -844,7 +844,9 @@
     "tabs": {
       "activities": "Etkinlik",
       "offers": "Teklifler",
-      "tasks": "Görevler"
+      "tasks": "Görevler",
+      "conversations": "Konuşmalar",
+      "sales": "Satış"
     },
     "summary": {
       "contactInfo": "İletişim",
@@ -918,6 +920,26 @@
     "deleteConfirm": {
       "title": "Bu müşteri adayı silinsin mi?",
       "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
+    },
+    "conversations": {
+      "failed": "Konuşmalar yüklenemedi.",
+      "unknownChannel": "Bilinmeyen kanal",
+      "aiPaused": "AI kapalı",
+      "noMessage": "Mesaj yok",
+      "openInbox": "Gelen kutusunu aç",
+      "empty": {
+        "title": "Bu kişiyle henüz konuşulmadı",
+        "desc": "WhatsApp, e-posta ya da başka bir kanaldan ilk mesaj geldiğinde burada görürsün."
+      }
+    },
+    "sales": {
+      "failed": "Fırsatlar yüklenemedi.",
+      "unknownStage": "Bilinmeyen aşama",
+      "newDeal": "Bu kişi için fırsat oluştur",
+      "empty": {
+        "title": "Bu kişi için henüz fırsat yok",
+        "desc": "Bir fırsat açtığında kişiyi hattında takip eder, aşamasını burada görürsün."
+      }
     }
   },
   "fax": {

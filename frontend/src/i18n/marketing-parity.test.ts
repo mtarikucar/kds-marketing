@@ -98,3 +98,35 @@ describe('marketing i18n — home left-column tabs', () => {
     }
   });
 });
+
+describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
+  // Two whole TABS and their empty/error copy. Same trap as the timeline panel:
+  // `fallbackLng: 'en'` means a locale that simply lacks these keys neither
+  // throws nor shows a raw key — a ru/ar/uz operator is quietly served English,
+  // and nothing at runtime notices (missingKeyHandler is DEV-only).
+  //
+  // The error strings are in the same set on purpose. `leadDetail.*.failed` is
+  // the sentence that distinguishes "could not load" from "nothing here"; if it
+  // silently degrades to English while the empty state is translated, the two
+  // states stop reading as different states in that locale.
+  it('every offered locale defines the conversations + sales keys, not just tr', async () => {
+    const want = flat((tr as Json).leadDetail as Json)
+      .filter((k) => /^(conversations\.|sales\.|tabs\.(conversations|sales)$)/.test(k))
+      .map((k) => `leadDetail.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'leadDetail.tabs.conversations',
+        'leadDetail.tabs.sales',
+        'leadDetail.conversations.failed',
+        'leadDetail.conversations.empty.title',
+        'leadDetail.sales.failed',
+        'leadDetail.sales.empty.title',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+});
