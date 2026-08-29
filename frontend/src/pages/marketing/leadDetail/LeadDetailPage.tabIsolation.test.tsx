@@ -5,28 +5,31 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import LeadDetailPage from './LeadDetailPage';
 import * as conversationsService from '../../../features/marketing/api/conversations.service';
+import * as leadStreamService from '../../../features/marketing/api/leadStream.service';
 import * as opportunitiesService from '../../../features/marketing/api/opportunities.service';
 
 /**
  * Spec §"Hata davranışı" / §Test: "bir sekmenin hatası diğerlerini düşürmüyor".
  *
  * This lives in its OWN file rather than in LeadDetailPage.test.tsx because
- * that file stubs `./ConversationsTab` and `./SalesTab` to null, and `vi.mock`
- * is file-scoped and hoisted — a failure-isolation test written there could
- * only ever prove that two stubs do not interfere with each other. Here the
- * two tabs are REAL and it is their SERVICE modules that are mocked, so the
+ * that file stubs `LeadStream` and `./SalesTab` to null, and `vi.mock` is
+ * file-scoped and hoisted — a failure-isolation test written there could only
+ * ever prove that two stubs do not interfere with each other. Here the two
+ * tabs are REAL and it is their SERVICE modules that are mocked, so the
  * failing query is a real failing query.
  *
  * The trap this test is written around: `components/ui/Tabs.tsx` uses plain
  * Radix `TabsContent` with no `forceMount`, so an inactive tab is UNMOUNTED
- * and fires no query at all. "The Satış tab still works while Konuşmalar is
- * broken" is therefore VACUOUSLY true if you merely render the page and look
- * at the default tab — nothing else was ever mounted. The assertion that
- * carries weight is the sequence: open the broken tab, SEE it fail by name,
- * then navigate on from it and see the next tab render its data. If the
- * failure escaped its boundary (an unguarded throw, an error boundary
- * swallowing the page, a strip that unmounts with its content) the second
- * navigation is what would no longer be possible.
+ * and fires no query at all. "The Satış tab still works while Akış is broken"
+ * would be VACUOUSLY true if the two were never mounted together. The
+ * assertion that carries weight is the SEQUENCE: see the broken tab fail by
+ * name, then navigate ON from it and see the next tab fetch and render its own
+ * data. If the failure escaped its boundary (an unguarded throw, an error
+ * boundary swallowing the page, a strip that unmounts with its content) the
+ * second navigation is what would no longer be possible.
+ *
+ * Akış is the page's default tab, so unlike v2.283.0's version this does not
+ * have to click into the broken tab first — but it still has to leave it.
  */
 
 const getLead = vi.fn();
@@ -46,6 +49,7 @@ vi.mock('../../../features/marketing/api/leads.service', () => ({
 }));
 
 vi.mock('../../../features/marketing/api/conversations.service');
+vi.mock('../../../features/marketing/api/leadStream.service');
 vi.mock('../../../features/marketing/api/opportunities.service');
 
 vi.mock('../../../store/marketingAuthStore', () => ({
@@ -57,8 +61,8 @@ vi.mock('../../../features/marketing/hooks/useBreadcrumbLabel', () => ({
   useBreadcrumbLabel: vi.fn(),
 }));
 
-// Only the panels that are NOT under test are stubbed. ConversationsTab and
-// SalesTab are deliberately left real — they are the subject.
+// Only the panels that are NOT under test are stubbed. LeadStream and SalesTab
+// are deliberately left real — they are the subject.
 vi.mock('../../../features/marketing/components', () => ({
   LeadStatusBadge: () => null,
   AssignCell: () => null,
@@ -77,7 +81,7 @@ vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
 vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
 vi.mock('./CompanyPanel', () => ({ CompanyPanel: () => null }));
-vi.mock('./ActivityTimelineTab', () => ({ default: () => null }));
+vi.mock('./LogActivityDialog', () => ({ default: () => null }));
 vi.mock('./OffersTab', () => ({ default: () => null }));
 vi.mock('./TasksTab', () => ({ default: () => null }));
 vi.mock('./ConvertDialog', () => ({ default: () => null }));
@@ -92,6 +96,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 const listConversations = vi.mocked(conversationsService.listConversations);
+const getLeadStream = vi.mocked(leadStreamService.getLeadStream);
 const listOpportunities = vi.mocked(opportunitiesService.listOpportunities);
 const listPipelines = vi.mocked(opportunitiesService.listPipelines);
 
@@ -151,7 +156,8 @@ describe('LeadDetailPage — one tab’s failure does not take the others down',
 
   it('names the broken tab, keeps the strip whole, and still opens Satış with its deals', async () => {
     const user = userEvent.setup();
-    listConversations.mockRejectedValue(new Error('boom'));
+    listConversations.mockResolvedValue([]);
+    getLeadStream.mockRejectedValue(new Error('boom'));
     listOpportunities.mockResolvedValue({
       data: [
         {
@@ -180,18 +186,17 @@ describe('LeadDetailPage — one tab’s failure does not take the others down',
 
     renderPage();
 
-    // Konuşmalar: the query rejects, and the tab says so BY NAME rather than
+    // Akış: the stream query rejects, and the tab says so BY NAME rather than
     // showing the empty state ("nothing here" and "could not ask" are
     // different answers — this repo has paid for confusing them).
-    await user.click(await screen.findByRole('tab', { name: 'Konuşmalar' }));
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Konuşmalar yüklenemedi.');
-    expect(listConversations).toHaveBeenCalledWith({ leadId: 'l1' });
+    expect(alert).toHaveTextContent('Akış yüklenemedi.');
+    expect(getLeadStream).toHaveBeenCalledWith('l1');
+    expect(screen.queryByTestId('stream-empty')).not.toBeInTheDocument();
 
-    // The strip survived the failure intact — all five, still in order.
+    // The strip survived the failure intact — all four, still in order.
     expect(screen.getAllByRole('tab').map((el) => el.textContent?.trim())).toEqual([
-      'Etkinlik',
-      'Konuşmalar',
+      'Akış',
       'Satış',
       'Teklifler (0)',
       'Görevler (0)',

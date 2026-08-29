@@ -260,10 +260,37 @@
     "back": "Back to leads",
     "tabs": {
       "activities": "Activity",
+      "stream": "Oqim",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "Suhbatlar",
       "sales": "Savdo"
+    },
+    "stream": {
+      "failed": "Oqimni yuklab bo‘lmadi.",
+      "unread": "o‘qib bo‘lmadi",
+      "unreadHint": "bu oqimda yetishmayotgan yozuvlar bor, nechtaligini bilmaymiz",
+      "truncated": "qirqildi",
+      "truncatedHint": "faqat eng yangi yozuvlar ko‘rsatilmoqda, undan eskilari ham bor",
+      "gated": "tarifingizga kirmaydi",
+      "gatedHint": "bu manba obunangizda yo‘q; qo‘shilganda tarixi bilan shu yerda ko‘rinadi",
+      "messageFailed": "Yuborilmadi",
+      "min": "daq",
+      "empty": {
+        "title": "Bu odam bilan hali hech nima bo‘lmagan",
+        "desc": "Xabar, qo‘ng‘iroq yoki eslatma qo‘shilganda uni shu odamning oqimida ko‘rasiz."
+      },
+      "source": {
+        "mesajlar": "xabarlar",
+        "hareketler": "harakatlar",
+        "yazarlar": "mualliflar"
+      },
+      "assignment": {
+        "auto": "Avtomatik",
+        "bulk": "Ommaviy"
+      },
+      "voicemail": "Ovozli xabar",
+      "fax": "Faks",
+      "faxOpen": "Hujjatni ochish"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -333,17 +360,6 @@
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
     "convertError": "Couldn't convert the lead",
-    "conversations": {
-      "failed": "Suhbatlarni yuklab bo'lmadi.",
-      "unknownChannel": "Noma'lum kanal",
-      "aiPaused": "AI o'chiq",
-      "noMessage": "Xabar yo'q",
-      "openInbox": "Kiruvchi qutini ochish",
-      "empty": {
-        "title": "Bu kishi bilan hali gaplashilmagan",
-        "desc": "Birinchi xabar kelganda — WhatsApp, e-pochta yoki boshqa kanal — shu yerda ko'rasiz."
-      }
-    },
     "sales": {
       "failed": "Bitimlarni yuklab bo'lmadi.",
       "unknownStage": "Noma'lum bosqich",
@@ -570,11 +586,6 @@
     "subtitle": "Yangi lidlar qanday avtomatik taqsimlansin?",
     "title": "Lidlarni avto-taqsimlash"
   },
-  "activityTimeline": {
-    "assignmentAuto": "Avto",
-    "assignmentBulk": "Ommaviy",
-    "assignmentUnassigned": "Biriktirilmagan"
-  },
   "register": {
     "title": "Ish maydoningizni yarating",
     "subtitle": "Jamoangiz, lidlaringiz, tadqiqotingiz — bir joyda.",
@@ -772,11 +783,22 @@
     "context": "Lid",
     "openLead": "Lidni ochish →",
     "noLead": "Suhbatni tanlang.",
-    "sendFailed": "Yuborib boʻlmadi",
+    "sendFailed": "Yuborilmadi",
     "title": "Kiruvchi xabarlar",
     "subtitle": "Barcha mijoz suhbatlari bir joyda.",
     "emptyHint": "Kanal ulanib, mijozlar sizga yozganda suhbatlar shu yerda paydo bo'ladi.",
-    "connectChannel": "Kanal ulash"
+    "connectChannel": "Kanal ulash",
+    "internalNotes": "Ichki eslatmalar",
+    "noNotes": "Hali ichki eslatma yoʻq. Ularni faqat jamoangiz koʻradi.",
+    "notePlaceholder": "Jamoaga eslatma…",
+    "addNote": "Qoʻshish",
+    "send": "Yuborish",
+    "reopen": "Qayta ochish",
+    "aiToggleFailed": "Sunʼiy intellekt holati oʻzgartirilmadi",
+    "closeFailed": "Suhbat yopilmadi",
+    "reopenFailed": "Suhbat qayta ochilmadi",
+    "noteFailed": "Eslatma saqlanmadi",
+    "smsCounter": "{{chars}} belgi · {{segments}} boʻlak"
   },
   "channels": {
     "title": "Kanallar",
@@ -1078,9 +1100,44 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "Suhbatlar",
-      "contacts": "Kontaktlar"
+    "people": {
+      "search": "Odam qidirish",
+      "loadFailed": "Odamlar yuklanmadi.",
+      "silent": "Hali suhbat boʻlmagan",
+      "empty": {
+        "title": "Bu navbatda hech kim yoʻq",
+        "desc": "Boshqa navbatni tanlang yoki qidiruvni tozalang."
+      }
+    },
+    "pane": {
+      "pickSomeone": "Chapdan bir odamni tanlang.",
+      "thread": "Suhbat",
+      "reply": "Javob yozing",
+      "gated": "Xabar almashish tarifingizga kirmaydi",
+      "gatedHint": "odam va uning harakatlari koʻrinadi; yozishmalar qoʻshilgach shu yerda ochiladi",
+      "threadsFailed": "Suhbatlar yuklanmadi",
+      "threadsFailedHint": "bu odamda suhbat boʻlishi mumkin — yangisini boshlashdan oldin yangilang",
+      "noThread": "Bu odam bilan hali yozishilmagan",
+      "noThreadHint": "birinchisini «Xabar» orqali boshlang",
+      "notesFailed": "Ichki eslatmalarni yuklab boʻlmadi",
+      "notesFailedHint": "bu yerda hamkasbingizning topshiriq eslatmasi boʻlishi mumkin — oʻqimasdan davom etmang",
+      "notesRetry": "Qayta urinish"
+    },
+    "card": {
+      "title": "Yozuv",
+      "idle": "Chapdan bir odamni tanlang.",
+      "owner": "Egasi",
+      "phone": "Telefon",
+      "email": "Email",
+      "city": "Shahar",
+      "created": "Qoʻshilgan",
+      "open": "Yozuvni ochish"
+    },
+    "title": "Odamlar",
+    "subtitle": "Hamma bitta roʻyxatda — yozayotgani ham, jim turgani ham.",
+    "view": {
+      "list": "Roʻyxat",
+      "table": "Jadval"
     }
   }
 }

@@ -260,10 +260,37 @@
     "back": "Back to leads",
     "tabs": {
       "activities": "Activity",
+      "stream": "التدفق",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "المحادثات",
       "sales": "المبيعات"
+    },
+    "stream": {
+      "failed": "تعذّر تحميل التدفق.",
+      "unread": "تعذّرت قراءته",
+      "unreadHint": "هناك سطور ناقصة في هذا التدفق ولا نعرف عددها",
+      "truncated": "تم اقتطاعه",
+      "truncatedHint": "تُعرض أحدث السجلات فقط، وهناك سجلات أقدم منها",
+      "gated": "غير مشمول في باقتك",
+      "gatedHint": "هذا المصدر غير موجود في اشتراكك؛ عند إضافته يظهر هنا مع سجله",
+      "messageFailed": "لم تُرسل",
+      "min": "دقيقة",
+      "empty": {
+        "title": "لم يحدث شيء مع هذا الشخص بعد",
+        "desc": "عند إضافة رسالة أو مكالمة أو ملاحظة سترى ذلك هنا في تدفق هذا الشخص."
+      },
+      "source": {
+        "mesajlar": "الرسائل",
+        "hareketler": "الأنشطة",
+        "yazarlar": "المؤلفون"
+      },
+      "assignment": {
+        "auto": "تلقائي",
+        "bulk": "جماعي"
+      },
+      "voicemail": "رسالة صوتية",
+      "fax": "فاكس",
+      "faxOpen": "فتح المستند"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -333,17 +360,6 @@
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
     "convertError": "Couldn't convert the lead",
-    "conversations": {
-      "failed": "تعذّر تحميل المحادثات.",
-      "unknownChannel": "قناة غير معروفة",
-      "aiPaused": "الذكاء الاصطناعي متوقف",
-      "noMessage": "لا توجد رسائل",
-      "openInbox": "افتح صندوق الوارد",
-      "empty": {
-        "title": "لا توجد محادثة مع جهة الاتصال هذه بعد",
-        "desc": "عند وصول أول رسالة — واتساب أو بريد إلكتروني أو أي قناة أخرى — ستراها هنا."
-      }
-    },
     "sales": {
       "failed": "تعذّر تحميل الصفقات.",
       "unknownStage": "مرحلة غير معروفة",
@@ -570,11 +586,6 @@
     "subtitle": "كيف يتم توزيع العملاء الجدد تلقائيًا؟",
     "title": "التوزيع التلقائي للعملاء"
   },
-  "activityTimeline": {
-    "assignmentAuto": "تلقائي",
-    "assignmentBulk": "جماعي",
-    "assignmentUnassigned": "غير معيّن"
-  },
   "register": {
     "title": "أنشئ مساحة عملك",
     "subtitle": "فريقك وعملاؤك وأبحاثك — في مكان واحد.",
@@ -776,7 +787,18 @@
     "title": "صندوق الوارد",
     "subtitle": "كل محادثات العملاء في مكان واحد.",
     "emptyHint": "تظهر المحادثات هنا بمجرد ربط قناة ومراسلة العملاء لك.",
-    "connectChannel": "اربط قناة"
+    "connectChannel": "اربط قناة",
+    "internalNotes": "ملاحظات داخلية",
+    "noNotes": "لا توجد ملاحظات داخلية بعد. يراها فريقك فقط.",
+    "notePlaceholder": "ملاحظة للفريق…",
+    "addNote": "إضافة",
+    "send": "إرسال",
+    "reopen": "إعادة فتح",
+    "aiToggleFailed": "تعذّر تغيير حالة الذكاء الاصطناعي",
+    "closeFailed": "تعذّر إغلاق المحادثة",
+    "reopenFailed": "تعذّر إعادة فتح المحادثة",
+    "noteFailed": "تعذّر حفظ الملاحظة",
+    "smsCounter": "{{chars}} حرفًا · {{segments}} مقطعًا"
   },
   "channels": {
     "title": "القنوات",
@@ -1078,9 +1100,44 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "المحادثات",
-      "contacts": "جهات الاتصال"
+    "people": {
+      "search": "ابحث عن شخص",
+      "loadFailed": "تعذّر تحميل الأشخاص.",
+      "silent": "لا توجد محادثة بعد",
+      "empty": {
+        "title": "لا أحد في هذا الطابور",
+        "desc": "اختر طابورًا آخر أو امسح البحث."
+      }
+    },
+    "pane": {
+      "pickSomeone": "اختر شخصًا من اليسار.",
+      "thread": "المحادثة",
+      "reply": "اكتب ردًا",
+      "gated": "المراسلة غير مشمولة في باقتك",
+      "gatedHint": "ترى الشخص وأنشطته؛ وتظهر المحادثات هنا بعد إضافتها",
+      "threadsFailed": "تعذّر تحميل المحادثات",
+      "threadsFailedHint": "قد تكون لهذا الشخص محادثة بالفعل — حدّث الصفحة قبل بدء واحدة جديدة",
+      "noThread": "لا توجد محادثة مع هذا الشخص بعد",
+      "noThreadHint": "استخدم «رسالة» لبدء أول محادثة",
+      "notesFailed": "تعذّر تحميل الملاحظات الداخلية",
+      "notesFailedHint": "قد يكون زميل قد ترك هنا ملاحظة تسليم — لا تتابع قبل قراءتها",
+      "notesRetry": "أعد المحاولة"
+    },
+    "card": {
+      "title": "السجل",
+      "idle": "اختر شخصًا من اليسار.",
+      "owner": "المسؤول",
+      "phone": "الهاتف",
+      "email": "البريد الإلكتروني",
+      "city": "المدينة",
+      "created": "أُضيف",
+      "open": "فتح السجل"
+    },
+    "title": "الأشخاص",
+    "subtitle": "الجميع في قائمة واحدة — من يتحدث ومن يصمت.",
+    "view": {
+      "list": "قائمة",
+      "table": "جدول"
     }
   }
 }

@@ -60,11 +60,12 @@ vi.mock('../../../features/marketing/api/conversations.service', () => ({
 vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
 vi.mock('./CompanyPanel', () => ({ CompanyPanel: () => null }));
-vi.mock('./ActivityTimelineTab', () => ({ default: () => null }));
-// Rendered (not null) so the gated CONTENT is an assertable element, not an
-// absence that is trivially true.
-vi.mock('./ConversationsTab', () => ({
-  default: () => <div data-testid="conversations-panel" />,
+vi.mock('./LogActivityDialog', () => ({ default: () => null }));
+// Rendered (not null) so the Akış PANEL is an assertable element rather than an
+// absence that is trivially true — the un-entitled case below turns on the
+// panel still BEING there, which is the whole improvement over v2.283.0.
+vi.mock('../../../features/marketing/components/LeadStream', () => ({
+  default: () => <div data-testid="stream-panel" />,
 }));
 vi.mock('./SalesTab', () => ({ default: () => null }));
 vi.mock('./OffersTab', () => ({ default: () => null }));
@@ -159,13 +160,16 @@ describe('LeadDetailPage — delete confirmation', () => {
   });
 });
 
-// The five tabs ARE the lead record's shape — spec §2 fixes both the set and
-// the order (Hareketler | Konuşmalar | Satış | Teklifler | Görevler). Stubbing
-// the tab components (above) proves nothing about the strip itself: with only
-// those stubs, deleting `<TabsTrigger value="conversations">` or swapping two
-// triggers fails no test at all. This asserts the ORDERED list of accessible
-// names, not mere presence, because a strip that silently reorders itself
-// moves the default tab out from under every muscle-memory click.
+// The FOUR tabs ARE the lead record's shape — the 2026-08-29 spec fixes both
+// the set and the order (Akış | Satış | Teklifler | Görevler). v2.283.0 pinned
+// FIVE here, and the first two of them (Hareketler, Konuşmalar) were the same
+// person's history shown twice in two different shapes; the merged stream
+// dissolves the pair into one. Stubbing the tab components (above) proves
+// nothing about the strip itself: with only those stubs, deleting a
+// `<TabsTrigger>` or swapping two of them fails no test at all. This asserts
+// the ORDERED list of accessible names, not mere presence, because a strip that
+// silently reorders itself moves the default tab out from under every
+// muscle-memory click.
 describe('LeadDetailPage — the tab strip', () => {
   beforeEach(() => {
     getLead.mockReset();
@@ -174,79 +178,77 @@ describe('LeadDetailPage — the tab strip', () => {
     listConversations.mockResolvedValue([]);
   });
 
-  it('offers exactly the five lead tabs, in the spec’s order, for an entitled workspace', async () => {
+  it('offers exactly the four lead tabs, in the spec’s order', async () => {
     renderPage();
     // Positive anchor first: the page is SETTLED before any list is measured.
     // `getAllByRole('tab')` against a still-loading page returns [] and would
     // satisfy a naive length assertion instantly.
-    await screen.findByRole('tab', { name: 'Konuşmalar' });
+    await screen.findByRole('tab', { name: 'Akış' });
 
     const tabs = screen.getAllByRole('tab').map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(['Etkinlik', 'Konuşmalar', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
+    expect(tabs).toEqual(['Akış', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
   });
 
-  // The other half of the same rule. `GET /conversations` is behind
-  // @RequiresFeature('conversationAi'), so for an un-entitled workspace this
-  // tab's ONLY reachable state is "Konuşmalar yüklenemedi." — navigation.ts's
-  // own words: the gate moves WITH the item, and a tab that lands on a page you
-  // cannot open is worse than one that lands on the first page you can.
+  // The un-entitled case — and it is now the MORE interesting half, not the
+  // lesser one. v2.283.0 hid Konuşmalar outright for a workspace without
+  // `conversationAi`, because `GET /conversations` sits behind
+  // @RequiresFeature and the tab's only reachable state was "Konuşmalar
+  // yüklenemedi." — a tab that lands on a page you cannot open.
   //
-  // Satış deliberately stays: marketing-opportunities.controller.ts carries no
-  // RequiresFeature at all and /opportunities is permission-gated on
-  // leads.read, so the argument does not transfer to it.
-  it('drops Konuşmalar entirely for a workspace without conversationAi', async () => {
+  // `GET /leads/:id/timeline` carries no route-level gate on purpose: it reads
+  // the entitlement PER SOURCE and names the withheld one in `gated`, so the
+  // workspace keeps its activities and is told, in billing's language rather
+  // than support's, what it is not seeing. There is no longer a state this tab
+  // lands on that it cannot open, so the tab no longer moves with the gate.
+  it('keeps Akış, and the same four tabs, for a workspace without conversationAi', async () => {
     FEATURES = new Set(['telephony']);
     renderPage();
-    // Anchor on a tab that survives the gate, so the count below is measured
+    // Anchor on a tab that is not the subject, so the list below is measured
     // against a rendered strip rather than an empty one.
     await screen.findByRole('tab', { name: 'Satış' });
 
     const tabs = screen.getAllByRole('tab').map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(['Etkinlik', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
-    // Trigger AND content: a gate on the trigger alone leaves a reachable dead
-    // panel behind `setTab`, and the panel is what would 403.
-    expect(screen.queryByTestId('conversations-panel')).not.toBeInTheDocument();
+    expect(tabs).toEqual(['Akış', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
+    // Trigger AND content. The PANEL is the point: an un-entitled workspace
+    // still gets this person's history, and LeadStream is what tells it which
+    // source is withheld and why.
+    expect(screen.getByTestId('stream-panel')).toBeInTheDocument();
   });
 
-  // Guarding the CONTROLLED STATE, not just the render. `tab` is page state
-  // that `onOpenConversations` (and any future deep link) can set to
-  // 'conversations'; if the trigger for that value no longer exists, Radix
-  // selects nothing and the page strands on a blank panel. Simulated by
-  // selecting the tab while entitled and then taking the entitlement away —
-  // the same end state a deep link into an un-entitled workspace produces.
-  it('falls back to Etkinlik rather than stranding on a tab that no longer exists', async () => {
+  // What the old "falls back rather than stranding" case was really protecting:
+  // page state naming a tab that the render then gates away, leaving Radix with
+  // nothing selected and the user on a blank panel. With one ungated set of
+  // tabs that is structurally impossible, and this is the test that says so —
+  // take the entitlement away mid-session and find the same four tabs with the
+  // same one still selected.
+  it('does not lose the selected tab when an entitlement disappears', async () => {
     const user = userEvent.setup();
-    // A thread exists, so Mesaj SELECTS the tab instead of opening the start
-    // dialog — that selection is the state this test then invalidates.
-    listConversations.mockResolvedValue([{ id: 'c1', status: 'OPEN', aiPaused: false, unreadCount: 0 }]);
     const { rerenderPage } = renderPage();
 
-    const message = await screen.findByRole('button', { name: /Mesaj/ });
-    await waitFor(() => expect(message).toBeEnabled());
-    await user.click(message);
-    await waitFor(() =>
-      expect(screen.getByRole('tab', { name: 'Konuşmalar' })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      ),
-    );
+    await user.click(await screen.findByRole('tab', { name: 'Satış' }));
+    expect(screen.getByRole('tab', { name: 'Satış' })).toHaveAttribute('aria-selected', 'true');
 
     FEATURES = new Set(['telephony']);
     rerenderPage();
 
     await waitFor(() =>
-      expect(screen.queryByRole('tab', { name: 'Konuşmalar' })).not.toBeInTheDocument(),
+      expect(screen.getByRole('tab', { name: 'Satış' })).toHaveAttribute('aria-selected', 'true'),
     );
-    expect(screen.getByRole('tab', { name: 'Etkinlik' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab').map((el) => el.textContent?.trim())).toEqual([
+      'Akış',
+      'Satış',
+      'Teklifler (0)',
+      'Görevler (0)',
+    ]);
   });
 });
 
 // The header's Mesaj action reaches ACROSS to the tab strip: this app has no
-// per-thread URL, so "open the conversation" can only mean "bring Konuşmalar
-// forward". That is a wire between two components and belongs here, not in
-// either one's own test — LeadHeaderActions.test.tsx can only prove the
+// per-thread URL, so "open the conversation" can only mean "bring this person's
+// stream forward". That is a wire between two components and belongs here, not
+// in either one's own test — LeadHeaderActions.test.tsx can only prove the
 // callback fires.
-describe('LeadDetailPage — Mesaj brings the Konuşmalar tab forward', () => {
+describe('LeadDetailPage — Mesaj brings the Akış tab forward', () => {
   beforeEach(() => {
     getLead.mockReset();
     getLead.mockResolvedValue({ ...LEAD, phone: '+905551112233' });
@@ -254,13 +256,15 @@ describe('LeadDetailPage — Mesaj brings the Konuşmalar tab forward', () => {
     listConversations.mockResolvedValue([{ id: 'c1', status: 'OPEN', aiPaused: false, unreadCount: 0 }]);
   });
 
-  it('selects Konuşmalar when the lead already has a thread', async () => {
+  it('returns to Akış from another tab when the lead already has a thread', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Activities is the tab the page opens on…
-    const activities = await screen.findByRole('tab', { name: 'Etkinlik' });
-    expect(activities).toHaveAttribute('aria-selected', 'true');
+    // Deliberately NOT starting on Akış. It is the default tab now, so
+    // asserting it is selected after clicking Mesaj would pass just as well
+    // with the wire cut — the rep has to be somewhere else first.
+    await user.click(await screen.findByRole('tab', { name: 'Teklifler (0)' }));
+    expect(screen.getByRole('tab', { name: 'Akış' })).toHaveAttribute('aria-selected', 'false');
 
     const message = screen.getByRole('button', { name: /Mesaj/ });
     await waitFor(() => expect(message).toBeEnabled());
@@ -269,10 +273,7 @@ describe('LeadDetailPage — Mesaj brings the Konuşmalar tab forward', () => {
     // …and Mesaj moves it, rather than opening a start flow on a lead that is
     // already mid-conversation.
     await waitFor(() =>
-      expect(screen.getByRole('tab', { name: 'Konuşmalar' })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      ),
+      expect(screen.getByRole('tab', { name: 'Akış' })).toHaveAttribute('aria-selected', 'true'),
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });

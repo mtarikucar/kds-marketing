@@ -120,27 +120,23 @@ function S({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The merged surface's routes (spec §1), as DATA rather than as JSX buried in
- * the table below — so the unit suite can assert the wiring that actually
- * ships.
+ * The person-primary surface's routes, as DATA rather than as JSX buried in the
+ * table below — so the unit suite can assert the wiring that actually ships.
  *
- * MergedSurface.test.tsx used to build its own two-line route table and assert
- * against that. It is a hand-copy, and a hand-copy proves the copy: deleting
- * `defaultTab="contacts"` from this file left all eleven of those tests green
- * while `/leads` opened on the wrong tab. Only e2e/leads.spec.ts noticed, which
- * is several minutes and a browser too late for the mistake it catches.
+ * PersonSurface.test.tsx used to build its own two-line route table and assert
+ * against that. A hand-copy proves the copy: deleting `defaultTab="contacts"`
+ * from this file once left every one of those tests green while `/leads` opened
+ * on the wrong tab, and only a browser noticed.
  *
- * Exported, mapped below, and consumed by the test — one definition, so the
- * assertion and the app cannot disagree.
- *
- * Both paths stay: they are members of the frozen 50-path set
- * (navigation.test.ts) and they are in people's bookmarks. They render the SAME
- * component and differ only in which tab opens; `?tab=` still reaches either
- * half from either path.
+ * Both paths stay — they are members of the frozen 50-path set
+ * (navigation.test.ts) and they are in people's bookmarks. They now render the
+ * SAME component with no prop between them: after the 2026-08-29 correction
+ * there are no tabs left to differ about, only one list of people. `?tab=`
+ * still reaches the four config surfaces from either path.
  */
 export const MERGED_SURFACE_ROUTES: { path: string; element: React.ReactElement }[] = [
   { path: '/inbox', element: <S><InboxPage /></S> },
-  { path: '/leads', element: <S><InboxPage defaultTab="contacts" /></S> },
+  { path: '/leads', element: <S><InboxPage /></S> },
 ];
 
 // Unknown paths: signed-in users keep deep-link recovery into the app; everyone
@@ -221,9 +217,8 @@ export default function App() {
               who has to act on them. */}
           <Route path="/home"      element={<S><CommandCenterPage /></S>} />
           <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
-          {/* One surface, two tabs, two routes — see MERGED_SURFACE_ROUTES
-              above, which is where the two elements (and the one prop that
-              distinguishes them) are defined. */}
+          {/* One surface, two routes, no difference between them — see
+              MERGED_SURFACE_ROUTES above. */}
           {MERGED_SURFACE_ROUTES.map((r) => (
             <Route key={r.path} path={r.path} element={r.element} />
           ))}

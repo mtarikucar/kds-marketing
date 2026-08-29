@@ -757,11 +757,6 @@
     "saveSuccess": "Dağıtım kuralı güncellendi",
     "saveError": "Kural kaydedilemedi"
   },
-  "activityTimeline": {
-    "assignmentAuto": "Otomatik",
-    "assignmentBulk": "Toplu",
-    "assignmentUnassigned": "Atama kaldırıldı"
-  },
   "leads": {
     "title": "Lead'ler",
     "subtitle": "Pipeline genel görünüm",
@@ -851,10 +846,37 @@
     },
     "tabs": {
       "activities": "Etkinlik",
+      "stream": "Akış",
       "offers": "Teklifler",
       "tasks": "Görevler",
-      "conversations": "Konuşmalar",
       "sales": "Satış"
+    },
+    "stream": {
+      "failed": "Akış yüklenemedi.",
+      "unread": "okunamadı",
+      "unreadHint": "bu akışta eksik satırlar var, kaç tane olduğunu bilmiyoruz",
+      "truncated": "kırpıldı",
+      "truncatedHint": "yalnızca en yeni kayıtlar gösteriliyor, daha eski kayıtlar var",
+      "gated": "paketine dahil değil",
+      "gatedHint": "bu kaynak aboneliğinde yok; eklendiğinde geçmişiyle birlikte burada görünür",
+      "messageFailed": "Gönderilemedi",
+      "min": "dk",
+      "empty": {
+        "title": "Bu kişiyle henüz bir şey yaşanmadı",
+        "desc": "Bir mesaj, arama ya da not eklendiğinde bu kişinin akışında burada görürsün."
+      },
+      "source": {
+        "mesajlar": "mesajlar",
+        "hareketler": "hareketler",
+        "yazarlar": "yazarlar"
+      },
+      "assignment": {
+        "auto": "Otomatik",
+        "bulk": "Toplu"
+      },
+      "voicemail": "Sesli mesaj",
+      "fax": "Faks",
+      "faxOpen": "Belgeyi aç"
     },
     "summary": {
       "contactInfo": "İletişim",
@@ -929,17 +951,6 @@
     "deleteConfirm": {
       "title": "Bu müşteri adayı silinsin mi?",
       "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
-    },
-    "conversations": {
-      "failed": "Konuşmalar yüklenemedi.",
-      "unknownChannel": "Bilinmeyen kanal",
-      "aiPaused": "AI kapalı",
-      "noMessage": "Mesaj yok",
-      "openInbox": "Gelen kutusunu aç",
-      "empty": {
-        "title": "Bu kişiyle henüz konuşulmadı",
-        "desc": "WhatsApp, e-posta ya da başka bir kanaldan ilk mesaj geldiğinde burada görürsün."
-      }
     },
     "sales": {
       "failed": "Fırsatlar yüklenemedi.",
@@ -1819,7 +1830,7 @@
     "fax": "Faks",
     "faxOpenDocument": "Belgeyi aç",
     "replyPlaceholder": "Yanıt yazın… (AI'ı duraklatır)",
-    "smsCounter": "{{chars}} karakter · {{segments}} segment",
+    "smsCounter": "{{chars}} karakter · {{segments}} parça",
     "context": "Lead",
     "openLead": "Lead'i aç →",
     "noLead": "Bir konuşma seçin.",
@@ -1834,7 +1845,17 @@
       "snippets": "Hazır Yanıtlar",
       "agents": "AI Ajanları",
       "knowledge": "Bilgi Bankası"
-    }
+    },
+    "internalNotes": "İç notlar",
+    "noNotes": "Henüz iç not yok. Bunları yalnızca ekibin görür.",
+    "notePlaceholder": "Ekibe not…",
+    "addNote": "Ekle",
+    "send": "Gönder",
+    "reopen": "Yeniden aç",
+    "aiToggleFailed": "Yapay zeka durumu değiştirilemedi",
+    "closeFailed": "Konuşma kapatılamadı",
+    "reopenFailed": "Konuşma açılamadı",
+    "noteFailed": "Not kaydedilemedi"
   },
   "channels": {
     "title": "Kanallar",
@@ -4037,9 +4058,44 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "Konuşmalar",
-      "contacts": "Kişiler"
+    "people": {
+      "search": "Kişi ara",
+      "loadFailed": "Kişiler yüklenemedi.",
+      "silent": "Henüz konuşulmadı",
+      "empty": {
+        "title": "Bu kuyrukta kimse yok",
+        "desc": "Başka bir kuyruk seç ya da aramayı temizle."
+      }
+    },
+    "pane": {
+      "pickSomeone": "Soldan bir kişi seç.",
+      "thread": "Konuşma",
+      "reply": "Yanıt yaz",
+      "gated": "Mesajlaşma paketinde yok",
+      "gatedHint": "kişiyi ve hareketlerini görüyorsun; yazışma eklendiğinde burada açılır",
+      "threadsFailed": "Konuşmalar yüklenemedi",
+      "threadsFailedHint": "bu kişinin bir konuşması olabilir; yeni bir tane açmadan önce yenile",
+      "noThread": "Bu kişiyle henüz konuşulmadı",
+      "noThreadHint": "Mesaj ile ilk konuşmayı başlat",
+      "notesFailed": "İç notlar yüklenemedi",
+      "notesFailedHint": "bir ekip arkadaşının devir notu burada olabilir; okumadan devam etme",
+      "notesRetry": "Yeniden dene"
+    },
+    "card": {
+      "title": "Kayıt",
+      "idle": "Soldan bir kişi seç.",
+      "owner": "Sahibi",
+      "phone": "Telefon",
+      "email": "E-posta",
+      "city": "Şehir",
+      "created": "Kayıt",
+      "open": "Kaydı aç"
+    },
+    "title": "Kişiler",
+    "subtitle": "Herkes tek listede — konuşanı da, sessizi de.",
+    "view": {
+      "list": "Liste",
+      "table": "Tablo"
     }
   }
 }

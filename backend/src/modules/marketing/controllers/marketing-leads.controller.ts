@@ -20,6 +20,7 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingLeadsService } from '../services/marketing-leads.service';
+import { LeadStreamService } from '../services/lead-stream.service';
 import { TagsService } from '../services/tags.service';
 import { LeadDedupeService } from '../services/lead-dedupe.service';
 import { AssignTagsDto } from '../dto/tag.dto';
@@ -49,6 +50,7 @@ export class MarketingLeadsController {
     private readonly tagsService: TagsService,
     private readonly dedupeService: LeadDedupeService,
     private readonly leadBulk: LeadBulkService,
+    private readonly leadStream: LeadStreamService,
   ) {}
 
   // Declared before the `:id` routes so "duplicates"/"merge"/"export.csv" are
@@ -138,6 +140,29 @@ export class MarketingLeadsController {
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.leadsService.findOne(actor.workspaceId, id, actor.id, actor.role);
+  }
+
+  /**
+   * The person's ONE stream: messages and lead activities on a single time
+   * axis, each item carrying a KIND discriminator.
+   *
+   * Named `/timeline`, not `/stream`, although the design calls it the person's
+   * akış: this API already has a `/conversations/stream` and it is Server-Sent
+   * Events (`@Sse('stream')` in MarketingConversationsController, answering
+   * `text/event-stream`). A second `/stream` that answers plain JSON is one
+   * `new EventSource(...)` away from a bug report.
+   *
+   * Deliberately NOT behind @RequiresFeature('conversationAi') even though
+   * half of what it returns is. A route-level gate answers 403 and takes the
+   * ACTIVITIES down with the messages, but the design says a workspace without
+   * the conversation add-on still sees the person and their history. So the
+   * gate is read inside the service, per source, and the response names the
+   * withheld source in GATED — the customer is sent to billing rather than
+   * to a dead end, and no message body reaches an unentitled workspace.
+   */
+  @Get(':id/timeline')
+  timeline(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadStream.forLead(actor.workspaceId, id, actor.id, actor.role);
   }
 
   @Patch(':id')

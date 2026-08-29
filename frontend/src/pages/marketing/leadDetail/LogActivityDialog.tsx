@@ -3,7 +3,6 @@ import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Plus, Phone } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
@@ -23,9 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/Dialog';
-import { ActivityTimeline } from '../../../features/marketing/components';
 import { ActivityType } from '../../../features/marketing/types';
-import type { LeadActivity } from '../../../features/marketing/types';
 
 const activitySchema = z.object({
   type: z.string().min(1, 'required'),
@@ -35,20 +32,33 @@ const activitySchema = z.object({
 
 type ActivityFormValues = z.infer<typeof activitySchema>;
 
-interface ActivityTimelineTabProps {
-  /** The lead this tab is showing — used to reset the draft on lead change. */
+interface LogActivityDialogProps {
+  /** The lead this is logging against — used to reset the draft on lead change. */
   leadId: string;
-  activities: LeadActivity[];
   onSubmit: (data: { type: string; title: string; description?: string }) => void;
   isPending: boolean;
 }
 
-export default function ActivityTimelineTab({
+/**
+ * The two triggers that WRITE a lead activity, and the dialog behind them.
+ *
+ * Lifted out of `ActivityTimelineTab` when the lead detail collapsed from five
+ * tabs to four. That component was two things stapled together: a rendering of
+ * `lead.activities` and the form that creates one. `LeadStream` took over the
+ * rendering — activities and messages on one axis, from one endpoint — but a
+ * rep still has to be able to record the call they just made from their own
+ * handset, so the writing half survives on its own.
+ *
+ * Deliberately NOT folded into `LeadStream`. That component is mounted by two
+ * different surfaces and takes its composer as a SLOT; baking a lead-activity
+ * form into it would hand the three-column surface a second, conflicting
+ * composer next to the message one it owns.
+ */
+export default function LogActivityDialog({
   leadId,
-  activities,
   onSubmit,
   isPending,
-}: ActivityTimelineTabProps) {
+}: LogActivityDialogProps) {
   const [open, setOpen] = useState(false);
 
   const form = useForm<ActivityFormValues>({
@@ -57,7 +67,7 @@ export default function ActivityTimelineTab({
     defaultValues: { type: 'NOTE', title: '', description: '' },
   });
 
-  // The lead-detail route reuses this tab across /leads/:id navigations (no
+  // The lead-detail route reuses this across /leads/:id navigations (no
   // remount, like WalletPanel) — clear + close a half-typed activity draft when
   // the lead changes so it can't be logged against the next contact.
   useEffect(() => {
@@ -83,33 +93,27 @@ export default function ActivityTimelineTab({
   };
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>Activity Timeline</CardTitle>
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => openWith('CALL')}
-            className="text-primary hover:text-primary"
-          >
-            <Phone className="h-4 w-4" /> Log call
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => openWith('NOTE')}
-            className="text-primary hover:text-primary"
-          >
-            <Plus className="h-4 w-4" /> Add Activity
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <ActivityTimeline activities={activities || []} />
-      </CardContent>
+    <>
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => openWith('CALL')}
+          className="text-primary hover:text-primary"
+        >
+          <Phone className="h-4 w-4" /> Log call
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => openWith('NOTE')}
+          className="text-primary hover:text-primary"
+        >
+          <Plus className="h-4 w-4" /> Add Activity
+        </Button>
+      </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -173,6 +177,6 @@ export default function ActivityTimelineTab({
           </form>
         </DialogContent>
       </Dialog>
-    </Card>
+    </>
   );
 }

@@ -1,214 +1,515 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import InboxPage from './InboxPage';
+import type { Lead } from '../../../features/marketing/types';
 
 const get = vi.fn();
-const post = vi.fn().mockResolvedValue({ data: {} });
-
+const post = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
-  default: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a) },
-}));
-// Role is switchable per test — the config tabs are manager-only.
-const auth = vi.hoisted(() => ({ role: 'MANAGER' }));
-vi.mock('../../../store/marketingAuthStore', () => ({
-  useMarketingAuthStore: () => ({ accessToken: 'tok', user: { role: auth.role } }),
-}));
-vi.mock('../../../lib/env', () => ({ API_URL: 'http://test' }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (k: string, d?: { defaultValue?: string } | string) =>
-      (typeof d === 'string' ? d : d?.defaultValue) ?? k,
-    i18n: { language: 'en' },
-  }),
+  default: {
+    get: (...a: unknown[]) => get(...a),
+    post: (...a: unknown[]) => post(...a),
+  },
 }));
 
-// Isolate InboxPage's own state logic from the heavy child trees: the
-// ConversationList exposes onSelect, the ThreadPane exposes the controlled draft.
-vi.mock('./ConversationList', () => ({
-  ConversationList: ({ conversations, onSelect }: any) => (
+const listConversations = vi.fn();
+vi.mock('../../../features/marketing/api/conversations.service', () => ({
+  listConversations: (...a: unknown[]) => listConversations(...a),
+  startConversation: vi.fn(),
+}));
+
+const person = (id: string, name: string): Lead =>
+  ({
+    id,
+    businessName: `Firma ${name}`,
+    contactPerson: name,
+    businessType: 'OTHER',
+    source: 'OTHER',
+    status: 'NEW',
+    priority: 'MEDIUM',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }) as Lead;
+
+const ALICE = person('p1', 'Ayşe');
+const BORA = person('p2', 'Bora');
+
+// The list has its own file and its own thirteen tests. Here it is reduced to
+// the one thing the SURFACE is answerable for: it hands a person up.
+vi.mock('./PeopleList', () => ({
+  PeopleList: ({ selectedId, onSelect }: any) => (
     <div>
-      {(conversations ?? []).map((c: any) => (
-        <button key={c.id} onClick={() => onSelect(c.id)}>
-          {c.id}
+      <span data-testid="list-selected">selected:{selectedId ?? 'none'}</span>
+      {[ALICE, BORA].map((p) => (
+        <button key={p.id} onClick={() => onSelect(p)}>
+          {p.contactPerson}
         </button>
       ))}
     </div>
   ),
 }));
-vi.mock('./ThreadPane', () => ({
-  ThreadPane: ({ draft, onDraftChange }: any) => (
-    <input aria-label="composer" value={draft} onChange={(e: any) => onDraftChange(e.target.value)} />
-  ),
-}));
-vi.mock('./LeadContextPane', () => ({ LeadContextPane: () => null }));
 
-// Stub the lazy-loaded config tab pages — only the tab shell is under test here.
+// PersonPane is REAL below — the composer it owns is what proves per-person
+// state resets. Only its two heavy children are stubbed.
+vi.mock('../../../features/marketing/components/LeadStream', () => ({
+  default: ({ leadId }: { leadId: string }) => <div data-testid="stream">stream:{leadId}</div>,
+}));
+vi.mock('../leadDetail/LeadHeaderActions', () => ({ default: () => null }));
+
 vi.mock('../ChannelsSettingsPage', () => ({
-  default: ({ embedded }: { embedded?: boolean }) => <div>channels-embedded:{String(embedded)}</div>,
+  default: ({ embedded }: { embedded?: boolean }) => (
+    <div>channels-embedded:{String(!!embedded)}</div>
+  ),
 }));
 vi.mock('../settings/snippets', () => ({ default: () => <div>snippets-page</div> }));
 vi.mock('../AgentStudioPage', () => ({ default: () => <div>agents-page</div> }));
 vi.mock('../KnowledgeBasePage', () => ({ default: () => <div>knowledge-page</div> }));
-// The Kişiler half of the merged surface is a whole second page; every test in
-// THIS file is about the conversation half.
-vi.mock('../leads/LeadsPage', () => ({ default: () => <div>leads-surface</div> }));
-
-// Konuşmalar is gated on conversationAi now that `/leads` reaches this same
-// component, so these tests have to say which workspace they are. Entitled
-// here; the gate's other outcome is covered in MergedSurface.test.tsx.
-vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
-  useEntitlements: () => ({ has: (k?: string) => !k || k === 'conversationAi' }),
+vi.mock('../leads/LeadsPage', () => ({
+  default: ({ embedded }: { embedded?: boolean }) => (
+    <div data-testid="leads-table">leads-embedded:{String(!!embedded)}</div>
+  ),
 }));
 
-function wrapper({ children }: { children: React.ReactNode }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return (
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>{children}</MemoryRouter>
-    </QueryClientProvider>
-  );
+const auth = vi.hoisted(() => ({ role: 'MANAGER' }));
+vi.mock('../../../store/marketingAuthStore', () => ({
+  useMarketingAuthStore: (sel?: (s: unknown) => unknown) => {
+    const state = { accessToken: 'tok', user: { role: auth.role, id: 'u-1' } };
+    return sel ? sel(state) : state;
+  },
+}));
+vi.mock('../../../lib/env', () => ({ API_URL: 'http://test' }));
+
+let FEATURES = new Set<string>(['conversationAi']);
+vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: (k?: string) => !k || FEATURES.has(k), isLoading: false }),
+}));
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string | string[], opts?: { defaultValue?: string } | string) =>
+      (typeof opts === 'string' ? opts : opts?.defaultValue) ??
+      (Array.isArray(key) ? key[0] : key),
+    i18n: { language: 'tr' },
+  }),
+}));
+
+/** Records the URL so a test can prove a selection did NOT navigate. */
+let seenPath = '';
+function PathProbe() {
+  const loc = useLocation();
+  seenPath = `${loc.pathname}${loc.search}`;
+  return null;
 }
 
-/** Render at a specific URL — the top tabs are `?tab=`-synced deep links. */
-function renderAt(path: string) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+function renderAt(path = '/leads', qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
-        <InboxPage />
+        <PathProbe />
+        <Routes>
+          <Route path="*" element={<InboxPage />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return qc;
 }
 
-function setupApi() {
-  // The live SSE stream uses fetch(); reject it so the component renders without
-  // a real connection (the effect just schedules a reconnect, harmless here).
-  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no sse')));
+beforeEach(() => {
+  vi.clearAllMocks();
   auth.role = 'MANAGER';
-  get.mockReset();
-  post.mockClear();
-  get.mockImplementation((url: string) =>
-    url === '/conversations'
-      ? Promise.resolve({
-          data: [
-            { id: 'cA', status: 'OPEN', aiPaused: false, unreadCount: 0 },
-            { id: 'cB', status: 'OPEN', aiPaused: false, unreadCount: 0 },
-          ],
-        })
-      : Promise.resolve({
-          data: { conversation: { id: 'x', aiPaused: false }, lead: null, messages: [], channel: null },
-        }),
-  );
-}
+  FEATURES = new Set(['conversationAi']);
+  seenPath = '';
+  // The SSE effect uses fetch(); reject it by default so nothing connects.
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no sse')));
+  get.mockResolvedValue({ data: [] });
+  post.mockResolvedValue({ data: {} });
+  listConversations.mockResolvedValue([]);
+});
 
-describe('InboxPage — composer draft isolation', () => {
-  beforeEach(setupApi);
+describe('The person surface — three columns, one object', () => {
+  it('renders all three columns', async () => {
+    renderAt();
 
-  it('clears the reply draft when switching conversations (no cross-customer leak)', async () => {
-    render(<InboxPage />, { wrapper });
-
-    await userEvent.click(await screen.findByRole('button', { name: 'cA' }));
-    const composer = screen.getByLabelText('composer') as HTMLInputElement;
-    await userEvent.type(composer, 'private note for A');
-    expect(composer.value).toBe('private note for A');
-
-    // Switching to another customer's thread must NOT carry the half-typed reply.
-    await userEvent.click(screen.getByRole('button', { name: 'cB' }));
-    expect((screen.getByLabelText('composer') as HTMLInputElement).value).toBe('');
+    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-list')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-card')).toBeInTheDocument();
   });
 
-  it('marks a thread read AND refreshes the list so the unread badge clears now', async () => {
-    // cA carries unread messages — opening it must mark them read (a thread with
-    // nothing unread is left alone; see the next test).
-    get.mockImplementation((url: string) =>
-      url === '/conversations'
-        ? Promise.resolve({
-            data: [
-              { id: 'cA', status: 'OPEN', aiPaused: false, unreadCount: 2 },
-              { id: 'cB', status: 'OPEN', aiPaused: false, unreadCount: 0 },
-            ],
-          })
-        : Promise.resolve({
-            data: { conversation: { id: 'x', aiPaused: false }, lead: null, messages: [], channel: null },
-          }),
+  it('shows one page header, not one per merged page', async () => {
+    renderAt();
+    await screen.findByTestId('person-surface');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('opens the selected person in the other two columns, and does not navigate', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+    const before = seenPath;
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+
+    expect(await screen.findByTestId('stream')).toHaveTextContent('stream:p1');
+    expect(within(screen.getByTestId('surface-card')).getByTestId('record-card')).toHaveTextContent(
+      'Ayşe',
     );
-    render(<InboxPage />, { wrapper });
-    await screen.findByRole('button', { name: 'cA' });
-    const listCalls = () => get.mock.calls.filter((c) => c[0] === '/conversations').length;
-    const before = listCalls();
-
-    await userEvent.click(screen.getByRole('button', { name: 'cA' }));
-
-    // Opening a thread marks it read server-side…
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/conversations/cA/read'));
-    // …and re-fetches the list, so the badge updates without waiting for the poll.
-    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+    expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p1');
+    // The whole correction, asserted at the surface: a selection is not a URL.
+    expect(seenPath).toBe(before);
   });
 
-  it('does NOT re-mark an already-read thread on open (no redundant POST)', async () => {
-    // Default fixture: cA/cB both unreadCount 0 — opening cA has nothing to mark.
-    render(<InboxPage />, { wrapper });
-    await userEvent.click(await screen.findByRole('button', { name: 'cA' }));
-    // Give the mark-read effect a chance to (not) fire.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(post).not.toHaveBeenCalledWith('/conversations/cA/read');
+  it('says nobody is selected rather than showing an empty conversation', async () => {
+    renderAt();
+    expect(await screen.findByTestId('person-pane-idle')).toBeInTheDocument();
   });
 });
 
-// 2026-07 trim: the config surfaces moved from an always-visible tab bar into
-// ONE gear "Inbox settings" menu — the daily messaging page shows no config
-// chrome. ?tab= deep links keep resolving unchanged.
-describe('InboxPage — config surfaces behind the gear menu (?tab=)', () => {
-  beforeEach(setupApi);
-
-  it('shows the two surface tabs and a single Inbox settings gear for a manager', async () => {
-    renderAt('/inbox');
-    // The merged surface's strip is exactly two tabs. The four config surfaces
-    // stayed behind the gear — that is what the 2026-07 trim bought, and the
-    // Kişiler merge did not spend it back.
-    expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
-    expect(screen.getAllByRole('tab').map((el) => el.textContent?.trim())).toEqual([
-      'Konuşmalar',
-      'Kişiler',
+/**
+ * The bug this branch has already shipped once, in a different component: a
+ * header kept lead A's phone number and dialled it under lead B's id. Every
+ * piece of the middle column's state is per-person, and `key` is the ONE
+ * mechanism that resets it. A test, because "by construction" is exactly the
+ * kind of thing that stops being true later.
+ */
+describe('The person surface — per-person state does not follow the rep', () => {
+  beforeEach(() => {
+    listConversations.mockResolvedValue([
+      { id: 'c1', status: 'OPEN', aiPaused: false, unreadCount: 0, channel: { type: 'SMS' } },
     ]);
-    expect(screen.getByRole('button', { name: /inbox settings/i })).toBeInTheDocument();
   });
 
-  it('opens a config surface from the gear menu', async () => {
+  it('drops a half-typed reply when the selection moves to someone else', async () => {
+    const user = userEvent.setup();
+    renderAt();
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    const box = await screen.findByLabelText('Yanıt yaz');
+    await user.type(box, 'Ayşe’ye özel');
+    expect((box as HTMLInputElement).value).toBe('Ayşe’ye özel');
+
+    await user.click(screen.getByRole('button', { name: 'Bora' }));
+
+    // Anchor on the NEW person's pane before reading the box, so an empty
+    // value cannot be an un-rendered one.
+    await waitFor(() => expect(screen.getByTestId('stream')).toHaveTextContent('stream:p2'));
+    expect((screen.getByLabelText('Yanıt yaz') as HTMLInputElement).value).toBe('');
+  });
+});
+
+/**
+ * The live stream. Its old wiring refreshed the conversation list and the open
+ * THREAD; the middle column is no longer a thread, so an inbound message landed
+ * in the database and nothing moved on screen until a reload.
+ */
+describe('The person surface — a live message reaches the open person', () => {
+  /**
+   * An SSE endpoint that STAYS OPEN and delivers what a test pushes into it.
+   *
+   * It used to be "one frame per CONNECTION", with a comment explaining that
+   * the surface reconnects when the selected person changes. That comment
+   * documented a bug and then relied on it: `ConversationStreamService` is a
+   * plain per-workspace RxJS Subject with no replay, so every frame the server
+   * pushed during a teardown/reconnect window was gone for good, and a rep
+   * clicking through their queue silently missed messages. The surface now
+   * holds one connection for its lifetime, so the fixture has to be able to
+   * deliver a frame at a moment the test chooses rather than at a reconnect.
+   */
+  const openStream = () => {
+    const encoder = new TextEncoder();
+    const queued: Uint8Array[] = [];
+    let waiting: ((r: { done: boolean; value?: Uint8Array }) => void) | null = null;
+
+    const read = () =>
+      new Promise<{ done: boolean; value?: Uint8Array }>((resolve) => {
+        const next = queued.shift();
+        if (next) resolve({ done: false, value: next });
+        else waiting = resolve;
+      });
+
+    const push = async (payload: unknown) => {
+      const value = encoder.encode(`data: ${JSON.stringify(payload)}
+
+`);
+      await act(async () => {
+        if (waiting) {
+          const resolve = waiting;
+          waiting = null;
+          resolve({ done: false, value });
+        } else {
+          queued.push(value);
+        }
+        // Let the reader loop turn and the invalidations land.
+        await Promise.resolve();
+      });
+    };
+
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => ({ ok: true, body: { getReader: () => ({ read }) } }));
+
+    return { fetchMock, push };
+  };
+
+  it('refreshes the open person’s stream, the people list and the threads', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'message', conversationId: 'c9' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] }),
+    );
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'conversations'] });
+  });
+
+  /**
+   * The reason the fixture above had to change, asserted directly.
+   *
+   * The effect used to list the whole selected ROW in its dependency array, so
+   * every click aborted the fetch and opened a new connection. The stream has
+   * no replay: anything the server pushed in that window was lost, and the
+   * window is exactly when a rep is moving through their queue.
+   */
+  it('holds ONE connection across selections rather than reconnecting per click', async () => {
+    const user = userEvent.setup();
+    const { fetchMock } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+    renderAt('/leads');
+
+    await screen.findByTestId('person-surface');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('button', { name: 'Ayşe' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p1'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Bora' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p2'),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * And the half that a `useRef` could quietly break: reading the id out of a
+   * ref instead of the closure is only correct if the ref is actually current
+   * when a frame lands. A frame pushed AFTER a second selection has to refresh
+   * the second person, not the first.
+   */
+  it('refreshes whoever is selected NOW, on a connection that was opened before them', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await user.click(screen.getByRole('button', { name: 'Bora' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p2'),
+    );
+    invalidate.mockClear();
+
+    await push({ kind: 'message', conversationId: 'c9' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p2'] }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] });
+  });
+
+  it('ignores a heartbeat — it is a keep-alive, not news', async () => {
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    // Positive anchor: the surface is up, so the stream effect has run.
+    await screen.findByTestId('person-surface');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'heartbeat' });
+
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'conversations'] });
+  });
+});
+
+/**
+ * `/leads` carries no entitlement; `GET /conversations` and the SSE endpoint
+ * both require `conversationAi`. A workspace without it gets the whole surface —
+ * what degrades is the message half, with a reason.
+ */
+describe('The person surface — a workspace without the conversation add-on', () => {
+  beforeEach(() => {
+    FEATURES = new Set();
+  });
+
+  it('never opens a stream it is not allowed to have', async () => {
+    renderAt();
+    await screen.findByTestId('person-surface');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('still gives them all three columns', async () => {
+    const user = userEvent.setup();
+    renderAt();
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+
+    expect(await screen.findByTestId('stream')).toBeInTheDocument();
+    expect(within(screen.getByTestId('surface-card')).getByTestId('record-card')).toBeInTheDocument();
+    // The message half says which plan line is missing rather than going blank.
+    expect(screen.getByTestId('person-pane-gated')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The four conversation-domain config surfaces. They were behind one gear
+ * before this rewrite and they still are — `?tab=` deep links are pasted into
+ * onboarding docs and Slack.
+ */
+describe('The person surface — config surfaces behind the gear (?tab=)', () => {
+  it('opens one from the gear menu', async () => {
     const user = userEvent.setup();
     renderAt('/inbox');
-    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+
+    await user.click(await screen.findByRole('button', { name: /inbox settings/i }));
     await user.click(await screen.findByRole('menuitem', { name: 'AI Agents' }));
+
     expect(await screen.findByText('agents-page')).toBeInTheDocument();
   });
 
-  it('honors the ?tab= deep link and lazy-mounts the embedded page with a back affordance', async () => {
-    renderAt('/inbox?tab=agents');
-    expect(await screen.findByText('agents-page')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /back to inbox/i })).toBeInTheDocument();
-  });
-
-  it('passes embedded to the hosted config page (no double header)', async () => {
+  it('honours a ?tab= deep link, embedded, with a way back', async () => {
     renderAt('/inbox?tab=channels');
+
     expect(await screen.findByText('channels-embedded:true')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /back to inbox/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('person-surface')).not.toBeInTheDocument();
   });
 
-  it('falls back to the inbox on an unknown ?tab= value', async () => {
-    renderAt('/inbox?tab=nope');
-    expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /back to inbox/i })).not.toBeInTheDocument();
+  it('falls back to the surface on an unknown ?tab= value', async () => {
+    renderAt('/inbox?tab=not-a-real-tab');
+    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
   });
 
-  it('hides the gear from non-managers and forces deep links back to the inbox', async () => {
+  it('hides the gear from a rep and lands their deep link on the surface', async () => {
     auth.role = 'REP';
     renderAt('/inbox?tab=channels');
+
+    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /inbox settings/i })).not.toBeInTheDocument();
-    // …and the manager-only deep link lands on the inbox body, not the config page.
-    expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
     expect(screen.queryByText('channels-embedded:true')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The leads TABLE. It is where bulk assign, bulk delete, bulk enrol and CSV
+ * export live, and they exist nowhere else in the product — see InboxPage's
+ * docstring, where this deviation from "one list, no tabs" is recorded.
+ *
+ * Its ENTRY POINT is behind the gear. Rendered as a full-weight outline button
+ * in the header, shown to reps, at the same visual weight as the primary
+ * chrome, it read as a peer VIEW — which is the second list the owner objected
+ * to, wearing a different word. Its whole justification is manager tooling
+ * (`LeadsPage` gates the checkbox column and the bulk toolbar on `isManager`),
+ * so it sits where the other manager-only surfaces already sit.
+ */
+describe('The person surface — the table is behind the gear, not beside the title', () => {
+  it('opens the three columns, not the table, on both routes', async () => {
+    renderAt('/leads');
+    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+    expect(screen.queryByTestId('leads-table')).not.toBeInTheDocument();
+  });
+
+  it('is not page chrome — nothing in the header competes with the surface', async () => {
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+
+    // The gear is the only action. A button labelled Tablo standing beside the
+    // title is the framing this moved away from.
+    expect(screen.queryByRole('button', { name: /Tablo/ })).not.toBeInTheDocument();
+  });
+
+  it('reaches the table from the gear, embedded so the header stays single', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /Tablo/ }));
+
+    expect(await screen.findByTestId('leads-table')).toHaveTextContent('leads-embedded:true');
+    expect(screen.queryByTestId('person-surface')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('honours ?view=table as a deep link, and the gear brings you back', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads?view=table');
+
+    expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /Liste/ }));
+    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+  });
+
+  /**
+   * A rep is offered nothing — but their deep link still works, and that is
+   * deliberate rather than an oversight. Unlike `?tab=`, which opens surfaces
+   * that CONFIGURE the workspace and whose render is therefore guarded, the
+   * table is the same people a rep already sees in the left column; the tools
+   * that are manager-only are gated inside `LeadsPage` itself. Bouncing a
+   * pasted link would take away a view without taking away a permission.
+   */
+  it('offers a rep no way in, and still opens their pasted link', async () => {
+    auth.role = 'REP';
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+    expect(screen.queryByRole('button', { name: /inbox settings/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Tablo/ })).not.toBeInTheDocument();
+
+    cleanup();
+    renderAt('/leads?view=table');
+    expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
+  });
+
+  /**
+   * The gear exists for the table alone when the four config surfaces are not
+   * available. `?tab=` is gated on `conversationAi` — every one of those pages
+   * configures that domain — and the table is not: `/leads` carries no
+   * entitlement at all. Folding the table into the same condition would have
+   * deleted a manager's bulk assign for a workspace that never bought the
+   * conversation add-on.
+   */
+  it('still gives a manager the table when the conversation add-on is missing', async () => {
+    const user = userEvent.setup();
+    FEATURES = new Set();
+    renderAt('/leads');
+    await screen.findByTestId('person-surface');
+
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    expect(screen.queryByRole('menuitem', { name: 'AI Agents' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('menuitem', { name: /Tablo/ }));
+
+    expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
   });
 });

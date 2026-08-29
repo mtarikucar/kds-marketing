@@ -15,7 +15,12 @@ import {
 } from '../../../features/marketing/api/leads.service';
 import type { LeadListParams } from '../../../features/marketing/api/leads.service';
 import marketingApi from '../../../features/marketing/api/marketingApi';
-import { BulkActionToolbar } from '../../../features/marketing/components';
+import {
+  BulkActionToolbar,
+  LeadQueueChips,
+  useLeadQueueCounts,
+  type LeadQueue,
+} from '../../../features/marketing/components';
 import {
   LeadStatus,
   BusinessType,
@@ -58,67 +63,6 @@ interface RepRow extends MarketingUserInfo {
 }
 
 const LIMIT = 20;
-
-/** The three named work queues of the Kişiler tab, in the spec's order. */
-type Queue = 'waiting' | 'unassigned' | 'all';
-const QUEUE_PARAMS: Record<Queue, Pick<LeadListParams, 'assignmentStatus' | 'waitingReply'>> = {
-  waiting: { waitingReply: true },
-  unassigned: { assignmentStatus: 'unassigned' },
-  all: {},
-};
-
-/**
- * How many leads one queue would show under the CURRENT other filters — the
- * number on the chip is what you get when you click it.
- *
- * The queue you are already in is never probed: the list query has just
- * counted exactly that set, so a second count is only one more number that can
- * disagree with the rows on screen.
- */
-function useQueueCount(
-  base: Pick<LeadListParams, 'search' | 'status' | 'source' | 'businessType'>,
-  queue: Queue,
-  active: Queue | null,
-) {
-  return useQuery({
-    queryKey: ['marketing', 'leads', 'queue-count', queue, base],
-    queryFn: () =>
-      listLeads({ ...base, ...QUEUE_PARAMS[queue], page: 1, limit: 1 }).then(
-        (r) => r.meta.total,
-      ),
-    enabled: queue !== active,
-    staleTime: 30_000,
-  });
-}
-
-/**
- * The number on a work-queue chip.
- *
- * Three states, and they must not read alike. A count we HAVE is the number; a
- * count we could not fetch is an em dash that says so when you hover or ask a
- * screen reader; a count still in flight is nothing at all. Rendering a failed
- * count as `0` would announce an empty queue when nobody knows whether it is
- * empty — the same "a failed query and no results look identical" bug this
- * repo already paid for in the morning brief.
- */
-function QueueCount({
-  total,
-  isError,
-  failedLabel,
-}: {
-  total?: number;
-  isError?: boolean;
-  failedLabel: string;
-}) {
-  if (isError)
-    return (
-      <span title={failedLabel} aria-label={failedLabel}>
-        —
-      </span>
-    );
-  if (typeof total !== 'number') return null;
-  return <span>{total}</span>;
-}
 
 /**
  * Leads list page — Console design system migration.
@@ -221,7 +165,7 @@ export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
   // leaves the previous one stacked silently underneath. Choosing "Bana
   // atanmış" from the assignment Select is a view none of the three describes,
   // and then no chip is lit — which is the truth, not a bug.
-  const activeQueue: Queue | null = waiting
+  const activeQueue: LeadQueue | null = waiting
     ? 'waiting'
     : assignmentStatus === 'unassigned'
       ? 'unassigned'
@@ -229,7 +173,7 @@ export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
         ? 'all'
         : null;
 
-  const selectQueue = (q: Queue) => {
+  const selectQueue = (q: LeadQueue) => {
     setWaiting(q === 'waiting');
     setAssignmentStatus(q === 'unassigned' ? 'unassigned' : '');
     setPage(1);
@@ -245,9 +189,7 @@ export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
     source: source || undefined,
     businessType: businessType || undefined,
   };
-  const waitingCount = useQueueCount(countBase, 'waiting', activeQueue);
-  const unassignedCount = useQueueCount(countBase, 'unassigned', activeQueue);
-  const allCount = useQueueCount(countBase, 'all', activeQueue);
+  const queueCounts = useLeadQueueCounts(countBase, activeQueue);
 
   // Reps used by both AssignCell popovers (per row) and BulkActionToolbar.
   const { data: reps = [] } = useQuery<RepRow[]>({
@@ -441,42 +383,12 @@ export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
           The chips lead because they are the first decision on this tab: which
           pile am I working. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div
-          role="group"
-          aria-label={t('leads.queue.label', { defaultValue: 'İş kuyruğu' })}
-          className="flex flex-wrap items-center gap-2"
-        >
-          {(
-            [
-              ['waiting', t('leads.queue.waiting', { defaultValue: 'Bekleyen' }), waitingCount,
-                t('leads.queue.waitingHint', {
-                  defaultValue: 'Müşteri en son yazan taraf ve kimse yanıtlamadı',
-                })],
-              ['unassigned', t('leads.queue.unassigned', { defaultValue: 'Atanmamış' }), unassignedCount, undefined],
-              ['all', t('leads.queue.all', { defaultValue: 'Hepsi' }), allCount, undefined],
-            ] as const
-          ).map(([queue, label, count, hint]) => (
-            <Button
-              key={queue}
-              size="sm"
-              variant={activeQueue === queue ? 'primary' : 'outline'}
-              aria-pressed={activeQueue === queue}
-              title={hint}
-              onClick={() => selectQueue(queue)}
-            >
-              {label}
-              {/* An explicit space, not just the flex gap: the accessible name
-                  is built from text nodes, and without it a screen reader
-                  announces "Bekleyen2". */}
-              {' '}
-              <QueueCount
-                total={activeQueue === queue ? data?.meta.total : count.data}
-                isError={activeQueue !== queue && count.isError}
-                failedLabel={t('leads.queue.countFailed', { defaultValue: 'Sayı alınamadı' })}
-              />
-            </Button>
-          ))}
-        </div>
+        <LeadQueueChips
+          active={activeQueue}
+          counts={queueCounts}
+          activeTotal={data?.meta.total}
+          onSelect={selectQueue}
+        />
 
         {/* Embedded (Kişiler tab): the header is the host's, so Export CSV and
             Yeni Lead move into this row — the actions must never be lost. */}

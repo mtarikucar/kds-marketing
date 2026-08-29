@@ -501,11 +501,6 @@
     "saveSuccess": "Distribution rule updated",
     "saveError": "Couldn't save rule"
   },
-  "activityTimeline": {
-    "assignmentAuto": "Auto",
-    "assignmentBulk": "Bulk",
-    "assignmentUnassigned": "Unassigned"
-  },
   "leads": {
     "title": "Leads",
     "subtitle": "Pipeline overview",
@@ -595,10 +590,37 @@
     },
     "tabs": {
       "activities": "Activity",
+      "stream": "Stream",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "Conversations",
       "sales": "Sales"
+    },
+    "stream": {
+      "failed": "Could not load the stream.",
+      "unread": "could not be read",
+      "unreadHint": "rows are missing from this stream and we cannot say how many",
+      "truncated": "was truncated",
+      "truncatedHint": "only the most recent records are shown; there are older ones",
+      "gated": "is not part of your plan",
+      "gatedHint": "this source is not in your subscription; add it and its history appears here",
+      "messageFailed": "Not sent",
+      "min": "min",
+      "empty": {
+        "title": "Nothing has happened with this person yet",
+        "desc": "When a message, call or note is added you will see it here in this person's stream."
+      },
+      "source": {
+        "mesajlar": "messages",
+        "hareketler": "activities",
+        "yazarlar": "authors"
+      },
+      "assignment": {
+        "auto": "Automatic",
+        "bulk": "Bulk"
+      },
+      "voicemail": "Voicemail",
+      "fax": "Fax",
+      "faxOpen": "Open document"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -673,17 +695,6 @@
     "deleteConfirm": {
       "title": "Delete this lead?",
       "desc": "The lead and its timeline are removed from your workspace. This cannot be undone."
-    },
-    "conversations": {
-      "failed": "Could not load the conversations.",
-      "unknownChannel": "Unknown channel",
-      "aiPaused": "AI off",
-      "noMessage": "No messages",
-      "openInbox": "Open the inbox",
-      "empty": {
-        "title": "No conversation with this contact yet",
-        "desc": "When the first message arrives — WhatsApp, email or any other channel — you will see it here."
-      }
     },
     "sales": {
       "failed": "Could not load the deals.",
@@ -1534,7 +1545,7 @@
     "fax": "Fax",
     "faxOpenDocument": "Open document",
     "replyPlaceholder": "Type a reply… (this pauses the AI)",
-    "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
+    "smsCounter": "{{chars}} characters · {{segments}} segment(s)",
     "context": "Lead",
     "openLead": "Open lead →",
     "noLead": "Select a conversation.",
@@ -1549,7 +1560,17 @@
       "snippets": "Canned Responses",
       "agents": "AI Agents",
       "knowledge": "Knowledge"
-    }
+    },
+    "internalNotes": "Internal notes",
+    "noNotes": "No internal notes yet. Only your team can see these.",
+    "notePlaceholder": "Note for the team…",
+    "addNote": "Add",
+    "send": "Send",
+    "reopen": "Reopen",
+    "aiToggleFailed": "Could not change the AI status",
+    "closeFailed": "Could not close the conversation",
+    "reopenFailed": "Could not reopen the conversation",
+    "noteFailed": "Could not save the note"
   },
   "channels": {
     "title": "Channels",
@@ -3186,9 +3207,44 @@
     }
   },
   "surface": {
-    "tab": {
-      "conversations": "Conversations",
-      "contacts": "Contacts"
+    "people": {
+      "search": "Search people",
+      "loadFailed": "Could not load people.",
+      "silent": "No conversation yet",
+      "empty": {
+        "title": "Nobody in this queue",
+        "desc": "Pick another queue or clear the search."
+      }
+    },
+    "pane": {
+      "pickSomeone": "Pick someone on the left.",
+      "thread": "Conversation",
+      "reply": "Write a reply",
+      "gated": "Messaging is not in your plan",
+      "gatedHint": "you can see the person and their activity; conversations appear here once it is added",
+      "threadsFailed": "Could not load conversations",
+      "threadsFailedHint": "this person may already have one — refresh before starting a new one",
+      "noThread": "No conversation with this person yet",
+      "noThreadHint": "use Message to start the first one",
+      "notesFailed": "Could not load internal notes",
+      "notesFailedHint": "a teammate may have left a handover note here — do not carry on without reading it",
+      "notesRetry": "Try again"
+    },
+    "card": {
+      "title": "Record",
+      "idle": "Pick someone on the left.",
+      "owner": "Owner",
+      "phone": "Phone",
+      "email": "Email",
+      "city": "City",
+      "created": "Added",
+      "open": "Open record"
+    },
+    "title": "People",
+    "subtitle": "Everyone in one list — the ones talking and the quiet ones.",
+    "view": {
+      "list": "List",
+      "table": "Table"
     }
   }
 }

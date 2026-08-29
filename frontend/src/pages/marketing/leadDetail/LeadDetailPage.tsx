@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/Select';
 import { LEAD_STATUS_LABELS } from '../../../features/marketing/types';
 
@@ -52,8 +53,8 @@ import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import ContactInfo from './ContactInfo';
 import { WalletPanel } from './WalletPanel';
 import { CompanyPanel } from './CompanyPanel';
-import ActivityTimelineTab from './ActivityTimelineTab';
-import ConversationsTab from './ConversationsTab';
+import LeadStream from '../../../features/marketing/components/LeadStream';
+import LogActivityDialog from './LogActivityDialog';
 import SalesTab from './SalesTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
@@ -83,26 +84,18 @@ export default function LeadDetailPage() {
   const convert = useConvertDialog();
   const [faxOpen, setFaxOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
-  // Controlled so the header's Mesaj action can bring the Konuşmalar tab
-  // forward — there is no per-thread URL in this app, so "open the
-  // conversation" is "show me this lead's threads".
-  const [tab, setTab] = useState('activities');
-  // `GET /conversations` is behind @RequiresFeature('conversationAi'), so for
-  // an un-entitled workspace this tab's ONLY reachable state is "Konuşmalar
-  // yüklenemedi." — navigation.ts's rule, applied one level down: the gate
-  // moves WITH the item, and a tab that lands on a page you cannot open is
-  // worse than one that lands on the first page you can.
+  // Controlled so the header's Mesaj action can bring Akış forward — there is
+  // no per-thread URL in this app, so "open the conversation" is "show me this
+  // person's stream".
   //
-  // Satış is deliberately NOT gated alongside it:
-  // marketing-opportunities.controller.ts carries no RequiresFeature and
-  // /opportunities is permission-gated on leads.read, not entitlement-gated.
-  const canConverse = has('conversationAi');
-  // The controlled state is guarded too, not just the render. `tab` is state
-  // that Mesaj — and any future deep link — can set to 'conversations'; if the
-  // trigger for that value has been gated away, Radix would select nothing and
-  // strand the page on a blank panel. Falling back keeps the page on a tab that
-  // exists no matter how the state got there.
-  const activeTab = tab === 'conversations' && !canConverse ? 'activities' : tab;
+  // No entitlement fallback guards this value any more, and none is needed.
+  // v2.283.0 had to keep one because Konuşmalar was gated on `conversationAi`
+  // and `setTab('conversations')` could name a trigger the render had removed,
+  // leaving Radix with nothing selected. `GET /leads/:id/timeline` carries no
+  // route-level gate — it reads the entitlement per SOURCE and names the
+  // withheld one — so every tab in the strip exists for every workspace, and
+  // there is no state to fall back from.
+  const [tab, setTab] = useState('stream');
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
@@ -349,14 +342,10 @@ export default function LeadDetailPage() {
                 start-conversation draft. Pressing Ara then dialled lead A's
                 number carrying lead B's id — wrong person rung, activity
                 mirrored onto the wrong lead. Same bug class WalletPanel,
-                TasksTab and ActivityTimelineTab each guard against; keying is
+                TasksTab and LogActivityDialog each guard against; keying is
                 the right answer HERE because every piece of this component's
                 state is per-lead, so there is nothing worth preserving. */}
-            <LeadHeaderActions
-              key={lead.id}
-              lead={lead}
-              onOpenConversations={() => setTab('conversations')}
-            />
+            <LeadHeaderActions key={lead.id} lead={lead} onOpenStream={() => setTab('stream')} />
             {has('fax') && (
               <Button variant="outline" size="sm" onClick={() => setFaxOpen(true)}>
                 <Printer className="h-4 w-4" /> {t('fax.action', 'Send fax')}
@@ -431,21 +420,15 @@ export default function LeadDetailPage() {
 
         {/* Right: Tabs */}
         <div className="lg:col-span-2">
-          <Tabs value={activeTab} onValueChange={setTab}>
+          <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
-              <TabsTrigger value="activities">
-                {t('leadDetail.tabs.activities', 'Etkinlik')}
-              </TabsTrigger>
-              {/* The lead and the conversation about the lead used to live on
-                  two separate screens; these two tabs put the whole person on
-                  one record. Both fetch their own data (neither rides on the
-                  lead payload), so neither can show a count in the tab strip
-                  without a second query firing before the tab is ever opened. */}
-              {canConverse && (
-                <TabsTrigger value="conversations">
-                  {t('leadDetail.tabs.conversations', 'Konuşmalar')}
-                </TabsTrigger>
-              )}
+              {/* Akış is Hareketler and Konuşmalar merged. Keeping them apart
+                  showed the same person's history twice in two shapes and left
+                  a rep asking which one was right — the cost the 2026-08-29
+                  spec exists to remove. It fetches its own stream (it does not
+                  ride on the lead payload), so it cannot carry a count in the
+                  strip without firing a second query before anyone opens it. */}
+              <TabsTrigger value="stream">{t('leadDetail.tabs.stream', 'Akış')}</TabsTrigger>
               <TabsTrigger value="sales">{t('leadDetail.tabs.sales', 'Satış')}</TabsTrigger>
               <TabsTrigger value="offers">
                 {t('leadDetail.tabs.offers', 'Teklifler')} ({lead.offers?.length || 0})
@@ -455,23 +438,31 @@ export default function LeadDetailPage() {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="activities">
-              <ActivityTimelineTab
-                leadId={lead.id}
-                activities={lead.activities || []}
-                onSubmit={(data) => activityMutation.mutate(data)}
-                isPending={activityMutation.isPending}
-              />
+            <TabsContent value="stream">
+              <Card>
+                <CardHeader className="flex-row items-center justify-between">
+                  <CardTitle>{t('leadDetail.tabs.stream', 'Akış')}</CardTitle>
+                  {/* The WRITING half of the old Hareketler tab. LeadStream
+                      renders the history and takes a composer as a slot, but a
+                      rep still has to be able to record the call they made from
+                      their own handset — so the form survives its tab. */}
+                  <LogActivityDialog
+                    leadId={lead.id}
+                    onSubmit={(data) => activityMutation.mutate(data)}
+                    isPending={activityMutation.isPending}
+                  />
+                </CardHeader>
+                <CardContent>
+                  {/* `leadId` and nothing else: the stream owns its query, so
+                      this page and the three-column surface cannot end up
+                      disagreeing about what this person's history is. It is
+                      keyed under ['marketing','lead',id] so `invalidate()`
+                      above — which runs after logging an activity — refreshes
+                      it without either file knowing about the other. */}
+                  <LeadStream leadId={lead.id} />
+                </CardContent>
+              </Card>
             </TabsContent>
-
-            {/* Trigger and content are gated TOGETHER: gating only the trigger
-                leaves a dead panel that `setTab` can still reach, and gating
-                only the content leaves a trigger that blanks the page. */}
-            {canConverse && (
-              <TabsContent value="conversations">
-                <ConversationsTab leadId={lead.id} fmtDate={fmtDate} />
-              </TabsContent>
-            )}
 
             <TabsContent value="sales">
               <SalesTab leadId={lead.id} fmtDate={fmtDate} />

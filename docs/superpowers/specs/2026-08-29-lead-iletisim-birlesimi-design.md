@@ -34,6 +34,19 @@ Bu iş büyük ölçüde **inşa değil, bağlama**. Ölçüldü:
 Sahibin talimatı "başla ve bitir" olduğu için aşağıdaki kararları ben verdim.
 Yanlış olan varsa değiştirilir; hepsi tek tek yazılı olsun diye buradalar.
 
+> **DÜZELTME (2026-08-29, aynı gün, sahibin uyarısıyla):** Aşağıdaki §1 ve §2
+> **yanlıştır ve uygulanmış hâli geri alınmaktadır.** Sahip "işlevsel olarak
+> birleştir" dedi; §1 iki sekme tasarladı, yani şikâyet edilen durumu tek sayfaya
+> taşıdı. Daha da kötüsü: 28 Ağustos'ta **sahibin onayladığı** IA spec'i zaten
+> doğrusunu yazıyordu — *"Tek nesne var: kişi. Konuşma onun bir alanı."* Bu belge
+> onunla çelişen bir tasarımı, "sahibin 'başla ve bitir' talimatıyla onaylı
+> kabul edildi" diyerek **kendi kendine onaylattı.** Onaylı bir tasarımla çelişen
+> ikinci bir tasarım, onay değil varsayımdır.
+>
+> Yerine geçen belge: `2026-08-29-kisi-birincil-yuzey-design.md`.
+> §3 (başlıkta Ara/Mesaj) ve §4 (backend `leadId` filtresi) geçerliliğini korur;
+> ikisi de v2.283.0'da canlıya çıktı ve doğru çıktı.
+
 ### 1 · Birleşik yüzey: iki sekme, tek veri kümesi
 
 `/inbox` ve `/leads` **aynı bileşeni** render eder, yalnızca varsayılan sekmesi

@@ -72,8 +72,10 @@ test('each test gets its own empty workspace', async ({ app, workspace }) => {
   await app.goto('/leads');
 
   await expect(app).toHaveURL(/\/leads/);
-  // A brand-new workspace has no leads; the page must say so rather than
-  // showing another test's rows.
-  await expect(app.getByText(/henüz lead yok|no leads/i).first()).toBeVisible();
+  // A brand-new workspace has nobody; the person surface must SAY so rather
+  // than showing another test's rows or an unexplained blank column.
+  await expect(
+    app.getByText(/bu kuyrukta kimse yok|nobody in this queue/i).first(),
+  ).toBeVisible();
   expect(workspace.id).toMatch(/^[0-9a-f-]{36}$/);
 });

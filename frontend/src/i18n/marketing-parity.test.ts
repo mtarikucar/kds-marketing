@@ -99,8 +99,8 @@ describe('marketing i18n — home left-column tabs', () => {
   });
 });
 
-describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
-  // Two whole TABS and their empty/error copy. Same trap as the timeline panel:
+describe('marketing i18n — lead detail: the Satış tab', () => {
+  // A whole TAB and its empty/error copy. Same trap as the timeline panel:
   // `fallbackLng: 'en'` means a locale that simply lacks these keys neither
   // throws nor shows a raw key — a ru/ar/uz operator is quietly served English,
   // and nothing at runtime notices (missingKeyHandler is DEV-only).
@@ -109,16 +109,17 @@ describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
   // the sentence that distinguishes "could not load" from "nothing here"; if it
   // silently degrades to English while the empty state is translated, the two
   // states stop reading as different states in that locale.
-  it('every offered locale defines the conversations + sales keys, not just tr', async () => {
+  //
+  // Konuşmalar used to be pinned here beside it. That tab is gone — Hareketler
+  // and Konuşmalar merged into Akış — and its keys went with the component, so
+  // what stood here is now covered by the Akış block below.
+  it('every offered locale defines the sales keys, not just tr', async () => {
     const want = flat((tr as Json).leadDetail as Json)
-      .filter((k) => /^(conversations\.|sales\.|tabs\.(conversations|sales)$)/.test(k))
+      .filter((k) => /^(sales\.|tabs\.sales$)/.test(k))
       .map((k) => `leadDetail.${k}`);
     expect(want).toEqual(
       expect.arrayContaining([
-        'leadDetail.tabs.conversations',
         'leadDetail.tabs.sales',
-        'leadDetail.conversations.failed',
-        'leadDetail.conversations.empty.title',
         'leadDetail.sales.failed',
         'leadDetail.sales.empty.title',
       ]),
@@ -139,6 +140,51 @@ describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
       const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
       const have = new Set(flat(cat));
       expect({ locale, has: have.has('opportunities.dealNotFound') }).toEqual({ locale, has: true });
+    }
+  });
+});
+
+describe('marketing i18n — lead detail: the Akış stream', () => {
+  // The whole merged stream: its tab name, its three source signals, its
+  // per-message failure line and its empty state. Same trap as everywhere else
+  // in this file — `fallbackLng: 'en'` means a locale that simply lacks these
+  // neither throws nor shows a raw key, so a ru/ar/uz operator is quietly
+  // served another language and nothing at runtime notices.
+  it('every offered locale defines the stream namespace, not just tr', async () => {
+    const want = flat((tr as Json).leadDetail as Json)
+      .filter((k) => /^(stream\.|tabs\.stream$)/.test(k))
+      .map((k) => `leadDetail.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'leadDetail.tabs.stream',
+        'leadDetail.stream.failed',
+        'leadDetail.stream.unread',
+        'leadDetail.stream.truncated',
+        'leadDetail.stream.gated',
+        'leadDetail.stream.messageFailed',
+        'leadDetail.stream.empty.title',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // The three signals mean three different things — could not READ it / read
+  // it, there was MORE / your PLAN does not include it — and LeadStream.tsx is
+  // held to keeping them apart. But that component test runs against the inline
+  // Turkish defaults, so it can only police one language. A translator who
+  // renders `gated` with the same words as `unread` re-collapses the
+  // distinction in a locale no other test looks at, and sends a billing
+  // question to support.
+  it('never says a gated source failed, in any locale', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const s = (cat.leadDetail as Json).stream as Record<string, string>;
+      expect({ locale, collides: s.gated === s.unread }).toEqual({ locale, collides: false });
+      expect({ locale, collides: s.gated === s.truncated }).toEqual({ locale, collides: false });
     }
   });
 });
@@ -217,27 +263,36 @@ describe('marketing i18n — the click-to-dial affordance', () => {
   });
 });
 
-describe('marketing i18n — the merged surface and its work queue', () => {
-  // These two words ARE the navigation of the merged surface, and the three
-  // chips below them are how anyone reaches the leads nobody has answered.
+describe('marketing i18n — the person surface and its work queue', () => {
+  // The whole of the person-primary surface: its title, its three columns and
+  // the chips that are how anyone reaches the leads nobody has answered. The
+  // two tab names that used to be anchored here are deliberately gone with the
+  // tabs — there is one list now, and one object in it.
+  //
   // Same trap as everywhere else in this file: `fallbackLng: 'en'` means a
   // locale that simply lacks them neither throws nor shows a raw key — a
   // ru/ar/uz operator is quietly served another language, and nothing at
   // runtime notices (missingKeyHandler is DEV-only).
-  it('every offered locale names both tabs and all three work-queue chips', async () => {
+  it('every offered locale names all three columns and all three work-queue chips', async () => {
     const want = [
       ...flat((tr as Json).surface as Json).map((k) => `surface.${k}`),
       ...flat(((tr as Json).leads as Json).queue as Json).map((k) => `leads.queue.${k}`),
     ];
     expect(want).toEqual(
       expect.arrayContaining([
-        'surface.tab.conversations',
-        'surface.tab.contacts',
+        'surface.title',
+        // the list column, the stream column, the record card
+        'surface.people.search',
+        'surface.pane.reply',
+        'surface.card.open',
         'leads.queue.waiting',
         'leads.queue.unassigned',
         'leads.queue.all',
       ]),
     );
+    // The tabs are gone; a stale key left behind is a string nobody renders
+    // and a translator still pays for.
+    expect(want).not.toContain('surface.tab.conversations');
     for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
       const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
       const have = new Set(flat(cat));
@@ -261,9 +316,10 @@ describe('marketing i18n — the merged surface and its work queue', () => {
   });
 
   it('uses the spec’s own words in Turkish', () => {
-    expect((tr as Json).surface).toMatchObject({
-      tab: { conversations: 'Konuşmalar', contacts: 'Kişiler' },
-    });
+    // The spec's own word for the object on this surface. Not "leads" and not
+    // "conversations" — those were the two lists, and the correction was that
+    // there is only ever one, of people.
+    expect((tr as Json).surface).toMatchObject({ title: 'Kişiler' });
     expect(((tr as Json).leads as Json).queue).toMatchObject({
       waiting: 'Bekleyen',
       unassigned: 'Atanmamış',
