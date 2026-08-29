@@ -783,11 +783,22 @@
     "context": "Lid",
     "openLead": "Lidni ochish →",
     "noLead": "Suhbatni tanlang.",
-    "sendFailed": "Yuborib boʻlmadi",
+    "sendFailed": "Yuborilmadi",
     "title": "Kiruvchi xabarlar",
     "subtitle": "Barcha mijoz suhbatlari bir joyda.",
     "emptyHint": "Kanal ulanib, mijozlar sizga yozganda suhbatlar shu yerda paydo bo'ladi.",
-    "connectChannel": "Kanal ulash"
+    "connectChannel": "Kanal ulash",
+    "internalNotes": "Ichki eslatmalar",
+    "noNotes": "Hali ichki eslatma yoʻq. Ularni faqat jamoangiz koʻradi.",
+    "notePlaceholder": "Jamoaga eslatma…",
+    "addNote": "Qoʻshish",
+    "send": "Yuborish",
+    "reopen": "Qayta ochish",
+    "aiToggleFailed": "Sunʼiy intellekt holati oʻzgartirilmadi",
+    "closeFailed": "Suhbat yopilmadi",
+    "reopenFailed": "Suhbat qayta ochilmadi",
+    "noteFailed": "Eslatma saqlanmadi",
+    "smsCounter": "{{chars}} belgi · {{segments}} boʻlak"
   },
   "channels": {
     "title": "Kanallar",
@@ -1101,6 +1112,17 @@
         "title": "Bu navbatda hech kim yoʻq",
         "desc": "Boshqa navbatni tanlang yoki qidiruvni tozalang."
       }
+    },
+    "pane": {
+      "pickSomeone": "Chapdan bir odamni tanlang.",
+      "thread": "Suhbat",
+      "reply": "Javob yozing",
+      "gated": "Xabar almashish tarifingizga kirmaydi",
+      "gatedHint": "odam va uning harakatlari koʻrinadi; yozishmalar qoʻshilgach shu yerda ochiladi",
+      "threadsFailed": "Suhbatlar yuklanmadi",
+      "threadsFailedHint": "bu odamda suhbat boʻlishi mumkin — yangisini boshlashdan oldin yangilang",
+      "noThread": "Bu odam bilan hali yozishilmagan",
+      "noThreadHint": "birinchisini «Xabar» orqali boshlang"
     }
   }
 }

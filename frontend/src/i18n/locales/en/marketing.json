@@ -1545,7 +1545,7 @@
     "fax": "Fax",
     "faxOpenDocument": "Open document",
     "replyPlaceholder": "Type a reply… (this pauses the AI)",
-    "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
+    "smsCounter": "{{chars}} characters · {{segments}} segment(s)",
     "context": "Lead",
     "openLead": "Open lead →",
     "noLead": "Select a conversation.",
@@ -1560,7 +1560,17 @@
       "snippets": "Canned Responses",
       "agents": "AI Agents",
       "knowledge": "Knowledge"
-    }
+    },
+    "internalNotes": "Internal notes",
+    "noNotes": "No internal notes yet. Only your team can see these.",
+    "notePlaceholder": "Note for the team…",
+    "addNote": "Add",
+    "send": "Send",
+    "reopen": "Reopen",
+    "aiToggleFailed": "Could not change the AI status",
+    "closeFailed": "Could not close the conversation",
+    "reopenFailed": "Could not reopen the conversation",
+    "noteFailed": "Could not save the note"
   },
   "channels": {
     "title": "Channels",
@@ -3209,6 +3219,17 @@
         "title": "Nobody in this queue",
         "desc": "Pick another queue or clear the search."
       }
+    },
+    "pane": {
+      "pickSomeone": "Pick someone on the left.",
+      "thread": "Conversation",
+      "reply": "Write a reply",
+      "gated": "Messaging is not in your plan",
+      "gatedHint": "you can see the person and their activity; conversations appear here once it is added",
+      "threadsFailed": "Could not load conversations",
+      "threadsFailedHint": "this person may already have one — refresh before starting a new one",
+      "noThread": "No conversation with this person yet",
+      "noThreadHint": "use Message to start the first one"
     }
   }
 }

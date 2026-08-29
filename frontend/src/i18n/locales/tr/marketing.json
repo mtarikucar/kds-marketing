@@ -1830,7 +1830,7 @@
     "fax": "Faks",
     "faxOpenDocument": "Belgeyi aç",
     "replyPlaceholder": "Yanıt yazın… (AI'ı duraklatır)",
-    "smsCounter": "{{chars}} karakter · {{segments}} segment",
+    "smsCounter": "{{chars}} karakter · {{segments}} parça",
     "context": "Lead",
     "openLead": "Lead'i aç →",
     "noLead": "Bir konuşma seçin.",
@@ -1845,7 +1845,17 @@
       "snippets": "Hazır Yanıtlar",
       "agents": "AI Ajanları",
       "knowledge": "Bilgi Bankası"
-    }
+    },
+    "internalNotes": "İç notlar",
+    "noNotes": "Henüz iç not yok. Bunları yalnızca ekibin görür.",
+    "notePlaceholder": "Ekibe not…",
+    "addNote": "Ekle",
+    "send": "Gönder",
+    "reopen": "Yeniden aç",
+    "aiToggleFailed": "Yapay zeka durumu değiştirilemedi",
+    "closeFailed": "Konuşma kapatılamadı",
+    "reopenFailed": "Konuşma açılamadı",
+    "noteFailed": "Not kaydedilemedi"
   },
   "channels": {
     "title": "Kanallar",
@@ -4060,6 +4070,17 @@
         "title": "Bu kuyrukta kimse yok",
         "desc": "Başka bir kuyruk seç ya da aramayı temizle."
       }
+    },
+    "pane": {
+      "pickSomeone": "Soldan bir kişi seç.",
+      "thread": "Konuşma",
+      "reply": "Yanıt yaz",
+      "gated": "Mesajlaşma paketinde yok",
+      "gatedHint": "kişiyi ve hareketlerini görüyorsun; yazışma eklendiğinde burada açılır",
+      "threadsFailed": "Konuşmalar yüklenemedi",
+      "threadsFailedHint": "bu kişinin bir konuşması olabilir; yeni bir tane açmadan önce yenile",
+      "noThread": "Bu kişiyle henüz konuşulmadı",
+      "noThreadHint": "Mesaj ile ilk konuşmayı başlat"
     }
   }
 }
