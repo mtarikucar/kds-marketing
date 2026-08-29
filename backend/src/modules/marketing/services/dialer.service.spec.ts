@@ -37,6 +37,25 @@ describe('DialerService', () => {
       expect(out.current.lead.id).toBe('l1');
     });
 
+    // Consent belongs in the QUEUE, not only at the dial. SalesCallService
+    // .startCall refuses a lead who opted out of phone contact, and `dial()`
+    // below calls it with the queued lead's id — so without this filter a
+    // power-dialer session fills with rows that hard-400 the moment the rep
+    // presses Dial, one at a time, with no way to skip past them but the
+    // outcome log. "Has a phone" was never the same question as "may be rung".
+    it('keeps opted-out leads out of the queue entirely', async () => {
+      const { prisma, svc } = makeSvc();
+      prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }] as any);
+      (prisma.dialSession.create as jest.Mock).mockResolvedValue({ id: 'sess-1' });
+      prisma.dialSession.findFirst.mockResolvedValue({ id: 'sess-1', status: 'ACTIVE', currentIndex: 0, total: 1 } as any);
+      prisma.dialSessionItem.findFirst.mockResolvedValue(null as any);
+      (prisma.dialSessionItem.count as jest.Mock).mockResolvedValue(0);
+
+      await svc.createSession(WS, USER, 'MANAGER', {});
+
+      expect(prisma.lead.findMany.mock.calls[0][0].where.smsOptOut).toBe(false);
+    });
+
     it('clamps a REP to their own assigned leads', async () => {
       const { prisma, svc } = makeSvc();
       prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }] as any);
