@@ -340,10 +340,11 @@ export class MarketingLeadsService {
       where.id = { in: await waitingReplyLeadIds(this.prisma, workspaceId) };
     }
 
-    // workspaceId is spread LAST so no filter combination can ever
-    // widen the query beyond the caller's workspace.
-    const scoped: Prisma.LeadWhereInput = { ...where, workspaceId };
-
+    // Every read below spreads workspaceId LAST, and spells it out at the call
+    // site rather than behind a shared `where` alias: no filter combination can
+    // widen a query beyond the caller's workspace, and workspace-scoping.arch
+    // can only see the guard when it is written where the query is.
+    //
     // `activities` here is a HELPER read, not a new field on the list: it is
     // the one instant a page row's `lastActivityAt` needs that no aggregate
     // supplies, and it is stripped off again before the row is returned.
@@ -388,7 +389,10 @@ export class MarketingLeadsService {
        * the number of messages or activities.
        */
       const [candidates, msgAt, actAt] = await Promise.all([
-        this.prisma.lead.findMany({ where: scoped, select: { id: true, createdAt: true } }),
+        this.prisma.lead.findMany({
+          where: { ...where, workspaceId },
+          select: { id: true, createdAt: true },
+        }),
         workspaceLastMessageAt(this.prisma, workspaceId),
         workspaceLastActivityAt(this.prisma, workspaceId),
       ]);
@@ -422,8 +426,14 @@ export class MarketingLeadsService {
       leads = pageIds.map((id) => byId.get(id)).filter((r): r is (typeof rows)[number] => !!r);
     } else {
       [leads, total] = await Promise.all([
-        this.prisma.lead.findMany({ where: scoped, orderBy, skip, take: limit, include }),
-        this.prisma.lead.count({ where: scoped }),
+        this.prisma.lead.findMany({
+          where: { ...where, workspaceId },
+          orderBy,
+          skip,
+          take: limit,
+          include,
+        }),
+        this.prisma.lead.count({ where: { ...where, workspaceId } }),
       ]);
     }
 
