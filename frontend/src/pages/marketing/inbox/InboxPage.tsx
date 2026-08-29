@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -131,6 +131,15 @@ export default function InboxPage() {
   // person's fields, and re-fetching a record the list already returned would
   // be a third source of truth about who this is.
   const [selected, setSelected] = useState<Lead | null>(null);
+  // The SAME answer, in a form the live-stream effect can read without being
+  // torn down and rebuilt for it. See the effect below: `selected` in its
+  // dependency array reconnected the SSE socket on every click.
+  const selectedRef = useRef<Lead | null>(null);
+  /** The one place selection changes, so the ref cannot drift from the state. */
+  const select = (person: Lead | null) => {
+    selectedRef.current = person;
+    setSelected(person);
+  };
   // Below lg the record card cannot sit beside the other two, so it arrives as
   // a sheet on request.
   const [cardOpen, setCardOpen] = useState(false);
@@ -160,8 +169,24 @@ export default function InboxPage() {
   // contract change and is deliberately not smuggled into this commit.
   //
   // The chip COUNTS are excluded by predicate. They sit under the same
-  // ['marketing','leads'] prefix and refetching three of them per frame would
-  // turn one inbound message into six requests.
+  // ['marketing','leads'] prefix, and the three of them are the only queries
+  // there whose answer a single inbound message cannot change in a way anyone
+  // needs within the second — so refetching them per frame would turn one
+  // message into six requests for two numbers that did not move. `PersonPane`'s
+  // WRITES invalidate ['marketing','leads'] wholesale on purpose, and that is
+  // not an inconsistency: a reply, a close or a reopen is exactly the kind of
+  // event that moves "Bekleyen", it happens once per human action rather than
+  // once per frame, and the person who caused it is the person looking at the
+  // chip. Frames are cheap-and-many; writes are rare-and-consequential.
+  //
+  // WHO is selected is read from `selectedRef`, not from `selected`, and the
+  // dependency array is why. This effect owns a live SSE socket; listing the
+  // selected row in its deps meant every click aborted the fetch and opened a
+  // new connection, and `ConversationStreamService` is a plain per-workspace
+  // RxJS Subject with NO replay — so every frame the server pushed during that
+  // teardown window was gone for good, precisely while a rep was moving
+  // through their queue. One connection for the surface's lifetime; the ref is
+  // how the handler still knows whose stream to refresh.
   useEffect(() => {
     if (!accessToken || !canConverse) return;
 
@@ -185,8 +210,8 @@ export default function InboxPage() {
             q.queryKey[1] === 'leads' &&
             q.queryKey[2] !== 'queue-count',
         });
-        if (selected)
-          queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', selected.id] });
+        const open = selectedRef.current;
+        if (open) queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', open.id] });
       } catch {
         /* ignore malformed frame */
       }
@@ -239,10 +264,10 @@ export default function InboxPage() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       controller.abort();
     };
-  }, [accessToken, canConverse, queryClient, selected]);
+  }, [accessToken, canConverse, queryClient]);
 
   const onSelect = (person: Lead) => {
-    setSelected(person);
+    select(person);
     setCardOpen(false);
   };
 
@@ -373,7 +398,7 @@ export default function InboxPage() {
                   variant="ghost"
                   size="sm"
                   aria-label={t('inbox.back', 'Geri')}
-                  onClick={() => setSelected(null)}
+                  onClick={() => select(null)}
                   className="md:hidden"
                 >
                   <ChevronLeft className="h-5 w-5" />

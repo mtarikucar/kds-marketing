@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
@@ -209,43 +209,66 @@ describe('The person surface — per-person state does not follow the rep', () =
  */
 describe('The person surface — a live message reaches the open person', () => {
   /**
-   * An SSE endpoint that delivers ONE frame per CONNECTION.
+   * An SSE endpoint that STAYS OPEN and delivers what a test pushes into it.
    *
-   * Per connection, not once in total: the surface reconnects when the selected
-   * person changes, so a fixture that fires only on the first connection
-   * delivers its frame while nobody is selected — a green test of nothing.
+   * It used to be "one frame per CONNECTION", with a comment explaining that
+   * the surface reconnects when the selected person changes. That comment
+   * documented a bug and then relied on it: `ConversationStreamService` is a
+   * plain per-workspace RxJS Subject with no replay, so every frame the server
+   * pushed during a teardown/reconnect window was gone for good, and a rep
+   * clicking through their queue silently missed messages. The surface now
+   * holds one connection for its lifetime, so the fixture has to be able to
+   * deliver a frame at a moment the test chooses rather than at a reconnect.
    */
-  const oneFramePerConnection = (payload: unknown) => {
+  const openStream = () => {
     const encoder = new TextEncoder();
-    return vi.fn().mockImplementation(async () => {
-      let sent = false;
-      return {
-        ok: true,
-        body: {
-          getReader: () => ({
-            read: async () => {
-              if (sent) return { done: true, value: undefined };
-              sent = true;
-              return {
-                done: false,
-                value: encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
-              };
-            },
-          }),
-        },
-      };
-    });
+    const queued: Uint8Array[] = [];
+    let waiting: ((r: { done: boolean; value?: Uint8Array }) => void) | null = null;
+
+    const read = () =>
+      new Promise<{ done: boolean; value?: Uint8Array }>((resolve) => {
+        const next = queued.shift();
+        if (next) resolve({ done: false, value: next });
+        else waiting = resolve;
+      });
+
+    const push = async (payload: unknown) => {
+      const value = encoder.encode(`data: ${JSON.stringify(payload)}
+
+`);
+      await act(async () => {
+        if (waiting) {
+          const resolve = waiting;
+          waiting = null;
+          resolve({ done: false, value });
+        } else {
+          queued.push(value);
+        }
+        // Let the reader loop turn and the invalidations land.
+        await Promise.resolve();
+      });
+    };
+
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => ({ ok: true, body: { getReader: () => ({ read }) } }));
+
+    return { fetchMock, push };
   };
 
   it('refreshes the open person’s stream, the people list and the threads', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('fetch', oneFramePerConnection({ kind: 'message', conversationId: 'c9' }));
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
     renderAt('/leads', qc);
 
     await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'message', conversationId: 'c9' });
 
     await waitFor(() =>
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] }),
@@ -253,8 +276,68 @@ describe('The person surface — a live message reaches the open person', () => 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'conversations'] });
   });
 
+  /**
+   * The reason the fixture above had to change, asserted directly.
+   *
+   * The effect used to list the whole selected ROW in its dependency array, so
+   * every click aborted the fetch and opened a new connection. The stream has
+   * no replay: anything the server pushed in that window was lost, and the
+   * window is exactly when a rep is moving through their queue.
+   */
+  it('holds ONE connection across selections rather than reconnecting per click', async () => {
+    const user = userEvent.setup();
+    const { fetchMock } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+    renderAt('/leads');
+
+    await screen.findByTestId('person-surface');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('button', { name: 'Ayşe' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p1'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Bora' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p2'),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * And the half that a `useRef` could quietly break: reading the id out of a
+   * ref instead of the closure is only correct if the ref is actually current
+   * when a frame lands. A frame pushed AFTER a second selection has to refresh
+   * the second person, not the first.
+   */
+  it('refreshes whoever is selected NOW, on a connection that was opened before them', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await user.click(screen.getByRole('button', { name: 'Bora' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('list-selected')).toHaveTextContent('selected:p2'),
+    );
+    invalidate.mockClear();
+
+    await push({ kind: 'message', conversationId: 'c9' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p2'] }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] });
+  });
+
   it('ignores a heartbeat — it is a keep-alive, not news', async () => {
-    vi.stubGlobal('fetch', oneFramePerConnection({ kind: 'heartbeat' }));
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
@@ -262,7 +345,10 @@ describe('The person surface — a live message reaches the open person', () => 
 
     // Positive anchor: the surface is up, so the stream effect has run.
     await screen.findByTestId('person-surface');
-    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'heartbeat' });
+
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'conversations'] });
   });
 });
