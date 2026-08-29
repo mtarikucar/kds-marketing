@@ -757,11 +757,6 @@
     "saveSuccess": "Dağıtım kuralı güncellendi",
     "saveError": "Kural kaydedilemedi"
   },
-  "activityTimeline": {
-    "assignmentAuto": "Otomatik",
-    "assignmentBulk": "Toplu",
-    "assignmentUnassigned": "Atama kaldırıldı"
-  },
   "leads": {
     "title": "Lead'ler",
     "subtitle": "Pipeline genel görünüm",
@@ -854,7 +849,6 @@
       "stream": "Akış",
       "offers": "Teklifler",
       "tasks": "Görevler",
-      "conversations": "Konuşmalar",
       "sales": "Satış"
     },
     "stream": {
@@ -945,17 +939,6 @@
     "deleteConfirm": {
       "title": "Bu müşteri adayı silinsin mi?",
       "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
-    },
-    "conversations": {
-      "failed": "Konuşmalar yüklenemedi.",
-      "unknownChannel": "Bilinmeyen kanal",
-      "aiPaused": "AI kapalı",
-      "noMessage": "Mesaj yok",
-      "openInbox": "Gelen kutusunu aç",
-      "empty": {
-        "title": "Bu kişiyle henüz konuşulmadı",
-        "desc": "WhatsApp, e-posta ya da başka bir kanaldan ilk mesaj geldiğinde burada görürsün."
-      }
     },
     "sales": {
       "failed": "Fırsatlar yüklenemedi.",

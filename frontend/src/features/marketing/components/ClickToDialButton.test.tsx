@@ -132,10 +132,10 @@ describe('ClickToDialButton — clears the in-call controls panel once logged (P
  * This button was written for the calls page, where the only list that could
  * go stale was the call log. Dropped onto the lead header it acquires a second
  * consumer: SalesCallService.logCall mirrors the outcome onto the lead as a
- * CALL LeadActivity, and the lead detail page reads its activities off the
- * LEAD payload (ActivityTimelineTab takes them as a prop — it has no query of
- * its own). So without invalidating the lead, the rep logs a call, watches
- * Hareketler, and sees nothing until they reload the page by hand.
+ * CALL LeadActivity, and the lead detail's Akış stream is keyed UNDER
+ * ['marketing','lead',id] so that this one invalidation reaches it. Without it
+ * the rep logs a call, watches the stream, and sees nothing until they reload
+ * the page by hand.
  */
 describe('ClickToDialButton — a logged call refreshes the lead it was placed from', () => {
   beforeEach(() => {
@@ -143,7 +143,7 @@ describe('ClickToDialButton — a logged call refreshes the lead it was placed f
     Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
   });
 
-  it('invalidates the lead detail query (where Hareketler gets its activities) after logging', async () => {
+  it('invalidates the lead detail query (whose prefix the Akış stream shares) after logging', async () => {
     postMock.mockResolvedValueOnce({ data: { call: call(), dialUri: '', mode: 'api' } });
     postMock.mockResolvedValueOnce({ data: {} });
     const { invalidate } = renderButton({ leadId: 'lead-9', defaultPhone: '+905551112233' });

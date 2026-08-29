@@ -263,7 +263,6 @@
       "stream": "Oqim",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "Suhbatlar",
       "sales": "Savdo"
     },
     "stream": {
@@ -349,17 +348,6 @@
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
     "convertError": "Couldn't convert the lead",
-    "conversations": {
-      "failed": "Suhbatlarni yuklab bo'lmadi.",
-      "unknownChannel": "Noma'lum kanal",
-      "aiPaused": "AI o'chiq",
-      "noMessage": "Xabar yo'q",
-      "openInbox": "Kiruvchi qutini ochish",
-      "empty": {
-        "title": "Bu kishi bilan hali gaplashilmagan",
-        "desc": "Birinchi xabar kelganda — WhatsApp, e-pochta yoki boshqa kanal — shu yerda ko'rasiz."
-      }
-    },
     "sales": {
       "failed": "Bitimlarni yuklab bo'lmadi.",
       "unknownStage": "Noma'lum bosqich",
@@ -585,11 +573,6 @@
     "saveSuccess": "Taqsimlash qoidasi yangilandi",
     "subtitle": "Yangi lidlar qanday avtomatik taqsimlansin?",
     "title": "Lidlarni avto-taqsimlash"
-  },
-  "activityTimeline": {
-    "assignmentAuto": "Avto",
-    "assignmentBulk": "Ommaviy",
-    "assignmentUnassigned": "Biriktirilmagan"
   },
   "register": {
     "title": "Ish maydoningizni yarating",

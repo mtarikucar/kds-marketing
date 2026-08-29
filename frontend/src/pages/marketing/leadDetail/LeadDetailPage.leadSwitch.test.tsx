@@ -19,7 +19,7 @@ import LeadDetailPage from './LeadDetailPage';
  * rung and the activity is mirrored onto the wrong lead.
  *
  * WalletPanel (`amount resets per lead`), TasksTab (`draft resets per lead`)
- * and ActivityTimelineTab (a `useEffect` keyed on `leadId`, with the comment
+ * and LogActivityDialog (a `useEffect` keyed on `leadId`, with the comment
  * explaining exactly this) already guard against it. This file is the fourth.
  *
  * Two things make this test load-bearing rather than decorative:
@@ -103,8 +103,8 @@ vi.mock('../../../features/marketing/components', async () => ({
 vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
 vi.mock('./CompanyPanel', () => ({ CompanyPanel: () => null }));
-vi.mock('./ActivityTimelineTab', () => ({ default: () => null }));
-vi.mock('./ConversationsTab', () => ({ default: () => null }));
+vi.mock('./LogActivityDialog', () => ({ default: () => null }));
+vi.mock('../../../features/marketing/components/LeadStream', () => ({ default: () => null }));
 vi.mock('./SalesTab', () => ({ default: () => null }));
 vi.mock('./OffersTab', () => ({ default: () => null }));
 vi.mock('./TasksTab', () => ({ default: () => null }));
@@ -182,12 +182,12 @@ describe('LeadDetailPage — the header resets per lead', () => {
     // Captured BEFORE the navigation: this node lives outside the header, so
     // if the page had unmounted and remounted, the assertion below it fails and
     // the number check would have been vacuous.
-    const tabBefore = screen.getByRole('tab', { name: 'Etkinlik' });
+    const tabBefore = screen.getByRole('tab', { name: 'Akış' });
 
     await user.click(screen.getByRole('link', { name: 'open-lead-b' }));
 
     await screen.findByText('Beta Ltd');
-    expect(screen.getByRole('tab', { name: 'Etkinlik' })).toBe(tabBefore);
+    expect(screen.getByRole('tab', { name: 'Akış' })).toBe(tabBefore);
     expect(phoneField()).toHaveValue('5550000002');
   });
 

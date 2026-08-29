@@ -73,9 +73,9 @@ interface ChannelRow {
 export interface LeadHeaderActionsProps {
   /** Only the fields these two actions actually decide on. */
   lead: { id: string; phone?: string | null; smsOptOut?: boolean };
-  /** Switch the lead detail to its Konuşmalar tab — the app has no per-thread
-   *  deep link, so "open the conversation" means "show me this lead's threads". */
-  onOpenConversations: () => void;
+  /** Bring the person's Akış stream forward — the app has no per-thread deep
+   *  link, so "open the conversation" means "show me this person's stream". */
+  onOpenStream: () => void;
 }
 
 const errMsg = (e: unknown, fallback: string) =>
@@ -87,7 +87,7 @@ const errMsg = (e: unknown, fallback: string) =>
  * Neither is a new path. Ara mounts the EXISTING ClickToDialButton with this
  * lead's id, which is the whole point: SalesCallService.logCall writes a CALL
  * LeadActivity off `call.leadId`, so a call placed from here mirrors onto the
- * Hareketler tab without anything new being written for it. Mesaj posts to the
+ * person's Akış stream without anything new being written for it. Mesaj posts to the
  * existing `POST /conversations/start`, which until now had no caller in the
  * frontend at all.
  *
@@ -95,7 +95,7 @@ const errMsg = (e: unknown, fallback: string) =>
  * lead has no number, or when the lead has opted out of phone contact: a button
  * that fails when clicked is worse than no button.
  */
-export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHeaderActionsProps) {
+export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActionsProps) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const { has } = useEntitlements();
@@ -120,11 +120,10 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
   // lead may be dialled.
   const callable = has('telephony') && !!phone && !lead.smsOptOut;
 
-  // Same key as ConversationsTab, deliberately: Mesaj has to know whether a
-  // thread exists before it can choose between opening one and starting one,
-  // and sharing the key means that answer is ALSO the Konuşmalar tab's first
-  // render — one request serves both, rather than the header paying for a
-  // second copy of the same list.
+  // Mesaj has to know whether a thread exists before it can choose between
+  // opening one and starting one. The key is still the conversations prefix the
+  // Inbox's SSE stream invalidates, so a reply arriving while this page is open
+  // flips the button's job without a reload.
   const threads = useQuery<ConversationSummary[]>({
     queryKey: ['marketing', 'conversations', 'lead', lead.id],
     queryFn: () => listConversations({ leadId: lead.id }),
@@ -164,20 +163,18 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
         // Deliberately NOT navigating, and deliberately leaving the dialog
         // open with the text intact.
         //
-        // ConversationsTab — where onOpenConversations lands the rep — renders
-        // `lastMessage.body` with no per-message failure indicator at all
-        // (ConversationsTab.tsx:101-103; the indicator lives in the INBOX's
-        // ThreadPane, which is not this surface). Landing them there after a
-        // failure would show their own copy sitting in a thread, reading
-        // exactly like a delivered message — re-asserting, in pixels, the
-        // claim this branch exists to withdraw, with only a toast that
-        // disappears to say otherwise.
+        // The original reason no longer holds and is recorded here because
+        // the behaviour outlived it: ConversationsTab rendered
+        // `lastMessage.body` with no per-message failure indicator, so landing
+        // the rep there after a failure showed their own copy reading exactly
+        // like a delivered message. LeadStream closed that — a FAILED message
+        // now carries the word and the provider's reason on the bubble itself.
         //
-        // Nothing is hidden by staying put: the thread is real and reachable —
-        // the now-invalidated list means the next Mesaj click opens Konuşmalar
-        // rather than this dialog. What staying buys is the retry: the channel
-        // picker and the message are still on screen, so trying another
-        // channel is one click rather than a re-typed message.
+        // What still holds is the retry. The channel picker and the typed
+        // message are on screen; staying makes trying another channel one
+        // click instead of a re-typed message, and nothing is hidden by it —
+        // the thread is real, the list is invalidated, and the next Mesaj
+        // click opens Akış rather than this dialog.
         return;
       }
 
@@ -187,7 +184,7 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
       setChannelId('');
       // The thread now exists and carries a message that actually went out —
       // land the user on it.
-      onOpenConversations();
+      onOpenStream();
     },
     onError: (e) =>
       toast.error(errMsg(e, t('leadDetail.startConversation.failed', 'Mesaj gönderilemedi'))),
@@ -198,7 +195,7 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
     // lets the failure say so by name, where guessing "none" would open a
     // start flow on top of a conversation that may well already exist.
     if (threads.isError || (threads.data?.length ?? 0) > 0) {
-      onOpenConversations();
+      onOpenStream();
       return;
     }
     setStartOpen(true);

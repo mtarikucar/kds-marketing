@@ -3,7 +3,6 @@ export { default as MarketingSidebar } from './MarketingSidebar';
 export { default as MarketingHeader } from './MarketingHeader';
 export { default as MarketingProtectedRoute } from './MarketingProtectedRoute';
 export { default as LeadStatusBadge } from './LeadStatusBadge';
-export { default as ActivityTimeline } from './ActivityTimeline';
 // One person's whole history on one axis — messages and activities together.
 // Mounted from the lead detail's Akış tab and from the person-primary surface's
 // middle column; the two must not drift into two renderings of one endpoint.

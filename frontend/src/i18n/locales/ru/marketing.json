@@ -263,7 +263,6 @@
       "stream": "Лента",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "Переписка",
       "sales": "Продажи"
     },
     "stream": {
@@ -349,17 +348,6 @@
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
     "convertError": "Couldn't convert the lead",
-    "conversations": {
-      "failed": "Не удалось загрузить переписку.",
-      "unknownChannel": "Неизвестный канал",
-      "aiPaused": "ИИ выключен",
-      "noMessage": "Сообщений нет",
-      "openInbox": "Открыть входящие",
-      "empty": {
-        "title": "С этим контактом ещё не общались",
-        "desc": "Когда придёт первое сообщение — WhatsApp, почта или другой канал — вы увидите его здесь."
-      }
-    },
     "sales": {
       "failed": "Не удалось загрузить сделки.",
       "unknownStage": "Неизвестный этап",
@@ -585,11 +573,6 @@
     "saveSuccess": "Правило распределения обновлено",
     "subtitle": "Как автоматически распределять новые лиды?",
     "title": "Автораспределение лидов"
-  },
-  "activityTimeline": {
-    "assignmentAuto": "Авто",
-    "assignmentBulk": "Массово",
-    "assignmentUnassigned": "Не назначен"
   },
   "register": {
     "title": "Создайте рабочее пространство",

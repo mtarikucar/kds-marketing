@@ -263,7 +263,6 @@
       "stream": "التدفق",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "المحادثات",
       "sales": "المبيعات"
     },
     "stream": {
@@ -349,17 +348,6 @@
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
     "convertError": "Couldn't convert the lead",
-    "conversations": {
-      "failed": "تعذّر تحميل المحادثات.",
-      "unknownChannel": "قناة غير معروفة",
-      "aiPaused": "الذكاء الاصطناعي متوقف",
-      "noMessage": "لا توجد رسائل",
-      "openInbox": "افتح صندوق الوارد",
-      "empty": {
-        "title": "لا توجد محادثة مع جهة الاتصال هذه بعد",
-        "desc": "عند وصول أول رسالة — واتساب أو بريد إلكتروني أو أي قناة أخرى — ستراها هنا."
-      }
-    },
     "sales": {
       "failed": "تعذّر تحميل الصفقات.",
       "unknownStage": "مرحلة غير معروفة",
@@ -585,11 +573,6 @@
     "saveSuccess": "تم تحديث قاعدة التوزيع",
     "subtitle": "كيف يتم توزيع العملاء الجدد تلقائيًا؟",
     "title": "التوزيع التلقائي للعملاء"
-  },
-  "activityTimeline": {
-    "assignmentAuto": "تلقائي",
-    "assignmentBulk": "جماعي",
-    "assignmentUnassigned": "غير معيّن"
   },
   "register": {
     "title": "أنشئ مساحة عملك",

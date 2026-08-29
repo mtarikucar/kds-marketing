@@ -81,17 +81,17 @@ const CHANNELS = [
 
 function renderActions(
   lead: { id: string; phone?: string | null; smsOptOut?: boolean },
-  onOpenConversations = vi.fn(),
+  onOpenStream = vi.fn(),
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <LeadHeaderActions lead={lead} onOpenConversations={onOpenConversations} />
+        <LeadHeaderActions lead={lead} onOpenStream={onOpenStream} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onOpenConversations };
+  return { onOpenStream };
 }
 
 /** The Mesaj button decides between "open the thread" and "start one", so it
@@ -186,11 +186,11 @@ describe('LeadHeaderActions — Mesaj', () => {
   it('opens the lead’s existing threads rather than starting a new one', async () => {
     const user = userEvent.setup({ delay: null });
     listConversations.mockResolvedValue([thread('c1')]);
-    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+    const { onOpenStream } = renderActions({ id: 'l1', phone: '+905551112233' });
 
     await user.click(await readyMessageButton());
 
-    expect(onOpenConversations).toHaveBeenCalledTimes(1);
+    expect(onOpenStream).toHaveBeenCalledTimes(1);
     // No start flow — this lead is already being talked to.
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(listConversations).toHaveBeenCalledWith({ leadId: 'l1' });
@@ -199,12 +199,12 @@ describe('LeadHeaderActions — Mesaj', () => {
   it('opens the start flow when there is no thread yet, and posts to the existing start endpoint', async () => {
     const user = userEvent.setup({ delay: null });
     listConversations.mockResolvedValue([]);
-    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+    const { onOpenStream } = renderActions({ id: 'l1', phone: '+905551112233' });
 
     await user.click(await readyMessageButton());
 
     const dialog = await screen.findByRole('dialog');
-    expect(onOpenConversations).not.toHaveBeenCalled();
+    expect(onOpenStream).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole('combobox'));
     await screen.findByRole('listbox');
@@ -230,7 +230,7 @@ describe('LeadHeaderActions — Mesaj', () => {
       }),
     );
     // Once the thread exists, land the user on it.
-    await waitFor(() => expect(onOpenConversations).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onOpenStream).toHaveBeenCalledTimes(1));
   });
 
   /**
@@ -299,13 +299,13 @@ describe('LeadHeaderActions — Mesaj', () => {
   it('toasts success only when the returned message actually went out', async () => {
     const user = userEvent.setup({ delay: null });
     startConversation.mockResolvedValue(started('SENT'));
-    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+    const { onOpenStream } = renderActions({ id: 'l1', phone: '+905551112233' });
 
     await sendFirstMessage(user);
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     expect(toastError).not.toHaveBeenCalled();
-    await waitFor(() => expect(onOpenConversations).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onOpenStream).toHaveBeenCalledTimes(1));
   });
 
   it('does not claim a 2xx FAILED message was sent — it says why it was not', async () => {
@@ -313,7 +313,7 @@ describe('LeadHeaderActions — Mesaj', () => {
     startConversation.mockResolvedValue(
       started('FAILED', 'NetGSM rejected the message: 0030 invalid header'),
     );
-    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+    const { onOpenStream } = renderActions({ id: 'l1', phone: '+905551112233' });
 
     await sendFirstMessage(user);
 
@@ -323,11 +323,12 @@ describe('LeadHeaderActions — Mesaj', () => {
       expect(toastError).toHaveBeenCalledWith(expect.stringContaining('0030 invalid header')),
     );
     expect(toastSuccess).not.toHaveBeenCalled();
-    // Not navigated: ConversationsTab renders `lastMessage.body` with NO
-    // failure indicator (ConversationsTab.tsx:101-103), so landing the rep
-    // there would re-assert the very claim this branch exists to withdraw.
-    // The dialog stays open, with the text intact, as the retry surface.
-    expect(onOpenConversations).not.toHaveBeenCalled();
+    // Not navigated. The original reason is gone — LeadStream marks a FAILED
+    // message on the bubble with the provider's reason, which ConversationsTab
+    // never did — but the retry reason stands: the dialog stays open with the
+    // text intact, so trying another channel is one click and not a re-typed
+    // message.
+    expect(onOpenStream).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByLabelText(/İlk mesaj/)).toHaveValue('Merhaba');
   });
@@ -337,7 +338,7 @@ describe('LeadHeaderActions — Mesaj', () => {
     startConversation.mockRejectedValue({
       response: { data: { message: 'This lead opted out of SMS messages, so a conversation cannot be started.' } },
     });
-    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+    const { onOpenStream } = renderActions({ id: 'l1', phone: '+905551112233' });
 
     await user.click(await readyMessageButton());
     const dialog = await screen.findByRole('dialog');
@@ -349,7 +350,7 @@ describe('LeadHeaderActions — Mesaj', () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringContaining('opted out')));
     expect(toastSuccess).not.toHaveBeenCalled();
-    expect(onOpenConversations).not.toHaveBeenCalled();
+    expect(onOpenStream).not.toHaveBeenCalled();
   });
 });
 

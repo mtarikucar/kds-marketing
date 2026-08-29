@@ -501,11 +501,6 @@
     "saveSuccess": "Distribution rule updated",
     "saveError": "Couldn't save rule"
   },
-  "activityTimeline": {
-    "assignmentAuto": "Auto",
-    "assignmentBulk": "Bulk",
-    "assignmentUnassigned": "Unassigned"
-  },
   "leads": {
     "title": "Leads",
     "subtitle": "Pipeline overview",
@@ -598,7 +593,6 @@
       "stream": "Stream",
       "offers": "Offers",
       "tasks": "Tasks",
-      "conversations": "Conversations",
       "sales": "Sales"
     },
     "stream": {
@@ -689,17 +683,6 @@
     "deleteConfirm": {
       "title": "Delete this lead?",
       "desc": "The lead and its timeline are removed from your workspace. This cannot be undone."
-    },
-    "conversations": {
-      "failed": "Could not load the conversations.",
-      "unknownChannel": "Unknown channel",
-      "aiPaused": "AI off",
-      "noMessage": "No messages",
-      "openInbox": "Open the inbox",
-      "empty": {
-        "title": "No conversation with this contact yet",
-        "desc": "When the first message arrives — WhatsApp, email or any other channel — you will see it here."
-      }
     },
     "sales": {
       "failed": "Could not load the deals.",

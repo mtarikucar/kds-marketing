@@ -99,8 +99,8 @@ describe('marketing i18n — home left-column tabs', () => {
   });
 });
 
-describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
-  // Two whole TABS and their empty/error copy. Same trap as the timeline panel:
+describe('marketing i18n — lead detail: the Satış tab', () => {
+  // A whole TAB and its empty/error copy. Same trap as the timeline panel:
   // `fallbackLng: 'en'` means a locale that simply lacks these keys neither
   // throws nor shows a raw key — a ru/ar/uz operator is quietly served English,
   // and nothing at runtime notices (missingKeyHandler is DEV-only).
@@ -109,16 +109,17 @@ describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
   // the sentence that distinguishes "could not load" from "nothing here"; if it
   // silently degrades to English while the empty state is translated, the two
   // states stop reading as different states in that locale.
-  it('every offered locale defines the conversations + sales keys, not just tr', async () => {
+  //
+  // Konuşmalar used to be pinned here beside it. That tab is gone — Hareketler
+  // and Konuşmalar merged into Akış — and its keys went with the component, so
+  // what stood here is now covered by the Akış block below.
+  it('every offered locale defines the sales keys, not just tr', async () => {
     const want = flat((tr as Json).leadDetail as Json)
-      .filter((k) => /^(conversations\.|sales\.|tabs\.(conversations|sales)$)/.test(k))
+      .filter((k) => /^(sales\.|tabs\.sales$)/.test(k))
       .map((k) => `leadDetail.${k}`);
     expect(want).toEqual(
       expect.arrayContaining([
-        'leadDetail.tabs.conversations',
         'leadDetail.tabs.sales',
-        'leadDetail.conversations.failed',
-        'leadDetail.conversations.empty.title',
         'leadDetail.sales.failed',
         'leadDetail.sales.empty.title',
       ]),
