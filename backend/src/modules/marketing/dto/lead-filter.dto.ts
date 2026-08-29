@@ -72,6 +72,16 @@ export class LeadFilterDto {
   @IsDateString()
   dateTo?: string;
 
+  /**
+   * One of the fields `MarketingLeadsService.findAll` allows; anything else
+   * falls back to `createdAt desc` rather than erroring.
+   *
+   * `lastActivityAt` is the person-primary surface's sort and is the one value
+   * here that is NOT a column: it is the newest of the person's last message,
+   * their newest LeadActivity and their own createdAt, so people with live
+   * conversations rise to the top and silent ones fall below by record date.
+   * It is resolved in the service — see the sort branch of findAll.
+   */
   @IsOptional()
   @IsString()
   sortBy?: string;
