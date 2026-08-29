@@ -13,6 +13,7 @@ import {
   bulkEnrollLeads,
   exportLeadsCsv,
 } from '../../../features/marketing/api/leads.service';
+import type { LeadListParams } from '../../../features/marketing/api/leads.service';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { BulkActionToolbar } from '../../../features/marketing/components';
 import {
@@ -58,14 +59,83 @@ interface RepRow extends MarketingUserInfo {
 
 const LIMIT = 20;
 
+/** The three named work queues of the Kişiler tab, in the spec's order. */
+type Queue = 'waiting' | 'unassigned' | 'all';
+const QUEUE_PARAMS: Record<Queue, Pick<LeadListParams, 'assignmentStatus' | 'waitingReply'>> = {
+  waiting: { waitingReply: true },
+  unassigned: { assignmentStatus: 'unassigned' },
+  all: {},
+};
+
+/**
+ * How many leads one queue would show under the CURRENT other filters — the
+ * number on the chip is what you get when you click it.
+ *
+ * The queue you are already in is never probed: the list query has just
+ * counted exactly that set, so a second count is only one more number that can
+ * disagree with the rows on screen.
+ */
+function useQueueCount(
+  base: Pick<LeadListParams, 'search' | 'status' | 'source' | 'businessType'>,
+  queue: Queue,
+  active: Queue | null,
+) {
+  return useQuery({
+    queryKey: ['marketing', 'leads', 'queue-count', queue, base],
+    queryFn: () =>
+      listLeads({ ...base, ...QUEUE_PARAMS[queue], page: 1, limit: 1 }).then(
+        (r) => r.meta.total,
+      ),
+    enabled: queue !== active,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * The number on a work-queue chip.
+ *
+ * Three states, and they must not read alike. A count we HAVE is the number; a
+ * count we could not fetch is an em dash that says so when you hover or ask a
+ * screen reader; a count still in flight is nothing at all. Rendering a failed
+ * count as `0` would announce an empty queue when nobody knows whether it is
+ * empty — the same "a failed query and no results look identical" bug this
+ * repo already paid for in the morning brief.
+ */
+function QueueCount({
+  total,
+  isError,
+  failedLabel,
+}: {
+  total?: number;
+  isError?: boolean;
+  failedLabel: string;
+}) {
+  if (isError)
+    return (
+      <span title={failedLabel} aria-label={failedLabel}>
+        —
+      </span>
+    );
+  if (typeof total !== 'number') return null;
+  return <span>{total}</span>;
+}
+
 /**
  * Leads list page — Console design system migration.
  *
  * Behavior (query keys, URL params, mutations, invalidations, pagination,
  * row navigation, bulk-assign) is preserved verbatim from the original
  * LeadsPage.tsx. Presentation is migrated to Console primitives.
+ *
+ * `embedded` renders it as the Kişiler tab of the merged surface: the host
+ * owns the one PageHeader, so this drops its own rather than stacking a second
+ * <h1>. The actions do NOT disappear with it — they move into a toolbar row,
+ * the arrangement ChannelsSettingsPage and SnippetsPage already use as
+ * embedded tabs of the same shell. They stay HERE rather than moving up into
+ * the host's header because Export CSV exports the current filters, and the
+ * filters live in this component.
  */
-export default function LeadsPage() {
+export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -86,6 +156,10 @@ export default function LeadsPage() {
   const [businessType, setBusinessType] = useState('');
   const [assignmentStatus, setAssignmentStatus] =
     useState<AssignmentStatus>(initialAssignment);
+  // Also URL-driven, and for the same two reasons: it is shareable, and Radix
+  // unmounts this whole page every time someone visits Konuşmalar and comes
+  // back — local state would not survive that trip, the URL does.
+  const [waiting, setWaiting] = useState(searchParams.get('waiting') === '1');
   // Server-side sort: the DataTable headers were sortable but uncontrolled, so a
   // click only reordered the 20 visible rows (and reset on paginate). Drive the
   // sort through the query instead so the WHOLE dataset is ordered. Column ids
@@ -101,24 +175,26 @@ export default function LeadsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
-  // Sync URL when assignmentStatus changes so deep-links stay current.
+  // Sync URL when the queue filters change so deep-links stay current.
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
     if (assignmentStatus) next.set('assignmentStatus', assignmentStatus);
     else next.delete('assignmentStatus');
+    if (waiting) next.set('waiting', '1');
+    else next.delete('waiting');
     // Only update if changed to avoid a render loop with React Router.
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignmentStatus]);
+  }, [assignmentStatus, waiting]);
 
   // Preserve verbatim query key: ['marketing','leads',{ search, status, source, businessType, assignmentStatus, page }]
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [
       'marketing',
       'leads',
-      { search, status, source, businessType, assignmentStatus, sortBy, sortOrder, page },
+      { search, status, source, businessType, assignmentStatus, waiting, sortBy, sortOrder, page },
     ],
     queryFn: () =>
       listLeads({
@@ -127,12 +203,51 @@ export default function LeadsPage() {
         source: source || undefined,
         businessType: businessType || undefined,
         assignmentStatus: assignmentStatus || undefined,
+        waitingReply: waiting || undefined,
         sortBy,
         sortOrder,
         page,
         limit: LIMIT,
       }),
   });
+
+  // ── Work queue ─────────────────────────────────────────────────────────────
+  // Three named queues over the same list. `Bekleyen` is what nobody has
+  // answered, `Atanmamış` is what nobody owns, `Hepsi` is everything —
+  // including the leads that have never had a conversation, who are invisible
+  // on the Konuşmalar tab by construction and are the reason this tab exists.
+  //
+  // Single-select, and the chips own BOTH dimensions, so picking one never
+  // leaves the previous one stacked silently underneath. Choosing "Bana
+  // atanmış" from the assignment Select is a view none of the three describes,
+  // and then no chip is lit — which is the truth, not a bug.
+  const activeQueue: Queue | null = waiting
+    ? 'waiting'
+    : assignmentStatus === 'unassigned'
+      ? 'unassigned'
+      : assignmentStatus === ''
+        ? 'all'
+        : null;
+
+  const selectQueue = (q: Queue) => {
+    setWaiting(q === 'waiting');
+    setAssignmentStatus(q === 'unassigned' ? 'unassigned' : '');
+    setPage(1);
+  };
+
+  // The chip promises "click me and you get this many rows", so the count is
+  // measured under the SAME other filters as the list. The queue you are
+  // already in is not probed at all: the list has just counted it, and asking
+  // twice is one more pair of numbers that can disagree.
+  const countBase = {
+    search: search || undefined,
+    status: status || undefined,
+    source: source || undefined,
+    businessType: businessType || undefined,
+  };
+  const waitingCount = useQueueCount(countBase, 'waiting', activeQueue);
+  const unassignedCount = useQueueCount(countBase, 'unassigned', activeQueue);
+  const allCount = useQueueCount(countBase, 'all', activeQueue);
 
   // Reps used by both AssignCell popovers (per row) and BulkActionToolbar.
   const { data: reps = [] } = useQuery<RepRow[]>({
@@ -146,7 +261,7 @@ export default function LeadsPage() {
   // checkbox state would silently drift across paginations.
   useEffect(() => {
     setSelected(new Set());
-  }, [page, search, status, source, businessType, assignmentStatus, sortBy, sortOrder]);
+  }, [page, search, status, source, businessType, assignmentStatus, waiting, sortBy, sortOrder]);
 
   // Bulk assign mutation — preserved verbatim (keys + invalidations).
   const bulkAssign = useMutation({
@@ -202,7 +317,17 @@ export default function LeadsPage() {
   // Export the current filtered list as CSV.
   const exporting = useMutation({
     mutationFn: () =>
-      exportLeadsCsv({ search, status, source, businessType, assignmentStatus }),
+      exportLeadsCsv({
+        search,
+        status,
+        source,
+        businessType,
+        assignmentStatus,
+        // The queue is a filter like any other; an export that quietly ignored
+        // it would hand back everything under a button sitting next to a chip
+        // that says "2".
+        waitingReply: waiting || undefined,
+      }),
     onError: () => toast.error(t('leads.export.error', { defaultValue: 'Export failed' })),
   });
 
@@ -284,27 +409,79 @@ export default function LeadsPage() {
       )
     : t('leads.empty', 'No leads found.');
 
+  const actions = (
+    <div className="flex items-center gap-2">
+      <Button variant="outline" size="md" onClick={() => exporting.mutate()} loading={exporting.isPending}>
+        <Download className="w-4 h-4" aria-hidden="true" />
+        {t('leads.export.button', { defaultValue: 'Export CSV' })}
+      </Button>
+      <Button asChild size="md">
+        <Link to="/leads/new">
+          <Plus className="w-4 h-4" aria-hidden="true" />
+          {t('leads.createButton')}
+        </Link>
+      </Button>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
-      {/* Page header */}
-      <PageHeader
-        title={t('leads.title')}
-        description={t('leads.subtitle')}
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="md" onClick={() => exporting.mutate()} loading={exporting.isPending}>
-              <Download className="w-4 h-4" aria-hidden="true" />
-              {t('leads.export.button', { defaultValue: 'Export CSV' })}
+      {/* Page header — suppressed when this is the merged surface's Kişiler
+          tab, where the host already rendered one. The actions never go with
+          it; they move to the toolbar row below. */}
+      {!embedded && (
+        <PageHeader
+          title={t('leads.title')}
+          description={t('leads.subtitle')}
+          actions={actions}
+        />
+      )}
+
+      {/* Work queue + (when embedded) the actions the host's header gave up.
+          The chips lead because they are the first decision on this tab: which
+          pile am I working. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div
+          role="group"
+          aria-label={t('leads.queue.label', { defaultValue: 'İş kuyruğu' })}
+          className="flex flex-wrap items-center gap-2"
+        >
+          {(
+            [
+              ['waiting', t('leads.queue.waiting', { defaultValue: 'Bekleyen' }), waitingCount,
+                t('leads.queue.waitingHint', {
+                  defaultValue: 'Müşteri en son yazan taraf ve kimse yanıtlamadı',
+                })],
+              ['unassigned', t('leads.queue.unassigned', { defaultValue: 'Atanmamış' }), unassignedCount, undefined],
+              ['all', t('leads.queue.all', { defaultValue: 'Hepsi' }), allCount, undefined],
+            ] as const
+          ).map(([queue, label, count, hint]) => (
+            <Button
+              key={queue}
+              size="sm"
+              variant={activeQueue === queue ? 'primary' : 'outline'}
+              aria-pressed={activeQueue === queue}
+              title={hint}
+              onClick={() => selectQueue(queue)}
+            >
+              {label}
+              {/* An explicit space, not just the flex gap: the accessible name
+                  is built from text nodes, and without it a screen reader
+                  announces "Bekleyen2". */}
+              {' '}
+              <QueueCount
+                total={activeQueue === queue ? data?.meta.total : count.data}
+                isError={activeQueue !== queue && count.isError}
+                failedLabel={t('leads.queue.countFailed', { defaultValue: 'Sayı alınamadı' })}
+              />
             </Button>
-            <Button asChild size="md">
-              <Link to="/leads/new">
-                <Plus className="w-4 h-4" aria-hidden="true" />
-                {t('leads.createButton')}
-              </Link>
-            </Button>
-          </div>
-        }
-      />
+          ))}
+        </div>
+
+        {/* Embedded (Kişiler tab): the header is the host's, so Export CSV and
+            Yeni Lead move into this row — the actions must never be lost. */}
+        {embedded && actions}
+      </div>
 
       {/* Filter bar */}
       <FilterBar

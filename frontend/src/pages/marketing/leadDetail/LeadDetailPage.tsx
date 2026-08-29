@@ -53,12 +53,15 @@ import ContactInfo from './ContactInfo';
 import { WalletPanel } from './WalletPanel';
 import { CompanyPanel } from './CompanyPanel';
 import ActivityTimelineTab from './ActivityTimelineTab';
+import ConversationsTab from './ConversationsTab';
+import SalesTab from './SalesTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
 import ConvertDialog from './ConvertDialog';
 import { ReopenLeadDialog } from './ReopenLeadDialog';
 import { useConvertDialog } from './useConvertDialog';
 import SendFaxDialog from './SendFaxDialog';
+import LeadHeaderActions from './LeadHeaderActions';
 
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -80,6 +83,26 @@ export default function LeadDetailPage() {
   const convert = useConvertDialog();
   const [faxOpen, setFaxOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
+  // Controlled so the header's Mesaj action can bring the Konuşmalar tab
+  // forward — there is no per-thread URL in this app, so "open the
+  // conversation" is "show me this lead's threads".
+  const [tab, setTab] = useState('activities');
+  // `GET /conversations` is behind @RequiresFeature('conversationAi'), so for
+  // an un-entitled workspace this tab's ONLY reachable state is "Konuşmalar
+  // yüklenemedi." — navigation.ts's rule, applied one level down: the gate
+  // moves WITH the item, and a tab that lands on a page you cannot open is
+  // worse than one that lands on the first page you can.
+  //
+  // Satış is deliberately NOT gated alongside it:
+  // marketing-opportunities.controller.ts carries no RequiresFeature and
+  // /opportunities is permission-gated on leads.read, not entitlement-gated.
+  const canConverse = has('conversationAi');
+  // The controlled state is guarded too, not just the render. `tab` is state
+  // that Mesaj — and any future deep link — can set to 'conversations'; if the
+  // trigger for that value has been gated away, Radix would select nothing and
+  // strand the page on a blank panel. Falling back keeps the page on a tab that
+  // exists no matter how the state got there.
+  const activeTab = tab === 'conversations' && !canConverse ? 'activities' : tab;
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
@@ -312,6 +335,28 @@ export default function LeadDetailPage() {
                 onAssigned={invalidate}
               />
             </div>
+            {/* Ara + Mesaj (spec §3). Both reuse paths that already existed:
+                ClickToDialButton with this lead's id, and POST
+                /conversations/start — which had no frontend caller until now.
+
+                `key` is load-bearing, not cosmetic. This page early-returns on
+                `isLoading`, and React Query's isLoading is `isPending &&
+                isFetching` — FALSE when the next lead is already CACHED. So
+                /leads/A → cached /leads/B re-renders this subtree instead of
+                unmounting it, and every useState seeded from a prop keeps the
+                previous lead's value: ClickToDialButton's number
+                (`useState(defaultPhone || '')`, which never re-runs) and the
+                start-conversation draft. Pressing Ara then dialled lead A's
+                number carrying lead B's id — wrong person rung, activity
+                mirrored onto the wrong lead. Same bug class WalletPanel,
+                TasksTab and ActivityTimelineTab each guard against; keying is
+                the right answer HERE because every piece of this component's
+                state is per-lead, so there is nothing worth preserving. */}
+            <LeadHeaderActions
+              key={lead.id}
+              lead={lead}
+              onOpenConversations={() => setTab('conversations')}
+            />
             {has('fax') && (
               <Button variant="outline" size="sm" onClick={() => setFaxOpen(true)}>
                 <Printer className="h-4 w-4" /> {t('fax.action', 'Send fax')}
@@ -386,11 +431,28 @@ export default function LeadDetailPage() {
 
         {/* Right: Tabs */}
         <div className="lg:col-span-2">
-          <Tabs defaultValue="activities">
+          <Tabs value={activeTab} onValueChange={setTab}>
             <TabsList>
-              <TabsTrigger value="activities">Activities</TabsTrigger>
-              <TabsTrigger value="offers">Offers ({lead.offers?.length || 0})</TabsTrigger>
-              <TabsTrigger value="tasks">Tasks ({lead.tasks?.length || 0})</TabsTrigger>
+              <TabsTrigger value="activities">
+                {t('leadDetail.tabs.activities', 'Etkinlik')}
+              </TabsTrigger>
+              {/* The lead and the conversation about the lead used to live on
+                  two separate screens; these two tabs put the whole person on
+                  one record. Both fetch their own data (neither rides on the
+                  lead payload), so neither can show a count in the tab strip
+                  without a second query firing before the tab is ever opened. */}
+              {canConverse && (
+                <TabsTrigger value="conversations">
+                  {t('leadDetail.tabs.conversations', 'Konuşmalar')}
+                </TabsTrigger>
+              )}
+              <TabsTrigger value="sales">{t('leadDetail.tabs.sales', 'Satış')}</TabsTrigger>
+              <TabsTrigger value="offers">
+                {t('leadDetail.tabs.offers', 'Teklifler')} ({lead.offers?.length || 0})
+              </TabsTrigger>
+              <TabsTrigger value="tasks">
+                {t('leadDetail.tabs.tasks', 'Görevler')} ({lead.tasks?.length || 0})
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="activities">
@@ -400,6 +462,19 @@ export default function LeadDetailPage() {
                 onSubmit={(data) => activityMutation.mutate(data)}
                 isPending={activityMutation.isPending}
               />
+            </TabsContent>
+
+            {/* Trigger and content are gated TOGETHER: gating only the trigger
+                leaves a dead panel that `setTab` can still reach, and gating
+                only the content leaves a trigger that blanks the page. */}
+            {canConverse && (
+              <TabsContent value="conversations">
+                <ConversationsTab leadId={lead.id} fmtDate={fmtDate} />
+              </TabsContent>
+            )}
+
+            <TabsContent value="sales">
+              <SalesTab leadId={lead.id} fmtDate={fmtDate} />
             </TabsContent>
 
             <TabsContent value="offers">

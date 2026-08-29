@@ -40,8 +40,15 @@ export class DialerService {
     return {
       deletedAt: null,
       mergedIntoId: null,
-      // Only leads we can actually dial.
+      // Only leads we can actually dial. Both halves matter: a number to ring,
+      // and permission to ring it. `dial()` hands the queued lead's id to
+      // SalesCallService.startCall, which REFUSES an opted-out lead — so
+      // without this filter the queue fills with rows that hard-400 when the
+      // rep presses Dial. "Has a phone" is not the same question as "may be
+      // rung"; campaign suppression, the AI auto-reply and click-to-dial all
+      // already answer the second one.
       phone: { not: null },
+      smsOptOut: false,
       ...(filter.status ? { status: filter.status } : {}),
       ...(filter.assignedToId ? { assignedToId: filter.assignedToId } : {}),
       ...(filter.businessType ? { businessType: filter.businessType } : {}),

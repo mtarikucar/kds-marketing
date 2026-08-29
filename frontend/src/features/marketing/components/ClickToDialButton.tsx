@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Phone } from 'lucide-react';
 import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
@@ -15,8 +16,13 @@ const errMsg = (err: any, fallback: string) => err?.response?.data?.message || f
  *   1. POST /calls/start → backend reserves the line, returns a `tel:` dialUri
  *   2. window.location → the rep's softphone dials
  *   3. a modal collects the outcome → POST /calls/:id/log frees the line
- * Drop it into the calls page header, or later into the lead detail with a
- * `leadId` + `defaultPhone` so the call mirrors onto that lead's timeline.
+ * Drop it into the calls page header, or into the lead detail with a `leadId`
+ * + `defaultPhone` so the call mirrors onto that lead's timeline.
+ *
+ * Every visible string goes through `calls.dial.*`. This shipped with English
+ * literals, which on the lead header (spec §3, where the action is named "Ara")
+ * put an English button in the middle of a translated page — and unlike a
+ * missing key, a literal cannot even fall back.
  */
 export default function ClickToDialButton({
   leadId,
@@ -25,6 +31,7 @@ export default function ClickToDialButton({
   leadId?: string;
   defaultPhone?: string;
 }) {
+  const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [phone, setPhone] = useState(defaultPhone || '');
   const [activeCall, setActiveCall] = useState<SalesCall | null>(null);
@@ -42,7 +49,12 @@ export default function ClickToDialButton({
         // api-dial: NetGSM rings the rep's extension first, then the customer. The
         // request was accepted — the extension only actually rings if a device
         // (the webphone) is registered on it. Keep the copy honest (not "ringing").
-        toast.success('Call request sent — your extension will ring (keep the webphone open).');
+        toast.success(
+          t(
+            'calls.dial.requestSent',
+            'Call request sent — your extension will ring (keep the webphone open).',
+          ),
+        );
         // Finding H1: this REST dial never touches webphone.store.ts's own
         // `call()`, so nothing else arms the ring-back-expectation window —
         // without this, the extension ring-back INVITE would surface the
@@ -58,7 +70,7 @@ export default function ClickToDialButton({
       }
       queryClient.invalidateQueries({ queryKey: ['marketing', 'calls'] });
     },
-    onError: (e: any) => toast.error(errMsg(e, 'Failed to start call')),
+    onError: (e: any) => toast.error(errMsg(e, t('calls.dial.startFailed', 'Failed to start call'))),
   });
 
   const log = useMutation({
@@ -69,12 +81,23 @@ export default function ClickToDialButton({
         notes: logForm.notes || undefined,
       }),
     onSuccess: () => {
-      toast.success('Call logged');
+      toast.success(t('calls.dial.logged', 'Call logged'));
       setActiveCall(null);
       setActiveCallId(null); // the in-call controls panel has nothing left to control
       queryClient.invalidateQueries({ queryKey: ['marketing', 'calls'] });
+      // logCall mirrors the outcome onto the lead as a CALL LeadActivity
+      // (SalesCallService.logCall, keyed off call.leadId). The lead detail
+      // page hands ActivityTimelineTab those activities as a PROP off its own
+      // ['marketing','lead',id] query — the tab has no query of its own — so
+      // without this the mirrored call is invisible on the Hareketler tab the
+      // rep is looking at until they reload the page by hand. Only fires when
+      // the dial carried a lead; from the calls page there is nothing to
+      // refresh.
+      if (leadId) {
+        queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', leadId] });
+      }
     },
-    onError: (e: any) => toast.error(errMsg(e, 'Failed to log call')),
+    onError: (e: any) => toast.error(errMsg(e, t('calls.dial.logFailed', 'Failed to log call'))),
   });
 
   return (
@@ -87,22 +110,26 @@ export default function ClickToDialButton({
         />
         <button
           onClick={() => {
-            if (!phone.trim()) { toast.error('Enter a phone number'); return; }
+            if (!phone.trim()) { toast.error(t('calls.dial.enterPhone', 'Enter a phone number')); return; }
             start.mutate();
           }}
           disabled={start.isPending}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
         >
           <Phone className="w-4 h-4" />
-          {start.isPending ? 'Starting…' : 'Call'}
+          {start.isPending ? t('calls.dial.starting', 'Starting…') : t('calls.dial.call', 'Call')}
         </button>
       </div>
 
       {activeCall && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setActiveCall(null)}>
           <div className="bg-background rounded-xl shadow-xl w-full max-w-sm p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold text-foreground">Log call outcome</h2>
-            <p className="text-sm text-muted-foreground">Dialing {activeCall.toPhone}</p>
+            <h2 className="text-lg font-semibold text-foreground">
+              {t('calls.dial.logTitle', 'Log call outcome')}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t('calls.dial.dialing', 'Dialing {{phone}}', { phone: activeCall.toPhone })}
+            </p>
             <select
               value={logForm.status}
               onChange={(e) => setLogForm({ ...logForm, status: e.target.value })}
@@ -114,14 +141,14 @@ export default function ClickToDialButton({
               <input
                 type="number"
                 min={0}
-                placeholder="Duration (seconds)"
+                placeholder={t('calls.dial.duration', 'Duration (seconds)')}
                 value={logForm.durationSec}
                 onChange={(e) => setLogForm({ ...logForm, durationSec: e.target.value })}
                 className="w-full px-3 py-2 border border-input rounded-lg text-sm bg-background text-foreground"
               />
             )}
             <textarea
-              placeholder="Notes"
+              placeholder={t('calls.dial.notes', 'Notes')}
               value={logForm.notes}
               onChange={(e) => setLogForm({ ...logForm, notes: e.target.value })}
               className="w-full px-3 py-2 border border-input rounded-lg text-sm resize-none bg-background text-foreground"
@@ -129,9 +156,9 @@ export default function ClickToDialButton({
             />
             <div className="flex gap-2">
               <button onClick={() => log.mutate()} disabled={log.isPending} className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50">
-                {log.isPending ? 'Saving…' : 'Save outcome'}
+                {log.isPending ? t('calls.dial.saving', 'Saving…') : t('calls.dial.save', 'Save outcome')}
               </button>
-              <button onClick={() => setActiveCall(null)} className="px-4 py-2 border border-input rounded-lg text-sm text-muted-foreground hover:text-foreground">Close</button>
+              <button onClick={() => setActiveCall(null)} className="px-4 py-2 border border-input rounded-lg text-sm text-muted-foreground hover:text-foreground">{t('calls.dial.close', 'Close')}</button>
             </div>
           </div>
         </div>

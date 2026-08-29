@@ -569,7 +569,15 @@
       "confirmButton": "Enroll",
       "label": "Enroll in workflow"
     },
-    "emptyTitle": "No leads"
+    "emptyTitle": "No leads",
+    "queue": {
+      "label": "Work queue",
+      "waiting": "Waiting",
+      "waitingHint": "The customer wrote last and nobody has replied yet",
+      "unassigned": "Unassigned",
+      "all": "All",
+      "countFailed": "Count unavailable"
+    }
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -588,7 +596,9 @@
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "conversations": "Conversations",
+      "sales": "Sales"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -611,7 +621,8 @@
       "assign": "Assign…",
       "addActivity": "Log activity",
       "addOffer": "New offer",
-      "addTask": "New task"
+      "addTask": "New task",
+      "message": "Message"
     },
     "convertDialog": {
       "title": "Convert to customer",
@@ -662,6 +673,39 @@
     "deleteConfirm": {
       "title": "Delete this lead?",
       "desc": "The lead and its timeline are removed from your workspace. This cannot be undone."
+    },
+    "conversations": {
+      "failed": "Could not load the conversations.",
+      "unknownChannel": "Unknown channel",
+      "aiPaused": "AI off",
+      "noMessage": "No messages",
+      "openInbox": "Open the inbox",
+      "empty": {
+        "title": "No conversation with this contact yet",
+        "desc": "When the first message arrives — WhatsApp, email or any other channel — you will see it here."
+      }
+    },
+    "sales": {
+      "failed": "Could not load the deals.",
+      "unknownStage": "Unknown stage",
+      "newDeal": "Create a deal for this contact",
+      "empty": {
+        "title": "No deal for this contact yet",
+        "desc": "Open a deal to track this contact in the pipeline and see its stage here."
+      }
+    },
+    "startConversation": {
+      "title": "Start a conversation",
+      "desc": "There is no conversation with this contact yet. Pick a channel and write the first message.",
+      "channel": "Channel",
+      "pickChannel": "Pick a channel",
+      "message": "First message",
+      "messagePlaceholder": "Hello, …",
+      "send": "Send",
+      "sent": "Message sent",
+      "failed": "Could not send the message",
+      "noChannels": "No connected channel can open a conversation — connect SMS or email.",
+      "channelsFailed": "Could not load the channels."
     }
   },
   "createLead": {
@@ -912,7 +956,8 @@
     "stageDeleteError": "Stage in use or last stage — cannot delete",
     "probability": "Win %",
     "wonFlag": "Won",
-    "lostFlag": "Lost"
+    "lostFlag": "Lost",
+    "dealNotFound": "Could not open the deal"
   },
   "offers": {
     "title": "Offers",
@@ -2913,6 +2958,22 @@
     "tab": {
       "calls": "Calls",
       "dialer": "Power Dialer"
+    },
+    "dial": {
+      "call": "Call",
+      "starting": "Starting…",
+      "enterPhone": "Enter a phone number",
+      "requestSent": "Call request sent — your extension will ring (keep the webphone open).",
+      "startFailed": "Failed to start call",
+      "logTitle": "Log call outcome",
+      "dialing": "Dialing {{phone}}",
+      "duration": "Duration (seconds)",
+      "notes": "Notes",
+      "save": "Save outcome",
+      "saving": "Saving…",
+      "close": "Close",
+      "logged": "Call logged",
+      "logFailed": "Failed to log call"
     }
   },
   "weekly": {
@@ -3122,6 +3183,12 @@
       "SEND": "Send message",
       "STRATEGY_ACTION": "Strategy action",
       "TARGET_CHANGE": "Targeting change"
+    }
+  },
+  "surface": {
+    "tab": {
+      "conversations": "Conversations",
+      "contacts": "Contacts"
     }
   }
 }

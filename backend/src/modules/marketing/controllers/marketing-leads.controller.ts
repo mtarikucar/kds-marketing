@@ -77,6 +77,7 @@ export class MarketingLeadsController {
         assignedToId: q.assignedToId,
         assignmentStatus: q.assignmentStatus,
         search: q.search,
+        waitingReply: q.waitingReply,
       },
       actor.id,
       actor.role,

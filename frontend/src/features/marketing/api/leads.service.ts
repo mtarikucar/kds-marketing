@@ -25,6 +25,13 @@ export interface LeadListParams {
   source?: string;
   businessType?: string;
   assignmentStatus?: string;
+  /**
+   * "Bekleyen" work-queue chip: only the leads whose OPEN conversation is
+   * waiting on us — the customer wrote last and nobody has replied. Resolved
+   * server-side (backend waiting-reply-leads.ts). Deliberately NOT
+   * `status: 'WAITING'`, which is a sales stage a rep chose on purpose.
+   */
+  waitingReply?: boolean;
   // Server-side sort. sortBy must be one of the backend allow-listed columns
   // (createdAt, updatedAt, businessName, contactPerson, city, status, source,
   // priority, nextFollowUp); anything else falls back to createdAt desc.

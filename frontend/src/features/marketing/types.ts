@@ -109,6 +109,13 @@ export interface Lead {
   phoneVerifiedAt?: string | null;
   whatsapp?: string;
   email?: string;
+  /** "Do not call/SMS me." Set by the consent panel, by campaign unsubscribes
+   *  and by esp-feedback on a hard bounce; honoured by campaigns, by the AI
+   *  auto-reply engine, by `POST /conversations/start` and (since the Ara
+   *  button landed on the lead header) by `SalesCallService.startCall`. It
+   *  rides along on `GET /marketing/leads/:id`, which returns the Lead row's
+   *  scalars unfiltered. */
+  smsOptOut?: boolean;
   address?: string;
   city?: string;
   region?: string;

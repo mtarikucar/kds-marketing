@@ -246,14 +246,24 @@
       "toolbar": "تم تحديد {{count}} عميلًا"
     },
     "emptyManager": "لا عملاء بعد. أضف يدويًا أو انتظر وكيل البحث.",
-    "emptyUnassigned": "لا عملاء غير معيّنين — الكل قيد المتابعة."
+    "emptyUnassigned": "لا عملاء غير معيّنين — الكل قيد المتابعة.",
+    "queue": {
+      "label": "قائمة العمل",
+      "waiting": "بانتظار الرد",
+      "waitingHint": "العميل هو آخر من كتب ولم يردّ عليه أحد بعد",
+      "unassigned": "غير مُسند",
+      "all": "الكل",
+      "countFailed": "تعذّر جلب العدد"
+    }
   },
   "leadDetail": {
     "back": "Back to leads",
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "conversations": "المحادثات",
+      "sales": "المبيعات"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -276,7 +286,8 @@
       "assign": "Assign…",
       "addActivity": "Log activity",
       "addOffer": "New offer",
-      "addTask": "New task"
+      "addTask": "New task",
+      "message": "رسالة"
     },
     "convertDialog": {
       "title": "Convert to customer",
@@ -321,7 +332,40 @@
     "sentOffer": "Offer sent",
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
-    "convertError": "Couldn't convert the lead"
+    "convertError": "Couldn't convert the lead",
+    "conversations": {
+      "failed": "تعذّر تحميل المحادثات.",
+      "unknownChannel": "قناة غير معروفة",
+      "aiPaused": "الذكاء الاصطناعي متوقف",
+      "noMessage": "لا توجد رسائل",
+      "openInbox": "افتح صندوق الوارد",
+      "empty": {
+        "title": "لا توجد محادثة مع جهة الاتصال هذه بعد",
+        "desc": "عند وصول أول رسالة — واتساب أو بريد إلكتروني أو أي قناة أخرى — ستراها هنا."
+      }
+    },
+    "sales": {
+      "failed": "تعذّر تحميل الصفقات.",
+      "unknownStage": "مرحلة غير معروفة",
+      "newDeal": "أنشئ صفقة لجهة الاتصال هذه",
+      "empty": {
+        "title": "لا توجد صفقة لجهة الاتصال هذه بعد",
+        "desc": "افتح صفقة لتتبّع جهة الاتصال في المسار وترى مرحلتها هنا."
+      }
+    },
+    "startConversation": {
+      "title": "بدء محادثة",
+      "desc": "لا توجد محادثة مع جهة الاتصال هذه بعد. اختر قناة واكتب الرسالة الأولى.",
+      "channel": "القناة",
+      "pickChannel": "اختر قناة",
+      "message": "الرسالة الأولى",
+      "messagePlaceholder": "مرحبًا، …",
+      "send": "إرسال",
+      "sent": "تم إرسال الرسالة",
+      "failed": "تعذّر إرسال الرسالة",
+      "noChannels": "لا توجد قناة متصلة يمكنها بدء محادثة — اربط الرسائل القصيرة أو البريد الإلكتروني.",
+      "channelsFailed": "تعذّر تحميل القنوات."
+    }
   },
   "createLead": {
     "titleNew": "New lead",
@@ -1010,6 +1054,33 @@
     "none": {
       "title": "لا شيء مجدول",
       "desc": "عندما تُجدول مهمة أو موعد أو حملة، ستراها هنا."
+    }
+  },
+  "opportunities": {
+    "dealNotFound": "تعذّر فتح الصفقة"
+  },
+  "calls": {
+    "dial": {
+      "call": "اتصال",
+      "starting": "جارٍ البدء…",
+      "enterPhone": "أدخل رقم هاتف",
+      "requestSent": "تم إرسال طلب الاتصال — سيرن تحويلتك (أبقِ هاتف الويب مفتوحًا).",
+      "startFailed": "تعذّر بدء المكالمة",
+      "logTitle": "سجّل نتيجة المكالمة",
+      "dialing": "جارٍ الاتصال بـ {{phone}}",
+      "duration": "المدة (بالثواني)",
+      "notes": "ملاحظات",
+      "save": "حفظ النتيجة",
+      "saving": "جارٍ الحفظ…",
+      "close": "إغلاق",
+      "logged": "تم تسجيل المكالمة",
+      "logFailed": "تعذّر تسجيل المكالمة"
+    }
+  },
+  "surface": {
+    "tab": {
+      "conversations": "المحادثات",
+      "contacts": "جهات الاتصال"
     }
   }
 }

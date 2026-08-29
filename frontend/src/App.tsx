@@ -21,8 +21,10 @@ const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvi
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
 const CommandCenterPage        = lazy(() => import('./pages/marketing/command/CommandCenterPage'));
 const MarketingDashboardPage   = lazy(() => import('./pages/marketing/MarketingDashboardPage'));
+// The merged surface (spec §1). Serves BOTH /inbox and /leads; the leads list
+// is lazy-loaded inside it as the Kişiler tab, so it is no longer imported
+// here.
 const InboxPage                = lazy(() => import('./pages/marketing/inbox/InboxPage'));
-const LeadsPage                = lazy(() => import('./pages/marketing/leads/LeadsPage'));
 const CreateLeadPage           = lazy(() => import('./pages/marketing/CreateLeadPage'));
 const LeadDetailPage           = lazy(() => import('./pages/marketing/leadDetail/LeadDetailPage'));
 const TasksPage                = lazy(() => import('./pages/marketing/tasks/TasksPage'));
@@ -117,6 +119,30 @@ function S({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }
 
+/**
+ * The merged surface's routes (spec §1), as DATA rather than as JSX buried in
+ * the table below — so the unit suite can assert the wiring that actually
+ * ships.
+ *
+ * MergedSurface.test.tsx used to build its own two-line route table and assert
+ * against that. It is a hand-copy, and a hand-copy proves the copy: deleting
+ * `defaultTab="contacts"` from this file left all eleven of those tests green
+ * while `/leads` opened on the wrong tab. Only e2e/leads.spec.ts noticed, which
+ * is several minutes and a browser too late for the mistake it catches.
+ *
+ * Exported, mapped below, and consumed by the test — one definition, so the
+ * assertion and the app cannot disagree.
+ *
+ * Both paths stay: they are members of the frozen 50-path set
+ * (navigation.test.ts) and they are in people's bookmarks. They render the SAME
+ * component and differ only in which tab opens; `?tab=` still reaches either
+ * half from either path.
+ */
+export const MERGED_SURFACE_ROUTES: { path: string; element: React.ReactElement }[] = [
+  { path: '/inbox', element: <S><InboxPage /></S> },
+  { path: '/leads', element: <S><InboxPage defaultTab="contacts" /></S> },
+];
+
 // Unknown paths: signed-in users keep deep-link recovery into the app; everyone
 // else lands on the public marketing home rather than being bounced to /login.
 function CatchAllRedirect() {
@@ -195,8 +221,12 @@ export default function App() {
               who has to act on them. */}
           <Route path="/home"      element={<S><CommandCenterPage /></S>} />
           <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
-          <Route path="/inbox"     element={<S><InboxPage /></S>} />
-          <Route path="/leads"     element={<S><LeadsPage /></S>} />
+          {/* One surface, two tabs, two routes — see MERGED_SURFACE_ROUTES
+              above, which is where the two elements (and the one prop that
+              distinguishes them) are defined. */}
+          {MERGED_SURFACE_ROUTES.map((r) => (
+            <Route key={r.path} path={r.path} element={r.element} />
+          ))}
           <Route path="/leads/new" element={<S><CreateLeadPage /></S>} />
           <Route path="/leads/:id" element={<S><LeadDetailPage /></S>} />
           <Route path="/leads/:id/edit" element={<S><CreateLeadPage /></S>} />

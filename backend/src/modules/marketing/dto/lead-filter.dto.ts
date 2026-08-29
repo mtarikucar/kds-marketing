@@ -1,6 +1,15 @@
-import { IsOptional, IsString, IsInt, IsDateString, Min, Max, IsIn } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsInt,
+  IsDateString,
+  Min,
+  Max,
+  IsIn,
+  IsBoolean,
+} from 'class-validator';
 import { Type } from 'class-transformer';
-import { EmptyStringToUndefined } from '../../../common/dto/transforms';
+import { EmptyStringToUndefined, StringToBoolean } from '../../../common/dto/transforms';
 
 export class LeadFilterDto {
   @IsOptional()
@@ -39,6 +48,15 @@ export class LeadFilterDto {
   @IsOptional()
   @IsIn(['unassigned', 'assigned', 'mine'])
   assignmentStatus?: 'unassigned' | 'assigned' | 'mine';
+
+  // "Bekleyen" work-queue chip on the merged Kişiler tab: only the leads whose
+  // OPEN conversation is waiting on US (the customer wrote last). Stacks with
+  // assignmentStatus rather than replacing it. See waiting-reply-leads.ts for
+  // the predicate, and for why it is not `unreadCount > 0`.
+  @StringToBoolean()
+  @IsOptional()
+  @IsBoolean()
+  waitingReply?: boolean;
 
   @IsOptional()
   @IsString()

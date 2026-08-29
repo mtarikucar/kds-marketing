@@ -825,7 +825,15 @@
       "confirmButton": "Ekle",
       "label": "İş akışına ekle"
     },
-    "emptyTitle": "Lead listen boş"
+    "emptyTitle": "Lead listen boş",
+    "queue": {
+      "label": "İş kuyruğu",
+      "waiting": "Bekleyen",
+      "waitingHint": "Müşteri en son yazan taraf ve kimse yanıtlamadı",
+      "unassigned": "Atanmamış",
+      "all": "Hepsi",
+      "countFailed": "Sayı alınamadı"
+    }
   },
   "leadDetail": {
     "back": "Lead'lere dön",
@@ -844,7 +852,9 @@
     "tabs": {
       "activities": "Etkinlik",
       "offers": "Teklifler",
-      "tasks": "Görevler"
+      "tasks": "Görevler",
+      "conversations": "Konuşmalar",
+      "sales": "Satış"
     },
     "summary": {
       "contactInfo": "İletişim",
@@ -867,7 +877,8 @@
       "assign": "Ata…",
       "addActivity": "Etkinlik kaydet",
       "addOffer": "Yeni teklif",
-      "addTask": "Yeni görev"
+      "addTask": "Yeni görev",
+      "message": "Mesaj"
     },
     "convertDialog": {
       "title": "Müşteriye dönüştür",
@@ -918,6 +929,39 @@
     "deleteConfirm": {
       "title": "Bu müşteri adayı silinsin mi?",
       "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
+    },
+    "conversations": {
+      "failed": "Konuşmalar yüklenemedi.",
+      "unknownChannel": "Bilinmeyen kanal",
+      "aiPaused": "AI kapalı",
+      "noMessage": "Mesaj yok",
+      "openInbox": "Gelen kutusunu aç",
+      "empty": {
+        "title": "Bu kişiyle henüz konuşulmadı",
+        "desc": "WhatsApp, e-posta ya da başka bir kanaldan ilk mesaj geldiğinde burada görürsün."
+      }
+    },
+    "sales": {
+      "failed": "Fırsatlar yüklenemedi.",
+      "unknownStage": "Bilinmeyen aşama",
+      "newDeal": "Bu kişi için fırsat oluştur",
+      "empty": {
+        "title": "Bu kişi için henüz fırsat yok",
+        "desc": "Bir fırsat açtığında kişiyi hattında takip eder, aşamasını burada görürsün."
+      }
+    },
+    "startConversation": {
+      "title": "Konuşma başlat",
+      "desc": "Bu kişiyle henüz konuşulmadı. Bir kanal seç ve ilk mesajı yaz.",
+      "channel": "Kanal",
+      "pickChannel": "Kanal seç",
+      "message": "İlk mesaj",
+      "messagePlaceholder": "Merhaba, …",
+      "send": "Gönder",
+      "sent": "Mesaj gönderildi",
+      "failed": "Mesaj gönderilemedi",
+      "noChannels": "Konuşma başlatılabilecek bağlı kanal yok — SMS veya e-posta bağla.",
+      "channelsFailed": "Kanallar yüklenemedi."
     }
   },
   "fax": {
@@ -1182,7 +1226,8 @@
     "stageDeleteError": "Aşama kullanımda veya son aşama — silinemez",
     "probability": "Kazanma %",
     "wonFlag": "Kazanıldı",
-    "lostFlag": "Kaybedildi"
+    "lostFlag": "Kaybedildi",
+    "dealNotFound": "Fırsat açılamadı"
   },
   "offers": {
     "title": "Teklifler",
@@ -3780,6 +3825,22 @@
     "tab": {
       "calls": "Aramalar",
       "dialer": "Güçlü Arayıcı"
+    },
+    "dial": {
+      "call": "Ara",
+      "starting": "Başlatılıyor…",
+      "enterPhone": "Bir telefon numarası gir",
+      "requestSent": "Arama isteği gönderildi — dahilin çalacak (web telefonu açık tut).",
+      "startFailed": "Arama başlatılamadı",
+      "logTitle": "Görüşme sonucunu kaydet",
+      "dialing": "{{phone}} aranıyor",
+      "duration": "Süre (saniye)",
+      "notes": "Notlar",
+      "save": "Sonucu kaydet",
+      "saving": "Kaydediliyor…",
+      "close": "Kapat",
+      "logged": "Görüşme kaydedildi",
+      "logFailed": "Görüşme kaydedilemedi"
     }
   },
   "weekly": {
@@ -3973,6 +4034,12 @@
     "none": {
       "title": "Planlanmış bir şey yok",
       "desc": "Bir görev, randevu ya da kampanya zamanlandığında burada görürsün."
+    }
+  },
+  "surface": {
+    "tab": {
+      "conversations": "Konuşmalar",
+      "contacts": "Kişiler"
     }
   }
 }

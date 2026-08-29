@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   ConflictException,
@@ -64,6 +65,44 @@ export class SalesCallService {
    * or written here is scoped to the actor's workspace.
    */
   async startCall(workspaceId: string, marketingUserId: string, dto: StartCallDto) {
+    // WHO MAY BE RUNG comes before WHETHER A LINE IS FREE. This guard used to
+    // sit after the rep lookup, the AES telephony-config resolve, the
+    // occupancy read and the stale-INITIATED sweep — so a busy line answered
+    // first and MASKED the consent refusal entirely: the rep was told "Sales
+    // line is busy" about a lead they were never allowed to call, and got a
+    // different refusal once the line cleared. Consent does not depend on
+    // capacity, and it is the cheaper question, so it is asked first.
+    if (dto.leadId) {
+      // Scoped read — a lead id from another workspace must not be linkable.
+      // The select is WIDENED (not joined by a second query) to carry the three
+      // flags that decide whether this lead may be rung at all.
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: dto.leadId, workspaceId },
+        select: { id: true, smsOptOut: true, deletedAt: true, mergedIntoId: true },
+      });
+      if (!lead) throw new NotFoundException('Lead not found');
+
+      // Consent lives HERE, not only in the caller. `jeeta.click_to_dial` has
+      // refused deleted/merged/opted-out leads since it was written — but it
+      // did so in the MCP tool and then called this service, which asked only
+      // "is this lead mine?". That was tolerable while the tool was the one
+      // lead-aware dial path and the UI took a hand-typed number; it is not,
+      // now that there is an Ara button on every lead header. Same refusals,
+      // same wording, so the two roads to a ringing phone cannot drift on who
+      // may be called. The UI ALSO hides the button — that is courtesy; this
+      // is the rule.
+      if (lead.deletedAt || lead.mergedIntoId) {
+        throw new BadRequestException(
+          `lead ${dto.leadId} has been deleted or merged and must not be called`,
+        );
+      }
+      if (lead.smsOptOut) {
+        throw new BadRequestException(
+          `lead ${dto.leadId} has opted out of phone contact and must not be called. Record consent in the panel first if that is wrong.`,
+        );
+      }
+    }
+
     // Fetch the rep's phone + dahili FIRST — skip the expensive DB+AES resolve
     // when the rep has neither (api-dial is impossible without a leg to ring).
     const rep = await this.prisma.marketingUser.findFirst({
@@ -142,15 +181,6 @@ export class SalesCallService {
           ? 'You already have an active call — log or cancel it first'
           : 'Sales line is busy — log or cancel the active call first',
       );
-    }
-
-    if (dto.leadId) {
-      // Scoped read — a lead id from another workspace must not be linkable.
-      const lead = await this.prisma.lead.findFirst({
-        where: { id: dto.leadId, workspaceId },
-        select: { id: true },
-      });
-      if (!lead) throw new NotFoundException('Lead not found');
     }
 
     // FIX 1: Create the DB row BEFORE placing the live call so that if origination

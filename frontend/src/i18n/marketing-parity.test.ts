@@ -98,3 +98,176 @@ describe('marketing i18n — home left-column tabs', () => {
     }
   });
 });
+
+describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
+  // Two whole TABS and their empty/error copy. Same trap as the timeline panel:
+  // `fallbackLng: 'en'` means a locale that simply lacks these keys neither
+  // throws nor shows a raw key — a ru/ar/uz operator is quietly served English,
+  // and nothing at runtime notices (missingKeyHandler is DEV-only).
+  //
+  // The error strings are in the same set on purpose. `leadDetail.*.failed` is
+  // the sentence that distinguishes "could not load" from "nothing here"; if it
+  // silently degrades to English while the empty state is translated, the two
+  // states stop reading as different states in that locale.
+  it('every offered locale defines the conversations + sales keys, not just tr', async () => {
+    const want = flat((tr as Json).leadDetail as Json)
+      .filter((k) => /^(conversations\.|sales\.|tabs\.(conversations|sales)$)/.test(k))
+      .map((k) => `leadDetail.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'leadDetail.tabs.conversations',
+        'leadDetail.tabs.sales',
+        'leadDetail.conversations.failed',
+        'leadDetail.conversations.empty.title',
+        'leadDetail.sales.failed',
+        'leadDetail.sales.empty.title',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // The Satış tab's rows deep-link into the board with `?deal=`, and a deal
+  // that cannot be opened has to say so out loud rather than dropping the user
+  // on a pipeline. That toast is the only thing distinguishing a dead link from
+  // a working one, so it may not silently degrade to English.
+  it('every offered locale can say a deal could not be opened', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, has: have.has('opportunities.dealNotFound') }).toEqual({ locale, has: true });
+    }
+  });
+});
+
+describe('marketing i18n — lead header: Ara + Mesaj', () => {
+  // The lead header's two new actions and the whole start-conversation dialog.
+  // `fallbackLng: 'en'` means a locale that simply lacks these neither throws
+  // nor shows a raw key — a ru/ar/uz operator is quietly served English, and
+  // nothing at runtime notices (missingKeyHandler is DEV-only).
+  //
+  // The refusal strings are in the set deliberately. `startConversation.failed`
+  // and `.noChannels` are what a rep sees when the message did NOT go out; if
+  // they degrade to English while the dialog around them is translated, "sent"
+  // and "not sent" stop reading as different outcomes in that locale — the
+  // exact confusion this repo has already paid for once.
+  it('every offered locale defines the message action + start-conversation keys', async () => {
+    const want = flat((tr as Json).leadDetail as Json)
+      .filter((k) => /^(startConversation\.|actions\.message$)/.test(k))
+      .map((k) => `leadDetail.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'leadDetail.actions.message',
+        'leadDetail.startConversation.title',
+        'leadDetail.startConversation.send',
+        'leadDetail.startConversation.failed',
+        'leadDetail.startConversation.noChannels',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+});
+describe('marketing i18n — the click-to-dial affordance', () => {
+  // ClickToDialButton is the ONE dial affordance in the product — the calls
+  // page header and, since spec §3, every lead header. It shipped with its
+  // labels as hardcoded English literals ('Call', 'Starting…', 'Log call
+  // outcome', 'Save outcome', 'Enter a phone number') on a page where every
+  // other string is translated. `fallbackLng: 'en'` means the same trap as the
+  // timeline panel, except here it was not even a fallback: a Turkish rep saw
+  // an English button no matter what the catalogue said.
+  it('every offered locale defines the dial keys, not just tr', async () => {
+    const want = flat(((tr as Json).calls as Json).dial as Json).map((k) => `calls.dial.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'calls.dial.call',
+        'calls.dial.starting',
+        'calls.dial.enterPhone',
+        'calls.dial.logTitle',
+        'calls.dial.save',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // The spec names the action "Ara", and that word is the whole button.
+  it('calls the primary action Ara in Turkish', () => {
+    expect(((tr as Json).calls as Json).dial as Json).toMatchObject({ call: 'Ara' });
+  });
+
+  // The number being rung is the only thing that tells a rep the modal in front
+  // of them belongs to the call they just placed. A translator dropping
+  // {{phone}} costs nothing at runtime and leaves the dialog naming no one.
+  it('keeps the {{phone}} placeholder in every dialing label', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const label = ((cat.calls as Json).dial as Json).dialing as string;
+      expect({ locale, label }).toEqual({ locale, label: expect.stringContaining('{{phone}}') });
+    }
+  });
+});
+
+describe('marketing i18n — the merged surface and its work queue', () => {
+  // These two words ARE the navigation of the merged surface, and the three
+  // chips below them are how anyone reaches the leads nobody has answered.
+  // Same trap as everywhere else in this file: `fallbackLng: 'en'` means a
+  // locale that simply lacks them neither throws nor shows a raw key — a
+  // ru/ar/uz operator is quietly served another language, and nothing at
+  // runtime notices (missingKeyHandler is DEV-only).
+  it('every offered locale names both tabs and all three work-queue chips', async () => {
+    const want = [
+      ...flat((tr as Json).surface as Json).map((k) => `surface.${k}`),
+      ...flat(((tr as Json).leads as Json).queue as Json).map((k) => `leads.queue.${k}`),
+    ];
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'surface.tab.conversations',
+        'surface.tab.contacts',
+        'leads.queue.waiting',
+        'leads.queue.unassigned',
+        'leads.queue.all',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // "Bekleyen" is the one chip whose meaning is not self-evident — it is not a
+  // lead status but "the customer wrote last and nobody replied". The hint is
+  // the only place that says so, and a count that cannot be fetched has to
+  // read as unknown rather than as zero, which is what countFailed is for.
+  it('every offered locale can explain Bekleyen and admit a missing count', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({
+        locale,
+        missing: ['leads.queue.waitingHint', 'leads.queue.countFailed'].filter((k) => !have.has(k)),
+      }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  it('uses the spec’s own words in Turkish', () => {
+    expect((tr as Json).surface).toMatchObject({
+      tab: { conversations: 'Konuşmalar', contacts: 'Kişiler' },
+    });
+    expect(((tr as Json).leads as Json).queue).toMatchObject({
+      waiting: 'Bekleyen',
+      unassigned: 'Atanmamış',
+      all: 'Hepsi',
+    });
+  });
+});
