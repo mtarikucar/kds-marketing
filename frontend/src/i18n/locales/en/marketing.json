@@ -3230,6 +3230,16 @@
       "threadsFailedHint": "this person may already have one — refresh before starting a new one",
       "noThread": "No conversation with this person yet",
       "noThreadHint": "use Message to start the first one"
+    },
+    "card": {
+      "title": "Record",
+      "idle": "Pick someone on the left.",
+      "owner": "Owner",
+      "phone": "Phone",
+      "email": "Email",
+      "city": "City",
+      "created": "Added",
+      "open": "Open record"
     }
   }
 }

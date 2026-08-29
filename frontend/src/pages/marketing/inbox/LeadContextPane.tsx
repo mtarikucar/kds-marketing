@@ -1,59 +1,112 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent, Badge, IconButton } from '@/components/ui';
+import { Link } from 'react-router-dom';
+import { ArrowRight, X } from 'lucide-react';
+import { Badge } from '@/components/ui/Badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { IconButton } from '@/components/ui/IconButton';
+import { fmtDate } from '../../../features/marketing/utils/format';
+import type { Lead } from '../../../features/marketing/types';
 
-interface Lead {
-  id: string;
-  businessName?: string;
-  contactPerson?: string;
-  phone?: string;
-  email?: string;
-  status?: string;
-}
+/**
+ * The fields this card reads. A structural subset of `Lead` rather than `Lead`
+ * itself, because the card is also handed the (narrower) lead that rides on a
+ * conversation payload, and widening the prop to the full model would make
+ * those call sites lie about what they have.
+ */
+export type RecordCardLead = Pick<Lead, 'id'> &
+  Partial<
+    Pick<
+      Lead,
+      | 'businessName'
+      | 'contactPerson'
+      | 'phone'
+      | 'email'
+      | 'city'
+      | 'status'
+      | 'source'
+      | 'businessType'
+      | 'createdAt'
+      | 'assignedTo'
+    >
+  >;
 
-interface LeadContextPaneProps {
-  lead: Lead | null | undefined;
-  /** When set, renders as a modal sheet (mobile/tablet) with close button. */
+export interface LeadContextPaneProps {
+  /** Null before anyone is selected — the card says so rather than rendering
+   *  an empty shell that looks like a person with no details. */
+  lead: RecordCardLead | null | undefined;
+  /** Below `lg` three columns cannot coexist, so the card arrives as a sheet. */
   asSheet?: boolean;
   onClose?: () => void;
+  className?: string;
 }
 
 /**
- * Lead context panel — shown inline at lg+ and as a bottom-sheet on smaller
- * screens. Pure presentational; receives the lead data from the parent.
+ * The right column: the selected person's record card.
+ *
+ * It is the ONLY navigation on the whole surface, and that is deliberate rather
+ * than incidental. Every other click here selects; the one link goes to
+ * `/leads/:id`, where the four-tab detail does the deep work (Akış, Satış,
+ * Teklifler, Görevler). A test counts the links inside the card, because a
+ * second one appearing later is exactly how "selecting is not navigating"
+ * quietly stops being true.
+ *
+ * The card grew out of the Inbox's lead-context pane, which showed four fields
+ * because the object beside it was a conversation. The object is now the
+ * person, so it carries what someone triaging needs before they commit to
+ * opening the record: who, where they stand, WHO OWNS THEM — unowned said out
+ * loud, since that is the whole point of the Atanmamış queue one column over —
+ * and how to reach them.
  */
-export function LeadContextPane({ lead, asSheet, onClose }: LeadContextPaneProps) {
+export function LeadContextPane({ lead, asSheet, onClose, className }: LeadContextPaneProps) {
   const { t } = useTranslation('marketing');
 
-  const body = lead ? (
-    <div className="space-y-2 text-sm">
-      {lead.businessName && (
-        <p className="font-medium text-foreground">{lead.businessName}</p>
-      )}
-      {lead.contactPerson && (
-        <p className="text-muted-foreground">{lead.contactPerson}</p>
-      )}
-      {lead.phone && (
-        <p className="text-xs text-muted-foreground">{lead.phone}</p>
-      )}
-      {lead.email && (
-        <p className="text-xs text-muted-foreground">{lead.email}</p>
-      )}
-      {lead.status && (
-        <div>
-          <Badge tone="neutral">{lead.status}</Badge>
-        </div>
-      )}
-      <a
-        href={`/leads/${lead.id}`}
-        className="text-primary text-xs hover:underline inline-block mt-1"
+  const body: ReactNode = lead ? (
+    <div data-testid="record-card" className="space-y-3 text-sm">
+      <div>
+        {lead.contactPerson && (
+          <p className="font-medium text-foreground">{lead.contactPerson}</p>
+        )}
+        {lead.businessName && <p className="text-muted-foreground">{lead.businessName}</p>}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {lead.status && <Badge tone="neutral">{lead.status}</Badge>}
+        {lead.source && (
+          <Badge tone="neutral" size="sm">
+            {lead.source}
+          </Badge>
+        )}
+      </div>
+
+      <dl className="space-y-1 text-xs">
+        <Row label={t('surface.card.owner', 'Sahibi')}>
+          <span data-testid="record-owner">
+            {lead.assignedTo
+              ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}`.trim()
+              : t('leads.assignmentStatus.unassigned', 'Atanmamış')}
+          </span>
+        </Row>
+        {lead.phone && <Row label={t('surface.card.phone', 'Telefon')}>{lead.phone}</Row>}
+        {lead.email && <Row label={t('surface.card.email', 'E-posta')}>{lead.email}</Row>}
+        {lead.city && <Row label={t('surface.card.city', 'Şehir')}>{lead.city}</Row>}
+        {lead.createdAt && (
+          <Row label={t('surface.card.created', 'Kayıt')}>{fmtDate(lead.createdAt)}</Row>
+        )}
+      </dl>
+
+      {/* The one door off this surface. */}
+      <Link
+        to={`/leads/${lead.id}`}
+        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
       >
-        {t('inbox.openLead', 'Open lead →')}
-      </a>
+        {t('surface.card.open', 'Kaydı aç')}
+        <ArrowRight className="h-3 w-3" aria-hidden="true" />
+      </Link>
     </div>
   ) : (
-    <p className="text-xs text-muted-foreground">
-      {t('inbox.noLead', 'Select a conversation.')}
+    <p data-testid="record-card-idle" className="text-xs text-muted-foreground">
+      {t('surface.card.idle', 'Soldan bir kişi seç.')}
     </p>
   );
 
@@ -61,18 +114,18 @@ export function LeadContextPane({ lead, asSheet, onClose }: LeadContextPaneProps
     return (
       <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center lg:hidden">
         <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-        <div className="relative bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-4 max-h-[80vh] overflow-y-auto border border-border shadow-xl">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              {t('inbox.context', 'Lead')}
+        <div className="relative max-h-[80vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-surface p-4 shadow-xl sm:max-w-md sm:rounded-2xl">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('surface.card.title', 'Kayıt')}
             </h3>
             <IconButton
               variant="ghost"
               size="sm"
-              aria-label={t('common.close', 'Close')}
+              aria-label={t('common.close', 'Kapat')}
               onClick={onClose}
             >
-              <X className="w-4 h-4" />
+              <X className="h-4 w-4" />
             </IconButton>
           </div>
           {body}
@@ -82,13 +135,22 @@ export function LeadContextPane({ lead, asSheet, onClose }: LeadContextPaneProps
   }
 
   return (
-    <Card className="hidden lg:flex lg:w-64 lg:shrink-0 flex-col overflow-y-auto">
+    <Card className={`flex-col overflow-y-auto ${className ?? ''}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-          {t('inbox.context', 'Lead')}
+        <CardTitle className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {t('surface.card.title', 'Kayıt')}
         </CardTitle>
       </CardHeader>
       <CardContent>{body}</CardContent>
     </Card>
+  );
+}
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-end text-foreground">{children}</dd>
+    </div>
   );
 }

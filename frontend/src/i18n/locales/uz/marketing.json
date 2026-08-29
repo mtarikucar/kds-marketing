@@ -1123,6 +1123,16 @@
       "threadsFailedHint": "bu odamda suhbat boʻlishi mumkin — yangisini boshlashdan oldin yangilang",
       "noThread": "Bu odam bilan hali yozishilmagan",
       "noThreadHint": "birinchisini «Xabar» orqali boshlang"
+    },
+    "card": {
+      "title": "Yozuv",
+      "idle": "Chapdan bir odamni tanlang.",
+      "owner": "Egasi",
+      "phone": "Telefon",
+      "email": "Email",
+      "city": "Shahar",
+      "created": "Qoʻshilgan",
+      "open": "Yozuvni ochish"
     }
   }
 }

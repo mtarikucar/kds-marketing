@@ -4081,6 +4081,16 @@
       "threadsFailedHint": "bu kişinin bir konuşması olabilir; yeni bir tane açmadan önce yenile",
       "noThread": "Bu kişiyle henüz konuşulmadı",
       "noThreadHint": "Mesaj ile ilk konuşmayı başlat"
+    },
+    "card": {
+      "title": "Kayıt",
+      "idle": "Soldan bir kişi seç.",
+      "owner": "Sahibi",
+      "phone": "Telefon",
+      "email": "E-posta",
+      "city": "Şehir",
+      "created": "Kayıt",
+      "open": "Kaydı aç"
     }
   }
 }
