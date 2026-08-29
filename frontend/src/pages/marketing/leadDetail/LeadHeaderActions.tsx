@@ -69,8 +69,9 @@ const errMsg = (e: unknown, fallback: string) =>
  * existing `POST /conversations/start`, which until now had no caller in the
  * frontend at all.
  *
- * Ara is ABSENT, not disabled, when the lead has no number (or has opted out of
- * phone contact): a button that fails when clicked is worse than no button.
+ * Ara is ABSENT, not disabled, when the workspace has no telephony, when the
+ * lead has no number, or when the lead has opted out of phone contact: a button
+ * that fails when clicked is worse than no button.
  */
 export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHeaderActionsProps) {
   const { t } = useTranslation('marketing');
@@ -88,7 +89,14 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
   const [text, setText] = useState('');
 
   const phone = lead.phone?.trim() || '';
-  const callable = !!phone && !lead.smsOptOut;
+  // Same shape as canMessage, one gate over: `POST /calls/start` is behind
+  // @RequiresFeature('telephony') at CONTROLLER level (SalesCallController),
+  // while `/leads` carries no feature at all in navigation.ts — so a workspace
+  // without telephony reaches this header freely and would be offered a dial
+  // button whose only possible outcome is a 403. The consent + reachability
+  // terms stay: entitlement says the workspace MAY dial, the other two say this
+  // lead may be dialled.
+  const callable = has('telephony') && !!phone && !lead.smsOptOut;
 
   // Same key as ConversationsTab, deliberately: Mesaj has to know whether a
   // thread exists before it can choose between opening one and starting one,

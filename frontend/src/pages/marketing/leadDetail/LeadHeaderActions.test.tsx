@@ -81,20 +81,26 @@ async function readyMessageButton() {
 
 /** Entitlements come from the same `/billing/summary` read the rest of the app
  *  uses (useEntitlements shares its query key), so the mock dispatches on URL
- *  rather than answering every GET with channels. */
+ *  rather than answering every GET with channels.
+ *
+ *  Two flags, not one: Mesaj is gated on `conversationAi` and Ara on
+ *  `telephony`. A single switch would let each gate's test pass on the other
+ *  gate's behaviour. */
 let entitled = true;
+let telephony = true;
+
+const billing = () => ({
+  data: { entitlements: { features: { conversationAi: entitled, telephony } } },
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
   entitled = true;
+  telephony = true;
   listConversations.mockResolvedValue([]);
   startConversation.mockResolvedValue({ conversationId: 'c-new' } as never);
   apiGet.mockImplementation((url: string) =>
-    Promise.resolve(
-      url === '/billing/summary'
-        ? { data: { entitlements: { features: { conversationAi: entitled } } } }
-        : { data: CHANNELS },
-    ),
+    Promise.resolve(url === '/billing/summary' ? billing() : { data: CHANNELS }),
   );
 });
 
@@ -224,6 +230,48 @@ describe('LeadHeaderActions — Mesaj', () => {
     await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringContaining('opted out')));
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(onOpenConversations).not.toHaveBeenCalled();
+  });
+});
+
+// `POST /calls/start` is behind @RequiresFeature('telephony') at CONTROLLER
+// level on SalesCallController, but `/leads` carries no feature in
+// navigation.ts — so a workspace without telephony reaches lead detail freely
+// and, until this gate, was offered a dial button whose only possible outcome
+// was a 403. Same rule as Mesaj, same reason: a button that fails when clicked
+// is worse than no button.
+describe('LeadHeaderActions — the telephony gate', () => {
+  it('does not offer Ara at all to a workspace without the feature', async () => {
+    telephony = false;
+    renderActions({ id: 'l1', phone: '+905551112233' });
+
+    // Positive anchor: Mesaj is up and settled, so the component HAS rendered
+    // its actions. Without it, `queryByTestId(...)` is trivially null against a
+    // tree that has not mounted anything yet.
+    await readyMessageButton();
+    expect(screen.queryByTestId('click-to-dial')).not.toBeInTheDocument();
+  });
+
+  // useEntitlements fails CLOSED: `features` is `{}` until /billing/summary
+  // answers, so `has('telephony')` is false for that whole window. Asserting it
+  // needs the resolution as the anchor — the button appearing AFTER the read
+  // lands is what proves its earlier absence was this gate and not an unmounted
+  // tree.
+  it('keeps Ara off while the entitlement read is still in flight', async () => {
+    let releaseBilling: () => void = () => {};
+    const pending = new Promise<void>((r) => {
+      releaseBilling = r;
+    });
+    apiGet.mockImplementation((url: string) =>
+      url === '/billing/summary'
+        ? pending.then(() => billing())
+        : Promise.resolve({ data: CHANNELS }),
+    );
+
+    renderActions({ id: 'l1', phone: '+905551112233' });
+
+    expect(screen.queryByTestId('click-to-dial')).not.toBeInTheDocument();
+    releaseBilling();
+    expect(await screen.findByTestId('click-to-dial')).toBeInTheDocument();
   });
 });
 
