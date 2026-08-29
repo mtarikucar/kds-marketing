@@ -32,38 +32,43 @@ function renderSidebar() {
   );
 }
 
-describe('MarketingSidebar — progressive disclosure', () => {
+describe('MarketingSidebar — three surfaces, nothing hidden', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en');
     useSidebarPrefsStore.setState({ favorites: [], advancedOpen: false });
   });
 
-  it('hides advanced hubs behind "More" while core hubs stay visible', () => {
+  it('renders the three surfaces and drops the "More" disclosure entirely', () => {
     renderSidebar();
-    // Core hub is directly visible…
-    expect(screen.getByRole('link', { name: /Contacts/i })).toBeInTheDocument();
-    // …the "More" disclosure exists…
-    expect(screen.getByRole('button', { name: /^More$/i })).toBeInTheDocument();
-    // …and an advanced hub (Payments) is not rendered until expanded.
-    // (Growth Studio is CORE — the product's flagship surface — so it must
-    // NOT hide behind More; that promotion is asserted in navigation.test.ts.)
-    expect(screen.queryByRole('link', { name: /^Payments$/i })).not.toBeInTheDocument();
-    // Growth Studio, being core, is always directly visible.
+    // The 2026-08 surface merge: what used to be ~15 hubs (Contacts, Sales,
+    // Calendar, Tasks, Payments…) is Home / Inbox / Growth Studio, so there is
+    // nothing left to hide and no reason to make the user open a section.
+    expect(screen.getByRole('link', { name: /^Home$/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Inbox$/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Growth Studio$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^More$/i })).not.toBeInTheDocument();
+    // The retired hubs are gone from the RAIL — their pages moved into a
+    // surface's sub-nav (navigation.test.ts freezes the full path set).
+    for (const retired of [/^Contacts$/i, /^Sales$/i, /^Payments$/i, /^Tasks$/i]) {
+      expect(screen.queryByRole('link', { name: retired })).not.toBeInTheDocument();
+    }
+    // Settings stays pinned at the bottom as its own area.
+    expect(screen.getByRole('link', { name: /^Settings$/i })).toBeInTheDocument();
   });
 
-  it('reveals advanced hubs when "More" is expanded', async () => {
-    const user = userEvent.setup();
+  it('lands the Inbox surface on the first page the workspace may actually open', () => {
+    // This manager has no entitlements, so /inbox itself (conversationAi) is
+    // gated out. A rail item pointing at a page you cannot open is worse than
+    // one pointing at the first you can — hence hubTarget's fallback.
     renderSidebar();
-    await user.click(screen.getByRole('button', { name: /^More$/i }));
-    expect(screen.getByRole('link', { name: /^Payments$/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Inbox$/i })).toHaveAttribute('href', '/leads');
   });
 
   it('surfaces a "Pinned" section for favorited hubs', () => {
-    useSidebarPrefsStore.setState({ favorites: ['sales'], advancedOpen: false });
+    useSidebarPrefsStore.setState({ favorites: ['studio'], advancedOpen: false });
     renderSidebar();
     expect(screen.getByText(/^Pinned$/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Sales/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Growth Studio$/i })).toBeInTheDocument();
   });
 
   it('pins a hub to favorites when its star is clicked', async () => {

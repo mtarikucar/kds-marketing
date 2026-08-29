@@ -368,6 +368,9 @@
     }
   },
   "settingsGroup": {
+    "automation": "Otomasyon",
+    "billing": "Ürünler ve faturalama",
+    "agency": "Ajans",
     "workspace": "Çalışma Alanı",
     "team": "Ekip ve erişim",
     "data": "Veri",
@@ -3948,12 +3951,28 @@
     "leads": "{{count}} lead",
     "unassigned": "{{count}} atanmamış",
     "tasks": "{{count}} açık görev",
-    "fullDashboard": "Tüm göstergeler"
+    "fullDashboard": "Tüm göstergeler",
+    "tabs": {
+      "timeline": "Takvim",
+      "flow": "Akış",
+      "failures": "{{count}} başarısız iş"
+    }
   },
   "activity": {
     "none": {
       "title": "Henüz bir iş yapılmadı",
       "desc": "Ajan bir şey yaptığında — gönderi, araştırma, takip — burada görürsün."
+    }
+  },
+  "timeline": {
+    "failed": "Takvim yüklenemedi.",
+    "unread": "Okunamayan kaynaklar",
+    "unreadHint": "bu listede eksik satırlar var, kaç tane olduğunu bilmiyoruz",
+    "truncated": "Sığmayan kaynaklar",
+    "truncatedHint": "bu pencerenin yalnızca en erken kayıtları gösteriliyor, devamı var",
+    "none": {
+      "title": "Planlanmış bir şey yok",
+      "desc": "Bir görev, randevu ya da kampanya zamanlandığında burada görürsün."
     }
   }
 }

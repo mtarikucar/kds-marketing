@@ -14,12 +14,18 @@ import { ThemeToggle, LanguageSwitcher } from '@/components/ui';
 const STORAGE_KEY = 'kds-sidebar-collapsed';
 
 /**
- * Primary navigation rail — a lean list of GoHighLevel-style HUBS grouped for
- * progressive disclosure: the user's PINNED hubs first, then the CORE tier, then
- * an ADVANCED tier tucked behind a collapsed "More" disclosure. Nothing is
- * removed — "More" and the command palette (Cmd/Ctrl+K) still reach every hub —
- * but the default view stays focused (~6-8 items) instead of ~15. Settings is
- * pinned at the bottom as a gear. Collapses to an icon-rail (persisted).
+ * Primary navigation rail — the user's PINNED surfaces first, then the rest.
+ * Since the 2026-08 surface merge that is Home / Inbox / Growth Studio, with
+ * Settings pinned at the bottom as a gear; every other page reaches you through
+ * a surface's sub-nav or the command palette (Cmd/Ctrl+K). Collapses to an
+ * icon-rail (persisted).
+ *
+ * The tier split below (`splitByTier`, the "More" disclosure, `advancedOpen`)
+ * is progressive disclosure for a rail that was ~15 hubs long. It is now inert:
+ * every hub in NAV_HUBS is `core`, so `advanced` comes back empty and the
+ * disclosure never renders. Kept rather than deleted because it is a property
+ * of the hub LIST, not of this component — a future advanced hub switches it
+ * back on with no change here (splitByTier's own test covers that path).
  */
 export default function MarketingSidebar({
   onNavigate,

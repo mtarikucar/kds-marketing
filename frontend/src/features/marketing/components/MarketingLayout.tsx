@@ -11,7 +11,7 @@ import { AgencyImpersonationBanner } from './AgencyImpersonationBanner';
 import WebphoneHost from '../webphone/WebphoneHost';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
-import { NAV_HUBS, findActiveHub } from '../navigation';
+import { NAV_HUBS, findActiveHub, findActiveChild } from '../navigation';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
 import { usePageViewTracking } from '../hooks/usePageViewTracking';
 
@@ -24,8 +24,16 @@ export default function MarketingLayout() {
   // page-retiring has to rest on. Anonymous and aggregate; see the hook.
   usePageViewTracking();
 
-  // Area detection is structural (no gating needed) — the active hub's `area`.
-  const isSettings = findActiveHub(NAV_HUBS, location.pathname)?.area === 'settings';
+  // Area detection is structural (no gating needed) — the active hub's `area`,
+  // minus the pages that opt out of the settings chrome. A `fullBleed` item is
+  // a settings page everywhere EXCEPT here: the workflow builder is a
+  // viewport-height canvas, and the settings pane is a bare `overflow-y-auto`
+  // column beside a 240px sidebar, which would render it as a canvas in a
+  // letterbox. Giving that pane `h-full` would fix the height and leave the
+  // canvas jammed next to the sidebar, so the page leaves the area instead.
+  const isSettings =
+    findActiveHub(NAV_HUBS, location.pathname)?.area === 'settings' &&
+    !findActiveChild(NAV_HUBS, location.pathname)?.fullBleed;
 
   // Global command palette shortcut (Cmd/Ctrl+K) — a deliberate app-wide
   // override, so it fires even while a form field is focused (like Slack/Linear).

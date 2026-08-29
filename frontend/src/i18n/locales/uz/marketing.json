@@ -988,12 +988,28 @@
     "leads": "{{count}} lid",
     "unassigned": "{{count}} biriktirilmagan",
     "tasks": "{{count}} ochiq vazifa",
-    "fullDashboard": "Barcha ko'rsatkichlar"
+    "fullDashboard": "Barcha ko'rsatkichlar",
+    "tabs": {
+      "timeline": "Taqvim",
+      "flow": "Oqim",
+      "failures": "{{count}} muvaffaqiyatsiz ish"
+    }
   },
   "activity": {
     "none": {
       "title": "Hozircha hech narsa qilinmadi",
       "desc": "Agent biror ish qilganda — post, tadqiqot, kuzatuv — shu yerda ko'rinadi."
+    }
+  },
+  "timeline": {
+    "failed": "Taqvimni yuklab bo'lmadi.",
+    "unread": "O'qib bo'lmagan manbalar",
+    "unreadHint": "bu ro'yxatda qatorlar yetishmayapti, nechtasini bilmaymiz",
+    "truncated": "Sig'magan manbalar",
+    "truncatedHint": "bu oynadagi eng erta yozuvlar ko'rsatilmoqda, davomi bor",
+    "none": {
+      "title": "Rejalashtirilgan hech narsa yo'q",
+      "desc": "Vazifa, uchrashuv yoki kampaniya rejalashtirilganda shu yerda ko'rasiz."
     }
   }
 }

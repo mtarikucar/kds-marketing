@@ -177,9 +177,15 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
 
   /**
    * A FAILED job exhausted every attempt — there is no reading of that which is
-   * fine, which is why it reports unconditionally. On the live workspace these
-   * rows carried the vendor's own 400 ("Your credit balance is too low") on
-   * every AI reply for a day, in a column nothing read.
+   * fine, which is why it reports.
+   *
+   * "Unconditionally" was true until v2.280.0, and the change is why this
+   * fixture uses a transport error rather than the credit-balance one the live
+   * incident actually carried. The generic line now reports only what the
+   * vendor-refusal line does not already explain, so one incident stops being
+   * counted as two problems — which means a credit-balance fixture here would
+   * be swallowed by the OTHER lane and this test would silently stop covering
+   * the line it is named for.
    */
   it('reports a background job that gave up, and windows it to the period', async () => {
     await prisma.scheduledJob.create({
@@ -190,7 +196,12 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
         payload: {},
         status: 'FAILED',
         attempts: 5,
-        lastError: '400 credit balance too low',
+        // Deliberately NOT a credit-balance error. v2.280.0 made the generic
+        // dead-jobs line report only what the vendor-refusal line does not
+        // explain, so a credit failure is now counted THERE and this line
+        // correctly stays silent. Using that error here tested the vendor lane
+        // while claiming to test this one.
+        lastError: 'ECONNRESET talking to the channel provider',
         completedAt: t(60),
       },
     });
