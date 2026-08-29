@@ -20,6 +20,12 @@ import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { rangeEndInclusive } from './report-date-range.util';
 import { waitingReplyLeadIds } from './waiting-reply-leads';
+import {
+  leadConversationSummaries,
+  workspaceLastMessageAt,
+  workspaceLastActivityAt,
+  newestOf,
+} from './lead-activity-enrichment';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -307,9 +313,12 @@ export class MarketingLeadsService {
       'source',
       'priority',
       'nextFollowUp',
+      // The person-primary surface's sort. NOT a column - resolved below.
+      'lastActivityAt',
     ];
+    const sortByActivity = filter.sortBy === 'lastActivityAt';
     const orderBy: Prisma.LeadOrderByWithRelationInput = {};
-    if (filter.sortBy && allowedSortFields.includes(filter.sortBy)) {
+    if (filter.sortBy && allowedSortFields.includes(filter.sortBy) && !sortByActivity) {
       (orderBy as any)[filter.sortBy] = filter.sortOrder || 'desc';
     } else {
       orderBy.createdAt = 'desc';
@@ -333,26 +342,124 @@ export class MarketingLeadsService {
 
     // workspaceId is spread LAST so no filter combination can ever
     // widen the query beyond the caller's workspace.
-    const [leads, total] = await Promise.all([
-      this.prisma.lead.findMany({
-        where: { ...where, workspaceId },
-        orderBy,
-        skip,
-        take: limit,
-        include: {
-          assignedTo: {
-            select: { id: true, firstName: true, lastName: true },
-          },
-          _count: {
-            select: { activities: true, offers: true, tasks: true },
-          },
-        },
-      }),
-      this.prisma.lead.count({ where: { ...where, workspaceId } }),
-    ]);
+    const scoped: Prisma.LeadWhereInput = { ...where, workspaceId };
+
+    // `activities` here is a HELPER read, not a new field on the list: it is
+    // the one instant a page row's `lastActivityAt` needs that no aggregate
+    // supplies, and it is stripped off again before the row is returned.
+    // LeadActivity is the only one of the three sources with a real foreign key
+    // to Lead, so this take-1 rides along in the page query rather than costing
+    // a query of its own.
+    const include = {
+      assignedTo: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+      _count: {
+        select: { activities: true, offers: true, tasks: true },
+      },
+      activities: {
+        select: { createdAt: true },
+        orderBy: { createdAt: 'desc' as const },
+        take: 1,
+      },
+    };
+
+    let leads: any[];
+    let total: number;
+
+    if (sortByActivity) {
+      /**
+       * `lastActivityAt` is not a column. It is the newest of three instants -
+       * the last message on any of the person's threads, their newest
+       * LeadActivity, and their own createdAt - and one of those three lives
+       * behind a table with NO foreign key back to `leads`.
+       *
+       * So the ORDER is settled here rather than in the database. Restating
+       * this method's `where` in raw SQL would let Postgres order by the
+       * expression directly, but it would also create a SECOND copy of the lead
+       * filter - exactly the divergence that once made the CSV export disagree
+       * with the on-screen list (see the note on the export route). One
+       * `where`, in Prisma, stays the source of truth; only the order moves.
+       *
+       * Cost: three reads regardless of page size - the filtered ids, and one
+       * GROUP BY per instant source, both scoped to the workspace rather than
+       * to the page (an order cannot be settled from a page). The two GROUP BYs
+       * are bounded by the number of people ever messaged or touched, not by
+       * the number of messages or activities.
+       */
+      const [candidates, msgAt, actAt] = await Promise.all([
+        this.prisma.lead.findMany({ where: scoped, select: { id: true, createdAt: true } }),
+        workspaceLastMessageAt(this.prisma, workspaceId),
+        workspaceLastActivityAt(this.prisma, workspaceId),
+      ]);
+
+      const dir = filter.sortOrder === 'asc' ? 1 : -1;
+      const ranked = candidates
+        .map((c) => ({
+          id: c.id,
+          at: newestOf(c.createdAt, msgAt.get(c.id), actAt.get(c.id)).getTime(),
+        }))
+        // Ties break on id so two people who moved in the same millisecond keep
+        // a stable order between requests - otherwise a page boundary could
+        // show one of them twice and the other never.
+        .sort((a, b) => (a.at === b.at ? a.id.localeCompare(b.id) : (a.at - b.at) * dir));
+
+      total = candidates.length;
+      const pageIds = ranked.slice(skip, skip + limit).map((r) => r.id);
+
+      // The `in: []` trap: a page past the end produces an EMPTY id list, and
+      // an implementation that drops the clause when the list is empty returns
+      // the entire workspace under a page number that says otherwise.
+      const rows = pageIds.length
+        ? await this.prisma.lead.findMany({
+            where: { id: { in: pageIds }, workspaceId },
+            include,
+          })
+        : [];
+      // `findMany` answers in ITS order, not ours; re-seat the rows on the
+      // ranking the page was cut from.
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      leads = pageIds.map((id) => byId.get(id)).filter((r): r is (typeof rows)[number] => !!r);
+    } else {
+      [leads, total] = await Promise.all([
+        this.prisma.lead.findMany({ where: scoped, orderBy, skip, take: limit, include }),
+        this.prisma.lead.count({ where: scoped }),
+      ]);
+    }
+
+    // Per PAGE, never per row: two statements for up to `limit` people.
+    //
+    // Deliberately NOT wrapped in a soft catch. A conversation column that
+    // cannot be read must not render as "this person has never written" - the
+    // list row has nowhere to say WHICH source was lost (the stream endpoint
+    // does, and says so by name), so here the request fails loudly rather than
+    // quietly reporting silence.
+    const summaries = await leadConversationSummaries(
+      this.prisma,
+      workspaceId,
+      leads.map((l) => l.id),
+    );
+
+    const data = leads.map((lead) => {
+      const { activities, ...rest } = lead as any;
+      const summary = summaries.get(lead.id);
+      return {
+        ...rest,
+        lastMessageAt: summary?.lastMessageAt ?? null,
+        lastMessagePreview: summary?.lastMessagePreview ?? null,
+        unreadCount: summary?.unreadCount ?? 0,
+        // Non-null by construction: createdAt is always there, so the sort key
+        // never has to cope with a hole.
+        lastActivityAt: newestOf(
+          lead.createdAt,
+          summary?.lastMessageAt,
+          activities?.[0]?.createdAt,
+        ),
+      };
+    });
 
     return {
-      data: leads,
+      data,
       meta: {
         total,
         page,
