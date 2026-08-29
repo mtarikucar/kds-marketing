@@ -869,7 +869,8 @@
       "assign": "Ata…",
       "addActivity": "Etkinlik kaydet",
       "addOffer": "Yeni teklif",
-      "addTask": "Yeni görev"
+      "addTask": "Yeni görev",
+      "message": "Mesaj"
     },
     "convertDialog": {
       "title": "Müşteriye dönüştür",
@@ -940,6 +941,19 @@
         "title": "Bu kişi için henüz fırsat yok",
         "desc": "Bir fırsat açtığında kişiyi hattında takip eder, aşamasını burada görürsün."
       }
+    },
+    "startConversation": {
+      "title": "Konuşma başlat",
+      "desc": "Bu kişiyle henüz konuşulmadı. Bir kanal seç ve ilk mesajı yaz.",
+      "channel": "Kanal",
+      "pickChannel": "Kanal seç",
+      "message": "İlk mesaj",
+      "messagePlaceholder": "Merhaba, …",
+      "send": "Gönder",
+      "sent": "Mesaj gönderildi",
+      "failed": "Mesaj gönderilemedi",
+      "noChannels": "Konuşma başlatılabilecek bağlı kanal yok — SMS, WhatsApp veya e-posta bağla.",
+      "channelsFailed": "Kanallar yüklenemedi."
     }
   },
   "fax": {

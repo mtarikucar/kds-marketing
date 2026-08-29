@@ -61,6 +61,7 @@ import ConvertDialog from './ConvertDialog';
 import { ReopenLeadDialog } from './ReopenLeadDialog';
 import { useConvertDialog } from './useConvertDialog';
 import SendFaxDialog from './SendFaxDialog';
+import LeadHeaderActions from './LeadHeaderActions';
 
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -82,6 +83,10 @@ export default function LeadDetailPage() {
   const convert = useConvertDialog();
   const [faxOpen, setFaxOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
+  // Controlled so the header's Mesaj action can bring the Konuşmalar tab
+  // forward — there is no per-thread URL in this app, so "open the
+  // conversation" is "show me this lead's threads".
+  const [tab, setTab] = useState('activities');
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
@@ -314,6 +319,10 @@ export default function LeadDetailPage() {
                 onAssigned={invalidate}
               />
             </div>
+            {/* Ara + Mesaj (spec §3). Both reuse paths that already existed:
+                ClickToDialButton with this lead's id, and POST
+                /conversations/start — which had no frontend caller until now. */}
+            <LeadHeaderActions lead={lead} onOpenConversations={() => setTab('conversations')} />
             {has('fax') && (
               <Button variant="outline" size="sm" onClick={() => setFaxOpen(true)}>
                 <Printer className="h-4 w-4" /> {t('fax.action', 'Send fax')}
@@ -388,7 +397,7 @@ export default function LeadDetailPage() {
 
         {/* Right: Tabs */}
         <div className="lg:col-span-2">
-          <Tabs defaultValue="activities">
+          <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
               <TabsTrigger value="activities">
                 {t('leadDetail.tabs.activities', 'Etkinlik')}

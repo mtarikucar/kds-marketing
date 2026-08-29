@@ -278,7 +278,8 @@
       "assign": "Assign…",
       "addActivity": "Log activity",
       "addOffer": "New offer",
-      "addTask": "New task"
+      "addTask": "New task",
+      "message": "رسالة"
     },
     "convertDialog": {
       "title": "Convert to customer",
@@ -343,6 +344,19 @@
         "title": "لا توجد صفقة لجهة الاتصال هذه بعد",
         "desc": "افتح صفقة لتتبّع جهة الاتصال في المسار وترى مرحلتها هنا."
       }
+    },
+    "startConversation": {
+      "title": "بدء محادثة",
+      "desc": "لا توجد محادثة مع جهة الاتصال هذه بعد. اختر قناة واكتب الرسالة الأولى.",
+      "channel": "القناة",
+      "pickChannel": "اختر قناة",
+      "message": "الرسالة الأولى",
+      "messagePlaceholder": "مرحبًا، …",
+      "send": "إرسال",
+      "sent": "تم إرسال الرسالة",
+      "failed": "تعذّر إرسال الرسالة",
+      "noChannels": "لا توجد قناة متصلة يمكنها بدء محادثة — اربط الرسائل القصيرة أو واتساب أو البريد الإلكتروني.",
+      "channelsFailed": "تعذّر تحميل القنوات."
     }
   },
   "createLead": {

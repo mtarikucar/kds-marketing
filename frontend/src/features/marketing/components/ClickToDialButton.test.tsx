@@ -26,11 +26,15 @@ vi.mock('../webphone/WebphoneHost', () => ({
 
 function renderButton(props: { leadId?: string; defaultPhone?: string } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <ClickToDialButton {...props} />
-    </QueryClientProvider>,
-  );
+  const invalidate = vi.spyOn(qc, 'invalidateQueries');
+  return {
+    invalidate,
+    ...render(
+      <QueryClientProvider client={qc}>
+        <ClickToDialButton {...props} />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 const call = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -97,5 +101,62 @@ describe('ClickToDialButton — clears the in-call controls panel once logged (P
     await userEvent.click(screen.getByRole('button', { name: /save outcome/i }));
 
     await waitFor(() => expect(setActiveCallIdMock).toHaveBeenCalledWith(null));
+  });
+});
+
+/**
+ * This button was written for the calls page, where the only list that could
+ * go stale was the call log. Dropped onto the lead header it acquires a second
+ * consumer: SalesCallService.logCall mirrors the outcome onto the lead as a
+ * CALL LeadActivity, and the lead detail page reads its activities off the
+ * LEAD payload (ActivityTimelineTab takes them as a prop — it has no query of
+ * its own). So without invalidating the lead, the rep logs a call, watches
+ * Hareketler, and sees nothing until they reload the page by hand.
+ */
+describe('ClickToDialButton — a logged call refreshes the lead it was placed from', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
+  });
+
+  it('invalidates the lead detail query (where Hareketler gets its activities) after logging', async () => {
+    postMock.mockResolvedValueOnce({ data: { call: call(), dialUri: '', mode: 'api' } });
+    postMock.mockResolvedValueOnce({ data: {} });
+    const { invalidate } = renderButton({ leadId: 'lead-9', defaultPhone: '+905551112233' });
+
+    await userEvent.click(screen.getByRole('button', { name: /call/i }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+    // The dial itself carries the lead — that link is what makes the backend
+    // write the mirrored activity at all.
+    expect(postMock).toHaveBeenCalledWith('/calls/start', {
+      toPhone: '+905551112233',
+      leadId: 'lead-9',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /save outcome/i }));
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'lead-9'] }),
+    );
+  });
+
+  it('does not invalidate any lead when dialled from the calls page (no leadId)', async () => {
+    postMock.mockResolvedValueOnce({ data: { call: call(), dialUri: '', mode: 'api' } });
+    postMock.mockResolvedValueOnce({ data: {} });
+    const { invalidate } = renderButton({ defaultPhone: '+905551112233' });
+
+    await userEvent.click(screen.getByRole('button', { name: /call/i }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole('button', { name: /save outcome/i }));
+
+    // Positive anchor: the call-log invalidation DID happen, so the mutation
+    // settled — only then is "no lead was invalidated" a real observation
+    // rather than a snapshot of a mutation that had not run yet.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'calls'] }),
+    );
+    expect(
+      invalidate.mock.calls.filter((c) => (c[0]?.queryKey as unknown[])?.[1] === 'lead'),
+    ).toEqual([]);
   });
 });

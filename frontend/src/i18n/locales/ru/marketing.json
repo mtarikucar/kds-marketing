@@ -278,7 +278,8 @@
       "assign": "Assign…",
       "addActivity": "Log activity",
       "addOffer": "New offer",
-      "addTask": "New task"
+      "addTask": "New task",
+      "message": "Сообщение"
     },
     "convertDialog": {
       "title": "Convert to customer",
@@ -343,6 +344,19 @@
         "title": "По этому контакту ещё нет сделок",
         "desc": "Откройте сделку, чтобы вести контакт по воронке и видеть его этап здесь."
       }
+    },
+    "startConversation": {
+      "title": "Начать переписку",
+      "desc": "С этим контактом ещё не общались. Выберите канал и напишите первое сообщение.",
+      "channel": "Канал",
+      "pickChannel": "Выберите канал",
+      "message": "Первое сообщение",
+      "messagePlaceholder": "Здравствуйте, …",
+      "send": "Отправить",
+      "sent": "Сообщение отправлено",
+      "failed": "Не удалось отправить сообщение",
+      "noChannels": "Нет подключённого канала, с которого можно начать переписку — подключите SMS, WhatsApp или почту.",
+      "channelsFailed": "Не удалось загрузить каналы."
     }
   },
   "createLead": {

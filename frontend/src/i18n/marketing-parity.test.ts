@@ -142,3 +142,35 @@ describe('marketing i18n — lead detail: Konuşmalar + Satış tabs', () => {
     }
   });
 });
+
+describe('marketing i18n — lead header: Ara + Mesaj', () => {
+  // The lead header's two new actions and the whole start-conversation dialog.
+  // `fallbackLng: 'en'` means a locale that simply lacks these neither throws
+  // nor shows a raw key — a ru/ar/uz operator is quietly served English, and
+  // nothing at runtime notices (missingKeyHandler is DEV-only).
+  //
+  // The refusal strings are in the set deliberately. `startConversation.failed`
+  // and `.noChannels` are what a rep sees when the message did NOT go out; if
+  // they degrade to English while the dialog around them is translated, "sent"
+  // and "not sent" stop reading as different outcomes in that locale — the
+  // exact confusion this repo has already paid for once.
+  it('every offered locale defines the message action + start-conversation keys', async () => {
+    const want = flat((tr as Json).leadDetail as Json)
+      .filter((k) => /^(startConversation\.|actions\.message$)/.test(k))
+      .map((k) => `leadDetail.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'leadDetail.actions.message',
+        'leadDetail.startConversation.title',
+        'leadDetail.startConversation.send',
+        'leadDetail.startConversation.failed',
+        'leadDetail.startConversation.noChannels',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+});

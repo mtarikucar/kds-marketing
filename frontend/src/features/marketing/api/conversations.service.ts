@@ -53,3 +53,21 @@ export const listConversations = (
   params: ConversationListParams = {},
 ): Promise<ConversationSummary[]> =>
   marketingApi.get('/conversations', { params }).then((r) => r.data);
+
+// ── Starting a thread ────────────────────────────────────────────────────────
+
+export interface StartConversationParams {
+  leadId: string;
+  /** Which connected channel to reach them on. Only SMS / WhatsApp / email can
+   *  OPEN a thread — see OutboundConversationService's INITIABLE map. */
+  channelId: string;
+  /** Required in practice: the backend refuses a start with neither text nor a
+   *  (WhatsApp-only) approved template. */
+  text?: string;
+}
+
+/** `POST /marketing/conversations/start` — message a lead we chose, opening the
+ *  thread if there is not one yet. Finds an existing thread rather than forking
+ *  a second one, so a double-send is not a double-conversation. */
+export const startConversation = (params: StartConversationParams): Promise<unknown> =>
+  marketingApi.post('/conversations/start', params).then((r) => r.data);

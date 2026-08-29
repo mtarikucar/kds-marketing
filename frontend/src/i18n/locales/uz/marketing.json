@@ -278,7 +278,8 @@
       "assign": "Assign…",
       "addActivity": "Log activity",
       "addOffer": "New offer",
-      "addTask": "New task"
+      "addTask": "New task",
+      "message": "Xabar"
     },
     "convertDialog": {
       "title": "Convert to customer",
@@ -343,6 +344,19 @@
         "title": "Bu kishi uchun hali bitim yo'q",
         "desc": "Bitim ochsangiz, kishini quvurda kuzatasiz va bosqichini shu yerda ko'rasiz."
       }
+    },
+    "startConversation": {
+      "title": "Suhbat boshlash",
+      "desc": "Bu kishi bilan hali gaplashilmagan. Kanalni tanlang va birinchi xabarni yozing.",
+      "channel": "Kanal",
+      "pickChannel": "Kanalni tanlang",
+      "message": "Birinchi xabar",
+      "messagePlaceholder": "Salom, …",
+      "send": "Yuborish",
+      "sent": "Xabar yuborildi",
+      "failed": "Xabarni yuborib bo'lmadi",
+      "noChannels": "Suhbat boshlash mumkin bo'lgan ulangan kanal yo'q — SMS, WhatsApp yoki e-pochtani ulang.",
+      "channelsFailed": "Kanallarni yuklab bo'lmadi."
     }
   },
   "createLead": {

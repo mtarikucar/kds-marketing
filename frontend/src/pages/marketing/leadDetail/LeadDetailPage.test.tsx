@@ -35,6 +35,17 @@ vi.mock('../../../features/marketing/hooks/useBreadcrumbLabel', () => ({
 vi.mock('../../../features/marketing/components', () => ({
   LeadStatusBadge: () => null,
   AssignCell: () => null,
+  // Real ClickToDialButton drags in the SIP.js webphone; the header only needs
+  // to prove it mounts it (LeadHeaderActions.test.tsx owns the rest).
+  ClickToDialButton: () => <div data-testid="click-to-dial" />,
+}));
+
+// LeadHeaderActions is REAL here — its wiring into the tab strip is the thing
+// under test below — so its two reads are stubbed instead.
+const listConversations = vi.fn();
+vi.mock('../../../features/marketing/api/conversations.service', () => ({
+  listConversations: (...a: unknown[]) => listConversations(...a),
+  startConversation: vi.fn(),
 }));
 vi.mock('./ContactInfo', () => ({ default: () => null }));
 vi.mock('./WalletPanel', () => ({ WalletPanel: () => null }));
@@ -89,6 +100,8 @@ describe('LeadDetailPage — delete confirmation', () => {
   beforeEach(() => {
     getLead.mockReset();
     getLead.mockResolvedValue(LEAD);
+    listConversations.mockReset();
+    listConversations.mockResolvedValue([]);
     deleteLead.mockReset();
     deleteLead.mockResolvedValue({});
   });
@@ -134,6 +147,8 @@ describe('LeadDetailPage — the tab strip', () => {
   beforeEach(() => {
     getLead.mockReset();
     getLead.mockResolvedValue(LEAD);
+    listConversations.mockReset();
+    listConversations.mockResolvedValue([]);
   });
 
   it('offers exactly the five lead tabs, in the spec’s order', async () => {
@@ -145,5 +160,42 @@ describe('LeadDetailPage — the tab strip', () => {
 
     const tabs = screen.getAllByRole('tab').map((el) => el.textContent?.trim());
     expect(tabs).toEqual(['Etkinlik', 'Konuşmalar', 'Satış', 'Teklifler (0)', 'Görevler (0)']);
+  });
+});
+
+// The header's Mesaj action reaches ACROSS to the tab strip: this app has no
+// per-thread URL, so "open the conversation" can only mean "bring Konuşmalar
+// forward". That is a wire between two components and belongs here, not in
+// either one's own test — LeadHeaderActions.test.tsx can only prove the
+// callback fires.
+describe('LeadDetailPage — Mesaj brings the Konuşmalar tab forward', () => {
+  beforeEach(() => {
+    getLead.mockReset();
+    getLead.mockResolvedValue({ ...LEAD, phone: '+905551112233' });
+    listConversations.mockReset();
+    listConversations.mockResolvedValue([{ id: 'c1', status: 'OPEN', aiPaused: false, unreadCount: 0 }]);
+  });
+
+  it('selects Konuşmalar when the lead already has a thread', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Activities is the tab the page opens on…
+    const activities = await screen.findByRole('tab', { name: 'Etkinlik' });
+    expect(activities).toHaveAttribute('aria-selected', 'true');
+
+    const message = screen.getByRole('button', { name: /Mesaj/ });
+    await waitFor(() => expect(message).toBeEnabled());
+    await user.click(message);
+
+    // …and Mesaj moves it, rather than opening a start flow on a lead that is
+    // already mid-conversation.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Konuşmalar' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

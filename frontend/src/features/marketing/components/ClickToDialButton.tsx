@@ -15,8 +15,8 @@ const errMsg = (err: any, fallback: string) => err?.response?.data?.message || f
  *   1. POST /calls/start → backend reserves the line, returns a `tel:` dialUri
  *   2. window.location → the rep's softphone dials
  *   3. a modal collects the outcome → POST /calls/:id/log frees the line
- * Drop it into the calls page header, or later into the lead detail with a
- * `leadId` + `defaultPhone` so the call mirrors onto that lead's timeline.
+ * Drop it into the calls page header, or into the lead detail with a `leadId`
+ * + `defaultPhone` so the call mirrors onto that lead's timeline.
  */
 export default function ClickToDialButton({
   leadId,
@@ -73,6 +73,17 @@ export default function ClickToDialButton({
       setActiveCall(null);
       setActiveCallId(null); // the in-call controls panel has nothing left to control
       queryClient.invalidateQueries({ queryKey: ['marketing', 'calls'] });
+      // logCall mirrors the outcome onto the lead as a CALL LeadActivity
+      // (SalesCallService.logCall, keyed off call.leadId). The lead detail
+      // page hands ActivityTimelineTab those activities as a PROP off its own
+      // ['marketing','lead',id] query — the tab has no query of its own — so
+      // without this the mirrored call is invisible on the Hareketler tab the
+      // rep is looking at until they reload the page by hand. Only fires when
+      // the dial carried a lead; from the calls page there is nothing to
+      // refresh.
+      if (leadId) {
+        queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', leadId] });
+      }
     },
     onError: (e: any) => toast.error(errMsg(e, 'Failed to log call')),
   });
