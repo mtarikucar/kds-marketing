@@ -106,6 +106,21 @@ eksiğin hangisi olduğu yazılır.
 - **Frozen yol kümesi bozulmamalı**
 - Her davranış mutasyonla doğrulanır — silindiğinde düşmeyen test kabul edilmez
 
+## Uygulamada bir sapma: `?view=table`
+
+Bu belge "sekme yok" diyor ve yüzey öyle çıktı — `/inbox` ve `/leads` aynı üç
+sütunu render ediyor, hiçbir varsayılan kimseyi tabloya düşürmüyor.
+
+Ama eski Kişiler sekmesindeki lead **tablosu** silinmedi. Toplu atama, toplu
+silme, toplu iş akışına alma ve CSV dışa aktarım yalnızca orada var; yeni
+listeye yeniden yazmak bu görevin kapsamı dışındaydı ve bir yöneticinin toplu
+atamasını yerleşim uğruna sessizce kaldırmak daha kötü bir cevap olurdu.
+Tablo `?view=table` ile açılıyor, başlıktaki tek düğmeyle gidilip geliniyor.
+
+Bu bir **görünüm**, ikinci bir nesne değil: aynı kişiler, aynı kuyruklar, hiçbir
+varsayılan oraya götürmüyor. Sahip "tablo da gitsin" derse silinecek yer tek bir
+dal — `InboxPage`'in `tableView` kolu ve `LeadsPage` importu.
+
 ## Kapsam dışı
 
 - `/opportunities` board'unun kendisi
