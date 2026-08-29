@@ -190,6 +190,76 @@ describe('SalesCallService', () => {
       );
     });
 
+    /**
+     * Consent, on the path that actually dials.
+     *
+     * `jeeta.click_to_dial` has refused an opted-out / deleted / merged lead
+     * since it was written, but it enforces that in the MCP TOOL and then
+     * calls this service — which checked only that the lead belonged to the
+     * workspace. That divergence was survivable while the sole dial UI took a
+     * hand-typed number and the tool was the only lead-aware caller. It stops
+     * being survivable the moment there is an Ara button on every lead header:
+     * the guard has to live where the dial is, not on one of the two roads to
+     * it. Guarding only the new UI would repeat the same mistake in the other
+     * direction.
+     */
+    describe('lead consent', () => {
+      const CALLABLE = { id: 'lead-1', smsOptOut: false, deletedAt: null, mergedIntoId: null };
+
+      it('refuses to dial a lead who opted out of phone contact', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...CALLABLE, smsOptOut: true } as any);
+        await expect(
+          svc.startCall(WS, REP, { toPhone: '05551234567', leadId: 'lead-1' } as any),
+        ).rejects.toMatchObject({ message: expect.stringContaining('opted out of phone contact') });
+        // Refused BEFORE the line is reserved — no row, no origination.
+        expect(prisma.salesCall.create).not.toHaveBeenCalled();
+        expect(provider.prepareOutboundCall).not.toHaveBeenCalled();
+      });
+
+      it('refuses to dial a soft-deleted lead', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...CALLABLE, deletedAt: new Date() } as any);
+        await expect(
+          svc.startCall(WS, REP, { toPhone: '05551234567', leadId: 'lead-1' } as any),
+        ).rejects.toMatchObject({ message: expect.stringContaining('deleted or merged') });
+        expect(prisma.salesCall.create).not.toHaveBeenCalled();
+      });
+
+      it('refuses to dial a lead that was merged into another', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...CALLABLE, mergedIntoId: 'lead-canon' } as any);
+        await expect(
+          svc.startCall(WS, REP, { toPhone: '05551234567', leadId: 'lead-1' } as any),
+        ).rejects.toMatchObject({ message: expect.stringContaining('deleted or merged') });
+        expect(prisma.salesCall.create).not.toHaveBeenCalled();
+      });
+
+      it('still dials a normal lead — and reads the flags it judges on in ONE query', async () => {
+        prisma.lead.findFirst.mockResolvedValue(CALLABLE as any);
+
+        const res = await svc.startCall(WS, REP, {
+          toPhone: '05551234567',
+          leadId: 'lead-1',
+        } as any);
+
+        expect(res.dialUri).toBe('tel:+905551234567');
+        expect(prisma.salesCall.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ leadId: 'lead-1' }) }),
+        );
+        // The existing scoped read is WIDENED rather than joined by a second
+        // lookup: three flags decided on one row, one round trip.
+        expect(prisma.lead.findFirst).toHaveBeenCalledTimes(1);
+        expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 'lead-1', workspaceId: WS },
+            select: expect.objectContaining({
+              smsOptOut: true,
+              deletedAt: true,
+              mergedIntoId: true,
+            }),
+          }),
+        );
+      });
+    });
+
     it('uses netgsm-netsantral with resolved config when the workspace has an ACTIVE config', async () => {
       const apiProvider = { id: 'netgsm-netsantral', maxConcurrentCalls: 50, prepareOutboundCall: jest.fn().mockResolvedValue({ providerId: 'netgsm-netsantral', dialUri: '', mode: 'api', externalCallId: 'u-1' }) };
       registry.get.mockImplementation((id: string) => (id === 'netgsm-netsantral' ? apiProvider : liteProvider));
