@@ -82,7 +82,11 @@ describeRealDb('Conversation list — leadId filter, real DB (e2e)', () => {
       ],
     });
 
-    // Conversation.leadId is NOT NULL, so every thread needs a real lead.
+    // Real lead ROWS, not just real ids. `conversations` carries no foreign
+    // keys at all (schema.prisma:1822 declares a bare `leadId String`), so
+    // NOT NULL would be satisfied by garbage. What needs these rows to exist
+    // is `enrich()`, which joins them back in via `lead.findMany` — and the
+    // `c.lead?.id` assertion below, which reads the result of that join.
     await prisma.lead.createMany({
       data: [
         { id: leadOne, workspaceId, businessName: `${SEED}-lead-one`, contactPerson: 'Leyla', businessType: 'CAFE', source: 'OTHER' },
@@ -122,7 +126,7 @@ describeRealDb('Conversation list — leadId filter, real DB (e2e)', () => {
   });
 
   afterAll(async () => {
-    if (!realDbEnabled() || !prisma) return;
+    if (!realDbEnabled()) return;
     // FK-safe order: messages, then conversations, then the leads/channels they
     // name, then the workspaces.
     //
@@ -138,6 +142,18 @@ describeRealDb('Conversation list — leadId filter, real DB (e2e)', () => {
       }
     };
     try {
+      // Bail out of the DELETES when there is no client, never out of the
+      // close in `finally` — the guard on this callback used to cover both,
+      // so a missing `prisma` skipped `closeTestApp` too and left a Nest
+      // context and its pool open.
+      //
+      // Note what this does NOT reach: `app` and `prisma` are destructured
+      // from one call, so if createRealDbTestApp() throws partway, neither is
+      // ever assigned and `closeTestApp(undefined)` no-ops. The helper owns
+      // the app until it returns; stranding there is a harness-level gap that
+      // no afterAll in a spec can close. What this fixes is the case where a
+      // client is absent but a context is not.
+      if (!prisma) return;
       await del(() => prisma.message.deleteMany({ where: { workspaceId: scope } }));
       await del(() => prisma.conversation.deleteMany({ where: { workspaceId: scope } }));
       await del(() => prisma.lead.deleteMany({ where: { workspaceId: scope } }));
@@ -164,13 +180,16 @@ describeRealDb('Conversation list — leadId filter, real DB (e2e)', () => {
   });
 
   it('never returns another workspace conversation, filtered or not', async () => {
-    // Unfiltered.
-    expect(ids(await svc.list(workspaceId))).not.toContain(convoForeign);
-
     // Asking BY the neighbour's lead id: the row matches `leadId` exactly, so
-    // `workspaceId` is the only clause that can keep it out. Drop the tenant
-    // line and this is the assertion that breaks.
+    // `workspaceId` is the only clause that can keep it out. This goes FIRST
+    // on purpose — Jest stops at the first failed expect, and dropping the
+    // tenant line should report the probe built to catch it rather than the
+    // ordinary unfiltered check below, which fails for the same reason but
+    // explains nothing.
     expect(await svc.list(workspaceId, { leadId: foreignLead })).toEqual([]);
+
+    // And unfiltered, the everyday path.
+    expect(ids(await svc.list(workspaceId))).not.toContain(convoForeign);
 
     // The neighbour sees its own, so the row really is there to be leaked.
     expect(ids(await svc.list(otherWorkspaceId, { leadId: foreignLead }))).toEqual([convoForeign]);

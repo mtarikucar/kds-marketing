@@ -33,6 +33,12 @@ describe('ConversationsService.list — optional leadId filter', () => {
 
     prisma.conversation.findMany.mockClear();
     await svc.list(WS, {});
+    // Two matchers because they fail on different mistakes, and neither
+    // subsumes the other. `toEqual` catches an unexpected DEFINED key — any
+    // clause that crept into the unfiltered inbox. It cannot catch
+    // `leadId: undefined`, which it ignores by design. `not.toHaveProperty`
+    // is the one that sees a spread-in `undefined`, but says nothing about
+    // any other key. An unfiltered inbox has to survive both.
     expect(whereOf()).toEqual({ workspaceId: WS });
     expect(whereOf()).not.toHaveProperty('leadId');
   });
