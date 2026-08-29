@@ -174,3 +174,45 @@ describe('marketing i18n — lead header: Ara + Mesaj', () => {
     }
   });
 });
+describe('marketing i18n — the click-to-dial affordance', () => {
+  // ClickToDialButton is the ONE dial affordance in the product — the calls
+  // page header and, since spec §3, every lead header. It shipped with its
+  // labels as hardcoded English literals ('Call', 'Starting…', 'Log call
+  // outcome', 'Save outcome', 'Enter a phone number') on a page where every
+  // other string is translated. `fallbackLng: 'en'` means the same trap as the
+  // timeline panel, except here it was not even a fallback: a Turkish rep saw
+  // an English button no matter what the catalogue said.
+  it('every offered locale defines the dial keys, not just tr', async () => {
+    const want = flat(((tr as Json).calls as Json).dial as Json).map((k) => `calls.dial.${k}`);
+    expect(want).toEqual(
+      expect.arrayContaining([
+        'calls.dial.call',
+        'calls.dial.starting',
+        'calls.dial.enterPhone',
+        'calls.dial.logTitle',
+        'calls.dial.save',
+      ]),
+    );
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  // The spec names the action "Ara", and that word is the whole button.
+  it('calls the primary action Ara in Turkish', () => {
+    expect(((tr as Json).calls as Json).dial as Json).toMatchObject({ call: 'Ara' });
+  });
+
+  // The number being rung is the only thing that tells a rep the modal in front
+  // of them belongs to the call they just placed. A translator dropping
+  // {{phone}} costs nothing at runtime and leaves the dialog naming no one.
+  it('keeps the {{phone}} placeholder in every dialing label', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const label = ((cat.calls as Json).dial as Json).dialing as string;
+      expect({ locale, label }).toEqual({ locale, label: expect.stringContaining('{{phone}}') });
+    }
+  });
+});

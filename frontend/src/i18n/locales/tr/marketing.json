@@ -3817,6 +3817,22 @@
     "tab": {
       "calls": "Aramalar",
       "dialer": "Güçlü Arayıcı"
+    },
+    "dial": {
+      "call": "Ara",
+      "starting": "Başlatılıyor…",
+      "enterPhone": "Bir telefon numarası gir",
+      "requestSent": "Arama isteği gönderildi — dahilin çalacak (web telefonu açık tut).",
+      "startFailed": "Arama başlatılamadı",
+      "logTitle": "Görüşme sonucunu kaydet",
+      "dialing": "{{phone}} aranıyor",
+      "duration": "Süre (saniye)",
+      "notes": "Notlar",
+      "save": "Sonucu kaydet",
+      "saving": "Kaydediliyor…",
+      "close": "Kapat",
+      "logged": "Görüşme kaydedildi",
+      "logFailed": "Görüşme kaydedilemedi"
     }
   },
   "weekly": {

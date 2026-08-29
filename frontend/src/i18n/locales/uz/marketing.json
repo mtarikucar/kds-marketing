@@ -1050,5 +1050,23 @@
   },
   "opportunities": {
     "dealNotFound": "Bitimni ochib bo'lmadi"
+  },
+  "calls": {
+    "dial": {
+      "call": "Qo‘ng‘iroq",
+      "starting": "Boshlanmoqda…",
+      "enterPhone": "Telefon raqamini kiriting",
+      "requestSent": "Qo‘ng‘iroq so‘rovi yuborildi — ichki raqamingiz jiringlaydi (veb-telefonni ochiq qoldiring).",
+      "startFailed": "Qo‘ng‘iroqni boshlab bo‘lmadi",
+      "logTitle": "Qo‘ng‘iroq natijasini yozing",
+      "dialing": "{{phone}} terilmoqda",
+      "duration": "Davomiyligi (soniya)",
+      "notes": "Izohlar",
+      "save": "Natijani saqlash",
+      "saving": "Saqlanmoqda…",
+      "close": "Yopish",
+      "logged": "Qo‘ng‘iroq yozildi",
+      "logFailed": "Qo‘ng‘iroqni yozib bo‘lmadi"
+    }
   }
 }

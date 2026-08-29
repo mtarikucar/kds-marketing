@@ -2950,6 +2950,22 @@
     "tab": {
       "calls": "Calls",
       "dialer": "Power Dialer"
+    },
+    "dial": {
+      "call": "Call",
+      "starting": "Starting…",
+      "enterPhone": "Enter a phone number",
+      "requestSent": "Call request sent — your extension will ring (keep the webphone open).",
+      "startFailed": "Failed to start call",
+      "logTitle": "Log call outcome",
+      "dialing": "Dialing {{phone}}",
+      "duration": "Duration (seconds)",
+      "notes": "Notes",
+      "save": "Save outcome",
+      "saving": "Saving…",
+      "close": "Close",
+      "logged": "Call logged",
+      "logFailed": "Failed to log call"
     }
   },
   "weekly": {
