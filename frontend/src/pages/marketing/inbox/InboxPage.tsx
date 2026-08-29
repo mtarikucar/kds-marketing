@@ -77,7 +77,7 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
   const queryClient = useQueryClient();
   const { accessToken, user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
-  const { has } = useEntitlements();
+  const { has, isLoading: entitlementsLoading } = useEntitlements();
 
   // `GET /conversations` and `GET /channels` are both
   // @RequiresFeature('conversationAi'). navigation.ts gates `/inbox` on it and
@@ -87,6 +87,14 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
   // down): trigger and content together, and the gear menu with them, because
   // the merge is what would have put it in front of them.
   const canConverse = has('conversationAi');
+  // Only a RESOLVED "no" takes the tab away. useEntitlements fails CLOSED while
+  // `/billing/summary` is in flight, which is right for a nav rail — an item
+  // that appears a beat late beats one that 403s — and wrong here: it would
+  // open /inbox on Kişiler for the first render, mounting the leads table and
+  // firing its three requests, then flip back the moment billing answered.
+  // Nothing is FETCHED in that window either way; `conversationsLive` below
+  // still demands a resolved yes.
+  const offersConversations = canConverse || entitlementsLoading;
 
   // ── URL-synced top tabs (?tab=) ────────────────────────────────────────────
   // Konuşmalar + Kişiler are the two visible tabs of ONE surface; `/inbox` and
@@ -106,10 +114,11 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
   // strands on a blank panel. Fall back to a tab that exists, however the
   // state got here.
   const tab: InboxTab =
-    CONFIG_TABS.includes(requested) && !(isManager && canConverse)
+    CONFIG_TABS.includes(requested) && !(isManager && offersConversations)
       ? defaultTab
       : requested;
-  const activeTab: InboxTab = tab === 'inbox' && !canConverse ? 'contacts' : tab;
+  const activeTab: InboxTab =
+    tab === 'inbox' && !offersConversations ? 'contacts' : tab;
   const setTab = (v: string) =>
     setParams((p) => {
       p.set('tab', v);
@@ -378,7 +387,7 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
           // ONE gear menu (deep links via ?tab= keep resolving unchanged).
           // Gated on conversationAi too: every one of them configures the
           // conversation domain, and `/leads` never used to offer them.
-          isManager && canConverse ? (
+          isManager && offersConversations ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -413,7 +422,7 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
             reason there are two tabs and not one merged feed. */}
         {!CONFIG_TABS.includes(activeTab) && (
           <TabsList className="shrink-0">
-            {canConverse && (
+            {offersConversations && (
               <TabsTrigger value="inbox">
                 {t('surface.tab.conversations', 'Konuşmalar')}
               </TabsTrigger>
@@ -441,7 +450,7 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
             survives). Trigger and content are gated TOGETHER: gating only the
             trigger leaves a dead panel `setTab` can still reach, and gating
             only the content leaves a trigger that blanks the page. */}
-        {canConverse && (
+        {offersConversations && (
         <TabsContent
           value="inbox"
           className="flex-1 min-h-0 flex gap-0 sm:gap-4 mt-0"
@@ -450,7 +459,11 @@ export default function InboxPage({ defaultTab = 'inbox' }: { defaultTab?: Surfa
           <div className={selectedId ? 'hidden sm:flex' : 'flex w-full sm:w-auto'}>
             <ConversationList
               conversations={conversations}
-              isLoading={conversationsLoading}
+              // Also loading while the entitlement answer is still in
+              // flight: the query is not enabled yet, so `isLoading` is false
+              // and the list would flash "no conversations" at a workspace
+              // that has plenty.
+              isLoading={conversationsLoading || !conversationsLive}
               isError={conversationsError}
               selectedId={selectedId}
               statusFilter={statusFilter}

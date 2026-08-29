@@ -44,8 +44,12 @@ vi.mock('react-i18next', () => ({
 // route that now reaches this component — carries no entitlement at all.
 // Mutable so both outcomes are real renders rather than two files.
 let FEATURES = new Set<string>();
+let ENTITLEMENTS_LOADING = false;
 vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
-  useEntitlements: () => ({ has: (k?: string) => !k || FEATURES.has(k) }),
+  useEntitlements: () => ({
+    has: (k?: string) => !k || FEATURES.has(k),
+    isLoading: ENTITLEMENTS_LOADING,
+  }),
 }));
 
 // The two heavy halves are stubbed down to the one fact each test reads: the
@@ -94,6 +98,7 @@ function renderAt(path: string) {
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no sse')));
   FEATURES = new Set(['conversationAi']);
+  ENTITLEMENTS_LOADING = false;
   get.mockReset();
   post.mockClear();
   get.mockImplementation((url: string) =>
@@ -238,5 +243,37 @@ describe('The merged surface — what /leads does not pay for', () => {
     await user.click(screen.getByRole('tab', { name: 'Konuşmalar' }));
     await screen.findByText('cA');
     expect(get.mock.calls.map((c) => c[0])).toContain('/conversations');
+  });
+});
+
+describe('The merged surface — while the entitlement answer is still in flight', () => {
+  // useEntitlements fails CLOSED while /billing/summary is loading. That is the
+  // right default for a nav rail, and the wrong one here: applied literally it
+  // would open /inbox on Kişiler for the first render — mounting the leads
+  // table and firing its three requests — and then flip back a moment later.
+  // Only a RESOLVED "no" is allowed to move anybody off the tab they asked for.
+  beforeEach(() => {
+    ENTITLEMENTS_LOADING = true;
+    FEATURES = new Set();
+  });
+
+  it('leaves /inbox on Konuşmalar and does not mount the leads table', async () => {
+    renderAt('/inbox');
+
+    expect(await screen.findByRole('tab', { name: 'Konuşmalar' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.queryByTestId('leads-surface')).not.toBeInTheDocument();
+  });
+
+  it('still fetches nothing it may not be allowed to fetch', async () => {
+    renderAt('/inbox');
+    // Positive anchor: the tab strip is rendered, so the page has settled and
+    // "no call" is a decision rather than a race.
+    await screen.findByRole('tab', { name: 'Konuşmalar' });
+
+    expect(get.mock.calls.map((c) => c[0])).not.toContain('/conversations');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 });
