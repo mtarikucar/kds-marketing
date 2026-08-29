@@ -4,6 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { WorkflowExecutorService } from '../workflows/workflow-executor.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob, JobHandlerResult } from '../scheduling/scheduled-job-runner.service';
+import { waitingReplyLeadIds } from '../services/waiting-reply-leads';
 
 export interface ExportLeadsFilter {
   status?: string;
@@ -12,6 +13,8 @@ export interface ExportLeadsFilter {
   assignedToId?: string;
   assignmentStatus?: 'unassigned' | 'assigned' | 'mine';
   search?: string;
+  /** "Bekleyen" work-queue chip — leads whose OPEN thread is waiting on us. */
+  waitingReply?: boolean;
 }
 
 export interface EnrollFilter {
@@ -305,9 +308,18 @@ export class LeadBulkService implements OnModuleInit {
       assignment = { assignedToId: userId };
     }
 
+    // The Bekleyen chip sits right next to the Export button. A filter the
+    // list honours and the export drops is the bug the comment above already
+    // records once ("the CSV didn't match the on-screen list") — so it is
+    // resolved here too, from the same workspace-scoped helper findAll uses.
+    const waiting: Prisma.LeadWhereInput = filter.waitingReply
+      ? { id: { in: await waitingReplyLeadIds(this.prisma, workspaceId) } }
+      : {};
+
     // Only the optional predicate is hoisted; workspaceId is inlined in the
     // findMany call below (the fitness test requires a literal workspaceId).
     const match: Prisma.LeadWhereInput = {
+      ...waiting,
       ...(filter.status ? { status: filter.status } : {}),
       ...(filter.source ? { source: filter.source } : {}),
       ...(filter.businessType ? { businessType: filter.businessType } : {}),

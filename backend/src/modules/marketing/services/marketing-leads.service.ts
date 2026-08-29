@@ -19,6 +19,7 @@ import { SmsOtpService } from './sms-otp.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { rangeEndInclusive } from './report-date-range.util';
+import { waitingReplyLeadIds } from './waiting-reply-leads';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -319,6 +320,16 @@ export class MarketingLeadsService {
     where.mergedIntoId = null;
     // Inbox productivity — soft-deleted leads (bulk delete) are hidden too.
     where.deletedAt = null;
+
+    // "Bekleyen" — leads we owe a reply to. Resolved as an id list because
+    // `conversations` has no foreign key to `leads`, so there is no nested
+    // `some` to write; the resolver is scoped to THIS workspace, so the ids
+    // can never name a neighbour's lead. An empty result must select nothing,
+    // which `in: []` does — dropping the clause instead would quietly return
+    // the whole workspace under a filter that says otherwise.
+    if (filter.waitingReply) {
+      where.id = { in: await waitingReplyLeadIds(this.prisma, workspaceId) };
+    }
 
     // workspaceId is spread LAST so no filter combination can ever
     // widen the query beyond the caller's workspace.
