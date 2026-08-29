@@ -82,6 +82,27 @@ bir düğme, olmayan düğmeden kötüdür.
 `GET /marketing/conversations` opsiyonel `leadId` filtresi alır. Kiracı
 sınırlaması değişmez (`workspaceId` zaten her sorguda).
 
+## Teslimde sapma — §1'in detay paneli
+
+§1'de yazan şu cümle **teslim edilmedi**: "Sağdaki detay paneli her iki sekmede
+de **aynı**: kişi ve onunla olan yazışma."
+
+Kişiler sekmesinde böyle bir panel yok. Listedeki bir satıra tıklamak hâlâ
+`/leads/:id`'ye götürüyor (`LeadsPage.tsx:619`) — kişi ile yazışmasının yan yana
+durduğu yer, Task 3'te eklenen Konuşmalar sekmesi; yani niyetin kendisi teslim
+edildi, ama **panel olarak değil, tam sayfa olarak**.
+
+Paneli yazmanın iki yolu vardı ve ikisi de Task 6'nın kapsam disiplinine
+çarpıyordu: ya lead detayının gövdesi bu yüzeyin içinde ikinci kez yazılacaktı
+— "aynı şeyin ikinci uygulaması", bu spec'in gönderim yolu için açıkça
+reddettiği şeklin ta kendisi — ya da lead tablosunun satır tıklaması koparılıp
+yerine panel konacaktı, ki bu `/leads/:id`'ye giden her yer imini ve derin
+bağlantıyı sessizce değiştirirdi.
+
+Bu bir eksik, ve karar olarak kaydediliyor. Yapılacaksa ayrı bir iş olarak
+yapılmalı: önce lead detayının gövdesi tekrar kullanılabilir bir bileşene
+ayrılır, sonra hem sayfa hem panel onu render eder.
+
 ## Kapsam dışı
 
 - Satış hattının kendisi (`/opportunities` board) değişmez — lead'den o hatta
