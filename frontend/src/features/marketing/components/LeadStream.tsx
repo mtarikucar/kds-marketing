@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Activity, FileText, MessageSquare, Mic, Phone, RefreshCw, Sparkles, User } from 'lucide-react';
@@ -139,6 +139,23 @@ export interface LeadStreamProps {
  * And the rule underneath all three: an empty stream and a broken one are not
  * the same screen. The empty state is withheld whenever a source failed —
  * "nothing has happened yet" is a lie when half the sources never answered.
+ *
+ * ## Why the auto-scroll is in here and not in the two hosts
+ *
+ * The stream reads oldest -> newest, so without one, opening a person lands the
+ * rep on the FIRST thing that ever happened to them and sending a reply does
+ * not move the view. ThreadPane had the answer already and it is carried over
+ * verbatim in behaviour: jump on a new person, follow your OWN outbound reply
+ * down, and never move for an inbound one — this is an AI-agent inbox where
+ * messages stream in continuously, and yanking a rep who scrolled up to read
+ * history is how they lose the sentence they were on.
+ *
+ * The docstring above says the HOST owns the scroll, and it still does — but
+ * `scrollIntoView` acts on the nearest scrollable ancestor, so owning the
+ * anchor never required owning the overflow. That is the whole reason this is
+ * not a prop: an optional `autoScroll` would be behaviour a consumer has to
+ * remember, and the third consumer is the one that forgets. Mounting the
+ * component is the opt-in.
  */
 export default function LeadStream({ leadId, composer, className }: LeadStreamProps) {
   const { t } = useTranslation('marketing');
@@ -163,6 +180,30 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
   // in this condition: a workspace without the conversation add-on genuinely
   // has no messages to show, and the banner above says which source that is.)
   const historyIsEmpty = items.length === 0 && unread.length === 0;
+
+  // See the docstring. Three-way, and the third way is doing nothing.
+  const endRef = useRef<HTMLDivElement | null>(null);
+  // Which person we have already jumped for. Not "did the id change": the
+  // stream arrives ASYNCHRONOUSLY, so a plain previous-id check fires its jump
+  // against an empty list on mount and then never fires again once the rows
+  // land. This flips only once rows exist.
+  const jumpedFor = useRef<string | null>(null);
+  const last = items.length > 0 ? items[items.length - 1] : undefined;
+  const lastId = last?.id;
+  const lastIsOurReply = last?.kind === 'message' && last.direction === 'OUTBOUND';
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (jumpedFor.current !== leadId) {
+      jumpedFor.current = leadId;
+      endRef.current?.scrollIntoView({ behavior: 'auto' });
+      return;
+    }
+    if (lastIsOurReply) endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // `lastId` rather than the array: a refetch that returns the same rows must
+    // not re-scroll, and an inbound arrival must change the deps so the
+    // outbound branch is re-evaluated and DECLINES rather than never running.
+  }, [leadId, items.length, lastId, lastIsOurReply]);
 
   return (
     <QueryStateBoundary
@@ -225,6 +266,9 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
             {items.map((i) => (i.kind === 'message' ? messageRow(i, t) : eventRow(i, t)))}
           </ul>
         )}
+
+        {/* The bottom of the history. Inside whatever the host scrolls. */}
+        <div ref={endRef} data-testid="stream-end" aria-hidden="true" />
 
         {composer}
       </div>

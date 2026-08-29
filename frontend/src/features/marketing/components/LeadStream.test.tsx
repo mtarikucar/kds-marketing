@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import LeadStream from './LeadStream';
 import * as leadStreamService from '../api/leadStream.service';
 import type { LeadStream as LeadStreamPayload, LeadStreamItem } from '../api/leadStream.service';
@@ -586,5 +586,104 @@ describe('LeadStream — a voicemail is not a text message', () => {
     const bubble = await screen.findByTestId('stream-item-m4');
     expect(within(bubble).queryByTestId('stream-voicemail-m4')).not.toBeInTheDocument();
     expect(within(bubble).queryByTestId('stream-fax-m4')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Auto-scroll. This is ThreadPane's three-way behaviour (ThreadPane.tsx:125-137
+ * at 8f3ec48b), carried over rather than reinvented: the surface it replaced
+ * jumped to the bottom of a freshly opened thread, followed the rep's OWN reply
+ * down, and deliberately left an inbound message alone so a rep reading history
+ * is not yanked away mid-sentence.
+ *
+ * It lives HERE, in the component that renders the messages, and not in the two
+ * hosts that own the scroll box. `scrollIntoView` walks up to the nearest
+ * scrollable ancestor, so owning the anchor never required owning the overflow —
+ * and a behaviour a consumer has to opt into is a behaviour the third consumer
+ * silently ships without.
+ */
+describe('LeadStream — you land on the newest, and you are not yanked off it', () => {
+  let scrollIntoView: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+  });
+  afterEach(() => scrollIntoView.mockRestore());
+
+  const msg = (id: string, direction: 'INBOUND' | 'OUTBOUND', at: string) =>
+    item({ kind: 'message', id, at, body: id, direction });
+
+  const renderWithClient = (leadId = 'l1') => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId={leadId} />
+      </QueryClientProvider>,
+    );
+    return qc;
+  };
+
+  /** A second server answer, delivered the way a live frame delivers one. */
+  const arrive = async (qc: QueryClient, leadId: string, items: LeadStreamItem[]) => {
+    getLeadStream.mockResolvedValue(stream({ items }));
+    await qc.invalidateQueries({ queryKey: ['marketing', 'lead', leadId, 'stream'] });
+  };
+
+  it('jumps to the newest message when the person opens, not the oldest', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          msg('m1', 'INBOUND', '2026-08-01T09:00:00Z'),
+          msg('m2', 'INBOUND', '2026-08-02T09:00:00Z'),
+        ],
+      }),
+    );
+
+    renderWithClient();
+
+    await screen.findByTestId('stream-item-m2');
+    // 'auto', not 'smooth': opening someone should already BE at the bottom,
+    // not animate there while the rep is reading.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto' }));
+  });
+
+  it('follows the rep’s own outbound reply down', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({ items: [msg('m1', 'INBOUND', '2026-08-01T09:00:00Z')] }),
+    );
+    const qc = renderWithClient();
+    await screen.findByTestId('stream-item-m1');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    scrollIntoView.mockClear();
+
+    await arrive(qc, 'l1', [
+      msg('m1', 'INBOUND', '2026-08-01T09:00:00Z'),
+      msg('m2', 'OUTBOUND', '2026-08-01T09:05:00Z'),
+    ]);
+
+    await screen.findByTestId('stream-item-m2');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth' }));
+  });
+
+  it('leaves a rep reading history where they are when the CUSTOMER writes', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({ items: [msg('m1', 'INBOUND', '2026-08-01T09:00:00Z')] }),
+    );
+    const qc = renderWithClient();
+    await screen.findByTestId('stream-item-m1');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    scrollIntoView.mockClear();
+
+    await arrive(qc, 'l1', [
+      msg('m1', 'INBOUND', '2026-08-01T09:00:00Z'),
+      msg('m2', 'INBOUND', '2026-08-01T09:05:00Z'),
+    ]);
+
+    // Positive anchor: the new message really did render, so "did not scroll"
+    // is a decision rather than a race that never got there.
+    await screen.findByTestId('stream-item-m2');
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });

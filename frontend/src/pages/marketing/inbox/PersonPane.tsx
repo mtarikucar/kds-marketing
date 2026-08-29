@@ -376,7 +376,10 @@ export function PersonPane({ person, className }: PersonPaneProps) {
 
       {/* The stream. THIS element owns the scroll — LeadStream deliberately sets
           no height and no overflow so the same component can sit in a lead
-          detail tab that does not scroll. */}
+          detail tab that does not scroll. Owning the overflow is NOT owning the
+          auto-scroll: `scrollIntoView` walks up to whichever ancestor scrolls,
+          so LeadStream keeps the anchor and the jump-on-open / follow-your-own-
+          reply rule, and this column just has to be the thing that scrolls. */}
       <div
         data-testid="person-pane-scroll"
         className="min-h-0 flex-1 overflow-y-auto bg-surface-muted/30 p-3"
