@@ -1,21 +1,27 @@
 /**
- * Inbox — the omnichannel conversations hub at /inbox.
+ * The person-primary surface at /inbox (and, identically, at /leads).
  *
  * The 2026-07 IA merge dissolved the Conversations hub: Channels, Canned
  * Responses, AI Agents and Knowledge stopped being sibling pages and became
- * `?tab=` surfaces of THIS page (App.tsx no longer routes /settings/channels
- * et al). The onboarding checklist and the inbox's own empty state deep-link
- * straight into those params, so a `?tab=` value that stops resolving is a
- * dead end for a brand-new workspace with no way back — and nothing else in
- * the suite covers it.
+ * `?tab=` surfaces of THIS page (App.tsx no longer routes /settings/channels et
+ * al). The onboarding checklist deep-links straight into those params, so a
+ * `?tab=` value that stops resolving is a dead end for a brand-new workspace —
+ * and nothing else in the suite covers it.
+ *
+ * The 2026-08-29 correction then replaced this page's two tabs with three
+ * columns over ONE list of people, and the copy asserted below moved with it:
+ * the conversation list's empty state became the people list's, and "select a
+ * conversation" became "pick someone". The conversation-list empty state's
+ * "Kanal bağla" link went with the list it lived on; the gear menu and the
+ * onboarding checklist are the two routes that remain, and the first of them is
+ * pinned here.
  *
  * These tests pin, for a fresh (therefore empty) workspace:
- *   - the default inbox surface renders its empty state rather than a blank
- *     pane, and an unknown ?tab= falls back to it instead of rendering nothing;
- *   - the empty state's "Kanal bağla" CTA actually lands on the channels tab
- *     (it is the only route a new workspace is offered to connect a channel);
- *   - each config tab mounts its OWN lazy surface — a mis-wired TabsContent
- *     would silently render the wrong one, or none.
+ *   - the surface renders its NAMED empty states rather than blank columns, and
+ *     an unknown ?tab= falls back to it instead of rendering nothing;
+ *   - the gear menu still reaches the Channels surface;
+ *   - each config tab mounts its OWN lazy surface — a mis-wired branch would
+ *     silently render the wrong one, or none.
  *
  * All copy asserted here is verified present in
  * src/i18n/locales/tr/marketing.json (locale is pinned tr-TR); no production
@@ -27,47 +33,45 @@ import { test, expect } from './support/fixtures';
 // transform, which can outrun the 10 s default expect timeout on a cold run.
 const LAZY = { timeout: 20_000 };
 
-test('a fresh workspace gets the inbox empty state, and a bogus ?tab= still lands there', async ({
+test('a fresh workspace gets the surface empty states, and a bogus ?tab= still lands there', async ({
   app,
 }) => {
   await app.goto('/inbox');
 
-  await expect(app.getByRole('heading', { level: 1, name: 'Gelen Kutusu' })).toBeVisible();
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
 
-  // Left pane: no conversations yet — it must SAY so (inbox.empty/emptyHint),
-  // not render an empty list body that reads as a broken page.
-  await expect(app.getByText('Henüz konuşma yok.')).toBeVisible();
-  await expect(app.getByText(/Bir kanal bağlanıp/)).toBeVisible();
+  // Left column: nobody yet — it must SAY so (surface.people.empty), not render
+  // an empty list body that reads as a broken page.
+  await expect(app.getByText('Bu kuyrukta kimse yok')).toBeVisible();
 
-  // Centre pane with nothing selected (inbox.selectPrompt).
-  await expect(app.getByText('Konuşmayı görmek için birini seçin.')).toBeVisible();
+  // Middle column with nobody selected (surface.pane.pickSomeone).
+  await expect(app.getByText('Soldan bir kişi seç.').first()).toBeVisible();
 
   // `tab` is read straight off the query string; an unrecognised value must
-  // fall back to the inbox, not select a tab that has no TabsContent and
-  // leave the page blank.
+  // fall back to the surface rather than leaving the page blank.
   await app.goto('/inbox?tab=not-a-real-tab');
-  await expect(app.getByText('Henüz konuşma yok.')).toBeVisible();
-  await expect(app.getByText('Konuşmayı görmek için birini seçin.')).toBeVisible();
+  await expect(app.getByText('Bu kuyrukta kimse yok')).toBeVisible();
+  await expect(app.getByText('Soldan bir kişi seç.').first()).toBeVisible();
 });
 
-test('the empty state\'s connect-channel CTA opens the Channels tab', async ({ app }) => {
+test('the gear menu opens the Channels surface', async ({ app }) => {
   await app.goto('/inbox');
 
-  // inbox.connectChannel — the ONLY affordance a new workspace is given here.
-  await app.getByRole('link', { name: 'Kanal bağla' }).click();
+  await app.getByRole('button', { name: /Inbox settings|Gelen kutusu ayarları/i }).click();
+  await app.getByRole('menuitem', { name: /Kanallar|Channels/i }).click();
 
   await expect(app).toHaveURL(/\/inbox\?tab=channels/);
 
   // channels.empty + its Account Center CTA: connecting moved to /accounts, so
-  // the channels tab that no longer offers that link is a dead end.
+  // a channels tab that no longer offers that link is a dead end.
   await expect(app.getByText(/Henüz kanal yok/)).toBeVisible(LAZY);
   const connect = app.getByRole('link', { name: /Hesap Merkezi.nden kanal bağla/ });
   await expect(connect).toBeVisible();
   await expect(connect).toHaveAttribute('href', '/accounts');
 
-  // The tab really SWAPPED the surface — the conversation list is gone, so
-  // this cannot pass on a page that merely appended the channels panel.
-  await expect(app.getByText('Henüz konuşma yok.')).toBeHidden();
+  // The surface really SWAPPED — the people list is gone, so this cannot pass
+  // on a page that merely appended the channels panel.
+  await expect(app.getByText('Bu kuyrukta kimse yok')).toBeHidden();
 });
 
 test('?tab=agents mounts the Agent Studio, and its create form opens', async ({ app }) => {
@@ -75,7 +79,7 @@ test('?tab=agents mounts the Agent Studio, and its create form opens', async ({ 
 
   // agents.empty — specific to the AI-agent surface.
   await expect(app.getByText(/Henüz ajan yok/)).toBeVisible(LAZY);
-  await expect(app.getByText('Konuşmayı görmek için birini seçin.')).toBeHidden();
+  await expect(app.getByText('Soldan bir kişi seç.')).toBeHidden();
 
   // The lazy chunk is not just painted, it is wired: the create dialog opens
   // and carries the persona field (agents.persona) that defines the agent.
@@ -91,7 +95,7 @@ test('?tab=knowledge and ?tab=snippets each mount their own surface', async ({ a
   // knowledge.empty + knowledge.new
   await expect(app.getByText(/Henüz belge yok/)).toBeVisible(LAZY);
   await expect(app.getByRole('button', { name: 'Yeni belge' })).toBeVisible();
-  // Not the agent studio, not the inbox — the tabs must not collide.
+  // Not the agent studio, not the surface — the tabs must not collide.
   await expect(app.getByText(/Henüz ajan yok/)).toBeHidden();
 
   await app.goto('/inbox?tab=snippets');

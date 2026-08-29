@@ -19,8 +19,12 @@
  *
  * Verified against the app before asserting:
  *   - routes /leads, /leads/new, /leads/:id all exist in App.tsx (no redirect).
+ *   - /leads is the person-primary SURFACE since 2026-08-29; the table with its
+ *     columns, filters and bulk actions lives at /leads?view=table, and the
+ *     column assertions below use it deliberately rather than being deleted.
  *   - every Turkish string below comes from src/i18n/locales/tr/marketing.json:
- *     leads.title, leads.emptyManager, createLead.titleNew,
+ *     surface.title, surface.people.empty.title, leads.emptyManager,
+ *     surface.card.open, createLead.titleNew,
  *     createLead.fields.*, createLead.submitCreate, source.WEBSITE,
  *     validation.required.
  *   - required fields on the create form are ONLY businessName + contactPerson
@@ -33,17 +37,20 @@ import { test, expect } from './support/fixtures';
 /** Turkish-character name — also proves the value survives the round-trip. */
 const stamp = () => `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-test('a brand-new workspace shows the leads empty state instead of rows', async ({ app }) => {
+test('a brand-new workspace shows the person surface empty, not a blank column', async ({ app }) => {
   await app.goto('/leads');
 
-  await expect(app.getByRole('heading', { level: 1, name: "Lead'ler" })).toBeVisible();
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
 
-  // No rows at all — this is what proves the per-test workspace is really
-  // isolated; a leak from another spec shows up here first.
+  // Nobody at all — this is what proves the per-test workspace is really
+  // isolated; a leak from another spec shows up here first. And the column
+  // SAYS it is empty rather than rendering nothing, which is the difference
+  // between an empty workspace and a broken page.
+  await expect(app.getByText('Bu kuyrukta kimse yok')).toBeVisible();
+
+  // The table view of the same set is still one click away, and still empty.
+  await app.goto('/leads?view=table');
   await expect(app.locator('tbody tr')).toHaveCount(0);
-
-  // The owner is a manager, so the list renders `leads.emptyManager`, which is
-  // the only guidance a fresh workspace gets on this page.
   await expect(app.getByText(/Henüz lead yok/)).toBeVisible();
 });
 
@@ -80,19 +87,24 @@ test('a lead typed into /leads/new is saved, opened, and listed', async ({ app }
   await expect(app.getByText(contactPerson)).toBeVisible();
   await expect(app.getByRole('link', { name: email })).toBeVisible();
 
-  // A full reload of the list, not a cached client-side view.
-  await app.goto('/leads');
+  // A full reload of the TABLE view, not a cached client-side view. The table
+  // is where the columns live, so this is where "the chosen source came back"
+  // can still be read off a row.
+  await app.goto('/leads?view=table');
   const row = app.locator('tbody tr').filter({ hasText: businessName });
   await expect(row).toHaveCount(1);
   // The workspace is fresh, so this must be the ONLY row.
   await expect(app.locator('tbody tr')).toHaveCount(1);
-  // Optional fields and the chosen source came back through the list columns.
   await expect(row).toContainText('Web sitesi');
   await expect(row).toContainText(city);
 
-  // Clicking the row opens that same lead (the row is the only way into the
-  // detail page from the list — the cells are not links).
-  await row.getByText(businessName).click();
+  // And on the surface itself: clicking a person SELECTS them — the URL does
+  // not move — and the record card is the one door back into the detail page.
+  // This is the 2026-08-29 correction, end to end.
+  await app.goto('/leads');
+  await app.getByText(contactPerson).click();
+  await expect(app).toHaveURL(/\/leads$/);
+  await app.getByRole('link', { name: /Kaydı aç/ }).click();
   await expect(app).toHaveURL(detailUrl);
 });
 
@@ -110,6 +122,6 @@ test('the create form refuses a lead with no business name or contact', async ({
   await expect(app).toHaveURL(/\/leads\/new$/);
 
   // And nothing was written behind the form's back.
-  await app.goto('/leads');
+  await app.goto('/leads?view=table');
   await expect(app.locator('tbody tr')).toHaveCount(0);
 });
