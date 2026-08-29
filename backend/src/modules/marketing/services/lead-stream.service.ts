@@ -64,11 +64,33 @@ export interface LeadStreamItem {
   deliveryStatus: string | null;
   /** Provider/adapter error on a FAILED message. */
   error: string | null;
+  /**
+   * `Message.meta`, verbatim. The provider payload is the ONLY thing marking
+   * an inbound row as a voicemail or a fax (`meta.raw.kind`) and the only
+   * place its audio/document link lives — a Message has no channel column of
+   * its own. Passed through rather than parsed here so this service does not
+   * become a second place where NetGSM's payload shape is spelled out.
+   */
+  meta: unknown | null;
 
   // ── activities only (null on every message) ──────────────────────────────
   activityType: string | null;
   outcome: string | null;
   durationMinutes: number | null;
+  /**
+   * How an assignment happened, when the activity IS one.
+   *
+   * `LeadActivity.metadata` distinguishes an auto-distribution on ingest from
+   * a manager's bulk assign from a single manual reassignment; the title does
+   * not — three of the four shapes are STATUS_CHANGE rows whose prose starts
+   * with the same word. The lead detail's old timeline badged them apart, and
+   * that badge died with it when Hareketler became Akış.
+   *
+   * A narrow enum rather than the raw `metadata` blob: this is the one thing
+   * a reader needs, and shipping the blob would put user ids and names on a
+   * DTO that has no other reason to carry them.
+   */
+  assignment: 'auto' | 'bulk' | 'manual' | null;
 
   // ── both, when there is a person behind it ───────────────────────────────
   /** MarketingUser id: the AGENT who sent the message, or the activity's author. */
@@ -195,6 +217,7 @@ export class LeadStreamService {
             description: true,
             outcome: true,
             duration: true,
+            metadata: true,
             createdById: true,
             createdAt: true,
           },
@@ -259,6 +282,7 @@ export class LeadStreamService {
         channelType: messages.channelByConvo.get(m.conversationId)?.type ?? null,
         deliveryStatus: m.status,
         error: m.error,
+        meta: m.meta ?? null,
         authorId: m.authorId,
         authorName: m.authorId ? (nameById.get(m.authorId) ?? null) : null,
       })),
@@ -272,6 +296,7 @@ export class LeadStreamService {
         activityType: a.type,
         outcome: a.outcome ?? null,
         durationMinutes: a.duration ?? null,
+        assignment: assignmentOf(a.metadata),
         authorId: a.createdById ?? null,
         authorName: a.createdById ? (nameById.get(a.createdById) ?? null) : null,
       })),
@@ -325,6 +350,7 @@ export class LeadStreamService {
           body: true,
           status: true,
           error: true,
+          meta: true,
           createdAt: true,
         },
         // Newest first, so the cap drops the OLDEST rows (see CAP).
@@ -361,6 +387,7 @@ interface MessageRow {
   body: string;
   status: string;
   error: string | null;
+  meta: unknown | null;
   createdAt: Date;
 }
 
@@ -387,15 +414,36 @@ const BLANK = {
   channelType: null as string | null,
   deliveryStatus: null as string | null,
   error: null as string | null,
+  meta: null as unknown | null,
   activityType: null as string | null,
   outcome: null as string | null,
   durationMinutes: null as number | null,
+  assignment: null as LeadStreamItem['assignment'],
   authorId: null as string | null,
   authorName: null as string | null,
 };
 
 /** LeadActivity.type → how the item should read. Unknown types keep their name
  *  in `activityType` and render generically rather than vanishing. */
+/**
+ * `LeadActivity.metadata` -> how the assignment happened.
+ *
+ * Three writers set this shape and each sets ONE discriminator:
+ * marketing-leads-ingest.service.ts stamps `auto: true`, the bulk path in
+ * marketing-leads.service.ts stamps `bulk: true`, and the single-lead assign
+ * path stamps neither. Everything without `kind: 'assignment'` — every legacy
+ * row, every ordinary stage move — is not an assignment and answers null, so
+ * the badge cannot appear on a plain STATUS_CHANGE.
+ */
+export function assignmentOf(metadata: unknown): LeadStreamItem['assignment'] {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const m = metadata as Record<string, unknown>;
+  if (m.kind !== 'assignment') return null;
+  if (m.auto === true) return 'auto';
+  if (m.bulk === true) return 'bulk';
+  return 'manual';
+}
+
 function kindOfActivity(type: string): LeadStreamKind {
   if (type === 'CALL') return 'call';
   if (type === 'NOTE') return 'note';

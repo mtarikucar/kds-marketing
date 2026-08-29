@@ -50,6 +50,7 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
   const quietLead = randomUUID(); // activities only, no thread at all
   const floodLead = randomUUID(); // more activities than the cap
   const foreignLead = randomUUID(); // next door's own person
+  const assignLead = randomUUID(); // every flavour of assignment event
 
   const convo = randomUUID();
   const spoofConvo = randomUUID(); // in otherWorkspace, points at richLead
@@ -136,6 +137,7 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
         lead(richLead, 'rich'),
         lead(quietLead, 'quiet'),
         lead(floodLead, 'flood'),
+        lead(assignLead, 'assign'),
         lead(foreignLead, 'foreign', otherWorkspaceId, null),
       ],
     });
@@ -158,7 +160,7 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
 
     await prisma.message.createMany({
       data: [
-        { workspaceId, conversationId: convo, direction: 'INBOUND', authorType: 'CUSTOMER', body: 'Merhaba, fiyat?', status: 'RECEIVED', createdAt: t(40) },
+        { workspaceId, conversationId: convo, direction: 'INBOUND', authorType: 'CUSTOMER', body: 'Merhaba, fiyat?', status: 'RECEIVED', meta: { raw: { kind: 'VOICEMAIL', audioUrl: 'https://provider.test/vm.mp3', durationSec: 31 } }, createdAt: t(40) },
         { workspaceId, conversationId: convo, direction: 'OUTBOUND', authorType: 'AGENT', authorId: agentId, body: 'Merhaba, hemen donuyorum', status: 'DELIVERED', createdAt: t(30) },
         { workspaceId, conversationId: convo, direction: 'OUTBOUND', authorType: 'AI', body: 'Otomatik yanit', status: 'FAILED', error: 'provider down', createdAt: t(10) },
         // Never ours. Three rows, because there are three different ways in
@@ -189,6 +191,13 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
         { leadId: richLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'NEW → CONTACTED', createdAt: t(5) },
         { leadId: quietLead, createdById: managerId, type: 'NOTE', title: 'Sessiz not', createdAt: t(15) },
         { leadId: foreignLead, createdById: managerId, type: 'NOTE', title: 'Yabanci not', createdAt: t(15) },
+        // The four shapes a STATUS_CHANGE row can have. Only `metadata`
+        // tells them apart — the titles are prose and three of them start
+        // with the same word.
+        { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'Auto-assigned on ingest', metadata: { kind: 'assignment', fromUserId: null, fromUserName: null, toUserId: agentId, auto: true }, createdAt: t(40) },
+        { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'Assigned to Ayse Temsilci', metadata: { kind: 'assignment', fromUserId: null, fromUserName: null, toUserId: agentId, toUserName: 'Ayse Temsilci', bulk: true }, createdAt: t(30) },
+        { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'Reassigned: Ayse Temsilci -> Mana Ger', metadata: { kind: 'assignment', fromUserId: agentId, fromUserName: 'Ayse Temsilci', toUserId: managerId, toUserName: 'Mana Ger' }, createdAt: t(20) },
+        { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'NEW -> CONTACTED', createdAt: t(10) },
       ],
     });
 
@@ -218,7 +227,7 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
       if (!prisma) return;
       await del(() =>
         prisma.leadActivity.deleteMany({
-          where: { leadId: { in: [richLead, quietLead, floodLead, foreignLead] } },
+          where: { leadId: { in: [richLead, quietLead, floodLead, foreignLead, assignLead] } },
         }),
       );
       await del(() => prisma.message.deleteMany({ where: { workspaceId: scope } }));
@@ -379,6 +388,48 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
     expect(res.items.every((i) => i.kind !== 'message')).toBe(true);
     // Gated is NOT a failure: nothing broke, so nothing is named as unread.
     expect(res.unread).toEqual([]);
+  });
+
+  it('says HOW a person was assigned, which the title alone cannot', async () => {
+    // The lead detail used to read `LeadActivity.metadata` and badge an
+    // auto-distribution differently from a manual reassignment. The stream
+    // endpoint carried no metadata at all, so that distinction was lost the
+    // moment Hareketler became Akış: all four rows below are type
+    // STATUS_CHANGE and three of their titles begin with the same word.
+    const res = await svc.forLead(workspaceId, assignLead, managerId, 'MANAGER');
+
+    expect(res.items.map((i) => [i.title, i.assignment])).toEqual([
+      ['Auto-assigned on ingest', 'auto'],
+      ['Assigned to Ayse Temsilci', 'bulk'],
+      ['Reassigned: Ayse Temsilci -> Mana Ger', 'manual'],
+      // A plain stage move is not an assignment and must not be badged as one.
+      ['NEW -> CONTACTED', null],
+    ]);
+  });
+
+  it('leaves `assignment` null on a message, like every other activity-only field', async () => {
+    const res = await svc.forLead(workspaceId, richLead, managerId, 'MANAGER');
+    expect(res.items.filter((i) => i.kind === 'message').map((i) => i.assignment)).toEqual([
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("carries a message's provider payload, so a voicemail is still a voicemail", async () => {
+    // `Message.meta.raw.kind` is the ONLY thing marking an inbound row as a
+    // voicemail or a fax — there is no channel column on the message. The
+    // inbox's thread pane read it; the stream that replaces that pane has to
+    // read it too, or the audio player and the document link disappear with
+    // no error anywhere.
+    const res = await svc.forLead(workspaceId, richLead, managerId, 'MANAGER');
+    const inbound = res.items.find((i) => i.at === iso(40))!;
+
+    expect(inbound.meta).toEqual({
+      raw: { kind: 'VOICEMAIL', audioUrl: 'https://provider.test/vm.mp3', durationSec: 31 },
+    });
+    // Null on an activity rather than absent — the DTO's own rule.
+    expect(res.items.find((i) => i.kind === 'call')!.meta).toBeNull();
   });
 
   it('holds a REP to their own people, as the lead detail already does', async () => {
