@@ -29,6 +29,7 @@ import {
   listConversations,
   startConversation,
   type ConversationSummary,
+  type StartedConversation,
 } from '../../../features/marketing/api/conversations.service';
 
 /**
@@ -140,16 +141,52 @@ export default function LeadHeaderActions({ lead, onOpenConversations }: LeadHea
     (c) => INITIABLE_CHANNEL_TYPES.includes(c.type) && c.status === 'ACTIVE',
   );
 
-  const start = useMutation({
+  const start = useMutation<StartedConversation>({
     mutationFn: () => startConversation({ leadId: lead.id, channelId, text: text.trim() }),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      // The thread and its Message row exist on BOTH branches, so the cache
+      // that says "this lead has no conversations" is stale either way — and a
+      // failed send is exactly the moment we must not keep claiming there is
+      // nothing here.
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
+
+      // A 2xx is the REQUEST succeeding, not the send. MessageSenderService
+      // catches an adapter rejection, persists the Message as FAILED with the
+      // provider's reason, refunds the quota and RETURNS
+      // (message-sender.service.ts:78-93, :177) — so `POST
+      // /conversations/start` answers 200 for a message that never left the
+      // building. Channel-agnostic: SMS and email reach it as readily as
+      // WhatsApp does. `message.status` is the only witness.
+      if (res?.message?.status === 'FAILED') {
+        const base = t('leadDetail.startConversation.failed', 'Mesaj gönderilemedi');
+        const reason = res.message.error?.trim();
+        toast.error(reason ? `${base}: ${reason}` : base);
+        // Deliberately NOT navigating, and deliberately leaving the dialog
+        // open with the text intact.
+        //
+        // ConversationsTab — where onOpenConversations lands the rep — renders
+        // `lastMessage.body` with no per-message failure indicator at all
+        // (ConversationsTab.tsx:101-103; the indicator lives in the INBOX's
+        // ThreadPane, which is not this surface). Landing them there after a
+        // failure would show their own copy sitting in a thread, reading
+        // exactly like a delivered message — re-asserting, in pixels, the
+        // claim this branch exists to withdraw, with only a toast that
+        // disappears to say otherwise.
+        //
+        // Nothing is hidden by staying put: the thread is real and reachable —
+        // the now-invalidated list means the next Mesaj click opens Konuşmalar
+        // rather than this dialog. What staying buys is the retry: the channel
+        // picker and the message are still on screen, so trying another
+        // channel is one click rather than a re-typed message.
+        return;
+      }
+
       toast.success(t('leadDetail.startConversation.sent', 'Mesaj gönderildi'));
       setStartOpen(false);
       setText('');
       setChannelId('');
-      // The thread now exists — refresh the list this header and the
-      // Konuşmalar tab share, then land the user on it.
-      queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
+      // The thread now exists and carries a message that actually went out —
+      // land the user on it.
       onOpenConversations();
     },
     onError: (e) =>

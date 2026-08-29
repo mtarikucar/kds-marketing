@@ -47,6 +47,29 @@ const apiGet = vi.mocked(marketingApi.get);
 const thread = (id: string) =>
   ({ id, status: 'OPEN', aiPaused: false, unreadCount: 0 }) as conversationsService.ConversationSummary;
 
+/** What `POST /conversations/start` really answers with — the thread AND the
+ *  Message row, whose `status` is the only place the send's outcome lives. */
+const started = (
+  status: conversationsService.StartedMessage['status'],
+  error?: string,
+): conversationsService.StartedConversation => ({
+  conversationId: 'c-new',
+  leadId: 'l1',
+  channel: 'SMS',
+  to: '+905551112233',
+  reusedThread: false,
+  message: {
+    id: 'm1',
+    conversationId: 'c-new',
+    direction: 'OUTBOUND',
+    body: 'Merhaba',
+    status,
+    error: error ?? null,
+    externalMessageId: status === 'SENT' ? 'ext-1' : null,
+    createdAt: '2026-08-29T09:00:00.000Z',
+  },
+});
+
 const CHANNELS = [
   { id: 'ch-sms', type: 'SMS', name: 'NetGSM', status: 'ACTIVE' },
   { id: 'ch-wa', type: 'WHATSAPP', name: 'WhatsApp Business', status: 'ACTIVE' },
@@ -79,6 +102,19 @@ async function readyMessageButton() {
   return btn;
 }
 
+/** Open the start dialog, pick the one offerable channel, type and send. The
+ *  three send-outcome tests differ ONLY in what the endpoint answers, so the
+ *  driving is shared and the difference is the assertion. */
+async function sendFirstMessage(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await readyMessageButton());
+  const dialog = await screen.findByRole('dialog');
+  await user.click(within(dialog).getByRole('combobox'));
+  await screen.findByRole('listbox');
+  await user.click(screen.getByRole('option', { name: /NetGSM/ }));
+  await user.type(within(dialog).getByLabelText(/İlk mesaj/), 'Merhaba');
+  await user.click(within(dialog).getByRole('button', { name: 'Gönder' }));
+}
+
 /** Entitlements come from the same `/billing/summary` read the rest of the app
  *  uses (useEntitlements shares its query key), so the mock dispatches on URL
  *  rather than answering every GET with channels.
@@ -98,7 +134,7 @@ beforeEach(() => {
   entitled = true;
   telephony = true;
   listConversations.mockResolvedValue([]);
-  startConversation.mockResolvedValue({ conversationId: 'c-new' } as never);
+  startConversation.mockResolvedValue(started('SENT'));
   apiGet.mockImplementation((url: string) =>
     Promise.resolve(url === '/billing/summary' ? billing() : { data: CHANNELS }),
   );
@@ -243,6 +279,57 @@ describe('LeadHeaderActions — Mesaj', () => {
 
     expect(within(dialog).getByRole('button', { name: 'Gönder' })).toBeDisabled();
     expect(startConversation).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The 2xx that is not a success.
+   *
+   * MessageSenderService.send does NOT throw when an adapter rejects a send: it
+   * records the Message with status FAILED and the provider's reason, refunds
+   * the quota, logs a warning and RETURNS (message-sender.service.ts:78-93,
+   * :177). OutboundConversationService.start hands that Message straight back,
+   * so `POST /conversations/start` answers 200 for a message that never left
+   * the building — on SMS and email exactly as much as on WhatsApp.
+   *
+   * So `onSuccess` is the wrong place to decide the outcome: the transport
+   * succeeded, the SEND is what failed, and the only thing that knows is
+   * `message.status` in the body. Two tests, not one, because a green toast is
+   * only a lie if the other branch is genuinely reachable.
+   */
+  it('toasts success only when the returned message actually went out', async () => {
+    const user = userEvent.setup({ delay: null });
+    startConversation.mockResolvedValue(started('SENT'));
+    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+
+    await sendFirstMessage(user);
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    expect(toastError).not.toHaveBeenCalled();
+    await waitFor(() => expect(onOpenConversations).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not claim a 2xx FAILED message was sent — it says why it was not', async () => {
+    const user = userEvent.setup({ delay: null });
+    startConversation.mockResolvedValue(
+      started('FAILED', 'NetGSM rejected the message: 0030 invalid header'),
+    );
+    const { onOpenConversations } = renderActions({ id: 'l1', phone: '+905551112233' });
+
+    await sendFirstMessage(user);
+
+    // The provider's own reason, not a generic shrug — it is the only thing
+    // that tells the rep whether to retry, fix the header or pick a channel.
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringContaining('0030 invalid header')),
+    );
+    expect(toastSuccess).not.toHaveBeenCalled();
+    // Not navigated: ConversationsTab renders `lastMessage.body` with NO
+    // failure indicator (ConversationsTab.tsx:101-103), so landing the rep
+    // there would re-assert the very claim this branch exists to withdraw.
+    // The dialog stays open, with the text intact, as the retry surface.
+    expect(onOpenConversations).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByLabelText(/İlk mesaj/)).toHaveValue('Merhaba');
   });
 
   it('surfaces the backend’s refusal instead of pretending the message went out', async () => {
