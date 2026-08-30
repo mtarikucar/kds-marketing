@@ -937,7 +937,9 @@
     },
     "card": {
       "nobody": "No person",
-      "unnamed": "Unnamed person"
+      "unnamed": "Unnamed person",
+      "lastContact": "Last contact",
+      "noContact": "No contact yet"
     },
     "terminalDropRefused": "You cannot drop a person straight onto Won/Lost.",
     "dealForPersonFailed": "Could not open a deal for this person",

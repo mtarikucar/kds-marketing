@@ -1089,7 +1089,9 @@
     },
     "card": {
       "nobody": "Shaxssiz",
-      "unnamed": "Nomsiz shaxs"
+      "unnamed": "Nomsiz shaxs",
+      "lastContact": "Oxirgi aloqa",
+      "noContact": "Hali aloqa yo‘q"
     },
     "terminalDropRefused": "Shaxsni to'g'ridan-to'g'ri Yutildi/Yutqazildi ustuniga tashlab bo'lmaydi.",
     "dealForPersonFailed": "Bu shaxs uchun bitim ochib bo'lmadi",

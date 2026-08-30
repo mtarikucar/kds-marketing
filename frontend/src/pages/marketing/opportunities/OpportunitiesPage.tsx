@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, TrendingUp, ChevronDown } from 'lucide-react';
 import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
+import { fmtSlot } from '../../../features/marketing/utils/format';
 
 import {
   getBoard,
@@ -291,6 +292,35 @@ export default function OpportunitiesPage() {
     for (const s of board?.stages ?? []) for (const o of s.opportunities) if (o.currency) set.add(o.currency);
     return set;
   }, [board]);
+
+  /**
+   * "Son temas" — the newest message on any of this person's threads.
+   *
+   * The third thing a card carries, and the one the design named alongside the
+   * value (2026-08-30 §1: name primary, deal value and last contact secondary).
+   * A name and a number say who and how much; only this says whether anyone has
+   * spoken to them — which on the "Hatta değil" column IS the decision.
+   *
+   * `fmtSlot`, the helper this surface already reads dates with, because a board
+   * is a COLUMN of these: the year and the seconds are identical on every card
+   * and only push the name off the line.
+   *
+   * Silence gets WORDS. An empty slot reads as "not loaded yet" on a card whose
+   * whole point is that nobody has done anything here, and any date standing in
+   * for "never" would simply be false.
+   *
+   * The test id deliberately does NOT start with `person-card-`/`deal-card-`:
+   * `getAllByTestId(/^person-card-/)` is how the column counts its CARDS, and a
+   * second node per card under that prefix doubles the count silently.
+   */
+  const lastContact = (at: string | null, testId: string) => (
+    <p data-testid={testId} className="text-micro text-muted-foreground truncate">
+      {at
+        ? `${t('opportunities.card.lastContact', 'Son temas')}: ${fmtSlot(at)}`
+        : t('opportunities.card.noContact', 'Henüz temas yok')}
+    </p>
+  );
+
   const fmtBoard = (n: number) =>
     boardCurrencies.size === 1 ? money(n, [...boardCurrencies][0]) : n.toLocaleString();
 
@@ -603,6 +633,7 @@ export default function OpportunitiesPage() {
                               {p.businessName}
                             </p>
                           )}
+                          {lastContact(p.lastMessageAt, `person-contact-${p.id}`)}
                         </div>
                       </div>
                     </div>
@@ -704,9 +735,13 @@ export default function OpportunitiesPage() {
                           {money(o.value, o.currency)}
                         </p>
                         {/* Secondary, but present: one person may be carrying
-                            two deals, and the card still has to say which. */}
+                            two deals, and the card still has to say which — and
+                            when they were last spoken to. */}
                         {o.lead && (
-                          <p className="text-micro text-muted-foreground truncate">{o.name}</p>
+                          <>
+                            <p className="text-micro text-muted-foreground truncate">{o.name}</p>
+                            {lastContact(o.lead.lastMessageAt, `deal-contact-${o.id}`)}
+                          </>
                         )}
                       </div>
                     </div>

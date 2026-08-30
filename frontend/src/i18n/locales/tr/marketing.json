@@ -1207,7 +1207,9 @@
     },
     "card": {
       "nobody": "Kişisiz",
-      "unnamed": "İsimsiz kişi"
+      "unnamed": "İsimsiz kişi",
+      "lastContact": "Son temas",
+      "noContact": "Henüz temas yok"
     },
     "terminalDropRefused": "Kişiyi doğrudan Kazanıldı/Kaybedildi sütununa bırakamazsın.",
     "dealForPersonFailed": "Bu kişi için fırsat açılamadı",

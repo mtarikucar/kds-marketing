@@ -1089,7 +1089,9 @@
     },
     "card": {
       "nobody": "بدون شخص",
-      "unnamed": "شخص بلا اسم"
+      "unnamed": "شخص بلا اسم",
+      "lastContact": "آخر تواصل",
+      "noContact": "لا يوجد تواصل بعد"
     },
     "terminalDropRefused": "لا يمكنك إسقاط شخص مباشرةً في عمود رابح/خاسر.",
     "dealForPersonFailed": "تعذّر فتح صفقة لهذا الشخص",

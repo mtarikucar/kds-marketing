@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import OpportunitiesPage from './OpportunitiesPage';
+import { fmtSlot } from '../../../features/marketing/utils/format';
 
 const get = vi.fn();
 const post = vi.fn();
@@ -456,6 +457,96 @@ describe('OpportunitiesPage — the board is a view of person-cards', () => {
 
     expect(await screen.findByTestId('not-in-pipeline-empty')).toBeInTheDocument();
     expect(screen.getByTestId('not-in-pipeline-count')).toHaveTextContent('0');
+  });
+
+  /**
+   * The card the design asked for, in full: "kişinin adı birincil, anlaşma
+   * değeri ve SON TEMASI ikincil" (2026-08-30 §1). The name and the value
+   * landed; the last contact was computed server-side — two extra raw
+   * aggregates per board load and per column page — and drawn nowhere.
+   *
+   * It is the third thing a card needs to be a decision rather than a label: a
+   * name and a number say who and how much, and only this says whether anyone
+   * has actually spoken to them.
+   */
+  describe('the card says when they were last spoken to', () => {
+    // Local wall-clock rather than a fixed ISO instant, so the expectation does
+    // not move with the machine's timezone.
+    const AUG_29_0905 = new Date(2026, 7, 29, 9, 5).toISOString();
+
+    it("carries the person's last contact on the deal card", async () => {
+      serve({
+        board: {
+          pipeline: PEOPLE_BOARD.pipeline,
+          stages: [
+            stage({
+              id: 's-new',
+              name: 'New',
+              position: 0,
+              opportunities: [
+                {
+                  id: 'o1',
+                  pipelineId: 'p1',
+                  stageId: 's-new',
+                  leadId: 'lead-1',
+                  name: 'Happy Day Organizasyon',
+                  value: 45000,
+                  currency: 'TRY',
+                  status: 'OPEN',
+                  lead: personCard({ lastMessageAt: AUG_29_0905 }),
+                },
+              ],
+              totalValue: 45000,
+              count: 1,
+            }),
+          ],
+        },
+      });
+      render(<OpportunitiesPage />, { wrapper });
+
+      const card = await screen.findByTestId('deal-card-o1');
+      const line = within(card).getByTestId('deal-contact-o1');
+      // The surface's own short-date helper, not a second formatter: a board is
+      // a COLUMN of these, so the year and the seconds are noise on every row.
+      expect(line).toHaveTextContent(`Son temas: ${fmtSlot(AUG_29_0905)}`);
+      expect(line.textContent).not.toContain(AUG_29_0905); // never the raw instant
+    });
+
+    it('carries it on the "Hatta değil" cards too, where it decides the most', async () => {
+      serve({
+        notInPipeline: () =>
+          column([personCard({ id: 'lead-9', name: 'Sessiz Kişi', lastMessageAt: AUG_29_0905 })], {
+            total: 1,
+          }),
+      });
+      render(<OpportunitiesPage />, { wrapper });
+
+      const card = await screen.findByTestId('person-card-lead-9');
+      expect(within(card).getByTestId('person-contact-lead-9')).toHaveTextContent(
+        `Son temas: ${fmtSlot(AUG_29_0905)}`,
+      );
+    });
+
+    // This column is the 361 people nobody is selling to, and most of them have
+    // never been messaged at all. Silence is the ANSWER here, so it gets words:
+    // an empty slot reads as "not loaded yet", and any date standing in for
+    // "never" is simply false.
+    it('says the silence out loud rather than leaving the slot blank', async () => {
+      serve({
+        notInPipeline: () =>
+          column([personCard({ id: 'lead-9', name: 'Sessiz Kişi', lastMessageAt: null })], {
+            total: 1,
+          }),
+      });
+      render(<OpportunitiesPage />, { wrapper });
+
+      // Positive anchor first — the absence below would pass against a card
+      // that never rendered at all.
+      const card = await screen.findByTestId('person-card-lead-9');
+      const line = within(card).getByTestId('person-contact-lead-9');
+      expect(line).toHaveTextContent('Henüz temas yok');
+      expect(line.textContent).not.toMatch(/\d/); // no date stood in for "never"
+    });
   });
 
   it('opens a deal for a person dragged onto a stage, with no name of its own', async () => {
