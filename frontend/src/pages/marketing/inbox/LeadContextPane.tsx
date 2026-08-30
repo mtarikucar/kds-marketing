@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { IconButton } from '@/components/ui/IconButton';
 import { fmtDate } from '../../../features/marketing/utils/format';
 import type { Lead } from '../../../features/marketing/types';
+import { PersonDeals } from './PersonDeals';
 
 /**
  * The fields this card reads. A structural subset of `Lead` rather than `Lead`
@@ -94,6 +95,14 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
           <Row label={t('surface.card.created', 'Kayıt')}>{fmtDate(lead.createdAt)}</Row>
         )}
       </dl>
+
+      {/* SATIŞ — the deal is a FIELD of this person, and its stage moves from
+          right here. `key` is the ONE reset for the section's per-deal state:
+          the card is handed a new person rather than remounted by the router
+          (selecting is not navigating), so an optimistic stage set for A would
+          otherwise still be on screen under B. Same mechanism, and the same
+          reason, as the middle column's `key` in InboxPage. */}
+      <PersonDeals key={lead.id} leadId={lead.id} />
 
       {/* The one door off this surface. */}
       <Link

@@ -124,6 +124,7 @@
     }
   },
   "common": {
+    "retry": "إعادة المحاولة",
     "save": "Save",
     "saveChanges": "Save changes",
     "cancel": "Cancel",
@@ -1100,6 +1101,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "المبيعات",
+      "none": "ليس ضمن المسار.",
+      "add": "أضِف إلى المسار",
+      "stage": "المرحلة",
+      "unknownStage": "مرحلة غير معروفة",
+      "noClose": "لا يوجد تاريخ إغلاق",
+      "failed": "تعذّر تحميل الصفقات.",
+      "moveFailed": "تعذّر نقل المرحلة.",
+      "addFailed": "تعذّرت الإضافة إلى المسار."
+    },
     "people": {
       "search": "ابحث عن شخص",
       "loadFailed": "تعذّر تحميل الأشخاص.",

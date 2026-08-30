@@ -124,6 +124,7 @@
     }
   },
   "common": {
+    "retry": "Qayta urinish",
     "save": "Save",
     "saveChanges": "Save changes",
     "cancel": "Cancel",
@@ -1100,6 +1101,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "Sotuv",
+      "none": "Quvurda emas.",
+      "add": "Quvurga qo'shish",
+      "stage": "Bosqich",
+      "unknownStage": "Noma'lum bosqich",
+      "noClose": "Yopilish sanasi yo'q",
+      "failed": "Bitimlarni yuklab bo'lmadi.",
+      "moveFailed": "Bosqichni ko'chirib bo'lmadi.",
+      "addFailed": "Quvurga qo'shib bo'lmadi."
+    },
     "people": {
       "search": "Odam qidirish",
       "loadFailed": "Odamlar yuklanmadi.",

@@ -3207,6 +3207,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "Sales",
+      "none": "Not in the pipeline.",
+      "add": "Add to pipeline",
+      "stage": "Stage",
+      "unknownStage": "Unknown stage",
+      "noClose": "No close date",
+      "failed": "Deals could not be loaded.",
+      "moveFailed": "Could not move the stage.",
+      "addFailed": "Could not add to the pipeline."
+    },
     "people": {
       "search": "Search people",
       "loadFailed": "Could not load people.",

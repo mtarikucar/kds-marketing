@@ -115,7 +115,18 @@ export interface UpdatePipelinePayload {
 }
 
 export interface CreateOpportunityPayload {
-  name: string;
+  /**
+   * Optional ONLY when `leadId` is given — mirrors `CreateOpportunityDto`. That
+   * is the drag-a-PERSON-onto-a-stage path, and the record card's "Hatta ekle":
+   * the gesture supplies no deal name, so the backend falls back to the
+   * person's own `contactPerson || businessName`. Inventing a name client-side
+   * instead would put a second answer to "what is this person called" on the
+   * wire, next to the one `PersonCard.name` already computes server-side.
+   *
+   * A deal with neither a name nor a person is still refused — by the service,
+   * where the lead has been read and the fallback actually exists.
+   */
+  name?: string;
   pipelineId?: string;
   stageId?: string;
   leadId?: string;
