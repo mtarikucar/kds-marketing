@@ -3,6 +3,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { OpportunitiesService } from '../../src/modules/marketing/opportunities/opportunities.service';
 import { LeadStreamService } from '../../src/modules/marketing/services/lead-stream.service';
+import { leadIdsWithOpenOpportunity } from '../../src/modules/marketing/services/not-in-pipeline-leads';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
 /**
@@ -351,13 +352,23 @@ describeRealDb('Pipeline ↔ person merge, real DB (e2e)', () => {
     });
 
     it('survives a deal with no person on it, which would otherwise empty the column', async () => {
-      // `orphanCard` is an OPEN deal with `leadId = NULL`. A NULL reaching the
-      // exclusion list makes `NOT IN (NULL, …)` unsatisfiable for EVERY row, so
-      // one nameless deal would blank the whole column while every query still
-      // returned successfully. That deal is on this board right now.
+      // `orphanCard` is an OPEN deal with `leadId = NULL`, and it is on this
+      // board right now. A NULL reaching the exclusion list is refused outright
+      // by Prisma — `Expected ListStringFieldRefInput, provided (String, String,
+      // Null)` — so one nameless deal takes the whole column down with a 500;
+      // hand-written in SQL the same NULL is SILENT instead, because
+      // `NOT IN (NULL, …)` is never true for any row. `leadId IS NOT NULL` in
+      // `not-in-pipeline-leads.ts` is the ONE clause standing between the column
+      // and both readings, and this is the assertion that falls when it goes.
       const orphan = await prisma.opportunity.findUniqueOrThrow({ where: { id: orphanCard } });
       expect(orphan.leadId).toBeNull();
       expect(orphan.status).toBe('OPEN');
+
+      // The list itself, before any caller sees it: the two people our OPEN
+      // deals actually name, and nothing standing in for the nameless one.
+      const excluded = await leadIdsWithOpenOpportunity(prisma, workspaceId);
+      expect(excluded).not.toContain(null);
+      expect([...excluded].sort()).toEqual([foreignLead, leadOpen].sort());
 
       const res = await opportunities.notInPipeline(workspaceId, { limit: 50 } as any, MGR);
       expect(res.data.length).toBeGreaterThan(0);

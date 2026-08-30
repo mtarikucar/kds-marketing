@@ -299,8 +299,9 @@ export class OpportunitiesService {
        * clause is therefore never conditional.
        *
        * A NULL in this list would make `NOT IN` unsatisfiable for every row and
-       * silently empty the column; `leadIdsWithOpenOpportunity` filters nulls
-       * out at both ends for exactly that reason.
+       * silently empty the column — and Prisma refuses one outright, which is
+       * louder and just as total. `leadIdsWithOpenOpportunity` keeps it out in
+       * SQL, once, for exactly that reason.
        */
       id: { notIn: await leadIdsWithOpenOpportunity(this.prisma, workspaceId) },
       // Merged duplicates are tombstoned, not deleted, and bulk-deleted people
