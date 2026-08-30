@@ -3,6 +3,7 @@ import {
   NAV_HUBS,
   visibleNav,
   findActiveHub,
+  findActiveChild,
   splitByTier,
   shouldAutoOpenAdvanced,
   type FeatureKey,
@@ -79,17 +80,73 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
     expect(paths('invoicing')).toContain('/invoices');
   });
 
-  it('the Inbox page stays gated by conversationAi without taking the surface with it', () => {
-    const withAi = visibleNav(NAV_HUBS, { isManager: true, has: entitle('conversationAi') });
-    expect(childPaths(withAi, 'inbox')[0]).toBe('/inbox');
+  /**
+   * `/inbox` and `/leads` render the SAME component with no prop between them
+   * (App.tsx MERGED_SURFACE_ROUTES) and have since v2.284.0. Two menu entries
+   * for one page is not a choice a user can make correctly, so the menu lists
+   * it once — as `/leads`, ungated.
+   *
+   * The gate did not move to the survivor; it went away, and that is the honest
+   * reading rather than an omission. `conversationAi` used to hide `/inbox`
+   * from the menu while `/leads` opened the identical surface one line below
+   * it, so it never gated anything. The entitlement's real effect on this
+   * surface is INSIDE the page (the stream's `gated` signal). Hanging it on the
+   * one remaining entry would take the person list, their activities and their
+   * record card off the menu of every workspace without it — exactly the
+   * regression v2.284.0 was careful to avoid.
+   */
+  it('lists the person surface ONCE, ungated, at /leads', () => {
+    const withAi = childPaths(
+      visibleNav(NAV_HUBS, { isManager: true, has: entitle('conversationAi') }),
+      'inbox',
+    );
+    const withoutAi = childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle() }), 'inbox');
 
-    const withoutAi = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
-    expect(childPaths(withoutAi, 'inbox')).not.toContain('/inbox');
-    // The gate belongs to the PAGE. Hanging it on the surface — which is what
-    // merging a gated single-page hub naively does — would have taken Leads,
-    // Pipeline, Calendar and Tasks away from every unentitled workspace.
-    expect(withoutAi.map((h) => h.id)).toContain('inbox');
-    expect(childPaths(withoutAi, 'inbox')).toContain('/leads');
+    // Identical either way: the entitlement no longer decides anything here.
+    expect(withAi).toEqual(withoutAi);
+    // First, so the rail's hubTarget lands on a page every workspace can open.
+    expect(withoutAi[0]).toBe('/leads');
+    // ONE entry, not two. The count is the assertion — a second one is exactly
+    // how the duplication came back.
+    expect(withoutAi.filter((p) => p === '/leads' || p === '/inbox')).toEqual(['/leads']);
+    // …and the surface itself is untouched by the entitlement, as before.
+    expect(visibleNav(NAV_HUBS, { isManager: true, has: entitle() }).map((h) => h.id)).toContain(
+      'inbox',
+    );
+  });
+
+  /**
+   * The bookmark half. `/inbox` is in the frozen 50-path set and in people's
+   * bookmarks, so it stays a route AND stays owned by an item — otherwise the
+   * chrome forgets which surface you are on the moment you arrive by the old
+   * URL, and `findActiveChild` stops resolving for it.
+   */
+  it('keeps /inbox reachable and resolving, as an alias of the entry that survived', () => {
+    expect(findActiveHub(NAV_HUBS, '/inbox')?.id).toBe('inbox');
+    // The alias resolves to the CHILD that replaced it, not to some other page.
+    expect(findActiveChild(NAV_HUBS, '/inbox')?.path).toBe('/leads');
+    expect(findActiveChild(NAV_HUBS, '/leads')?.path).toBe('/leads');
+  });
+
+  it('never points an alias at a path no item owns, nor at a second item', () => {
+    // An alias is a second door onto an item. Rename the item's path and the
+    // alias silently becomes a route with no owner — resolvable by the router,
+    // invisible to the chrome. Cheap to assert, impossible to notice otherwise.
+    const owned = new Set(
+      NAV_HUBS.flatMap((h) => [
+        ...(h.path ? [h.path] : []),
+        ...(h.children?.map((c) => c.path) ?? []),
+      ]),
+    );
+    const aliases = NAV_HUBS.flatMap((h) => h.children ?? []).flatMap((c) =>
+      (c.aliases ?? []).map((a) => ({ alias: a, on: c.path })),
+    );
+    expect(aliases.length).toBeGreaterThan(0); // the mechanism is in use
+    for (const { alias, on } of aliases) {
+      expect({ alias, on, ownerExists: owned.has(on) }).toEqual({ alias, on, ownerExists: true });
+      // An alias must not ALSO be a listed item, or two entries own one path.
+      expect({ alias, listedTwice: owned.has(alias) }).toEqual({ alias, listedTwice: false });
+    }
   });
 
   it('hides the Agency pages from a non-agency workspace (Epic D)', () => {
@@ -120,9 +177,22 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
 });
 
 describe('navigation — merged destinations have exactly one home (clean cut)', () => {
+  /**
+   * Every path the sidebar's config OWNS — a listed item's own path, plus any
+   * ALIAS it carries.
+   *
+   * The aliases had to join this sum on 2026-08-30, when `/inbox` stopped being
+   * a menu entry of its own and became a second door onto `/leads` (they render
+   * the identical component, so two entries were two doors on one room). The
+   * FROZEN SET below did not move by one character: `/inbox` is still a route,
+   * still bookmarked, still resolved by findActiveHub/findActiveChild. What
+   * changed is where the config keeps it, and this line is what keeps the
+   * freeze honest about that rather than letting a "collapse the menu" refactor
+   * quietly delete a path.
+   */
   const allPaths = NAV_HUBS.flatMap((h) => [
     ...(h.path ? [h.path] : []),
-    ...(h.children?.map((c) => c.path) ?? []),
+    ...(h.children?.flatMap((c) => [c.path, ...(c.aliases ?? [])]) ?? []),
   ]);
 
   /**

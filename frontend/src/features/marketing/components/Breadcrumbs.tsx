@@ -13,13 +13,19 @@ import { useBreadcrumbStore } from '../hooks/useBreadcrumbLabel';
  * hubs (Dashboard/Tasks) render just their own label.
  */
 const ITEMS = NAV_HUBS.flatMap((h) => {
-  const items = (h.children ?? []).map((c) => ({
-    path: c.path,
-    label: c.label,
-    labelKey: c.labelKey,
-    groupLabel: h.label,
-    groupLabelKey: h.labelKey,
-  }));
+  // One entry per DOOR, not per item: an alias (`/inbox` → the `/leads` item)
+  // opens the same page and earns the same trail. Without it, arriving on a
+  // bookmarked alias renders no breadcrumb at all — the one page in the console
+  // that cannot say where it is.
+  const items = (h.children ?? []).flatMap((c) =>
+    [c.path, ...(c.aliases ?? [])].map((path) => ({
+      path,
+      label: c.label,
+      labelKey: c.labelKey,
+      groupLabel: h.label,
+      groupLabelKey: h.labelKey,
+    })),
+  );
   if (h.path) {
     // single-page hub — the hub itself is the leaf (no distinct group)
     items.push({

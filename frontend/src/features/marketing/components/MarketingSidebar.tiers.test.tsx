@@ -56,11 +56,23 @@ describe('MarketingSidebar — three surfaces, nothing hidden', () => {
     expect(screen.getByRole('link', { name: /^Settings$/i })).toBeInTheDocument();
   });
 
-  it('lands the Inbox surface on the first page the workspace may actually open', () => {
-    // This manager has no entitlements, so /inbox itself (conversationAi) is
-    // gated out. A rail item pointing at a page you cannot open is worse than
-    // one pointing at the first you can — hence hubTarget's fallback.
+  it('lands the Inbox surface on a page every workspace may open', () => {
+    // Until 2026-08-30 this assertion was hubTarget's FALLBACK doing the work:
+    // the surface's first child was /inbox (conversationAi), so an unentitled
+    // manager had to be re-aimed at the next page they could open. /inbox is an
+    // alias of the ungated /leads now and no longer a menu entry, so the FIRST
+    // child is already the answer — for everyone, entitled or not. The rail can
+    // no longer point at a page you cannot open.
     renderSidebar();
+    expect(screen.getByRole('link', { name: /^Inbox$/i })).toHaveAttribute('href', '/leads');
+  });
+
+  it('offers the person surface once, under one name', () => {
+    renderSidebar();
+    // The rail renders SURFACES, so "Inbox" here is the surface, not a page.
+    // What must not come back is a second door to the same page: /inbox has no
+    // link of its own anywhere in the chrome.
+    expect(document.querySelectorAll('a[href="/inbox"]')).toHaveLength(0);
     expect(screen.getByRole('link', { name: /^Inbox$/i })).toHaveAttribute('href', '/leads');
   });
 

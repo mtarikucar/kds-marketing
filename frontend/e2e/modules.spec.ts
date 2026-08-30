@@ -62,12 +62,21 @@ test('the catalogue lists what the plan entitles — and nothing else', async ({
 test('switching a module off drops its PAGE from the surface — not the surface itself — and back on restores it', async ({
   app,
 }) => {
-  // Start on the Inbox SURFACE. Since the 2026-08 merge `conversationAi` gates
-  // the /inbox PAGE rather than the hub that used to be it, and a page appears
-  // in its surface's sub-nav strip — which HubSubNav renders only for the
-  // active surface, and never in the Settings area. So a surface page is the
-  // only place the gated item is observable. /leads is an ungated page in the
-  // same surface, which lets it double as the survival proof below.
+  // Start on the Inbox SURFACE. A gated PAGE appears in its surface's sub-nav
+  // strip — which HubSubNav renders only for the ACTIVE surface, and never in
+  // the Settings area — so a surface page is the only place the gate is
+  // observable. /leads is an ungated page in the same surface, which lets it
+  // double as the survival proof below.
+  //
+  // The module under test is `telephony` (Aramalar), not `conversationAi`.
+  // Until 2026-08-30 this test watched /inbox, and it could: /inbox was a menu
+  // entry gated on conversationAi. It is now an ALIAS of /leads with no entry
+  // of its own — the two paths have rendered the identical page since v2.284.0,
+  // so listing both was listing one page twice, and the gate on the first was
+  // doing nothing while the same surface sat unguarded on the line below it.
+  // conversationAi therefore no longer hides anything from this menu (its real
+  // effect is inside the page, on the message stream), and /calls is the page
+  // that still makes the claim in this test's title observable.
   await app.goto('/leads');
 
   // The primary hub rail is the FIRST <aside> — inside the Settings area
@@ -76,61 +85,62 @@ test('switching a module off drops its PAGE from the surface — not the surface
   const rail = app.locator('aside').first();
   const inboxSurface = rail.getByRole('link', { name: 'Gelen Kutusu', exact: true });
   // Every route the chrome offers to the gated PAGE, counted wherever it
-  // appears. The rail item counts: a surface with no path of its own targets
-  // its first VISIBLE child (hubTarget), so it aims at /inbox exactly while
-  // /inbox is visible, and re-aims the moment it is not.
+  // appears.
+  const routesToCalls = app.locator('a[href="/calls"]');
+  // And the ONE route to the person surface. /inbox is a bookmark, never a
+  // menu entry: a link back to it anywhere in the chrome is the duplication
+  // this collapse removed, coming back.
   const routesToInbox = app.locator('a[href="/inbox"]');
-  // The surface and the page share a label (both are `nav.inbox`), so this
-  // counts BOTH — which is what makes "2 → 1" say that the page went and the
-  // surface stayed.
-  const namedInbox = app.getByRole('link', { name: 'Gelen Kutusu', exact: true });
+  const routesToPeople = app.locator('a[href="/leads"]');
 
   await expect(inboxSurface).toBeVisible();
-  await expect(namedInbox).toHaveCount(2); // the surface, plus its page as a tab
-  await expect(routesToInbox).toHaveCount(2);
+  await expect(routesToCalls).toHaveCount(1);
+  await expect(routesToInbox).toHaveCount(0);
+  // The rail item and the sub-nav tab: the surface targets its first child,
+  // which is the person page, and that page is also a tab.
+  await expect(routesToPeople).toHaveCount(2);
+  await expect(inboxSurface).toHaveAttribute('href', '/leads');
 
   await app.goto('/settings/modules');
-  const toggle = app.getByRole('switch', { name: 'Mesajlar & Gelen Kutusu', exact: true });
+  const toggle = app.getByRole('switch', { name: 'Telefon & aramalar', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
 
   const off = app.waitForResponse((r) => modulesWrite(r.url(), r.request().method()));
   await toggle.click();
   expect((await off).status()).toBe(200);
 
-  // No reload — and no navigation either. The rail reads the SAME
-  // ['marketing','billing','summary'] query the mutation invalidates, so it has
-  // to stop aiming at a page this workspace can no longer open the moment the
-  // write lands. A menu that needs a refresh to tell the truth is a real bug.
-  await expect(inboxSurface).toHaveAttribute('href', '/leads');
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
 
   // Click, do not goto: a full load would re-fetch everything from the server
   // and prove nothing about the live cache. This is still the same JS heap
-  // that issued the write.
+  // that issued the write. The rail reads the SAME
+  // ['marketing','billing','summary'] query the mutation invalidates, so the
+  // menu has to tell the truth without a refresh — one that needs a reload to
+  // stop offering a deactivated page is a real bug.
   await inboxSurface.click();
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
 
-  // The PAGE is gone from the sub-nav, and from the rail's target with it…
-  await expect(routesToInbox).toHaveCount(0);
-  await expect(namedInbox).toHaveCount(1);
+  // The PAGE is gone from the sub-nav…
+  await expect(routesToCalls).toHaveCount(0);
   // …while the SURFACE survives, which is the entire reason the gate hangs on
-  // the child. It used to hang on the hub, so switching this one module off
-  // took Leads, Pipeline, Calendar and Tasks off the rail with it.
+  // the child. It used to hang on the hub, so switching one module off took
+  // People, Pipeline, Calendar and Tasks off the rail with it.
   await expect(inboxSurface).toBeVisible();
   await expect(app.getByRole('link', { name: 'Satış Hattı', exact: true })).toBeVisible();
+  await expect(app.getByRole('link', { name: 'Kişiler', exact: true })).toBeVisible();
 
   // A reload proves the deactivation reached `Workspace.activatedModules` AND
   // that the server-side entitlements cache was invalidated — not that a tab
   // merely vanished from a client-side cache for 30 seconds.
   await app.reload();
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
-  await expect(routesToInbox).toHaveCount(0);
+  await expect(routesToCalls).toHaveCount(0);
   await expect(inboxSurface).toBeVisible();
 
   // Turning it back on must be equally live — a one-way door would strand an
   // owner who switched something off to try it out.
   await app.goto('/settings/modules');
-  const toggleBack = app.getByRole('switch', { name: 'Mesajlar & Gelen Kutusu', exact: true });
+  const toggleBack = app.getByRole('switch', { name: 'Telefon & aramalar', exact: true });
   // Still off after a fresh boot: the switch persisted, not just the menu.
   await expect(toggleBack).toHaveAttribute('aria-checked', 'false');
 
@@ -139,10 +149,34 @@ test('switching a module off drops its PAGE from the surface — not the surface
   expect((await on).status()).toBe(200);
 
   await expect(toggleBack).toHaveAttribute('aria-checked', 'true');
-  await expect(inboxSurface).toHaveAttribute('href', '/inbox');
   await inboxSurface.click();
-  await expect(namedInbox).toHaveCount(2);
-  await expect(routesToInbox).toHaveCount(2);
+  await expect(routesToCalls).toHaveCount(1);
+});
+
+test('the person surface has ONE menu entry, and both of its routes still open it', async ({
+  app,
+}) => {
+  // /inbox and /leads have rendered the identical page since v2.284.0. The menu
+  // listed it twice until 2026-08-30 — a choice nobody could make correctly —
+  // and both halves of the fix need saying out loud: the entry is now ONE, and
+  // the old URL still works, because it is in people's bookmarks.
+  await app.goto('/leads');
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
+
+  // Exactly one place in the chrome names it, and nothing links to /inbox.
+  await expect(app.getByRole('link', { name: 'Kişiler', exact: true })).toHaveCount(1);
+  await expect(app.locator('a[href="/inbox"]')).toHaveCount(0);
+  // The old label is gone with the old entry — a menu that still said "Lead'ler"
+  // beside a page headed "Kişiler" would be the naming half of the same split.
+  await expect(app.getByRole('link', { name: "Lead'ler", exact: true })).toHaveCount(0);
+
+  // The bookmark: same page, same chrome, and the surface still resolves — the
+  // rail item lights up and the sub-nav strip renders, which is what an alias
+  // has to keep beyond the router not 404ing.
+  await app.goto('/inbox');
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
+  await expect(app.locator('aside').first().getByRole('link', { name: 'Gelen Kutusu', exact: true })).toBeVisible();
+  await expect(app.getByRole('link', { name: 'Satış Hattı', exact: true })).toBeVisible();
 });
 
 test('deactivating a module also drops its page from the Settings menu', async ({ app }) => {

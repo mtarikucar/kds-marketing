@@ -277,6 +277,11 @@ describe('marketing i18n — the person surface and its work queue', () => {
     const want = [
       ...flat((tr as Json).surface as Json).map((k) => `surface.${k}`),
       ...flat(((tr as Json).leads as Json).queue as Json).map((k) => `leads.queue.${k}`),
+      // The surface's MENU entry. Since 2026-08-30 it is the only one — /inbox
+      // and /leads listed one page twice and the duplicate is gone — so if this
+      // single word degrades to English, the surface is unreachable by name in
+      // that locale, with no second entry left to fall back on.
+      'nav.people',
     ];
     expect(want).toEqual(
       expect.arrayContaining([

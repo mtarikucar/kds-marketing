@@ -24,7 +24,18 @@ describe('Breadcrumbs', () => {
   it('falls back to a generic Detail leaf when no record name is registered', () => {
     renderAt('/leads/abc-123');
     expect(screen.getByText('Detail')).toBeInTheDocument();
-    expect(screen.getByText('Leads')).toBeInTheDocument();
+    // "People", not "Leads": the menu entry was renamed when /inbox and /leads
+    // collapsed into one, because the surface it opens is headed Kişiler and a
+    // trail that disagrees with the h1 is worse than no trail at all.
+    expect(screen.getByText('People')).toBeInTheDocument();
+  });
+
+  // `/inbox` is an ALIAS of the /leads item now, with no menu entry of its own.
+  // The breadcrumb is exactly what an alias must not lose: someone arriving on
+  // their old bookmark still has to be told where they are.
+  it('names the same page when it is reached by its alias', () => {
+    renderAt('/inbox');
+    expect(screen.getByText('People')).toBeInTheDocument();
   });
 
   it('shows the record name when a detail page registers one', () => {

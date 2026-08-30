@@ -265,6 +265,7 @@
     "REP": "Sales Rep"
   },
   "nav": {
+    "people": "People",
     "pinned": "Pinned",
     "more": "More",
     "pin": "Pin",

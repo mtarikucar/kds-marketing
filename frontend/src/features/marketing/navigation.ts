@@ -144,6 +144,23 @@ type IconType = LucideIcon;
 
 export interface NavChild {
   path: string;
+  /**
+   * Other routes that open THIS page and hold no place of their own in the
+   * menu. One item, several doors.
+   *
+   * Added 2026-08-30 for `/inbox`. Since v2.284.0 it and `/leads` render the
+   * identical element with no prop between them (App.tsx
+   * `MERGED_SURFACE_ROUTES`), so listing both offered a choice nobody can make
+   * correctly. The route survives — it is in the frozen path set and in
+   * people's bookmarks — and by living here rather than as a second child it
+   * keeps being RESOLVED (`findActiveHub`, `findActiveChild`, Breadcrumbs)
+   * without being RENDERED. Drop it and someone arriving on their old bookmark
+   * loses the chrome that tells them where they are.
+   *
+   * Not a redirect: both routes must keep working, and a redirect would rewrite
+   * a URL people have saved.
+   */
+  aliases?: string[];
   /** i18n key; `label` is the inline fallback so a missing translation still reads well. */
   labelKey: string;
   label: string;
@@ -249,11 +266,33 @@ export const NAV_HUBS: NavHub[] = [
     // lands on the first page you can (see `hubTarget` in MarketingSidebar).
     id: 'inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, tier: 'core',
     children: [
-      // The gate moved WITH the item, not to the surface: gating the whole
-      // surface on conversationAi would have taken Leads and Pipeline away from
-      // every workspace without the entitlement.
-      { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, feature: 'conversationAi' },
-      { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
+      /**
+       * ONE entry for the person-primary surface, and `/inbox` is its alias.
+       *
+       * Until 2026-08-30 this line was two: `/inbox` (gated on
+       * `conversationAi`) and `/leads` (ungated). Since v2.284.0 both render
+       * the SAME element with no prop between them, so the menu was offering
+       * one page twice — and the gate on the first was doing nothing, because
+       * the identical surface sat unguarded on the line below it.
+       *
+       * `/leads` is the one that survives, and it stays UNGATED, deliberately:
+       * `conversationAi`'s real effect on this surface is inside the page (the
+       * stream's `gated` signal says "your plan does not include messages"),
+       * and a workspace without it still gets people, activities and the record
+       * card. Putting the gate on the survivor would take all of that off the
+       * menu — the exact regression v2.284.0 was careful to avoid.
+       *
+       * It is also first in the list, which is what `hubTarget` reads: the rail
+       * item for this surface can now never aim at a page you cannot open.
+       */
+      {
+        path: '/leads',
+        aliases: ['/inbox'],
+
+        labelKey: 'nav.people',
+        label: 'People',
+        icon: Users,
+      },
       { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
       { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Pipeline', icon: Target },
       // Offers + Estimates + Documents merged into one tabbed hub.
@@ -402,9 +441,14 @@ export function splitByTier(hubs: NavHub[]): { core: NavHub[]; advanced: NavHub[
   };
 }
 
-/** All routable paths a hub owns (its own `path` + every child path). */
+/**
+ * All routable paths a hub owns: its own `path`, every child path, and every
+ * child ALIAS. Aliases belong here or arriving on `/inbox` would resolve to no
+ * hub at all — no active rail item, no sub-nav, no breadcrumb — which is what
+ * "the route survives" has to mean beyond the router not 404ing.
+ */
 function hubPaths(h: NavHub): string[] {
-  const paths = h.children ? h.children.map((c) => c.path) : [];
+  const paths = h.children ? h.children.flatMap((c) => [c.path, ...(c.aliases ?? [])]) : [];
   if (h.path) paths.push(h.path);
   return paths;
 }
@@ -437,8 +481,12 @@ export function findActiveChild(hubs: NavHub[], pathname: string): NavChild | un
   let best: { child: NavChild; len: number } | undefined;
   for (const h of hubs) {
     for (const c of h.children ?? []) {
-      if (pathname === c.path || pathname.startsWith(c.path + '/')) {
-        if (!best || c.path.length > best.len) best = { child: c, len: c.path.length };
+      // An alias is the same item under another URL, so it resolves to the same
+      // child — `/inbox` must answer with the `/leads` item, not with nothing.
+      for (const p of [c.path, ...(c.aliases ?? [])]) {
+        if (pathname === p || pathname.startsWith(p + '/')) {
+          if (!best || p.length > best.len) best = { child: c, len: p.length };
+        }
       }
     }
   }

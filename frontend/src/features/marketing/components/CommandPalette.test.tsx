@@ -55,8 +55,12 @@ describe('CommandPalette', () => {
     const user = userEvent.setup();
     renderPalette();
     const input = await screen.findByRole('combobox');
-    await user.type(input, 'Leads');
-    expect(screen.getByRole('option', { name: /Leads/i })).toBeInTheDocument();
+    // "People" since /inbox and /leads collapsed into one entry — and the
+    // palette offers it ONCE, which is the point of the collapse: the palette
+    // is built from visibleNav, so a page listed twice in the menu would have
+    // offered two identical rows here as well.
+    await user.type(input, 'People');
+    expect(screen.getAllByRole('option', { name: /People/i })).toHaveLength(1);
     await user.keyboard('{Enter}');
     expect(screen.getByTestId('loc')).toHaveTextContent('/leads');
   });
