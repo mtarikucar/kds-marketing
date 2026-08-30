@@ -1080,6 +1080,18 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "خارج المسار",
+      "empty": "الجميع داخل المسار.",
+      "failed": "تعذّرت قراءة من هم خارج المسار.",
+      "more": "تحميل المزيد"
+    },
+    "card": {
+      "nobody": "بدون شخص",
+      "unnamed": "شخص بلا اسم"
+    },
+    "terminalDropRefused": "لا يمكنك إسقاط شخص مباشرةً في عمود رابح/خاسر.",
+    "dealForPersonFailed": "تعذّر فتح صفقة لهذا الشخص",
     "dealNotFound": "تعذّر فتح الصفقة"
   },
   "calls": {

@@ -1198,6 +1198,18 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Hatta değil",
+      "empty": "Herkes hatta.",
+      "failed": "Hatta olmayanlar okunamadı.",
+      "more": "Daha fazla"
+    },
+    "card": {
+      "nobody": "Kişisiz",
+      "unnamed": "İsimsiz kişi"
+    },
+    "terminalDropRefused": "Kişiyi doğrudan Kazanıldı/Kaybedildi sütununa bırakamazsın.",
+    "dealForPersonFailed": "Bu kişi için fırsat açılamadı",
     "title": "Fırsatlar",
     "subtitle": "Anlaşmaları satış pipeline'larında takip edin.",
     "newDeal": "Yeni fırsat",

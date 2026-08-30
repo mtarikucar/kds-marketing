@@ -928,6 +928,18 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Not in pipeline",
+      "empty": "Everyone is in the pipeline.",
+      "failed": "Could not read who is outside the pipeline.",
+      "more": "Load more"
+    },
+    "card": {
+      "nobody": "No person",
+      "unnamed": "Unnamed person"
+    },
+    "terminalDropRefused": "You cannot drop a person straight onto Won/Lost.",
+    "dealForPersonFailed": "Could not open a deal for this person",
     "title": "Opportunities",
     "subtitle": "Track deals across your sales pipelines.",
     "newDeal": "New deal",

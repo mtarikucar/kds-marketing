@@ -1080,6 +1080,18 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Quvurda emas",
+      "empty": "Hamma quvurda.",
+      "failed": "Quvurdan tashqaridagilarni o'qib bo'lmadi.",
+      "more": "Ko'proq yuklash"
+    },
+    "card": {
+      "nobody": "Shaxssiz",
+      "unnamed": "Nomsiz shaxs"
+    },
+    "terminalDropRefused": "Shaxsni to'g'ridan-to'g'ri Yutildi/Yutqazildi ustuniga tashlab bo'lmaydi.",
+    "dealForPersonFailed": "Bu shaxs uchun bitim ochib bo'lmadi",
     "dealNotFound": "Bitimni ochib bo'lmadi"
   },
   "calls": {
