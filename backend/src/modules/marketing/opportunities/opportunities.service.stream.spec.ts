@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
 import { assignmentOf } from '../services/lead-stream.service';
@@ -92,6 +93,20 @@ describe('OpportunitiesService — sales movement in the person stream', () => {
     it('writes nothing for a deal with no person behind it', async () => {
       await svc.create(WS, { name: 'Walk-in deal' } as any, MGR);
       expect(tx.leadActivity.create).not.toHaveBeenCalled();
+    });
+
+    it("takes the person's own name when the drag supplies none", async () => {
+      // Dropping a person from the "not in pipeline" column onto a stage is the
+      // ONLY creation gesture with no name field, and it reuses this one path
+      // rather than adding a second `Opportunity` writer beside it.
+      await svc.create(WS, { leadId: LEAD.id, stageId: 's-offer' } as any, MGR);
+      expect((tx.opportunity.create.mock.calls[0][0] as any).data.name).toBe('Ayse');
+      expect(written().title).toBe('Deal opened: Ayse');
+    });
+
+    it('still refuses a deal that has neither a name nor a person', async () => {
+      await expect(svc.create(WS, {} as any, MGR)).rejects.toBeInstanceOf(BadRequestException);
+      expect(tx.opportunity.create).not.toHaveBeenCalled();
     });
 
     it("does not badge a sales move as an assignment (the stream's other STATUS_CHANGE)", async () => {

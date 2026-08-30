@@ -65,7 +65,14 @@ export class ReorderStagesDto {
 }
 
 export class CreateOpportunityDto {
-  @IsString() @IsNotEmpty() @MaxLength(160) name: string;
+  /**
+   * Optional ONLY when `leadId` is given: dragging a PERSON from the "not in
+   * pipeline" column onto a stage supplies no deal name, so the service falls
+   * back to the person's own (`contactPerson || businessName`). A deal with
+   * neither a name nor a person is still rejected — in the service, where the
+   * lead has been read and the fallback is actually available.
+   */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(160) name?: string;
   @IsOptional() @IsString() pipelineId?: string;
   @IsOptional() @IsString() stageId?: string;
   @IsOptional() @IsString() leadId?: string;
@@ -87,6 +94,19 @@ export class UpdateOpportunityDto {
   @IsOptional() @IsString() leadId?: string;
   // null clears the expected close date; an ISO date sets it.
   @IsOptional() @IsDateString() expectedCloseDate?: string | null;
+}
+
+/**
+ * The board's leftmost column — people with no OPEN deal.
+ *
+ * Paginated by design and not optionally: the live workspace has 361 such people
+ * against 2 deals, and a column that tried to draw them all would be the reason
+ * nobody opens the board.
+ */
+export class NotInPipelineFilterDto {
+  @IsOptional() @IsString() @MaxLength(120) search?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number;
 }
 
 export class MoveOpportunityDto {

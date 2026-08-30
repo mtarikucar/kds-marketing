@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
@@ -17,8 +18,66 @@ import {
   MoveOpportunityDto,
   LoseOpportunityDto,
   OpportunityFilterDto,
+  NotInPipelineFilterDto,
 } from '../dto/opportunity.dto';
 import { DealEvent, dealActivity, personDisplayName } from './opportunity-activity';
+import { leadIdsWithOpenOpportunity } from '../services/not-in-pipeline-leads';
+import { leadConversationSummaries } from '../services/lead-activity-enrichment';
+
+/**
+ * The person as a pipeline surface draws them — one shape for the board card
+ * and for the "not in pipeline" column, so the same human cannot be named two
+ * different ways on two halves of the same screen.
+ *
+ * `name` is computed here rather than left to the client because two clients
+ * already compute it independently (`PeopleList.tsx:233`, `PersonPane.tsx:234`)
+ * and a third copy is a third chance to disagree.
+ */
+export interface PersonCard {
+  id: string;
+  /** `contactPerson || businessName`, trimmed. Never null; may be empty. */
+  name: string;
+  businessName: string | null;
+  contactPerson: string | null;
+  phone: string | null;
+  /** The lead's own lifecycle status (NEW, CONTACTED, …) — not the deal's. */
+  status: string;
+  assignedToId: string | null;
+  /** ISO 8601 of the newest message on any of the person's threads; null if none. */
+  lastMessageAt: string | null;
+}
+
+const PERSON_CARD_SELECT = {
+  id: true,
+  businessName: true,
+  contactPerson: true,
+  phone: true,
+  status: true,
+  assignedToId: true,
+} as const;
+
+function toPersonCard(
+  lead: {
+    id: string;
+    businessName: string | null;
+    contactPerson: string | null;
+    phone: string | null;
+    status: string;
+    assignedToId: string | null;
+  },
+  lastMessageAt?: Date | null,
+): PersonCard {
+  return {
+    id: lead.id,
+    name: personDisplayName(lead),
+    businessName: lead.businessName,
+    contactPerson: lead.contactPerson,
+    phone: lead.phone,
+    status: lead.status,
+    assignedToId: lead.assignedToId,
+    lastMessageAt: lastMessageAt ? lastMessageAt.toISOString() : null,
+  };
+}
 
 /** Round a major-unit money sum to 2dp — float sums of Decimal(12,2) values
  *  drift (e.g. 10×0.10 → 0.9999999999999999), so every surfaced total is rounded. */
@@ -181,6 +240,123 @@ export class OpportunitiesService {
   }
 
   /**
+   * The people behind a set of deal cards, keyed by lead id.
+   *
+   * ONE `findMany` for the whole board plus the page-scoped conversation
+   * aggregate `lead-activity-enrichment.ts` already ships — never a lookup per
+   * card. The empty-list guard is not an optimisation: `id: { in: [] }` is a
+   * pointless round trip and `Prisma.join([])` inside the aggregate THROWS.
+   *
+   * `workspaceId` sits beside the id list because `Opportunity.leadId` carries no
+   * foreign key: a card of ours may legally name a person next door, and this
+   * read is the only thing that refuses to put their name on our board.
+   */
+  private async peopleByLeadId(
+    workspaceId: string,
+    leadIds: Array<string | null>,
+  ): Promise<Map<string, PersonCard>> {
+    const ids = [...new Set(leadIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return new Map();
+
+    const [rows, conversations] = await Promise.all([
+      this.prisma.lead.findMany({ where: { id: { in: ids }, workspaceId }, select: PERSON_CARD_SELECT }),
+      leadConversationSummaries(this.prisma, workspaceId, ids),
+    ]);
+    return new Map(rows.map((l) => [l.id, toPersonCard(l, conversations.get(l.id)?.lastMessageAt)]));
+  }
+
+  /**
+   * The board's leftmost column: the people with NO open deal, paginated.
+   *
+   * Its own endpoint rather than a stage inside `board()` because it is the one
+   * column that must page — 361 people on the live workspace against 2 deals —
+   * and folding a paginated list into a response whose other columns are whole
+   * would make "count" mean two different things in one payload.
+   *
+   * "No OPEN opportunity" is defined once, in `not-in-pipeline-leads.ts`; the
+   * lead-side filters (tombstones, soft deletes, REP scope, search) stay in
+   * Prisma so there is exactly one copy of them.
+   */
+  async notInPipeline(
+    workspaceId: string,
+    filter: NotInPipelineFilterDto,
+    user: MarketingUserPayload,
+  ) {
+    const page = filter.page ?? 1;
+    const limit = filter.limit ?? 20;
+    const search = filter.search?.trim();
+
+    const where: Prisma.LeadWhereInput = {
+      /**
+       * The empty-list trap, in the direction this query actually has it.
+       *
+       * `notIn: []` MUST mean "nobody is excluded" — a workspace with no open
+       * deals has its whole roster in this column — while `notIn: [everyone]`
+       * MUST come back empty. Both are asserted against real Postgres, because
+       * the two failures look identical from here: an implementation that drops
+       * the clause when the list is empty is RIGHT in the first case and, for a
+       * complement-shaped query, catastrophically wrong in the second. The
+       * clause is therefore never conditional.
+       *
+       * A NULL in this list would make `NOT IN` unsatisfiable for every row and
+       * silently empty the column; `leadIdsWithOpenOpportunity` filters nulls
+       * out at both ends for exactly that reason.
+       */
+      id: { notIn: await leadIdsWithOpenOpportunity(this.prisma, workspaceId) },
+      // Merged duplicates are tombstoned, not deleted, and bulk-deleted people
+      // are hidden — the same two clauses the person list applies. A column of
+      // work to do must not offer work on a person who no longer exists.
+      mergedIntoId: null,
+      deletedAt: null,
+      // Mirrors board()/forecast(): a rep's column is their own people.
+      ...(user.role === 'REP' ? { assignedToId: user.id } : {}),
+      ...(search
+        ? {
+            OR: [
+              { businessName: { contains: search, mode: 'insensitive' as const } },
+              { contactPerson: { contains: search, mode: 'insensitive' as const } },
+              { phone: { contains: search } },
+              { email: { contains: search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+
+    // `workspaceId` is spread at each call site rather than folded into `where`
+    // above — the ONLY thing keeping a neighbour's people out of this column,
+    // since the id list is a list of people to EXCLUDE and so cannot narrow
+    // anything to a tenant. Written where the query is, both because
+    // `workspace-scoping.arch.spec.ts` can only see a guard it can read at the
+    // call site and because a reader of either statement can see it too. Same
+    // shape as MarketingLeadsService.findAll.
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.lead.findMany({
+        where: { ...where, workspaceId },
+        // Ties break on id so two people touched in the same millisecond keep a
+        // stable order between requests — otherwise a page boundary could show
+        // one of them twice and the other never.
+        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: PERSON_CARD_SELECT,
+      }),
+      this.prisma.lead.count({ where: { ...where, workspaceId } }),
+    ]);
+
+    const conversations = await leadConversationSummaries(
+      this.prisma,
+      workspaceId,
+      rows.map((r) => r.id),
+    );
+    return paginated(
+      rows.map((r) => toPersonCard(r, conversations.get(r.id)?.lastMessageAt)),
+      total,
+      page,
+      limit,
+    );
+  }
+
+  /**
    * Kanban board for one pipeline: the ordered stages, each with its OPEN cards
    * (ordered by `position`). REP sees only their own cards.
    */
@@ -199,10 +375,23 @@ export class OpportunitiesService {
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
     });
 
-    const byStage = new Map<string, typeof cards>();
+    // The card's headline is the PERSON, not the deal (design 2026-08-30): daily
+    // work runs from the human, the board stands for forecast and overview. One
+    // read for the whole board — `Opportunity` has no relation to `Lead` to
+    // `include`, and a lookup per card is the N+1 the e2e counts.
+    const people = await this.peopleByLeadId(
+      workspaceId,
+      cards.map((c) => c.leadId),
+    );
+
+    const byStage = new Map<string, Array<(typeof cards)[number] & { lead: PersonCard | null }>>();
     for (const card of cards) {
       const list = byStage.get(card.stageId) ?? [];
-      list.push(card);
+      // Null rather than absent when the deal has no person, or names one we
+      // cannot show: `leadId` has no foreign key, so it may point at a deleted
+      // person or at a NEIGHBOUR's. The id stays on the row; the NAME is only
+      // rendered when it resolved inside this workspace.
+      list.push({ ...card, lead: (card.leadId && people.get(card.leadId)) || null });
       byStage.set(card.stageId, list);
     }
 
