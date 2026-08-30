@@ -75,7 +75,17 @@ korunur** (yer imleri + frozen küme).
 
 ## Korunacaklar
 
-- Frozen 50-yol kümesi — `navigation.test.ts` değiştirilmez
+- Frozen 50-yol kümesi — liste (`PATHS_BEFORE_THE_SURFACE_MERGE`) harfi harfine
+  korunur. **Düzeltme (2026-08-31):** bu satır önce "`navigation.test.ts`
+  değiştirilmez" diyordu; yanlıştı. Menü tek maddeye indiğinde `/inbox` bir
+  menü maddesi olmaktan çıkıp `/leads`'in **alias**'ı oldu — rota, yer imi ve
+  `findActiveHub` çözümü yerinde kaldı. Testin `allPaths` toplamı yalnızca
+  maddelerin kendi `path`'lerini sayıyordu, dolayısıyla hiçbir rota
+  kaybolmadığı hâlde donmuş liste ile karşılaştırma kırmızıya düşerdi. Tek
+  satır değişti: toplam artık çocukların `path`'ini **ve** `aliases`'ını
+  topluyor (`navigation.test.ts:193-196`). Donmuş listenin kendisi hiç
+  oynamadı ve hâlâ ısırıyor — bir rotayı gerçekten silen refactor yine kırmızı
+  verir.
 - Sürükle-bırak aşama taşıma, tahmin çubuğu, `?deal=` derin bağlantısı
 - v2.284.0'ın kazanımları: tek liste, tıklamanın gezinmemesi, tek akış,
   `unread`/`truncated`/`gated` ayrımı
