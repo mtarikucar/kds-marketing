@@ -261,9 +261,9 @@ export const NAV_HUBS: NavHub[] = [
     // WORK — everything that arrives with a person attached: the conversation,
     // who it is with, what it is worth, when it happens, what you owe them.
     // Absorbed the old `contacts`, `sales`, `calendar`, `tasks` and `voice`
-    // hubs; no `path` of its own, because `/inbox` is entitlement-gated and a
-    // rail item that lands on a page you cannot open is worse than one that
-    // lands on the first page you can (see `hubTarget` in MarketingSidebar).
+    // hubs; no `path` of its own, so `hubTarget` in MarketingSidebar aims the
+    // rail item at the first child — see the note on that child for why the
+    // first child is the ungated one.
     id: 'inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, tier: 'core',
     children: [
       /**
@@ -288,7 +288,6 @@ export const NAV_HUBS: NavHub[] = [
       {
         path: '/leads',
         aliases: ['/inbox'],
-
         labelKey: 'nav.people',
         label: 'People',
         icon: Users,
