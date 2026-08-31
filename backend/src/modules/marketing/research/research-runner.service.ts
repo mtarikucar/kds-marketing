@@ -6,8 +6,13 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { PlatformAiSpendService } from '../ai/platform-ai-spend.service';
 import { ResearchJobService } from './research-job.service';
 import { ResearchWorkerService } from './research-worker.service';
+import { RESEARCH_RUN_KIND } from './research-kinds';
 
-export const RESEARCH_RUN_KIND = 'research.run';
+// Re-exported so every existing importer keeps its `from './research-runner.service'`
+// path. The constant itself lives in the import-free `research-kinds.ts` because
+// the generic ScheduledJobRunnerService now names it in its claim predicate and
+// must not import this file back.
+export { RESEARCH_RUN_KIND };
 
 /**
  * Hard ceilings on the UNATTENDED lane, independent of any customer's plan.

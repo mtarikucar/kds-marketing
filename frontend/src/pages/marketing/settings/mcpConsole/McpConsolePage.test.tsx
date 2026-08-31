@@ -12,6 +12,7 @@ vi.mock('../../../../features/marketing/api/mcpConsole.service', () => ({
   listMcpSessions: vi.fn(),
   getMcpSession: vi.fn(),
   setMcpWriteMode: vi.fn(),
+  setResearchExecution: vi.fn(),
 }));
 
 // `t(key, default, vars)` — resolves to the inline default and interpolates
@@ -42,12 +43,14 @@ const api = svc as unknown as {
   listMcpSessions: ReturnType<typeof vi.fn>;
   getMcpSession: ReturnType<typeof vi.fn>;
   setMcpWriteMode: ReturnType<typeof vi.fn>;
+  setResearchExecution: ReturnType<typeof vi.fn>;
 };
 
 const CLIENT_ID = 'https://claude.ai/api/mcp/client/abc';
 
 const overview = (over: Partial<Record<string, unknown>> = {}) => ({
   mcpWriteMode: 'APPROVAL',
+  researchExecution: 'SERVER',
   canToggle: true,
   mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
   liveConnectionCount: 2,
@@ -223,16 +226,18 @@ describe('McpConsolePage — write mode', () => {
     api.getMcpConsoleOverview.mockResolvedValue(overview({ canToggle: false }));
     render(<McpConsolePage />, { wrapper });
 
-    const sw = await screen.findByRole('switch');
+    const sw = await screen.findByRole('switch', { name: /let claude act without approval/i });
     await waitFor(() => expect(sw).toBeDisabled());
-    expect(screen.getByText(/only a workspace owner/i)).toBeInTheDocument();
+    // Both locked hints are on screen now (write mode and research execution);
+    // this one is about the write mode specifically.
+    expect(screen.getByText(/only a workspace owner.*write mode/i)).toBeInTheDocument();
     // The current mode is still shown — read-only, not hidden.
     expect(screen.getAllByText('Needs approval').length).toBeGreaterThan(0);
   });
 
   it('does not show the locked hint when the caller may toggle', async () => {
     render(<McpConsolePage />, { wrapper });
-    const sw = await screen.findByRole('switch');
+    const sw = await screen.findByRole('switch', { name: /let claude act without approval/i });
     await waitFor(() => expect(sw).toBeEnabled());
     expect(screen.queryByText(/only a workspace owner/i)).not.toBeInTheDocument();
   });
@@ -241,7 +246,7 @@ describe('McpConsolePage — write mode', () => {
     const user = userEvent.setup();
     render(<McpConsolePage />, { wrapper });
 
-    const sw = await screen.findByRole('switch');
+    const sw = await screen.findByRole('switch', { name: /let claude act without approval/i });
     await waitFor(() => expect(sw).toBeEnabled());
     await user.click(sw);
 
@@ -262,7 +267,7 @@ describe('McpConsolePage — write mode', () => {
     const user = userEvent.setup();
     render(<McpConsolePage />, { wrapper });
 
-    const sw = await screen.findByRole('switch');
+    const sw = await screen.findByRole('switch', { name: /let claude act without approval/i });
     await waitFor(() => expect(sw).toBeEnabled());
     await user.click(sw);
 
@@ -278,12 +283,99 @@ describe('McpConsolePage — write mode', () => {
     const user = userEvent.setup();
     render(<McpConsolePage />, { wrapper });
 
-    const sw = await screen.findByRole('switch');
+    const sw = await screen.findByRole('switch', { name: /let claude act without approval/i });
     await waitFor(() => expect(sw).toBeEnabled());
     await user.click(sw);
 
     await waitFor(() => expect(api.setMcpWriteMode).toHaveBeenCalledWith('APPROVAL'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The switch that decides who drains the nightly research queue.
+ *
+ * `PATCH marketing/workspaces/research-execution` shipped OWNER-only, audited
+ * and DTO-validated — with no frontend at all, while `claim_research_job`'s
+ * refusal text and the connector doc both told owners to "switch it in
+ * Settings". An owner could not use the feature without a curl.
+ */
+describe('McpConsolePage — who drains the research queue', () => {
+  it('shows the platform as the drainer by default, and says what that means', async () => {
+    render(<McpConsolePage />, { wrapper });
+
+    const sw = await screen.findByRole('switch', { name: /run the nightly research/i });
+    await waitFor(() => expect(sw).toBeEnabled());
+    expect(sw).not.toBeChecked();
+    expect(screen.getByText(/platform runs the nightly research/i)).toBeInTheDocument();
+  });
+
+  it('confirms before handing the queue over, and names the way it fails', async () => {
+    // Flipping to MCP STOPS the platform draining. With no scheduled task on
+    // the other side the jobs pile up, no candidates appear, and the review
+    // queue looks exactly like "research found nothing" — so this direction is
+    // confirmed and the confirmation says so.
+    const user = userEvent.setup();
+    render(<McpConsolePage />, { wrapper });
+
+    const sw = await screen.findByRole('switch', { name: /run the nightly research/i });
+    await waitFor(() => expect(sw).toBeEnabled());
+    await user.click(sw);
+
+    expect(api.setResearchExecution).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/stops draining/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /yes, my claude drains it/i }));
+    await waitFor(() => expect(api.setResearchExecution).toHaveBeenCalledWith('MCP'));
+  });
+
+  it('hands the queue BACK to the platform with no confirm step', async () => {
+    // The safe direction. Asking twice to become safer only trains people to
+    // click through the dialog.
+    api.getMcpConsoleOverview.mockResolvedValue(overview({ researchExecution: 'MCP' }));
+    api.setResearchExecution.mockResolvedValue({ researchExecution: 'SERVER' });
+    const user = userEvent.setup();
+    render(<McpConsolePage />, { wrapper });
+
+    const sw = await screen.findByRole('switch', { name: /run the nightly research/i });
+    await waitFor(() => expect(sw).toBeEnabled());
+    expect(sw).toBeChecked();
+    await user.click(sw);
+
+    await waitFor(() => expect(api.setResearchExecution).toHaveBeenCalledWith('SERVER'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('warns that the lane needs AUTONOMOUS to run as designed', async () => {
+    // Under APPROVAL the three Jeeta-keyed data tools return PENDING_APPROVAL
+    // and their results can never reach the drainer inside its session, so the
+    // lane silently loses the Google Maps pain signal. An owner turning this on
+    // while the gate is up has to be told before, not after.
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', mcpWriteMode: 'APPROVAL' }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    expect(await screen.findByText(/google maps/i)).toBeInTheDocument();
+  });
+
+  it('says nothing about AUTONOMOUS when the workspace is already on it', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', mcpWriteMode: 'AUTONOMOUS' }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    await screen.findByRole('switch', { name: /run the nightly research/i });
+    expect(screen.queryByText(/google maps/i)).not.toBeInTheDocument();
+  });
+
+  it('is read-only for a caller who cannot flip it, and says why', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(overview({ canToggle: false }));
+    render(<McpConsolePage />, { wrapper });
+
+    const sw = await screen.findByRole('switch', { name: /run the nightly research/i });
+    await waitFor(() => expect(sw).toBeDisabled());
   });
 });
 

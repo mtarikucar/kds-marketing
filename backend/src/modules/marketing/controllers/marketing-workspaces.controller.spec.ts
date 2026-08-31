@@ -284,3 +284,69 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
     });
   });
 });
+
+/**
+ * Which side drains the nightly research queue. Same posture as
+ * `mcp-write-mode` above and for the same reason: this decides whether an
+ * unattended job runs on the platform's Anthropic key or waits for the
+ * owner's own Claude, so it is OWNER-only, audited, and always the CALLER'S
+ * OWN workspace.
+ */
+describe('MarketingWorkspacesController — research-execution', () => {
+  describe('delegation', () => {
+    it("getResearchExecution reads the mode for the CALLER'S OWN workspace", async () => {
+      const authService = {
+        getResearchExecution: jest.fn().mockResolvedValue({ researchExecution: 'SERVER' }),
+      } as any;
+      const ctrl = new MarketingWorkspacesController(authService);
+
+      const res = await ctrl.getResearchExecution({ workspaceId: 'ws-1' } as any);
+
+      expect(authService.getResearchExecution).toHaveBeenCalledWith('ws-1');
+      expect(res).toEqual({ researchExecution: 'SERVER' });
+    });
+
+    it('setResearchExecution writes MCP to the CALLER\'S OWN workspace (never the body/path)', async () => {
+      const authService = {
+        setResearchExecution: jest.fn().mockResolvedValue({ researchExecution: 'MCP' }),
+      } as any;
+      const ctrl = new MarketingWorkspacesController(authService);
+
+      const res = await ctrl.setResearchExecution(
+        { workspaceId: 'ws-1' } as any,
+        { mode: 'MCP' } as any,
+      );
+
+      expect(authService.setResearchExecution).toHaveBeenCalledWith('ws-1', 'MCP');
+      expect(res).toEqual({ researchExecution: 'MCP' });
+    });
+
+    it('setResearchExecution writes SERVER (handing the queue back to the platform)', async () => {
+      const authService = {
+        setResearchExecution: jest.fn().mockResolvedValue({ researchExecution: 'SERVER' }),
+      } as any;
+      const ctrl = new MarketingWorkspacesController(authService);
+
+      const res = await ctrl.setResearchExecution(
+        { workspaceId: 'ws-1' } as any,
+        { mode: 'SERVER' } as any,
+      );
+
+      expect(authService.setResearchExecution).toHaveBeenCalledWith('ws-1', 'SERVER');
+      expect(res).toEqual({ researchExecution: 'SERVER' });
+    });
+  });
+
+  describe('OWNER-only gate', () => {
+    it("is gated by exactly ['OWNER'] on both routes — never co-listed with a lower role", () => {
+      for (const method of ['getResearchExecution', 'setResearchExecution']) {
+        expect(requiredRoles(method)).toEqual(['OWNER']);
+      }
+    });
+
+    it('audits both the read and the write with unambiguous actions', () => {
+      expect(auditAction('getResearchExecution')).toBe('workspace.research_execution.read');
+      expect(auditAction('setResearchExecution')).toBe('workspace.research_execution.update');
+    });
+  });
+});

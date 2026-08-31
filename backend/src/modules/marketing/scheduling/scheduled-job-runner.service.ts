@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
+import { RESEARCH_RUN_KIND } from '../research/research-kinds';
 
 export interface ClaimedJob {
   id: string;
@@ -179,6 +180,52 @@ export class ScheduledJobRunnerService {
     ]);
   }
 
+  /**
+   * Claim the due batch — minus the one kind this runner is not always
+   * entitled to.
+   *
+   * A workspace on `researchExecution = 'MCP'` has said its nightly research
+   * is drained by its OWN Claude over MCP, billed to its own Anthropic
+   * subscription. That is the whole feature: research is 86% of the platform's
+   * measured model bill, and moving the EXECUTION is what moves the money. The
+   * cron still enqueues those jobs unchanged — the queue is the handover point
+   * — so if this claim took them anyway, they would be executed in-process on
+   * the platform's key within sixty seconds of being written, the owner's
+   * drainer would never find anything to lease, and the mode would silently do
+   * nothing while looking like it worked.
+   *
+   * Two properties of the predicate are load-bearing, and each is a different
+   * outage if it slips:
+   *
+   *  - It is a CONJUNCTION of kind and mode. Excluding the kind alone would
+   *    strand research for every SERVER workspace (the default, i.e. almost
+   *    all of them); excluding the workspace alone would strand its campaigns,
+   *    follow-ups, imports and reminders too.
+   *  - The mode is read LIVE off `workspaces`, not stamped onto the row at
+   *    enqueue time. Stamping is tidier layering — this is the one place the
+   *    generic runner knows a feature's kind — but it leaves a real bug:
+   *    rows stamped MCP are orphaned forever the moment an owner switches back
+   *    to SERVER, drained by nobody, noticed by nothing.
+   *
+   *    Reading live means flipping the switch releases every PENDING row in the
+   *    very next tick, in either direction. It does NOT release a row that is
+   *    already CLAIMED: this predicate only ever sees PENDING, so a job an MCP
+   *    client holds is untouched by the flip and stays that way until
+   *    `ResearchLeaseService.releaseExpired` returns it to the queue. That is
+   *    precisely why the sweep runs from `queueStatus()` — mode-independent, no
+   *    client needed — and not only from `claim()` behind the mode check;
+   *    without that second caller the stamped-row bug described above simply
+   *    reappeared one status later, and just as invisibly.
+   *
+   *    Cost: the planner does NOT do a PK lookup per candidate row. `EXPLAIN`
+   *    on this predicate shows `(kind <> 'research.run') OR (NOT (hashed
+   *    SubPlan))` — one pass over the MCP workspaces, hashed once, then probed
+   *    per row. `workspaces` is read once per tick, not once per job. The
+   *    honest version is cheaper than it was described as.
+   *
+   * `RESEARCH_RUN_KIND` is imported from the import-free `research-kinds.ts`
+   * rather than from the research runner, which imports this file.
+   */
   private async claimBatch(): Promise<ClaimedJob[]> {
     const now = new Date();
     const rows = await this.prisma.$queryRaw<
@@ -187,9 +234,17 @@ export class ScheduledJobRunnerService {
       UPDATE "scheduled_jobs"
          SET "status" = 'RUNNING', "lockedAt" = ${now}
        WHERE "id" IN (
-         SELECT "id" FROM "scheduled_jobs"
-          WHERE "status" = 'PENDING' AND "runAt" <= ${now}
-          ORDER BY "runAt"
+         SELECT s."id" FROM "scheduled_jobs" s
+          WHERE s."status" = 'PENDING' AND s."runAt" <= ${now}
+            AND NOT (
+              s."kind" = ${RESEARCH_RUN_KIND}
+              AND EXISTS (
+                SELECT 1 FROM "workspaces" w
+                 WHERE w."id" = s."workspaceId"
+                   AND w."researchExecution" = 'MCP'
+              )
+            )
+          ORDER BY s."runAt"
           FOR UPDATE SKIP LOCKED
           LIMIT ${BATCH}
        )

@@ -38,6 +38,13 @@ describe('Faz 5 D4 — research/prospecting MCP tools', () => {
         'jeeta.list_research_candidates',
         'jeeta.accept_research_candidates',
         'jeeta.reject_research_candidates',
+        // The MCP lane: the owner's own Claude drains the nightly queue.
+        'jeeta.claim_research_job',
+        'jeeta.submit_research_candidates',
+        'jeeta.complete_research_job',
+        'jeeta.research_search_places',
+        'jeeta.research_lookup_instagram',
+        'jeeta.research_scrape_page',
       ].sort(),
     );
     for (const t of tools) {
@@ -253,5 +260,281 @@ describe('jeeta.pause_research_profile', () => {
       parse: (v: unknown) => unknown;
     };
     expect(() => schema.parse({ profileId: 'p1', status: 'ACTIVE' })).toThrow();
+  });
+});
+
+/**
+ * The MCP research lane — the tools an owner's own Claude uses to drain the
+ * nightly queue on its own Anthropic subscription instead of the platform's.
+ *
+ * Three lifecycle tools (claim / submit / complete) plus the three data
+ * sources that stay on Jeeta's vendor keys because Claude cannot substitute
+ * them: Google Maps listings and their reviews (the primary pain signal),
+ * Instagram lookups, and Firecrawl-first page fetches.
+ */
+function buildLane(features: Record<string, boolean> = { research: true }) {
+  const lease = {
+    claim: jest.fn().mockResolvedValue({
+      job: {
+        jobId: 'job-1',
+        profileId: 'p1',
+        profileName: 'Salons',
+        agentRunId: 'run-1',
+        leaseExpiresAt: '2026-08-31T12:30:00.000Z',
+        instruction: 'FULL BRIEF',
+        targetVolume: 20,
+        language: 'tr',
+        geo: { country: 'TR' },
+        businessTypes: ['SALON'],
+        exclusions: null,
+      },
+    }),
+    submit: jest.fn().mockResolvedValue({ researched: 3, staged: 2, duplicates: 1 }),
+    complete: jest.fn().mockResolvedValue({ closed: true, jobId: 'job-1', status: 'DONE' }),
+    toolContext: jest.fn().mockResolvedValue({
+      workspaceId: 'ws1',
+      runId: 'run-1',
+      geo: { country: 'TR', cities: ['Izmir'] },
+    }),
+    queueStatus: jest.fn().mockResolvedValue({ mode: 'MCP', pending: 0, claimed: 0 }),
+  };
+  const sources = {
+    isEnabled: () => true,
+    apify: {
+      isConfigured: () => true,
+      searchPlaces: jest.fn().mockResolvedValue([{ name: 'Cafe X' }]),
+      lookupInstagram: jest.fn().mockResolvedValue({ handle: '@cafex' }),
+    },
+    firecrawl: { isConfigured: () => true, scrape: jest.fn().mockResolvedValue({ markdown: 'x' }) },
+    native: { isConfigured: () => false, scrape: jest.fn(), searchWeb: jest.fn() },
+  };
+  const spend = { settle: jest.fn().mockResolvedValue(null) };
+  const runs = { recordTool: jest.fn().mockResolvedValue(undefined) };
+  const registry = new McpToolRegistry();
+  registerResearchTools(registry, {
+    research: { list: jest.fn(), create: jest.fn(), update: jest.fn(), usage: jest.fn() },
+    runner: { enqueueNow: jest.fn() },
+    candidates: { list: jest.fn(), accept: jest.fn(), reject: jest.fn() },
+    entitlements: { getEffective: jest.fn().mockResolvedValue({ features }) },
+    lease,
+    sources,
+    spend,
+    runs,
+  } as unknown as ResearchToolDeps);
+  return { registry, lease, sources, spend, runs };
+}
+
+const LANE_CTX = { workspaceId: 'ws1', grantedScopes: [] as string[] };
+
+const LANE_TOOLS = [
+  'jeeta.claim_research_job',
+  'jeeta.submit_research_candidates',
+  'jeeta.complete_research_job',
+  'jeeta.research_search_places',
+  'jeeta.research_lookup_instagram',
+  'jeeta.research_scrape_page',
+];
+
+describe('research MCP lane — leasing the nightly queue to the owner Claude', () => {
+  it('registers the six lane tools, all deferred and in the research domain', () => {
+    const { registry } = buildLane();
+    const lane = registry.list([...ALL, 'leads.write']).filter((t) => LANE_TOOLS.includes(t.name));
+
+    expect(lane.map((t) => t.name).sort()).toEqual([...LANE_TOOLS].sort());
+    for (const t of lane) {
+      expect(t.domain).toBe('research');
+      // The advertised surface has a hard ceiling, and every one of these is a
+      // niche tool the drainer is TOLD to call by the instruction it claims.
+      expect(t.defer).toBe(true);
+    }
+  });
+
+  it('classifies the money-spending tools as SPEND and gates them like every other SPEND', () => {
+    const { registry } = buildLane();
+    for (const name of [
+      'jeeta.research_search_places',
+      'jeeta.research_lookup_instagram',
+      'jeeta.research_scrape_page',
+    ]) {
+      const t = registry.get(name)!;
+      // Apify and Firecrawl bill Jeeta by the call. Classifying these as plain
+      // WRITE to dodge the gate would be a lie about where the money goes, and
+      // this catalogue has never had an ungated SPEND.
+      expect(t.risk).toBe('SPEND');
+      expect(t.requiresApproval).toBe(true);
+      expect(t.approvalKind).toBe('AI_SPEND');
+    }
+  });
+
+  it('gates the submit, because loosening it is the owner decision this spec did not take', () => {
+    const { registry } = buildLane();
+    const t = registry.get('jeeta.submit_research_candidates')!;
+    expect(t.risk).toBe('WRITE');
+    expect(t.requiresApproval).toBe(true);
+  });
+
+  it('leaves claim and complete ungated — a gate there costs money instead of saving it', () => {
+    // Claiming spends nothing (the cron already made the job) and self-reverses
+    // when the lease expires. Gating the CLOSE is worse than pointless: the job
+    // would sit leased until it expired and then be researched a second time.
+    const { registry } = buildLane();
+    for (const name of ['jeeta.claim_research_job', 'jeeta.complete_research_job']) {
+      const t = registry.get(name)!;
+      expect(t.risk).toBe('WRITE');
+      expect(t.requiresApproval).toBe(false);
+    }
+  });
+
+  it('claim returns the whole server-authored instruction', async () => {
+    const { registry, lease } = buildLane();
+    const res: any = await registry.get('jeeta.claim_research_job')!.handler(LANE_CTX, {});
+    expect(lease.claim).toHaveBeenCalledWith('ws1');
+    expect(res.job.instruction).toBe('FULL BRIEF');
+    expect(res.job.jobId).toBe('job-1');
+  });
+
+  it('claim SAYS why there is nothing rather than returning an empty object', async () => {
+    // "no job tonight" and "this workspace is not on the MCP lane at all" need
+    // opposite fixes, and a drainer that cannot tell them apart polls forever
+    // against a workspace whose jobs the platform is already draining.
+    const { registry, lease } = buildLane();
+    lease.claim.mockResolvedValue({ job: null, reason: 'not-in-mcp-mode' });
+    const res: any = await registry.get('jeeta.claim_research_job')!.handler(LANE_CTX, {});
+    expect(res.job).toBeNull();
+    expect(res.reason).toBe('not-in-mcp-mode');
+    expect(res.message).toMatch(/MCP/);
+  });
+
+  /**
+   * What APPROVAL actually does to this lane, said in the two places a reader
+   * looks. The doc used to say "under APPROVAL each night's work waits in the
+   * approval queue", which reads as a DELAY. It is not one.
+   *
+   * `McpApprovalExecutorService.apply()` returns the tool result to the
+   * approving human's HTTP response, not into the agent's turn. For a terminal
+   * WRITE like `submit_research_candidates` that is fine — the call is replayed
+   * and the candidates land. For a DATA-FETCH like `research_search_places` the
+   * drainer receives `PENDING_APPROVAL` and can never obtain the reviews within
+   * its session, however fast the owner clicks. So the three Maps/Instagram/
+   * scrape tools are not delayed under APPROVAL, they are unusable, and the
+   * lane silently degrades to Claude's own web search — losing the Google Maps
+   * pain signal the design calls unsubstitutable.
+   */
+  it('claim states plainly that the vendor tools are UNUSABLE under APPROVAL, not delayed', () => {
+    const { registry } = buildLane();
+    const d = registry.get('jeeta.claim_research_job')!.description;
+    expect(d).toMatch(/AUTONOMOUS/);
+    // The degradation must be named, not implied by the absence of a promise.
+    expect(d).toMatch(/Google Maps|Maps/);
+    // And it must not describe the gate as a wait, which is the lie being fixed.
+    expect(d).not.toMatch(/waits? in the approval queue/i);
+  });
+
+  it('points an owner at where the research-execution switch actually is', () => {
+    // Two strings used to say "an OWNER switches it in Settings" while no
+    // frontend for PATCH /workspaces/research-execution existed at all.
+    const { registry, lease } = buildLane();
+    lease.claim.mockResolvedValue({ job: null, reason: 'not-in-mcp-mode' });
+    return registry
+      .get('jeeta.claim_research_job')!
+      .handler(LANE_CTX, {})
+      .then((res: any) => {
+        // The real nav label (`nav.mcpConsole`), not a vague "in Settings".
+        expect(res.message).toMatch(/Settings > Claude connector/i);
+      });
+  });
+
+  it('submit routes to the shared staging path and reports duplicates honestly', async () => {
+    const { registry, lease } = buildLane();
+    const res: any = await registry.get('jeeta.submit_research_candidates')!.handler(LANE_CTX, {
+      jobId: 'job-1',
+      candidates: [
+        {
+          externalRef: 'phone:+905551112233',
+          businessName: 'X',
+          businessType: 'CAFE',
+          painPoint: 'p',
+          evidence: 'e',
+          pitch: 'q',
+        },
+      ],
+    });
+    expect(lease.submit).toHaveBeenCalledWith(
+      'ws1',
+      'job-1',
+      expect.arrayContaining([expect.objectContaining({ businessName: 'X' })]),
+    );
+    expect(res).toMatchObject({ staged: 2, duplicates: 1, researched: 3 });
+    expect(res.message).toMatch(/review/i);
+  });
+
+  it('complete closes the job with the reason it was given', async () => {
+    const { registry, lease } = buildLane();
+    await registry.get('jeeta.complete_research_job')!.handler(LANE_CTX, {
+      jobId: 'job-1',
+      status: 'FAILED',
+      reason: 'apify returned nothing',
+    });
+    expect(lease.complete).toHaveBeenCalledWith('ws1', 'job-1', {
+      status: 'FAILED',
+      reason: 'apify returned nothing',
+    });
+  });
+
+  it('resolves the data tools run id and geo from the LEASE, never from the caller', async () => {
+    // This is the isolation predicate for the three vendor-billed tools: the
+    // run a ToolCallLog and an Apify meter are attributed to, and the geo the
+    // brief promised, both come from the server's record of the leased job.
+    const { registry, lease, sources, spend } = buildLane();
+
+    await registry
+      .get('jeeta.research_search_places')!
+      .handler(LANE_CTX, { jobId: 'job-1', query: 'salon' });
+
+    expect(lease.toolContext).toHaveBeenCalledWith('ws1', 'job-1');
+    expect(sources.apify.searchPlaces).toHaveBeenCalledWith(
+      expect.objectContaining({ query: 'salon', geo: { country: 'TR', cities: ['Izmir'] } }),
+    );
+    expect(spend.settle).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({ unit: 'APIFY_RUN', ref: 'run-1' }),
+    );
+  });
+
+  it('logs every vendor-billed call against the leased run', async () => {
+    const { registry, runs } = buildLane();
+    await registry
+      .get('jeeta.research_scrape_page')!
+      .handler(LANE_CTX, { jobId: 'job-1', url: 'https://x.test' });
+    expect(runs.recordTool).toHaveBeenCalledWith(
+      'ws1',
+      'run-1',
+      expect.objectContaining({ tool: 'scrape_page' }),
+    );
+  });
+
+  it('accepts no workspaceId on any lane tool', () => {
+    const { registry } = buildLane();
+    for (const name of LANE_TOOLS) {
+      const schema = registry.get(name)!.inputSchema as { parse: (v: unknown) => unknown };
+      expect(() => schema.parse({ workspaceId: 'ws-b' })).toThrow();
+    }
+  });
+
+  it('gates the whole lane on the research module', async () => {
+    const { registry } = buildLane({});
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['jeeta.claim_research_job', {}],
+      ['jeeta.submit_research_candidates', { jobId: 'j', candidates: [] }],
+      ['jeeta.complete_research_job', { jobId: 'j', status: 'DONE' }],
+      ['jeeta.research_search_places', { jobId: 'j', query: 'q' }],
+      ['jeeta.research_lookup_instagram', { jobId: 'j', handle: '@x' }],
+      ['jeeta.research_scrape_page', { jobId: 'j', url: 'https://x.test' }],
+    ];
+    for (const [name, args] of calls) {
+      await expect(registry.get(name)!.handler(LANE_CTX, args)).rejects.toMatchObject({
+        response: { code: 'FEATURE_NOT_IN_PACKAGE', feature: 'research' },
+      });
+    }
   });
 });

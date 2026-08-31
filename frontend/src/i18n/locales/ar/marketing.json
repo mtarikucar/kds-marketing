@@ -1081,7 +1081,18 @@
     "none": {
       "title": "لا شيء مجدول",
       "desc": "عندما تُجدول مهمة أو موعد أو حملة، ستراها هنا."
-    }
+    },
+    "researchWaitingMcp": "مهمة بحث بانتظار Claude الخاص بك",
+    "researchWaitingServer": "مهمة بحث بانتظار الدور في الطابور",
+    "researchHeldMcp": "مهمة/مهام بحث يحتفظ بها Claude الخاص بك الآن",
+    "researchHeldServer": "مهمة/مهام بحث ما زالت محجوزة لدى Claude الخاص بك — تعود إلى الطابور عند انتهاء مدة الحجز",
+    "researchHeldFor": "محجوزة منذ",
+    "researchMinutesAgo": "دقيقة",
+    "researchHoursAgo": "ساعة",
+    "researchOldest": "أقدمها",
+    "researchDays": "يوم",
+    "researchHours": "ساعة",
+    "researchAwaitingApproval": "نتيجة بحث بانتظار موافقتك — لا يُحفظ أي مرشح قبل الموافقة"
   },
   "opportunities": {
     "notInPipeline": {

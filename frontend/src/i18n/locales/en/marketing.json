@@ -3081,6 +3081,25 @@
       "approvalToast": "Approval required — every write Claude attempts now waits for a human.",
       "error": "Could not change the write mode."
     },
+    "researchExecution": {
+      "title": "Who runs the nightly research",
+      "desc": "Prospect research is the most expensive thing this product does. You can have your own Claude do the searching and reasoning on your subscription instead of ours — the briefs, the queue and the review step stay exactly the same.",
+      "switchLabel": "Let my Claude run the nightly research",
+      "stateMcp": "MCP — your Claude drains the queue. If nothing claims the jobs they simply pile up and no prospects appear.",
+      "stateServer": "SERVER — the platform runs the nightly research for you, on our key.",
+      "MCP": "Your Claude",
+      "SERVER": "Platform",
+      "needsAutonomousTitle": "This lane needs autonomous write mode",
+      "needsAutonomous": "While writes need approval, the Google Maps and page-fetch tools your Claude uses to find the pain signal answer \"waiting for approval\" instead of returning results — and an approved call is replayed to you, never handed back into the session that asked for it, however fast you click. Your Claude falls back to plain web search and the prospects come out weaker. Switch write mode to autonomous above to run this as designed.",
+      "lockedTitle": "Read-only for you",
+      "locked": "Only a workspace owner with the \"manage settings\" permission can change who runs the research. You can see the current setting but not change it.",
+      "confirmTitle": "Hand the nightly research to your own Claude?",
+      "confirmDesc": "From the moment you save this, the platform stops draining your research queue. Nothing runs until a connected Claude claims the jobs itself — so you need a scheduled task on your side that calls the connector. Until then the queue fills up and no new prospects appear, which on screen looks the same as research finding nothing. You can hand it back at any time.",
+      "confirmCta": "Yes, my Claude drains it",
+      "mcpToast": "Your Claude drains the research queue now — the platform has stopped. Nothing runs until a connected client claims the jobs.",
+      "serverToast": "The platform drains the research queue again.",
+      "error": "Could not change who runs the research."
+    },
     "connections": {
       "title": "Connections",
       "desc": "Everything that can currently reach this workspace over MCP — Claude apps that you authorised, plus the API keys used by Claude Code.",
@@ -3211,7 +3230,18 @@
     "none": {
       "title": "Nothing is scheduled",
       "desc": "When a task, appointment or campaign is scheduled, you will see it here."
-    }
+    },
+    "researchWaitingMcp": "research job(s) waiting for your Claude",
+    "researchWaitingServer": "research job(s) waiting in the queue",
+    "researchHeldMcp": "research job(s) your Claude is holding right now",
+    "researchHeldServer": "research job(s) still leased to your Claude — each returns to the queue when its lease runs out",
+    "researchHeldFor": "leased",
+    "researchMinutesAgo": "minute(s) ago",
+    "researchHoursAgo": "hour(s) ago",
+    "researchOldest": "oldest is",
+    "researchDays": "day(s) old",
+    "researchHours": "hour(s) old",
+    "researchAwaitingApproval": "research result(s) waiting for your approval — no candidate is saved until you approve"
   },
   "budget": {
     "kind": {

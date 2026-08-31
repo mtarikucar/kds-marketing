@@ -118,9 +118,14 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
             "'campaign.batch', 'import.batch', 'booking.reminder'.",
         ),
       status: z
-        .enum(['PENDING', 'RUNNING', 'DONE', 'FAILED', 'CANCELLED'])
+        .enum(['PENDING', 'CLAIMED', 'RUNNING', 'DONE', 'FAILED', 'CANCELLED'])
         .optional()
-        .describe('Filter by status. Omit to see every state, newest first.'),
+        .describe(
+          'Filter by status. Omit to see every state, newest first. CLAIMED means an MCP client ' +
+            'holds a lease on the job — the nightly research this workspace handed to its own Claude — ' +
+            'neither the generic runner nor its stuck-job reaper touches that state, so it is where ' +
+            'an abandoned research job sits until its lease expires.',
+        ),
       limit: z.number().int().min(1).max(100).optional().describe('Rows to return. Defaults to 20.'),
     }),
     // The registry hands every handler `Record<string, unknown>`; the zod schema

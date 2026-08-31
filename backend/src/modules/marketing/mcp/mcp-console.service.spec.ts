@@ -570,12 +570,53 @@ describe('McpConsoleService — overview', () => {
 
     expect(res).toEqual({
       mcpWriteMode: 'AUTONOMOUS',
+      researchExecution: 'SERVER',
       canToggle: true,
       mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
       liveConnectionCount: 2, // 1 live OAuth client + 1 ACTIVE api key
       pendingApprovalCount: 0,
     });
     expect(prisma.workspace.findUnique.mock.calls[0][0].where).toEqual({ id: 'ws-a' });
+  });
+
+  /**
+   * The research-execution switch reads through the SAME overview for the same
+   * reason the write mode does: `GET marketing/workspaces/research-execution`
+   * is OWNER-only and `@Audit`-logged, so a MANAGER opening the console would
+   * be 403d off the page and every page load would write an audit row. Read
+   * here, MANAGER-visible, with `canToggle` — whose gate (OWNER +
+   * `settings.manage`) is identical to `setResearchExecution`'s — deciding
+   * whether the switch is offered.
+   */
+  it('reports which side drains the nightly research queue', async () => {
+    const { svc, prisma } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({
+      mcpWriteMode: 'APPROVAL',
+      researchExecution: 'MCP',
+    });
+
+    await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({
+      researchExecution: 'MCP',
+    });
+    expect(prisma.workspace.findUnique.mock.calls[0][0].select).toMatchObject({
+      researchExecution: true,
+    });
+  });
+
+  it('falls back to SERVER for an unset/unknown researchExecution', async () => {
+    // Same fail-safe direction as `ResearchLeaseService.modeFor`: anything that
+    // is not exactly 'MCP' means the platform is still draining. Guessing MCP
+    // here would draw a switch claiming the owner's Claude is responsible for a
+    // queue the platform is in fact still working.
+    const { svc, prisma } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({
+      mcpWriteMode: 'APPROVAL',
+      researchExecution: 'nonsense',
+    });
+
+    await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({
+      researchExecution: 'SERVER',
+    });
   });
 
   it('falls back to APPROVAL for an unset/unknown stored mode', async () => {

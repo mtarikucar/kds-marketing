@@ -13,6 +13,7 @@ import {
   getMcpSession,
   getMcpWriteMode,
   setMcpWriteMode,
+  setResearchExecution,
 } from './mcpConsole.service';
 
 const api = marketingApi as unknown as {
@@ -108,5 +109,22 @@ describe('mcpConsole.service', () => {
     api.patch.mockResolvedValue({ data: { mcpWriteMode: 'APPROVAL' } });
     await setMcpWriteMode('APPROVAL');
     expect(api.patch).toHaveBeenCalledWith('/workspaces/mcp-write-mode', { mode: 'APPROVAL' });
+  });
+
+  // A DIFFERENT route on the same controller, and a different column. Sending
+  // this to `/workspaces/mcp-write-mode` would 400 on the DTO
+  // (`@IsIn(['APPROVAL','AUTONOMOUS'])`) rather than silently mis-set — but it
+  // is worth pinning, because the two switches now sit on one card stack.
+  it('setResearchExecution PATCHes { mode } to its own endpoint', async () => {
+    api.patch.mockResolvedValue({ data: { researchExecution: 'MCP' } });
+    const res = await setResearchExecution('MCP');
+    expect(api.patch).toHaveBeenCalledWith('/workspaces/research-execution', { mode: 'MCP' });
+    expect(res).toEqual({ researchExecution: 'MCP' });
+  });
+
+  it('setResearchExecution can hand the queue back to the platform', async () => {
+    api.patch.mockResolvedValue({ data: { researchExecution: 'SERVER' } });
+    await setResearchExecution('SERVER');
+    expect(api.patch).toHaveBeenCalledWith('/workspaces/research-execution', { mode: 'SERVER' });
   });
 });

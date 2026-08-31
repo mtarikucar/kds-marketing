@@ -10,6 +10,7 @@ import { Audit } from '../../audit/audit.decorator';
 import { MarketingAuthService } from '../services/marketing-auth.service';
 import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
 import { SetMcpWriteModeDto } from '../dto/set-mcp-write-mode.dto';
+import { SetResearchExecutionDto } from '../dto/set-research-execution.dto';
 import { MarketingUserPayload } from '../types';
 
 /**
@@ -93,5 +94,41 @@ export class MarketingWorkspacesController {
     @Body() dto: SetMcpWriteModeDto,
   ) {
     return this.authService.setMcpWriteMode(user.workspaceId, dto.mode);
+  }
+
+  /**
+   * Which side drains the nightly research queue (SERVER | MCP).
+   *
+   * Same posture as the two routes above, and for a comparable reason: this
+   * decides whether an unattended nightly job spends the PLATFORM's Anthropic
+   * key or waits for the owner's own Claude. Flipping it to MCP without a
+   * drainer on the other side silently stops research — so it is OWNER-only,
+   * `@Audit`-logged, DTO-validated (`@IsIn(['SERVER','MCP'])`), and always the
+   * CALLER'S OWN workspace from the authenticated principal, never the body.
+   *
+   * `@MarketingRoles('OWNER')` is listed alone — see getMcpWriteMode above for
+   * why co-listing a lower role would silently widen nothing and read as if it
+   * widened something.
+   */
+  @Get('research-execution')
+  @MarketingRoles('OWNER')
+  @Audit({ action: 'workspace.research_execution.read', resourceType: 'workspace' })
+  getResearchExecution(@CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.authService.getResearchExecution(user.workspaceId);
+  }
+
+  @Patch('research-execution')
+  @MarketingRoles('OWNER')
+  @RequirePermission('settings.manage')
+  @Audit({
+    action: 'workspace.research_execution.update',
+    resourceType: 'workspace',
+    captureBody: ['mode'],
+  })
+  setResearchExecution(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Body() dto: SetResearchExecutionDto,
+  ) {
+    return this.authService.setResearchExecution(user.workspaceId, dto.mode);
   }
 }

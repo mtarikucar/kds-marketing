@@ -45,7 +45,7 @@ function recorder() {
     }
     return obj as never;
   };
-  return { calls, stub, setTool: (t: string) => (current = t) };
+  return { calls, stub, setTool: (t: string) => (current = t), current: () => current };
 }
 
 function buildRegistry() {
@@ -105,10 +105,36 @@ function buildRegistry() {
     principals: principals as never,
     entitlements: entitlements as never,
   });
+  // The MCP research lane. `toolContext` needs a real shape back (the three
+  // vendor tools run under the context it returns), so it is hand-built rather
+  // than taken from rec.stub's single-result form — and it deliberately answers
+  // with the workspace it was ASKED about, so a leak would propagate rather
+  // than being absorbed by a hardcoded CALLER_WS.
+  const lease = {
+    ...(rec.stub('lease', ['claim', 'submit', 'complete'], { job: null }) as Record<string, unknown>),
+    toolContext: jest.fn(async (workspaceId: string, jobId: string) => {
+      rec.calls.push({ tool: rec.current(), service: 'lease', method: 'toolContext', args: [workspaceId, jobId] });
+      return { workspaceId, runId: 'run-1', geo: { country: 'TR' } };
+    }),
+  };
+  const sources = {
+    isEnabled: () => true,
+    apify: {
+      isConfigured: () => true,
+      searchPlaces: jest.fn(async () => []),
+      lookupInstagram: jest.fn(async () => ({})),
+    },
+    firecrawl: { isConfigured: () => true, scrape: jest.fn(async () => ({})) },
+    native: { isConfigured: () => false, scrape: jest.fn(), searchWeb: jest.fn() },
+  };
   registerResearchTools(registry, {
     research: rec.stub('research', ['list', 'create', 'usage'], []),
     runner: rec.stub('runner', ['enqueueNow'], undefined),
     entitlements: entitlements as never,
+    lease: lease as never,
+    sources: sources as never,
+    spend: rec.stub('spend', ['settle'], null),
+    runs: rec.stub('runs', ['recordTool'], undefined),
   });
   registerBrandTools(registry, {
     brand: rec.stub('brand', ['search'], []),
@@ -151,6 +177,30 @@ const D4_CALLS: Array<[string, Record<string, unknown>]> = [
     },
   ],
   ['jeeta.run_research', { profileId: FOREIGN_WS }],
+  // The MCP research lane. `jobId` is the probe: it is the ONLY identifier
+  // these tools take, so if any of them let a caller-supplied value stand in
+  // for the workspace, this is where it would show.
+  ['jeeta.claim_research_job', {}],
+  [
+    'jeeta.submit_research_candidates',
+    {
+      jobId: FOREIGN_WS,
+      candidates: [
+        {
+          externalRef: `domain:${FOREIGN_WS}.test`,
+          businessName: FOREIGN_WS,
+          businessType: 'CAFE',
+          painPoint: FOREIGN_WS,
+          evidence: FOREIGN_WS,
+          pitch: FOREIGN_WS,
+        },
+      ],
+    },
+  ],
+  ['jeeta.complete_research_job', { jobId: FOREIGN_WS, status: 'DONE', reason: FOREIGN_WS }],
+  ['jeeta.research_search_places', { jobId: FOREIGN_WS, query: FOREIGN_WS }],
+  ['jeeta.research_lookup_instagram', { jobId: FOREIGN_WS, handle: FOREIGN_WS }],
+  ['jeeta.research_scrape_page', { jobId: FOREIGN_WS, url: `https://${FOREIGN_WS}.test` }],
   ['jeeta.get_brand_profile', {}],
   ['jeeta.update_brand_profile', { brandName: FOREIGN_WS, voiceGuide: FOREIGN_WS }],
 ];
@@ -235,6 +285,10 @@ describe('Faz 5 D4 — workspace isolation across the whole wave', () => {
         'jeeta.trigger_workflow:SPEND:SEND',
         'jeeta.set_workflow_enabled:WRITE:CHANNEL_LAUNCH',
         'jeeta.set_strategy_autonomy:WRITE:TARGET_CHANGE',
+        'jeeta.submit_research_candidates:WRITE:undefined',
+        'jeeta.research_search_places:SPEND:AI_SPEND',
+        'jeeta.research_lookup_instagram:SPEND:AI_SPEND',
+        'jeeta.research_scrape_page:SPEND:AI_SPEND',
       ].sort(),
     );
   });
@@ -262,6 +316,11 @@ describe('Faz 5 D4 — workspace isolation across the whole wave', () => {
         'jeeta.create_research_profile',
         'jeeta.get_brand_profile',
         'jeeta.update_brand_profile',
+        // Claiming spends nothing and self-reverses on lease expiry; gating the
+        // CLOSE would leave the job leased until it expired and then researched
+        // twice — a gate that costs money instead of saving it.
+        'jeeta.claim_research_job',
+        'jeeta.complete_research_job',
       ].sort(),
     );
   });

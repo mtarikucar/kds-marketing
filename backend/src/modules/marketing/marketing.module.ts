@@ -241,6 +241,8 @@ import { NativeWebProvider } from './research/providers/native-web.provider';
 import { ResearchSourcesService } from './research/providers/research-sources.service';
 import { ResearchJobService } from './research/research-job.service';
 import { ResearchCandidateService } from './research/research-candidate.service';
+import { ResearchFinalizeService } from './research/research-finalize.service';
+import { ResearchLeaseService } from './research/research-lease.service';
 import { ResearchWorkerService } from './research/research-worker.service';
 import { ResearchRunnerService } from './research/research-runner.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
@@ -956,6 +958,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ResearchSourcesService,
     ResearchJobService,
     ResearchCandidateService,
+    ResearchFinalizeService,
+    ResearchLeaseService,
     ResearchWorkerService,
     ResearchRunnerService,
     BudgetPacerService,
@@ -1275,6 +1279,10 @@ export class MarketingModule {
     marketingResearch: MarketingResearchService,
     researchRunner: ResearchRunnerService,
     researchCandidates: ResearchCandidateService,
+    researchLease: ResearchLeaseService,
+    researchSources: ResearchSourcesService,
+    researchSpend: ResearchSpendService,
+    agentRuns: AgentRunService,
     brandProfiles: BrandProfileService,
     // Faz 5 D5 — commerce & reputation.
     products: ProductsService,
@@ -1323,6 +1331,13 @@ export class MarketingModule {
       runner: researchRunner,
       candidates: researchCandidates,
       entitlements,
+      // The MCP research lane — the owner's own Claude drains the nightly
+      // queue. The three source deps are the SAME providers, spend meter and
+      // audit sink the in-process worker uses; nothing is reimplemented.
+      lease: researchLease,
+      sources: researchSources,
+      spend: researchSpend,
+      runs: agentRuns,
     });
     // Faz 5 D5 — commerce & reputation.
     registerCommerceTools(registry, {

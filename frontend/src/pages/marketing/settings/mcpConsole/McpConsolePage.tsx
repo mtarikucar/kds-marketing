@@ -46,9 +46,11 @@ import {
   listMcpSessions,
   getMcpSession,
   setMcpWriteMode,
+  setResearchExecution,
   type McpOAuthConnection,
   type McpSessionSummary,
   type McpWriteMode,
+  type ResearchExecution,
 } from '../../../../features/marketing/api/mcpConsole.service';
 import { fmtDateTime } from '../../../../features/marketing/utils/format';
 import { copyToClipboard } from '../../../../lib/clipboard';
@@ -100,6 +102,7 @@ export default function McpConsolePage() {
       />
       <OverviewSection />
       <WriteModeSection />
+      <ResearchExecutionSection />
       <ConnectionsSection />
       <SessionsSection />
     </div>
@@ -364,6 +367,176 @@ function WriteModeSection() {
           tone="danger"
           loading={save.isPending}
           onConfirm={() => save.mutate('AUTONOMOUS')}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── 2b. Who drains the nightly research queue ────────────────
+
+/**
+ * The SERVER ⇄ MCP switch for `Workspace.researchExecution`.
+ *
+ * `PATCH marketing/workspaces/research-execution` shipped OWNER-only, audited
+ * and DTO-validated, with no frontend at all — while the connector doc and
+ * `claim_research_job`'s own refusal text both told owners to "switch it in
+ * Settings". An owner could not turn the feature on without a curl.
+ *
+ * Same shape as WriteModeSection above, and the risky direction is likewise
+ * confirmed — but it is the OPPOSITE direction. Turning this ON does not loosen
+ * a gate; it makes the PLATFORM stop draining. With no scheduled task on the
+ * other side the jobs pile up, no candidates appear, and the review queue reads
+ * exactly like "research ran and found nothing". Handing the queue BACK is the
+ * safe direction and applies immediately.
+ */
+function ResearchExecutionSection() {
+  const { t } = useTranslation('marketing');
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const q = useQuery({ queryKey: QK.overview, queryFn: getMcpConsoleOverview });
+  // Fail-safe in the SERVER direction, matching the backend: anything that is
+  // not exactly 'MCP' means the platform is still draining, and a switch drawn
+  // the other way would tell an owner their Claude owes work it does not.
+  const mode: ResearchExecution = q.data?.researchExecution === 'MCP' ? 'MCP' : 'SERVER';
+  const canToggle = q.data?.canToggle === true;
+  const onMcp = mode === 'MCP';
+  // The gate that makes this lane half-work. Only shown when it actually
+  // applies — a warning that is always on screen is a warning nobody reads.
+  const gatedByApproval = onMcp && q.data?.mcpWriteMode !== 'AUTONOMOUS';
+
+  const save = useMutation({
+    mutationFn: (next: ResearchExecution) => setResearchExecution(next),
+    onSuccess: (_res, next) => {
+      qc.invalidateQueries({ queryKey: QK.overview });
+      setConfirmOpen(false);
+      toast.success(
+        next === 'MCP'
+          ? t(
+              'mcpConsole.researchExecution.mcpToast',
+              'Your Claude drains the research queue now — the platform has stopped. Nothing runs until a connected client claims the jobs.',
+            )
+          : t(
+              'mcpConsole.researchExecution.serverToast',
+              'The platform drains the research queue again.',
+            ),
+      );
+    },
+    onError: (e: unknown) =>
+      toast.error(
+        (e as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+          t('mcpConsole.researchExecution.error', 'Could not change who runs the research.'),
+      ),
+  });
+
+  const onSwitch = (checked: boolean) => {
+    // Handing the queue away is confirmed; taking it back applies straight away.
+    if (checked) setConfirmOpen(true);
+    else save.mutate('SERVER');
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          {t('mcpConsole.researchExecution.title', 'Who runs the nightly research')}
+        </CardTitle>
+        <CardDescription>
+          {t(
+            'mcpConsole.researchExecution.desc',
+            'Prospect research is the most expensive thing this product does. You can have your own Claude do the searching and reasoning on your subscription instead of ours — the briefs, the queue and the review step stay exactly the same.',
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <Label htmlFor="research-execution" className="text-sm font-medium">
+              {t(
+                'mcpConsole.researchExecution.switchLabel',
+                'Let my Claude run the nightly research',
+              )}
+            </Label>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {onMcp
+                ? t(
+                    'mcpConsole.researchExecution.stateMcp',
+                    'MCP — your Claude drains the queue. If nothing claims the jobs they simply pile up and no prospects appear.',
+                  )
+                : t(
+                    'mcpConsole.researchExecution.stateServer',
+                    'SERVER — the platform runs the nightly research for you, on our key.',
+                  )}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Badge tone={onMcp ? 'warning' : 'success'} size="sm">
+              {onMcp
+                ? t('mcpConsole.researchExecution.MCP', 'Your Claude')
+                : t('mcpConsole.researchExecution.SERVER', 'Platform')}
+            </Badge>
+            <Switch
+              id="research-execution"
+              checked={onMcp}
+              disabled={!canToggle || save.isPending || q.isLoading}
+              onCheckedChange={onSwitch}
+              aria-label={t(
+                'mcpConsole.researchExecution.switchLabel',
+                'Let my Claude run the nightly research',
+              )}
+            />
+          </div>
+        </div>
+
+        {gatedByApproval && (
+          <Callout
+            tone="warning"
+            title={t(
+              'mcpConsole.researchExecution.needsAutonomousTitle',
+              'This lane needs autonomous write mode',
+            )}
+          >
+            {t(
+              'mcpConsole.researchExecution.needsAutonomous',
+              'While writes need approval, the Google Maps and page-fetch tools your Claude uses to find the pain signal answer "waiting for approval" instead of returning results — and an approved call is replayed to you, never handed back into the session that asked for it, however fast you click. Your Claude falls back to plain web search and the prospects come out weaker. Switch write mode to autonomous above to run this as designed.',
+            )}
+          </Callout>
+        )}
+
+        {!q.isLoading && !canToggle && (
+          <Callout
+            tone="info"
+            title={t('mcpConsole.researchExecution.lockedTitle', 'Read-only for you')}
+          >
+            {t(
+              'mcpConsole.researchExecution.locked',
+              'Only a workspace owner with the "manage settings" permission can change who runs the research. You can see the current setting but not change it.',
+            )}
+          </Callout>
+        )}
+
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={(open) => {
+            if (!open) setConfirmOpen(false);
+          }}
+          title={t(
+            'mcpConsole.researchExecution.confirmTitle',
+            'Hand the nightly research to your own Claude?',
+          )}
+          description={t(
+            'mcpConsole.researchExecution.confirmDesc',
+            'From the moment you save this, the platform stops draining your research queue. Nothing runs until a connected Claude claims the jobs itself — so you need a scheduled task on your side that calls the connector. Until then the queue fills up and no new prospects appear, which on screen looks the same as research finding nothing. You can hand it back at any time.',
+          )}
+          confirmLabel={t('mcpConsole.researchExecution.confirmCta', 'Yes, my Claude drains it')}
+          cancelLabel={t('common.cancel', 'Cancel')}
+          // Not `danger`: this destroys nothing and the switch back is one
+          // click away. What it needs is the WARNING in the description, which
+          // no button colour could carry.
+          tone="default"
+          loading={save.isPending}
+          onConfirm={() => save.mutate('MCP')}
         />
       </CardContent>
     </Card>

@@ -123,7 +123,22 @@ export interface McpSessionDetail extends Omit<McpSessionSummary, 'toolCallCount
 
 export interface McpConsoleOverview {
   mcpWriteMode: 'APPROVAL' | 'AUTONOMOUS';
-  /** Whether THIS caller may flip the mode. See `canToggleWriteMode`. */
+  /**
+   * Which side drains the nightly research queue (`Workspace.researchExecution`).
+   *
+   * Read here rather than from its own OWNER-only, `@Audit`-logged endpoint for
+   * the same reason `mcpWriteMode` is: the console is MANAGER-readable, and a
+   * page load must not 403 a MANAGER or write an audit row per render.
+   */
+  researchExecution: 'SERVER' | 'MCP';
+  /**
+   * Whether THIS caller may flip either switch. See `canToggleWriteMode`.
+   *
+   * One flag for both because both endpoints carry the IDENTICAL pair of gates
+   * — `@MarketingRoles('OWNER')` plus `@RequirePermission('settings.manage')`.
+   * If they ever diverge this must split in two; a single flag standing in for
+   * two different gates is how a UI starts offering a switch the API refuses.
+   */
   canToggle: boolean;
   /** The canonical MCP resource URI to paste into a client, or null when the
    *  deployment has no PUBLIC_BASE_URL configured. */
@@ -429,7 +444,7 @@ export class McpConsoleService {
     const [workspace, connections, pendingApprovalCount, canToggle] = await Promise.all([
       this.prisma.workspace.findUnique({
         where: { id: workspaceId },
-        select: { mcpWriteMode: true },
+        select: { mcpWriteMode: true, researchExecution: true },
       }),
       this.listConnections(workspaceId),
       this.pendingMcpApprovalCount(workspaceId),
@@ -440,6 +455,11 @@ export class McpConsoleService {
       // Anything other than the explicit opt-out reads as the gated default —
       // same fail-safe direction McpInvokerService.writeModeFor() uses.
       mcpWriteMode: workspace?.mcpWriteMode === 'AUTONOMOUS' ? 'AUTONOMOUS' : 'APPROVAL',
+      // Same fail-safe direction as ResearchLeaseService.modeFor(): anything
+      // that is not exactly 'MCP' means the PLATFORM is still draining. Reading
+      // an unknown value as MCP would draw a switch telling the owner their own
+      // Claude is responsible for a queue the platform is in fact working.
+      researchExecution: workspace?.researchExecution === 'MCP' ? 'MCP' : 'SERVER',
       canToggle,
       mcpEndpoint: this.mcpEndpoint(),
       liveConnectionCount: connections.oauth.length + connections.apiKeys.length,

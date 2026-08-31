@@ -16,6 +16,16 @@ const timeline = (over: Partial<HomeTimeline> = {}): HomeTimeline => ({
   items: [],
   unread: [],
   truncated: [],
+  research: {
+    mode: 'SERVER',
+    pending: 0,
+    claimed: 0,
+    oldestPendingAt: null,
+    oldestPendingAgeHours: null,
+    oldestClaimedAt: null,
+    oldestClaimedAgeMinutes: null,
+    pendingApprovals: 0,
+  },
   ...over,
 });
 
@@ -130,5 +140,158 @@ describe('TimelinePanel', () => {
     renderPanel();
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText(/Planlanmış bir şey yok/)).not.toBeInTheDocument();
+  });
+});
+
+
+/**
+ * The un-drained research queue, said out loud.
+ *
+ * A workspace can hand its nightly research to its own Claude
+ * (`researchExecution: 'MCP'`), and from that moment the platform stops
+ * draining the queue. If nothing drains it on the other side — no scheduled
+ * task, or a broken one — the jobs pile up, no candidates appear, and the
+ * review queue is empty. On screen that is identical to "research ran and
+ * found nothing", and the two need opposite fixes.
+ *
+ * So this panel names it: how many are waiting, how old the oldest is, and
+ * whose Claude is supposed to be taking them.
+ */
+describe('TimelinePanel — the research queue nobody drained', () => {
+  const queue = (over: Partial<NonNullable<HomeTimeline['research']>> = {}) => ({
+    mode: 'MCP' as const,
+    pending: 0,
+    claimed: 0,
+    oldestPendingAt: null,
+    oldestPendingAgeHours: null,
+    oldestClaimedAt: null,
+    oldestClaimedAgeMinutes: null,
+    pendingApprovals: 0,
+    ...over,
+  });
+
+  it('says how many jobs are waiting and how old the oldest is', async () => {
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ pending: 4, oldestPendingAgeHours: 74 }) }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-waiting');
+    expect(line).toHaveTextContent('4');
+    // 74 hours is three days. A count with no age cannot distinguish "tonight's
+    // batch, still early" from "nobody has drained this since Tuesday".
+    expect(line).toHaveTextContent('3');
+  });
+
+  it('stays quiet when the queue is empty', async () => {
+    getHomeTimeline.mockResolvedValue(timeline({ research: queue() }));
+    renderPanel();
+    await screen.findByText('Planlanmış bir şey yok');
+    expect(screen.queryByTestId('tl-research-waiting')).not.toBeInTheDocument();
+  });
+
+  it('does not blame the owner Claude for a queue the PLATFORM is draining', async () => {
+    // On a SERVER workspace a backlog means the platform's own runner is
+    // stuck. Telling the owner to check their Claude would send them to fix
+    // something that was never theirs.
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ mode: 'SERVER', pending: 3, oldestPendingAgeHours: 5 }) }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-waiting');
+    expect(line).toHaveTextContent('3');
+    expect(line.textContent ?? '').not.toMatch(/Claude/);
+  });
+
+  it('names work that is complete but waiting on a human approval', async () => {
+    // The other way this goes silent: submit_research_candidates is
+    // approval-gated, so the night can be fully researched and still show an
+    // empty review queue until somebody clicks.
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ pendingApprovals: 2 }) }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-research-approvals')).toHaveTextContent('2');
+  });
+
+  // The other half of the same silence, and the one this panel shipped with.
+  // `claimed` was computed by the backend, sent to the client, and rendered
+  // nowhere — the gate was `pending > 0` alone. A workspace whose only research
+  // job is HELD by a drainer that never came back therefore drew nothing at
+  // all: same blank screen as "research found nothing", opposite fix.
+  it('says a job is HELD, and for how long, when nothing is waiting behind it', async () => {
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ pending: 0, claimed: 1, oldestClaimedAgeMinutes: 20 }) }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-claimed');
+    expect(line).toHaveTextContent('1');
+    expect(line).toHaveTextContent('20');
+  });
+
+  it('keeps HELD and WAITING as two separate lines, never one number', async () => {
+    // They have different owners and different fixes: waiting means nobody is
+    // draining, held means somebody took it and has not come back. Summing them
+    // into one count would hide whichever is smaller.
+    getHomeTimeline.mockResolvedValue(
+      timeline({
+        research: queue({
+          pending: 2,
+          oldestPendingAgeHours: 5,
+          claimed: 3,
+          oldestClaimedAgeMinutes: 12,
+        }),
+      }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-research-waiting')).toHaveTextContent('2');
+    const held = screen.getByTestId('tl-research-claimed');
+    expect(held).toHaveTextContent('3');
+    expect(held).toHaveTextContent('12');
+  });
+
+  it('states a long-held lease in hours rather than a three-figure minute count', async () => {
+    // 26 hours on a 30-minute lease is not a working client; it is a row the
+    // sweep has not reached. "1560 dakika" makes a reader do the division.
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ claimed: 1, oldestClaimedAgeMinutes: 1560 }) }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-claimed');
+    expect(line).toHaveTextContent('26');
+    expect(line.textContent ?? '').not.toMatch(/1560/);
+  });
+
+  it('stays quiet about held jobs when none are held', async () => {
+    getHomeTimeline.mockResolvedValue(timeline({ research: queue({ pending: 1 }) }));
+    renderPanel();
+    await screen.findByTestId('tl-research-waiting');
+    expect(screen.queryByTestId('tl-research-claimed')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing of its own when the queue could not be read', async () => {
+    // The backend already named `araştırma kuyruğu` in `unread` for this case.
+    // A second line here would either repeat it or, worse, invent a zero.
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: null, unread: ['araştırma kuyruğu'] }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-unread')).toHaveTextContent('araştırma kuyruğu');
+    expect(screen.queryByTestId('tl-research-waiting')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tl-research-claimed')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tl-research-approvals')).not.toBeInTheDocument();
   });
 });

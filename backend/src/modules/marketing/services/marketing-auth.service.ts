@@ -14,6 +14,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
+import { ResearchExecutionMode } from '../dto/set-research-execution.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 import { hashBackupCode, openTotpSecret, verifyTotpStep } from '../util/totp';
@@ -962,6 +963,43 @@ export class MarketingAuthService {
       throw new BadRequestException('Workspace not found');
     }
     return { mcpWriteMode: workspace.mcpWriteMode };
+  }
+
+  /**
+   * Which side drains the nightly research queue — the sole write path to
+   * `Workspace.researchExecution`, mirroring setMcpWriteMode above.
+   *
+   * SERVER is today's behaviour: the in-process worker runs an Anthropic
+   * tool-loop on the PLATFORM's key, which live measurement put at 86% of the
+   * whole Anthropic bill. MCP leaves those jobs queued for the workspace's own
+   * Claude to lease over MCP, so the reasoning is billed to the owner.
+   *
+   * Nothing here validates that a drainer actually EXISTS on the owner's side —
+   * it cannot; that is a scheduled task in their Claude, not a row we can read.
+   * Which is exactly why the home timeline reports the un-drained queue by name
+   * (`HomeTimelineService.researchQueue`): flipping this switch and then
+   * forgetting to schedule anything must look like a growing backlog, never
+   * like "research found nothing".
+   */
+  async setResearchExecution(workspaceId: string, mode: ResearchExecutionMode) {
+    const workspace = await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { researchExecution: mode },
+      select: { researchExecution: true },
+    });
+    return { researchExecution: workspace.researchExecution };
+  }
+
+  /** Read-back so an owner can confirm which side is draining, not guess. */
+  async getResearchExecution(workspaceId: string) {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { researchExecution: true },
+    });
+    if (!workspace) {
+      throw new BadRequestException('Workspace not found');
+    }
+    return { researchExecution: workspace.researchExecution };
   }
 
   async changePassword(

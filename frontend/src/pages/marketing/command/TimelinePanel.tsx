@@ -69,6 +69,20 @@ export function TimelinePanel() {
   const items = q.data?.items ?? [];
   const unread = q.data?.unread ?? [];
   const truncated = q.data?.truncated ?? [];
+  // `null` means the backend could not read the queue — and it already said so
+  // by name in `unread`. Rendering our own line here would either repeat that
+  // or, worse, dress a failed read up as a count.
+  const research = q.data?.research ?? null;
+  const waitingDays =
+    research?.oldestPendingAgeHours != null
+      ? Math.floor(research.oldestPendingAgeHours / 24)
+      : null;
+  // A lease is thirty minutes by default, so minutes is the unit that carries
+  // information — until it does not. Past an hour the count is no longer a
+  // working client but a row the sweep has not reached, and "1560 dakika" makes
+  // the reader do the division to find that out.
+  const heldMinutes = research?.oldestClaimedAgeMinutes ?? null;
+  const heldHours = heldMinutes != null && heldMinutes >= 60 ? Math.floor(heldMinutes / 60) : null;
 
   return (
     <QueryStateBoundary
@@ -88,6 +102,80 @@ export function TimelinePanel() {
           <p data-testid="tl-truncated" role="status" className="pb-1.5 text-xs text-muted-foreground">
             {t('timeline.truncated', 'Sığmayan kaynaklar')}: {truncated.join(', ')} —{' '}
             {t('timeline.truncatedHint', 'bu pencerenin yalnızca en erken kayıtları gösteriliyor, devamı var')}
+          </p>
+        )}
+
+        {research && research.pending > 0 && (
+          <p data-testid="tl-research-waiting" role="status" className="pb-1.5 text-xs text-warning">
+            {research.pending}{' '}
+            {research.mode === 'MCP'
+              ? t('timeline.researchWaitingMcp', "araştırma işi senin Claude'unu bekliyor")
+              : t('timeline.researchWaitingServer', 'araştırma işi kuyrukta bekliyor')}
+            {research.oldestPendingAgeHours != null && (
+              <>
+                {' — '}
+                {waitingDays != null && waitingDays >= 1 ? (
+                  <>
+                    {t('timeline.researchOldest', 'en eskisi')} {waitingDays}{' '}
+                    {t('timeline.researchDays', 'gündür')}
+                  </>
+                ) : (
+                  <>
+                    {t('timeline.researchOldest', 'en eskisi')} {research.oldestPendingAgeHours}{' '}
+                    {t('timeline.researchHours', 'saattir')}
+                  </>
+                )}
+              </>
+            )}
+          </p>
+        )}
+        {/*
+          HELD is its own line, never folded into the waiting count.
+          `claimed` was computed by the backend and rendered nowhere, so a
+          workspace whose only research job was held by a drainer that never
+          came back showed a completely blank panel — indistinguishable from
+          "research found nothing", and needing the opposite fix. The two
+          numbers also have different owners: waiting means nobody is draining,
+          held means somebody took it and has not come back.
+        */}
+        {research && research.claimed > 0 && (
+          <p data-testid="tl-research-claimed" role="status" className="pb-1.5 text-xs text-warning">
+            {research.claimed}{' '}
+            {research.mode === 'MCP'
+              ? t('timeline.researchHeldMcp', "araştırma işini şu an senin Claude'un tutuyor")
+              : t(
+                  'timeline.researchHeldServer',
+                  "araştırma işi hâlâ Claude'unda kilitli — kirası dolunca kuyruğa geri döner",
+                )}
+            {heldMinutes != null && (
+              <>
+                {' — '}
+                {heldHours != null ? (
+                  <>
+                    {t('timeline.researchHeldFor', 'kiralanalı')} {heldHours}{' '}
+                    {t('timeline.researchHoursAgo', 'saat oldu')}
+                  </>
+                ) : (
+                  <>
+                    {t('timeline.researchHeldFor', 'kiralanalı')} {heldMinutes}{' '}
+                    {t('timeline.researchMinutesAgo', 'dakika oldu')}
+                  </>
+                )}
+              </>
+            )}
+          </p>
+        )}
+        {research && research.pendingApprovals > 0 && (
+          <p
+            data-testid="tl-research-approvals"
+            role="status"
+            className="pb-1.5 text-xs text-muted-foreground"
+          >
+            {research.pendingApprovals}{' '}
+            {t(
+              'timeline.researchAwaitingApproval',
+              'araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez',
+            )}
           </p>
         )}
 
