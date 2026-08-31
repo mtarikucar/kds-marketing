@@ -287,15 +287,23 @@ export class ScheduledJobRunnerService {
    * The default mode is `AUTO`, resolved live here: MCP while this workspace
    * has MCP TRAFFIC inside `MCP_CONNECTION_STALE_MS`, SERVER otherwise.
    *
-   * The signal is an `agent_runs` row with `agent = 'mcp'`. `McpInvokerService`
-   * opens exactly one per tool call and a tool call cannot happen any other
-   * way, so the row IS a Claude that reached this workspace. Deliberately NOT
-   * `ApiKey.lastUsedAt`: `ApiKeysService.authenticate()` is shared by the MCP
-   * verifier and the public REST `ApiKeyGuard` and stamps `lastUsedAt` for
-   * both, so a workspace whose Zapier integration polls the REST API would be
-   * auto-switched to a lane no Claude is on. The agent-run signal is also the
-   * only one that sees the OAuth connectors (Claude.ai / Desktop), which never
-   * touch `ApiKey` at all.
+   * The signal is an `agent_runs` row with `agent = 'mcp'`. Two code paths
+   * write it and both are a Claude: `McpInvokerService.invoke` opens one per
+   * tool call (the signal proper), and `McpApprovalExecutorService.execute`
+   * opens one per released approval. The second cannot widen the answer on its
+   * own — an approval only exists because a tool call created it, that call
+   * already wrote its own row, and the approval TTL is 24 hours against a
+   * 14-day window — so the row IS a Claude that reached this workspace either
+   * way. A THIRD writer would silently move workspaces into the MCP lane;
+   * `research-connection-signal.tripwire.spec.ts` makes adding one a red
+   * build.
+   *
+   * Deliberately NOT `ApiKey.lastUsedAt`: `ApiKeysService.authenticate()` is
+   * shared by the MCP verifier and the public REST `ApiKeyGuard` and stamps
+   * `lastUsedAt` for both, so a workspace whose Zapier integration polls the
+   * REST API would be auto-switched to a lane no Claude is on. The agent-run
+   * signal is also the only one that sees the OAuth connectors (Claude.ai /
+   * Desktop), which never touch `ApiKey` at all.
    *
    * The whole three-way decision is duplicated in TypeScript by
    * `effectiveResearchExecution()`, because `ResearchLeaseService` has to

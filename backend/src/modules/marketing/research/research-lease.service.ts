@@ -235,9 +235,26 @@ export class ResearchLeaseService {
    * twice.
    *
    * The AUTO branch asks one question: has a Claude actually reached this
-   * workspace lately? The signal is an `agent_runs` row with `agent = 'mcp'` —
-   * `McpInvokerService` opens exactly one per tool call, on both the api-key
-   * and the OAuth paths, and nothing else writes that value.
+   * workspace lately? The signal is an `agent_runs` row with `agent = 'mcp'`.
+   *
+   * TWO code paths write that value, and both are a Claude:
+   *
+   *  1. `McpInvokerService.invoke` — one run per tool call, on both the
+   *     api-key and the OAuth paths. This is the signal proper.
+   *  2. `McpApprovalExecutorService.execute` — one run per approval a human
+   *     releases (`{ agent: 'mcp', goal: 'apply approval …' }`).
+   *
+   * (2) cannot make this read say "connected" on its own. An approval only
+   * exists because a tool call created it, that call already wrote its own (1)
+   * row, and `MCP_APPROVAL_TTL_MS` is 24 hours against a 14-day window — so
+   * the (1) row is always still inside the window when the (2) row lands. It
+   * never widens the answer, only ever agrees with it.
+   *
+   * A THIRD writer would not be harmless, and would be silent: it would flip
+   * workspaces into the MCP lane, and the only visible symptom is six hours of
+   * research latency somebody attributes to something else.
+   * `research-connection-signal.tripwire.spec.ts` pins the exact set of code
+   * paths that write this value, so a third one is a red build.
    *
    * Deliberately NOT `ApiKey.lastUsedAt`, which the design proposed.
    * `ApiKeysService.authenticate()` is shared by this surface and the PUBLIC

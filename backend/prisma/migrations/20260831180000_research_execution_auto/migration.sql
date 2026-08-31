@@ -29,9 +29,16 @@ UPDATE "workspaces"
  WHERE "researchExecution" = 'SERVER';
 
 -- The auto-detection asks: "has an MCP tool call happened in this workspace
--- lately?" That is an `agent_runs` row with agent = 'mcp' — McpInvokerService
--- opens exactly one per tool call, on BOTH the api-key and the OAuth paths, and
--- nothing else writes that value. The read runs inside the once-a-minute
+-- lately?" That is an `agent_runs` row with agent = 'mcp'. Two code paths write
+-- it, and both are a Claude: McpInvokerService opens exactly one per tool call
+-- (on BOTH the api-key and the OAuth paths), and McpApprovalExecutorService
+-- opens one per approval a human releases. The second cannot make a workspace
+-- look connected on its own — an approval only exists because a tool call
+-- created it, that call already wrote its own row, and the approval TTL (24h)
+-- is far inside the 14-day window this reads over. A THIRD writer would move
+-- workspaces into the MCP lane silently; src/modules/marketing/research/
+-- research-connection-signal.tripwire.spec.ts turns adding one into a red
+-- build. The read runs inside the once-a-minute
 -- scheduled-job claim, so it must be an index probe rather than a scan.
 --
 -- `agent_runs_workspaceId_agent_startedAt_idx` already exists (schema.prisma,
