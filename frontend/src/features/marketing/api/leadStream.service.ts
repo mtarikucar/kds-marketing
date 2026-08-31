@@ -62,6 +62,24 @@ export interface LeadStreamItem {
    * STATUS_CHANGE rows beginning with the same word.
    */
   assignment: 'auto' | 'bulk' | 'manual' | null;
+  /**
+   * The `SalesCall` a logged call mirrors, when the row knows one.
+   *
+   * Without it a call in the stream is a dead end: the recording and the AI
+   * analysis both hang off a `SalesCall.id`, so a reader saw "Sales call:
+   * CONNECTED · 3 dk" and had to leave for /calls and find the row again by
+   * phone number and timestamp to hear it.
+   *
+   * Null on every other kind, and null on every call MIRRORED BEFORE the id
+   * was carried — `LeadActivity.metadata` was empty on those rows and there is
+   * no backfill. A null here is not a bug and must not render as a broken
+   * player: LeadStream.tsx draws such a row exactly as it always has.
+   *
+   * Derived server-side from `LeadActivity.metadata`, like `assignment` above
+   * it — the blob itself carries user ids and names this endpoint has no
+   * reason to ship.
+   */
+  callId: string | null;
 
   // ── both, when there is a person behind it ───────────────────────────────
   authorId: string | null;

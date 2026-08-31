@@ -292,7 +292,9 @@
       },
       "voicemail": "Ovozli xabar",
       "fax": "Faks",
-      "faxOpen": "Hujjatni ochish"
+      "faxOpen": "Hujjatni ochish",
+      "callDetail": "Yozuv va tahlil",
+      "callAnalysis": "Qo'ng'iroq tahlili"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -1166,5 +1168,12 @@
       "list": "Roʻyxat",
       "table": "Jadval"
     }
+  },
+  "callRecording": {
+    "title": "Yozuv",
+    "loading": "Yozuv yuklanmoqda…",
+    "unavailable": "Bu qo'ng'iroq uchun yozuv mavjud emas.",
+    "failed": "Yozuvni yuklab bo'lmadi",
+    "retry": "Qayta urinish"
   }
 }

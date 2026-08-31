@@ -621,7 +621,9 @@
       },
       "voicemail": "Voicemail",
       "fax": "Fax",
-      "faxOpen": "Open document"
+      "faxOpen": "Open document",
+      "callDetail": "Recording & analysis",
+      "callAnalysis": "Call analysis"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -1909,7 +1911,9 @@
   "callRecording": {
     "title": "Recording",
     "loading": "Loading recording…",
-    "unavailable": "Recording is not available for this call."
+    "unavailable": "Recording is not available for this call.",
+    "failed": "Recording could not be loaded",
+    "retry": "Try again"
   },
   "callAnalysis": {
     "title": "Call analysis",

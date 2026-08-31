@@ -1,11 +1,23 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Activity, FileText, MessageSquare, Mic, Phone, RefreshCw, Sparkles, User } from 'lucide-react';
+import {
+  Activity,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  MessageSquare,
+  Mic,
+  Phone,
+  RefreshCw,
+  Sparkles,
+  User,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { getLeadStream, type LeadStreamItem } from '../api/leadStream.service';
+import StreamCallDetail from './StreamCallDetail';
 import { fmtSlot } from '../utils/format';
 
 /**
@@ -181,6 +193,24 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
   // has no messages to show, and the banner above says which source that is.)
   const historyIsEmpty = items.length === 0 && unread.length === 0;
 
+  /**
+   * Which call rows are open, BY ROW ID.
+   *
+   * Keyed rather than a single `expandedId`, and keyed rather than held inside
+   * the row: a person can have several calls worth comparing (the one that got
+   * a promise and the one that did not), and this lineage has twice shipped
+   * per-record state that was really per-component and leaked one record's
+   * answer onto another's.
+   *
+   * Reset when the person changes. The ids are unique across leads, so a stale
+   * entry could not open the wrong row — but leaving one behind would open a
+   * NEW person's stream with a panel already fetching, which is exactly the
+   * request-on-load this expansion exists to avoid.
+   */
+  const [openCalls, setOpenCalls] = useState<Record<string, boolean>>({});
+  useEffect(() => setOpenCalls({}), [leadId]);
+  const toggleCall = (id: string) => setOpenCalls((o) => ({ ...o, [id]: !o[id] }));
+
   // See the docstring. Three-way, and the third way is doing nothing.
   const endRef = useRef<HTMLDivElement | null>(null);
   // Which person we have already jumped for. Not "did the id change": the
@@ -263,7 +293,11 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
           // conversation reads. No `overflow` and no height: the host owns the
           // scroll (the surface's middle column scrolls, a tab does not).
           <ul className="flex flex-col gap-1">
-            {items.map((i) => (i.kind === 'message' ? messageRow(i, t) : eventRow(i, t)))}
+            {items.map((i) =>
+              i.kind === 'message'
+                ? messageRow(i, t)
+                : eventRow(i, t, !!openCalls[i.id], toggleCall),
+            )}
           </ul>
         )}
 
@@ -369,10 +403,30 @@ function messageRow(i: LeadStreamItem, t: TFn) {
   );
 }
 
-/** A call, a note, a status move, or anything else logged on the lead: a
- *  timeline event, NOT a bubble. Nobody said it to anyone. */
-function eventRow(i: LeadStreamItem, t: TFn) {
+/**
+ * A call, a note, a status move, or anything else logged on the lead: a
+ * timeline event, NOT a bubble. Nobody said it to anyone.
+ *
+ * A CALL row that knows which call it was opens: the recording and the AI
+ * analysis mount underneath it (StreamCallDetail). `open`/`onToggleCall` are
+ * passed down rather than held here because this is a function, not a
+ * component — and because the state has to be keyed by row for a person with
+ * several calls (see `openCalls` above).
+ */
+function eventRow(
+  i: LeadStreamItem,
+  t: TFn,
+  open: boolean,
+  onToggleCall: (id: string) => void,
+) {
   const weight = rowWeight(i);
+  /**
+   * There is no backfill. Every call mirrored before the id was carried has
+   * `metadata: null` and nothing anywhere pairs it to a `SalesCall`, so
+   * `callId` is null and the row renders exactly as it always has — a line of
+   * history with nothing to open, rather than a player that would never load.
+   */
+  const openable = i.kind === 'call' && !!i.callId;
   const Icon = EVENT_ICON[i.kind] ?? Activity;
   const meta = [
     i.authorName,
@@ -414,6 +468,26 @@ function eventRow(i: LeadStreamItem, t: TFn) {
         {meta.length > 0 && (
           <p className="mt-0.5 text-xs text-muted-foreground">{meta.join(' · ')}</p>
         )}
+        {openable && (
+          <button
+            type="button"
+            data-testid={`stream-call-toggle-${i.id}`}
+            aria-expanded={open}
+            onClick={() => onToggleCall(i.id)}
+            className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {open ? (
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {t('leadDetail.stream.callDetail', 'Kayıt ve analiz')}
+          </button>
+        )}
+        {/* Mounted on EXPAND, never on load: a person with fifty calls would
+            otherwise put fifty recording requests on the wire before the rep
+            has decided which call they care about. */}
+        {openable && open && <StreamCallDetail callId={i.callId!} itemId={i.id} />}
       </div>
     </li>
   );

@@ -292,7 +292,9 @@
       },
       "voicemail": "رسالة صوتية",
       "fax": "فاكس",
-      "faxOpen": "فتح المستند"
+      "faxOpen": "فتح المستند",
+      "callDetail": "التسجيل والتحليل",
+      "callAnalysis": "تحليل المكالمة"
     },
     "summary": {
       "contactInfo": "Contact",
@@ -1166,5 +1168,12 @@
       "list": "قائمة",
       "table": "جدول"
     }
+  },
+  "callRecording": {
+    "title": "التسجيل",
+    "loading": "جارٍ تحميل التسجيل…",
+    "unavailable": "لا يتوفر تسجيل لهذه المكالمة.",
+    "failed": "تعذّر تحميل التسجيل",
+    "retry": "أعد المحاولة"
   }
 }

@@ -877,7 +877,9 @@
       },
       "voicemail": "Sesli mesaj",
       "fax": "Faks",
-      "faxOpen": "Belgeyi aç"
+      "faxOpen": "Belgeyi aç",
+      "callDetail": "Kayıt ve analiz",
+      "callAnalysis": "Arama analizi"
     },
     "summary": {
       "contactInfo": "İletişim",
@@ -2214,7 +2216,9 @@
   "callRecording": {
     "title": "Kayıt",
     "loading": "Kayıt yükleniyor…",
-    "unavailable": "Bu görüşme için kayıt mevcut değil."
+    "unavailable": "Bu görüşme için kayıt mevcut değil.",
+    "failed": "Kayıt yüklenemedi",
+    "retry": "Yeniden dene"
   },
   "callAnalysis": {
     "title": "Görüşme analizi",
