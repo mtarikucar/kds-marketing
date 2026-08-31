@@ -33,7 +33,11 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+// jsdom has no clipboard; the copy assertions are about WHAT is handed over.
+vi.mock('../../../../lib/clipboard', () => ({ copyToClipboard: vi.fn(async () => true) }));
+
 import * as svc from '../../../../features/marketing/api/mcpConsole.service';
+import * as clipboard from '../../../../lib/clipboard';
 import McpConsolePage from './McpConsolePage';
 
 const api = svc as unknown as {
@@ -51,6 +55,8 @@ const CLIENT_ID = 'https://claude.ai/api/mcp/client/abc';
 const overview = (over: Partial<Record<string, unknown>> = {}) => ({
   mcpWriteMode: 'APPROVAL',
   researchExecution: 'SERVER',
+  researchExecutionSource: 'EXPLICIT',
+  researchGraceHours: 6,
   canToggle: true,
   mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
   liveConnectionCount: 2,
@@ -325,7 +331,11 @@ describe('McpConsolePage — who drains the research queue', () => {
     expect(api.setResearchExecution).not.toHaveBeenCalled();
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/stops draining/i)).toBeInTheDocument();
+    // The dialog used to promise the platform would stop draining. It does not
+    // stop any more — it waits. Naming the wait, and the hours, is what makes
+    // this dialog honest rather than reassuring.
+    expect(within(dialog).getByText(/offered each night first/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/6 hours/i)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /yes, my claude drains it/i }));
     await waitFor(() => expect(api.setResearchExecution).toHaveBeenCalledWith('MCP'));
   });
@@ -357,7 +367,11 @@ describe('McpConsolePage — who drains the research queue', () => {
     );
     render(<McpConsolePage />, { wrapper });
 
-    expect(await screen.findByText(/google maps/i)).toBeInTheDocument();
+    // Scoped to the callout: the scheduled-task prompt above also names Google
+    // Maps (it tells the drainer the listings ARE the pain signal), and an
+    // unscoped query would pass on that instead of on the warning.
+    const warning = await screen.findByTestId('research-approval-warning');
+    expect(warning).toHaveTextContent(/google maps/i);
   });
 
   it('says nothing about AUTONOMOUS when the workspace is already on it', async () => {
@@ -367,7 +381,7 @@ describe('McpConsolePage — who drains the research queue', () => {
     render(<McpConsolePage />, { wrapper });
 
     await screen.findByRole('switch', { name: /run the nightly research/i });
-    expect(screen.queryByText(/google maps/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('research-approval-warning')).not.toBeInTheDocument();
   });
 
   it('is read-only for a caller who cannot flip it, and says why', async () => {
@@ -453,5 +467,127 @@ describe('McpConsolePage — session audit detail', () => {
     const approval = screen.getByTestId('mcp-approval');
     expect(within(approval).getByText('Send a WhatsApp message to 12 leads')).toBeInTheDocument();
     expect(within(approval).getByText('PENDING')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The card has to tell the truth about a three-state column behind a
+ * two-position switch — and about a lane that no longer means what it did.
+ */
+describe('McpConsolePage — the research lane is now first refusal, not a hard switch', () => {
+  it('says the lane was DETECTED when nobody chose it', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchExecutionSource: 'AUTO' }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    expect(await screen.findByTestId('research-auto-note')).toBeInTheDocument();
+  });
+
+  it('says nothing about detection when the owner chose the lane', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchExecutionSource: 'EXPLICIT' }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    await screen.findByText(/who runs the nightly research/i);
+    expect(screen.queryByTestId('research-auto-note')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The shipped copy promised "nothing runs until a connected Claude claims the
+   * jobs itself". That is no longer true and it is the most dangerous sentence
+   * on the page: it is what stops an owner turning this on, and it is now a
+   * lie in the reassuring direction. The card must state the fallback, with the
+   * real number the server uses.
+   */
+  it('states the fallback, using the grace window the SERVER reports', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchGraceHours: 6 }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    // This paragraph is painted before the query resolves, so the assertion has
+    // to wait for the DATA rather than for the element.
+    await waitFor(() =>
+      expect(screen.getByTestId('research-lane-state')).toHaveTextContent(/6/),
+    );
+    expect(screen.getByTestId('research-lane-state').textContent).not.toMatch(
+      /nothing runs until/i,
+    );
+  });
+
+  it('takes the grace window from the payload, not from a number typed into the copy', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchGraceHours: 12 }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('research-lane-state')).toHaveTextContent(/12/),
+    );
+  });
+});
+
+/**
+ * The copy-paste scheduled-task prompt.
+ *
+ * The lane's whole failure mode is a half-finished setup: a key created, no
+ * scheduled task written, and a workspace that then looks connected while
+ * nothing drains. Writing that prompt from scratch is the step people skip, so
+ * the product hands it over finished — with the four tool calls in order, and
+ * the workspace's own connector address baked in.
+ */
+describe('McpConsolePage — the scheduled-task prompt', () => {
+  it('hands over a prompt that names all four calls, in order', async () => {
+    render(<McpConsolePage />, { wrapper });
+
+    const prompt = await screen.findByTestId('mcp-task-prompt');
+    const text = prompt.textContent ?? '';
+    const order = ['claim_research_job', 'submit_research_candidates', 'complete_research_job'].map(
+      (tool) => text.indexOf(tool),
+    );
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // The brief is SERVER-authored and arrives inside the claim; the prompt has
+    // to tell the drainer to work THAT, not to invent its own ICP.
+    expect(text).toMatch(/instruction/i);
+  });
+
+  it('bakes in this workspace own connector address', async () => {
+    render(<McpConsolePage />, { wrapper });
+
+    const prompt = await screen.findByTestId('mcp-task-prompt');
+    expect(prompt.textContent).toContain('https://app.jeetagrowth.com/api/mcp');
+  });
+
+  /**
+   * No endpoint means no address to paste, and a prompt containing "undefined"
+   * is worse than no prompt: it looks copyable and silently cannot work.
+   */
+  it('offers no prompt at all when the deployment has no address', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(overview({ mcpEndpoint: null }));
+    render(<McpConsolePage />, { wrapper });
+
+    await screen.findByText(/no public address/i);
+    expect(screen.queryByTestId('mcp-task-prompt')).not.toBeInTheDocument();
+  });
+
+  it('points at where a key is actually created', async () => {
+    render(<McpConsolePage />, { wrapper });
+
+    const link = await screen.findByRole('link', { name: /create a key/i });
+    expect(link).toHaveAttribute('href', '/settings/api-keys');
+  });
+
+  it('copies the prompt', async () => {
+    const user = userEvent.setup();
+    render(<McpConsolePage />, { wrapper });
+
+    await screen.findByTestId('mcp-task-prompt');
+    await user.click(screen.getByRole('button', { name: /copy the scheduled-task prompt/i }));
+
+    await waitFor(() => expect(clipboard.copyToClipboard).toHaveBeenCalled());
+    expect(vi.mocked(clipboard.copyToClipboard).mock.calls[0][0]).toContain('claim_research_job');
   });
 });

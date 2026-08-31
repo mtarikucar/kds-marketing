@@ -13,6 +13,14 @@ export interface ChecklistStep {
   id: string;
   to: string;
   done: boolean;
+  /**
+   * An i18n key for a caveat this step carries RIGHT NOW, or undefined.
+   *
+   * Conditional rather than baked into the step's copy: a warning that is
+   * always on screen is a warning nobody reads, and this one only applies while
+   * the workspace is on `APPROVAL` MCP write mode.
+   */
+  warningKey?: string;
 }
 
 export interface OnboardingChecklist {
@@ -63,7 +71,14 @@ export function useOnboardingChecklist(): OnboardingChecklist {
     onMutate: async (next: boolean) => {
       await qc.cancelQueries({ queryKey: ONBOARDING_QUERY_KEY });
       const prev = qc.getQueryData(ONBOARDING_QUERY_KEY);
-      qc.setQueryData(ONBOARDING_QUERY_KEY, { dismissed: next });
+      // MERGE, never replace. This payload carries two other workspace facts
+      // (`claudeLaneProven`, `mcpWriteMode`) that dismissal does not touch, and
+      // overwriting the cache with `{ dismissed }` alone would blank them until
+      // the refetch — flickering completed steps back to incomplete on the way
+      // out.
+      qc.setQueryData(ONBOARDING_QUERY_KEY, (old: unknown) =>
+        old && typeof old === 'object' ? { ...(old as object), dismissed: next } : { dismissed: next },
+      );
       return { prev };
     },
     onError: (_e, _v, ctx) => {
@@ -97,7 +112,7 @@ export function useOnboardingChecklist(): OnboardingChecklist {
   });
 
   /**
-   * THREE steps, down from eight.
+   * FOUR steps, down from eight and back up by one.
    *
    * The old checklist demanded agent, knowledge, brand brain, a first lead and
    * a published site as separate chores. Every one of those is now a BYPRODUCT
@@ -108,8 +123,17 @@ export function useOnboardingChecklist(): OnboardingChecklist {
    * system's job — the exact complexity complaint this flow exists to answer.
    *
    * What remains is what only a human CAN do: describe the business (strategy),
-   * plug in where customers talk to them (channel), and bring their people
-   * (team). Everything provisioned stays editable in its own pages.
+   * plug in where customers talk to them (channel), bring their people (team)
+   * — and connect their own Claude.
+   *
+   * THAT FOURTH STEP EARNS ITS PLACE for a reason none of the deleted ones
+   * could: research is 86% of the platform's measured model bill, and it is the
+   * one thing the customer can move onto their own subscription. It is also the
+   * step most likely to be left half-done, which is why its completion is
+   * `claudeLaneProven` — a real `claim_research_job` having succeeded — and not
+   * "a key exists". A key with no scheduled task behind it looks identical to a
+   * working lane from every other angle, and ticking the step for it would mean
+   * the checklist certifies exactly the broken setup it exists to prevent.
    */
   const steps: ChecklistStep[] = [
     {
@@ -120,6 +144,21 @@ export function useOnboardingChecklist(): OnboardingChecklist {
     { id: 'channel', to: '/inbox?tab=channels', done: (channels.data?.length ?? 0) > 0 },
     // "Invite your team" — done once there's more than just the owner.
     { id: 'team', to: '/users', done: (team.data?.length ?? 0) > 1 },
+    {
+      id: 'claude',
+      // The connector console: the MCP address, the key, and the copy-paste
+      // scheduled-task prompt all live on one page there.
+      to: '/settings/mcp-console',
+      done: state.data?.claudeLaneProven === true,
+      // Only while it applies. Under APPROVAL the three Jeeta-keyed data tools
+      // are not delayed, they are UNUSABLE (the approval executor returns their
+      // result to the approver's HTTP response, never to the agent's turn), so
+      // the lane silently degrades to plain web search and loses the Google
+      // Maps pain signal it was designed around. Someone being walked through
+      // setup has to know that before they finish.
+      warningKey:
+        state.data?.mcpWriteMode === 'APPROVAL' ? 'onboarding.steps.claude.approvalWarning' : undefined,
+    },
   ];
 
   const total = steps.length;

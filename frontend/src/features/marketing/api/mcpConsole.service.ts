@@ -42,8 +42,27 @@ export interface ResearchExecutionState {
 
 export interface McpConsoleOverview {
   mcpWriteMode: McpWriteMode;
-  /** Which side drains the nightly research queue. See `setResearchExecution`. */
+  /**
+   * Which side gets FIRST REFUSAL on the nightly research queue — the
+   * EFFECTIVE lane, with the stored AUTO state already resolved against the
+   * live connection. See `setResearchExecution`.
+   */
   researchExecution: ResearchExecution;
+  /**
+   * Whether that lane was CHOSEN or DETECTED.
+   *
+   * The stored column has three states and the card has a two-position switch.
+   * Without this the switch lies by omission: an owner seeing 'Your Claude'
+   * cannot tell whether they turned it on or whether we noticed a connection
+   * and decided for them.
+   */
+  researchExecutionSource: 'EXPLICIT' | 'AUTO';
+  /**
+   * How long the owner's Claude keeps first refusal before the platform drains
+   * the job anyway. Sent by the server rather than typed into the copy: a card
+   * promising six hours while the server waits twelve is worse than silence.
+   */
+  researchGraceHours: number;
   /**
    * Whether THIS caller may flip EITHER switch (OWNER + `settings.manage`).
    *

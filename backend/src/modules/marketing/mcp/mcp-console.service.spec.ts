@@ -45,13 +45,18 @@ function deps() {
   const apiKeys = { list: jest.fn().mockResolvedValue([]) };
   const roles = { hasPermission: jest.fn().mockResolvedValue(true) };
   const config = { get: jest.fn().mockReturnValue('https://app.jeetagrowth.com') };
+  // The ONE resolver for the effective research lane. The console must not
+  // re-derive it: a second copy of that rule is how the switch starts drawing
+  // a lane that is not the lane the claim predicate is using.
+  const lease = { modeFor: jest.fn().mockResolvedValue('SERVER') };
   const svc = new McpConsoleService(
     prisma as never,
     apiKeys as never,
     roles as never,
     config as never,
+    lease as never,
   );
-  return { svc, prisma, apiKeys, roles, config };
+  return { svc, prisma, apiKeys, roles, config, lease };
 }
 
 /** Every `where` object handed to Prisma across the whole mock, flattened. */
@@ -571,6 +576,8 @@ describe('McpConsoleService — overview', () => {
     expect(res).toEqual({
       mcpWriteMode: 'AUTONOMOUS',
       researchExecution: 'SERVER',
+      researchExecutionSource: 'EXPLICIT',
+      researchGraceHours: 6,
       canToggle: true,
       mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
       liveConnectionCount: 2, // 1 live OAuth client + 1 ACTIVE api key
@@ -589,11 +596,15 @@ describe('McpConsoleService — overview', () => {
    * whether the switch is offered.
    */
   it('reports which side drains the nightly research queue', async () => {
-    const { svc, prisma } = deps();
+    const { svc, prisma, lease } = deps();
     prisma.workspace.findUnique.mockResolvedValue({
       mcpWriteMode: 'APPROVAL',
       researchExecution: 'MCP',
     });
+    // The lane itself now comes from the ONE resolver, not from re-reading the
+    // column here — the column has three states and only the resolver knows how
+    // AUTO lands.
+    lease.modeFor.mockResolvedValue('MCP');
 
     await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({
       researchExecution: 'MCP',
@@ -750,5 +761,80 @@ describe('McpConsoleService — overview', () => {
       if ('clientId' in where && !('workspaceId' in where) && typeof where.clientId === 'object') continue;
       expect(where.workspaceId).toBe('ws-a');
     }
+  });
+});
+
+/**
+ * AUTO — and why the console has to say which it is.
+ *
+ * The lane defaults to AUTO, so most workspaces are on a mode nobody chose. A
+ * two-position switch drawn over three states is a lie by omission: an owner
+ * seeing "Your Claude" with no further explanation cannot tell whether they
+ * turned it on or whether the platform noticed a connection and decided for
+ * them — and therefore cannot tell that DISCONNECTING their Claude would hand
+ * the queue silently back.
+ */
+describe('McpConsoleService.overview — the AUTO lane', () => {
+  const owner = { role: 'OWNER', customRoleId: null };
+
+  it('reports the EFFECTIVE lane, resolved by the one resolver', async () => {
+    const { svc, prisma, lease } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({
+      mcpWriteMode: 'APPROVAL',
+      researchExecution: 'AUTO',
+    });
+    lease.modeFor.mockResolvedValue('MCP');
+
+    const res = await svc.overview('ws-a', owner);
+
+    expect(res.researchExecution).toBe('MCP');
+    expect(res.researchExecutionSource).toBe('AUTO');
+    // Delegated, never re-derived here.
+    expect(lease.modeFor).toHaveBeenCalledWith('ws-a');
+  });
+
+  it('reports AUTO that resolved to SERVER as SERVER, still sourced AUTO', async () => {
+    const { svc, prisma, lease } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({
+      mcpWriteMode: 'APPROVAL',
+      researchExecution: 'AUTO',
+    });
+    lease.modeFor.mockResolvedValue('SERVER');
+
+    const res = await svc.overview('ws-a', owner);
+
+    expect(res).toMatchObject({ researchExecution: 'SERVER', researchExecutionSource: 'AUTO' });
+  });
+
+  it('marks an explicitly chosen lane as EXPLICIT, in both directions', async () => {
+    for (const stored of ['MCP', 'SERVER']) {
+      const { svc, prisma, lease } = deps();
+      prisma.workspace.findUnique.mockResolvedValue({
+        mcpWriteMode: 'APPROVAL',
+        researchExecution: stored,
+      });
+      lease.modeFor.mockResolvedValue(stored);
+
+      const res = await svc.overview('ws-a', owner);
+      expect(res).toMatchObject({ researchExecution: stored, researchExecutionSource: 'EXPLICIT' });
+    }
+  });
+
+  /**
+   * A value nothing here wrote is not a decision anyone made — but it is also
+   * not AUTO, and the resolver reads it as SERVER. Reporting it as EXPLICIT
+   * keeps the card's sentence ("the platform runs this") true, which is the
+   * only thing the reader can act on.
+   */
+  it('treats an unknown stored value as EXPLICIT SERVER', async () => {
+    const { svc, prisma, lease } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({
+      mcpWriteMode: 'APPROVAL',
+      researchExecution: 'nonsense',
+    });
+    lease.modeFor.mockResolvedValue('SERVER');
+
+    const res = await svc.overview('ws-a', owner);
+    expect(res).toMatchObject({ researchExecution: 'SERVER', researchExecutionSource: 'EXPLICIT' });
   });
 });

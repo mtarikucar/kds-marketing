@@ -66,9 +66,11 @@ export interface HomeTimeline {
    * the read failed — in which case `research` is named in `unread`.
    *
    * A workspace can hand research execution to its own Claude
-   * (`researchExecution: 'MCP'`), and from that moment the platform stops
-   * draining the queue. If nothing drains it on the other side the jobs simply
-   * pile up: no candidates, an empty review queue, and a screen that looks
+   * (`researchExecution: 'MCP'`, or the default `AUTO` while one is connected).
+   * That is FIRST REFUSAL, not a hard switch: the platform stops draining the
+   * queue only for `RESEARCH_MCP_GRACE_HOURS`, and then takes the job anyway.
+   * So the jobs no longer pile up forever — but a job still WAITS through that
+   * window, and a queue with a real backlog on it still looks from the outside
    * exactly like "research ran and found nothing". Those need opposite fixes,
    * so the count and the age of the oldest waiting job are stated outright.
    *
@@ -81,6 +83,17 @@ export interface HomeTimeline {
    * `pendingApprovals` covers the other silent stop: `submit_research_candidates`
    * is approval-gated, so on an APPROVAL-mode workspace the night's work can be
    * complete and still show nothing until a human clicks.
+   *
+   * `takenOver` is the one field here that does NOT describe research failing
+   * to happen. It counts the nights the platform had to drain a job reserved
+   * for the owner's Claude because the grace window ran out with nobody
+   * claiming it, and what those nights cost in vendor spend. Everything else
+   * on this object is visible as an absence; this one is invisible by
+   * construction — the candidates arrive, the queue is empty, the panel looks
+   * perfectly healthy, and the only thing that changed is who paid. Without it
+   * the fallback is the silent stop from the other side: the owner never finds
+   * out their scheduled task died. See `PlatformTakeoverReport` for why
+   * `costUsd` is nullable and what `costUnknown` obliges the caller to say.
    */
   research: ResearchQueueStatus | null;
 }

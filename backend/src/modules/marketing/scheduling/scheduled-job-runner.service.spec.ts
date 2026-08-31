@@ -8,6 +8,11 @@ jest.mock('../../../common/scheduling/advisory-lock', () => ({
 
 import { ScheduledJobRunnerService } from './scheduled-job-runner.service';
 import { RESEARCH_RUN_KIND } from '../research/research-kinds';
+import {
+  MCP_ACTIVITY_AGENT,
+  MCP_CONNECTION_STALE_MS,
+  RESEARCH_MCP_GRACE_MS,
+} from '../research/research-execution';
 
 /**
  * Claim → dispatch → outcome routing of the delayed-work runner. The DLQ and
@@ -266,5 +271,91 @@ describe('ScheduledJobRunnerService — leaves an MCP workspace its research job
     expect(sql).toMatch(/NOT\s*\(/i);
     expect(sql).toMatch(/"kind"\s*=/);
     expect(sql).toMatch(/EXISTS/i);
+  });
+});
+
+/**
+ * ...but only while the owner's Claude still has first refusal.
+ *
+ * The mode stopped meaning "who drains" and started meaning "who is asked
+ * first" (`research-execution.ts`). A workspace that connected Claude once and
+ * never scheduled a drainer used to have its research silently stop; now the
+ * platform takes the job back `RESEARCH_MCP_GRACE_HOURS` after it was enqueued.
+ *
+ * The window belongs in THIS predicate, beside the mode, because the claim is
+ * the only place the platform decides to touch the row at all. Everything below
+ * asserts on the emitted SQL — whether it is valid Postgres, and whether it
+ * excludes exactly the right rows, is settled in
+ * `research-mcp-fallback.realdb.e2e-spec.ts` against a real database.
+ */
+describe('ScheduledJobRunnerService — first refusal expires', () => {
+  let prisma: any;
+  let runner: ScheduledJobRunnerService;
+
+  beforeEach(() => {
+    prisma = {
+      scheduledJob: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        update: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn().mockResolvedValue({ maxAttempts: 5 }),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    };
+    runner = new ScheduledJobRunnerService(prisma as any);
+  });
+
+  function claimCall() {
+    const [strings, ...values] = prisma.$queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    return { sql: strings.join(' ? ').replace(/\s+/g, ' '), values };
+  }
+
+  it('bounds the exclusion by createdAt, so an unclaimed job comes back to us', async () => {
+    await runner.tick();
+    const { sql } = claimCall();
+    expect(sql).toMatch(/"createdAt"\s*>/);
+  });
+
+  it('measures the grace window from RESEARCH_MCP_GRACE_MS, not a literal', async () => {
+    const before = Date.now();
+    await runner.tick();
+    const after = Date.now();
+
+    const { values } = claimCall();
+    const cutoffs = values.filter((v): v is Date => v instanceof Date);
+    // now, and now - GRACE, and now - STALE.
+    const grace = cutoffs.find(
+      (d) =>
+        d.getTime() >= before - RESEARCH_MCP_GRACE_MS && d.getTime() <= after - RESEARCH_MCP_GRACE_MS,
+    );
+    expect(grace).toBeDefined();
+  });
+
+  it('treats AUTO as MCP only when an MCP tool call happened recently', async () => {
+    await runner.tick();
+    const { sql, values } = claimCall();
+
+    // AUTO resolves against real MCP traffic — an agent_runs row this
+    // workspace's own connector wrote.
+    expect(sql).toContain("'AUTO'");
+    expect(sql).toContain('agent_runs');
+    expect(values).toContain(MCP_ACTIVITY_AGENT);
+
+    const before = Date.now();
+    const stale = values.find(
+      (v): v is Date =>
+        v instanceof Date && Math.abs(v.getTime() - (before - MCP_CONNECTION_STALE_MS)) < 5_000,
+    );
+    expect(stale).toBeDefined();
+  });
+
+  it('keeps the whole exclusion conjoined to the research kind', async () => {
+    await runner.tick();
+    const { sql, values } = claimCall();
+    // One NOT(...) whose first conjunct is the kind: every other kind, for
+    // every workspace in every mode, is unaffected by all of the above.
+    expect(sql).toMatch(/NOT \( s\."kind" = \?/);
+    expect(values).toContain(RESEARCH_RUN_KIND);
   });
 });

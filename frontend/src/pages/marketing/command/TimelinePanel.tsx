@@ -83,6 +83,23 @@ export function TimelinePanel() {
   // the reader do the division to find that out.
   const heldMinutes = research?.oldestClaimedAgeMinutes ?? null;
   const heldHours = heldMinutes != null && heldMinutes >= 60 ? Math.floor(heldMinutes / 60) : null;
+  // Read through optional chaining even though the type says it is always
+  // there. During a rolling deploy this page can be served the PREVIOUS
+  // backend's payload, which has no `takenOver` at all — and a home screen that
+  // white-screens on a field it merely wanted to mention is a worse outage than
+  // the silence this field exists to break.
+  const takenOver = research?.takenOver ?? null;
+  // A takeover we could not price prints no NUMBER — `0,00 $` would read as "it
+  // was free", which is the one thing we know it was not, and the whole reason
+  // the backend records `null` rather than a zero. Two decimals because these
+  // are cents: a week of takeovers is well under a dollar.
+  //
+  // But it does not print SILENCE either. A bare "3 gece" is indistinguishable
+  // from a takeover that genuinely cost nothing, and this panel refuses that
+  // trade everywhere else — `unread` names the sources it could not read
+  // instead of shortening the list, `truncated` says there is more. The
+  // unpriced case says so in words for the same reason.
+  const takenOverCost = takenOver?.costUsd != null ? takenOver.costUsd.toFixed(2) : null;
 
   return (
     <QueryStateBoundary
@@ -163,6 +180,44 @@ export function TimelinePanel() {
                 )}
               </>
             )}
+          </p>
+        )}
+        {/*
+          THE FALLBACK, SAID OUT LOUD.
+
+          The platform takes back a research job the owner's Claude did not
+          claim inside the grace window. That is what guarantees research never
+          silently stops — and it is exactly why this line has to exist: a
+          customer whose scheduled task died sees a completely healthy panel
+          (no backlog, candidates arriving) while Jeeta quietly pays their model
+          bill night after night. Without this the safety net IS the trap,
+          approached from the other side.
+
+          Three things, in order: that we ran it, what it cost us, and the one
+          thing the reader can actually go and fix.
+        */}
+        {takenOver && takenOver.count > 0 && (
+          <p data-testid="tl-research-takenover" role="status" className="pb-1.5 text-xs text-warning">
+            {t('timeline.researchTakenOverLead', "Claude'un işi almadı, biz koşturduk")}
+            {': '}
+            {takenOver.count} {t('timeline.researchTakenOverNights', 'gece')}
+            {takenOverCost != null ? (
+              <>
+                {' ('}
+                {takenOver.costUnknown > 0 && (
+                  <>{t('timeline.researchTakenOverAtLeast', 'en az')} </>
+                )}
+                {takenOverCost} $)
+              </>
+            ) : (
+              <>
+                {' ('}
+                {t('timeline.researchTakenOverCostUnknown', 'maliyeti okunamadı')}
+                {')'}
+              </>
+            )}
+            {' — '}
+            {t('timeline.researchTakenOverAsk', 'zamanlanmış görevin çalışıyor mu?')}
           </p>
         )}
         {research && research.pendingApprovals > 0 && (

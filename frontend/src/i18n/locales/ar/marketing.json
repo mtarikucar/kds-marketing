@@ -1033,6 +1033,11 @@
       "site": {
         "title": "انشر صفحة هبوط",
         "desc": "اجمع العملاء عبر صفحة مسار من إعداد الذكاء الاصطناعي."
+      },
+      "claude": {
+        "title": "اربط Claude الخاص بك",
+        "desc": "دع Claude الخاص بك يشغّل بحث العملاء المحتملين الليلي على اشتراكك. انسخ عنوان الموصّل، أنشئ مفتاحًا، والصق أمر المهمة المجدولة الجاهز.",
+        "approvalWarning": "تنبيه: مساحة العمل هذه تتطلب موافقة على عمليات كتابة MCP، وما دام ذلك قائمًا فلن تتمكن أدوات خرائط Google وجلب الصفحات من إعادة أي نتيجة إلى Claude — سيعمل المسار بالبحث العادي على الويب ويجد عملاء أضعف. غيّر وضع الكتابة إلى مستقل أولًا."
       }
     }
   },
@@ -1092,7 +1097,12 @@
     "researchOldest": "أقدمها",
     "researchDays": "يوم",
     "researchHours": "ساعة",
-    "researchAwaitingApproval": "نتيجة بحث بانتظار موافقتك — لا يُحفظ أي مرشح قبل الموافقة"
+    "researchAwaitingApproval": "نتيجة بحث بانتظار موافقتك — لا يُحفظ أي مرشح قبل الموافقة",
+    "researchTakenOverLead": "لم يأخذ Claude المهمة — نفّذناها نحن",
+    "researchTakenOverNights": "ليلة",
+    "researchTakenOverAtLeast": "على الأقل",
+    "researchTakenOverCostUnknown": "تعذّرت قراءة التكلفة",
+    "researchTakenOverAsk": "هل مهمتك المجدولة لا تزال تعمل؟"
   },
   "opportunities": {
     "notInPipeline": {

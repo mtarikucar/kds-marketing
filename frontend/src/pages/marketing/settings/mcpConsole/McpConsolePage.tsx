@@ -101,6 +101,7 @@ export default function McpConsolePage() {
         )}
       />
       <OverviewSection />
+      <ScheduledTaskSection />
       <WriteModeSection />
       <ResearchExecutionSection />
       <ConnectionsSection />
@@ -248,6 +249,118 @@ function Metric({
   );
 }
 
+// ── 1b. The scheduled task that actually drains the queue ────────────────────
+
+/**
+ * The prompt an owner pastes into their own Claude's scheduled task.
+ *
+ * This section exists because of a measured failure mode, not a hunch: the
+ * whole MCP research lane dies at "a key was created and no scheduled task was
+ * ever written". From every other angle that workspace looks connected — a live
+ * key, a green connector — while nothing drains the queue. The product's answer
+ * is to stop asking anyone to author this from scratch and hand it over
+ * finished, with this workspace's own address already in it.
+ *
+ * Three deliberate choices:
+ *
+ *  - THE FOUR CALLS ARE NAMED, IN ORDER. A drainer that claims and never
+ *    completes holds the night hostage until the lease expires; one that
+ *    submits without claiming has no job to submit against. The order is the
+ *    protocol.
+ *  - IT TELLS THE MODEL TO WORK THE `instruction` IT WAS HANDED. The brief is
+ *    server-authored and travels inside the claim precisely so quality does not
+ *    depend on whatever sentence the owner typed that night. A prompt that
+ *    invited the model to invent its own ICP would quietly undo that.
+ *  - NO ENDPOINT, NO PROMPT. A prompt containing `undefined` looks copyable and
+ *    silently cannot work, which is strictly worse than an honest absence — the
+ *    endpoint card above already says why there is no address.
+ */
+function buildScheduledTaskPrompt(endpoint: string): string {
+  return [
+    `Connect to the Jeeta MCP server at ${endpoint} and drain tonight's prospect research.`,
+    '',
+    '1. Call `jeeta.claim_research_job`. If it returns no job, stop — there is nothing to do tonight.',
+    '2. Work the `instruction` field it hands back, exactly as written. It is the full brief:',
+    '   the ICP, the geo, the language, the exclusions and the output contract. Do not',
+    '   substitute your own idea of a good prospect.',
+    '   Use `jeeta.research_search_places`, `jeeta.research_lookup_instagram` and `jeeta.research_scrape_page`',
+    '   for the evidence — the Google Maps records are the pain signal, and your own web',
+    '   search cannot replace them.',
+    '3. Call `jeeta.submit_research_candidates` with `jobId` and the candidates you qualified.',
+    '4. Call `jeeta.complete_research_job` with the same `jobId` — `DONE`, or `FAILED` with the',
+    '   reason. Always call it, even when you found nothing: an unclosed job holds the',
+    '   night until its lease expires.',
+  ].join('\n');
+}
+
+function ScheduledTaskSection() {
+  const { t } = useTranslation('marketing');
+  const q = useQuery({ queryKey: QK.overview, queryFn: getMcpConsoleOverview });
+  const endpoint = q.data?.mcpEndpoint ?? null;
+  const prompt = endpoint ? buildScheduledTaskPrompt(endpoint) : null;
+
+  const copy = async () => {
+    if (!prompt) return;
+    if (await copyToClipboard(prompt)) {
+      toast.success(t('common.copied', 'Copied'));
+    } else {
+      toast.error(
+        t('mcpConsole.copyFailed', 'Could not copy — select the address and copy it manually.'),
+      );
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('mcpConsole.task.title', 'Your nightly scheduled task')}</CardTitle>
+        <CardDescription>
+          {t(
+            'mcpConsole.task.desc',
+            'Create a key, then paste this into a scheduled task in your own Claude. Until something runs it, we keep running the research for you — this is the part that moves the cost.',
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Link
+          to="/settings/api-keys"
+          className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+        >
+          <KeyRound className="h-4 w-4" aria-hidden="true" />
+          {t('mcpConsole.task.createKey', 'Create a key for this workspace')}
+        </Link>
+
+        {prompt ? (
+          <div className="space-y-2">
+            <pre
+              data-testid="mcp-task-prompt"
+              className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-3 text-xs leading-relaxed"
+            >
+              {prompt}
+            </pre>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={copy}
+              aria-label={t('mcpConsole.task.copyPrompt', 'Copy the scheduled-task prompt')}
+            >
+              <Clipboard className="me-1.5 h-4 w-4" aria-hidden="true" />
+              {t('mcpConsole.task.copyPrompt', 'Copy the scheduled-task prompt')}
+            </Button>
+          </div>
+        ) : (
+          <Callout tone="warning" title={t('mcpConsole.noEndpointTitle', 'No public address')}>
+            {t(
+              'mcpConsole.task.noEndpoint',
+              'There is no connector address to build a prompt around yet, and a prompt with a missing address would look copyable while silently doing nothing.',
+            )}
+          </Callout>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── 2. Write mode ────────────────────────────────────────────────────────────
 
 /**
@@ -380,15 +493,26 @@ function WriteModeSection() {
  *
  * `PATCH marketing/workspaces/research-execution` shipped OWNER-only, audited
  * and DTO-validated, with no frontend at all — while the connector doc and
- * `claim_research_job`'s own refusal text both told owners to "switch it in
+ * `jeeta.claim_research_job`'s own refusal text both told owners to "switch it in
  * Settings". An owner could not turn the feature on without a curl.
  *
  * Same shape as WriteModeSection above, and the risky direction is likewise
  * confirmed — but it is the OPPOSITE direction. Turning this ON does not loosen
- * a gate; it makes the PLATFORM stop draining. With no scheduled task on the
- * other side the jobs pile up, no candidates appear, and the review queue reads
- * exactly like "research ran and found nothing". Handing the queue BACK is the
- * safe direction and applies immediately.
+ * a gate; it changes who is asked FIRST.
+ *
+ * THE COPY ON THIS CARD CHANGED, and the reason matters. It used to promise
+ * "nothing runs until a connected Claude claims the jobs itself", which was
+ * true of the hard switch and is the most dangerous sentence the page could
+ * carry now that it is false: reassuring in the wrong direction. Under the
+ * grace window the platform takes an unclaimed job back after
+ * `researchGraceHours` and says so on the home screen. The number comes from
+ * the SERVER, never from a literal in a translation, because a card promising
+ * six hours while the server waits twelve is worse than a card saying nothing.
+ *
+ * The stored column also has THREE states behind this two-position switch, so
+ * `researchExecutionSource` tells the owner whether they chose this lane or
+ * whether we detected their Claude and decided. Without that they cannot know
+ * that disconnecting Claude hands the queue back on its own.
  */
 function ResearchExecutionSection() {
   const { t } = useTranslation('marketing');
@@ -402,8 +526,16 @@ function ResearchExecutionSection() {
   const mode: ResearchExecution = q.data?.researchExecution === 'MCP' ? 'MCP' : 'SERVER';
   const canToggle = q.data?.canToggle === true;
   const onMcp = mode === 'MCP';
+  // Detected rather than chosen. Only ever shown while it is actually true.
+  const autoDetected = onMcp && q.data?.researchExecutionSource === 'AUTO';
+  // From the server. A fallback window the card guesses at is a promise the
+  // product does not keep.
+  const graceHours = q.data?.researchGraceHours ?? null;
   // The gate that makes this lane half-work. Only shown when it actually
   // applies — a warning that is always on screen is a warning nobody reads.
+  // Deliberately keyed off the EFFECTIVE lane, so an auto-detected workspace on
+  // APPROVAL gets the same warning as one that opted in by hand: the tools are
+  // just as unusable either way, and it did not choose to be here.
   const gatedByApproval = onMcp && q.data?.mcpWriteMode !== 'AUTONOMOUS';
 
   const save = useMutation({
@@ -415,7 +547,7 @@ function ResearchExecutionSection() {
         next === 'MCP'
           ? t(
               'mcpConsole.researchExecution.mcpToast',
-              'Your Claude drains the research queue now — the platform has stopped. Nothing runs until a connected client claims the jobs.',
+              'Your Claude is asked first now. Anything it does not claim, we still run.',
             )
           : t(
               'mcpConsole.researchExecution.serverToast',
@@ -458,17 +590,32 @@ function ResearchExecutionSection() {
                 'Let my Claude run the nightly research',
               )}
             </Label>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p data-testid="research-lane-state" className="mt-1 text-sm text-muted-foreground">
               {onMcp
-                ? t(
-                    'mcpConsole.researchExecution.stateMcp',
-                    'MCP — your Claude drains the queue. If nothing claims the jobs they simply pile up and no prospects appear.',
-                  )
+                ? t('mcpConsole.researchExecution.stateMcp', {
+                    defaultValue:
+                      'MCP — your Claude is asked first. If nothing claims a job within {{hours}} hours we run it ourselves on our key, and say so on the home screen. Research never just stops.',
+                    hours: graceHours ?? '—',
+                  })
                 : t(
                     'mcpConsole.researchExecution.stateServer',
                     'SERVER — the platform runs the nightly research for you, on our key.',
                   )}
             </p>
+            {/*
+              Only while it is true. An owner who never touched this switch is
+              on a lane the platform picked for them, and the one thing they
+              cannot otherwise discover is that disconnecting Claude hands the
+              queue back with no further action.
+            */}
+            {autoDetected && (
+              <p data-testid="research-auto-note" className="mt-1 text-xs text-muted-foreground">
+                {t(
+                  'mcpConsole.researchExecution.autoDetected',
+                  'You did not switch this on: we can see a Claude connected to this workspace, so it gets first refusal. Disconnect it and the platform goes back to running the research on its own.',
+                )}
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Badge tone={onMcp ? 'warning' : 'success'} size="sm">
@@ -491,6 +638,7 @@ function ResearchExecutionSection() {
 
         {gatedByApproval && (
           <Callout
+            data-testid="research-approval-warning"
             tone="warning"
             title={t(
               'mcpConsole.researchExecution.needsAutonomousTitle',
@@ -525,10 +673,11 @@ function ResearchExecutionSection() {
             'mcpConsole.researchExecution.confirmTitle',
             'Hand the nightly research to your own Claude?',
           )}
-          description={t(
-            'mcpConsole.researchExecution.confirmDesc',
-            'From the moment you save this, the platform stops draining your research queue. Nothing runs until a connected Claude claims the jobs itself — so you need a scheduled task on your side that calls the connector. Until then the queue fills up and no new prospects appear, which on screen looks the same as research finding nothing. You can hand it back at any time.',
-          )}
+          description={t('mcpConsole.researchExecution.confirmDesc', {
+            defaultValue:
+              'From the moment you save this, your Claude is offered each night first — so you want a scheduled task on your side that claims the jobs. If it does not claim one within {{hours}} hours we run that job ourselves, on our key, and tell you on the home screen. Your research never stops; you just stop saving on the nights your task did not run. You can hand it back at any time.',
+            hours: graceHours ?? '—',
+          })}
           confirmLabel={t('mcpConsole.researchExecution.confirmCta', 'Yes, my Claude drains it')}
           cancelLabel={t('common.cancel', 'Cancel')}
           // Not `danger`: this destroys nothing and the switch back is one

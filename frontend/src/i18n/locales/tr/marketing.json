@@ -2432,6 +2432,11 @@
       "site": {
         "title": "Açılış sayfası yayınla",
         "desc": "AI'ın hazırladığı funnel sayfasıyla lead topla."
+      },
+      "claude": {
+        "title": "Claude'unu bağla",
+        "desc": "Gece yapılan aday araştırmasını kendi Claude’un kendi aboneliğinde koştursun. Bağlantı adresini kopyala, bir anahtar oluştur, hazır zamanlanmış görev komutunu yapıştır.",
+        "approvalWarning": "Dikkat: bu workspace MCP yazımları için onay istiyor; bu böyle kaldıkça Google Maps ve sayfa okuma araçları Claude'una hiçbir sonuç döndüremez — hat düz web aramasıyla çalışır ve daha zayıf adaylar bulur. Önce MCP yazma modunu otonom yap."
       }
     },
     "startHere": "Buradan başla"
@@ -3952,7 +3957,7 @@
       "title": "Gecelik araştırmayı kim çalıştırıyor",
       "desc": "Aday araştırması bu üründeki en pahalı iş. Arama ve akıl yürütmeyi bizim yerimize kendi Claude’un kendi aboneliğinde yapabilir — brifler, kuyruk ve inceleme adımı aynen kalır.",
       "switchLabel": "Gecelik araştırmayı benim Claude’um çalıştırsın",
-      "stateMcp": "MCP — kuyruğu senin Claude’un boşaltıyor. İşleri kimse almazsa öylece birikirler ve hiç aday çıkmaz.",
+      "stateMcp": "MCP — önce senin Claude'una soruluyor. Bir işi {{hours}} saat içinde kimse almazsa onu biz koşturur, ana ekranda söyleriz. Araştırma öylece durmaz.",
       "stateServer": "SERVER — gecelik araştırmayı platform senin için, kendi anahtarıyla çalıştırıyor.",
       "MCP": "Senin Claude’un",
       "SERVER": "Platform",
@@ -3961,11 +3966,12 @@
       "lockedTitle": "Senin için salt okunur",
       "locked": "Araştırmayı kimin çalıştıracağını yalnızca \"ayarları yönet\" iznine sahip çalışma alanı sahibi değiştirebilir. Mevcut ayarı görebilirsin ama değiştiremezsin.",
       "confirmTitle": "Gecelik araştırma kendi Claude’una devredilsin mi?",
-      "confirmDesc": "Bunu kaydettiğin andan itibaren platform araştırma kuyruğunu boşaltmayı bırakır. Bağlı bir Claude işleri kendisi almadıkça hiçbir şey çalışmaz — yani senin tarafında konektörü çağıran zamanlanmış bir görev olması gerekir. O zamana kadar kuyruk dolar ve yeni aday çıkmaz; ekranda bu, araştırmanın hiçbir şey bulamamasıyla birebir aynı görünür. İstediğin an geri alabilirsin.",
+      "confirmDesc": "Kaydettiğin andan itibaren her gece önce senin Claude'una soruluyor — yani kendi tarafında işleri alan bir zamanlanmış görev istersin. Bir işi {{hours}} saat içinde almazsa o işi biz koşturur, kendi anahtarımızla, ve ana ekranda söyleriz. Araştırman hiç durmaz; sadece görevinin çalışmadığı gecelerde tasarruf etmezsin. İstediğin an geri alabilirsin.",
       "confirmCta": "Evet, benim Claude’um boşaltsın",
-      "mcpToast": "Araştırma kuyruğunu artık senin Claude’un boşaltıyor — platform durdu. Bağlı bir istemci işleri almadıkça hiçbir şey çalışmaz.",
+      "mcpToast": "Artık önce senin Claude'una soruluyor. Almadığı işi yine biz koşturuyoruz.",
       "serverToast": "Araştırma kuyruğunu yine platform boşaltıyor.",
-      "error": "Araştırmayı kimin çalıştıracağı değiştirilemedi."
+      "error": "Araştırmayı kimin çalıştıracağı değiştirilemedi.",
+      "autoDetected": "Bunu sen açmadın: bu workspace'e bağlı bir Claude görüyoruz, o yüzden öncelik onda. Bağlantıyı kaldırırsan araştırmayı yeniden platform koşturur."
     },
     "connections": {
       "title": "Bağlantılar",
@@ -4024,6 +4030,13 @@
       "noApprovals": "Bu oturum hiç onay istemedi.",
       "decided": "karara bağlandı",
       "expires": "sona eriyor"
+    },
+    "task": {
+      "title": "Gecelik zamanlanmış görevin",
+      "desc": "Bir anahtar oluştur, sonra bunu kendi Claude’unda bir zamanlanmış göreve yapıştır. Bir şey bunu koşturana kadar araştırmayı biz koşturmaya devam ederiz — maliyeti taşıyan kısım tam olarak burası.",
+      "createKey": "Bu workspace için anahtar oluştur",
+      "copyPrompt": "Zamanlanmış görev komutunu kopyala",
+      "noEndpoint": "Etrafına komut kurulacak bir bağlantı adresi henüz yok; adresi eksik bir komut kopyalanabilir görünür ama sessizce hiçbir şey yapmaz."
     }
   },
   "mcpConsent": {
@@ -4108,7 +4121,12 @@
     "researchOldest": "en eskisi",
     "researchDays": "gündür",
     "researchHours": "saattir",
-    "researchAwaitingApproval": "araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez"
+    "researchAwaitingApproval": "araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez",
+    "researchTakenOverLead": "Claude'un işi almadı, biz koşturduk",
+    "researchTakenOverNights": "gece",
+    "researchTakenOverAtLeast": "en az",
+    "researchTakenOverCostUnknown": "maliyeti okunamadı",
+    "researchTakenOverAsk": "zamanlanmış görevin çalışıyor mu?"
   },
   "surface": {
     "sales": {

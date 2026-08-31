@@ -5,6 +5,8 @@ import { ApiKeysService } from '../services/api-keys.service';
 import { RolesService } from '../roles/roles.service';
 import { safeLimit, safePage } from '../common/paging';
 import { mcpCanonicalResource } from '../../mcp-oauth/mcp-oauth.config';
+import { ResearchLeaseService } from '../research/research-lease.service';
+import { RESEARCH_MCP_GRACE_HOURS } from '../research/research-execution';
 
 /**
  * Faz 4 — the read model behind the connector management console.
@@ -124,13 +126,39 @@ export interface McpSessionDetail extends Omit<McpSessionSummary, 'toolCallCount
 export interface McpConsoleOverview {
   mcpWriteMode: 'APPROVAL' | 'AUTONOMOUS';
   /**
-   * Which side drains the nightly research queue (`Workspace.researchExecution`).
+   * Which side gets FIRST REFUSAL on the nightly research queue — the
+   * EFFECTIVE lane, with `AUTO` already resolved against the live connection.
    *
    * Read here rather than from its own OWNER-only, `@Audit`-logged endpoint for
    * the same reason `mcpWriteMode` is: the console is MANAGER-readable, and a
    * page load must not 403 a MANAGER or write an audit row per render.
    */
   researchExecution: 'SERVER' | 'MCP';
+  /**
+   * Whether that lane was CHOSEN or DETECTED.
+   *
+   * The stored column has three states and the card has a two-position switch,
+   * so without this the switch lies by omission: an owner seeing "Your Claude"
+   * cannot tell whether they turned it on or whether the platform noticed a
+   * connection and decided for them — and therefore cannot tell that
+   * disconnecting Claude would hand the queue back on its own.
+   *
+   * `AUTO` only for the literal stored `'AUTO'`. A value nothing here wrote is
+   * not a decision anyone made either, but it resolves to SERVER, and calling
+   * it EXPLICIT keeps the sentence the card prints ("the platform runs this")
+   * true — which is the only part the reader can act on.
+   */
+  researchExecutionSource: 'EXPLICIT' | 'AUTO';
+  /**
+   * How long the owner's Claude keeps first refusal before the platform drains
+   * the job anyway (RESEARCH_MCP_GRACE_HOURS).
+   *
+   * Sent rather than hard-coded in the copy because the card's whole job is to
+   * state what will actually happen. A number typed into a translation string
+   * drifts the moment the constant is tuned, and a card that promises six hours
+   * while the server waits twelve is worse than a card that says nothing.
+   */
+  researchGraceHours: number;
   /**
    * Whether THIS caller may flip either switch. See `canToggleWriteMode`.
    *
@@ -160,6 +188,11 @@ export class McpConsoleService {
     private readonly apiKeys: ApiKeysService,
     private readonly roles: RolesService,
     private readonly config: ConfigService,
+    // The ONE resolver for the effective research lane. Injected rather than
+    // re-derived here: `AUTO` is a three-way decision over a stored column plus
+    // live MCP traffic, and a second copy of it is exactly how this card starts
+    // drawing a lane that is not the lane the claim predicate is using.
+    private readonly researchLane: ResearchLeaseService,
   ) {}
 
   /** Both kinds of connection into this workspace's MCP surface. */
@@ -441,25 +474,34 @@ export class McpConsoleService {
    * that tell an operator whether anything is live or waiting on them.
    */
   async overview(workspaceId: string, actor: McpConsoleActor): Promise<McpConsoleOverview> {
-    const [workspace, connections, pendingApprovalCount, canToggle] = await Promise.all([
-      this.prisma.workspace.findUnique({
-        where: { id: workspaceId },
-        select: { mcpWriteMode: true, researchExecution: true },
-      }),
-      this.listConnections(workspaceId),
-      this.pendingMcpApprovalCount(workspaceId),
-      this.canToggleWriteMode(workspaceId, actor),
-    ]);
+    const [workspace, connections, pendingApprovalCount, canToggle, researchExecution] =
+      await Promise.all([
+        this.prisma.workspace.findUnique({
+          where: { id: workspaceId },
+          select: { mcpWriteMode: true, researchExecution: true },
+        }),
+        this.listConnections(workspaceId),
+        this.pendingMcpApprovalCount(workspaceId),
+        this.canToggleWriteMode(workspaceId, actor),
+        // The EFFECTIVE lane, from the one resolver. It re-reads the workspace
+        // row this method already has — one indexed primary-key lookup on a
+        // settings page — which is a cheaper price than a second copy of the
+        // AUTO rule living here and drifting out of step with the claim SQL.
+        this.researchLane.modeFor(workspaceId),
+      ]);
 
     return {
       // Anything other than the explicit opt-out reads as the gated default —
       // same fail-safe direction McpInvokerService.writeModeFor() uses.
       mcpWriteMode: workspace?.mcpWriteMode === 'AUTONOMOUS' ? 'AUTONOMOUS' : 'APPROVAL',
-      // Same fail-safe direction as ResearchLeaseService.modeFor(): anything
-      // that is not exactly 'MCP' means the PLATFORM is still draining. Reading
-      // an unknown value as MCP would draw a switch telling the owner their own
-      // Claude is responsible for a queue the platform is in fact working.
-      researchExecution: workspace?.researchExecution === 'MCP' ? 'MCP' : 'SERVER',
+      // Already fail-safe towards SERVER inside `modeFor`: anything that is not
+      // exactly 'MCP', or 'AUTO' with a live connection, means the PLATFORM is
+      // still draining. Reading an unknown value as MCP would draw a switch
+      // telling the owner their own Claude is responsible for a queue the
+      // platform is in fact working.
+      researchExecution,
+      researchExecutionSource: workspace?.researchExecution === 'AUTO' ? 'AUTO' : 'EXPLICIT',
+      researchGraceHours: RESEARCH_MCP_GRACE_HOURS,
       canToggle,
       mcpEndpoint: this.mcpEndpoint(),
       liveConnectionCount: connections.oauth.length + connections.apiKeys.length,
