@@ -242,6 +242,7 @@ import { ResearchSourcesService } from './research/providers/research-sources.se
 import { ResearchJobService } from './research/research-job.service';
 import { ResearchCandidateService } from './research/research-candidate.service';
 import { ResearchFinalizeService } from './research/research-finalize.service';
+import { ResearchLeaseService } from './research/research-lease.service';
 import { ResearchWorkerService } from './research/research-worker.service';
 import { ResearchRunnerService } from './research/research-runner.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
@@ -958,6 +959,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ResearchJobService,
     ResearchCandidateService,
     ResearchFinalizeService,
+    ResearchLeaseService,
     ResearchWorkerService,
     ResearchRunnerService,
     BudgetPacerService,

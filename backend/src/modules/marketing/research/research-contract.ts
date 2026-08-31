@@ -94,6 +94,49 @@ export function buildResearchBrief(job: ResearchJob, brand: string | null): stri
     .join('\n');
 }
 
+/**
+ * The MCP lane's version of the same instruction.
+ *
+ * Identical brief and identical system prompt — the only difference is the
+ * closing paragraph, because the two lanes finish differently. The server lane
+ * ends by calling the in-loop `submit_candidates` tool; the MCP lane ends by
+ * calling two Jeeta MCP tools against a leased job id. Everything above that
+ * paragraph is shared verbatim, which is the point: the owner's Claude gets the
+ * product's brief, not a paraphrase of it, and not whatever sentence was typed
+ * into a scheduled task once and never revisited.
+ *
+ * The lease deadline is stated because it is real. Miss it and the job returns
+ * to PENDING and will be handed out again — better to submit what has been
+ * gathered than to run past it and have the night researched twice.
+ */
+export function buildMcpResearchInstruction(
+  job: ResearchJob,
+  brand: string | null,
+  lease: { jobId: string; expiresAt: Date },
+): string {
+  return [
+    RESEARCH_SYSTEM_PROMPT,
+    '',
+    buildResearchBrief(job, brand),
+    '',
+    'HOW TO WORK THIS JOB',
+    `You hold a lease on research job ${lease.jobId} until ${lease.expiresAt.toISOString()}.`,
+    'Research with your own web search and reading, plus these Jeeta tools where they are',
+    'better than the open web: `jeeta.research_search_places` (Google Maps listings and their',
+    'recent reviews — the primary source of pain signals, and not substitutable by general web',
+    'search), `jeeta.research_lookup_instagram` (confirm a reachable social channel) and',
+    '`jeeta.research_scrape_page` (fetch one page as markdown). All three take this jobId.',
+    '',
+    `When you are done, call \`jeeta.submit_research_candidates\` ONCE with jobId ${lease.jobId} and`,
+    'your final list, then call `jeeta.complete_research_job` to close the job. Submitting writes',
+    'to the review queue as CANDIDATES, not leads — a human still accepts them.',
+    '',
+    'If you find nothing worth submitting, still call `jeeta.complete_research_job` and say why.',
+    'A job that is never closed goes back to the queue when the lease runs out and is researched',
+    'again, which costs you a second run for the same night.',
+  ].join('\n');
+}
+
 /** Keep only well-formed candidates (the ingest DTO re-validates on accept). */
 export function validateResearchCandidates(raw: unknown[]): StagedCandidate[] {
   const out: StagedCandidate[] = [];
