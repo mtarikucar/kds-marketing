@@ -458,9 +458,11 @@ Workflows gate on `workflows`; research on `research`.
 Live measurement put the nightly research agent at **86% of the platform's whole
 Anthropic bill** — and the `@Cron` that builds those jobs spends nothing. All of
 the money is spent by whoever *drains* the queue. So a workspace can set
-`researchExecution = MCP` (Settings, OWNER-only) and have **its own Claude**
-drain it: the platform's runner then leaves those jobs queued, and the reasoning
-and general web search are billed to the owner's subscription instead.
+`researchExecution = MCP` and have **its own Claude** drain it: the platform's
+runner then leaves those jobs queued, and the reasoning and general web search
+are billed to the owner's subscription instead. The switch lives in **Settings →
+Claude connector**, on the *"Who runs the nightly research"* card, and is
+OWNER-only (`PATCH marketing/workspaces/research-execution`, `@Audit`-logged).
 
 The instruction is **server-authored**. `jeeta.claim_research_job` returns the
 whole brief — ICP, geo, business types, exclusions, language, the hard
@@ -472,6 +474,17 @@ A job is **leased**, not just read: `PENDING -> CLAIMED -> DONE|FAILED`, with th
 flip taken by one conditional `UPDATE ... WHERE status = 'PENDING'`. Two holders
 would mean one night researched — and billed — twice. An expired lease returns to
 the queue, so a crashed client cannot hold a night hostage.
+
+`CLAIMED` is deliberately a status the generic sweepers do not know (`claimBatch`
+takes `PENDING`, `reapStuck` revives `RUNNING`), which means the ONLY thing that
+can move such a row is this lane's own expiry sweep. That sweep therefore runs
+from **two** places — on the way into a claim, and on every `queueStatus()` read
+(the home timeline, on load and on its 60-second refetch). The second is not
+redundant: nothing claims a `SERVER` queue, so a job left `CLAIMED` when an owner
+flips back to `SERVER` — or when a client crashes and stops polling — would
+otherwise be stranded permanently, and invisibly. The home timeline reports
+`claimed` and the age of the oldest lease alongside `pending`, because a fully
+*held* queue reads `pending: 0`, the same zero as a healthy empty one.
 
 `search_web` is deliberately **not** exposed: the owner's Claude does its own
 searching, and that is where the platform's `research.native_search` spend goes.
@@ -492,11 +505,24 @@ cannot reach them.
 `claim` and `complete` are ungated: claiming spends nothing and self-reverses on
 expiry, and gating the *close* would leave the job leased until it expired and
 then researched a second time — a gate that costs money instead of saving it.
+
 The three SPEND tools are gated exactly like every other SPEND in this
-catalogue, so **the lane runs unattended only under `AUTONOMOUS` write mode**.
-Under `APPROVAL` each night's work waits in the approval queue; the home
-timeline reports that by name rather than letting it look like an empty review
-queue.
+catalogue, and it is worth being exact about what that costs, because it is
+**not a delay**. `McpApprovalExecutorService.apply()` returns the tool result to
+the approving human's HTTP response; it does not resume the agent's turn. For a
+**terminal write** that is harmless — `submit_research_candidates` is replayed
+on approval with the candidates intact, which is why it survives the gate. For a
+**data fetch** it is fatal: under `APPROVAL` the drainer receives
+`PENDING_APPROVAL` and can never obtain the Maps listings *within its session*,
+however fast the owner clicks, and both the 30-minute lease and the 24-hour
+approval TTL run out first.
+
+So under `APPROVAL` the three vendor tools are not queued, they are **unusable**,
+and the lane silently degrades to Claude's own web search — losing exactly the
+Google Maps pain signal this design calls unsubstitutable. **Running this lane as
+designed requires `AUTONOMOUS` write mode.** What `APPROVAL` genuinely delays is
+the submit: each night's candidates wait for a human click, and the home timeline
+reports that by name rather than letting it look like an empty review queue.
 
 #### Scheduling
 

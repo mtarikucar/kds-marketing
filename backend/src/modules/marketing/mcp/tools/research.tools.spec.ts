@@ -405,6 +405,45 @@ describe('research MCP lane — leasing the nightly queue to the owner Claude', 
     expect(res.message).toMatch(/MCP/);
   });
 
+  /**
+   * What APPROVAL actually does to this lane, said in the two places a reader
+   * looks. The doc used to say "under APPROVAL each night's work waits in the
+   * approval queue", which reads as a DELAY. It is not one.
+   *
+   * `McpApprovalExecutorService.apply()` returns the tool result to the
+   * approving human's HTTP response, not into the agent's turn. For a terminal
+   * WRITE like `submit_research_candidates` that is fine — the call is replayed
+   * and the candidates land. For a DATA-FETCH like `research_search_places` the
+   * drainer receives `PENDING_APPROVAL` and can never obtain the reviews within
+   * its session, however fast the owner clicks. So the three Maps/Instagram/
+   * scrape tools are not delayed under APPROVAL, they are unusable, and the
+   * lane silently degrades to Claude's own web search — losing the Google Maps
+   * pain signal the design calls unsubstitutable.
+   */
+  it('claim states plainly that the vendor tools are UNUSABLE under APPROVAL, not delayed', () => {
+    const { registry } = buildLane();
+    const d = registry.get('jeeta.claim_research_job')!.description;
+    expect(d).toMatch(/AUTONOMOUS/);
+    // The degradation must be named, not implied by the absence of a promise.
+    expect(d).toMatch(/Google Maps|Maps/);
+    // And it must not describe the gate as a wait, which is the lie being fixed.
+    expect(d).not.toMatch(/waits? in the approval queue/i);
+  });
+
+  it('points an owner at where the research-execution switch actually is', () => {
+    // Two strings used to say "an OWNER switches it in Settings" while no
+    // frontend for PATCH /workspaces/research-execution existed at all.
+    const { registry, lease } = buildLane();
+    lease.claim.mockResolvedValue({ job: null, reason: 'not-in-mcp-mode' });
+    return registry
+      .get('jeeta.claim_research_job')!
+      .handler(LANE_CTX, {})
+      .then((res: any) => {
+        // The real nav label (`nav.mcpConsole`), not a vague "in Settings".
+        expect(res.message).toMatch(/Settings > Claude connector/i);
+      });
+  });
+
   it('submit routes to the shared staging path and reports duplicates honestly', async () => {
     const { registry, lease } = buildLane();
     const res: any = await registry.get('jeeta.submit_research_candidates')!.handler(LANE_CTX, {

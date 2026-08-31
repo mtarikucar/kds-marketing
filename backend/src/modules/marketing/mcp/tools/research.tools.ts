@@ -364,11 +364,26 @@ export function registerResearchTools(registry: McpToolRegistry, deps: ResearchT
  * by what would be convenient for this lane:
  *
  *  - The three vendor tools are SPEND + `AI_SPEND`, like every other SPEND in
- *    this catalogue. Under APPROVAL they queue; under AUTONOMOUS they run
- *    inline. Calling them WRITE to make the lane work unattended would be a lie
- *    about where the money goes.
- *  - `submit_research_candidates` is a gated WRITE. The design spec records
- *    this as an OPEN OWNER DECISION and explicitly does not take it: staging is
+ *    this catalogue. Calling them WRITE to make the lane work unattended would
+ *    be a lie about where the money goes.
+ *
+ *    What that gate costs is worth stating exactly, because it is NOT a delay.
+ *    `McpApprovalExecutorService.apply()` returns the tool result to the
+ *    approving human's HTTP response — it does not resume the agent's turn. For
+ *    a terminal write that is fine (see `submit_research_candidates` below).
+ *    For a DATA FETCH it is fatal: under APPROVAL the drainer gets
+ *    `PENDING_APPROVAL` back and can never obtain the Maps listings within its
+ *    session, however fast the owner clicks, and the 30-minute lease and 24h
+ *    approval TTL both run out first. So under APPROVAL these three are not
+ *    queued, they are unusable, and the lane silently degrades to Claude's own
+ *    web search — losing exactly the Google Maps pain signal this design calls
+ *    unsubstitutable. Running the lane as designed requires AUTONOMOUS.
+ *  - `submit_research_candidates` is a gated WRITE, and this one really does
+ *    only WAIT. It is terminal — the client closes the job, and the approval
+ *    executor replays the call hours later with the candidates intact — so the
+ *    result never needing to reach the agent's turn is exactly why it survives
+ *    the gate the three above do not. The design spec records the gate itself
+ *    as an OPEN OWNER DECISION and explicitly does not take it: staging is
  *    reversible and already human-reviewed at `accept_research_candidates`, so
  *    there is a case for loosening it — but that is the owner's call, not this
  *    file's. Until they take it, every night's submit waits in the approval
@@ -414,7 +429,7 @@ function registerResearchMcpLane(registry: McpToolRegistry, deps: ResearchToolDe
   registry.register({
     name: 'jeeta.claim_research_job',
     description:
-      "Take the next queued nightly research job for this workspace and get its full brief — who to look for, where, in which language, what disqualifies a prospect, and how to report back. Only works when the workspace has handed research execution to its own Claude (researchExecution = MCP); otherwise the platform is still running these jobs itself and this returns nothing. The job is LEASED to you for a limited time: work it, submit what you found, then close it. If you never close it the lease expires, the job goes back to the queue, and the same night gets researched twice.",
+      "Take the next queued nightly research job for this workspace and get its full brief — who to look for, where, in which language, what disqualifies a prospect, and how to report back. Only works when the workspace has handed research execution to its own Claude (researchExecution = MCP); otherwise the platform is still running these jobs itself and this returns nothing. The job is LEASED to you for a limited time: work it, submit what you found, then close it. If you never close it the lease expires, the job goes back to the queue, and the same night gets researched twice. NOTE ON WRITE MODE: this lane is designed for AUTONOMOUS. In APPROVAL mode the three Jeeta-keyed data tools (research_search_places, research_lookup_instagram, research_scrape_page) are not merely delayed — they return PENDING_APPROVAL and their results can never reach you inside this session, no matter how quickly a human approves, because an approved call is replayed to the approver, not back into your turn. Your lease and the approval both expire first. Working a job under APPROVAL therefore means working WITHOUT Google Maps listings and their recent reviews — the primary pain signal these briefs qualify on — using only your own web search. Say so in the job you submit rather than presenting the result as a normal night.",
     domain: 'research',
     defer: true,
     scopes: ['settings.manage'],
@@ -436,7 +451,7 @@ function registerResearchMcpLane(registry: McpToolRegistry, deps: ResearchToolDe
         reason: res.reason,
         message:
           res.reason === 'not-in-mcp-mode'
-            ? 'This workspace still has the PLATFORM draining its research queue (researchExecution = SERVER, not MCP), so there is nothing for you to lease and never will be until that changes. An OWNER switches it in Settings; until then, stop polling.'
+            ? 'This workspace still has the PLATFORM draining its research queue (researchExecution = SERVER, not MCP), so there is nothing for you to lease and never will be until that changes. A workspace OWNER switches it under Settings > Claude connector (the "Who runs the nightly research" card); until then, stop polling.'
             : 'No research job is waiting right now. The nightly cron enqueues one job per active brief at 03:00 workspace time.',
       };
     },
