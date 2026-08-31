@@ -7,6 +7,7 @@ jest.mock('../../../common/scheduling/advisory-lock', () => ({
 }));
 
 import { ScheduledJobRunnerService } from './scheduled-job-runner.service';
+import { RESEARCH_RUN_KIND } from '../research/research-kinds';
 
 /**
  * Claim → dispatch → outcome routing of the delayed-work runner. The DLQ and
@@ -197,5 +198,73 @@ describe('ScheduledJobRunnerService', () => {
       where: { id: 'jc' },
       data: { status: 'PENDING', runAt, payload: { step: 2 }, lockedAt: null, attempts: 0, lastError: null },
     });
+  });
+});
+
+/**
+ * The one kind this generic runner is NOT always allowed to claim.
+ *
+ * A workspace on `researchExecution: 'MCP'` has said its nightly research is
+ * drained by its OWN Claude, over MCP, on its own Anthropic subscription — the
+ * entire point being that the platform stops paying for 86% of its model bill.
+ * The cron still enqueues those jobs, unchanged. If this runner claims them
+ * anyway they are executed in-process against the platform's key within sixty
+ * seconds of being written, the owner's scheduled drainer never finds anything
+ * to lease, and the feature silently does not exist while looking like it
+ * works.
+ *
+ * The exclusion is read LIVE off the workspace rather than stamped on the row
+ * at enqueue time. Stamping would be tidier layering but leaves a real bug:
+ * rows stamped MCP would be orphaned forever the moment an owner switched back
+ * to SERVER, with no drainer on either side and nothing to notice it.
+ */
+describe('ScheduledJobRunnerService — leaves an MCP workspace its research jobs', () => {
+  let prisma: any;
+  let runner: ScheduledJobRunnerService;
+
+  beforeEach(() => {
+    prisma = {
+      scheduledJob: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        update: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn().mockResolvedValue({ maxAttempts: 5 }),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    };
+    runner = new ScheduledJobRunnerService(prisma as any);
+  });
+
+  /** The claim SQL, reassembled from the tagged-template call. */
+  function claimSql(): string {
+    const [strings] = prisma.$queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    return strings.join(' ? ');
+  }
+  function claimValues(): unknown[] {
+    const [, ...values] = prisma.$queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    return values;
+  }
+
+  it('excludes research jobs of MCP-mode workspaces from the claim itself', async () => {
+    await runner.tick();
+
+    const sql = claimSql();
+    // Read live off the workspace, not off a stamped column on the row.
+    expect(sql).toContain('workspaces');
+    expect(sql).toContain('researchExecution');
+    expect(sql).toContain("'MCP'");
+    // Scoped to the research kind: an MCP-research workspace still gets its
+    // campaigns, follow-ups, imports and reminders drained by this runner.
+    expect(claimValues()).toContain(RESEARCH_RUN_KIND);
+  });
+
+  it('still claims every OTHER kind, and research for a SERVER workspace', async () => {
+    // The exclusion must be a conjunction of kind AND mode — either half on
+    // its own is a different, much bigger, outage.
+    const sql = (await runner.tick(), claimSql()).replace(/\s+/g, ' ');
+    expect(sql).toMatch(/NOT\s*\(/i);
+    expect(sql).toMatch(/"kind"\s*=/);
+    expect(sql).toMatch(/EXISTS/i);
   });
 });
