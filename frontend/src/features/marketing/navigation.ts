@@ -296,8 +296,6 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Pipeline', icon: Target },
       // Offers + Estimates + Documents merged into one tabbed hub.
       { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
-      // Power Dialer is a tab inside Calls now.
-      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
       { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
       { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       { path: '/tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList },
@@ -335,6 +333,28 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: ShieldCheck, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
       { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
+      /**
+       * The call LOG, moved out of the Inbox surface on 2026-08-31.
+       *
+       * It sat there because calls are a thing you do to a person. But the
+       * page itself is not a person: it is the log of every call the workspace
+       * made, plus the Power Dialer, which is a bulk outbound tool you point
+       * at a list. Neither arrives with a person attached, and that is the one
+       * thing the Inbox surface is for.
+       *
+       * What made the move safe rather than merely tidy is the other half of
+       * this change: a call in a person's stream now opens its own recording
+       * and its own AI analysis (LeadStream -> StreamCallDetail). Before that,
+       * /calls was the ONLY place a rep could hear a call, so taking it off
+       * the surface would have removed the capability rather than relocated
+       * the page.
+       *
+       * `/calls` is still a route, still bookmarked, still in the frozen path
+       * set navigation.test.ts pins — nothing about the page changed except
+       * which menu names it. The Power Dialer stays a TAB of that page: it
+       * belongs to the operations surface, not to a person.
+       */
+      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
       { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       // Public surfaces you configure once (were their own single-page hubs).
       { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },

@@ -51,10 +51,14 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
   const floodLead = randomUUID(); // more activities than the cap
   const foreignLead = randomUUID(); // next door's own person
   const assignLead = randomUUID(); // every flavour of assignment event
+  const callLead = randomUUID(); // logged calls: with the SalesCall id, and without
 
   const convo = randomUUID();
   const spoofConvo = randomUUID(); // in otherWorkspace, points at richLead
   const foreignConvo = randomUUID();
+
+  /** The SalesCall a mirrored CALL activity points back at. */
+  const SALES_CALL_ID = randomUUID();
 
   // Frozen at load so an assertion cannot drift by the suite's own runtime.
   const BASE = Date.now();
@@ -138,6 +142,7 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
         lead(quietLead, 'quiet'),
         lead(floodLead, 'flood'),
         lead(assignLead, 'assign'),
+        lead(callLead, 'calls'),
         lead(foreignLead, 'foreign', otherWorkspaceId, null),
       ],
     });
@@ -198,6 +203,18 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
         { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'Assigned to Ayse Temsilci', metadata: { kind: 'assignment', fromUserId: null, fromUserName: null, toUserId: agentId, toUserName: 'Ayse Temsilci', bulk: true }, createdAt: t(30) },
         { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'Reassigned: Ayse Temsilci -> Mana Ger', metadata: { kind: 'assignment', fromUserId: agentId, fromUserName: 'Ayse Temsilci', toUserId: managerId, toUserName: 'Mana Ger' }, createdAt: t(20) },
         { leadId: assignLead, createdById: managerId, type: 'STATUS_CHANGE', title: 'NEW -> CONTACTED', createdAt: t(10) },
+        // A logged call as it is written TODAY: the SalesCall id rides in
+        // `metadata`, which is the only thing that lets the stream row reach
+        // the recording and the analysis.
+        { leadId: callLead, createdById: agentId, type: 'CALL', title: 'Sales call: CONNECTED', outcome: 'POSITIVE', duration: 3, metadata: { kind: 'call', salesCallId: SALES_CALL_ID }, createdAt: t(30) },
+        // The rows that CANNOT be backfilled: every call mirrored before the
+        // id was carried has `metadata: null` and nothing anywhere pairs it to
+        // a call. It must answer "no id" rather than something a player could
+        // be pointed at.
+        { leadId: callLead, createdById: agentId, type: 'CALL', title: 'Sales call: NO_ANSWER', outcome: 'NEGATIVE', createdAt: t(20) },
+        // Another writer's shape on a CALL row: still no id. `kind` is the
+        // discriminator, not the presence of the column.
+        { leadId: callLead, createdById: agentId, type: 'CALL', title: 'Sales call: BUSY', metadata: { kind: 'assignment', bulk: true }, createdAt: t(10) },
       ],
     });
 
@@ -227,7 +244,7 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
       if (!prisma) return;
       await del(() =>
         prisma.leadActivity.deleteMany({
-          where: { leadId: { in: [richLead, quietLead, floodLead, foreignLead, assignLead] } },
+          where: { leadId: { in: [richLead, quietLead, floodLead, foreignLead, assignLead, callLead] } },
         }),
       );
       await del(() => prisma.message.deleteMany({ where: { workspaceId: scope } }));
@@ -430,6 +447,47 @@ describeRealDb('Lead stream — messages + activities on one axis, real DB (e2e)
     });
     // Null on an activity rather than absent — the DTO's own rule.
     expect(res.items.find((i) => i.kind === 'call')!.meta).toBeNull();
+  });
+
+  /**
+   * The gap this closes: a rep reading a person's history saw "Sales call:
+   * CONNECTED · 3 dk" and could go no further, because the recording and the
+   * AI analysis both hang off a `SalesCall.id` the mirrored activity never
+   * kept. The id now rides in `LeadActivity.metadata`, and this is the only
+   * test that can prove it survives a real JSONB round-trip.
+   */
+  it('names the call a CALL row came from, so the stream is not a dead end', async () => {
+    const res = await svc.forLead(workspaceId, callLead, managerId, 'MANAGER');
+    const calls = res.items.filter((i) => i.kind === 'call');
+
+    expect(calls.map((i) => [i.title, i.callId])).toEqual([
+      ['Sales call: CONNECTED', SALES_CALL_ID],
+      // No backfill is possible for either of these; they degrade to the row
+      // they have always been rather than to a player pointed at a guess.
+      ['Sales call: NO_ANSWER', null],
+      ['Sales call: BUSY', null],
+    ]);
+  });
+
+  it('leaves `callId` null on every other kind, like the other narrow fields', async () => {
+    const res = await svc.forLead(workspaceId, richLead, managerId, 'MANAGER');
+    // Anchor first: assert on a stream that actually loaded.
+    expect(res.items.length).toBeGreaterThan(0);
+    for (const i of res.items) {
+      if (i.kind !== 'call') expect({ kind: i.kind, callId: i.callId }).toEqual({ kind: i.kind, callId: null });
+    }
+  });
+
+  /**
+   * The DTO exposes DERIVED fields, never the raw blob — `assignment` was
+   * narrowed for exactly this reason (`metadata` carries user ids and names
+   * this endpoint has no other reason to ship). `callId` follows it.
+   */
+  it('ships the derived id, not the metadata blob', async () => {
+    const res = await svc.forLead(workspaceId, callLead, managerId, 'MANAGER');
+    const call = res.items.find((i) => i.kind === 'call' && i.callId);
+    expect(call).toBeTruthy();
+    expect(Object.keys(call!)).not.toContain('metadata');
   });
 
   it('holds a REP to their own people, as the lead detail already does', async () => {

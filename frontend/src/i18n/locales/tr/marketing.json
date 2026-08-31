@@ -378,7 +378,8 @@
     "developer": "Geliştirici ve güvenlik",
     "compliance": "Uyumluluk",
     "other": "Diğer",
-    "connections": "Bağlantılar ve alan adları"
+    "connections": "Bağlantılar ve alan adları",
+    "telephony": "Telefon"
   },
   "leadStatus": {
     "NEW": "Yeni",
@@ -877,7 +878,10 @@
       },
       "voicemail": "Sesli mesaj",
       "fax": "Faks",
-      "faxOpen": "Belgeyi aç"
+      "faxOpen": "Belgeyi aç",
+      "callDetail": "Kayıt ve analiz",
+      "callAnalysis": "Arama analizi",
+      "callNotYours": "Bu arama başka bir temsilcinin — kaydını ve analizini yalnızca o açabilir."
     },
     "summary": {
       "contactInfo": "İletişim",
@@ -2214,7 +2218,9 @@
   "callRecording": {
     "title": "Kayıt",
     "loading": "Kayıt yükleniyor…",
-    "unavailable": "Bu görüşme için kayıt mevcut değil."
+    "unavailable": "Bu görüşme için kayıt mevcut değil.",
+    "failed": "Kayıt yüklenemedi",
+    "retry": "Yeniden dene"
   },
   "callAnalysis": {
     "title": "Görüşme analizi",
@@ -2231,7 +2237,9 @@
       "POSITIVE": "Olumlu",
       "NEUTRAL": "Nötr",
       "NEGATIVE": "Olumsuz"
-    }
+    },
+    "failed": "Analiz yüklenemedi",
+    "retry": "Yeniden dene"
   },
   "queueWallboard": {
     "title": "Kuyruk panosu",

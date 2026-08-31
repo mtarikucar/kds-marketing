@@ -241,6 +241,9 @@ describe('TelephonyEventConsumer', () => {
           endedAt: null,
         },
       });
+      // `metadata` carries the SalesCall id: without it the row the person's
+      // stream renders is a dead end — no recording to play, no analysis to
+      // read, because both hang off a SalesCall.id the mirror never kept.
       expect(prisma.leadActivity.create).toHaveBeenCalledWith({
         data: {
           type: 'CALL',
@@ -248,6 +251,7 @@ describe('TelephonyEventConsumer', () => {
           outcome: 'NEUTRAL',
           leadId: 'lead-1',
           createdById: 'rep-1',
+          metadata: { kind: 'call', salesCallId: 'call-5' },
         },
       });
       // Screen-pop (Task 3): pushed onto the workspace's telephony stream,

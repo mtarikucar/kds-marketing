@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import LeadStream from './LeadStream';
@@ -9,6 +10,25 @@ import type { LeadStream as LeadStreamPayload, LeadStreamItem } from '../api/lea
 // Sibling convention (TimelinePanel.test.tsx, ConversationsTab.test.tsx): mock
 // the SERVICE MODULE by path and drive it through `vi.mocked`.
 vi.mock('../api/leadStream.service');
+// The two panels the call rows mount are the REAL ones - reusing them is the
+// point of the merge, so stubbing them would test nothing. Their transport is
+// what gets mocked.
+vi.mock('../api/voice-ai.service', async () => {
+  const actual = await vi.importActual<typeof import('../api/voice-ai.service')>(
+    '../api/voice-ai.service',
+  );
+  return {
+    ...actual,
+    getCallRecording: (...a: unknown[]) => getCallRecording(...a),
+    getCallAnalysis: (...a: unknown[]) => getCallAnalysis(...a),
+    runCallAnalysis: (...a: unknown[]) => runCallAnalysis(...a),
+  };
+});
+const { getCallRecording, getCallAnalysis, runCallAnalysis } = vi.hoisted(() => ({
+  getCallRecording: vi.fn(),
+  getCallAnalysis: vi.fn(),
+  runCallAnalysis: vi.fn(),
+}));
 
 /**
  * `t` normally answers with the inline Turkish default, which is what every
@@ -53,6 +73,7 @@ const item = (
   outcome: null,
   durationMinutes: null,
   assignment: null,
+  callId: null,
   authorId: null,
   authorName: null,
   ...over,
@@ -76,6 +97,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   I18N.mode = 'defaults';
   getLeadStream.mockResolvedValue(stream());
+  getCallRecording.mockResolvedValue({ url: 'https://cdn.test/rec.mp3' });
+  getCallAnalysis.mockResolvedValue({ status: 'NONE' });
 });
 
 describe('LeadStream — one person, one axis', () => {
@@ -685,5 +708,289 @@ describe('LeadStream — you land on the newest, and you are not yanked off it',
     // is a decision rather than a race that never got there.
     await screen.findByTestId('stream-item-m2');
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
+
+/**
+ * Until this block existed, a call in the stream was a DEAD END.
+ *
+ * The rep could see "Sales call: CONNECTED - 3 dk" and nothing else: the
+ * recording and the AI analysis both hang off a `SalesCall.id`, and the
+ * mirrored activity kept none - so hearing the call you just read about meant
+ * leaving for /calls and finding the row again by phone number and timestamp.
+ * The id now rides on the stream item (`callId`), and the two panels that
+ * already knew how to render it are mounted here rather than rewritten.
+ */
+describe('LeadStream - a call you can actually play', () => {
+  const call = (id: string, over: Partial<LeadStreamItem> = {}) =>
+    item({
+      kind: 'call',
+      id,
+      at: `2026-08-30T09:0${id.length}:00.000Z`,
+      title: `Sales call ${id}`,
+      ...over,
+    });
+
+  it('offers the recording and the analysis on a call that knows which call it was', async () => {
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const toggle = await screen.findByTestId('stream-call-toggle-c1');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  /**
+   * `aria-expanded` on its own announces that SOMETHING is expanded and leaves
+   * a screen-reader user to work out what. The panel it opens has to be
+   * addressable for `aria-controls` to resolve to anything, which is why
+   * StreamCallDetail carries a real `id` and not only a `data-testid`.
+   */
+  it('names the panel its toggle controls, and that panel is addressable', async () => {
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    const toggle = await screen.findByTestId('stream-call-toggle-c1');
+    expect(toggle).toHaveAttribute('aria-controls', 'stream-call-detail-c1');
+
+    await user.click(toggle);
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    expect(detail).toHaveAttribute('id', 'stream-call-detail-c1');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toBe(detail);
+  });
+
+  /**
+   * A CALL row with no `callId` is the ORDINARY case, not a leftover. A rep who
+   * dialled from their own handset and logged it by hand has produced a call
+   * with no `SalesCall` behind it — there is nothing to play, today or ever —
+   * and calls mirrored before the id was carried land here too. No backfill can
+   * change either group. Both must read exactly as they always have, a line of
+   * history, rather than as a player that will never load.
+   */
+  it('leaves a call with nothing behind it exactly as it is, with nothing to open', async () => {
+    getLeadStream.mockResolvedValue(stream({ items: [call('old', { callId: null })] }));
+    renderStream();
+
+    // Anchor on the row itself first. Without it the absence below passes
+    // instantly against a component that has not rendered anything yet.
+    const row = await screen.findByTestId('stream-item-old');
+    expect(row).toHaveTextContent('Sales call old');
+    expect(within(row).queryByTestId('stream-call-toggle-old')).not.toBeInTheDocument();
+    expect(getCallRecording).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A person with fifty calls must not fire fifty recording requests on open.
+   * The panels are mounted on EXPAND, and this is the assertion that keeps it
+   * that way - the pre-fix instinct (render the player on every call row and
+   * let it 404) would put one request per row on the wire before the rep has
+   * decided which call they care about.
+   */
+  it('fetches nothing until a row is opened', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          call('c1', { callId: 'sc-1' }),
+          call('c2', { callId: 'sc-2' }),
+          call('c3', { callId: 'sc-3' }),
+        ],
+      }),
+    );
+    renderStream();
+
+    await screen.findByTestId('stream-call-toggle-c3');
+    expect(getCallRecording).not.toHaveBeenCalled();
+    expect(getCallAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('opens ONE call and fetches only that one', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({ items: [call('c1', { callId: 'sc-1' }), call('c2', { callId: 'sc-2' })] }),
+    );
+    renderStream();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    await waitFor(() => expect(detail.querySelector('audio')).not.toBeNull());
+    expect(detail.querySelector('audio')).toHaveAttribute('src', 'https://cdn.test/rec.mp3');
+
+    // Per-record state, keyed: opening one row may not open its neighbour.
+    expect(screen.queryByTestId('stream-call-detail-c2')).not.toBeInTheDocument();
+    expect(getCallRecording.mock.calls.map((c) => c[0])).toEqual(['sc-1']);
+    await waitFor(() => expect(getCallAnalysis.mock.calls.map((c) => c[0])).toEqual(['sc-1']));
+  });
+
+  it('closes again, so an opened call is not a one-way door', async () => {
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    const toggle = await screen.findByTestId('stream-call-toggle-c1');
+    await user.click(toggle);
+    await screen.findByTestId('stream-call-detail-c1');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(screen.queryByTestId('stream-call-detail-c1')).not.toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * The repo's central rule, inside the stream. "This call has no recording"
+   * and "we could not find out" are opposite facts, and the second one used to
+   * render as the first.
+   */
+  it('says a recording FAILED to load rather than showing an empty panel', async () => {
+    getCallRecording.mockRejectedValue({ response: { status: 500 } });
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    expect(await within(detail).findByRole('alert')).toHaveTextContent(
+      'Recording could not be loaded',
+    );
+  });
+
+  it('stays silent about a call that genuinely has no recording', async () => {
+    getCallRecording.mockRejectedValue({ response: { status: 404 } });
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    // Anchor: the analysis panel DID settle, so the absence below is a real
+    // absence rather than a still-loading pane.
+    await within(detail).findByText('A call recording is required to analyse');
+    expect(within(detail).queryByRole('alert')).not.toBeInTheDocument();
+    expect(detail.querySelector('audio')).toBeNull();
+  });
+
+  /**
+   * Neither host passes a `key` — `PersonPane` renders `<LeadStream
+   * leadId={person.id} />` and `LeadDetailPage` renders `<LeadStream
+   * leadId={lead.id} />` — so switching person does NOT remount this component.
+   * The stream query is keyed by lead and re-runs; `openCalls` is plain state
+   * and would simply survive.
+   *
+   * The ids are unique across leads, so a leftover entry cannot open the WRONG
+   * person's row, and that is exactly why this went untested: the forward trip
+   * A -> B looks clean. The trip that is not clean is the RETURN. Coming back
+   * to A re-opens the row A had open minutes ago and mounts a panel that puts a
+   * recording request on the wire before the rep has asked for one — the
+   * request-on-load the whole expand-on-demand design exists to prevent.
+   *
+   * This lineage has already shipped the same class of bug once: a header that
+   * kept lead A's phone number and dialled it under lead B's id.
+   */
+  it('forgets which calls were open when the person changes, and does not re-fetch on return', async () => {
+    getLeadStream.mockImplementation(async (id: string) =>
+      id === 'lead-a'
+        ? stream({ leadId: 'lead-a', items: [call('c1', { callId: 'sc-1' })] })
+        : stream({ leadId: 'lead-b', items: [call('c9', { callId: 'sc-9' })] }),
+    );
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId="lead-a" />
+      </QueryClientProvider>,
+    );
+
+    // Open A's call for real: the panel mounts and the recording is fetched.
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+    await screen.findByTestId('stream-call-detail-c1');
+    await waitFor(() => expect(getCallRecording).toHaveBeenCalledWith('sc-1'));
+
+    // Go to B. No `key`, so this is the SAME component instance throughout.
+    rerender(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId="lead-b" />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId('stream-item-c9');
+    getCallRecording.mockClear();
+    getCallAnalysis.mockClear();
+
+    // ...and back to A.
+    rerender(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId="lead-a" />
+      </QueryClientProvider>,
+    );
+
+    // Positive anchor: A's row really is on screen again, so the absences below
+    // are decisions rather than a stream that has not arrived.
+    const toggle = await screen.findByTestId('stream-call-toggle-c1');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('stream-call-detail-c1')).not.toBeInTheDocument();
+    // Nothing went on the wire on arrival. `waitFor` on the toggle above has
+    // already flushed the mount effects a remounted panel would fetch from.
+    expect(getCallRecording).not.toHaveBeenCalled();
+    expect(getCallAnalysis).not.toHaveBeenCalled();
+
+    // And it still opens on demand — the reset clears the map, it does not
+    // disable the row.
+    await user.click(toggle);
+    await screen.findByTestId('stream-call-detail-c1');
+  });
+
+  /**
+   * A REP who inherits a REASSIGNED lead can read every activity on it — the
+   * previous owner's call rows included — but `SalesCallService.get` gates the
+   * recording, the analysis and the run alike and answers Forbidden, not 404.
+   *
+   * Rendering that as the generic failure hands them a red alert with a retry
+   * that can never succeed, plus an Analyse button that would 403 in turn. The
+   * honest screen says whose call it is and offers nothing to press.
+   */
+  it('says a teammate’s call is not yours rather than offering a retry that cannot work', async () => {
+    getCallRecording.mockRejectedValue({ response: { status: 403 } });
+    getCallAnalysis.mockRejectedValue({ response: { status: 403 } });
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    // Positive anchor: the refusal really rendered, so the absences below are
+    // decisions rather than a pane that never settled.
+    expect(await within(detail).findByTestId('stream-call-forbidden-c1')).toHaveTextContent(
+      /başka bir temsilcinin/,
+    );
+    expect(within(detail).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(detail).queryByRole('button')).not.toBeInTheDocument();
+    expect(detail.querySelector('audio')).toBeNull();
+  });
+
+  it('never puts a player on a message, a note or a status move', async () => {
+    getLeadStream.mockResolvedValue(
+      stream({
+        items: [
+          item({ kind: 'note', id: 'n1', at: '2026-08-30T09:00:00.000Z', title: 'Not' }),
+          item({
+            kind: 'status',
+            id: 's1',
+            at: '2026-08-30T09:01:00.000Z',
+            title: 'NEW -> CONTACTED',
+          }),
+        ],
+      }),
+    );
+    renderStream();
+
+    await screen.findByTestId('stream-item-s1');
+    expect(screen.queryByTestId('stream-call-toggle-n1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('stream-call-toggle-s1')).not.toBeInTheDocument();
   });
 });

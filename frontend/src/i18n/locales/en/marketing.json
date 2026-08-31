@@ -174,7 +174,8 @@
     "developer": "Developer & security",
     "compliance": "Compliance",
     "other": "Other",
-    "connections": "Connections & domains"
+    "connections": "Connections & domains",
+    "telephony": "Telephony"
   },
   "leadStatus": {
     "NEW": "New",
@@ -621,7 +622,10 @@
       },
       "voicemail": "Voicemail",
       "fax": "Fax",
-      "faxOpen": "Open document"
+      "faxOpen": "Open document",
+      "callDetail": "Recording & analysis",
+      "callAnalysis": "Call analysis",
+      "callNotYours": "This call belongs to another rep — only they can open its recording and analysis."
     },
     "summary": {
       "contactInfo": "Contact",
@@ -1909,7 +1913,9 @@
   "callRecording": {
     "title": "Recording",
     "loading": "Loading recording…",
-    "unavailable": "Recording is not available for this call."
+    "unavailable": "Recording is not available for this call.",
+    "failed": "Recording could not be loaded",
+    "retry": "Try again"
   },
   "callAnalysis": {
     "title": "Call analysis",
@@ -1926,7 +1932,9 @@
       "POSITIVE": "Positive",
       "NEUTRAL": "Neutral",
       "NEGATIVE": "Negative"
-    }
+    },
+    "failed": "Analysis could not be loaded",
+    "retry": "Try again"
   },
   "queueWallboard": {
     "title": "Queue wallboard",

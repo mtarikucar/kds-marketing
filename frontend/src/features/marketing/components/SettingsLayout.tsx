@@ -16,8 +16,11 @@ import { cn } from '../../../components/ui/cn';
  * Grew from four clusters to seven with the 2026-08 surface merge: the retired
  * Strategy / Automation / Payments / Sites / Courses / Agency hubs landed here,
  * and thirteen unclustered pages would have made this exactly the grab-bag the
- * grouping exists to prevent. Paths not listed fall into "Other" — which the
- * test asserts stays EMPTY, so a new settings page has to be placed on purpose.
+ * grouping exists to prevent. An eighth arrived with the call log on
+ * 2026-08-31 — see the Telephony entry for why it is its own cluster rather
+ * than an exception inside someone else's. Paths not listed fall into "Other"
+ * — which the test asserts stays EMPTY, so a new settings page has to be
+ * placed on purpose.
  */
 const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
   {
@@ -45,6 +48,29 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     // Set-and-forget machinery, absorbed from the Strategy and Automation hubs:
     // you configure the plan, the system runs it without you.
     paths: ['/studio/strategy', '/automations', '/trigger-links'],
+  },
+  {
+    key: 'telephony',
+    label: 'Telephony',
+    /**
+     * The call log, moved out of the Inbox surface (see navigation.ts) — and
+     * given a group of its own rather than folded into one of the seven that
+     * already existed.
+     *
+     * None of them is honest about it. Workspace is what you configure once;
+     * Automation is machinery that runs without you; Products & billing is
+     * what you sell; Data is what SHAPES contact records; Connections &
+     * domains is external plumbing; Developer & security is tooling; Agency is
+     * the sub-account console. A call log is an operational record of work
+     * that already happened, and filing it under any of those would make that
+     * group mean "and also calls" — which is how the grab-bag this grouping
+     * exists to prevent gets rebuilt one exception at a time.
+     *
+     * It is a group of one today. /voice and /voice/ivr are the obvious second
+     * and third members the day the phone tree stops being something you visit
+     * from the Inbox rail.
+     */
+    paths: ['/calls'],
   },
   {
     key: 'billing',

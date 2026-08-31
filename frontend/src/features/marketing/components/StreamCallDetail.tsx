@@ -1,0 +1,122 @@
+import { useTranslation } from 'react-i18next';
+import { Lock } from 'lucide-react';
+import CallRecordingPlayer, {
+  isForbidden,
+  isMissingRecording,
+  useCallRecording,
+} from '../../../pages/marketing/calls/CallRecordingPlayer';
+import CallAnalysisPanel from '../../../pages/marketing/calls/CallAnalysisPanel';
+
+/**
+ * What a logged call opens into, inside the person's stream.
+ *
+ * ## Why it exists
+ *
+ * A call row in the stream used to be a dead end. It could say "Sales call:
+ * CONNECTED · 3 dk" and no more, because the recording and the AI analysis
+ * both hang off a `SalesCall.id` that the mirrored `LeadActivity` never kept.
+ * Hearing the call you had just read about meant leaving the person, opening
+ * /calls, and finding the row again by phone number and timestamp. The id now
+ * rides on the stream item (`callId`, derived from `LeadActivity.metadata` —
+ * see call-activity.ts), and this component is where it gets used.
+ *
+ * ## Why it reuses rather than reimplements
+ *
+ * `CallRecordingPlayer` and `CallAnalysisPanel` already know how to render a
+ * call's audio and its analysis, including the run-on-demand button and every
+ * failure state. Both were written self-contained ("drop it under a call row
+ * given the callId") and neither assumes the calls table's chrome, so the
+ * adaptation needed here is a wrapper, not a fork. Two components rendering
+ * one call two different ways is the same mistake one layer up that the merged
+ * stream exists to remove.
+ *
+ * ## The one thing this wrapper decides: `hasRecording`
+ *
+ * `CallAnalysisPanel` needs to know whether audio exists — with none, it shows
+ * "a recording is required to analyse" instead of the Analyse button. The
+ * calls table answers that from `SalesCall.recordingUrl`, a column the stream
+ * does not carry. So it is read off the recording query itself, which is a
+ * strictly better answer (the resolve route prefers the R2 copy, which the
+ * provider column does not know about) and costs nothing: `useCallRecording`
+ * is the same `queryKey` and `queryFn` the player mounts, so React Query
+ * serves both from ONE round-trip.
+ *
+ * It is answered only once that query has SETTLED. Rendering the panel while
+ * the recording is still in flight would flash a claim about audio nobody has
+ * looked for yet; and on a hard failure (a 500, an expired token, the network)
+ * the honest value is `true` — "we do not know, let the server decide when you
+ * press Analyse" — never `false`, which would state as fact that this call has
+ * no recording. That is the same lie the player itself used to tell by
+ * rendering an error as silence.
+ *
+ * The predicate itself is imported rather than rewritten: `isMissingRecording`
+ * lives beside the paragraph explaining why it is `=== 404` and not `!== 404`,
+ * and a second inline copy here is a copy that can drift away from its reason.
+ *
+ * ## A call that is not yours is not a call that broke
+ *
+ * `SalesCallService.get` gates the recording, the analysis and the analysis run
+ * alike, and it throws Forbidden — not 404 — when a REP asks for a teammate's
+ * call. This surface is where that becomes reachable: reassign a lead and the
+ * new owner can read every activity on it, the previous owner's call rows
+ * included. Rendering that as the generic failure gives them a red alert with a
+ * retry that can never succeed, and an Analyse button that would 403 too. So it
+ * gets its own sentence and no controls at all — the one thing a reader needs
+ * is that nothing is broken and there is nothing to press.
+ */
+export interface StreamCallDetailProps {
+  /** The `SalesCall` this stream row mirrors. Callers must not mount this for a
+   *  row without one — a hand-logged call has no `SalesCall` at all, and a
+   *  legacy mirrored one kept no id, so there is nothing to fetch either way. */
+  callId: string;
+  /** The stream row's id, so the panel can be addressed per record. */
+  itemId: string;
+}
+
+export default function StreamCallDetail({ callId, itemId }: StreamCallDetailProps) {
+  const { t } = useTranslation('marketing');
+  const recording = useCallRecording(callId);
+
+  // `isPending` is "no answer yet either way". A 404 has ANSWERED — there is no
+  // recording — so it falls through to the panel with hasRecording false.
+  const settled = !recording.isPending;
+  const knownAbsent = recording.isError && isMissingRecording(recording.error);
+  const notYours = recording.isError && isForbidden(recording.error);
+
+  return (
+    <div
+      // `id`, not only a `data-testid`: the row's toggle points at this element
+      // with `aria-controls`, and a target that cannot be addressed is a target
+      // that reference does not resolve to.
+      id={`stream-call-detail-${itemId}`}
+      data-testid={`stream-call-detail-${itemId}`}
+      className="mt-1.5 rounded-lg border border-border bg-surface-muted/40 px-3 py-1.5"
+    >
+      {notYours ? (
+        <p
+          role="status"
+          data-testid={`stream-call-forbidden-${itemId}`}
+          className="flex items-center gap-1.5 py-1 text-caption text-muted-foreground"
+        >
+          <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {t(
+            'leadDetail.stream.callNotYours',
+            'Bu arama başka bir temsilcinin — kaydını ve analizini yalnızca o açabilir.',
+          )}
+        </p>
+      ) : (
+        <>
+          <CallRecordingPlayer callId={callId} />
+          {settled && (
+            <>
+              <p className="mt-1 text-caption font-medium text-foreground">
+                {t('leadDetail.stream.callAnalysis', 'Arama analizi')}
+              </p>
+              <CallAnalysisPanel callId={callId} hasRecording={!knownAbsent} />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

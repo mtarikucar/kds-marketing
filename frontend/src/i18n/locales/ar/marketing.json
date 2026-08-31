@@ -292,7 +292,10 @@
       },
       "voicemail": "رسالة صوتية",
       "fax": "فاكس",
-      "faxOpen": "فتح المستند"
+      "faxOpen": "فتح المستند",
+      "callDetail": "التسجيل والتحليل",
+      "callAnalysis": "تحليل المكالمة",
+      "callNotYours": "هذه المكالمة تخصّ مندوبًا آخر — وحده يمكنه فتح تسجيلها وتحليلها."
     },
     "summary": {
       "contactInfo": "Contact",
@@ -1166,5 +1169,19 @@
       "list": "قائمة",
       "table": "جدول"
     }
+  },
+  "callRecording": {
+    "title": "التسجيل",
+    "loading": "جارٍ تحميل التسجيل…",
+    "unavailable": "لا يتوفر تسجيل لهذه المكالمة.",
+    "failed": "تعذّر تحميل التسجيل",
+    "retry": "أعد المحاولة"
+  },
+  "settingsGroup": {
+    "telephony": "الهاتف والمكالمات"
+  },
+  "callAnalysis": {
+    "failed": "تعذّر تحميل التحليل",
+    "retry": "أعد المحاولة"
   }
 }
