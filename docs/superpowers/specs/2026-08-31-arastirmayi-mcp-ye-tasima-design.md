@@ -108,6 +108,22 @@ geri alınabilir ve zaten gözden geçiriliyor.
 **Bu spec o modu değiştirmiyor.** Karar sahibin; değiştirilene kadar MCP modu
 kurulur ama adaylar onay kuyruğunda bekler ve panel bunu söyler.
 
+**Düzeltme (uygulama sonrası, ölçülmüş):** yukarıdaki paragraf kararın yalnızca
+ucuz yarısını anlatıyor. `submit_research_candidates` gerçekten sadece *gecikir*
+— terminal bir yazım, onaylanınca adaylarıyla birlikte yeniden oynatılır. Ama
+aynı APPROVAL kapısı `research_search_places`, `research_lookup_instagram` ve
+`research_scrape_page` için gecikme değil, **kullanılamazlık** üretir:
+`McpApprovalExecutorService.apply()` araç sonucunu onaylayan insanın HTTP
+yanıtına döndürür, ajanın turuna değil. Yani boşaltıcı `PENDING_APPROVAL` alır
+ve Maps kayıtlarını **kendi oturumu içinde asla** elde edemez — sahip ne kadar
+hızlı onaylarsa onaylasın; 30 dakikalık kiralama da 24 saatlik onay ömrü de
+önce dolar.
+
+Sonuç: APPROVAL'da hat sessizce Claude'un kendi web aramasına düşer ve bu
+tasarımın "yerine konamaz" dediği Google Maps acı sinyalini kaybeder. **Hattı
+tasarlandığı gibi çalıştırmak AUTONOMOUS gerektirir.** Karar hâlâ sahibin, ama
+karar bu bilgiyle verilmeli.
+
 ## Test
 
 - **Birim:** kiralamanın atomikliği (iki eşzamanlı `claim` → biri boş döner);
