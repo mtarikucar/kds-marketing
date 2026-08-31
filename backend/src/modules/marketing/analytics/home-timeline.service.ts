@@ -72,6 +72,12 @@ export interface HomeTimeline {
    * exactly like "research ran and found nothing". Those need opposite fixes,
    * so the count and the age of the oldest waiting job are stated outright.
    *
+   * `claimed` covers the third: a job a drainer LEASED and never came back to.
+   * It is not part of `pending`, so a workspace whose whole queue is held reads
+   * `pending: 0` — the same zero as a healthy empty queue. The count travels
+   * with the age of the oldest lease, because four minutes is a client working
+   * and a day is a client gone.
+   *
    * `pendingApprovals` covers the other silent stop: `submit_research_candidates`
    * is approval-gated, so on an APPROVAL-mode workspace the night's work can be
    * complete and still show nothing until a human clicks.

@@ -22,6 +22,8 @@ const timeline = (over: Partial<HomeTimeline> = {}): HomeTimeline => ({
     claimed: 0,
     oldestPendingAt: null,
     oldestPendingAgeHours: null,
+    oldestClaimedAt: null,
+    oldestClaimedAgeMinutes: null,
     pendingApprovals: 0,
   },
   ...over,
@@ -139,7 +141,8 @@ describe('TimelinePanel', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText(/Planlanmış bir şey yok/)).not.toBeInTheDocument();
   });
-});
+});
+
 
 /**
  * The un-drained research queue, said out loud.
@@ -161,6 +164,8 @@ describe('TimelinePanel — the research queue nobody drained', () => {
     claimed: 0,
     oldestPendingAt: null,
     oldestPendingAgeHours: null,
+    oldestClaimedAt: null,
+    oldestClaimedAgeMinutes: null,
     pendingApprovals: 0,
     ...over,
   });
@@ -214,6 +219,67 @@ describe('TimelinePanel — the research queue nobody drained', () => {
     expect(await screen.findByTestId('tl-research-approvals')).toHaveTextContent('2');
   });
 
+  // The other half of the same silence, and the one this panel shipped with.
+  // `claimed` was computed by the backend, sent to the client, and rendered
+  // nowhere — the gate was `pending > 0` alone. A workspace whose only research
+  // job is HELD by a drainer that never came back therefore drew nothing at
+  // all: same blank screen as "research found nothing", opposite fix.
+  it('says a job is HELD, and for how long, when nothing is waiting behind it', async () => {
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ pending: 0, claimed: 1, oldestClaimedAgeMinutes: 20 }) }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-claimed');
+    expect(line).toHaveTextContent('1');
+    expect(line).toHaveTextContent('20');
+  });
+
+  it('keeps HELD and WAITING as two separate lines, never one number', async () => {
+    // They have different owners and different fixes: waiting means nobody is
+    // draining, held means somebody took it and has not come back. Summing them
+    // into one count would hide whichever is smaller.
+    getHomeTimeline.mockResolvedValue(
+      timeline({
+        research: queue({
+          pending: 2,
+          oldestPendingAgeHours: 5,
+          claimed: 3,
+          oldestClaimedAgeMinutes: 12,
+        }),
+      }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-research-waiting')).toHaveTextContent('2');
+    const held = screen.getByTestId('tl-research-claimed');
+    expect(held).toHaveTextContent('3');
+    expect(held).toHaveTextContent('12');
+  });
+
+  it('states a long-held lease in hours rather than a three-figure minute count', async () => {
+    // 26 hours on a 30-minute lease is not a working client; it is a row the
+    // sweep has not reached. "1560 dakika" makes a reader do the division.
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: queue({ claimed: 1, oldestClaimedAgeMinutes: 1560 }) }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-claimed');
+    expect(line).toHaveTextContent('26');
+    expect(line.textContent ?? '').not.toMatch(/1560/);
+  });
+
+  it('stays quiet about held jobs when none are held', async () => {
+    getHomeTimeline.mockResolvedValue(timeline({ research: queue({ pending: 1 }) }));
+    renderPanel();
+    await screen.findByTestId('tl-research-waiting');
+    expect(screen.queryByTestId('tl-research-claimed')).not.toBeInTheDocument();
+  });
+
   it('renders nothing of its own when the queue could not be read', async () => {
     // The backend already named `araştırma kuyruğu` in `unread` for this case.
     // A second line here would either repeat it or, worse, invent a zero.
@@ -225,6 +291,7 @@ describe('TimelinePanel — the research queue nobody drained', () => {
 
     expect(await screen.findByTestId('tl-unread')).toHaveTextContent('araştırma kuyruğu');
     expect(screen.queryByTestId('tl-research-waiting')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tl-research-claimed')).not.toBeInTheDocument();
     expect(screen.queryByTestId('tl-research-approvals')).not.toBeInTheDocument();
   });
 });

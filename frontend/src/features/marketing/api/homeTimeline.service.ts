@@ -37,6 +37,15 @@ export interface HomeTimeline {
     claimed: number;
     oldestPendingAt: string | null;
     oldestPendingAgeHours: number | null;
+    /**
+     * When the oldest LIVE lease was taken, and how long ago in minutes.
+     *
+     * `claimed` on its own cannot be rendered honestly: a job held for four
+     * minutes is a drainer at work, a job held for a day is a drainer that
+     * never came back. Minutes because the lease is thirty of them by default.
+     */
+    oldestClaimedAt: string | null;
+    oldestClaimedAgeMinutes: number | null;
     /** Nights fully researched but held in the human approval queue. */
     pendingApprovals: number;
   } | null;
