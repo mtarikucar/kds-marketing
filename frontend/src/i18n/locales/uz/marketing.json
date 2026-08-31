@@ -1092,7 +1092,11 @@
     "researchOldest": "eng eskisi",
     "researchDays": "kun",
     "researchHours": "soat",
-    "researchAwaitingApproval": "tadqiqot natijasi tasdiqingizni kutmoqda — tasdiqlanmaguncha hech bir nomzod saqlanmaydi"
+    "researchAwaitingApproval": "tadqiqot natijasi tasdiqingizni kutmoqda — tasdiqlanmaguncha hech bir nomzod saqlanmaydi",
+    "researchTakenOverLead": "Claude vazifani olmadi — biz bajardik",
+    "researchTakenOverNights": "kecha",
+    "researchTakenOverAtLeast": "kamida",
+    "researchTakenOverAsk": "rejalashtirilgan vazifangiz ishlayaptimi?"
   },
   "opportunities": {
     "notInPipeline": {

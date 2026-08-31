@@ -4108,7 +4108,11 @@
     "researchOldest": "en eskisi",
     "researchDays": "gündür",
     "researchHours": "saattir",
-    "researchAwaitingApproval": "araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez"
+    "researchAwaitingApproval": "araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez",
+    "researchTakenOverLead": "Claude'un işi almadı, biz koşturduk",
+    "researchTakenOverNights": "gece",
+    "researchTakenOverAtLeast": "en az",
+    "researchTakenOverAsk": "zamanlanmış görevin çalışıyor mu?"
   },
   "surface": {
     "sales": {

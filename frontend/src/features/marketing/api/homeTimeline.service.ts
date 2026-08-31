@@ -48,6 +48,24 @@ export interface HomeTimeline {
     oldestClaimedAgeMinutes: number | null;
     /** Nights fully researched but held in the human approval queue. */
     pendingApprovals: number;
+    /**
+     * Nights the PLATFORM had to drain a job reserved for the owner's Claude,
+     * because the grace window ran out with nobody claiming it.
+     *
+     * Every other field here describes research NOT happening. This one
+     * describes research that happened on the wrong side's money — and it is
+     * the only signal a customer whose scheduled task quietly died will ever
+     * get, because their panel is otherwise perfectly healthy.
+     *
+     * `costUsd` is `null` when nothing could be priced and must never be drawn
+     * as `0`; `costUnknown > 0` makes the total a LOWER BOUND.
+     */
+    takenOver: {
+      count: number;
+      lastAt: string | null;
+      costUsd: number | null;
+      costUnknown: number;
+    };
   } | null;
 }
 

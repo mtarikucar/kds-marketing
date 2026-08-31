@@ -25,6 +25,7 @@ const timeline = (over: Partial<HomeTimeline> = {}): HomeTimeline => ({
     oldestClaimedAt: null,
     oldestClaimedAgeMinutes: null,
     pendingApprovals: 0,
+    takenOver: { count: 0, lastAt: null, costUsd: null, costUnknown: 0 },
   },
   ...over,
 });
@@ -167,6 +168,7 @@ describe('TimelinePanel — the research queue nobody drained', () => {
     oldestClaimedAt: null,
     oldestClaimedAgeMinutes: null,
     pendingApprovals: 0,
+    takenOver: { count: 0, lastAt: null, costUsd: null, costUnknown: 0 },
     ...over,
   });
 
@@ -293,5 +295,101 @@ describe('TimelinePanel — the research queue nobody drained', () => {
     expect(screen.queryByTestId('tl-research-waiting')).not.toBeInTheDocument();
     expect(screen.queryByTestId('tl-research-claimed')).not.toBeInTheDocument();
     expect(screen.queryByTestId('tl-research-approvals')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The line that keeps the fallback from becoming a silent subsidy.
+ *
+ * The platform now takes back a research job the owner's Claude did not claim
+ * inside the grace window. That guarantees research never stops — and it means
+ * a customer whose scheduled task died sees a perfectly healthy panel while
+ * Jeeta quietly pays their Anthropic bill forever. So the takeover is named,
+ * priced, and pointed at the thing that is actually broken.
+ */
+describe('TimelinePanel — when the platform had to step in', () => {
+  type Taken = NonNullable<HomeTimeline['research']>['takenOver'];
+  const withTakeover = (over: Partial<Taken> = {}) =>
+    timeline({
+      research: {
+        mode: 'MCP',
+        pending: 0,
+        claimed: 0,
+        oldestPendingAt: null,
+        oldestPendingAgeHours: null,
+        oldestClaimedAt: null,
+        oldestClaimedAgeMinutes: null,
+        pendingApprovals: 0,
+        takenOver: {
+          count: 1,
+          lastAt: '2026-08-31T09:00:00Z',
+          costUsd: 0.26,
+          costUnknown: 0,
+          ...over,
+        },
+      },
+    });
+
+  it('says the platform ran it, what it cost, and asks about the scheduled task', async () => {
+    getHomeTimeline.mockResolvedValue(withTakeover());
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-takenover');
+    expect(line).toHaveTextContent(/1/);
+    expect(line).toHaveTextContent(/0[.,]26/);
+    expect(line).toHaveTextContent(/zamanlanmış görev/i);
+  });
+
+  /**
+   * A cost we could not measure must not print as `$0.00`. The count is still
+   * the point — "we ran it" is the news; the price is the detail.
+   */
+  it('reports the takeover without a price when nothing could be priced', async () => {
+    getHomeTimeline.mockResolvedValue(
+      withTakeover({ costUsd: null, costUnknown: 1 }),
+    );
+
+    renderPanel();
+
+    const line = await screen.findByTestId('tl-research-takenover');
+    expect(line).toHaveTextContent(/1/);
+    expect(line.textContent).not.toMatch(/\$\s*0[.,]00|0[.,]00\s*\$/);
+  });
+
+  /** A partially-priced week is a LOWER bound and has to read as one. */
+  it('marks a partly-unpriced total as "at least"', async () => {
+    getHomeTimeline.mockResolvedValue(
+      withTakeover({ count: 3, costUsd: 0.26, costUnknown: 1 }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-research-takenover')).toHaveTextContent(/en az/i);
+  });
+
+  it('says nothing at all when the platform never had to step in', async () => {
+    getHomeTimeline.mockResolvedValue(timeline());
+
+    renderPanel();
+
+    await screen.findByText(/Planlanmış bir şey yok/i);
+    expect(screen.queryByTestId('tl-research-takenover')).not.toBeInTheDocument();
+  });
+
+  /**
+   * `research: null` means the BACKEND could not read the queue, and it already
+   * named itself in `unread`. Drawing our own "0 takeovers" here would dress a
+   * failed read up as good news — the exact lie this panel exists to prevent.
+   */
+  it('draws no takeover line at all when the queue could not be read', async () => {
+    getHomeTimeline.mockResolvedValue(
+      timeline({ research: null, unread: ['araştırma kuyruğu'] }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-unread')).toBeInTheDocument();
+    expect(screen.queryByTestId('tl-research-takenover')).not.toBeInTheDocument();
   });
 });

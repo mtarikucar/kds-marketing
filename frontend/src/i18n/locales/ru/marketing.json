@@ -1092,7 +1092,11 @@
     "researchOldest": "самому старому",
     "researchDays": "дн.",
     "researchHours": "ч.",
-    "researchAwaitingApproval": "результатов исследования ждут вашего одобрения — до одобрения ни один кандидат не сохраняется"
+    "researchAwaitingApproval": "результатов исследования ждут вашего одобрения — до одобрения ни один кандидат не сохраняется",
+    "researchTakenOverLead": "Ваш Claude не взял задачу — мы выполнили её сами",
+    "researchTakenOverNights": "ноч.",
+    "researchTakenOverAtLeast": "не менее",
+    "researchTakenOverAsk": "ваша запланированная задача ещё работает?"
   },
   "opportunities": {
     "notInPipeline": {

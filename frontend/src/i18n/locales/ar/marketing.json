@@ -1092,7 +1092,11 @@
     "researchOldest": "أقدمها",
     "researchDays": "يوم",
     "researchHours": "ساعة",
-    "researchAwaitingApproval": "نتيجة بحث بانتظار موافقتك — لا يُحفظ أي مرشح قبل الموافقة"
+    "researchAwaitingApproval": "نتيجة بحث بانتظار موافقتك — لا يُحفظ أي مرشح قبل الموافقة",
+    "researchTakenOverLead": "لم يأخذ Claude المهمة — نفّذناها نحن",
+    "researchTakenOverNights": "ليلة",
+    "researchTakenOverAtLeast": "على الأقل",
+    "researchTakenOverAsk": "هل مهمتك المجدولة لا تزال تعمل؟"
   },
   "opportunities": {
     "notInPipeline": {

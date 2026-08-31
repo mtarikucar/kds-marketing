@@ -3241,7 +3241,11 @@
     "researchOldest": "oldest is",
     "researchDays": "day(s) old",
     "researchHours": "hour(s) old",
-    "researchAwaitingApproval": "research result(s) waiting for your approval — no candidate is saved until you approve"
+    "researchAwaitingApproval": "research result(s) waiting for your approval — no candidate is saved until you approve",
+    "researchTakenOverLead": "Your Claude did not take the job — we ran it",
+    "researchTakenOverNights": "night(s)",
+    "researchTakenOverAtLeast": "at least",
+    "researchTakenOverAsk": "is your scheduled task still running?"
   },
   "budget": {
     "kind": {
