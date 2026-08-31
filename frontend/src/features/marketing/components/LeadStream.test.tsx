@@ -854,6 +854,76 @@ describe('LeadStream - a call you can actually play', () => {
     expect(detail.querySelector('audio')).toBeNull();
   });
 
+  /**
+   * Neither host passes a `key` — `PersonPane` renders `<LeadStream
+   * leadId={person.id} />` and `LeadDetailPage` renders `<LeadStream
+   * leadId={lead.id} />` — so switching person does NOT remount this component.
+   * The stream query is keyed by lead and re-runs; `openCalls` is plain state
+   * and would simply survive.
+   *
+   * The ids are unique across leads, so a leftover entry cannot open the WRONG
+   * person's row, and that is exactly why this went untested: the forward trip
+   * A -> B looks clean. The trip that is not clean is the RETURN. Coming back
+   * to A re-opens the row A had open minutes ago and mounts a panel that puts a
+   * recording request on the wire before the rep has asked for one — the
+   * request-on-load the whole expand-on-demand design exists to prevent.
+   *
+   * This lineage has already shipped the same class of bug once: a header that
+   * kept lead A's phone number and dialled it under lead B's id.
+   */
+  it('forgets which calls were open when the person changes, and does not re-fetch on return', async () => {
+    getLeadStream.mockImplementation(async (id: string) =>
+      id === 'lead-a'
+        ? stream({ leadId: 'lead-a', items: [call('c1', { callId: 'sc-1' })] })
+        : stream({ leadId: 'lead-b', items: [call('c9', { callId: 'sc-9' })] }),
+    );
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId="lead-a" />
+      </QueryClientProvider>,
+    );
+
+    // Open A's call for real: the panel mounts and the recording is fetched.
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+    await screen.findByTestId('stream-call-detail-c1');
+    await waitFor(() => expect(getCallRecording).toHaveBeenCalledWith('sc-1'));
+
+    // Go to B. No `key`, so this is the SAME component instance throughout.
+    rerender(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId="lead-b" />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId('stream-item-c9');
+    getCallRecording.mockClear();
+    getCallAnalysis.mockClear();
+
+    // ...and back to A.
+    rerender(
+      <QueryClientProvider client={qc}>
+        <LeadStream leadId="lead-a" />
+      </QueryClientProvider>,
+    );
+
+    // Positive anchor: A's row really is on screen again, so the absences below
+    // are decisions rather than a stream that has not arrived.
+    const toggle = await screen.findByTestId('stream-call-toggle-c1');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('stream-call-detail-c1')).not.toBeInTheDocument();
+    // Nothing went on the wire on arrival. `waitFor` on the toggle above has
+    // already flushed the mount effects a remounted panel would fetch from.
+    expect(getCallRecording).not.toHaveBeenCalled();
+    expect(getCallAnalysis).not.toHaveBeenCalled();
+
+    // And it still opens on demand — the reset clears the map, it does not
+    // disable the row.
+    await user.click(toggle);
+    await screen.findByTestId('stream-call-detail-c1');
+  });
+
   it('never puts a player on a message, a note or a status move', async () => {
     getLeadStream.mockResolvedValue(
       stream({

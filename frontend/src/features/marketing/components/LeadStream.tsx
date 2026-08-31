@@ -202,10 +202,16 @@ export default function LeadStream({ leadId, composer, className }: LeadStreamPr
    * per-record state that was really per-component and leaked one record's
    * answer onto another's.
    *
-   * Reset when the person changes. The ids are unique across leads, so a stale
-   * entry could not open the wrong row — but leaving one behind would open a
-   * NEW person's stream with a panel already fetching, which is exactly the
-   * request-on-load this expansion exists to avoid.
+   * Reset when the person changes, and NEITHER host passes a `key` — this
+   * component survives a person switch, so without the reset the map does too.
+   *
+   * The ids are unique across leads, so a stale entry cannot open a wrong row,
+   * and arriving at a person for the FIRST time is safe whatever is left in the
+   * map. The case the reset is for is the REVISIT: A -> B -> A re-mounts a
+   * panel for a row the rep opened minutes ago and puts a recording request on
+   * the wire before they have asked for one — exactly the request-on-load this
+   * expansion exists to avoid. Held by `LeadStream.test.tsx`
+   * ("forgets which calls were open when the person changes").
    */
   const [openCalls, setOpenCalls] = useState<Record<string, boolean>>({});
   useEffect(() => setOpenCalls({}), [leadId]);
