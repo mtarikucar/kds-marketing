@@ -40,11 +40,22 @@ import { getLead } from '../api/leads.service';
  * inbound message that an automation turns into a task shows up without a
  * reload.
  *
- * The cost is honest and worth naming: the two sections share a query, so they
- * share a FATE. When it fails they both fail — but each one says its own name
- * and neither is mistaken for empty, which is the rule that actually matters.
- * Splitting them into two requests for one payload would buy nothing but a
- * second request.
+ * Two costs, both deliberate and both worth naming.
+ *
+ * The two sections share a query, so they share a FATE: when it fails they
+ * both fail. Each still says its OWN name and neither is mistaken for empty,
+ * which is the rule that actually matters, and splitting one payload into two
+ * requests would have bought nothing else.
+ *
+ * And on the person surface this key now has an ACTIVE observer, where before
+ * only its `…,'stream'` child did — so the SSE handler's per-frame
+ * `invalidateQueries(['marketing','lead',id])` refetches this too, one extra
+ * request per workspace event while a person is selected. That is the right
+ * trade rather than an oversight: an inbound message is exactly what an
+ * automation turns into a task, and a task list that needs a reload to appear
+ * is worse than a request. If it ever stops being the right trade, the fix is
+ * the one the surface already names — a `leadId` on ConversationStreamEvent,
+ * so a frame refreshes the person it is actually about.
  */
 export function useLeadRecord(leadId: string) {
   return useQuery({
