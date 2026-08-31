@@ -11,6 +11,7 @@ import {
   useLeadOfferActions,
   useLeadTaskActions,
 } from '../../../features/marketing/hooks/useLeadRecordActions';
+import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
 import { sendFax } from '../../../features/marketing/api/fax.service';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
@@ -39,7 +40,6 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   LOST: [],
 };
 import {
-  getLead,
   updateLeadStatus,
   reopenLead,
   createLeadActivity,
@@ -104,19 +104,9 @@ export default function LeadDetailPage() {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
   };
 
-  const {
-    data: lead,
-    isLoading,
-    isError,
-    error,
-    refetch,
-  } = useQuery({
-    queryKey: ['marketing', 'lead', id],
-    queryFn: () => getLead(id!),
-    // A genuine 404 (deleted lead) is the answer, not a transient failure —
-    // don't burn retries on it; let the not-found branch render.
-    retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
-  });
+  // The SAME read the person surface's record card makes, through the same
+  // hook — one query key with one policy. See useLeadRecord.ts.
+  const { data: lead, isLoading, isError, error, refetch } = useLeadRecord(id!);
 
   // Show the lead's name in the header breadcrumb ("Contacts › Leads › <name>").
   useBreadcrumbLabel(lead?.businessName);

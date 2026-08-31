@@ -1,9 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
-import { getLead } from '../../../features/marketing/api/leads.service';
+import { getLead } from '../api/leads.service';
 
 /**
- * The person's own record — the read behind BOTH the GÖREVLER and the
- * TEKLİFLER sections of the record card.
+ * `GET /leads/:id` — the person's own record, with its offers and tasks
+ * inline. THE read behind the lead detail page and behind the record card's
+ * GÖREVLER and TEKLİFLER sections.
+ *
+ * One hook rather than two `useQuery` calls on the same key, because two would
+ * be free to disagree about the OPTIONS — and they did, in the first draft of
+ * this: the detail page refuses to retry a 404 (a deleted lead is the answer,
+ * not a blip) and the card would have burned three retries on it. React Query
+ * keys the cache, not the policy, so a shared key with unshared options is a
+ * behaviour that depends on which surface mounted first.
  *
  * ## Why this one is eager while two of its neighbours are not
  *
@@ -38,9 +46,12 @@ import { getLead } from '../../../features/marketing/api/leads.service';
  * Splitting them into two requests for one payload would buy nothing but a
  * second request.
  */
-export function usePersonRecord(leadId: string) {
+export function useLeadRecord(leadId: string) {
   return useQuery({
     queryKey: ['marketing', 'lead', leadId],
     queryFn: () => getLead(leadId),
+    // A genuine 404 (deleted lead) is the answer, not a transient failure —
+    // don't burn retries on it; let the caller's not-found branch render.
+    retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
   });
 }

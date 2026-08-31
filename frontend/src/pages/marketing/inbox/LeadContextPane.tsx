@@ -114,7 +114,7 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
           sections (React Query dedupes the shared key), so they cost one
           request between them and warm the cache for the link below. Both
           render the lead detail's own tabs in `embedded` chrome; see
-          usePersonRecord.ts for the eager-vs-lazy rule and for the cost of the
+          useLeadRecord.ts for the eager-vs-lazy rule and for the cost of the
           shared key, which is a shared FATE when it fails. */}
       <PersonTasks key={`tasks-${lead.id}`} leadId={lead.id} />
       <PersonOffers key={`offers-${lead.id}`} leadId={lead.id} />

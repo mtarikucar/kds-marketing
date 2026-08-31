@@ -4,7 +4,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useLeadOfferActions } from '../../../features/marketing/hooks/useLeadRecordActions';
 import { fmtDate } from '../../../features/marketing/utils/format';
 import OffersTab from '../leadDetail/OffersTab';
-import { usePersonRecord } from './usePersonRecord';
+import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
 
 export interface PersonOffersProps {
   /** Whose offers. The record card owns the identity; this section owns the read. */
@@ -31,7 +31,7 @@ export interface PersonOffersProps {
  */
 export function PersonOffers({ leadId }: PersonOffersProps) {
   const { t } = useTranslation('marketing');
-  const record = usePersonRecord(leadId);
+  const record = useLeadRecord(leadId);
   const actions = useLeadOfferActions(leadId);
 
   return (

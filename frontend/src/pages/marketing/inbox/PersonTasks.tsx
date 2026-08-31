@@ -4,7 +4,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useLeadTaskActions } from '../../../features/marketing/hooks/useLeadRecordActions';
 import { fmtDate } from '../../../features/marketing/utils/format';
 import TasksTab from '../leadDetail/TasksTab';
-import { usePersonRecord } from './usePersonRecord';
+import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
 
 export interface PersonTasksProps {
   /** Whose tasks. The record card owns the identity; this section owns the read. */
@@ -31,7 +31,7 @@ export interface PersonTasksProps {
  */
 export function PersonTasks({ leadId }: PersonTasksProps) {
   const { t } = useTranslation('marketing');
-  const record = usePersonRecord(leadId);
+  const record = useLeadRecord(leadId);
   const actions = useLeadTaskActions(leadId);
 
   return (

@@ -23,7 +23,7 @@ export interface RecordDisclosureProps {
  * but is `enabled: false` is still a query somebody can flip on by accident.
  *
  * The two sections that ride on `GET /leads/:id` are NOT disclosures, because
- * their data arrives with the person either way — see `usePersonRecord`.
+ * their data arrives with the person either way — see `useLeadRecord`.
  *
  * `open` is per-person state. The card is handed a new person rather than
  * remounted (selecting is not navigating), so the caller keys this by lead id;

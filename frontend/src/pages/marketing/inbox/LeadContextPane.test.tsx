@@ -390,7 +390,14 @@ describe('LeadContextPane — a broken section names itself and stands alone', (
 
     // Each section owes its OWN sentence — "something failed" on a five-section
     // card tells a rep nothing about what they are missing.
-    expect(await screen.findByText('Görevler yüklenemedi.')).toBeInTheDocument();
+    //
+    // The generous timeout is the RETRY, not flake: `useLeadRecord` retries a
+    // non-404 twice before conceding, so a rep does not see a failure sentence
+    // over one dropped packet. The section shows its skeleton in the meantime;
+    // what must never happen is it showing "no tasks".
+    expect(
+      await screen.findByText('Görevler yüklenemedi.', undefined, { timeout: 8000 }),
+    ).toBeInTheDocument();
     expect(screen.getByText('Teklifler yüklenemedi.')).toBeInTheDocument();
 
     // A failure is not an empty person: the words for "no tasks" must NOT be
