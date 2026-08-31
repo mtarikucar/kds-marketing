@@ -7,6 +7,7 @@ import { MarketingEventTypes, MarketingCallEventPayload } from '../events/market
 import { localMsisdnVariants, normalizePhone } from '../utils/lead-normalize';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { TelephonyStreamService } from './telephony-stream.service';
+import { callActivityMetadata } from './call-activity';
 
 /** A call is still "in flight" in exactly these two statuses; anything else is terminal. */
 const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
@@ -436,7 +437,7 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     }
 
     if (lead) {
-      await this.mirrorLeadActivity(workspaceId, lead.id, marketingUserId, `Inbound call: ${initialStatus}`, initialStatus);
+      await this.mirrorLeadActivity(workspaceId, lead.id, marketingUserId, `Inbound call: ${initialStatus}`, initialStatus, call.id);
     }
 
     if (opts.screenPop) {
@@ -693,6 +694,10 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     marketingUserId: string | null,
     title: string,
     status: string,
+    /** The row this activity mirrors. Carried in `metadata` so the person's
+     *  stream can reach the recording and the analysis, both of which hang off
+     *  a SalesCall.id — see call-activity.ts. */
+    salesCallId: string,
   ): Promise<void> {
     const actorId = marketingUserId ?? (await this.resolveSentinel(workspaceId));
     if (!actorId) {
@@ -708,6 +713,7 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
         outcome: this.outcomeFor(status),
         leadId,
         createdById: actorId,
+        metadata: callActivityMetadata(salesCallId),
       },
     });
   }

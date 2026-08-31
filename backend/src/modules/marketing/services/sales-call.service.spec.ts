@@ -381,6 +381,10 @@ describe('SalesCallService', () => {
             outcome: 'POSITIVE',
             duration: 2, // 120s → 2 min
             createdById: REP,
+            // The link back to the call. A stream row without it can show
+            // "Sales call: CONNECTED, 2 dk" and nothing more — the recording
+            // and the analysis both hang off this id.
+            metadata: { kind: 'call', salesCallId: 'call-1' },
           }),
         }),
       );

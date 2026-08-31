@@ -19,6 +19,7 @@ import { SalesCallFilterDto } from '../dto/sales-call-filter.dto';
 import { MarketingUserPayload } from '../types';
 import { paginated } from '../../../common/pagination';
 import { mintRecordingProxyToken, recordingProxyUrl } from '../telephony/recording-proxy-token.util';
+import { callActivityMetadata } from '../telephony/call-activity';
 
 /**
  * Final-review HIGH-2 fix — statuses `logCall` may still attach a manual
@@ -311,6 +312,10 @@ export class SalesCallService {
             duration: row.durationSec ? Math.round(row.durationSec / 60) : undefined,
             leadId: call.leadId,
             createdById: marketingUserId,
+            // The link back to THIS call. Without it the stream row is a dead
+            // end: the recording and the AI analysis both hang off a
+            // SalesCall.id, and a person's history had no way to name one.
+            metadata: callActivityMetadata(id),
           },
         });
       }

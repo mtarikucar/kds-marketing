@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
+import { salesCallIdOf } from '../telephony/call-activity';
 
 /**
  * Per-source row cap.
@@ -91,6 +92,25 @@ export interface LeadStreamItem {
    * DTO that has no other reason to carry them.
    */
   assignment: 'auto' | 'bulk' | 'manual' | null;
+  /**
+   * The `SalesCall` a logged call mirrors, when the row knows one.
+   *
+   * A call row without it is a dead end: the recording and the AI analysis
+   * both hang off a `SalesCall.id`, so a reader could see "Sales call:
+   * CONNECTED · 3 dk" and had to leave for /calls and find the row again by
+   * phone number and timestamp to hear it.
+   *
+   * Null on every other kind, and null on every call MIRRORED BEFORE the id
+   * was carried — there is no backfill (see call-activity.ts), and the caller
+   * is expected to render those exactly as it does today rather than as a
+   * broken player.
+   *
+   * A derived field, like `assignment` beside it, rather than the raw
+   * `metadata` blob: this is the one thing a reader needs, and shipping the
+   * blob would put user ids and names on a DTO that has no other reason to
+   * carry them.
+   */
+  callId: string | null;
 
   // ── both, when there is a person behind it ───────────────────────────────
   /** MarketingUser id: the AGENT who sent the message, or the activity's author. */
@@ -297,6 +317,7 @@ export class LeadStreamService {
         outcome: a.outcome ?? null,
         durationMinutes: a.duration ?? null,
         assignment: assignmentOf(a.metadata),
+        callId: salesCallIdOf(a.metadata),
         authorId: a.createdById ?? null,
         authorName: a.createdById ? (nameById.get(a.createdById) ?? null) : null,
       })),
@@ -419,6 +440,7 @@ const BLANK = {
   outcome: null as string | null,
   durationMinutes: null as number | null,
   assignment: null as LeadStreamItem['assignment'],
+  callId: null as string | null,
   authorId: null as string | null,
   authorName: null as string | null,
 };
