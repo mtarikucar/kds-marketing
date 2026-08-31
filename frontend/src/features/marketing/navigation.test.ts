@@ -71,6 +71,38 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
     expect(settings).not.toContain('/memberships/courses');
   });
 
+  /**
+   * The call log is a LOG. You go to it to read what already happened, or to
+   * run the Power Dialer down a list — neither is something that arrives with
+   * a person attached, which is what the Inbox surface is for. Since the
+   * recording and the analysis now open inside the person's own stream, the
+   * only reason left to open /calls is the operational one, and that belongs
+   * in the gear area beside the other things you administer.
+   *
+   * It stays a ROUTE (the frozen set above is unchanged, byte for byte) and it
+   * keeps its `telephony` gate. This is a menu move, not a deletion.
+   */
+  it('files the call log under settings, not on the person surface', () => {
+    const hubs = visibleNav(NAV_HUBS, {
+      isManager: true, isOwner: true, has: () => true, isAgency: false,
+    });
+    expect(childPaths(hubs, 'settings')).toContain('/calls');
+    expect(childPaths(hubs, 'inbox')).not.toContain('/calls');
+  });
+
+  it('carries the telephony gate with it rather than leaving it behind', () => {
+    const withTelephony = childPaths(
+      visibleNav(NAV_HUBS, { isManager: true, has: entitle('telephony') }),
+      'settings',
+    );
+    const without = childPaths(
+      visibleNav(NAV_HUBS, { isManager: true, has: entitle() }),
+      'settings',
+    );
+    expect(withTelephony).toContain('/calls');
+    expect(without).not.toContain('/calls');
+  });
+
   it('keeps the moved single-page hubs gated on the SAME entitlement they had', () => {
     const paths = (...keys: FeatureKey[]) =>
       childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle(...keys) }), 'settings');

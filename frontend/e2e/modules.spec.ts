@@ -68,15 +68,23 @@ test('switching a module off drops its PAGE from the surface — not the surface
   // observable. /leads is an ungated page in the same surface, which lets it
   // double as the survival proof below.
   //
-  // The module under test is `telephony` (Aramalar), not `conversationAi`.
-  // Until 2026-08-30 this test watched /inbox, and it could: /inbox was a menu
-  // entry gated on conversationAi. It is now an ALIAS of /leads with no entry
-  // of its own — the two paths have rendered the identical page since v2.284.0,
-  // so listing both was listing one page twice, and the gate on the first was
-  // doing nothing while the same surface sat unguarded on the line below it.
-  // conversationAi therefore no longer hides anything from this menu (its real
-  // effect is inside the page, on the message stream), and /calls is the page
-  // that still makes the claim in this test's title observable.
+  // The module under test is `voiceAi` (Sesli AI). This observation point has
+  // now moved twice, and both moves are worth recording, because each time the
+  // page being watched stopped being a gated child of this surface:
+  //
+  //   - Until 2026-08-30 it watched /inbox, gated on conversationAi. /inbox
+  //     became an ALIAS of /leads with no menu entry of its own (the two have
+  //     rendered the identical page since v2.284.0), so conversationAi no
+  //     longer hides anything from this menu — its real effect is inside the
+  //     page, on the message stream.
+  //   - Until 2026-08-31 it watched /calls, gated on telephony. The call log
+  //     moved into the Settings area, so it is no longer a page OF this
+  //     surface and cannot show that a surface survives losing one.
+  //
+  // /voice is the closest replacement available: like /calls before it, its
+  // module gates ONLY pages inside this surface (/voice and /voice/ivr) and
+  // nothing in Settings, so switching it off is a clean per-page observation
+  // rather than one that also empties half the gear area.
   await app.goto('/leads');
 
   // The primary hub rail is the FIRST <aside> — inside the Settings area
@@ -86,6 +94,11 @@ test('switching a module off drops its PAGE from the surface — not the surface
   const inboxSurface = rail.getByRole('link', { name: 'Gelen Kutusu', exact: true });
   // Every route the chrome offers to the gated PAGE, counted wherever it
   // appears.
+  const routesToVoice = app.locator('a[href="/voice"]');
+  // The call log is no longer a page of this surface (2026-08-31). Counted
+  // here so the move is OBSERVED rather than merely assumed: a regression that
+  // put it back on the Inbox rail would also quietly re-enable the premise
+  // this test used to rest on.
   const routesToCalls = app.locator('a[href="/calls"]');
   // And the ONE route to the person surface. /inbox is a bookmark, never a
   // menu entry: a link back to it anywhere in the chrome is the duplication
@@ -94,7 +107,8 @@ test('switching a module off drops its PAGE from the surface — not the surface
   const routesToPeople = app.locator('a[href="/leads"]');
 
   await expect(inboxSurface).toBeVisible();
-  await expect(routesToCalls).toHaveCount(1);
+  await expect(routesToVoice).toHaveCount(1);
+  await expect(routesToCalls).toHaveCount(0);
   await expect(routesToInbox).toHaveCount(0);
   // The rail item and the sub-nav tab: the surface targets its first child,
   // which is the person page, and that page is also a tab.
@@ -102,7 +116,7 @@ test('switching a module off drops its PAGE from the surface — not the surface
   await expect(inboxSurface).toHaveAttribute('href', '/leads');
 
   await app.goto('/settings/modules');
-  const toggle = app.getByRole('switch', { name: 'Telefon & aramalar', exact: true });
+  const toggle = app.getByRole('switch', { name: 'Sesli AI', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
 
   const off = app.waitForResponse((r) => modulesWrite(r.url(), r.request().method()));
@@ -121,7 +135,7 @@ test('switching a module off drops its PAGE from the surface — not the surface
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
 
   // The PAGE is gone from the sub-nav…
-  await expect(routesToCalls).toHaveCount(0);
+  await expect(routesToVoice).toHaveCount(0);
   // …while the SURFACE survives, which is the entire reason the gate hangs on
   // the child. It used to hang on the hub, so switching one module off took
   // People, Pipeline, Calendar and Tasks off the rail with it.
@@ -134,13 +148,13 @@ test('switching a module off drops its PAGE from the surface — not the surface
   // merely vanished from a client-side cache for 30 seconds.
   await app.reload();
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
-  await expect(routesToCalls).toHaveCount(0);
+  await expect(routesToVoice).toHaveCount(0);
   await expect(inboxSurface).toBeVisible();
 
   // Turning it back on must be equally live — a one-way door would strand an
   // owner who switched something off to try it out.
   await app.goto('/settings/modules');
-  const toggleBack = app.getByRole('switch', { name: 'Telefon & aramalar', exact: true });
+  const toggleBack = app.getByRole('switch', { name: 'Sesli AI', exact: true });
   // Still off after a fresh boot: the switch persisted, not just the menu.
   await expect(toggleBack).toHaveAttribute('aria-checked', 'false');
 
@@ -150,7 +164,43 @@ test('switching a module off drops its PAGE from the surface — not the surface
 
   await expect(toggleBack).toHaveAttribute('aria-checked', 'true');
   await inboxSurface.click();
-  await expect(routesToCalls).toHaveCount(1);
+  await expect(routesToVoice).toHaveCount(1);
+});
+
+/**
+ * Where the call log lives now.
+ *
+ * /calls moved out of the Inbox surface and into the Settings area on
+ * 2026-08-31: it is a LOG plus a bulk dialer, not something that arrives with a
+ * person attached, and the reason to open it from a person is gone — a call in
+ * someone's stream now opens its own recording and analysis in place.
+ *
+ * The move is only half done if the page merely ARRIVES in the settings list:
+ * an item in no SETTINGS_GROUPS bucket falls into "Other", which is the
+ * grab-bag the grouping exists to prevent. So this watches the group heading,
+ * not just the link.
+ */
+test('the call log is a settings page now, filed under Telephony', async ({ app }) => {
+  await app.goto('/settings/modules');
+
+  // Second <aside> = SettingsLayout's page list (the first is the hub rail).
+  const settingsNav = app.locator('aside').nth(1);
+  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
+  await expect(settingsNav.getByText('Telefon', { exact: true })).toBeVisible();
+  await expect(settingsNav.getByText('Diğer', { exact: true })).toHaveCount(0);
+
+  // And it still opens — a menu move, not a route deletion. /calls is in the
+  // frozen 50-path set navigation.test.ts pins.
+  await app.goto('/calls');
+  await expect(app.getByRole('heading', { level: 1, name: 'Sales Calls' })).toBeVisible();
+  // Inside the settings chrome now: MarketingLayout picks the shell from the
+  // owning hub's `area`, so the page arrives beside the settings list rather
+  // than under the Inbox sub-nav. Two <aside>s is that shell, structurally —
+  // the hub rail plus SettingsLayout's own page list.
+  await expect(app.locator('aside')).toHaveCount(2);
+  await expect(
+    app.locator('aside').nth(1).getByRole('link', { name: 'Aramalar', exact: true }),
+  ).toBeVisible();
 });
 
 test('the person surface has ONE menu entry, and both of its routes still open it', async ({

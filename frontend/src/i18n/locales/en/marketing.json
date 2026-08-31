@@ -174,7 +174,8 @@
     "developer": "Developer & security",
     "compliance": "Compliance",
     "other": "Other",
-    "connections": "Connections & domains"
+    "connections": "Connections & domains",
+    "telephony": "Telephony"
   },
   "leadStatus": {
     "NEW": "New",

@@ -378,7 +378,8 @@
     "developer": "Geliştirici ve güvenlik",
     "compliance": "Uyumluluk",
     "other": "Diğer",
-    "connections": "Bağlantılar ve alan adları"
+    "connections": "Bağlantılar ve alan adları",
+    "telephony": "Telefon"
   },
   "leadStatus": {
     "NEW": "Yeni",

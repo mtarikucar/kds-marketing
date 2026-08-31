@@ -1175,5 +1175,8 @@
     "unavailable": "Bu qo'ng'iroq uchun yozuv mavjud emas.",
     "failed": "Yozuvni yuklab bo'lmadi",
     "retry": "Qayta urinish"
+  },
+  "settingsGroup": {
+    "telephony": "Telefoniya"
   }
 }
