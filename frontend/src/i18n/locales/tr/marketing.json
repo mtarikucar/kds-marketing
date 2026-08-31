@@ -2432,6 +2432,11 @@
       "site": {
         "title": "Açılış sayfası yayınla",
         "desc": "AI'ın hazırladığı funnel sayfasıyla lead topla."
+      },
+      "claude": {
+        "title": "Claude'unu bağla",
+        "desc": "Gece yapılan aday araştırmasını kendi Claude’un kendi aboneliğinde koştursun. Bağlantı adresini kopyala, bir anahtar oluştur, hazır zamanlanmış görev komutunu yapıştır.",
+        "approvalWarning": "Dikkat: bu workspace MCP yazımları için onay istiyor; bu böyle kaldıkça Google Maps ve sayfa okuma araçları Claude'una hiçbir sonuç döndüremez — hat düz web aramasıyla çalışır ve daha zayıf adaylar bulur. Önce MCP yazma modunu otonom yap."
       }
     },
     "startHere": "Buradan başla"
@@ -4025,6 +4030,13 @@
       "noApprovals": "Bu oturum hiç onay istemedi.",
       "decided": "karara bağlandı",
       "expires": "sona eriyor"
+    },
+    "task": {
+      "title": "Gecelik zamanlanmış görevin",
+      "desc": "Bir anahtar oluştur, sonra bunu kendi Claude’unda bir zamanlanmış göreve yapıştır. Bir şey bunu koşturana kadar araştırmayı biz koşturmaya devam ederiz — maliyeti taşıyan kısım tam olarak burası.",
+      "createKey": "Bu workspace için anahtar oluştur",
+      "copyPrompt": "Zamanlanmış görev komutunu kopyala",
+      "noEndpoint": "Etrafına komut kurulacak bir bağlantı adresi henüz yok; adresi eksik bir komut kopyalanabilir görünür ama sessizce hiçbir şey yapmaz."
     }
   },
   "mcpConsent": {

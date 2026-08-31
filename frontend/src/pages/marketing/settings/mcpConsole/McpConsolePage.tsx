@@ -101,6 +101,7 @@ export default function McpConsolePage() {
         )}
       />
       <OverviewSection />
+      <ScheduledTaskSection />
       <WriteModeSection />
       <ResearchExecutionSection />
       <ConnectionsSection />
@@ -248,6 +249,118 @@ function Metric({
   );
 }
 
+// ── 1b. The scheduled task that actually drains the queue ────────────────────
+
+/**
+ * The prompt an owner pastes into their own Claude's scheduled task.
+ *
+ * This section exists because of a measured failure mode, not a hunch: the
+ * whole MCP research lane dies at "a key was created and no scheduled task was
+ * ever written". From every other angle that workspace looks connected — a live
+ * key, a green connector — while nothing drains the queue. The product's answer
+ * is to stop asking anyone to author this from scratch and hand it over
+ * finished, with this workspace's own address already in it.
+ *
+ * Three deliberate choices:
+ *
+ *  - THE FOUR CALLS ARE NAMED, IN ORDER. A drainer that claims and never
+ *    completes holds the night hostage until the lease expires; one that
+ *    submits without claiming has no job to submit against. The order is the
+ *    protocol.
+ *  - IT TELLS THE MODEL TO WORK THE `instruction` IT WAS HANDED. The brief is
+ *    server-authored and travels inside the claim precisely so quality does not
+ *    depend on whatever sentence the owner typed that night. A prompt that
+ *    invited the model to invent its own ICP would quietly undo that.
+ *  - NO ENDPOINT, NO PROMPT. A prompt containing `undefined` looks copyable and
+ *    silently cannot work, which is strictly worse than an honest absence — the
+ *    endpoint card above already says why there is no address.
+ */
+function buildScheduledTaskPrompt(endpoint: string): string {
+  return [
+    `Connect to the Jeeta MCP server at ${endpoint} and drain tonight's prospect research.`,
+    '',
+    '1. Call `jeeta.claim_research_job`. If it returns no job, stop — there is nothing to do tonight.',
+    '2. Work the `instruction` field it hands back, exactly as written. It is the full brief:',
+    '   the ICP, the geo, the language, the exclusions and the output contract. Do not',
+    '   substitute your own idea of a good prospect.',
+    '   Use `jeeta.research_search_places`, `jeeta.research_lookup_instagram` and `jeeta.research_scrape_page`',
+    '   for the evidence — the Google Maps records are the pain signal, and your own web',
+    '   search cannot replace them.',
+    '3. Call `jeeta.submit_research_candidates` with `jobId` and the candidates you qualified.',
+    '4. Call `jeeta.complete_research_job` with the same `jobId` — `DONE`, or `FAILED` with the',
+    '   reason. Always call it, even when you found nothing: an unclosed job holds the',
+    '   night until its lease expires.',
+  ].join('\n');
+}
+
+function ScheduledTaskSection() {
+  const { t } = useTranslation('marketing');
+  const q = useQuery({ queryKey: QK.overview, queryFn: getMcpConsoleOverview });
+  const endpoint = q.data?.mcpEndpoint ?? null;
+  const prompt = endpoint ? buildScheduledTaskPrompt(endpoint) : null;
+
+  const copy = async () => {
+    if (!prompt) return;
+    if (await copyToClipboard(prompt)) {
+      toast.success(t('common.copied', 'Copied'));
+    } else {
+      toast.error(
+        t('mcpConsole.copyFailed', 'Could not copy — select the address and copy it manually.'),
+      );
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('mcpConsole.task.title', 'Your nightly scheduled task')}</CardTitle>
+        <CardDescription>
+          {t(
+            'mcpConsole.task.desc',
+            'Create a key, then paste this into a scheduled task in your own Claude. Until something runs it, we keep running the research for you — this is the part that moves the cost.',
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Link
+          to="/settings/api-keys"
+          className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+        >
+          <KeyRound className="h-4 w-4" aria-hidden="true" />
+          {t('mcpConsole.task.createKey', 'Create a key for this workspace')}
+        </Link>
+
+        {prompt ? (
+          <div className="space-y-2">
+            <pre
+              data-testid="mcp-task-prompt"
+              className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-3 text-xs leading-relaxed"
+            >
+              {prompt}
+            </pre>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={copy}
+              aria-label={t('mcpConsole.task.copyPrompt', 'Copy the scheduled-task prompt')}
+            >
+              <Clipboard className="me-1.5 h-4 w-4" aria-hidden="true" />
+              {t('mcpConsole.task.copyPrompt', 'Copy the scheduled-task prompt')}
+            </Button>
+          </div>
+        ) : (
+          <Callout tone="warning" title={t('mcpConsole.noEndpointTitle', 'No public address')}>
+            {t(
+              'mcpConsole.task.noEndpoint',
+              'There is no connector address to build a prompt around yet, and a prompt with a missing address would look copyable while silently doing nothing.',
+            )}
+          </Callout>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── 2. Write mode ────────────────────────────────────────────────────────────
 
 /**
@@ -380,7 +493,7 @@ function WriteModeSection() {
  *
  * `PATCH marketing/workspaces/research-execution` shipped OWNER-only, audited
  * and DTO-validated, with no frontend at all — while the connector doc and
- * `claim_research_job`'s own refusal text both told owners to "switch it in
+ * `jeeta.claim_research_job`'s own refusal text both told owners to "switch it in
  * Settings". An owner could not turn the feature on without a curl.
  *
  * Same shape as WriteModeSection above, and the risky direction is likewise
@@ -525,6 +638,7 @@ function ResearchExecutionSection() {
 
         {gatedByApproval && (
           <Callout
+            data-testid="research-approval-warning"
             tone="warning"
             title={t(
               'mcpConsole.researchExecution.needsAutonomousTitle',

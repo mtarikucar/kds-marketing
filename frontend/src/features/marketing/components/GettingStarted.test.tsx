@@ -54,7 +54,15 @@ describe('GettingStarted', () => {
     // every write. A mock that always replied "not dismissed" would make the
     // checklist reappear and hide a real regression behind a passing test.
     let dismissed = false;
-    getOnboarding.mockReset().mockImplementation(async () => ({ dismissed }));
+    getOnboarding
+      .mockReset()
+      .mockImplementation(async () => ({
+        dismissed,
+        // The fourth step's own signals. Proven + autonomous here so these
+        // cases keep being about the three they were written for.
+        claudeLaneProven: true,
+        mcpWriteMode: 'AUTONOMOUS',
+      }));
     setOnboardingDismissed.mockReset().mockImplementation(async (next: boolean) => {
       dismissed = next;
       return { dismissed };
@@ -101,10 +109,84 @@ describe('GettingStarted', () => {
   });
 
   it('stays hidden when the workspace has already dismissed it elsewhere', async () => {
-    getOnboarding.mockImplementation(async () => ({ dismissed: true }));
+    getOnboarding.mockImplementation(async () => ({
+      dismissed: true,
+      claudeLaneProven: true,
+      mcpWriteMode: 'AUTONOMOUS',
+    }));
     renderGS();
 
     await waitFor(() => expect(getOnboarding).toHaveBeenCalled());
     expect(screen.queryByText('Invite your team')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The fourth step, and the only one whose completion is PROOF rather than
+ * intent.
+ *
+ * "A key exists" is the failure this step is built to avoid: a key with no
+ * scheduled task behind it looks exactly like a working lane from every other
+ * angle, so ticking the step for one would mean the checklist certifies the
+ * broken setup it exists to prevent. `claudeLaneProven` is a real
+ * `claim_research_job` having succeeded.
+ */
+describe('GettingStarted — connect your Claude', () => {
+  const state = (over: Partial<Record<string, unknown>> = {}) => ({
+    dismissed: false,
+    claudeLaneProven: false,
+    mcpWriteMode: 'AUTONOMOUS',
+    ...over,
+  });
+
+  beforeEach(async () => {
+    await i18n.changeLanguage('en');
+    setOnboardingDismissed.mockReset().mockResolvedValue({ dismissed: true });
+  });
+
+  it('offers the step, pointed at the connector console', async () => {
+    getOnboarding.mockReset().mockImplementation(async () => state());
+    renderGS();
+
+    const step = await screen.findByText('Connect your Claude');
+    expect(step.closest('a')).toHaveAttribute('href', '/settings/mcp-console');
+  });
+
+  it('is NOT done until a research job was actually claimed', async () => {
+    getOnboarding.mockReset().mockImplementation(async () => state({ claudeLaneProven: false }));
+    renderGS();
+
+    const title = await screen.findByText('Connect your Claude');
+    expect(title.className).not.toMatch(/line-through/);
+  });
+
+  it('is done once one was', async () => {
+    getOnboarding.mockReset().mockImplementation(async () => state({ claudeLaneProven: true }));
+    renderGS();
+
+    const title = await screen.findByText('Connect your Claude');
+    expect(title.className).toMatch(/line-through/);
+  });
+
+  /**
+   * Measured in v2.286.0: under APPROVAL the three Jeeta-keyed data tools are
+   * not delayed, they are unusable, and the lane silently degrades to plain web
+   * search. Somebody being walked through setup must be told BEFORE they
+   * finish — afterwards it just looks like research found weak prospects.
+   */
+  it('warns about APPROVAL write mode, which makes the lane half-work', async () => {
+    getOnboarding.mockReset().mockImplementation(async () => state({ mcpWriteMode: 'APPROVAL' }));
+    renderGS();
+
+    const warning = await screen.findByTestId('onboarding-warning-claude');
+    expect(warning).toHaveTextContent(/google maps/i);
+  });
+
+  it('says nothing about it when the workspace is already autonomous', async () => {
+    getOnboarding.mockReset().mockImplementation(async () => state({ mcpWriteMode: 'AUTONOMOUS' }));
+    renderGS();
+
+    await screen.findByText('Connect your Claude');
+    expect(screen.queryByTestId('onboarding-warning-claude')).not.toBeInTheDocument();
   });
 });

@@ -2127,6 +2127,11 @@
       "site": {
         "title": "Publish a landing page",
         "desc": "Capture leads with an AI-drafted funnel page."
+      },
+      "claude": {
+        "title": "Connect your Claude",
+        "desc": "Let your own Claude run the nightly prospect research on your subscription. Copy the connector address, create a key, and paste in the ready-made scheduled-task prompt.",
+        "approvalWarning": "Heads up: this workspace requires approval for MCP writes, and while it does, the Google Maps and page-fetch tools cannot return results to your Claude at all — the lane runs on plain web search and finds weaker prospects. Switch MCP write mode to autonomous first."
       }
     },
     "startHere": "Start here"
@@ -3158,6 +3163,13 @@
       "noApprovals": "This session asked for no approval.",
       "decided": "decided",
       "expires": "expires"
+    },
+    "task": {
+      "title": "Your nightly scheduled task",
+      "desc": "Create a key, then paste this into a scheduled task in your own Claude. Until something runs it, we keep running the research for you — this is the part that moves the cost.",
+      "createKey": "Create a key for this workspace",
+      "copyPrompt": "Copy the scheduled-task prompt",
+      "noEndpoint": "There is no connector address to build a prompt around yet, and a prompt with a missing address would look copyable while silently doing nothing."
     }
   },
   "mcpConsent": {

@@ -1033,6 +1033,11 @@
       "site": {
         "title": "Lending sahifa chop eting",
         "desc": "AI tayyorlagan voronka sahifasi bilan lid to'plang."
+      },
+      "claude": {
+        "title": "Claude’ingizni ulang",
+        "desc": "Tungi mijoz izlash ishini o’z Claude’ingiz o’z obunangizda bajarsin. Konnektor manzilini nusxalang, kalit yarating va tayyor rejalashtirilgan vazifa promptini joylashtiring.",
+        "approvalWarning": "Diqqat: bu ish maydonida MCP yozuvlari tasdiqlashni talab qiladi va shunday ekan, Google Maps va sahifa o’qish vositalari Claude’ingizga umuman natija qaytara olmaydi — yo’nalish oddiy veb-qidiruvda ishlaydi va zaifroq nomzodlar topadi. Avval MCP yozuv rejimini avtonomga o’tkazing."
       }
     }
   },

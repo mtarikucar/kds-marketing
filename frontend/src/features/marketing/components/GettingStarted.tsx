@@ -100,6 +100,21 @@ export default function GettingStarted() {
                   <span className="block text-xs text-muted-foreground">
                     {t(`onboarding.steps.${s.id}.desc`)}
                   </span>
+                  {/*
+                    A caveat that applies RIGHT NOW, not a permanent footnote.
+                    Rendered only when the hook attaches one — a warning that is
+                    always on screen is a warning nobody reads, and this one
+                    (APPROVAL write mode quietly disabling the research data
+                    tools) stops being true the moment the owner changes it.
+                  */}
+                  {s.warningKey && !s.done && (
+                    <span
+                      data-testid={`onboarding-warning-${s.id}`}
+                      className="mt-1 block text-xs text-warning"
+                    >
+                      {t(s.warningKey)}
+                    </span>
+                  )}
                 </span>
                 {isNext && (
                   <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground">

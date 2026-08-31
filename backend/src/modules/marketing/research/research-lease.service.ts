@@ -7,6 +7,7 @@ import { ResearchFinalizeService, ResearchFinalizeResult } from './research-fina
 import { RESEARCH_RUN_KIND } from './research-kinds';
 import {
   MCP_ACTIVITY_AGENT,
+  MCP_RESEARCH_AGENT,
   mcpActivityCutoff,
   effectiveResearchExecution,
   type EffectiveResearchExecution,
@@ -344,7 +345,7 @@ export class ResearchLeaseService {
       }
 
       const agentRunId = await this.runs.start(workspaceId, {
-        agent: 'research.mcp',
+        agent: MCP_RESEARCH_AGENT,
         goal: `Prospect for "${built.profile.name}" (drained by the workspace's own Claude)`,
         input: { jobId: next.id, profileId, geo: built.profile.geo },
       });

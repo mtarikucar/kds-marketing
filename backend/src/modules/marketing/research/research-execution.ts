@@ -63,6 +63,19 @@ export const RESEARCH_MCP_GRACE_MS = RESEARCH_MCP_GRACE_HOURS * 60 * 60 * 1000;
  * (`McpInvokerService.invoke`). THE connection signal — see below.
  */
 export const MCP_ACTIVITY_AGENT = 'mcp';
+/**
+ * The `AgentRun.agent` value `ResearchLeaseService.claim()` opens after a
+ * SUCCESSFUL atomic claim — one row per research job an MCP client actually
+ * leased, written nowhere else.
+ *
+ * This is the completion signal for the "connect your Claude" setup step, and
+ * the reason that step is not measured by "an API key exists": a key is intent,
+ * and a key with no scheduled task behind it looks exactly like a working lane.
+ * A `research.mcp` run is proof the lane RAN. Named here, beside
+ * `MCP_ACTIVITY_AGENT`, so writer and reader cannot drift — a renamed literal
+ * would leave that step silently uncompletable forever.
+ */
+export const MCP_RESEARCH_AGENT = 'research.mcp';
 
 /**
  * How recently an MCP tool call must have happened for `AUTO` to read as
