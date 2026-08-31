@@ -94,6 +94,13 @@ const TAKEOVER_READ_CAP = 200;
  * Enumerated rather than matched on a `research.` prefix so a future action
  * that merely mentions research cannot silently inflate a takeover's price —
  * and so that adding one is a decision somebody makes here.
+ *
+ * Note which side emits them. `research.turn` is the platform worker's own
+ * model loop. The other two come from `NativeWebProvider`, which BOTH lanes
+ * reach — the MCP lane through `dispatchResearchTool`'s fallback when
+ * Firecrawl/Apify are unconfigured — which is why the window in
+ * `recordPlatformTakeover` is documented as an upper bound rather than an
+ * exact figure.
  */
 export const RESEARCH_USAGE_ACTIONS = [
   'research.turn',
@@ -594,11 +601,41 @@ export class ResearchLeaseService {
    * bill this whole feature exists to move stays on the platform forever.
    *
    * `since` is when the run STARTED, and the cost is every research call this
-   * workspace billed from that instant. Attribution by window is exact here,
-   * not approximate: `ScheduledJobRunnerService` dispatches its batch
-   * sequentially under a single-replica advisory lock, so a workspace cannot
-   * have two research runs in flight, and the three actions counted are emitted
-   * by nothing except the research worker.
+   * workspace billed from that instant.
+   *
+   * ## What that window is and is not exact about
+   *
+   * It is exact against the PLATFORM's own research runs.
+   * `ScheduledJobRunnerService` dispatches its batch sequentially under a
+   * single-replica advisory lock, so one workspace cannot have two in-process
+   * research runs in flight, and no second platform run can bleed into this
+   * window.
+   *
+   * It is an UPPER BOUND when the MCP lane is spending at the same time. Two
+   * of the three counted actions — `research.native_search` and
+   * `research.native_scrape` — are emitted by `NativeWebProvider`, which the
+   * MCP lane also reaches: `research.tools.ts`'s `dispatchResearchTool` falls
+   * back to the native provider whenever Firecrawl/Apify are unconfigured or
+   * failing. So a client working job B can bill into the window of a takeover
+   * of job A in the same workspace, and this number would include it. The
+   * advisory lock says nothing about that; it only orders the platform against
+   * itself.
+   *
+   * Bounded, and deliberately not fixed here. Over-reporting a takeover
+   * inflates a number whose only use is "your scheduled task looks dead, go
+   * and check", which is the direction that costs nothing; and both lanes
+   * running research in the same workspace at the same time already means the
+   * night is being paid for twice, which is a louder problem than its
+   * attribution.
+   *
+   * Making it exact needs a run id ON the usage row, and `AiUsageLog` has no
+   * column that could carry or join to one — no runId, no jobId, nothing but
+   * `(workspaceId, action, model, tokens, createdAt)`. Adding one means a
+   * migration plus threading a correlation id through `AnthropicService`'s
+   * shared `recordUsage`, through `recordExternalUsage`, and into every
+   * research call site: a change to the billing path of the entire product to
+   * tighten one advisory line on one panel. It is not cheap, so the claim is
+   * scoped instead of the code being widened.
    *
    * A FAILED run is recorded too — it spent real money before it failed, and
    * the retry accumulates onto the same row rather than overwriting it, so a
