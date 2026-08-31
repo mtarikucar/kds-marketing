@@ -3948,6 +3948,25 @@
       "approvalToast": "Onay zorunlu — Claude'un denediği her yazma işlemi artık bir kişiyi bekler.",
       "error": "Yazma modu değiştirilemedi."
     },
+    "researchExecution": {
+      "title": "Gecelik araştırmayı kim çalıştırıyor",
+      "desc": "Aday araştırması bu üründeki en pahalı iş. Arama ve akıl yürütmeyi bizim yerimize kendi Claude’un kendi aboneliğinde yapabilir — brifler, kuyruk ve inceleme adımı aynen kalır.",
+      "switchLabel": "Gecelik araştırmayı benim Claude’um çalıştırsın",
+      "stateMcp": "MCP — kuyruğu senin Claude’un boşaltıyor. İşleri kimse almazsa öylece birikirler ve hiç aday çıkmaz.",
+      "stateServer": "SERVER — gecelik araştırmayı platform senin için, kendi anahtarıyla çalıştırıyor.",
+      "MCP": "Senin Claude’un",
+      "SERVER": "Platform",
+      "needsAutonomousTitle": "Bu hat otonom yazma modu istiyor",
+      "needsAutonomous": "Yazma işlemleri onay beklerken, Claude’unun acı sinyalini bulmak için kullandığı Google Maps ve sayfa çekme araçları sonuç yerine \"onay bekliyor\" döndürür — onaylanan çağrı sana tekrar oynatılır, ne kadar hızlı tıklarsan tıkla onu isteyen oturuma geri verilmez. Claude düz web aramasına düşer ve adaylar zayıflar. Tasarlandığı gibi çalışması için yukarıdan yazma modunu otonoma al.",
+      "lockedTitle": "Senin için salt okunur",
+      "locked": "Araştırmayı kimin çalıştıracağını yalnızca \"ayarları yönet\" iznine sahip çalışma alanı sahibi değiştirebilir. Mevcut ayarı görebilirsin ama değiştiremezsin.",
+      "confirmTitle": "Gecelik araştırma kendi Claude’una devredilsin mi?",
+      "confirmDesc": "Bunu kaydettiğin andan itibaren platform araştırma kuyruğunu boşaltmayı bırakır. Bağlı bir Claude işleri kendisi almadıkça hiçbir şey çalışmaz — yani senin tarafında konektörü çağıran zamanlanmış bir görev olması gerekir. O zamana kadar kuyruk dolar ve yeni aday çıkmaz; ekranda bu, araştırmanın hiçbir şey bulamamasıyla birebir aynı görünür. İstediğin an geri alabilirsin.",
+      "confirmCta": "Evet, benim Claude’um boşaltsın",
+      "mcpToast": "Araştırma kuyruğunu artık senin Claude’un boşaltıyor — platform durdu. Bağlı bir istemci işleri almadıkça hiçbir şey çalışmaz.",
+      "serverToast": "Araştırma kuyruğunu yine platform boşaltıyor.",
+      "error": "Araştırmayı kimin çalıştıracağı değiştirilemedi."
+    },
     "connections": {
       "title": "Bağlantılar",
       "desc": "Şu anda bu çalışma alanına MCP üzerinden erişebilen her şey — yetkilendirdiğiniz Claude uygulamaları ve Claude Code'un kullandığı API anahtarları.",

@@ -29,11 +29,28 @@ export interface McpWriteModeState {
   mcpWriteMode: McpWriteMode;
 }
 
+// ── Research execution ───────────────────────────────────────────────────────
+
+/** Mirrors `Workspace.researchExecution` / `SetResearchExecutionDto`. */
+export type ResearchExecution = 'SERVER' | 'MCP';
+
+export interface ResearchExecutionState {
+  researchExecution: ResearchExecution;
+}
+
 // ── Overview ─────────────────────────────────────────────────────────────────
 
 export interface McpConsoleOverview {
   mcpWriteMode: McpWriteMode;
-  /** Whether THIS caller may flip the mode (OWNER + `settings.manage`). */
+  /** Which side drains the nightly research queue. See `setResearchExecution`. */
+  researchExecution: ResearchExecution;
+  /**
+   * Whether THIS caller may flip EITHER switch (OWNER + `settings.manage`).
+   *
+   * One flag because both PATCH routes carry the identical pair of gates. The
+   * backend resolves it once; if the gates ever diverge it splits in two there
+   * and here together.
+   */
   canToggle: boolean;
   /** The canonical MCP resource URI to paste into a client — null when the
    *  deployment has no PUBLIC_BASE_URL configured. */
@@ -192,3 +209,17 @@ export const getMcpWriteMode = (): Promise<McpWriteModeState> =>
  */
 export const setMcpWriteMode = (mode: McpWriteMode): Promise<McpWriteModeState> =>
   marketingApi.patch('/workspaces/mcp-write-mode', { mode }).then((r) => r.data);
+
+/**
+ * Hand the nightly research queue to the workspace's own Claude, or take it
+ * back. OWNER + `settings.manage` only — check `overview().canToggle` first,
+ * or this 403s.
+ *
+ * The current value comes from `overview()`, not from this endpoint's own GET:
+ * that one is OWNER-only and `@Audit`-logged, so reading it on every console
+ * render would 403 a MANAGER off the page and write an audit row per load.
+ */
+export const setResearchExecution = (
+  mode: ResearchExecution,
+): Promise<ResearchExecutionState> =>
+  marketingApi.patch('/workspaces/research-execution', { mode }).then((r) => r.data);
