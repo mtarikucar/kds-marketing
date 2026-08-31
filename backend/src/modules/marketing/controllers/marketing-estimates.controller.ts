@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
@@ -17,7 +18,7 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { EstimatesService } from '../estimates/estimates.service';
-import { CreateEstimateDto, UpdateEstimateDto } from '../dto/estimate.dto';
+import { CreateEstimateDto, ListEstimatesQueryDto, UpdateEstimateDto } from '../dto/estimate.dto';
 
 /**
  * Estimates / quotes (GoHighLevel parity). Reads leads.read; create/edit/send/
@@ -30,10 +31,11 @@ import { CreateEstimateDto, UpdateEstimateDto } from '../dto/estimate.dto';
 export class MarketingEstimatesController {
   constructor(private readonly estimates: EstimatesService) {}
 
+  /** `?leadId=` narrows to one contact — the person record card's read. */
   @Get()
   @RequirePermission('leads.read')
-  list(@CurrentMarketingUser() a: MarketingUserPayload) {
-    return this.estimates.list(a.workspaceId);
+  list(@CurrentMarketingUser() a: MarketingUserPayload, @Query() q: ListEstimatesQueryDto) {
+    return this.estimates.list(a.workspaceId, q.leadId);
   }
 
   @Get(':id')
