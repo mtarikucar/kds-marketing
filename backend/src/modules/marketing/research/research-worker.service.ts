@@ -10,7 +10,12 @@ import { ResearchSpendService } from '../budget/research-spend.service';
 import { RESEARCH_TOOLS, SUBMIT_CANDIDATES_TOOL, dispatchResearchTool, ResearchToolCtx } from './research-toolset';
 import { ResearchCandidateService, StagedCandidate } from './research-candidate.service';
 import { ResearchJob } from './research-job.service';
-import { EXTERNAL_REF_PATTERN } from '../dto/ingest-leads.dto';
+import {
+  RESEARCH_SYSTEM_PROMPT,
+  buildResearchBrief,
+  researchBatchCap,
+  validateResearchCandidates,
+} from './research-contract';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 
 export interface ResearchRunResult {
@@ -28,8 +33,6 @@ const MAX_ITERS = 8;
 const FORCE_SUBMIT_GRACE_MS = 30_000;
 const MAX_TOOL_CALLS = 30;
 const MAX_WALL_MS = Number(process.env.RESEARCH_RUN_MAX_MS ?? 120_000);
-const STAGES = new Set(['GROWING', 'STRUGGLING', 'STABLE']);
-const PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
 
 /**
  * The native prospect-research agent — a bounded Claude tool-loop that replaces
@@ -80,7 +83,7 @@ export class ResearchWorkerService {
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
 
           const brand = await this.brandContext.summaryFor(job.workspaceId);
-          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(job, brand) }];
+          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: buildResearchBrief(job, brand) }];
           let candidates: StagedCandidate[] = [];
           let everSubmitted = false;
           let toolCalls = 0;
@@ -94,7 +97,7 @@ export class ResearchWorkerService {
             await this.credits.reserve(job.workspaceId, creditCost('research.turn'));
             turnsCharged += 1;
             const res = await this.anthropic.complete({
-              system: this.SYSTEM,
+              system: RESEARCH_SYSTEM_PROMPT,
               messages,
               tools: RESEARCH_TOOLS,
               cacheTools: true,
@@ -113,7 +116,7 @@ export class ResearchWorkerService {
             let submitted = false;
             for (const tu of res.toolUses) {
               if (tu.name === 'submit_candidates') {
-                candidates = this.validate((tu.input as { candidates?: unknown[] })?.candidates ?? []);
+                candidates = validateResearchCandidates((tu.input as { candidates?: unknown[] })?.candidates ?? []);
                 results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify({ received: candidates.length }) });
                 submitted = true;
                 everSubmitted = true;
@@ -151,7 +154,7 @@ export class ResearchWorkerService {
                   'list only if genuinely none qualify — but do not discard qualified prospects just because you ran out of turns.',
               });
               const forced = await this.anthropic.complete({
-                system: this.SYSTEM,
+                system: RESEARCH_SYSTEM_PROMPT,
                 messages,
                 tools: [SUBMIT_CANDIDATES_TOOL],
                 toolChoice: { type: 'tool', name: 'submit_candidates' },
@@ -164,7 +167,7 @@ export class ResearchWorkerService {
               turnsCompleted += 1;
               const submitTu = forced.toolUses.find((t) => t.name === 'submit_candidates');
               if (submitTu) {
-                candidates = this.validate((submitTu.input as { candidates?: unknown[] })?.candidates ?? []);
+                candidates = validateResearchCandidates((submitTu.input as { candidates?: unknown[] })?.candidates ?? []);
                 this.logger.log(`research run ${runId}: forced submit recovered ${candidates.length} candidate(s) (ws ${job.workspaceId})`);
               }
             } catch (e) {
@@ -173,8 +176,7 @@ export class ResearchWorkerService {
           }
 
           // Bound volume relative to what can actually be accepted (cost guard).
-          const cap = job.remainingToday === -1 ? job.maxBatchSize : Math.min(job.remainingToday + 10, job.maxBatchSize);
-          candidates = candidates.slice(0, cap);
+          candidates = candidates.slice(0, researchBatchCap(job));
 
           const { staged, duplicates } = await this.candidates.stage(job.workspaceId, job.profile.id, runId, candidates);
           if (staged > 0) {
@@ -208,111 +210,4 @@ export class ResearchWorkerService {
       },
     );
   }
-
-  /** Keep only well-formed candidates (the ingest DTO re-validates on accept). */
-  private validate(raw: unknown[]): StagedCandidate[] {
-    const out: StagedCandidate[] = [];
-    for (const r of raw) {
-      if (!r || typeof r !== 'object') continue;
-      const c = r as Record<string, unknown>;
-      const externalRef = String(c.externalRef ?? '').trim();
-      const businessName = String(c.businessName ?? '').trim();
-      const businessType = String(c.businessType ?? 'OTHER').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_') || 'OTHER';
-      const painPoint = String(c.painPoint ?? '').trim();
-      const evidence = String(c.evidence ?? '').trim();
-      const pitch = String(c.pitch ?? '').trim();
-      if (!EXTERNAL_REF_PATTERN.test(externalRef) || !businessName || !painPoint || !evidence || !pitch) continue;
-      const stage = typeof c.stage === 'string' && STAGES.has(c.stage) ? c.stage : undefined;
-      const priority = typeof c.priority === 'string' && PRIORITIES.has(c.priority) ? c.priority : 'MEDIUM';
-      out.push({
-        externalRef, businessName, businessType, painPoint: painPoint.slice(0, 1000),
-        evidence: evidence.slice(0, 500), pitch: pitch.slice(0, 500),
-        city: str(c.city), region: str(c.region),
-        // The externalRef IS a contact detail in three of its five forms, and
-        // the model routinely fills it while leaving the matching field empty:
-        // 33 of 301 leads carrying a `phone:` ref had a null phone, so a number
-        // the researcher had already found and paid for was unreachable.
-        // Recover it rather than re-researching it.
-        phone: str(c.phone) ?? refContact(externalRef, 'phone'),
-        instagram: str(c.instagram) ?? refContact(externalRef, 'instagram'),
-        website: str(c.website) ?? refContact(externalRef, 'domain'),
-        email: str(c.email), currentSystem: str(c.currentSystem),
-        branchCount: Number.isFinite(Number(c.branchCount)) ? Number(c.branchCount) : undefined,
-        stage, priority, score: this.clampScore(c.score),
-      });
-    }
-    return out;
-  }
-
-  /**
-   * The schema asks for 0-100, but the model is the only thing enforcing it and
-   * runs have come back on 0-1 and 0-10 scales. Storing those verbatim made the
-   * review queue rank candidates against incomparable numbers. Out-of-range is
-   * dropped rather than rescaled: guessing which scale was meant would invent a
-   * ranking, and `priority` — which IS constrained — carries the real signal.
-   */
-  private clampScore(raw: unknown): number | undefined {
-    // Number(null) is 0 and Number('') is 0 — the old check let a candidate the
-    // model declined to score be stored as a hard "does not fit at all".
-    if (raw === null || raw === undefined || raw === '') return undefined;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return undefined;
-    if (n < 0 || n > 100) return undefined;
-    return n;
-  }
-
-  private readonly SYSTEM =
-    'You are a B2B prospect-research agent inside a multi-tenant lead-generation platform. ' +
-    'Research the given ICP with the tools and return ONLY qualified, evidence-backed lead candidates. ' +
-    'Qualify on EVIDENCE (concrete pain in recent negative reviews, growth/hiring signals, operational gaps the product solves) — never on vibes. ' +
-    'HARD DISQUALIFIERS: business closed/inactive; clearly outside the ICP size; no reachable contact (need phone, instagram, email or website); no verifiable evidence; anything matching the profile exclusions or outside its geo/businessTypes. ' +
-    'externalRef is the cross-day dedup key — use the first applicable of phone:+<E164>, instagram:@handle, google:<placeId>, domain:<apex>, hash:<sha1(lowercase(businessName|city))>; never randomize it. ' +
-    'Write painPoint/evidence/pitch in the profile language. Padding weak leads is worse than returning few. ' +
-    'When done, call submit_candidates exactly once with your final list.';
-
-  private buildBrief(job: ResearchJob, brand: string | null): string {
-    const p = job.profile;
-    const geo = p.geo as { country?: string; regions?: string[]; cities?: string[] } | null;
-    const bt = Array.isArray(p.businessTypes) ? (p.businessTypes as string[]).join(', ') : '';
-    return [
-      `PRODUCT: ${job.productName ?? ''}${job.productUrl ? ` (${job.productUrl})` : ''}`,
-      brand ? `BRAND CONTEXT: ${brand}` : '',
-      job.productDescription ? `WHAT IT DOES: ${job.productDescription}` : '',
-      `ICP (who to find + what pain): ${p.icpDescription}`,
-      p.productPitch ? `PITCH ANGLE: ${p.productPitch}` : '',
-      geo ? `GEO (hard filter): ${JSON.stringify(geo)}` : '',
-      bt ? `BUSINESS TYPES (hard filter): ${bt}` : '',
-      p.exclusions ? `EXCLUSIONS (hard filter): ${p.exclusions}` : '',
-      `LANGUAGE for painPoint/evidence/pitch: ${p.language}`,
-      `TARGET VOLUME: up to ${job.remainingToday === -1 ? job.maxBatchSize : Math.min(job.remainingToday, 20)} strong candidates. Fewer is fine.`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-}
-
-function str(v: unknown): string | undefined {
-  const s = v == null ? '' : String(v).trim();
-  return s ? s : undefined;
-}
-
-/**
- * Pull a contact detail back out of the externalRef.
- *
- * The ref is a dedup key, but three of its five forms — `phone:`, `instagram:`,
- * `domain:` — are literally the contact itself, already validated by
- * EXTERNAL_REF_PATTERN. The model fills the ref reliably (it is required) and
- * the matching field only sometimes, so a number it had already found could
- * land in the key and nowhere else. Used only as a FALLBACK: an explicit field
- * always wins.
- *
- * `google:` and `hash:` carry no contact and yield nothing.
- */
-function refContact(externalRef: string, kind: 'phone' | 'instagram' | 'domain'): string | undefined {
-  const prefix = `${kind}:`;
-  if (!externalRef.startsWith(prefix)) return undefined;
-  const value = externalRef.slice(prefix.length).trim();
-  if (!value) return undefined;
-  // A domain ref is a bare apex; make it usable as the website it stands for.
-  return kind === 'domain' ? `https://${value}` : value;
 }

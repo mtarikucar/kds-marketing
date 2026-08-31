@@ -1,5 +1,6 @@
 import { ResearchWorkerService } from './research-worker.service';
 import { ResearchJob } from './research-job.service';
+import { RESEARCH_SYSTEM_PROMPT, buildResearchBrief, researchBatchCap } from './research-contract';
 
 const JOB: ResearchJob = {
   workspaceId: 'ws1', workspaceSlug: 'acme', productName: 'Jeeta', productUrl: null,
@@ -154,90 +155,57 @@ describe('ResearchWorkerService — forced final submit', () => {
 });
 
 /**
- * `validate` is the only thing standing between the model's JSON and the
- * database. `stage` and `priority` were always checked against their enums;
- * `score` was accepted as any finite number, and the review queue sorted on it.
- * Runs came back on 0-100, 0-10 and 0-1 scales, so the ranking was noise.
- */
-describe('ResearchWorkerService — score validation', () => {
-  const base = {
-    externalRef: 'phone:+905551112233',
-    businessName: 'Cafe X',
-    businessType: 'CAFE',
-    painPoint: 'p',
-    evidence: 'e',
-    pitch: 'pi',
-  };
-  const validate = (score: unknown) => {
-    const { svc } = deps({});
-    return (svc as any).validate([{ ...base, score }])[0];
-  };
-
-  it('keeps an in-range score', () => {
-    expect(validate(58).score).toBe(58);
-    expect(validate(0).score).toBe(0);
-    expect(validate(100).score).toBe(100);
-  });
-
-  it('drops a score outside 0-100 instead of storing it', () => {
-    // Rescaling would be a guess, and a guess here invents a ranking.
-    expect(validate(150).score).toBeUndefined();
-    expect(validate(-5).score).toBeUndefined();
-  });
-
-  it('drops a non-numeric score', () => {
-    expect(validate('high').score).toBeUndefined();
-    expect(validate(null).score).toBeUndefined();
-    expect(validate(undefined).score).toBeUndefined();
-  });
-
-  it('still accepts the candidate when the score is unusable', () => {
-    // The score is an ordering hint; losing it must not lose the prospect.
-    expect(validate(999).businessName).toBe('Cafe X');
-  });
-});
-
-/**
- * The externalRef is a contact detail, not just a dedup key.
+ * The server lane must send EXACTLY what the shared contract says — not a
+ * private copy of it that happens to read the same today.
  *
- * Three of its five forms ARE the contact: `phone:`, `instagram:`, `domain:`.
- * The model fills the ref reliably — it is required — and the matching field
- * only sometimes. Measured on the live database: 33 of 301 leads carrying a
- * `phone:` ref had a NULL phone, so a number the researcher had already found
- * and paid for sat in the key and nowhere the product could use it. Those leads
- * read as uncontactable.
+ * There are two drainers of this queue now (this worker, and the owner's own
+ * Claude over MCP via `claim_research_job`). They are only interchangeable if
+ * they carry the same instruction, and a duplicated prompt is the classic way
+ * that stops being true without anyone noticing: someone tightens a
+ * disqualifier here, the MCP lane keeps the old one, and six weeks later the
+ * two lanes produce visibly different leads with nothing to point at.
+ *
+ * Asserted by IDENTITY against `research-contract.ts` rather than by
+ * `toContain` on a few phrases, so editing the contract and forgetting the
+ * worker (or vice-versa) is a red test rather than a slow drift.
  */
-describe('ResearchWorkerService — contact recovery from externalRef', () => {
-  const base = {
-    businessName: 'Cafe X',
-    businessType: 'CAFE',
-    painPoint: 'p',
-    evidence: 'e',
-    pitch: 'pi',
-  };
-  const validate = (extra: Record<string, unknown>) => {
-    const { svc } = deps({});
-    return (svc as any).validate([{ ...base, ...extra }])[0];
-  };
-
-  it('recovers a phone from a phone: ref when the field is empty', () => {
-    const c = validate({ externalRef: 'phone:+905551112233' });
-    expect(c.phone).toBe('+905551112233');
+describe('ResearchWorkerService — sends the shared contract, not its own copy', () => {
+  it('uses RESEARCH_SYSTEM_PROMPT verbatim as the system prompt', async () => {
+    const { svc, complete } = deps({
+      completions: [completion([toolUse('t1', 'submit_candidates', { candidates: [] })])],
+    });
+    await svc.runProfile(JOB);
+    expect(complete.mock.calls[0][0].system).toBe(RESEARCH_SYSTEM_PROMPT);
   });
 
-  it('recovers an instagram handle and turns a domain ref into a usable url', () => {
-    expect(validate({ externalRef: 'instagram:@cafex' }).instagram).toBe('@cafex');
-    expect(validate({ externalRef: 'domain:cafex.com.tr' }).website).toBe('https://cafex.com.tr');
+  it('uses buildResearchBrief verbatim as the opening message', async () => {
+    const { svc, complete } = deps({
+      completions: [completion([toolUse('t1', 'submit_candidates', { candidates: [] })])],
+    });
+    await svc.runProfile(JOB);
+    expect(complete.mock.calls[0][0].messages[0].content).toBe(buildResearchBrief(JOB, null));
   });
 
-  it('never overrides a field the model actually supplied', () => {
-    const c = validate({ externalRef: 'phone:+905551112233', phone: '+902121112233' });
-    // The ref is only a fallback; an explicit field is the better evidence.
-    expect(c.phone).toBe('+902121112233');
-  });
+  it('keeps the batch at the shared cap rather than a locally-computed one', async () => {
+    // remainingToday 2 → cap 12, well under maxBatchSize. Fifteen submitted
+    // candidates must be trimmed to twelve by researchBatchCap, not by an
+    // arithmetic expression this file owns.
+    const job = { ...JOB, remainingToday: 2 };
+    const many = Array.from({ length: 15 }, (_v, i) => ({
+      externalRef: `domain:biz-${i}.test`,
+      businessName: `Biz ${i}`,
+      businessType: 'CAFE',
+      painPoint: 'Slow booking',
+      evidence: 'review',
+      pitch: 'merhaba',
+    }));
+    const { svc, candidates } = deps({
+      completions: [completion([toolUse('t1', 'submit_candidates', { candidates: many })])],
+    });
 
-  it('yields nothing for refs that carry no contact', () => {
-    expect(validate({ externalRef: 'hash:' + 'a'.repeat(40) }).phone).toBeUndefined();
-    expect(validate({ externalRef: 'google:' + 'a'.repeat(21) }).phone).toBeUndefined();
+    await svc.runProfile(job);
+
+    expect(researchBatchCap(job)).toBe(12);
+    expect(candidates.stage.mock.calls[0][3]).toHaveLength(researchBatchCap(job));
   });
 });
