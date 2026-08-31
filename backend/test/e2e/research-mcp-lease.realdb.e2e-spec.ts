@@ -479,6 +479,68 @@ describeRealDb('Research MCP lease — real DB (e2e)', () => {
       }
     });
 
+    it('drains a job that was left CLAIMED when the owner flipped back to SERVER', async () => {
+      // THE ORPHAN. `CLAIMED` is invisible to both generic sweepers on purpose
+      // — `claimBatch` takes only PENDING, `reapStuck` revives only RUNNING —
+      // so the ONE thing that can move such a row is this service's own
+      // `releaseExpired`. That used to sit behind `claim()`'s mode check, and
+      // no client claims a SERVER queue: one owner action stranded a research
+      // night permanently, and with `pending = 0` the panel drew nothing at all.
+      //
+      // The lease is already expired here because that is the contract: while a
+      // lease is LIVE the client may still be working and may still submit and
+      // complete (neither checks the mode), so releasing it early would hand
+      // the same night to the server lane as well and bill it twice.
+      const jobId = await job(wsA, profileA, {
+        status: RESEARCH_JOB_CLAIMED,
+        lockedAt: new Date(Date.now() - RESEARCH_LEASE_MS - 60_000),
+      });
+      await prisma.workspace.update({ where: { id: wsA }, data: { researchExecution: 'SERVER' } });
+      try {
+        // Nothing is polling `claim()` any more — the refusal told it to stop.
+        // The panel read is what runs, in either mode, on every home load.
+        const status = await lease.queueStatus(wsA);
+
+        // It is back in the queue, and it SAYS so — the two halves of the bug.
+        expect(status).toMatchObject({ mode: 'SERVER', pending: 1, claimed: 0 });
+        expect(await statusOf(jobId)).toBe('PENDING');
+
+        const claimed: Array<{ id: string }> = await (
+          runner as unknown as { claimBatch: () => Promise<Array<{ id: string }>> }
+        ).claimBatch();
+        expect(claimed.map((c) => c.id)).toContain(jobId);
+      } finally {
+        await prisma.workspace.update({ where: { id: wsA }, data: { researchExecution: 'MCP' } });
+      }
+    });
+
+    it('leaves a LIVE lease alone when the mode flips, and reports it as held', async () => {
+      // The other direction of the same rule. Flipping the switch must not
+      // yank a job out from under a client that is mid-session — and the panel
+      // must not go silent about a job it is holding just because nothing is
+      // waiting behind it.
+      const jobId = await job(wsA, profileA, {
+        status: RESEARCH_JOB_CLAIMED,
+        lockedAt: new Date(Date.now() - 5 * 60_000),
+      });
+      await prisma.workspace.update({ where: { id: wsA }, data: { researchExecution: 'SERVER' } });
+      try {
+        const status = await lease.queueStatus(wsA);
+
+        expect(status).toMatchObject({ pending: 0, claimed: 1 });
+        expect(status.oldestClaimedAgeMinutes).toBeGreaterThanOrEqual(4);
+        expect(status.oldestClaimedAt).toMatch(/^\d{4}-/);
+
+        const claimed: Array<{ id: string }> = await (
+          runner as unknown as { claimBatch: () => Promise<Array<{ id: string }>> }
+        ).claimBatch();
+        expect(claimed.map((c) => c.id)).not.toContain(jobId);
+        expect(await statusOf(jobId)).toBe(RESEARCH_JOB_CLAIMED);
+      } finally {
+        await prisma.workspace.update({ where: { id: wsA }, data: { researchExecution: 'MCP' } });
+      }
+    });
+
     it('refuses to lease for a workspace the platform is still draining', async () => {
       await job(wsServer, profileServer);
 

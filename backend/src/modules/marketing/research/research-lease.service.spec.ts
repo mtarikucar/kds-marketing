@@ -454,3 +454,159 @@ describe('ResearchLeaseService — tool context', () => {
     await expect(svc.toolContext(FOREIGN, 'job-1')).rejects.toThrow(/no claimed research job/i);
   });
 });
+
+/**
+ * The stranded CLAIMED row.
+ *
+ * `releaseExpired` was reachable from exactly ONE place — `claim()`, and only
+ * AFTER the `mode !== 'MCP'` early return. So a workspace that flipped back to
+ * SERVER while holding a lease, or whose client crashed and stopped polling,
+ * had a row nothing on the platform could ever move again: the generic
+ * `claimBatch` only takes PENDING, `reapStuck` only revives RUNNING, and the
+ * panel gated on `pending > 0` so the count it would have shown was zero.
+ */
+describe('ResearchLeaseService — an abandoned lease is not stranded', () => {
+  it('returns an expired lease to the queue from queueStatus, on a SERVER workspace', async () => {
+    // The exact orphan: mode is SERVER, so `claim()` returns at the mode check
+    // and never sweeps. `queueStatus` is the one call that runs in BOTH modes
+    // and with no client polling — the home timeline reads it every minute.
+    const { svc, updateMany } = build({
+      mode: 'SERVER',
+      rows: [
+        {
+          ...ROW,
+          status: RESEARCH_JOB_CLAIMED,
+          lockedAt: new Date(Date.now() - RESEARCH_LEASE_MS - 60_000),
+          payload: { profileId: 'p1', mcpAgentRunId: 'run-1' },
+        },
+      ],
+    });
+
+    await svc.queueStatus(WS);
+
+    const sweep = updateMany.mock.calls.find(
+      (c) => (c[0] as any).where.status === RESEARCH_JOB_CLAIMED,
+    );
+    expect(sweep).toBeDefined();
+    const where = (sweep![0] as any).where;
+    expect(where).toMatchObject({ workspaceId: WS, kind: RESEARCH_RUN_KIND });
+    expect(where.lockedAt.lt).toBeInstanceOf(Date);
+    expect((sweep![0] as any).data).toEqual({ status: 'PENDING', lockedAt: null });
+  });
+
+  it('sweeps BEFORE it counts, so the numbers it reports are post-release', async () => {
+    // Counting first would report the released row as `claimed`, and the panel
+    // would say a drainer is holding a job that is in fact back in the queue.
+    const { svc, prisma, updateMany } = build({ mode: 'SERVER' });
+
+    await svc.queueStatus(WS);
+
+    expect(updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.scheduledJob.count.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('scopes the sweep to the caller workspace — a neighbour lease is untouched', async () => {
+    const { svc, updateMany } = build();
+    await svc.queueStatus(FOREIGN);
+    const sweep = updateMany.mock.calls.find(
+      (c) => (c[0] as any).where.status === RESEARCH_JOB_CLAIMED,
+    )!;
+    expect((sweep[0] as any).where.workspaceId).toBe(FOREIGN);
+  });
+});
+
+/**
+ * `claimed` was computed and shipped and never rendered. A workspace at
+ * `pending = 0, claimed = 1` showed total silence — the `.catch(() => 0)`
+ * failure shape in a different costume.
+ */
+describe('ResearchLeaseService — a held job says how long it has been held', () => {
+  it('reports when the oldest LIVE lease was taken, and for how long', async () => {
+    const { svc, prisma } = build();
+    prisma.scheduledJob.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    prisma.scheduledJob.findFirst
+      .mockResolvedValueOnce(null) // oldest PENDING — there is none
+      .mockResolvedValueOnce({ lockedAt: new Date(Date.now() - 95 * 60_000) });
+
+    const s = await svc.queueStatus(WS);
+
+    expect(s).toMatchObject({ pending: 0, claimed: 1, oldestPendingAt: null });
+    expect(s.oldestClaimedAt).toMatch(/^\d{4}-/);
+    expect(s.oldestClaimedAgeMinutes).toBeGreaterThanOrEqual(94);
+  });
+
+  it('reads the oldest lease by lockedAt, scoped to this workspace and kind', async () => {
+    const { svc, prisma } = build();
+
+    await svc.queueStatus(WS);
+
+    const claimedLookup = prisma.scheduledJob.findFirst.mock.calls.find(
+      (c) => (c[0] as any).where.status === RESEARCH_JOB_CLAIMED,
+    )!;
+    expect((claimedLookup[0] as any).where).toMatchObject({
+      workspaceId: WS,
+      kind: RESEARCH_RUN_KIND,
+    });
+    expect((claimedLookup[0] as any).orderBy).toEqual({ lockedAt: 'asc' });
+  });
+
+  it('says nothing about a lease age when nothing is held', async () => {
+    const { svc, prisma } = build();
+    prisma.scheduledJob.findFirst.mockResolvedValue(null);
+
+    const s = await svc.queueStatus(WS);
+
+    expect(s).toMatchObject({ oldestClaimedAt: null, oldestClaimedAgeMinutes: null });
+  });
+});
+
+/**
+ * The DONE branch of `submit` exists for ONE caller: the approval executor
+ * replaying an approved `submit_research_candidates` hours after the client
+ * closed the job. Without a second predicate it also accepts every historical
+ * `research.run` in the workspace — ids that `jeeta.list_background_jobs`
+ * hands out to any READ-scoped client — including nights the SERVER lane
+ * drained on a workspace that never enabled MCP. That is metered RESEARCH_LEAD
+ * spend outside any run, plus a fabricated `lastRunAt`/`lastRunStats`.
+ *
+ * `mcpAgentRunId` is written by `claim()` and by nothing else — the server lane
+ * enqueues `{ profileId }` and never touches the payload again. So it is the
+ * exact marker of "this job was once part of the MCP lane".
+ */
+describe('ResearchLeaseService — a DONE job is only submittable if it was ever leased', () => {
+  it('refuses a DONE job the server lane drained, loudly', async () => {
+    const { svc, finalize } = build({
+      rows: [{ ...ROW, status: 'DONE', payload: { profileId: 'p1' } }],
+    });
+
+    await expect(svc.submit(WS, 'job-1', [{ businessName: 'X' }])).rejects.toThrow(
+      /never leased|was not claimed|MCP lane/i,
+    );
+    expect(finalize.finalize).not.toHaveBeenCalled();
+  });
+
+  it('still replays an approved submit on a job that WAS leased', async () => {
+    const { svc, finalize } = build({
+      rows: [{ ...ROW, status: 'DONE', payload: { profileId: 'p1', mcpAgentRunId: 'run-1' } }],
+    });
+
+    await expect(svc.submit(WS, 'job-1', [{ businessName: 'X' }])).resolves.toMatchObject({
+      staged: 2,
+    });
+    expect(finalize.finalize).toHaveBeenCalled();
+  });
+
+  it('does not demand the marker on a job that is still CLAIMED', async () => {
+    // A live lease is proof enough on its own — and the payload is stamped a
+    // moment after the flip, so a claim caught mid-write must not be refused.
+    const { svc, finalize } = build({
+      rows: [{ ...ROW, status: RESEARCH_JOB_CLAIMED, payload: { profileId: 'p1' } }],
+    });
+
+    await expect(svc.submit(WS, 'job-1', [{ businessName: 'X' }])).resolves.toMatchObject({
+      staged: 2,
+    });
+    expect(finalize.finalize).toHaveBeenCalled();
+  });
+});

@@ -73,6 +73,21 @@ export interface ResearchQueueStatus {
   claimed: number;
   oldestPendingAt: string | null;
   oldestPendingAgeHours: number | null;
+  /**
+   * When the oldest LIVE lease was taken, and how long ago in minutes.
+   *
+   * Reported separately from the pending age because they are different
+   * problems with different owners: a job WAITING means nobody drains this
+   * queue, a job HELD means a drainer took it and has not come back. Minutes,
+   * not hours, because `RESEARCH_LEASE_MS` is thirty of them by default — an
+   * age in hours would read `0` for every lease that has not yet expired.
+   *
+   * Null when nothing is held. Also null on the (unnatural) CLAIMED row with
+   * no `lockedAt`: `releaseExpired` cannot see such a row either, so the honest
+   * answer is "held, and we cannot say since when" rather than a made-up zero.
+   */
+  oldestClaimedAt: string | null;
+  oldestClaimedAgeMinutes: number | null;
   /** `submit_research_candidates` calls sitting in the human approval queue. */
   pendingApprovals: number;
 }
@@ -253,7 +268,34 @@ export class ResearchLeaseService {
     // The tenant boundary is unchanged: `workspaceId` and `kind` still hold, and
     // staging is idempotent on (workspaceId, profileId, externalRef), so a
     // replay collapses rather than duplicating.
-    const { job, runId } = await this.requireLeased(workspaceId, jobId, [RESEARCH_JOB_CLAIMED, 'DONE']);
+    const { job, runId, status } = await this.requireLeased(workspaceId, jobId, [
+      RESEARCH_JOB_CLAIMED,
+      'DONE',
+    ]);
+
+    // …but a DONE job must ALSO carry the marker `claim()` stamps on it.
+    //
+    // Without this, the DONE branch accepts every historical `research.run` in
+    // the workspace, and those ids are not secret: `jeeta.list_background_jobs`
+    // is a READ tool that returns `scheduled_jobs.id` filtered by kind and
+    // status. A client could enumerate months of nights the SERVER lane drained
+    // — on a workspace that never enabled MCP at all — and submit into any of
+    // them, metering RESEARCH_LEAD spend outside any run and stamping the
+    // profile with a `lastRunAt`/`lastRunStats` that describes work nobody did.
+    //
+    // `mcpAgentRunId` is written in exactly one place, the update that follows
+    // the atomic claim; the server lane enqueues `{ profileId }` and never
+    // touches the payload. So its presence is precisely "this job was once part
+    // of the MCP lane", which is the only thing the approval-replay case needs.
+    if (status !== RESEARCH_JOB_CLAIMED && !runId) {
+      throw new NotFoundException(
+        `research job ${jobId} is closed and was never leased through the MCP lane, so there is ` +
+          'nothing to submit against it. Only a job you claimed with jeeta.claim_research_job ' +
+          'accepts candidates after it closes — that path exists for replaying an approved submit, ' +
+          'not for writing into a night the platform already researched itself.',
+      );
+    }
+
     const result = await this.finalize.finalize(job, runId, candidates);
     this.logger.log(
       `research(mcp) job ${jobId}: ${result.researched} qualified, ${result.staged} staged, ` +
@@ -316,7 +358,28 @@ export class ResearchLeaseService {
    * waiting job are read and reported by name.
    */
   async queueStatus(workspaceId: string): Promise<ResearchQueueStatus> {
-    const [mode, pending, claimed, oldest, pendingApprovals] = await Promise.all([
+    // THE SWEEP RUNS HERE, not only on the way into a claim.
+    //
+    // `claim()` also sweeps, but only after its `mode !== 'MCP'` early return —
+    // so the two ways a lease is actually abandoned were both unreachable:
+    // an owner flipping back to SERVER (no client claims a SERVER queue, and
+    // the refusal text tells it to stop polling), and a client that crashed and
+    // never polls again. `CLAIMED` is a status the generic sweepers do not
+    // know — `claimBatch` takes PENDING, `reapStuck` revives RUNNING — so
+    // nothing else on the platform could ever move that row.
+    //
+    // This is the one call on this service that runs in BOTH modes with no
+    // client involved: the home timeline reads it on every panel load and every
+    // sixty-second refetch. Sweeping here bounds the damage of an abandoned
+    // lease at one lease length plus one panel read, in either mode.
+    //
+    // Awaited BEFORE the counts rather than joined into the Promise.all below,
+    // so the numbers reported are post-release. Counting concurrently would
+    // report a row as `claimed` that is, by the time the panel draws it, back
+    // in the queue.
+    await this.releaseExpired(workspaceId);
+
+    const [mode, pending, claimed, oldest, oldestLease, pendingApprovals] = await Promise.all([
       this.modeFor(workspaceId),
       this.prisma.scheduledJob.count({
         where: { workspaceId, kind: RESEARCH_RUN_KIND, status: 'PENDING' },
@@ -328,6 +391,14 @@ export class ResearchLeaseService {
         where: { workspaceId, kind: RESEARCH_RUN_KIND, status: 'PENDING' },
         orderBy: { createdAt: 'asc' },
         select: { createdAt: true },
+      }),
+      // The oldest LIVE lease. Ordered by `lockedAt` — when the lease was
+      // taken — not by `createdAt`, which is when the cron enqueued the job and
+      // says nothing about how long a drainer has been sitting on it.
+      this.prisma.scheduledJob.findFirst({
+        where: { workspaceId, kind: RESEARCH_RUN_KIND, status: RESEARCH_JOB_CLAIMED },
+        orderBy: { lockedAt: 'asc' },
+        select: { lockedAt: true },
       }),
       // The open owner decision the spec records: on an APPROVAL-mode
       // workspace every night's submit sits here until a human clicks, and no
@@ -343,6 +414,7 @@ export class ResearchLeaseService {
     ]);
 
     const oldestAt = oldest?.createdAt ?? null;
+    const leaseAt = oldestLease?.lockedAt ?? null;
     return {
       mode,
       pending,
@@ -351,6 +423,10 @@ export class ResearchLeaseService {
       oldestPendingAgeHours: oldestAt
         ? Math.floor((Date.now() - oldestAt.getTime()) / (60 * 60 * 1000))
         : null,
+      oldestClaimedAt: leaseAt ? leaseAt.toISOString() : null,
+      oldestClaimedAgeMinutes: leaseAt
+        ? Math.floor((Date.now() - leaseAt.getTime()) / 60_000)
+        : null,
       pendingApprovals,
     };
   }
@@ -358,10 +434,16 @@ export class ResearchLeaseService {
   /**
    * An expired lease goes back to the queue.
    *
-   * Lazy, on the way into a claim, rather than a cron: there is exactly one
-   * caller, it runs on every poll the feature depends on anyway, and a cron
-   * for this would be a second schedule to keep alive for a lane whose whole
-   * point is that the platform runs less.
+   * Lazy rather than a cron: a cron for this would be a second schedule to keep
+   * alive for a lane whose whole point is that the platform runs less.
+   *
+   * TWO callers, deliberately, and the second is not redundant. `claim()` is
+   * the fast path but it sweeps only after the mode check, so it never runs for
+   * a workspace that has flipped back to SERVER and never runs at all once a
+   * client stops polling — which is exactly when a lease is abandoned.
+   * `queueStatus()` runs in both modes with no client involved, so it is what
+   * makes an orphaned lease recoverable rather than permanent. Adding a
+   * caller here is cheap: the UPDATE matches nothing in the normal case.
    */
   private async releaseExpired(workspaceId: string): Promise<void> {
     await this.prisma.scheduledJob.updateMany({
@@ -380,18 +462,30 @@ export class ResearchLeaseService {
    *
    * Every predicate here is load-bearing and each rules out a different wrong
    * caller: `workspaceId` a neighbouring tenant, `kind` some other scheduled
-   * job whose id was guessed, `status` a lease that already expired back into
-   * the queue (and whose night is therefore about to be re-run by somebody
-   * else — writing into it would be writing into a job we no longer own).
+   * job whose id was guessed, `status` a job that is not in a state this write
+   * belongs to.
+   *
+   * What `status` does NOT rule out is an expired lease. Expiry is swept
+   * lazily — by `claim()` and by `queueStatus()` — so a row whose lease ran out
+   * an hour ago still reads CLAIMED until one of those runs. And a lease
+   * carries no holder identity: `lockedAt` records WHEN, never WHO. So if A's
+   * lease expires, the sweep returns the row to the queue and B claims it, A's
+   * stale job id still resolves here and A can still submit or complete into
+   * the job B now holds. Both are the same tenant and the staging write is
+   * idempotent on `(workspaceId, profileId, externalRef)`, so the cost is lost
+   * or duplicated work — B's job closed out from under it, or two clients'
+   * candidates merged into one night — not a boundary crossing. Giving a lease
+   * an owner token is the fix; it is not implemented, and this comment must not
+   * pretend otherwise.
    */
   private async requireLeased(
     workspaceId: string,
     jobId: string,
     statuses: string[],
-  ): Promise<{ job: ResearchJob; runId: string | null }> {
+  ): Promise<{ job: ResearchJob; runId: string | null; status: string }> {
     const row = await this.prisma.scheduledJob.findFirst({
       where: { id: jobId, workspaceId, kind: RESEARCH_RUN_KIND, status: { in: statuses } },
-      select: { id: true, payload: true },
+      select: { id: true, payload: true, status: true },
     });
     if (!row) {
       throw new NotFoundException(
@@ -411,7 +505,7 @@ export class ResearchLeaseService {
           'is used up — nothing can be staged against it now.',
       );
     }
-    return { job, runId: payload.mcpAgentRunId ?? null };
+    return { job, runId: payload.mcpAgentRunId ?? null, status: row.status };
   }
 
   /** Terminal write on a leased job. Guarded so it can only close OUR lease. */
