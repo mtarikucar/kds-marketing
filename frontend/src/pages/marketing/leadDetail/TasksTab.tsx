@@ -162,7 +162,11 @@ export default function TasksTab({
               return (
                 <div
                   key={task.id}
-                  className="flex items-center gap-3 rounded-lg border border-border p-3"
+                  // Denser in the record card — see OffersTab for why.
+                  className={cn(
+                    'flex items-center rounded-lg border border-border',
+                    embedded ? 'gap-2 p-2' : 'gap-3 p-3',
+                  )}
                 >
                   <button
                     type="button"

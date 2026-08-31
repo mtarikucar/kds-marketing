@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { cn } from '@/components/ui/cn';
 import { offerSchema, type OfferFormValues } from '../../../features/marketing/schemas';
 import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 import type { LeadOffer } from '../../../features/marketing/types';
@@ -160,14 +161,27 @@ export default function OffersTab({
         ) : (
           <div className="space-y-3">
             {(offers || []).map((offer) => (
-              <div key={offer.id} className="rounded-lg border border-border p-4">
+              // Denser in the record card: `p-4` and a three-across detail grid
+              // are sized for a two-thirds-width tab panel, and the card column
+              // is ~26%. The breakpoints are viewport-based, so `sm:grid-cols-3`
+              // would still be three columns of ~60px there — "Price: ₺49,00"
+              // wrapping mid-label.
+              <div
+                key={offer.id}
+                className={cn('rounded-lg border border-border', embedded ? 'p-2' : 'p-4')}
+              >
                 <div className="mb-2 flex items-center justify-between">
                   <Badge tone={offerStatusTone[offer.status] ?? 'neutral'} size="sm">
                     {offer.status}
                   </Badge>
                   <span className="text-xs text-muted-foreground">{fmtDate(offer.createdAt)}</span>
                 </div>
-                <div className="mb-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+                <div
+                  className={cn(
+                    'mb-3 grid gap-2',
+                    embedded ? 'grid-cols-1 text-xs' : 'grid-cols-2 text-sm sm:grid-cols-3',
+                  )}
+                >
                   {/* `!!` so a numeric 0 (e.g. trialDays) coerces to false and
                       hides the cell — a bare `{value && …}` would render a
                       stray literal "0" into the card. */}
