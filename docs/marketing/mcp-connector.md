@@ -453,6 +453,51 @@ Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 
 Workflows gate on `workflows`; research on `research`.
 
+##### The MCP research lane
+
+Live measurement put the nightly research agent at **86% of the platform's whole
+Anthropic bill** — and the `@Cron` that builds those jobs spends nothing. All of
+the money is spent by whoever *drains* the queue. So a workspace can set
+`researchExecution = MCP` (Settings, OWNER-only) and have **its own Claude**
+drain it: the platform's runner then leaves those jobs queued, and the reasoning
+and general web search are billed to the owner's subscription instead.
+
+The instruction is **server-authored**. `jeeta.claim_research_job` returns the
+whole brief — ICP, geo, business types, exclusions, language, the hard
+disqualifiers, the `externalRef` dedup convention and the output contract — from
+the same `research-contract.ts` the in-process worker reads, so lead quality does
+not depend on how the owner phrased their scheduled task.
+
+A job is **leased**, not just read: `PENDING -> CLAIMED -> DONE|FAILED`, with the
+flip taken by one conditional `UPDATE ... WHERE status = 'PENDING'`. Two holders
+would mean one night researched — and billed — twice. An expired lease returns to
+the queue, so a crashed client cannot hold a night hostage.
+
+`search_web` is deliberately **not** exposed: the owner's Claude does its own
+searching, and that is where the platform's `research.native_search` spend goes.
+The three tools below stay on **Jeeta's** Apify/Firecrawl keys — their cost does
+not move — because Google Maps listings and their recent reviews are the primary
+source of the pain signal every candidate is qualified on, and general web search
+cannot reach them.
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+| --- | --- | --- | --- | --- | --- |
+| `jeeta.claim_research_job` | Lease the next queued nightly job and get its full brief | `settings.manage` | WRITE | — | no |
+| `jeeta.submit_research_candidates` | Hand back the prospects found, as review **candidates** (not leads) | `settings.manage` | WRITE | yes | no |
+| `jeeta.complete_research_job` | Close a leased job, successfully or with the reason it failed | `settings.manage` | WRITE | — | no |
+| `jeeta.research_search_places` | Google Maps listings + recent reviews inside the job's geo — **Apify money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
+| `jeeta.research_lookup_instagram` | Confirm a reachable social channel for one handle — **Apify money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
+| `jeeta.research_scrape_page` | Fetch one page as markdown for evidence — **Firecrawl money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
+
+`claim` and `complete` are ungated: claiming spends nothing and self-reverses on
+expiry, and gating the *close* would leave the job leased until it expired and
+then researched a second time — a gate that costs money instead of saving it.
+The three SPEND tools are gated exactly like every other SPEND in this
+catalogue, so **the lane runs unattended only under `AUTONOMOUS` write mode**.
+Under `APPROVAL` each night's work waits in the approval queue; the home
+timeline reports that by name rather than letting it look like an empty review
+queue.
+
 #### Scheduling
 
 Gated on the `funnels` package feature, matching the REST controller.

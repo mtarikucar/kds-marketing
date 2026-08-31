@@ -73,6 +73,10 @@ function build(
         if ((v as { notIn: string[] }).notIn.includes(row.id as string)) return false;
         continue;
       }
+      if (typeof v === 'object' && v !== null && 'in' in (v as object)) {
+        if (!(v as { in: unknown[] }).in.includes(row[k])) return false;
+        continue;
+      }
       // Range operators are not modelled; the specs that care about them assert
       // on the recorded arguments instead.
       if (typeof v === 'object' && v !== null && !(v instanceof Date)) continue;
@@ -308,7 +312,8 @@ describe('ResearchLeaseService — submitting', () => {
       id: 'job-1',
       workspaceId: FOREIGN,
       kind: RESEARCH_RUN_KIND,
-      status: RESEARCH_JOB_CLAIMED,
+      // CLAIMED or DONE — see the approval-replay test below.
+      status: { in: [RESEARCH_JOB_CLAIMED, 'DONE'] },
     });
     expect(finalize.finalize).not.toHaveBeenCalled();
   });
@@ -317,6 +322,39 @@ describe('ResearchLeaseService — submitting', () => {
     // The lease ran out and the sweep put the row back in the queue.
     const { svc } = build({ rows: [{ ...ROW, status: 'PENDING' }] });
     await expect(svc.submit(WS, 'job-1', [{}])).rejects.toThrow(/expired|claim/i);
+  });
+});
+
+/**
+ * Which lifecycle states each write accepts, and why they differ.
+ */
+describe('ResearchLeaseService — what counts as still holding the job', () => {
+  it('still accepts a submit on a job the client already CLOSED', async () => {
+    // The APPROVAL-mode path, which is the mode this workspace is actually on.
+    // `submit_research_candidates` is gated, so the client gets PENDING_APPROVAL,
+    // sensibly closes the job, and the approval executor replays the call hours
+    // later when a human clicks. Requiring CLAIMED there would fail every
+    // approved submit — the candidates a human just said yes to would be thrown
+    // away, and the workspace would see an empty review queue.
+    const { svc, finalize } = build({ rows: [{ ...ROW, status: 'DONE', payload: { profileId: 'p1', mcpAgentRunId: 'run-1' } }] });
+
+    await svc.submit(WS, 'job-1', [{ businessName: 'X' }]);
+
+    expect(finalize.finalize).toHaveBeenCalled();
+  });
+
+  it('refuses to COMPLETE a job that is not currently leased', async () => {
+    // Unlike submit: closing a job that is already closed, or one that expired
+    // back into the queue and may now be held by somebody else, is meaningless
+    // at best and steals another holder's lease at worst.
+    const { svc } = build({ rows: [{ ...ROW, status: 'DONE' }] });
+    await expect(svc.complete(WS, 'job-1', { status: 'DONE' })).rejects.toThrow(/no claimed research job/i);
+  });
+
+  it('refuses a tool context on a job that is not currently leased', async () => {
+    // Same reason, sharper: this is what an Apify call is metered against.
+    const { svc } = build({ rows: [{ ...ROW, status: 'DONE' }] });
+    await expect(svc.toolContext(WS, 'job-1')).rejects.toThrow(/no claimed research job/i);
   });
 });
 

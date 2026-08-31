@@ -1279,6 +1279,10 @@ export class MarketingModule {
     marketingResearch: MarketingResearchService,
     researchRunner: ResearchRunnerService,
     researchCandidates: ResearchCandidateService,
+    researchLease: ResearchLeaseService,
+    researchSources: ResearchSourcesService,
+    researchSpend: ResearchSpendService,
+    agentRuns: AgentRunService,
     brandProfiles: BrandProfileService,
     // Faz 5 D5 — commerce & reputation.
     products: ProductsService,
@@ -1327,6 +1331,13 @@ export class MarketingModule {
       runner: researchRunner,
       candidates: researchCandidates,
       entitlements,
+      // The MCP research lane — the owner's own Claude drains the nightly
+      // queue. The three source deps are the SAME providers, spend meter and
+      // audit sink the in-process worker uses; nothing is reimplemented.
+      lease: researchLease,
+      sources: researchSources,
+      spend: researchSpend,
+      runs: agentRuns,
     });
     // Faz 5 D5 — commerce & reputation.
     registerCommerceTools(registry, {

@@ -241,7 +241,19 @@ export class ResearchLeaseService {
    * worker runs. Nothing here writes a candidate row of its own.
    */
   async submit(workspaceId: string, jobId: string, candidates: unknown[]): Promise<ResearchFinalizeResult> {
-    const { job, runId } = await this.requireClaimed(workspaceId, jobId);
+    // CLAIMED **or DONE**, unlike every other write here.
+    //
+    // `submit_research_candidates` is approval-gated, so on an APPROVAL-mode
+    // workspace the client gets PENDING_APPROVAL, sensibly closes the job, and
+    // the approval executor replays this call hours later once a human clicks.
+    // Demanding CLAIMED would fail every approved submit — the candidates a
+    // human just said yes to would be discarded and the review queue would look
+    // empty, which is precisely the failure this lane is built to avoid.
+    //
+    // The tenant boundary is unchanged: `workspaceId` and `kind` still hold, and
+    // staging is idempotent on (workspaceId, profileId, externalRef), so a
+    // replay collapses rather than duplicating.
+    const { job, runId } = await this.requireLeased(workspaceId, jobId, [RESEARCH_JOB_CLAIMED, 'DONE']);
     const result = await this.finalize.finalize(job, runId, candidates);
     this.logger.log(
       `research(mcp) job ${jobId}: ${result.researched} qualified, ${result.staged} staged, ` +
@@ -256,7 +268,7 @@ export class ResearchLeaseService {
     jobId: string,
     opts: { status: 'DONE' | 'FAILED'; reason?: string },
   ): Promise<{ closed: boolean; jobId: string; status: string }> {
-    const { runId } = await this.requireClaimed(workspaceId, jobId);
+    const { runId } = await this.requireLeased(workspaceId, jobId, [RESEARCH_JOB_CLAIMED]);
     const reason = (opts.reason ?? '').slice(0, 500) || undefined;
 
     const res = await this.close(workspaceId, jobId, opts.status, reason);
@@ -281,7 +293,7 @@ export class ResearchLeaseService {
    * the brief promised.
    */
   async toolContext(workspaceId: string, jobId: string): Promise<ResearchToolLeaseContext> {
-    const { job, runId } = await this.requireClaimed(workspaceId, jobId);
+    const { job, runId } = await this.requireLeased(workspaceId, jobId, [RESEARCH_JOB_CLAIMED]);
     if (!runId) {
       throw new BadRequestException(
         `research job ${jobId} has no agent run — claim it again with jeeta.claim_research_job`,
@@ -372,12 +384,13 @@ export class ResearchLeaseService {
    * the queue (and whose night is therefore about to be re-run by somebody
    * else — writing into it would be writing into a job we no longer own).
    */
-  private async requireClaimed(
+  private async requireLeased(
     workspaceId: string,
     jobId: string,
+    statuses: string[],
   ): Promise<{ job: ResearchJob; runId: string | null }> {
     const row = await this.prisma.scheduledJob.findFirst({
-      where: { id: jobId, workspaceId, kind: RESEARCH_RUN_KIND, status: RESEARCH_JOB_CLAIMED },
+      where: { id: jobId, workspaceId, kind: RESEARCH_RUN_KIND, status: { in: statuses } },
       select: { id: true, payload: true },
     });
     if (!row) {

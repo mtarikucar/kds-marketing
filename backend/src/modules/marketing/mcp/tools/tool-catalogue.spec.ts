@@ -417,6 +417,15 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_research_candidates',
         'jeeta.accept_research_candidates',
         'jeeta.reject_research_candidates',
+        // The MCP research lane — all six deferred, so the advertised ceiling
+        // below is unchanged. A drainer learns these names from the
+        // instruction jeeta.claim_research_job hands it.
+        'jeeta.claim_research_job',
+        'jeeta.submit_research_candidates',
+        'jeeta.complete_research_job',
+        'jeeta.research_search_places',
+        'jeeta.research_lookup_instagram',
+        'jeeta.research_scrape_page',
         'jeeta.get_brand_profile',
         'jeeta.update_brand_profile',
         // Faz 5 D5 — commerce & reputation (the final wave).
@@ -440,7 +449,7 @@ describe('MCP tool catalogue', () => {
     // 108 -> 109: jeeta.list_background_jobs, also deferred. Same shape of gap —
     // the retry queue behind every deferred action had no reader at all, so a
     // job's lastError was recorded and then unreachable from anywhere.
-    expect(names).toHaveLength(114);
+    expect(names).toHaveLength(120);
   });
 
   /**
@@ -526,10 +535,10 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 114 total, 45 advertised: everything a wave adds beyond the ceiling is
+    // 120 total, 45 advertised: everything a wave adds beyond the ceiling is
     // deferred — which is exactly why the advertised count above stayed fixed
     // while the catalogue grew past a hundred.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(114);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(120);
   });
 });
 
@@ -586,6 +595,8 @@ const ID_SOURCES: Record<string, string> = {
   actionId: 'jeeta.list_strategy_actions',
   profileId: 'jeeta.list_research_profiles',
   candidateIds: 'jeeta.list_research_candidates',
+  // The MCP research lane leases a job and every subsequent call names it.
+  jobId: 'jeeta.claim_research_job',
   workflowId: 'jeeta.list_workflows',
   // commerce / reviews / courses
   invoiceId: 'jeeta.list_invoices',
