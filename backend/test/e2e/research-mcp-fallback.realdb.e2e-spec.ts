@@ -3,7 +3,11 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { ResearchLeaseService } from '../../src/modules/marketing/research/research-lease.service';
-import { RESEARCH_RUN_KIND } from '../../src/modules/marketing/research/research-kinds';
+import { ResearchRunnerService } from '../../src/modules/marketing/research/research-runner.service';
+import {
+  RESEARCH_MANUAL_KEY,
+  RESEARCH_RUN_KIND,
+} from '../../src/modules/marketing/research/research-kinds';
 import {
   MCP_ACTIVITY_AGENT,
   MCP_CONNECTION_STALE_MS,
@@ -46,6 +50,7 @@ describeRealDb('Research MCP fallback — real DB (e2e)', () => {
   let prisma: PrismaService;
   let lease: ResearchLeaseService;
   let runner: ScheduledJobRunnerService;
+  let research: ResearchRunnerService;
 
   const SEED = `mcpfall-${randomUUID().slice(0, 8)}`;
 
@@ -62,7 +67,13 @@ describeRealDb('Research MCP fallback — real DB (e2e)', () => {
 
   const job = async (
     workspaceId: string,
-    over: { kind?: string; createdAt?: Date; status?: string } = {},
+    over: {
+      kind?: string;
+      createdAt?: Date;
+      status?: string;
+      payload?: Record<string, unknown>;
+      dedupKey?: string;
+    } = {},
   ): Promise<string> => {
     const id = randomUUID();
     await prisma.scheduledJob.create({
@@ -71,14 +82,22 @@ describeRealDb('Research MCP fallback — real DB (e2e)', () => {
         workspaceId,
         kind: over.kind ?? RESEARCH_RUN_KIND,
         runAt: new Date(Date.now() - 60_000),
-        payload: { profileId: `${SEED}-p` },
+        payload: over.payload ?? { profileId: `${SEED}-p` },
         status: over.status ?? 'PENDING',
+        dedupKey: over.dedupKey ?? null,
         createdAt: over.createdAt ?? INSIDE(),
       },
     });
     created.push(id);
     return id;
   };
+
+  /** What `ResearchRunnerService.enqueueNow` writes: a job a human asked for. */
+  const manual = (extra: Record<string, unknown> = {}) => ({
+    profileId: `${SEED}-p`,
+    [RESEARCH_MANUAL_KEY]: true,
+    ...extra,
+  });
 
   const mcpRun = async (workspaceId: string, startedAt: Date): Promise<void> => {
     await prisma.agentRun.create({
@@ -110,6 +129,7 @@ describeRealDb('Research MCP fallback — real DB (e2e)', () => {
     ({ app, prisma } = await createRealDbTestApp());
     lease = app.get(ResearchLeaseService);
     runner = app.get(ScheduledJobRunnerService);
+    research = app.get(ResearchRunnerService);
 
     // Silence every cron. The live scheduled-job runner fires once a minute and
     // would claim these fixtures mid-assertion; `claimBatch` is invoked directly
@@ -225,6 +245,153 @@ describeRealDb('Research MCP fallback — real DB (e2e)', () => {
         data: { runAt: new Date(Date.now() - 1_000), attempts: 1 },
       });
       expect(await claim()).toContain(id);
+    });
+  });
+
+  // ── "Run now" ──────────────────────────────────────────────────────────────
+
+  /**
+   * The button has to work in the lane the default now puts everyone in.
+   *
+   * `enqueueNow` stamps `RESEARCH_MANUAL_KEY` and the grace conjunct skips it,
+   * so a manual run is claimable on the very next tick even while the nightly
+   * rows beside it are still held. The pairing is the whole assertion: an
+   * exemption that also released the nightly row would hand the model bill
+   * straight back to the platform, and one that released neither is the
+   * six-hour silence this fixes.
+   */
+  describe('a run a human asked for is never held', () => {
+    it('claims a MANUAL job immediately on an explicit MCP workspace', async () => {
+      const id = await job(wsMcp, { createdAt: INSIDE(), payload: manual() });
+      expect(await claim()).toContain(id);
+    });
+
+    it('claims a MANUAL job immediately on an AUTO workspace with a live Claude', async () => {
+      await mcpRun(wsAuto, new Date(Date.now() - 60_000));
+      const id = await job(wsAuto, { createdAt: INSIDE(), payload: manual() });
+
+      expect(await claim()).toContain(id);
+      // ...and the LANE is genuinely MCP, so this is the exemption firing and
+      // not the workspace having quietly resolved to SERVER.
+      expect(await lease.modeFor(wsAuto)).toBe('MCP');
+    });
+
+    /**
+     * THE PAIR. Both rows are in the same workspace, in the same lane, inside
+     * the same grace window, and differ only by the payload flag.
+     */
+    it('takes the manual row and leaves the nightly row beside it held', async () => {
+      await mcpRun(wsAuto, new Date(Date.now() - 60_000));
+      const nightly = await job(wsAuto, { createdAt: INSIDE() });
+      const pressed = await job(wsAuto, { createdAt: INSIDE(), payload: manual() });
+
+      const taken = await claim();
+
+      expect(taken).toContain(pressed);
+      expect(taken).not.toContain(nightly);
+    });
+
+    /**
+     * The flag is read as a STRING comparison, never a boolean cast: `payload`
+     * is caller-supplied JSON and `NULL::boolean` on junk would throw inside
+     * the claim and take the whole tick down — every kind, every workspace.
+     * Anything that is not exactly `true` keeps first refusal, which is the
+     * safe direction.
+     */
+    it.each([
+      ['a string "true"', { profileId: 'p', [RESEARCH_MANUAL_KEY]: 'true' }],
+      ['the number 1', { profileId: 'p', [RESEARCH_MANUAL_KEY]: 1 }],
+      ['false', { profileId: 'p', [RESEARCH_MANUAL_KEY]: false }],
+      ['null', { profileId: 'p', [RESEARCH_MANUAL_KEY]: null }],
+      ['a nested object', { profileId: 'p', [RESEARCH_MANUAL_KEY]: { on: true } }],
+      ['no payload keys at all', {}],
+    ])('does not throw, and holds the row, for %s', async (_label, payload) => {
+      const id = await job(wsMcp, {
+        createdAt: INSIDE(),
+        payload: payload as Record<string, unknown>,
+      });
+      const taken = await claim();
+      // The string 'true' is the ONE non-boolean that legitimately reads as
+      // manual: `->>` renders a JSON `true` to exactly that text, so a JSON
+      // string "true" is indistinguishable from it and takes the same branch.
+      if ((payload as Record<string, unknown>)[RESEARCH_MANUAL_KEY] === 'true') {
+        expect(taken).toContain(id);
+      } else {
+        expect(taken).not.toContain(id);
+      }
+    });
+
+    /**
+     * THE SECOND-ORDER EFFECT, end to end through the real `enqueueNow`.
+     *
+     * `ScheduledJobService.schedule` dedups on `(kind, dedupKey)` WHERE
+     * `status = 'PENDING'` and does NOT reset `createdAt`. So a "Run now"
+     * pressed while tonight's held nightly row is still queued does not create
+     * a row of its own — it UPDATES that one, inheriting its six-hour-old
+     * clock. That is exactly the collapse that would have swallowed a
+     * distinct-`kind` fix's benefit, and with a payload flag it goes the other
+     * way: the stamp lands on the held row and PROMOTES it.
+     *
+     * Asserted on both halves — same row id (no duplicate paid run) AND
+     * claimable now (the press was honoured) — because either alone would pass
+     * for the wrong reason.
+     */
+    it('promotes the held nightly row when Run now collapses onto it', async () => {
+      const profileId = `${SEED}-collapse`;
+      await mcpRun(wsAuto, new Date(Date.now() - 60_000));
+      const nightly = await job(wsAuto, {
+        createdAt: INSIDE(),
+        payload: { profileId },
+        dedupKey: `research:${profileId}`,
+      });
+
+      // Held, as the nightly lane should be.
+      expect(await claim()).not.toContain(nightly);
+      await restore();
+
+      // The real "Run now" path, not a hand-written row.
+      await research.enqueueNow(wsAuto, profileId);
+
+      const rows = await prisma.scheduledJob.findMany({
+        where: { workspaceId: wsAuto, dedupKey: `research:${profileId}` },
+        select: { id: true, createdAt: true, payload: true },
+      });
+      // ONE row. A second kind would have made two, and the profile would have
+      // been researched — and paid for — twice.
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(nightly);
+      // The inherited clock is still there; the flag is what overrides it.
+      expect(rows[0].createdAt.getTime()).toBeLessThan(Date.now() - 60_000);
+      expect((rows[0].payload as Record<string, unknown>)[RESEARCH_MANUAL_KEY]).toBe(true);
+
+      expect(await claim()).toContain(nightly);
+    });
+
+    /** A SERVER workspace was never held, so the flag changes nothing there. */
+    it('changes nothing on a SERVER workspace', async () => {
+      const plain = await job(wsServer, { createdAt: INSIDE() });
+      const pressed = await job(wsServer, { createdAt: INSIDE(), payload: manual() });
+
+      const taken = await claim();
+
+      expect(taken).toContain(plain);
+      expect(taken).toContain(pressed);
+    });
+
+    /**
+     * Tenant boundary, same shape as every other case here: the neighbour's
+     * manual row must not release THIS workspace's held nightly row.
+     */
+    it('does not let a neighbour manual run release this workspace held job', async () => {
+      await mcpRun(wsAuto, new Date(Date.now() - 60_000));
+      await mcpRun(wsNeighbour, new Date(Date.now() - 60_000));
+      const mine = await job(wsAuto, { createdAt: INSIDE() });
+      const theirs = await job(wsNeighbour, { createdAt: INSIDE(), payload: manual() });
+
+      const taken = await claim();
+
+      expect(taken).toContain(theirs);
+      expect(taken).not.toContain(mine);
     });
   });
 

@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
-import { RESEARCH_RUN_KIND } from '../research/research-kinds';
+import { RESEARCH_MANUAL_KEY, RESEARCH_RUN_KIND } from '../research/research-kinds';
 import {
   MCP_ACTIVITY_AGENT,
   mcpActivityCutoff,
@@ -194,10 +194,16 @@ export class ScheduledJobRunnerService {
    * subscription. That is the whole feature: research is 86% of the platform's
    * measured model bill, and moving the EXECUTION is what moves the money. The
    * cron still enqueues those jobs unchanged — the queue is the handover point
-   * — so if this claim took them anyway, they would be executed in-process on
-   * the platform's key within sixty seconds of being written, the owner's
-   * drainer would never find anything to lease, and the mode would silently do
-   * nothing while looking like it worked.
+   * — so if this claim took them unconditionally, they would be executed
+   * in-process on the platform's key within sixty seconds of being written,
+   * the owner's drainer would never find anything to lease, and the mode would
+   * move no money at all while looking like it worked.
+   *
+   * "Unconditionally" is the whole of it: this exclusion is a DELAY, not a
+   * refusal. It expires after `RESEARCH_MCP_GRACE_HOURS` and the platform
+   * drains the job anyway — see "The exclusion EXPIRES" below, which is the
+   * authoritative description of what this predicate does. What is lost when
+   * the exclusion slips is the saving, not the run.
    *
    * Two properties of the predicate are load-bearing, and each is a different
    * outage if it slips:
@@ -257,6 +263,25 @@ export class ScheduledJobRunnerService {
    * `createdAt`, so it is claimable immediately — correct, since an abandoned
    * lease is precisely the case the fallback exists for.
    *
+   * ## And a job a HUMAN asked for is never held at all
+   *
+   * First refusal is for the NIGHTLY lane, where six hours of latency costs
+   * nobody anything because nobody is watching. A person who just pressed "Run
+   * now" is watching. `ResearchRunnerService.enqueueNow` stamps
+   * `RESEARCH_MANUAL_KEY` on the payload and the conjunct below skips those
+   * rows, so the platform drains them on the next tick in every lane. Without
+   * it the exact workspace this branch creates — Claude connected by the
+   * onboarding step, no scheduled task written yet, therefore AUTO resolving to
+   * MCP — presses the button, is told "research started", and gets nothing
+   * until 09:00.
+   *
+   * `IS DISTINCT FROM 'true'` rather than a boolean cast: `payload` is
+   * caller-supplied JSON, `->>` yields NULL for a missing key or a non-object
+   * payload, and `NULL::boolean` in a cast would throw on any junk value and
+   * take the whole tick's claim down with it. Anything that is not exactly the
+   * string `true` reads as "not manual", which is the safe direction — it
+   * keeps first refusal.
+   *
    * ## AUTO, and what actually counts as "a Claude is connected"
    *
    * The default mode is `AUTO`, resolved live here: MCP while this workspace
@@ -296,6 +321,7 @@ export class ScheduledJobRunnerService {
           WHERE s."status" = 'PENDING' AND s."runAt" <= ${now}
             AND NOT (
               s."kind" = ${RESEARCH_RUN_KIND}
+              AND s."payload"->>${RESEARCH_MANUAL_KEY} IS DISTINCT FROM 'true'
               AND s."createdAt" > ${graceCutoff}
               AND EXISTS (
                 SELECT 1 FROM "workspaces" w

@@ -7,7 +7,7 @@ import { PlatformAiSpendService } from '../ai/platform-ai-spend.service';
 import { ResearchJobService } from './research-job.service';
 import { ResearchWorkerService } from './research-worker.service';
 import { ResearchLeaseService } from './research-lease.service';
-import { RESEARCH_RUN_KIND } from './research-kinds';
+import { RESEARCH_MANUAL_KEY, RESEARCH_RUN_KIND } from './research-kinds';
 
 // Re-exported so every existing importer keeps its `from './research-runner.service'`
 // path. The constant itself lives in the import-free `research-kinds.ts` because
@@ -165,13 +165,38 @@ export class ResearchRunnerService implements OnModuleInit {
     }
   }
 
-  /** On-demand "Run now" for a single profile. */
+  /**
+   * On-demand "Run now" for a single profile — and it MEANS now.
+   *
+   * The grace window in `ScheduledJobRunnerService.claimBatch` gives the
+   * owner's Claude first refusal for `RESEARCH_MCP_GRACE_HOURS` on every
+   * `research.run` row. That is the right answer for the NIGHTLY lane, where
+   * nobody is watching and six hours of latency costs nothing. It is the wrong
+   * answer for a button: a human on an AUTO/MCP workspace who just connected
+   * their Claude and pressed this would see the panel toast "research started"
+   * and then nothing at all until 09:00, because first refusal belongs to a
+   * scheduled task they have not written yet.
+   *
+   * So a manual run is STAMPED (`RESEARCH_MANUAL_KEY`) and the grace conjunct
+   * skips it: the platform drains it on the next runner tick regardless of
+   * lane. The nightly rows in the very same workspace are untouched — this is
+   * a narrower exemption than "the workspace is in SERVER mode", and it has to
+   * stay that way or the feature that moves the model bill stops moving it.
+   *
+   * See `RESEARCH_MANUAL_KEY` for why this is a payload flag rather than a
+   * second `kind`, and for what the dedup collapse does in both directions.
+   *
+   * The row stays leasable by an MCP client that happens to poll first — the
+   * atomic claim already makes that safe, and either winner satisfies the only
+   * promise the button made, which is that the run starts now rather than in
+   * six hours.
+   */
   async enqueueNow(workspaceId: string, profileId: string): Promise<void> {
     await this.scheduledJob.schedule({
       workspaceId,
       kind: RESEARCH_RUN_KIND,
       runAt: new Date(),
-      payload: { profileId },
+      payload: { profileId, [RESEARCH_MANUAL_KEY]: true },
       dedupKey: `research:${profileId}`,
       maxAttempts: 2,
     });
@@ -182,15 +207,26 @@ export class ResearchRunnerService implements OnModuleInit {
    * say so.
    *
    * Reaching this handler on a workspace whose effective lane is `MCP` means
-   * exactly one thing: the owner's Claude was offered the job first and did not
-   * take it inside `RESEARCH_MCP_GRACE_HOURS`, so the grace window in
+   * one of two things, and only one of them is a takeover. Either the owner's
+   * Claude was offered the job first and did not take it inside
+   * `RESEARCH_MCP_GRACE_HOURS`, so the grace window in
    * `ScheduledJobRunnerService.claimBatch` expired and the job was handed to us
-   * anyway. That fallback is what makes defaulting to MCP safe — research can
-   * no longer silently stop — but an UNRECORDED fallback is the same trap from
-   * the other side: research keeps appearing, the owner never discovers their
-   * scheduled task died, and the bill this feature exists to move stays with us
+   * anyway — or a HUMAN pressed "Run now" and `enqueueNow` stamped
+   * `RESEARCH_MANUAL_KEY` so the grace conjunct would skip it.
+   *
+   * The fallback is what makes defaulting to MCP safe — research can no longer
+   * silently stop — but an UNRECORDED fallback is the same trap from the other
+   * side: research keeps appearing, the owner never discovers their scheduled
+   * task died, and the bill this feature exists to move stays with us
    * indefinitely. So the takeover is stamped on the job with what it cost, and
    * the home timeline reads it back by name.
+   *
+   * A MANUAL run is NOT stamped. Nobody's Claude declined it — it was never
+   * offered to one — and "your Claude did not take the job, we ran it" printed
+   * over somebody's own button press is a false alarm on the one panel line
+   * whose entire job is to be believed. It would also mis-bill: the manual
+   * run's vendor spend would be added to the week's takeover total, inflating
+   * the number the owner is being asked to act on.
    *
    * The stamp is written in a `finally`, for two reasons. A run that THREW
    * still spent vendor money before it threw, and its retry accumulates onto
@@ -204,10 +240,29 @@ export class ResearchRunnerService implements OnModuleInit {
     const built = await this.jobs.buildJob(job.workspaceId, profileId);
     if (!built) return; // profile paused/deleted or quota exhausted since enqueue
 
+    const manual = (job.payload as Record<string, unknown>)?.[RESEARCH_MANUAL_KEY] === true;
+
     // Read AFTER buildJob: a job that can produce nothing is not a takeover of
     // anything, and flagging it would put a "your drainer is broken" line on
     // the panel for a night where no work — and no cost — ever existed.
-    const takeover = (await this.lease.modeFor(job.workspaceId)) === 'MCP';
+    //
+    // FAILS OPEN to 'SERVER'. This read decides one thing only: whether to
+    // write a line on the panel. Letting it decide whether the research RUNS —
+    // which is what an unguarded await does, since a throw here skips
+    // `runProfile` entirely, retries, and on the second attempt lands in the
+    // DLQ — would trade a workspace-row read blip for a lost night. That is
+    // the exact silent stop this whole branch exists to remove, reintroduced
+    // one layer up. The cost of the wrong guess is a takeover that happened
+    // and was not announced, and the warning below is what makes that
+    // findable.
+    let takeover = false;
+    try {
+      takeover = !manual && (await this.lease.modeFor(job.workspaceId)) === 'MCP';
+    } catch (e) {
+      this.logger.warn(
+        `lane read failed for ws ${job.workspaceId}, running anyway (takeover unrecorded): ${(e as Error)?.message ?? e}`,
+      );
+    }
     const startedAt = new Date();
     try {
       await this.worker.runProfile(built);
