@@ -32,14 +32,32 @@ import { Prisma } from '@prisma/client';
  * `assignmentOf()` reacts to. Without that separation every logged call would
  * render in the stream wearing an assignment badge.
  *
- * ## There is no backfill
+ * ## A null answer is PERMANENT, not a backlog
  *
- * Every CALL activity written before this shipped has `metadata: null`, and
- * nothing anywhere pairs those rows to their call: the mirror kept no id, and
- * matching by (lead, timestamp, status) would guess. `salesCallIdOf` answers
- * null for them, and the stream renders them exactly as it does today — a
- * line of history with no player under it, rather than a player pointed at a
- * call that might be someone else's.
+ * `salesCallIdOf` answering null is a standing condition of the data, not a
+ * gap waiting to be filled. Three causes, and only the last of them is
+ * historical:
+ *
+ * 1. **A hand-logged call.** `MarketingActivitiesService.create` writes a
+ *    `LeadActivity` straight from `CreateActivityDto`, whose `type` enum
+ *    includes `CALL` — reachable from `POST /marketing/leads/:leadId/activities`,
+ *    from the MCP lead-write tools, and from the Arama button in
+ *    LogActivityDialog. A rep who dialled from their own handset and then wrote
+ *    down what happened has produced a CALL row with no `SalesCall` anywhere
+ *    behind it. There is no id to carry, today or ever, and this is the case
+ *    that keeps arriving.
+ * 2. **Another writer's metadata, or an unusable id.** `metadata` is a shared
+ *    blob; a row carrying `kind:'assignment'`, or `kind:'call'` with a
+ *    non-string `salesCallId`, has nothing this function may hand to a fetch.
+ * 3. **A call mirrored before this shipped.** Those rows have `metadata: null`
+ *    and nothing anywhere pairs them to their call: the mirror kept no id, and
+ *    matching by (lead, timestamp, status) would guess.
+ *
+ * So: do not go looking for a backfill. Only class 3 ever had a `SalesCall` to
+ * find, nothing links those rows to it, and classes 1 and 2 would have nothing
+ * to point at even if one ran. The stream renders every one of them as a line
+ * of history with no player under it — which for a hand-logged call is not a
+ * degraded rendering, it is the whole truth about that row.
  */
 export function callActivityMetadata(salesCallId: string): Prisma.InputJsonValue {
   return { kind: 'call', salesCallId };
@@ -48,10 +66,12 @@ export function callActivityMetadata(salesCallId: string): Prisma.InputJsonValue
 /**
  * `LeadActivity.metadata` -> the SalesCall it mirrors, or null.
  *
- * Null for a legacy row (no metadata), for another writer's shape, and for an
- * id that is not a usable string — a stream item's `callId` is fetched against
- * as soon as it is non-null, so "present but unusable" has to answer the same
- * way "absent" does.
+ * Null for a HAND-LOGGED call (no metadata — the common, permanent case), for a
+ * legacy mirrored row (also no metadata), for another writer's shape, and for
+ * an id that is not a usable string — a stream item's `callId` is fetched
+ * against as soon as it is non-null, so "present but unusable" has to answer
+ * the same way "absent" does. See the three classes above: none of them is a
+ * backlog.
  */
 export function salesCallIdOf(metadata: unknown): string | null {
   if (!metadata || typeof metadata !== 'object') return null;

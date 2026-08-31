@@ -100,10 +100,15 @@ export interface LeadStreamItem {
    * CONNECTED · 3 dk" and had to leave for /calls and find the row again by
    * phone number and timestamp to hear it.
    *
-   * Null on every other kind, and null on every call MIRRORED BEFORE the id
-   * was carried — there is no backfill (see call-activity.ts), and the caller
-   * is expected to render those exactly as it does today rather than as a
-   * broken player.
+   * A null here is a PERMANENT class, not a shrinking one, and there is no
+   * backfill coming (see call-activity.ts). Two of its causes never go away:
+   * every non-call kind, and every HAND-LOGGED call — a row written through
+   * `MarketingActivitiesService.create` with `type:'CALL'` (the Arama button in
+   * LogActivityDialog, `POST /marketing/leads/:leadId/activities`, the MCP
+   * lead-write tools) has no `SalesCall` behind it at all, so null is the only
+   * honest answer and always will be. The third cause is historical: calls
+   * mirrored before the id was carried. The caller renders all three the same
+   * way — a line of history, not a broken player.
    *
    * A derived field, like `assignment` beside it, rather than the raw
    * `metadata` blob: this is the one thing a reader needs, and shipping the

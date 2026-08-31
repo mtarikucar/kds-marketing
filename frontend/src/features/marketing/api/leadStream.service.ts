@@ -70,10 +70,17 @@ export interface LeadStreamItem {
    * CONNECTED · 3 dk" and had to leave for /calls and find the row again by
    * phone number and timestamp to hear it.
    *
-   * Null on every other kind, and null on every call MIRRORED BEFORE the id
-   * was carried — `LeadActivity.metadata` was empty on those rows and there is
-   * no backfill. A null here is not a bug and must not render as a broken
-   * player: LeadStream.tsx draws such a row exactly as it always has.
+   * A null here is a PERMANENT class, not a shrinking one, and no backfill is
+   * coming. Two of its causes never go away: every non-call kind, and every
+   * HAND-LOGGED call — a rep who dialled from their own handset and then
+   * recorded the outcome (the Arama button in LogActivityDialog, and the same
+   * write behind `POST /marketing/leads/:leadId/activities` and the MCP
+   * lead-write tools) produces a CALL row with no `SalesCall` behind it, so
+   * null is the only honest answer and always will be. The third cause is
+   * historical: calls mirrored before the id was carried, whose
+   * `LeadActivity.metadata` was empty. A null is not a bug in any of the three
+   * and must not render as a broken player: LeadStream.tsx draws such a row
+   * exactly as it always has.
    *
    * Derived server-side from `LeadActivity.metadata`, like `assignment` above
    * it — the blob itself carries user ids and names this endpoint has no

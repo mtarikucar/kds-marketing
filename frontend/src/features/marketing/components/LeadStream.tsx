@@ -421,10 +421,15 @@ function eventRow(
 ) {
   const weight = rowWeight(i);
   /**
-   * There is no backfill. Every call mirrored before the id was carried has
-   * `metadata: null` and nothing anywhere pairs it to a `SalesCall`, so
-   * `callId` is null and the row renders exactly as it always has — a line of
-   * history with nothing to open, rather than a player that would never load.
+   * A CALL row with no `callId` is the ORDINARY case, not a leftover.
+   *
+   * A rep who dialled from their own handset and then wrote down what happened
+   * logs the call by hand (the Arama button in LogActivityDialog), and a
+   * hand-logged call has no `SalesCall` behind it — nothing to play, nothing to
+   * analyse, today or ever. Calls mirrored before the id was carried land here
+   * too, and no backfill can change either group. Both render exactly as this
+   * row always has: a line of history with nothing to open, rather than a
+   * player that would never load.
    */
   const openable = i.kind === 'call' && !!i.callId;
   const Icon = EVENT_ICON[i.kind] ?? Activity;

@@ -741,12 +741,14 @@ describe('LeadStream - a call you can actually play', () => {
   });
 
   /**
-   * There is NO backfill: every call mirrored before the id was carried has
-   * `metadata: null` and nothing anywhere pairs it to a call. Those rows must
-   * read exactly as they always have - a line of history - rather than as a
-   * player that will never load.
+   * A CALL row with no `callId` is the ORDINARY case, not a leftover. A rep who
+   * dialled from their own handset and logged it by hand has produced a call
+   * with no `SalesCall` behind it — there is nothing to play, today or ever —
+   * and calls mirrored before the id was carried land here too. No backfill can
+   * change either group. Both must read exactly as they always have, a line of
+   * history, rather than as a player that will never load.
    */
-  it('leaves a legacy call row exactly as it is, with nothing to open', async () => {
+  it('leaves a call with nothing behind it exactly as it is, with nothing to open', async () => {
     getLeadStream.mockResolvedValue(stream({ items: [call('old', { callId: null })] }));
     renderStream();
 

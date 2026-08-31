@@ -48,7 +48,8 @@ import CallAnalysisPanel from '../../../pages/marketing/calls/CallAnalysisPanel'
  */
 export interface StreamCallDetailProps {
   /** The `SalesCall` this stream row mirrors. Callers must not mount this for a
-   *  row without one — a legacy call has no id and nothing to fetch. */
+   *  row without one — a hand-logged call has no `SalesCall` at all, and a
+   *  legacy mirrored one kept no id, so there is nothing to fetch either way. */
   callId: string;
   /** The stream row's id, so the panel can be addressed per record. */
   itemId: string;
