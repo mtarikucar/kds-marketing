@@ -4129,6 +4129,33 @@
     "researchTakenOverAsk": "zamanlanmış görevin çalışıyor mu?"
   },
   "surface": {
+    "tasks": {
+      "title": "Görevler",
+      "add": "Görev",
+      "none": "Bu kişide görev yok.",
+      "failed": "Görevler yüklenemedi."
+    },
+    "offers": {
+      "title": "Teklifler",
+      "add": "Teklif",
+      "none": "Bu kişiye teklif yok.",
+      "failed": "Teklifler yüklenemedi."
+    },
+    "estimates": {
+      "title": "Tahmini fiyat",
+      "none": "Bu kişiye tahmini fiyat verilmemiş.",
+      "noExpiry": "Geçerlilik tarihi yok",
+      "failed": "Tahmini fiyatlar yüklenemedi."
+    },
+    "appointments": {
+      "title": "Randevular",
+      "none": "Bu kişinin randevusu yok.",
+      "failed": "Randevular yüklenemedi."
+    },
+    "section": {
+      "show": "Göster",
+      "hide": "Gizle"
+    },
     "sales": {
       "title": "Satış",
       "none": "Bu kişi hatta değil.",

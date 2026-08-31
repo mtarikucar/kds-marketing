@@ -344,7 +344,7 @@ export default function TasksTab({
 
   if (embedded) {
     return (
-      <section data-testid="record-tasks" className="space-y-2 border-t border-border pt-3">
+      <div data-testid="record-tasks" className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t('surface.tasks.title', 'Görevler')}
@@ -353,7 +353,7 @@ export default function TasksTab({
         </div>
         {list}
         {dialogs}
-      </section>
+      </div>
     );
   }
 

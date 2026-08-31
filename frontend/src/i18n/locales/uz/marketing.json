@@ -1140,6 +1140,33 @@
     }
   },
   "surface": {
+    "tasks": {
+      "title": "Vazifalar",
+      "add": "Vazifa",
+      "none": "Bu shaxsda vazifa yo‘q.",
+      "failed": "Vazifalar yuklanmadi."
+    },
+    "offers": {
+      "title": "Takliflar",
+      "add": "Taklif",
+      "none": "Bu shaxsga taklif yo‘q.",
+      "failed": "Takliflar yuklanmadi."
+    },
+    "estimates": {
+      "title": "Taxminiy narxlar",
+      "none": "Bu shaxsga taxminiy narx berilmagan.",
+      "noExpiry": "Amal qilish muddati yo‘q",
+      "failed": "Taxminiy narxlar yuklanmadi."
+    },
+    "appointments": {
+      "title": "Uchrashuvlar",
+      "none": "Bu shaxsda uchrashuv yo‘q.",
+      "failed": "Uchrashuvlar yuklanmadi."
+    },
+    "section": {
+      "show": "Ko‘rsatish",
+      "hide": "Yashirish"
+    },
     "sales": {
       "title": "Sotuv",
       "none": "Quvurda emas.",

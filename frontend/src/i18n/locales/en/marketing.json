@@ -3278,6 +3278,33 @@
     }
   },
   "surface": {
+    "tasks": {
+      "title": "Tasks",
+      "add": "Task",
+      "none": "No tasks for this person.",
+      "failed": "Could not load tasks."
+    },
+    "offers": {
+      "title": "Offers",
+      "add": "Offer",
+      "none": "No offers for this person.",
+      "failed": "Could not load offers."
+    },
+    "estimates": {
+      "title": "Estimates",
+      "none": "No estimates for this person.",
+      "noExpiry": "No expiry date",
+      "failed": "Could not load estimates."
+    },
+    "appointments": {
+      "title": "Appointments",
+      "none": "No appointments for this person.",
+      "failed": "Could not load appointments."
+    },
+    "section": {
+      "show": "Show",
+      "hide": "Hide"
+    },
     "sales": {
       "title": "Sales",
       "none": "Not in the pipeline.",

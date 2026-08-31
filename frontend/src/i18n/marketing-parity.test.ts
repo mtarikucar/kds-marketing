@@ -290,6 +290,23 @@ describe('marketing i18n — the person surface and its work queue', () => {
         'surface.people.search',
         'surface.pane.reply',
         'surface.card.open',
+        // The record card is FIVE sections since 2026-09-01. Each one's title
+        // is how a rep knows which of them went missing, and each one's
+        // `failed` is the sentence that keeps a broken section from reading as
+        // an empty one — the card's central rule. Anchored by name so a
+        // deletion is loud rather than a silently shorter list.
+        'surface.sales.title',
+        'surface.tasks.title',
+        'surface.tasks.failed',
+        'surface.offers.title',
+        'surface.offers.failed',
+        'surface.estimates.title',
+        'surface.estimates.failed',
+        'surface.appointments.title',
+        'surface.appointments.failed',
+        // The two disclosures are unopenable without these two words.
+        'surface.section.show',
+        'surface.section.hide',
         'leads.queue.waiting',
         'leads.queue.unassigned',
         'leads.queue.all',

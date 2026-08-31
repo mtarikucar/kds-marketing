@@ -340,7 +340,7 @@ export default function OffersTab({
   // SATIŞ section uses, so five sections read as one card rather than five.
   if (embedded) {
     return (
-      <section data-testid="record-offers" className="space-y-2 border-t border-border pt-3">
+      <div data-testid="record-offers" className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t('surface.offers.title', 'Teklifler')}
@@ -349,7 +349,7 @@ export default function OffersTab({
         </div>
         {list}
         {dialogs}
-      </section>
+      </div>
     );
   }
 

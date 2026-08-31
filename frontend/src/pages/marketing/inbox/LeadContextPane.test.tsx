@@ -84,6 +84,75 @@ const DEAL = {
   updatedAt: '2026-08-01T00:00:00.000Z',
 };
 
+/** What `GET /leads/:id` returns — the ONE read behind both the GÖREVLER and
+ *  the TEKLİFLER sections. Same payload the lead-detail page renders. */
+const DETAIL_LEAD = {
+  id: 'p1',
+  businessName: 'Acme Kafe',
+  contactPerson: 'Ayşe Yılmaz',
+  status: 'CONTACTED',
+  convertedTenantId: null,
+  offers: [
+    {
+      id: 'of1',
+      status: 'DRAFT',
+      customPrice: 4900,
+      discount: null,
+      trialDays: null,
+      planCurrency: 'TRY',
+      validUntil: null,
+      notes: 'Kurulum dahil',
+      createdAt: '2026-08-20T00:00:00.000Z',
+    },
+  ],
+  tasks: [
+    {
+      id: 'tk1',
+      title: 'Ara onu',
+      type: 'CALL',
+      priority: 'HIGH',
+      status: 'PENDING',
+      dueDate: '2026-09-05T09:00:00.000Z',
+    },
+  ],
+};
+
+const ESTIMATES = [
+  {
+    id: 'es1',
+    leadId: 'p1',
+    number: 'EST-A1B2',
+    items: [],
+    currency: 'TRY',
+    total: 1250000,
+    notes: null,
+    validUntil: null,
+    status: 'SENT',
+    convertedInvoiceId: null,
+    createdAt: '2026-08-22T00:00:00.000Z',
+  },
+];
+
+const BOOKINGS = [
+  {
+    id: 'bk1',
+    calendarId: 'c1',
+    leadId: 'p1',
+    name: 'Demo görüşmesi',
+    email: null,
+    phone: null,
+    notes: null,
+    startAt: '2026-09-10T13:00:00.000Z',
+    endAt: '2026-09-10T13:30:00.000Z',
+    status: 'CONFIRMED',
+    assigneeUserId: null,
+    meetingUrl: null,
+    conferenceProvider: null,
+    attendeeTimezone: null,
+    token: 'tok',
+  },
+];
+
 beforeEach(() => {
   get.mockReset();
   post.mockReset();
@@ -94,6 +163,9 @@ beforeEach(() => {
       return Promise.resolve({
         data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
       });
+    if (url.startsWith('/leads/')) return Promise.resolve({ data: DETAIL_LEAD });
+    if (url === '/estimates') return Promise.resolve({ data: ESTIMATES });
+    if (url === '/calendars/bookings') return Promise.resolve({ data: BOOKINGS });
     return Promise.resolve({ data: {} });
   });
 });
@@ -225,5 +297,182 @@ describe('LeadContextPane — per-person state is keyed, not carried', () => {
     const stage = await screen.findByTestId('deal-stage-o1');
     expect(stage).toHaveTextContent('Yeni');
     expect(stage).not.toHaveTextContent('Teklif gönderildi');
+  });
+});
+
+/**
+ * Stage 1 of fitting the inbox onto one screen: the record card gains the rest
+ * of the person — their tasks, their offers, their estimates and their
+ * appointments. Five sections now share one card, which is why every one of
+ * these tests is about a section standing on its own.
+ */
+describe('LeadContextPane — the person’s remaining objects', () => {
+  it('shows this person’s tasks and offers from ONE read of their record', async () => {
+    renderCard();
+
+    expect(await screen.findByText('Ara onu')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('record-offers')).getByText('Kurulum dahil'),
+    ).toBeInTheDocument();
+
+    // Both sections ride on the singular detail read — the same query key the
+    // lead-detail page uses, so the two surfaces cannot disagree, and one
+    // request serves two sections rather than two requests serving one each.
+    const leadReads = get.mock.calls.filter(([url]) => String(url).startsWith('/leads/'));
+    expect(leadReads).toHaveLength(1);
+    expect(leadReads[0][0]).toBe('/leads/p1');
+  });
+
+  // The deliberate eager/lazy split: a section whose data is already a field of
+  // the person's own record costs nothing extra; a section with its own
+  // endpoint waits until someone opens it. Five sections × every click is a lot
+  // of requests for data most people do not have.
+  it('asks for nothing on behalf of the two collapsed sections', async () => {
+    renderCard();
+
+    // Positive anchor: the eager reads have RESOLVED, so "no request" is a
+    // settled fact and not a race with the first paint.
+    expect(await screen.findByText('Ara onu')).toBeInTheDocument();
+
+    expect(get).not.toHaveBeenCalledWith('/estimates', expect.anything());
+    expect(get).not.toHaveBeenCalledWith('/calendars/bookings', expect.anything());
+  });
+
+  it('asks for THIS person’s estimates, and only once opened', async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Tahmini fiyat/ }));
+
+    expect(await screen.findByText('EST-A1B2')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith('/estimates', { params: { leadId: 'p1' } });
+  });
+
+  it('asks for THIS person’s appointments, and only once opened', async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Randevular/ }));
+
+    expect(await screen.findByText('Demo görüşmesi')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith('/calendars/bookings', { params: { leadId: 'p1' } });
+  });
+
+  // Still exactly one door off the surface, with four more sections on the
+  // card. Selecting is not navigating.
+  it('adds no second way off the surface', async () => {
+    renderCard();
+
+    await screen.findByText('Ara onu');
+    const links = within(screen.getByTestId('record-card')).getAllByRole('link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/leads/p1');
+  });
+});
+
+/**
+ * The card's central rule, now that five sections share it: a section that
+ * cannot be read says so BY NAME, does not blank the card, and is never
+ * mistaken for a section that is simply empty.
+ */
+describe('LeadContextPane — a broken section names itself and stands alone', () => {
+  it('names Görevler and Teklifler when their shared read fails, and keeps the card', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
+      if (url === '/opportunities')
+        return Promise.resolve({
+          data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
+        });
+      if (url.startsWith('/leads/')) return Promise.reject(new Error('boom'));
+      return Promise.resolve({ data: {} });
+    });
+    renderCard();
+
+    // Each section owes its OWN sentence — "something failed" on a five-section
+    // card tells a rep nothing about what they are missing.
+    expect(await screen.findByText('Görevler yüklenemedi.')).toBeInTheDocument();
+    expect(screen.getByText('Teklifler yüklenemedi.')).toBeInTheDocument();
+
+    // A failure is not an empty person: the words for "no tasks" must NOT be
+    // on screen, or a rep reads "nothing to do" off a request that never
+    // answered.
+    expect(screen.queryByTestId('tasks-empty')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('offers-empty')).not.toBeInTheDocument();
+
+    // ...and the rest of the card is untouched: identity, and the SATIŞ
+    // section's own healthy read.
+    expect(screen.getByTestId('record-card')).toHaveTextContent('Ayşe Yılmaz');
+    expect(await screen.findByText('Happy Day Organizasyon')).toBeInTheDocument();
+  });
+
+  it('names Tahmini fiyat when its read fails, without touching Randevular', async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((url: string) => {
+      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
+      if (url === '/opportunities')
+        return Promise.resolve({
+          data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
+        });
+      if (url.startsWith('/leads/')) return Promise.resolve({ data: DETAIL_LEAD });
+      if (url === '/estimates') return Promise.reject(new Error('boom'));
+      if (url === '/calendars/bookings') return Promise.resolve({ data: BOOKINGS });
+      return Promise.resolve({ data: {} });
+    });
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Tahmini fiyat/ }));
+    expect(await screen.findByText('Tahmini fiyatlar yüklenemedi.')).toBeInTheDocument();
+    expect(screen.queryByTestId('estimates-empty')).not.toBeInTheDocument();
+
+    // The neighbour still opens and still works.
+    await user.click(screen.getByRole('button', { name: /Randevular/ }));
+    expect(await screen.findByText('Demo görüşmesi')).toBeInTheDocument();
+  });
+
+  it('says a person has no estimates in words a failure never uses', async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((url: string) => {
+      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
+      if (url === '/opportunities')
+        return Promise.resolve({
+          data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
+        });
+      if (url.startsWith('/leads/')) return Promise.resolve({ data: DETAIL_LEAD });
+      if (url === '/estimates') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Tahmini fiyat/ }));
+    expect(await screen.findByTestId('estimates-empty')).toBeInTheDocument();
+    expect(screen.queryByText('Tahmini fiyatlar yüklenemedi.')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The lazy sections hold per-person state — whether they are open — and the
+ * card is handed a new person rather than remounted. Left unkeyed, "I opened
+ * Randevular for Ayşe" would silently become "Randevular is open for whoever
+ * is selected next", and the section would fire a request for a person nobody
+ * asked about. Same mechanism, same reason, as the SATIŞ section's `key`.
+ */
+describe('LeadContextPane — the disclosures are keyed to the person', () => {
+  it('closes an opened section when the selection changes and comes back', async () => {
+    const user = userEvent.setup();
+    const other = person({ id: 'p2', contactPerson: 'Başka Kişi' });
+    const { rerender } = render(wrap(<LeadContextPane lead={person()} />));
+
+    await user.click(await screen.findByRole('button', { name: /Randevular/ }));
+    expect(await screen.findByText('Demo görüşmesi')).toBeInTheDocument();
+
+    rerender(wrap(<LeadContextPane lead={other} />));
+    await screen.findByText('Başka Kişi');
+    rerender(wrap(<LeadContextPane lead={person()} />));
+
+    // Positive anchor: the section is on screen and says it is CLOSED, rather
+    // than an absence that would also pass against a half-rendered card.
+    const toggle = await screen.findByRole('button', { name: /Randevular/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Demo görüşmesi')).not.toBeInTheDocument();
   });
 });

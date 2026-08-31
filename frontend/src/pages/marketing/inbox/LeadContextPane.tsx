@@ -7,7 +7,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { IconButton } from '@/components/ui/IconButton';
 import { fmtDate } from '../../../features/marketing/utils/format';
 import type { Lead } from '../../../features/marketing/types';
+import { PersonAppointments } from './PersonAppointments';
 import { PersonDeals } from './PersonDeals';
+import { PersonEstimates } from './PersonEstimates';
+import { PersonOffers } from './PersonOffers';
+import { PersonTasks } from './PersonTasks';
+import { RecordDisclosure } from './RecordDisclosure';
 
 /**
  * The fields this card reads. A structural subset of `Lead` rather than `Lead`
@@ -103,6 +108,37 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
           otherwise still be on screen under B. Same mechanism, and the same
           reason, as the middle column's `key` in InboxPage. */}
       <PersonDeals key={lead.id} leadId={lead.id} />
+
+      {/* GÖREVLER and TEKLİFLER — the person's other two fields that the
+          person's OWN record already carries. One `GET /leads/:id` serves both
+          sections (React Query dedupes the shared key), so they cost one
+          request between them and warm the cache for the link below. Both
+          render the lead detail's own tabs in `embedded` chrome; see
+          usePersonRecord.ts for the eager-vs-lazy rule and for the cost of the
+          shared key, which is a shared FATE when it fails. */}
+      <PersonTasks key={`tasks-${lead.id}`} leadId={lead.id} />
+      <PersonOffers key={`offers-${lead.id}`} leadId={lead.id} />
+
+      {/* TAHMİNİ FİYAT and RANDEVULAR each need their own endpoint, for objects
+          most contacts do not have — so they wait until someone opens them
+          rather than costing two requests per row a rep clicks. The `key` is
+          the ONE reset for "is this section open", which is per-person state on
+          a card that is handed a new person rather than remounted: the same
+          mechanism, and the same reason, as PersonDeals above. */}
+      <RecordDisclosure
+        key={`estimates-${lead.id}`}
+        data-testid="record-estimates"
+        title={t('surface.estimates.title', 'Tahmini fiyat')}
+      >
+        <PersonEstimates leadId={lead.id} />
+      </RecordDisclosure>
+      <RecordDisclosure
+        key={`appointments-${lead.id}`}
+        data-testid="record-appointments"
+        title={t('surface.appointments.title', 'Randevular')}
+      >
+        <PersonAppointments leadId={lead.id} />
+      </RecordDisclosure>
 
       {/* The one door off this surface. */}
       <Link
