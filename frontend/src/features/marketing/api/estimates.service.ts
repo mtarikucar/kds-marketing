@@ -38,8 +38,14 @@ export interface EstimatePayload {
   validUntil?: string;
 }
 
-export const listEstimates = (): Promise<Estimate[]> =>
-  marketingApi.get('/estimates').then((r) => r.data);
+export interface EstimatesFilter {
+  /** ONE contact's quotes, resolved server-side. Without it the caller pulls
+   *  every estimate in the workspace to show a handful. */
+  leadId?: string;
+}
+
+export const listEstimates = (filter: EstimatesFilter = {}): Promise<Estimate[]> =>
+  marketingApi.get('/estimates', { params: filter }).then((r) => r.data);
 
 export const getEstimate = (id: string): Promise<Estimate> =>
   marketingApi.get(`/estimates/${id}`).then((r) => r.data);

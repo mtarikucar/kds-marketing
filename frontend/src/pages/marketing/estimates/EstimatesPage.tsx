@@ -181,7 +181,10 @@ export default function EstimatesPage({ embedded }: { embedded?: boolean } = {})
 
   const { data: estimates, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'estimates'],
-    queryFn: listEstimates,
+    // NOT a bare `listEstimates`: React Query hands the queryFn a context
+    // object, and the function now takes a FILTER — passing it by reference
+    // would spread `{ queryKey, signal, meta, ... }` into the query string.
+    queryFn: () => listEstimates(),
   });
 
   // Catalog for the "add from product" picker in the line-item editor.

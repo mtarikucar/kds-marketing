@@ -7,6 +7,10 @@ import { ArrowLeft, Pencil, Trash2, CheckCircle2, Printer, RotateCcw } from 'luc
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcrumbLabel';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import {
+  useLeadOfferActions,
+  useLeadTaskActions,
+} from '../../../features/marketing/hooks/useLeadRecordActions';
 import { sendFax } from '../../../features/marketing/api/fax.service';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
@@ -39,12 +43,6 @@ import {
   updateLeadStatus,
   reopenLead,
   createLeadActivity,
-  createOffer,
-  sendOffer,
-  deleteOffer,
-  createTask,
-  completeTask,
-  deleteTask,
   convertLead,
   deleteLead,
 } from '../../../features/marketing/api/leads.service';
@@ -153,59 +151,12 @@ export default function LeadDetailPage() {
     onError: () => toast.error('Failed to add activity'),
   });
 
-  const createOfferMutation = useMutation({
-    mutationFn: (data: any) => createOffer(data),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Offer created');
-    },
-    onError: () => toast.error('Failed to create offer'),
-  });
-
-  const sendOfferMutation = useMutation({
-    mutationFn: (offerId: string) => sendOffer(offerId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Offer sent');
-    },
-    onError: () => toast.error('Failed to send offer'),
-  });
-
-  const deleteOfferMutation = useMutation({
-    mutationFn: (offerId: string) => deleteOffer(offerId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Offer deleted');
-    },
-    onError: () => toast.error('Failed to delete offer'),
-  });
-
-  const createTaskMutation = useMutation({
-    mutationFn: (data: any) => createTask(data),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Task created');
-    },
-    onError: () => toast.error('Failed to create task'),
-  });
-
-  const completeTaskMutation = useMutation({
-    mutationFn: (taskId: string) => completeTask(taskId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Task completed');
-    },
-    onError: () => toast.error('Failed to complete task'),
-  });
-
-  const deleteTaskMutation = useMutation({
-    mutationFn: (taskId: string) => deleteTask(taskId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Task deleted');
-    },
-    onError: () => toast.error('Failed to delete task'),
-  });
+  // The offer/task writes are SHARED with the person surface's record card,
+  // which renders the same two tabs. They moved to a hook rather than being
+  // copied: two implementations would drift on the invalidation set, which is
+  // the part nobody re-reads. See useLeadRecordActions.ts.
+  const offerActions = useLeadOfferActions(id!);
+  const taskActions = useLeadTaskActions(id!);
 
   const convertMutation = useMutation({
     mutationFn: (data: any) => convertLead(id!, data),
@@ -474,10 +425,10 @@ export default function LeadDetailPage() {
                 offers={lead.offers || []}
                 converted={!!lead.convertedTenantId}
                 fmtDate={fmtDate}
-                onCreate={(data) => createOfferMutation.mutate(data)}
-                createPending={createOfferMutation.isPending}
-                onSend={(offerId) => sendOfferMutation.mutate(offerId)}
-                onDelete={(offerId) => deleteOfferMutation.mutate(offerId)}
+                onCreate={(data) => offerActions.create.mutate(data)}
+                createPending={offerActions.create.isPending}
+                onSend={(offerId) => offerActions.send.mutate(offerId)}
+                onDelete={(offerId) => offerActions.remove.mutate(offerId)}
               />
             </TabsContent>
 
@@ -486,10 +437,10 @@ export default function LeadDetailPage() {
                 leadId={lead.id}
                 tasks={lead.tasks || []}
                 fmtDate={fmtDate}
-                onCreate={(data) => createTaskMutation.mutate(data)}
-                createPending={createTaskMutation.isPending}
-                onComplete={(taskId) => completeTaskMutation.mutate(taskId)}
-                onDelete={(taskId) => deleteTaskMutation.mutate(taskId)}
+                onCreate={(data) => taskActions.create.mutate(data)}
+                createPending={taskActions.create.isPending}
+                onComplete={(taskId) => taskActions.complete.mutate(taskId)}
+                onDelete={(taskId) => taskActions.remove.mutate(taskId)}
               />
             </TabsContent>
           </Tabs>

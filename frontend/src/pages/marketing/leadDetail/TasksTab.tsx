@@ -49,6 +49,17 @@ interface TasksTabProps {
   createPending: boolean;
   onComplete: (taskId: string) => void;
   onDelete: (taskId: string) => void;
+  /**
+   * Render as a SECTION of the person's record card instead of a page card.
+   * See `OffersTab` for the reasoning: the chrome is page furniture, the body
+   * is the capability, and only the chrome is a prop. `embedded` is the name
+   * this codebase already uses for it.
+   *
+   * It carries no loading or error state — the container owns the query, so
+   * the container owns the difference between "no tasks" and "could not read
+   * them".
+   */
+  embedded?: boolean;
 }
 
 export default function TasksTab({
@@ -59,6 +70,7 @@ export default function TasksTab({
   createPending,
   onComplete,
   onDelete,
+  embedded,
 }: TasksTabProps) {
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
@@ -119,23 +131,30 @@ export default function TasksTab({
     setOpen(false);
   };
 
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>Tasks</CardTitle>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setOpen(true)}
-          className="text-primary hover:text-primary"
-        >
-          <Plus className="h-4 w-4" /> New Task
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {(tasks || []).length === 0 ? (
-          <EmptyState title="No tasks yet" />
+  const addButton = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={() => setOpen(true)}
+      className="text-primary hover:text-primary"
+    >
+      <Plus className="h-4 w-4" /> {embedded ? t('surface.tasks.add', 'Görev') : 'New Task'}
+    </Button>
+  );
+
+  const list = (
+    <>
+      {(tasks || []).length === 0 ? (
+          embedded ? (
+            // A settled, successful, EMPTY answer — the container renders the
+            // failure, so the two states can never be read as one.
+            <p data-testid="tasks-empty" className="text-[11px] text-muted-foreground">
+              {t('surface.tasks.none', 'Bu kişide görev yok.')}
+            </p>
+          ) : (
+            <EmptyState title="No tasks yet" />
+          )
         ) : (
           <div className="space-y-2">
             {(tasks || []).map((task) => {
@@ -190,8 +209,11 @@ export default function TasksTab({
             })}
           </div>
         )}
-      </CardContent>
+    </>
+  );
 
+  const dialogs = (
+    <>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -317,6 +339,32 @@ export default function TasksTab({
           setConfirmDeleteId(null);
         }}
       />
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <section data-testid="record-tasks" className="space-y-2 border-t border-border pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t('surface.tasks.title', 'Görevler')}
+          </h4>
+          {addButton}
+        </div>
+        {list}
+        {dialogs}
+      </section>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>Tasks</CardTitle>
+        {addButton}
+      </CardHeader>
+      <CardContent>{list}</CardContent>
+      {dialogs}
     </Card>
   );
 }

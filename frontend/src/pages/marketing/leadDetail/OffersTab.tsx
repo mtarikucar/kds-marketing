@@ -41,6 +41,22 @@ interface OffersTabProps {
   createPending: boolean;
   onSend: (offerId: string) => void;
   onDelete: (offerId: string) => void;
+  /**
+   * Render as a SECTION of the person's record card instead of a page card.
+   *
+   * The tab's own chrome — a full `Card` with a title bar — is page furniture:
+   * inside the record card it would be a card in a card, with a second heading
+   * competing with the one above it. So the chrome is a prop and the whole
+   * body is not: the list, the create dialog, send, delete and both
+   * confirmations are the same code on both surfaces, because they are the
+   * same capability. `embedded` is the name this codebase already uses for
+   * exactly this (`LeadsPage embedded`, `ChannelsSettingsPage embedded`).
+   *
+   * NOTE it does not carry loading or error state. The container owns the
+   * query, so it owns the difference between "no offers" and "could not read
+   * them" — this component only ever renders a settled, successful answer.
+   */
+  embedded?: boolean;
 }
 
 export default function OffersTab({
@@ -52,6 +68,7 @@ export default function OffersTab({
   createPending,
   onSend,
   onDelete,
+  embedded,
 }: OffersTabProps) {
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
@@ -116,25 +133,30 @@ export default function OffersTab({
   // Empty string → undefined so optional numeric fields stay valid; otherwise Number.
   const numberSetValueAs = (v: string) => (v === '' ? '' : Number(v));
 
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>Offers</CardTitle>
-        {!converted && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setOpen(true)}
-            className="text-primary hover:text-primary"
-          >
-            <Plus className="h-4 w-4" /> New Offer
-          </Button>
-        )}
-      </CardHeader>
-      <CardContent>
-        {(offers || []).length === 0 ? (
-          <EmptyState title="No offers yet" />
+  const addButton = !converted && (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={() => setOpen(true)}
+      className="text-primary hover:text-primary"
+    >
+      <Plus className="h-4 w-4" /> {embedded ? t('surface.offers.add', 'Teklif') : 'New Offer'}
+    </Button>
+  );
+
+  const list = (
+    <>
+      {(offers || []).length === 0 ? (
+          embedded ? (
+            // A settled, successful, EMPTY answer. The container renders the
+            // failure, so these two states can never be read as one.
+            <p data-testid="offers-empty" className="text-[11px] text-muted-foreground">
+              {t('surface.offers.none', 'Bu kişiye teklif yok.')}
+            </p>
+          ) : (
+            <EmptyState title="No offers yet" />
+          )
         ) : (
           <div className="space-y-3">
             {(offers || []).map((offer) => (
@@ -200,8 +222,11 @@ export default function OffersTab({
             ))}
           </div>
         )}
-      </CardContent>
+    </>
+  );
 
+  const dialogs = (
+    <>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -308,6 +333,34 @@ export default function OffersTab({
           setConfirmDeleteId(null);
         }}
       />
+    </>
+  );
+
+  // The record card's section chrome: the same small uppercase heading the
+  // SATIŞ section uses, so five sections read as one card rather than five.
+  if (embedded) {
+    return (
+      <section data-testid="record-offers" className="space-y-2 border-t border-border pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t('surface.offers.title', 'Teklifler')}
+          </h4>
+          {addButton}
+        </div>
+        {list}
+        {dialogs}
+      </section>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>Offers</CardTitle>
+        {addButton}
+      </CardHeader>
+      <CardContent>{list}</CardContent>
+      {dialogs}
     </Card>
   );
 }
