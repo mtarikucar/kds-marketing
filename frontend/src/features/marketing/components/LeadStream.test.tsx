@@ -741,6 +741,26 @@ describe('LeadStream - a call you can actually play', () => {
   });
 
   /**
+   * `aria-expanded` on its own announces that SOMETHING is expanded and leaves
+   * a screen-reader user to work out what. The panel it opens has to be
+   * addressable for `aria-controls` to resolve to anything, which is why
+   * StreamCallDetail carries a real `id` and not only a `data-testid`.
+   */
+  it('names the panel its toggle controls, and that panel is addressable', async () => {
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    const toggle = await screen.findByTestId('stream-call-toggle-c1');
+    expect(toggle).toHaveAttribute('aria-controls', 'stream-call-detail-c1');
+
+    await user.click(toggle);
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    expect(detail).toHaveAttribute('id', 'stream-call-detail-c1');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toBe(detail);
+  });
+
+  /**
    * A CALL row with no `callId` is the ORDINARY case, not a leftover. A rep who
    * dialled from their own handset and logged it by hand has produced a call
    * with no `SalesCall` behind it — there is nothing to play, today or ever —
@@ -922,6 +942,35 @@ describe('LeadStream - a call you can actually play', () => {
     // disable the row.
     await user.click(toggle);
     await screen.findByTestId('stream-call-detail-c1');
+  });
+
+  /**
+   * A REP who inherits a REASSIGNED lead can read every activity on it — the
+   * previous owner's call rows included — but `SalesCallService.get` gates the
+   * recording, the analysis and the run alike and answers Forbidden, not 404.
+   *
+   * Rendering that as the generic failure hands them a red alert with a retry
+   * that can never succeed, plus an Analyse button that would 403 in turn. The
+   * honest screen says whose call it is and offers nothing to press.
+   */
+  it('says a teammate’s call is not yours rather than offering a retry that cannot work', async () => {
+    getCallRecording.mockRejectedValue({ response: { status: 403 } });
+    getCallAnalysis.mockRejectedValue({ response: { status: 403 } });
+    getLeadStream.mockResolvedValue(stream({ items: [call('c1', { callId: 'sc-1' })] }));
+    renderStream();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('stream-call-toggle-c1'));
+
+    const detail = await screen.findByTestId('stream-call-detail-c1');
+    // Positive anchor: the refusal really rendered, so the absences below are
+    // decisions rather than a pane that never settled.
+    expect(await within(detail).findByTestId('stream-call-forbidden-c1')).toHaveTextContent(
+      /başka bir temsilcinin/,
+    );
+    expect(within(detail).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(detail).queryByRole('button')).not.toBeInTheDocument();
+    expect(detail.querySelector('audio')).toBeNull();
   });
 
   it('never puts a player on a message, a note or a status move', async () => {

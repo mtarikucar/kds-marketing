@@ -880,7 +880,8 @@
       "fax": "Faks",
       "faxOpen": "Belgeyi aç",
       "callDetail": "Kayıt ve analiz",
-      "callAnalysis": "Arama analizi"
+      "callAnalysis": "Arama analizi",
+      "callNotYours": "Bu arama başka bir temsilcinin — kaydını ve analizini yalnızca o açabilir."
     },
     "summary": {
       "contactInfo": "İletişim",

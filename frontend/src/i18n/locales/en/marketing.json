@@ -624,7 +624,8 @@
       "fax": "Fax",
       "faxOpen": "Open document",
       "callDetail": "Recording & analysis",
-      "callAnalysis": "Call analysis"
+      "callAnalysis": "Call analysis",
+      "callNotYours": "This call belongs to another rep — only they can open its recording and analysis."
     },
     "summary": {
       "contactInfo": "Contact",

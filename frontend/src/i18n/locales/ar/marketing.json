@@ -294,7 +294,8 @@
       "fax": "فاكس",
       "faxOpen": "فتح المستند",
       "callDetail": "التسجيل والتحليل",
-      "callAnalysis": "تحليل المكالمة"
+      "callAnalysis": "تحليل المكالمة",
+      "callNotYours": "هذه المكالمة تخصّ مندوبًا آخر — وحده يمكنه فتح تسجيلها وتحليلها."
     },
     "summary": {
       "contactInfo": "Contact",

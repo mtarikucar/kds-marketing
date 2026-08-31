@@ -484,6 +484,10 @@ function eventRow(
             type="button"
             data-testid={`stream-call-toggle-${i.id}`}
             aria-expanded={open}
+            // The panel this button opens, named. `aria-expanded` alone says
+            // "something is expanded" and leaves a screen-reader user to guess
+            // WHAT; the id it points at is StreamCallDetail's container.
+            aria-controls={`stream-call-detail-${i.id}`}
             onClick={() => onToggleCall(i.id)}
             className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

@@ -43,9 +43,34 @@ export interface CallRecordingPlayerProps {
  * Written as an explicit `=== 404` rather than `!== 404` on purpose: a network
  * failure carries no `response` at all, and the inverted form would classify
  * the single most likely runtime failure as an absent recording.
+ *
+ * Exported because it is a RULE, not a detail of this component. StreamCallDetail
+ * asks the same question of the same query to decide CallAnalysisPanel's
+ * `hasRecording`, and it used to re-derive the cast and the comparison inline —
+ * two copies of a one-directional check, one of which carried the paragraph
+ * explaining the direction. One copy, in the file that documents it.
  */
-function isMissingRecording(error: unknown): boolean {
+export function isMissingRecording(error: unknown): boolean {
   return (error as { response?: { status?: number } } | null)?.response?.status === 404;
+}
+
+/**
+ * "This call is not yours to hear", as opposed to any other reason the fetch
+ * did not come back.
+ *
+ * Same explicit-`=== 403` direction and the same reason: a response-less
+ * network failure must not be classified as a permission decision.
+ *
+ * `SalesCallService.get` — which gates the recording, the analysis and the run
+ * — throws Forbidden when a REP asks for a teammate's call. In /calls that is
+ * nearly unreachable (the list is already filtered to the rep's own calls), but
+ * the person stream reaches it the moment a lead is REASSIGNED: the new owner
+ * can read the lead's activity rows, including the calls the previous owner
+ * placed. Without this, that row's panel is a red "could not be loaded" with a
+ * retry that can never succeed.
+ */
+export function isForbidden(error: unknown): boolean {
+  return (error as { response?: { status?: number } } | null)?.response?.status === 403;
 }
 
 /**

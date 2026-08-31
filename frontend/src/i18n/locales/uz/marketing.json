@@ -294,7 +294,8 @@
       "fax": "Faks",
       "faxOpen": "Hujjatni ochish",
       "callDetail": "Yozuv va tahlil",
-      "callAnalysis": "Qo'ng'iroq tahlili"
+      "callAnalysis": "Qo'ng'iroq tahlili",
+      "callNotYours": "Bu qo‘ng‘iroq boshqa vakilga tegishli — uning yozuvi va tahlilini faqat o‘sha vakil ocha oladi."
     },
     "summary": {
       "contactInfo": "Contact",

@@ -1,5 +1,8 @@
 import { useTranslation } from 'react-i18next';
+import { Lock } from 'lucide-react';
 import CallRecordingPlayer, {
+  isForbidden,
+  isMissingRecording,
   useCallRecording,
 } from '../../../pages/marketing/calls/CallRecordingPlayer';
 import CallAnalysisPanel from '../../../pages/marketing/calls/CallAnalysisPanel';
@@ -45,6 +48,21 @@ import CallAnalysisPanel from '../../../pages/marketing/calls/CallAnalysisPanel'
  * press Analyse" — never `false`, which would state as fact that this call has
  * no recording. That is the same lie the player itself used to tell by
  * rendering an error as silence.
+ *
+ * The predicate itself is imported rather than rewritten: `isMissingRecording`
+ * lives beside the paragraph explaining why it is `=== 404` and not `!== 404`,
+ * and a second inline copy here is a copy that can drift away from its reason.
+ *
+ * ## A call that is not yours is not a call that broke
+ *
+ * `SalesCallService.get` gates the recording, the analysis and the analysis run
+ * alike, and it throws Forbidden — not 404 — when a REP asks for a teammate's
+ * call. This surface is where that becomes reachable: reassign a lead and the
+ * new owner can read every activity on it, the previous owner's call rows
+ * included. Rendering that as the generic failure gives them a red alert with a
+ * retry that can never succeed, and an Analyse button that would 403 too. So it
+ * gets its own sentence and no controls at all — the one thing a reader needs
+ * is that nothing is broken and there is nothing to press.
  */
 export interface StreamCallDetailProps {
   /** The `SalesCall` this stream row mirrors. Callers must not mount this for a
@@ -62,21 +80,41 @@ export default function StreamCallDetail({ callId, itemId }: StreamCallDetailPro
   // `isPending` is "no answer yet either way". A 404 has ANSWERED — there is no
   // recording — so it falls through to the panel with hasRecording false.
   const settled = !recording.isPending;
-  const knownAbsent = recording.isError && !!recording.error &&
-    (recording.error as { response?: { status?: number } }).response?.status === 404;
+  const knownAbsent = recording.isError && isMissingRecording(recording.error);
+  const notYours = recording.isError && isForbidden(recording.error);
 
   return (
     <div
+      // `id`, not only a `data-testid`: the row's toggle points at this element
+      // with `aria-controls`, and a target that cannot be addressed is a target
+      // that reference does not resolve to.
+      id={`stream-call-detail-${itemId}`}
       data-testid={`stream-call-detail-${itemId}`}
       className="mt-1.5 rounded-lg border border-border bg-surface-muted/40 px-3 py-1.5"
     >
-      <CallRecordingPlayer callId={callId} />
-      {settled && (
+      {notYours ? (
+        <p
+          role="status"
+          data-testid={`stream-call-forbidden-${itemId}`}
+          className="flex items-center gap-1.5 py-1 text-caption text-muted-foreground"
+        >
+          <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {t(
+            'leadDetail.stream.callNotYours',
+            'Bu arama başka bir temsilcinin — kaydını ve analizini yalnızca o açabilir.',
+          )}
+        </p>
+      ) : (
         <>
-          <p className="mt-1 text-caption font-medium text-foreground">
-            {t('leadDetail.stream.callAnalysis', 'Arama analizi')}
-          </p>
-          <CallAnalysisPanel callId={callId} hasRecording={!knownAbsent} />
+          <CallRecordingPlayer callId={callId} />
+          {settled && (
+            <>
+              <p className="mt-1 text-caption font-medium text-foreground">
+                {t('leadDetail.stream.callAnalysis', 'Arama analizi')}
+              </p>
+              <CallAnalysisPanel callId={callId} hasRecording={!knownAbsent} />
+            </>
+          )}
         </>
       )}
     </div>
