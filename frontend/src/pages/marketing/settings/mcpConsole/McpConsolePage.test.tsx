@@ -51,6 +51,8 @@ const CLIENT_ID = 'https://claude.ai/api/mcp/client/abc';
 const overview = (over: Partial<Record<string, unknown>> = {}) => ({
   mcpWriteMode: 'APPROVAL',
   researchExecution: 'SERVER',
+  researchExecutionSource: 'EXPLICIT',
+  researchGraceHours: 6,
   canToggle: true,
   mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
   liveConnectionCount: 2,
@@ -325,7 +327,11 @@ describe('McpConsolePage — who drains the research queue', () => {
     expect(api.setResearchExecution).not.toHaveBeenCalled();
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/stops draining/i)).toBeInTheDocument();
+    // The dialog used to promise the platform would stop draining. It does not
+    // stop any more — it waits. Naming the wait, and the hours, is what makes
+    // this dialog honest rather than reassuring.
+    expect(within(dialog).getByText(/offered each night first/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/6 hours/i)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /yes, my claude drains it/i }));
     await waitFor(() => expect(api.setResearchExecution).toHaveBeenCalledWith('MCP'));
   });
@@ -453,5 +459,64 @@ describe('McpConsolePage — session audit detail', () => {
     const approval = screen.getByTestId('mcp-approval');
     expect(within(approval).getByText('Send a WhatsApp message to 12 leads')).toBeInTheDocument();
     expect(within(approval).getByText('PENDING')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The card has to tell the truth about a three-state column behind a
+ * two-position switch — and about a lane that no longer means what it did.
+ */
+describe('McpConsolePage — the research lane is now first refusal, not a hard switch', () => {
+  it('says the lane was DETECTED when nobody chose it', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchExecutionSource: 'AUTO' }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    expect(await screen.findByTestId('research-auto-note')).toBeInTheDocument();
+  });
+
+  it('says nothing about detection when the owner chose the lane', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchExecutionSource: 'EXPLICIT' }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    await screen.findByText(/who runs the nightly research/i);
+    expect(screen.queryByTestId('research-auto-note')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The shipped copy promised "nothing runs until a connected Claude claims the
+   * jobs itself". That is no longer true and it is the most dangerous sentence
+   * on the page: it is what stops an owner turning this on, and it is now a
+   * lie in the reassuring direction. The card must state the fallback, with the
+   * real number the server uses.
+   */
+  it('states the fallback, using the grace window the SERVER reports', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchGraceHours: 6 }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    // This paragraph is painted before the query resolves, so the assertion has
+    // to wait for the DATA rather than for the element.
+    await waitFor(() =>
+      expect(screen.getByTestId('research-lane-state')).toHaveTextContent(/6/),
+    );
+    expect(screen.getByTestId('research-lane-state').textContent).not.toMatch(
+      /nothing runs until/i,
+    );
+  });
+
+  it('takes the grace window from the payload, not from a number typed into the copy', async () => {
+    api.getMcpConsoleOverview.mockResolvedValue(
+      overview({ researchExecution: 'MCP', researchGraceHours: 12 }),
+    );
+    render(<McpConsolePage />, { wrapper });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('research-lane-state')).toHaveTextContent(/12/),
+    );
   });
 });

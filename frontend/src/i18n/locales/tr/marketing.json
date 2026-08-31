@@ -3952,7 +3952,7 @@
       "title": "Gecelik araştırmayı kim çalıştırıyor",
       "desc": "Aday araştırması bu üründeki en pahalı iş. Arama ve akıl yürütmeyi bizim yerimize kendi Claude’un kendi aboneliğinde yapabilir — brifler, kuyruk ve inceleme adımı aynen kalır.",
       "switchLabel": "Gecelik araştırmayı benim Claude’um çalıştırsın",
-      "stateMcp": "MCP — kuyruğu senin Claude’un boşaltıyor. İşleri kimse almazsa öylece birikirler ve hiç aday çıkmaz.",
+      "stateMcp": "MCP — önce senin Claude'una soruluyor. Bir işi {{hours}} saat içinde kimse almazsa onu biz koşturur, ana ekranda söyleriz. Araştırma öylece durmaz.",
       "stateServer": "SERVER — gecelik araştırmayı platform senin için, kendi anahtarıyla çalıştırıyor.",
       "MCP": "Senin Claude’un",
       "SERVER": "Platform",
@@ -3961,11 +3961,12 @@
       "lockedTitle": "Senin için salt okunur",
       "locked": "Araştırmayı kimin çalıştıracağını yalnızca \"ayarları yönet\" iznine sahip çalışma alanı sahibi değiştirebilir. Mevcut ayarı görebilirsin ama değiştiremezsin.",
       "confirmTitle": "Gecelik araştırma kendi Claude’una devredilsin mi?",
-      "confirmDesc": "Bunu kaydettiğin andan itibaren platform araştırma kuyruğunu boşaltmayı bırakır. Bağlı bir Claude işleri kendisi almadıkça hiçbir şey çalışmaz — yani senin tarafında konektörü çağıran zamanlanmış bir görev olması gerekir. O zamana kadar kuyruk dolar ve yeni aday çıkmaz; ekranda bu, araştırmanın hiçbir şey bulamamasıyla birebir aynı görünür. İstediğin an geri alabilirsin.",
+      "confirmDesc": "Kaydettiğin andan itibaren her gece önce senin Claude'una soruluyor — yani kendi tarafında işleri alan bir zamanlanmış görev istersin. Bir işi {{hours}} saat içinde almazsa o işi biz koşturur, kendi anahtarımızla, ve ana ekranda söyleriz. Araştırman hiç durmaz; sadece görevinin çalışmadığı gecelerde tasarruf etmezsin. İstediğin an geri alabilirsin.",
       "confirmCta": "Evet, benim Claude’um boşaltsın",
-      "mcpToast": "Araştırma kuyruğunu artık senin Claude’un boşaltıyor — platform durdu. Bağlı bir istemci işleri almadıkça hiçbir şey çalışmaz.",
+      "mcpToast": "Artık önce senin Claude'una soruluyor. Almadığı işi yine biz koşturuyoruz.",
       "serverToast": "Araştırma kuyruğunu yine platform boşaltıyor.",
-      "error": "Araştırmayı kimin çalıştıracağı değiştirilemedi."
+      "error": "Araştırmayı kimin çalıştıracağı değiştirilemedi.",
+      "autoDetected": "Bunu sen açmadın: bu workspace'e bağlı bir Claude görüyoruz, o yüzden öncelik onda. Bağlantıyı kaldırırsan araştırmayı yeniden platform koşturur."
     },
     "connections": {
       "title": "Bağlantılar",

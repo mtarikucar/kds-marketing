@@ -3085,7 +3085,7 @@
       "title": "Who runs the nightly research",
       "desc": "Prospect research is the most expensive thing this product does. You can have your own Claude do the searching and reasoning on your subscription instead of ours — the briefs, the queue and the review step stay exactly the same.",
       "switchLabel": "Let my Claude run the nightly research",
-      "stateMcp": "MCP — your Claude drains the queue. If nothing claims the jobs they simply pile up and no prospects appear.",
+      "stateMcp": "MCP — your Claude is asked first. If nothing claims a job within {{hours}} hours we run it ourselves on our key, and say so on the home screen. Research never just stops.",
       "stateServer": "SERVER — the platform runs the nightly research for you, on our key.",
       "MCP": "Your Claude",
       "SERVER": "Platform",
@@ -3094,11 +3094,12 @@
       "lockedTitle": "Read-only for you",
       "locked": "Only a workspace owner with the \"manage settings\" permission can change who runs the research. You can see the current setting but not change it.",
       "confirmTitle": "Hand the nightly research to your own Claude?",
-      "confirmDesc": "From the moment you save this, the platform stops draining your research queue. Nothing runs until a connected Claude claims the jobs itself — so you need a scheduled task on your side that calls the connector. Until then the queue fills up and no new prospects appear, which on screen looks the same as research finding nothing. You can hand it back at any time.",
+      "confirmDesc": "From the moment you save this, your Claude is offered each night first — so you want a scheduled task on your side that claims the jobs. If it does not claim one within {{hours}} hours we run that job ourselves, on our key, and tell you on the home screen. Your research never stops; you just stop saving on the nights your task did not run. You can hand it back at any time.",
       "confirmCta": "Yes, my Claude drains it",
-      "mcpToast": "Your Claude drains the research queue now — the platform has stopped. Nothing runs until a connected client claims the jobs.",
+      "mcpToast": "Your Claude is asked first now. Anything it does not claim, we still run.",
       "serverToast": "The platform drains the research queue again.",
-      "error": "Could not change who runs the research."
+      "error": "Could not change who runs the research.",
+      "autoDetected": "You did not switch this on: we can see a Claude connected to this workspace, so it gets first refusal. Disconnect it and the platform goes back to running the research on its own."
     },
     "connections": {
       "title": "Connections",
