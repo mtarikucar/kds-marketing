@@ -75,6 +75,24 @@ model Workspace {
   /// AUTONOMOUS (risky tools execute inline; audit logging still mandatory).
   mcpWriteMode String @default("APPROVAL")
 
+  /// WHO DRAINS the nightly research queue: SERVER (default — the in-process
+  /// worker runs an Anthropic tool-loop on the PLATFORM's key) or MCP (the
+  /// jobs stay queued until the owner's own Claude leases them over MCP and
+  /// pays for the reasoning on its own subscription). Research is 86% of the
+  /// platform's measured Anthropic bill, so this column is the whole point of
+  /// the MCP research lane.
+  ///
+  /// A MODE, not a global switch: it only works for a workspace that has
+  /// connected MCP and set up its own schedule. Read live on BOTH sides —
+  /// `ScheduledJobRunnerService.claimBatch` excludes research jobs of MCP
+  /// workspaces, and `ResearchLeaseService` refuses to lease for a SERVER one
+  /// — so flipping it back to SERVER releases a queue immediately instead of
+  /// stranding rows stamped with a lane that no longer has a drainer.
+  ///
+  /// Allowed values are RESEARCH_EXECUTION_MODES in
+  /// `dto/set-research-execution.dto.ts`.
+  researchExecution String @default("SERVER")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
