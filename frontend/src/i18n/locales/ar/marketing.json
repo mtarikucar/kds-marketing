@@ -1178,5 +1178,9 @@
   },
   "settingsGroup": {
     "telephony": "الهاتف والمكالمات"
+  },
+  "callAnalysis": {
+    "failed": "تعذّر تحميل التحليل",
+    "retry": "أعد المحاولة"
   }
 }

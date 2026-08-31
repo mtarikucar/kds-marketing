@@ -2236,7 +2236,9 @@
       "POSITIVE": "Olumlu",
       "NEUTRAL": "Nötr",
       "NEGATIVE": "Olumsuz"
-    }
+    },
+    "failed": "Analiz yüklenemedi",
+    "retry": "Yeniden dene"
   },
   "queueWallboard": {
     "title": "Kuyruk panosu",

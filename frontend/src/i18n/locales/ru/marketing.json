@@ -1178,5 +1178,9 @@
   },
   "settingsGroup": {
     "telephony": "Телефония"
+  },
+  "callAnalysis": {
+    "failed": "Не удалось загрузить анализ",
+    "retry": "Повторить"
   }
 }

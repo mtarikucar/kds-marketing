@@ -1931,7 +1931,9 @@
       "POSITIVE": "Positive",
       "NEUTRAL": "Neutral",
       "NEGATIVE": "Negative"
-    }
+    },
+    "failed": "Analysis could not be loaded",
+    "retry": "Try again"
   },
   "queueWallboard": {
     "title": "Queue wallboard",

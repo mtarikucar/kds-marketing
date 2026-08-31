@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Sparkles, AlarmClock } from 'lucide-react';
+import { Sparkles, AlarmClock, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getCallAnalysis,
@@ -20,6 +20,23 @@ import { Badge, type BadgeProps, Button, Spinner } from '../../../components/ui'
  *
  * Self-contained: drop it under a call row given the callId + whether the call
  * has a recording URL.
+ *
+ * ## "We could not find out" is not "there is nothing yet"
+ *
+ * This panel used to read only `{ data, isLoading }`. On a failed fetch `data`
+ * is `undefined`, `isCallAnalysis(undefined)` is false, and it fell into the
+ * no-analysis branch — so a 500, an expired session or a dropped connection
+ * rendered the IDENTICAL Analyse button that a call with no analysis yet
+ * renders. Byte-identical DOM for two opposite facts: pressing it was the only
+ * way to find out which one you were looking at, and on the failure it would
+ * fail again.
+ *
+ * That is the exact defect `CallRecordingPlayer` one file over was fixed for
+ * (commit b56080c3), and the treatment is deliberately the same shape: a
+ * `role="alert"` line that says the analysis could not be LOADED, with a retry
+ * beside it. `retry: false` on the query matches that sibling too — a 4xx will
+ * not come good on the third attempt, and the honest line is worth more to a
+ * reader than three silent backoffs.
  */
 export interface CallAnalysisPanelProps {
   callId: string;
@@ -38,9 +55,10 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
 
   const queryKey = ['marketing', 'calls', callId, 'analysis'];
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey,
     queryFn: () => getCallAnalysis(callId),
+    retry: false,
   });
 
   const run = useMutation({
@@ -68,6 +86,25 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
     return (
       <div className="flex items-center gap-2 py-2 text-caption text-muted-foreground">
         <Spinner className="h-4 w-4" /> {t('common.loading', 'Loading…')}
+      </div>
+    );
+  }
+
+  // The read FAILED. `data` is undefined here exactly as it is when no analysis
+  // exists, so this branch has to come first or the two collapse into one
+  // screen — see the docstring.
+  if (isError) {
+    return (
+      <div
+        role="alert"
+        data-testid={`call-analysis-failed-${callId}`}
+        className="flex flex-wrap items-center gap-2 py-2 text-caption text-danger"
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span>{t('callAnalysis.failed', 'Analysis could not be loaded')}</span>
+        <Button variant="ghost" size="sm" onClick={() => refetch()} loading={isFetching}>
+          {t('callAnalysis.retry', 'Try again')}
+        </Button>
       </div>
     );
   }

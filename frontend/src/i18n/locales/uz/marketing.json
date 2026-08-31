@@ -1178,5 +1178,9 @@
   },
   "settingsGroup": {
     "telephony": "Telefoniya"
+  },
+  "callAnalysis": {
+    "failed": "Tahlilni yuklab bo‘lmadi",
+    "retry": "Qayta urinish"
   }
 }
