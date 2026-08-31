@@ -31,6 +31,7 @@ import {
   MoveOpportunityDto,
   LoseOpportunityDto,
   OpportunityFilterDto,
+  NotInPipelineFilterDto,
 } from '../dto/opportunity.dto';
 
 /**
@@ -157,6 +158,22 @@ export class MarketingOpportunitiesController {
     @Query('pipelineId') pipelineId?: string,
   ) {
     return this.opportunities.forecast(a.workspaceId, pipelineId, a);
+  }
+
+  /**
+   * The board's leftmost column: people with NO open deal, paginated.
+   *
+   * Its own route, declared before `:id` so the literal path wins. Paginated
+   * rather than whole because the live workspace holds 361 such people against
+   * 2 deals — the measurement that made this column the point of the merge.
+   */
+  @Get('opportunities/not-in-pipeline')
+  @RequirePermission('leads.read')
+  notInPipeline(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query() filter: NotInPipelineFilterDto,
+  ) {
+    return this.opportunities.notInPipeline(a.workspaceId, filter, a);
   }
 
   @Get('opportunities/:id')

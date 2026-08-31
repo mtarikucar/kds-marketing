@@ -88,6 +88,7 @@
     "REP": "Savdo vakili"
   },
   "nav": {
+    "people": "Odamlar",
     "dashboard": "Dashboard",
     "leads": "Leads",
     "offers": "Offers",
@@ -124,6 +125,7 @@
     }
   },
   "common": {
+    "retry": "Qayta urinish",
     "save": "Save",
     "saveChanges": "Save changes",
     "cancel": "Cancel",
@@ -1079,6 +1081,20 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Quvurda emas",
+      "empty": "Hamma quvurda.",
+      "failed": "Quvurdan tashqaridagilarni o'qib bo'lmadi.",
+      "more": "Ko'proq yuklash"
+    },
+    "card": {
+      "nobody": "Shaxssiz",
+      "unnamed": "Nomsiz shaxs",
+      "lastContact": "Oxirgi aloqa",
+      "noContact": "Hali aloqa yo‘q"
+    },
+    "terminalDropRefused": "Shaxsni to'g'ridan-to'g'ri Yutildi/Yutqazildi ustuniga tashlab bo'lmaydi.",
+    "dealForPersonFailed": "Bu shaxs uchun bitim ochib bo'lmadi",
     "dealNotFound": "Bitimni ochib bo'lmadi"
   },
   "calls": {
@@ -1100,6 +1116,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "Sotuv",
+      "none": "Quvurda emas.",
+      "add": "Quvurga qo'shish",
+      "stage": "Bosqich",
+      "unknownStage": "Noma'lum bosqich",
+      "noClose": "Yopilish sanasi yo'q",
+      "failed": "Bitimlarni yuklab bo'lmadi.",
+      "moveFailed": "Bosqichni ko'chirib bo'lmadi.",
+      "addFailed": "Quvurga qo'shib bo'lmadi."
+    },
     "people": {
       "search": "Odam qidirish",
       "loadFailed": "Odamlar yuklanmadi.",

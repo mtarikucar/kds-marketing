@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, TrendingUp, ChevronDown } from 'lucide-react';
 import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
+import { fmtSlot } from '../../../features/marketing/utils/format';
 
 import {
   getBoard,
   getForecast,
   getOpportunity,
+  listNotInPipeline,
   listPipelines,
   createOpportunity,
   updateOpportunity,
@@ -18,8 +20,11 @@ import {
   loseOpportunity,
   deleteOpportunity,
   type Board,
+  type BoardOpportunity,
+  type BoardStage,
   type Forecast,
   type Opportunity,
+  type PersonCard,
 } from '../../../features/marketing/api/opportunities.service';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import {
@@ -39,9 +44,24 @@ import {
   Textarea,
   Badge,
   QueryStateBoundary,
+  Skeleton,
 } from '@/components/ui';
 
 const CURRENCIES = ['TRY', 'USD', 'EUR'] as const;
+
+/**
+ * How many people the "Hatta değil" column asks for at a time.
+ *
+ * The affordance is LOAD-MORE (append), not numbered pages, and that is a
+ * decision about the gesture rather than about the DOM. This column exists to
+ * be dragged OUT of: with a pager, surfacing person #21 means walking to page 2
+ * — and the moment you drop one, the column re-reads, everyone shifts up a slot
+ * and the page you were on is a different set of people. Appending keeps
+ * everything already surfaced on screen, so a drop removes exactly one card
+ * from a list you built yourself. It bounds the first paint just as hard (20
+ * cards, never 361) and grows only when someone asks.
+ */
+const NOT_IN_PIPELINE_PAGE = 20;
 
 function money(value: string | number, currency: string): string {
   const n = typeof value === 'string' ? Number(value) : value;
@@ -108,7 +128,15 @@ export default function OpportunitiesPage() {
   const [pipelineId, setPipelineId] = useState<string | undefined>(
     () => searchParams.get('pipelineId') ?? undefined,
   );
-  const [dragId, setDragId] = useState<string | null>(null);
+  /**
+   * What is in hand. Two KINDS travel across this board now — an existing deal
+   * moving between stages, and a PERSON being pulled out of "Hatta değil" to
+   * open their first one — and they end in two different requests. A bare id
+   * would make the drop handler guess from whichever list happens to contain
+   * it, which is the same id-space confusion that once dialled lead A's number
+   * under lead B's id.
+   */
+  const [drag, setDrag] = useState<{ kind: 'deal' | 'person'; id: string } | null>(null);
   const [overStage, setOverStage] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<OppFormState>(EMPTY_FORM);
@@ -132,6 +160,37 @@ export default function OpportunitiesPage() {
     enabled: !!pipelines, // wait until pipelines resolve so the default is known
   });
 
+  /**
+   * The leftmost column: everyone with no OPEN deal. 361 of them on the live
+   * workspace, and until now they appeared on no screen at all.
+   *
+   * Deliberately NOT keyed by pipeline. "In the pipeline" is `status = 'OPEN'`
+   * on ANY deal, so flipping the pipeline selector does not change who is
+   * outside — keying it would refetch the same answer under a second key and
+   * invite the two to disagree.
+   */
+  const outside = useInfiniteQuery({
+    queryKey: ['marketing', 'opportunities', 'not-in-pipeline'],
+    queryFn: ({ pageParam }) =>
+      listNotInPipeline({ page: pageParam, limit: NOT_IN_PIPELINE_PAGE }),
+    initialPageParam: 1,
+    // Optional-chained on purpose: this callback runs inside React Query's
+    // reducer, so a throw here blanks the WHOLE board rather than failing one
+    // column. A payload without `meta` costs the "Daha fazla" button; it does
+    // not cost the pipeline.
+    getNextPageParam: (last) =>
+      last?.meta && last.meta.page < last.meta.totalPages ? last.meta.page + 1 : undefined,
+  });
+
+  const outsiders: PersonCard[] = useMemo(
+    () => (outside.data?.pages ?? []).flatMap((p) => p?.data ?? []),
+    [outside.data],
+  );
+  // The count is the COLUMN, not the screenful: `meta.total` is the full figure
+  // on every page, so this reads 361 while twenty cards are drawn. Undefined
+  // until a page has actually arrived — a failed read must never render as 0.
+  const outsiderTotal = outside.data?.pages.at(-1)?.meta?.total;
+
   const invalidateBoard = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'opportunities'] });
   };
@@ -140,6 +199,20 @@ export default function OpportunitiesPage() {
     mutationFn: ({ id, stageId }: { id: string; stageId: string }) => moveOpportunity(id, stageId),
     onSuccess: invalidateBoard,
     onError: () => toast.error(t('opportunities.moveError', 'Could not move the deal')),
+  });
+
+  /**
+   * A person dragged out of "Hatta değil" onto a stage. Reuses the ONE creation
+   * endpoint with no `name` — the backend falls back to the person's own — so
+   * this gesture is not a second creation path with its own idea of what a deal
+   * is called.
+   */
+  const openForPerson = useMutation({
+    mutationFn: ({ leadId, stageId }: { leadId: string; stageId: string }) =>
+      createOpportunity({ leadId, pipelineId: activePipelineId, stageId }),
+    onSuccess: invalidateBoard,
+    onError: () =>
+      toast.error(t('opportunities.dealForPersonFailed', 'Bu kişi için fırsat açılamadı')),
   });
 
   const saveMutation = useMutation({
@@ -219,6 +292,35 @@ export default function OpportunitiesPage() {
     for (const s of board?.stages ?? []) for (const o of s.opportunities) if (o.currency) set.add(o.currency);
     return set;
   }, [board]);
+
+  /**
+   * "Son temas" — the newest message on any of this person's threads.
+   *
+   * The third thing a card carries, and the one the design named alongside the
+   * value (2026-08-30 §1: name primary, deal value and last contact secondary).
+   * A name and a number say who and how much; only this says whether anyone has
+   * spoken to them — which on the "Hatta değil" column IS the decision.
+   *
+   * `fmtSlot`, the helper this surface already reads dates with, because a board
+   * is a COLUMN of these: the year and the seconds are identical on every card
+   * and only push the name off the line.
+   *
+   * Silence gets WORDS. An empty slot reads as "not loaded yet" on a card whose
+   * whole point is that nobody has done anything here, and any date standing in
+   * for "never" would simply be false.
+   *
+   * The test id deliberately does NOT start with `person-card-`/`deal-card-`:
+   * `getAllByTestId(/^person-card-/)` is how the column counts its CARDS, and a
+   * second node per card under that prefix doubles the count silently.
+   */
+  const lastContact = (at: string | null, testId: string) => (
+    <p data-testid={testId} className="text-micro text-muted-foreground truncate">
+      {at
+        ? `${t('opportunities.card.lastContact', 'Son temas')}: ${fmtSlot(at)}`
+        : t('opportunities.card.noContact', 'Henüz temas yok')}
+    </p>
+  );
+
   const fmtBoard = (n: number) =>
     boardCurrencies.size === 1 ? money(n, [...boardCurrencies][0]) : n.toLocaleString();
 
@@ -291,14 +393,33 @@ export default function OpportunitiesPage() {
     if (deepLink.isError) toast.error(t('opportunities.dealNotFound', 'Fırsat açılamadı'));
   }, [deepLink.isError, t]);
 
-  const onDrop = (stageId: string) => {
+  const onDrop = (stage: BoardStage) => {
     setOverStage(null);
-    const id = dragId;
-    setDragId(null);
-    if (!id) return;
-    const from = board?.stages.find((s) => s.opportunities.some((o) => o.id === id));
-    if (from?.id === stageId) return; // same column — no-op
-    moveMutation.mutate({ id, stageId });
+    const held = drag;
+    setDrag(null);
+    if (!held) return;
+
+    if (held.kind === 'person') {
+      // Creating a deal directly in a terminal stage resolves it WON/LOST on
+      // the backend, so it would leave this OPEN-only board immediately while
+      // silently entering won/lost reporting. "+ Add" already refuses that;
+      // the drag refuses it too, and says so rather than doing nothing.
+      if (stage.isWon || stage.isLost) {
+        toast.error(
+          t(
+            'opportunities.terminalDropRefused',
+            'Kişiyi doğrudan Kazanıldı/Kaybedildi sütununa bırakamazsın.',
+          ),
+        );
+        return;
+      }
+      openForPerson.mutate({ leadId: held.id, stageId: stage.id });
+      return;
+    }
+
+    const from = board?.stages.find((s) => s.opportunities.some((o) => o.id === held.id));
+    if (from?.id === stage.id) return; // same column — no-op
+    moveMutation.mutate({ id: held.id, stageId: stage.id });
   };
 
   return (
@@ -425,16 +546,124 @@ export default function OpportunitiesPage() {
 
       {/* Kanban columns */}
       {board && !isError && (
-        <div className="flex gap-3 overflow-x-auto pb-4">
+        <div data-testid="board-columns" className="flex gap-3 overflow-x-auto pb-4">
+          {/* ── Hatta değil ───────────────────────────────────────────────────
+              Leftmost, and first in the DOM, because it is the biggest column
+              on the board: 361 people against 2 deals. A board open only to
+              people who already have a deal keeps the silent majority silent —
+              which is exactly the state that made this pipeline empty.
+
+              A SOURCE, never a destination: nothing is dropped back into it, so
+              it carries no drop handler. A deal leaves this column by being
+              opened, not by being dragged out of a stage. */}
+          <div
+            data-testid="column-not-in-pipeline"
+            className="flex-shrink-0 w-72 rounded-lg border border-dashed border-border bg-surface-muted/40 p-2"
+          >
+            <div className="flex items-center justify-between px-1 py-1.5">
+              <span className="font-medium text-sm text-foreground">
+                {t('opportunities.notInPipeline.title', 'Hatta değil')}
+              </span>
+              {/* Absent — not zero — until a page has actually arrived. */}
+              {outsiderTotal !== undefined && (
+                <Badge data-testid="not-in-pipeline-count" tone="neutral" size="sm">
+                  {outsiderTotal}
+                </Badge>
+              )}
+            </div>
+
+            {/* A column that could not be read must never wear the face of a
+                column with nobody in it — saying "0 kişi" to a failed request
+                is the exact lie this column exists to stop telling. */}
+            <QueryStateBoundary
+              isLoading={outside.isLoading}
+              isError={outside.isError}
+              onRetry={() => outside.refetch()}
+              errorMessage={t(
+                'opportunities.notInPipeline.failed',
+                'Hatta olmayanlar okunamadı.',
+              )}
+              retryLabel={t('common.retry', 'Retry')}
+              loading={
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <Skeleton key={i} className="h-12 rounded-md" />
+                  ))}
+                </div>
+              }
+            >
+              {outsiders.length === 0 ? (
+                <p
+                  data-testid="not-in-pipeline-empty"
+                  className="px-1 py-2 text-caption text-muted-foreground"
+                >
+                  {t('opportunities.notInPipeline.empty', 'Herkes hatta.')}
+                </p>
+              ) : (
+                <div className="space-y-2 min-h-[40px]">
+                  {outsiders.map((p) => (
+                    <div
+                      key={p.id}
+                      data-testid={`person-card-${p.id}`}
+                      draggable
+                      onDragStart={() => setDrag({ kind: 'person', id: p.id })}
+                      onDragEnd={() => setDrag(null)}
+                      className={[
+                        'group rounded-md border border-border bg-surface p-2.5 shadow-sm cursor-grab hover:border-primary/50',
+                        drag?.kind === 'person' && drag.id === p.id ? 'opacity-50' : '',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-start gap-1.5">
+                        <GripVertical
+                          className="w-3.5 h-3.5 mt-0.5 text-muted-foreground opacity-0 group-hover:opacity-100"
+                          aria-hidden="true"
+                        />
+                        <div className="min-w-0 flex-1">
+                          {/* `name` is computed server-side by the same rule the
+                              person list uses, and it may be empty — a lead with
+                              neither field set is legal. Falling through to the
+                              phone rather than drawing a blank card. */}
+                          <p className="text-sm font-medium text-foreground truncate">
+                            {p.name ||
+                              p.phone ||
+                              t('opportunities.card.unnamed', 'İsimsiz kişi')}
+                          </p>
+                          {p.contactPerson && p.businessName && (
+                            <p className="text-caption text-muted-foreground truncate mt-0.5">
+                              {p.businessName}
+                            </p>
+                          )}
+                          {lastContact(p.lastMessageAt, `person-contact-${p.id}`)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {outside.hasNextPage && (
+                <button
+                  type="button"
+                  onClick={() => outside.fetchNextPage()}
+                  disabled={outside.isFetchingNextPage}
+                  className="mt-2 w-full rounded-md py-1.5 text-xs text-muted-foreground hover:text-primary hover:bg-surface disabled:opacity-50"
+                >
+                  {t('opportunities.notInPipeline.more', 'Daha fazla')}
+                </button>
+              )}
+            </QueryStateBoundary>
+          </div>
+
           {board.stages.map((stage) => (
             <div
               key={stage.id}
+              data-testid={`column-${stage.id}`}
               onDragOver={(e) => {
                 e.preventDefault();
                 setOverStage(stage.id);
               }}
               onDragLeave={() => setOverStage((s) => (s === stage.id ? null : s))}
-              onDrop={() => onDrop(stage.id)}
+              onDrop={() => onDrop(stage)}
               className={[
                 'flex-shrink-0 w-72 rounded-lg border bg-surface-muted/40 p-2 transition-colors',
                 overStage === stage.id ? 'border-primary bg-primary/5' : 'border-border',
@@ -453,16 +682,17 @@ export default function OpportunitiesPage() {
               </div>
 
               <div className="space-y-2 min-h-[40px]">
-                {stage.opportunities.map((o) => (
+                {stage.opportunities.map((o: BoardOpportunity) => (
                   <div
                     key={o.id}
+                    data-testid={`deal-card-${o.id}`}
                     draggable
-                    onDragStart={() => setDragId(o.id)}
-                    onDragEnd={() => setDragId(null)}
+                    onDragStart={() => setDrag({ kind: 'deal', id: o.id })}
+                    onDragEnd={() => setDrag(null)}
                     onClick={() => openEdit(o)}
                     className={[
                       'group rounded-md border border-border bg-surface p-2.5 shadow-sm cursor-pointer hover:border-primary/50',
-                      dragId === o.id ? 'opacity-50' : '',
+                      drag?.kind === 'deal' && drag.id === o.id ? 'opacity-50' : '',
                     ].join(' ')}
                   >
                     <div className="flex items-start gap-1.5">
@@ -471,10 +701,48 @@ export default function OpportunitiesPage() {
                         aria-hidden="true"
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-foreground truncate">{o.name}</p>
+                        {/* The PERSON is the headline (design 2026-08-30): the
+                            daily work runs from the human, and the board stands
+                            for forecast and overview. */}
+                        {o.lead ? (
+                          <p
+                            data-testid={`deal-card-person-${o.id}`}
+                            className="text-sm font-medium text-foreground truncate"
+                          >
+                            {o.lead.name ||
+                              o.lead.phone ||
+                              t('opportunities.card.unnamed', 'İsimsiz kişi')}
+                          </p>
+                        ) : (
+                          // A deal attached to nobody is worth SEEING, not
+                          // hiding: `leadId` has no foreign key, so this is
+                          // either a deal filed against no one or one naming a
+                          // person this workspace cannot resolve. Hiding it
+                          // would shrink the board out from under a forecast
+                          // that still counts it.
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-medium text-foreground truncate">{o.name}</p>
+                            <Badge
+                              data-testid={`deal-card-nobody-${o.id}`}
+                              tone="warning"
+                              size="sm"
+                            >
+                              {t('opportunities.card.nobody', 'Kişisiz')}
+                            </Badge>
+                          </div>
+                        )}
                         <p className="text-caption text-muted-foreground mt-0.5">
                           {money(o.value, o.currency)}
                         </p>
+                        {/* Secondary, but present: one person may be carrying
+                            two deals, and the card still has to say which — and
+                            when they were last spoken to. */}
+                        {o.lead && (
+                          <>
+                            <p className="text-micro text-muted-foreground truncate">{o.name}</p>
+                            {lastContact(o.lead.lastMessageAt, `deal-contact-${o.id}`)}
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -504,6 +504,7 @@
     "error": "Snippet'ler yüklenemedi. Lütfen tekrar deneyin."
   },
   "nav": {
+    "people": "Kişiler",
     "pinned": "Sabitlenenler",
     "more": "Daha fazla",
     "pin": "Sabitle",
@@ -1198,6 +1199,20 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Hatta değil",
+      "empty": "Herkes hatta.",
+      "failed": "Hatta olmayanlar okunamadı.",
+      "more": "Daha fazla"
+    },
+    "card": {
+      "nobody": "Kişisiz",
+      "unnamed": "İsimsiz kişi",
+      "lastContact": "Son temas",
+      "noContact": "Henüz temas yok"
+    },
+    "terminalDropRefused": "Kişiyi doğrudan Kazanıldı/Kaybedildi sütununa bırakamazsın.",
+    "dealForPersonFailed": "Bu kişi için fırsat açılamadı",
     "title": "Fırsatlar",
     "subtitle": "Anlaşmaları satış pipeline'larında takip edin.",
     "newDeal": "Yeni fırsat",
@@ -4058,6 +4073,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "Satış",
+      "none": "Bu kişi hatta değil.",
+      "add": "Hatta ekle",
+      "stage": "Aşama",
+      "unknownStage": "Bilinmeyen aşama",
+      "noClose": "Kapanış tarihi yok",
+      "failed": "Fırsatlar yüklenemedi.",
+      "moveFailed": "Aşama taşınamadı.",
+      "addFailed": "Hatta eklenemedi."
+    },
     "people": {
       "search": "Kişi ara",
       "loadFailed": "Kişiler yüklenemedi.",

@@ -88,6 +88,7 @@
     "REP": "مندوب مبيعات"
   },
   "nav": {
+    "people": "الأشخاص",
     "dashboard": "Dashboard",
     "leads": "Leads",
     "offers": "Offers",
@@ -124,6 +125,7 @@
     }
   },
   "common": {
+    "retry": "إعادة المحاولة",
     "save": "Save",
     "saveChanges": "Save changes",
     "cancel": "Cancel",
@@ -1079,6 +1081,20 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "خارج المسار",
+      "empty": "الجميع داخل المسار.",
+      "failed": "تعذّرت قراءة من هم خارج المسار.",
+      "more": "تحميل المزيد"
+    },
+    "card": {
+      "nobody": "بدون شخص",
+      "unnamed": "شخص بلا اسم",
+      "lastContact": "آخر تواصل",
+      "noContact": "لا يوجد تواصل بعد"
+    },
+    "terminalDropRefused": "لا يمكنك إسقاط شخص مباشرةً في عمود رابح/خاسر.",
+    "dealForPersonFailed": "تعذّر فتح صفقة لهذا الشخص",
     "dealNotFound": "تعذّر فتح الصفقة"
   },
   "calls": {
@@ -1100,6 +1116,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "المبيعات",
+      "none": "ليس ضمن المسار.",
+      "add": "أضِف إلى المسار",
+      "stage": "المرحلة",
+      "unknownStage": "مرحلة غير معروفة",
+      "noClose": "لا يوجد تاريخ إغلاق",
+      "failed": "تعذّر تحميل الصفقات.",
+      "moveFailed": "تعذّر نقل المرحلة.",
+      "addFailed": "تعذّرت الإضافة إلى المسار."
+    },
     "people": {
       "search": "ابحث عن شخص",
       "loadFailed": "تعذّر تحميل الأشخاص.",

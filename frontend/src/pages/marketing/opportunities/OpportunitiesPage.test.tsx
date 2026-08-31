@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import OpportunitiesPage from './OpportunitiesPage';
+import { fmtSlot } from '../../../features/marketing/utils/format';
 
 const get = vi.fn();
 const post = vi.fn();
@@ -14,6 +15,11 @@ vi.mock('../../../features/marketing/api/marketingApi', () => ({
     patch: vi.fn().mockResolvedValue({ data: {} }),
     delete: vi.fn().mockResolvedValue({ data: {} }),
   },
+}));
+
+const toastError = vi.fn();
+vi.mock('sonner', () => ({
+  toast: { error: (...a: unknown[]) => toastError(...a), success: vi.fn() },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -68,6 +74,30 @@ const BOARD = {
   ],
 };
 
+/** One PersonCard, the shape `GET /opportunities/not-in-pipeline` returns. */
+const personCard = (over: Record<string, unknown> = {}) => ({
+  id: 'lead-1',
+  name: 'Ayşe Yılmaz',
+  businessName: 'Acme Kafe',
+  contactPerson: 'Ayşe Yılmaz',
+  phone: '+905551112233',
+  status: 'CONTACTED',
+  assignedToId: null,
+  lastMessageAt: null,
+  ...over,
+});
+
+/** A page of the "Hatta değil" column. `total` is the WHOLE column, every page. */
+const column = (
+  data: ReturnType<typeof personCard>[],
+  meta: { total: number; page?: number; limit?: number; totalPages?: number },
+) => ({
+  data,
+  meta: { page: 1, limit: 20, totalPages: 1, ...meta },
+});
+
+const emptyColumn = () => column([], { total: 0 });
+
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return (
@@ -97,6 +127,7 @@ describe('OpportunitiesPage', () => {
     get.mockImplementation((url: string) => {
       if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
       if (url === '/opportunities/board') return Promise.resolve({ data: BOARD });
+      if (url === '/opportunities/not-in-pipeline') return Promise.resolve({ data: emptyColumn() });
       return Promise.resolve({ data: {} });
     });
   });
@@ -132,6 +163,7 @@ describe('OpportunitiesPage', () => {
     get.mockImplementation((url: string) => {
       if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
       if (url === '/opportunities/board') return Promise.resolve({ data: MIXED_BOARD });
+      if (url === '/opportunities/not-in-pipeline') return Promise.resolve({ data: emptyColumn() });
       return Promise.resolve({ data: {} });
     });
 
@@ -159,6 +191,7 @@ describe('OpportunitiesPage — lead deep links', () => {
       if (url === '/opportunities/board') return Promise.resolve({ data: BOARD });
       if (url === '/opportunities/o1')
         return Promise.resolve({ data: BOARD.stages[0].opportunities[0] });
+      if (url === '/opportunities/not-in-pipeline') return Promise.resolve({ data: emptyColumn() });
       return Promise.resolve({ data: {} });
     });
   });
@@ -233,5 +266,357 @@ describe('OpportunitiesPage — lead deep links', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByDisplayValue('Acme deal')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith('/opportunities/o1');
+  });
+});
+
+/**
+ * The board renders PEOPLE. Daily work runs from the human; the board stands
+ * for forecast and overview — and the leftmost column is the 361 people nobody
+ * is selling to, who appeared on no screen at all before this.
+ */
+describe('OpportunitiesPage — the board is a view of person-cards', () => {
+  const AYSE = personCard();
+
+  /** Two open stages and a terminal one, so a drop on Won can be refused. */
+  const stage = (over: Record<string, unknown>) => ({
+    pipelineId: 'p1',
+    probability: 10,
+    isWon: false,
+    isLost: false,
+    opportunities: [],
+    totalValue: 0,
+    count: 0,
+    ...over,
+  });
+
+  const PEOPLE_BOARD = {
+    pipeline: { id: 'p1', name: 'Sales Pipeline', isDefault: true },
+    stages: [
+      stage({
+        id: 's-new',
+        name: 'New',
+        position: 0,
+        opportunities: [
+          {
+            id: 'o1',
+            pipelineId: 'p1',
+            stageId: 's-new',
+            leadId: 'lead-1',
+            name: 'Happy Day Organizasyon',
+            value: 45000,
+            currency: 'TRY',
+            status: 'OPEN',
+            lead: AYSE,
+          },
+        ],
+        totalValue: 45000,
+        count: 1,
+      }),
+      stage({ id: 's-offer', name: 'Offer sent', position: 1, probability: 40 }),
+      stage({ id: 's-won', name: 'Won', position: 2, probability: 100, isWon: true }),
+    ],
+  };
+
+  const serve = (over: { board?: unknown; notInPipeline?: (page: number) => unknown } = {}) => {
+    get.mockImplementation((url: string, cfg?: { params?: { page?: number } }) => {
+      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
+      if (url === '/opportunities/board')
+        return Promise.resolve({ data: over.board ?? PEOPLE_BOARD });
+      if (url === '/opportunities/not-in-pipeline')
+        return Promise.resolve({
+          data: over.notInPipeline
+            ? over.notInPipeline(cfg?.params?.page ?? 1)
+            : column([personCard({ id: 'lead-9', name: 'Sessiz Kişi' })], { total: 1 }),
+        });
+      return Promise.resolve({ data: {} });
+    });
+  };
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: {} });
+    toastError.mockReset();
+    serve();
+  });
+
+  it('puts the PERSON on the card, with the deal value under them', async () => {
+    render(<OpportunitiesPage />, { wrapper });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    expect(within(card).getByTestId('deal-card-person-o1')).toHaveTextContent('Ayşe Yılmaz');
+    // The deal is still identifiable — a person may have more than one — but it
+    // is no longer the headline.
+    expect(card).toHaveTextContent('Happy Day Organizasyon');
+    expect(card).toHaveTextContent(/45[.,]000/);
+  });
+
+  // `Opportunity.leadId` has no foreign key, so a deal can name a deleted
+  // person or a neighbour's. Hiding those cards would quietly shrink the board
+  // and the forecast would stop matching what is on it.
+  it('renders a deal attached to nobody honestly rather than hiding it', async () => {
+    serve({
+      board: {
+        pipeline: PEOPLE_BOARD.pipeline,
+        stages: [
+          stage({
+            id: 's-new',
+            name: 'New',
+            position: 0,
+            opportunities: [
+              {
+                id: 'o1',
+                pipelineId: 'p1',
+                stageId: 's-new',
+                leadId: null,
+                name: 'Happy Day Organizasyon',
+                value: 45000,
+                currency: 'TRY',
+                status: 'OPEN',
+                lead: null,
+              },
+            ],
+            totalValue: 45000,
+            count: 1,
+          }),
+        ],
+      },
+    });
+    render(<OpportunitiesPage />, { wrapper });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    expect(card).toHaveTextContent('Happy Day Organizasyon');
+    expect(within(card).getByTestId('deal-card-nobody-o1')).toBeInTheDocument();
+  });
+
+  it('makes "Hatta değil" the leftmost column and counts the WHOLE column, not the page', async () => {
+    serve({
+      notInPipeline: () =>
+        column(
+          Array.from({ length: 20 }, (_, i) => personCard({ id: `lead-${i}`, name: `Kişi ${i}` })),
+          { total: 361, totalPages: 19 },
+        ),
+    });
+    render(<OpportunitiesPage />, { wrapper });
+
+    const outside = await screen.findByTestId('column-not-in-pipeline');
+    // Leftmost: the first column in the board's own row.
+    expect(screen.getByTestId('board-columns').firstElementChild).toBe(outside);
+    // 361 is the column; 20 is the screenful. The header says the column.
+    expect(within(outside).getByTestId('not-in-pipeline-count')).toHaveTextContent('361');
+    expect(within(outside).getAllByTestId(/^person-card-/)).toHaveLength(20);
+  });
+
+  it('brings the rest of the column only when asked, and appends it', async () => {
+    const user = userEvent.setup();
+    serve({
+      notInPipeline: (page) =>
+        column([personCard({ id: `lead-p${page}`, name: `Sayfa ${page}` })], {
+          total: 361,
+          page,
+          limit: 1,
+          totalPages: 361,
+        }),
+    });
+    render(<OpportunitiesPage />, { wrapper });
+
+    expect(await screen.findByText('Sayfa 1')).toBeInTheDocument();
+    expect(screen.queryByText('Sayfa 2')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Daha fazla' }));
+
+    // Appended, not replaced: dragging person #21 out must not require walking
+    // back to the page they were on.
+    expect(await screen.findByText('Sayfa 2')).toBeInTheDocument();
+    expect(screen.getByText('Sayfa 1')).toBeInTheDocument();
+  });
+
+  // The repo's central rule. A column that cannot be read must never wear the
+  // face of a column with nobody in it — the whole reason it exists is to say
+  // how many people are outside the pipeline.
+  it('says the column could not be read rather than showing it empty', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
+      if (url === '/opportunities/board') return Promise.resolve({ data: PEOPLE_BOARD });
+      if (url === '/opportunities/not-in-pipeline') return Promise.reject(new Error('boom'));
+      return Promise.resolve({ data: {} });
+    });
+    render(<OpportunitiesPage />, { wrapper });
+
+    // Positive anchor first — the two absences below would pass instantly
+    // against the loading state.
+    expect(await screen.findByText('Hatta olmayanlar okunamadı.')).toBeInTheDocument();
+    const outside = screen.getByTestId('column-not-in-pipeline');
+    expect(within(outside).queryByTestId('not-in-pipeline-count')).not.toBeInTheDocument();
+    expect(within(outside).queryByTestId('not-in-pipeline-empty')).not.toBeInTheDocument();
+  });
+
+  it('says the column is empty only once it has actually been read', async () => {
+    serve({ notInPipeline: () => column([], { total: 0 }) });
+    render(<OpportunitiesPage />, { wrapper });
+
+    expect(await screen.findByTestId('not-in-pipeline-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('not-in-pipeline-count')).toHaveTextContent('0');
+  });
+
+  /**
+   * The card the design asked for, in full: "kişinin adı birincil, anlaşma
+   * değeri ve SON TEMASI ikincil" (2026-08-30 §1). The name and the value
+   * landed; the last contact was computed server-side — two extra raw
+   * aggregates per board load and per column page — and drawn nowhere.
+   *
+   * It is the third thing a card needs to be a decision rather than a label: a
+   * name and a number say who and how much, and only this says whether anyone
+   * has actually spoken to them.
+   */
+  describe('the card says when they were last spoken to', () => {
+    // Local wall-clock rather than a fixed ISO instant, so the expectation does
+    // not move with the machine's timezone.
+    const AUG_29_0905 = new Date(2026, 7, 29, 9, 5).toISOString();
+
+    it("carries the person's last contact on the deal card", async () => {
+      serve({
+        board: {
+          pipeline: PEOPLE_BOARD.pipeline,
+          stages: [
+            stage({
+              id: 's-new',
+              name: 'New',
+              position: 0,
+              opportunities: [
+                {
+                  id: 'o1',
+                  pipelineId: 'p1',
+                  stageId: 's-new',
+                  leadId: 'lead-1',
+                  name: 'Happy Day Organizasyon',
+                  value: 45000,
+                  currency: 'TRY',
+                  status: 'OPEN',
+                  lead: personCard({ lastMessageAt: AUG_29_0905 }),
+                },
+              ],
+              totalValue: 45000,
+              count: 1,
+            }),
+          ],
+        },
+      });
+      render(<OpportunitiesPage />, { wrapper });
+
+      const card = await screen.findByTestId('deal-card-o1');
+      const line = within(card).getByTestId('deal-contact-o1');
+      // The surface's own short-date helper, not a second formatter: a board is
+      // a COLUMN of these, so the year and the seconds are noise on every row.
+      expect(line).toHaveTextContent(`Son temas: ${fmtSlot(AUG_29_0905)}`);
+      expect(line.textContent).not.toContain(AUG_29_0905); // never the raw instant
+    });
+
+    it('carries it on the "Hatta değil" cards too, where it decides the most', async () => {
+      serve({
+        notInPipeline: () =>
+          column([personCard({ id: 'lead-9', name: 'Sessiz Kişi', lastMessageAt: AUG_29_0905 })], {
+            total: 1,
+          }),
+      });
+      render(<OpportunitiesPage />, { wrapper });
+
+      const card = await screen.findByTestId('person-card-lead-9');
+      expect(within(card).getByTestId('person-contact-lead-9')).toHaveTextContent(
+        `Son temas: ${fmtSlot(AUG_29_0905)}`,
+      );
+    });
+
+    // This column is the 361 people nobody is selling to, and most of them have
+    // never been messaged at all. Silence is the ANSWER here, so it gets words:
+    // an empty slot reads as "not loaded yet", and any date standing in for
+    // "never" is simply false.
+    it('says the silence out loud rather than leaving the slot blank', async () => {
+      serve({
+        notInPipeline: () =>
+          column([personCard({ id: 'lead-9', name: 'Sessiz Kişi', lastMessageAt: null })], {
+            total: 1,
+          }),
+      });
+      render(<OpportunitiesPage />, { wrapper });
+
+      // Positive anchor first — the absence below would pass against a card
+      // that never rendered at all.
+      const card = await screen.findByTestId('person-card-lead-9');
+      const line = within(card).getByTestId('person-contact-lead-9');
+      expect(line).toHaveTextContent('Henüz temas yok');
+      expect(line.textContent).not.toMatch(/\d/); // no date stood in for "never"
+    });
+  });
+
+  it('opens a deal for a person dragged onto a stage, with no name of its own', async () => {
+    render(<OpportunitiesPage />, { wrapper });
+
+    const person = await screen.findByTestId('person-card-lead-9');
+    fireEvent.dragStart(person);
+    const target = screen.getByTestId('column-s-offer');
+    fireEvent.dragOver(target);
+    fireEvent.drop(target);
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/opportunities', {
+        leadId: 'lead-9',
+        pipelineId: 'p1',
+        stageId: 's-offer',
+      }),
+    );
+  });
+
+  // Creating a deal directly in a terminal stage resolves it WON/LOST on the
+  // backend, so it would vanish from this OPEN-only board while silently
+  // entering won/lost reporting. The "+ Add" button already refuses this; the
+  // drag has to refuse it too, out loud.
+  it('refuses to open a deal by dropping a person straight on Won', async () => {
+    render(<OpportunitiesPage />, { wrapper });
+
+    const person = await screen.findByTestId('person-card-lead-9');
+    fireEvent.dragStart(person);
+    const won = screen.getByTestId('column-s-won');
+    fireEvent.dragOver(won);
+    fireEvent.drop(won);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  // The gesture that already existed. A drag state that stopped telling deals
+  // and people apart would break this one silently.
+  it('still moves an existing deal between stages', async () => {
+    render(<OpportunitiesPage />, { wrapper });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    fireEvent.dragStart(card);
+    const target = screen.getByTestId('column-s-offer');
+    fireEvent.dragOver(target);
+    fireEvent.drop(target);
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/opportunities/o1/move', {
+        stageId: 's-offer',
+        position: undefined,
+      }),
+    );
+  });
+
+  // The column is where people go OUT of; nothing is dropped back into it.
+  // Dropping a deal there must not read as a move to an unknown stage.
+  it('treats the "Hatta değil" column as a source, never a destination', async () => {
+    render(<OpportunitiesPage />, { wrapper });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    fireEvent.dragStart(card);
+    const outside = screen.getByTestId('column-not-in-pipeline');
+    fireEvent.dragOver(outside);
+    fireEvent.drop(outside);
+
+    // Anchor on something that DID render, so "no request" is settled rather
+    // than a race with the first paint.
+    await screen.findByTestId('person-card-lead-9');
+    expect(post).not.toHaveBeenCalled();
   });
 });

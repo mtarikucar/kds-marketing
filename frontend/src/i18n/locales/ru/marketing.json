@@ -88,6 +88,7 @@
     "REP": "Торговый представитель"
   },
   "nav": {
+    "people": "Люди",
     "dashboard": "Dashboard",
     "leads": "Leads",
     "offers": "Offers",
@@ -124,6 +125,7 @@
     }
   },
   "common": {
+    "retry": "Повторить",
     "save": "Save",
     "saveChanges": "Save changes",
     "cancel": "Cancel",
@@ -1079,6 +1081,20 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Не в воронке",
+      "empty": "Все в воронке.",
+      "failed": "Не удалось прочитать, кто вне воронки.",
+      "more": "Показать ещё"
+    },
+    "card": {
+      "nobody": "Без человека",
+      "unnamed": "Без имени",
+      "lastContact": "Последний контакт",
+      "noContact": "Контактов пока нет"
+    },
+    "terminalDropRefused": "Нельзя перетащить человека сразу в колонку «Выиграно»/«Проиграно».",
+    "dealForPersonFailed": "Не удалось открыть сделку для этого человека",
     "dealNotFound": "Не удалось открыть сделку"
   },
   "calls": {
@@ -1100,6 +1116,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "Продажи",
+      "none": "Не в воронке.",
+      "add": "Добавить в воронку",
+      "stage": "Этап",
+      "unknownStage": "Неизвестный этап",
+      "noClose": "Дата закрытия не указана",
+      "failed": "Не удалось загрузить сделки.",
+      "moveFailed": "Не удалось изменить этап.",
+      "addFailed": "Не удалось добавить в воронку."
+    },
     "people": {
       "search": "Поиск людей",
       "loadFailed": "Не удалось загрузить людей.",

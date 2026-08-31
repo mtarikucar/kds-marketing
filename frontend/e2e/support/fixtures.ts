@@ -29,6 +29,7 @@ import {
   AuthSession,
 } from './api';
 import { seedSession } from './session';
+import { workspaceNameFor } from './workspaceName';
 import { OWNER_STATE_FILE, APP_URL } from './config';
 import type { OwnerState } from '../global-setup';
 
@@ -103,8 +104,12 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
   },
 
   workspace: async ({ owner, api }, use, testInfo) => {
-    // Name carries the test title so a leftover row is traceable to its spec.
-    const name = `E2E ${testInfo.title}`.slice(0, 110);
+    // Name carries the test title so a leftover row is traceable to its spec,
+    // behind a per-call unique token so two runs of the same spec never ask the
+    // backend for the same slug. `E2E ${testInfo.title}` alone did, and the
+    // allocator's linear probe turned that into a 409 on the 51st run and into
+    // creeping slowness long before — see workspaceName.ts.
+    const name = workspaceNameFor(testInfo.title);
     // Signup collects productUrl + productDescription, so a realistic workspace
     // has them — and the strategy wizard is supposed to pre-fill from them.
     const { id } = await createWorkspace(api, owner.accessToken, name, {

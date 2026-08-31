@@ -277,6 +277,11 @@ describe('marketing i18n — the person surface and its work queue', () => {
     const want = [
       ...flat((tr as Json).surface as Json).map((k) => `surface.${k}`),
       ...flat(((tr as Json).leads as Json).queue as Json).map((k) => `leads.queue.${k}`),
+      // The surface's MENU entry. Since 2026-08-30 it is the only one — /inbox
+      // and /leads listed one page twice and the duplicate is gone — so if this
+      // single word degrades to English, the surface is unreachable by name in
+      // that locale, with no second entry left to fall back on.
+      'nav.people',
     ];
     expect(want).toEqual(
       expect.arrayContaining([
@@ -324,6 +329,60 @@ describe('marketing i18n — the person surface and its work queue', () => {
       waiting: 'Bekleyen',
       unassigned: 'Atanmamış',
       all: 'Hepsi',
+    });
+  });
+});
+
+describe('marketing i18n — the board as a view of people', () => {
+  // The pipeline's leftmost column is the 361 people nobody is selling to, and
+  // the words that make it readable: what the column IS, what a card with no
+  // person on it says, and — the load-bearing pair — how it admits a failure
+  // versus how it admits an empty column.
+  //
+  // Same trap as everywhere else in this file: `fallbackLng: 'en'` means a
+  // locale that simply LACKS these neither throws nor shows a raw key, so a
+  // ru/ar/uz operator is quietly served another language and nothing at runtime
+  // notices (missingKeyHandler is DEV-only). The `opportunities` namespace is
+  // barely translated outside en/tr, which is exactly why the new keys need
+  // pinning rather than assuming.
+  const WANT = [
+    'opportunities.notInPipeline.title',
+    'opportunities.notInPipeline.failed',
+    'opportunities.notInPipeline.empty',
+    'opportunities.notInPipeline.more',
+    'opportunities.card.nobody',
+    'opportunities.card.unnamed',
+    'opportunities.terminalDropRefused',
+    'opportunities.dealForPersonFailed',
+  ];
+
+  it('every offered locale can name the column, its cards and its refusals', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: WANT.filter((k) => !have.has(k)) }).toEqual({
+        locale,
+        missing: [],
+      });
+    }
+  });
+
+  // The repo's central rule, at the string level. "We could not read who is
+  // outside the pipeline" and "nobody is outside the pipeline" are opposite
+  // facts; a translator who renders them with the same sentence re-collapses
+  // the distinction in a locale no component test looks at — and this column
+  // exists precisely to stop a failed read from reading as a zero.
+  it('never says a column that failed is a column that is empty, in any locale', async () => {
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const c = (cat.opportunities as Json).notInPipeline as Record<string, string>;
+      expect({ locale, collides: c.failed === c.empty }).toEqual({ locale, collides: false });
+    }
+  });
+
+  it('uses the spec’s own words in Turkish', () => {
+    expect(((tr as Json).opportunities as Json).notInPipeline).toMatchObject({
+      title: 'Hatta değil',
     });
   });
 });

@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import * as os from 'node:os';
 
 /**
  * E2E runs against a REAL backend on a DEDICATED database (`marketing_e2e`),
@@ -9,8 +10,25 @@ import { defineConfig, devices } from '@playwright/test';
  * behind Playwright's start timeout and silently reuse whatever is listening.
  * globalSetup probes /health and fails with an actionable message instead.
  */
+/**
+ * Parallelism for a LOCAL run, sized from the host's cores. See `workers`.
+ * `availableParallelism` respects container/cgroup limits where the raw cpu
+ * count does not; it landed in Node 18.14, hence the fallback.
+ */
+function localWorkers(): number {
+  const cores = os.availableParallelism?.() ?? os.cpus().length;
+  return Math.max(2, Math.min(4, Math.floor(cores / 4)));
+}
+
 export default defineConfig({
   testDir: './e2e',
+  /**
+   * Specs are `*.spec.ts`; `*.test.ts` under `e2e/support` belongs to vitest
+   * (the fixtures' pure helpers — see vitest.config.ts). Without this, the
+   * default testMatch collects BOTH extensions and Playwright would try to run
+   * a vitest file as a spec.
+   */
+  testMatch: '**/*.spec.ts',
   globalSetup: './e2e/global-setup.ts',
 
   fullyParallel: true,
@@ -26,8 +44,27 @@ export default defineConfig({
    * globalSetup now authenticates ONCE and shares the session, so the whole
    * run costs 2 logins (setup + the real-UI-login smoke test) regardless of
    * worker count, and this number is free to track the machine.
+   *
+   * So it now DOES track the machine, instead of being the flat 4 that
+   * everyone inherited. A worker is not one thread: it drives a whole Chromium
+   * (itself multi-process), and locally it competes with a Vite dev server
+   * compiling ~200 modules per page AND the Nest API under test — all on the
+   * same box. On an 8-core machine the flat 4 over-subscribed it badly enough
+   * that a page needed 12-16s to finish rendering against a 10s `expect`
+   * budget, and the suite failed 1-5 tests per run with the victims moving
+   * around (contention, not a bug in any of them). It was not even buying
+   * speed: measured on 8 cores, workers 4 and 2 both completed the full suite
+   * in 1.8 minutes — 4 spent the difference thrashing — and only 2 completed
+   * it green, repeatably.
+   *
+   * ~4 cores per worker leaves that headroom. Clamped to at least 2 so a small
+   * machine still runs in parallel, and to at most 4 so a big one does not
+   * reintroduce the pile-up by driving eight browsers at one dev server.
+   *
+   * CI is untouched: it serves a PRODUCTION build (see webServer below), which
+   * does no on-demand compiling, and its runners are small.
    */
-  workers: process.env.CI ? 2 : 4,
+  workers: process.env.CI ? 2 : localWorkers(),
 
   // `list` for a readable log, `html` for the artifact CI uploads on failure.
   reporter: [['list'], ['html', { open: 'never' }]],

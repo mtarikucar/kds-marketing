@@ -265,6 +265,7 @@
     "REP": "Sales Rep"
   },
   "nav": {
+    "people": "People",
     "pinned": "Pinned",
     "more": "More",
     "pin": "Pin",
@@ -928,6 +929,20 @@
     }
   },
   "opportunities": {
+    "notInPipeline": {
+      "title": "Not in pipeline",
+      "empty": "Everyone is in the pipeline.",
+      "failed": "Could not read who is outside the pipeline.",
+      "more": "Load more"
+    },
+    "card": {
+      "nobody": "No person",
+      "unnamed": "Unnamed person",
+      "lastContact": "Last contact",
+      "noContact": "No contact yet"
+    },
+    "terminalDropRefused": "You cannot drop a person straight onto Won/Lost.",
+    "dealForPersonFailed": "Could not open a deal for this person",
     "title": "Opportunities",
     "subtitle": "Track deals across your sales pipelines.",
     "newDeal": "New deal",
@@ -3207,6 +3222,17 @@
     }
   },
   "surface": {
+    "sales": {
+      "title": "Sales",
+      "none": "Not in the pipeline.",
+      "add": "Add to pipeline",
+      "stage": "Stage",
+      "unknownStage": "Unknown stage",
+      "noClose": "No close date",
+      "failed": "Deals could not be loaded.",
+      "moveFailed": "Could not move the stage.",
+      "addFailed": "Could not add to the pipeline."
+    },
     "people": {
       "search": "Search people",
       "loadFailed": "Could not load people.",
