@@ -4125,6 +4125,7 @@
     "researchTakenOverLead": "Claude'un işi almadı, biz koşturduk",
     "researchTakenOverNights": "gece",
     "researchTakenOverAtLeast": "en az",
+    "researchTakenOverCostUnknown": "maliyeti okunamadı",
     "researchTakenOverAsk": "zamanlanmış görevin çalışıyor mu?"
   },
   "surface": {

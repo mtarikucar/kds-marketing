@@ -1101,6 +1101,7 @@
     "researchTakenOverLead": "Claude vazifani olmadi — biz bajardik",
     "researchTakenOverNights": "kecha",
     "researchTakenOverAtLeast": "kamida",
+    "researchTakenOverCostUnknown": "xarajatni o‘qib bo‘lmadi",
     "researchTakenOverAsk": "rejalashtirilgan vazifangiz ishlayaptimi?"
   },
   "opportunities": {

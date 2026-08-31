@@ -1101,6 +1101,7 @@
     "researchTakenOverLead": "Ваш Claude не взял задачу — мы выполнили её сами",
     "researchTakenOverNights": "ноч.",
     "researchTakenOverAtLeast": "не менее",
+    "researchTakenOverCostUnknown": "стоимость не считана",
     "researchTakenOverAsk": "ваша запланированная задача ещё работает?"
   },
   "opportunities": {

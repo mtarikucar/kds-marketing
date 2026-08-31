@@ -1101,6 +1101,7 @@
     "researchTakenOverLead": "لم يأخذ Claude المهمة — نفّذناها نحن",
     "researchTakenOverNights": "ليلة",
     "researchTakenOverAtLeast": "على الأقل",
+    "researchTakenOverCostUnknown": "تعذّرت قراءة التكلفة",
     "researchTakenOverAsk": "هل مهمتك المجدولة لا تزال تعمل؟"
   },
   "opportunities": {

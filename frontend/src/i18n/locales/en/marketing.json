@@ -3258,6 +3258,7 @@
     "researchTakenOverLead": "Your Claude did not take the job — we ran it",
     "researchTakenOverNights": "night(s)",
     "researchTakenOverAtLeast": "at least",
+    "researchTakenOverCostUnknown": "cost unreadable",
     "researchTakenOverAsk": "is your scheduled task still running?"
   },
   "budget": {

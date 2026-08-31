@@ -89,10 +89,16 @@ export function TimelinePanel() {
   // white-screens on a field it merely wanted to mention is a worse outage than
   // the silence this field exists to break.
   const takenOver = research?.takenOver ?? null;
-  // A takeover we could not price prints NO number. `0,00 $` would read as "it
-  // was free", which is the one thing we know it was not — and the whole reason
+  // A takeover we could not price prints no NUMBER — `0,00 $` would read as "it
+  // was free", which is the one thing we know it was not, and the whole reason
   // the backend records `null` rather than a zero. Two decimals because these
   // are cents: a week of takeovers is well under a dollar.
+  //
+  // But it does not print SILENCE either. A bare "3 gece" is indistinguishable
+  // from a takeover that genuinely cost nothing, and this panel refuses that
+  // trade everywhere else — `unread` names the sources it could not read
+  // instead of shortening the list, `truncated` says there is more. The
+  // unpriced case says so in words for the same reason.
   const takenOverCost = takenOver?.costUsd != null ? takenOver.costUsd.toFixed(2) : null;
 
   return (
@@ -195,13 +201,19 @@ export function TimelinePanel() {
             {t('timeline.researchTakenOverLead', "Claude'un işi almadı, biz koşturduk")}
             {': '}
             {takenOver.count} {t('timeline.researchTakenOverNights', 'gece')}
-            {takenOverCost != null && (
+            {takenOverCost != null ? (
               <>
                 {' ('}
                 {takenOver.costUnknown > 0 && (
                   <>{t('timeline.researchTakenOverAtLeast', 'en az')} </>
                 )}
                 {takenOverCost} $)
+              </>
+            ) : (
+              <>
+                {' ('}
+                {t('timeline.researchTakenOverCostUnknown', 'maliyeti okunamadı')}
+                {')'}
               </>
             )}
             {' — '}

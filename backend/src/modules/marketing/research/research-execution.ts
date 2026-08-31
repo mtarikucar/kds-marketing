@@ -22,9 +22,41 @@
  *  - `AUTO`   — the default: `MCP` while a Claude is actually connected,
  *               `SERVER` otherwise.
  *
- * "Research never silently stops" becomes a system-wide invariant, and that is
- * precisely what makes auto-defaulting safe: a wrong guess costs latency, never
- * a lost night.
+ * "Research never silently stops" becomes the invariant, and that is precisely
+ * what makes auto-defaulting safe: a wrong guess costs latency, never a lost
+ * night.
+ *
+ * ## The one gap the grace window does NOT cover
+ *
+ * The window is measured on PENDING rows — `ScheduledJobRunnerService.claimBatch`
+ * only ever sees `status = 'PENDING'`. A job an MCP client has already LEASED
+ * sits in `CLAIMED`, a status chosen precisely so neither generic sweeper can
+ * see it (`claimBatch` takes PENDING, `reapStuck` revives RUNNING). Its only
+ * way back to the queue is `ResearchLeaseService.releaseExpired`, which has
+ * exactly two callers, both lazy: `claim()` (a client polling again) and
+ * `queueStatus()` (a panel load).
+ *
+ * So a client that leases a job and then dies, in a workspace whose owner does
+ * not open the panel and whose client never polls again, strands THAT night. No
+ * cron will notice; the row sits in CLAIMED until somebody looks.
+ *
+ * It is bounded, which is why it is documented rather than fixed:
+ *
+ *  - It costs one night, not the feature. The partial-unique index behind
+ *    `(kind, dedupKey)` is `WHERE status = 'PENDING'`, so a CLAIMED row does
+ *    not block tomorrow's cron from enqueueing the same profile again — and
+ *    that fresh row runs the whole grace-and-fallback path normally.
+ *  - Anything that looks heals it. One panel load, or one further poll from
+ *    any client in that workspace, sweeps the expired lease back to PENDING,
+ *    where it is immediately claimable (`releaseExpired` preserves the original
+ *    `createdAt`, which is already outside the window).
+ *  - The stranding case requires the client to die mid-lease AND never return
+ *    AND nobody to open the panel for a day — a workspace where research is
+ *    not being watched at all.
+ *
+ * Stated here rather than left implied because "never" was doing real work in
+ * the sentence above, and a reader who takes it literally will not go looking
+ * for the CLAIMED row when a single night is missing.
  */
 
 /** Every value `Workspace.researchExecution` may hold. */

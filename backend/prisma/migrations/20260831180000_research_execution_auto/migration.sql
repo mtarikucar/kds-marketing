@@ -20,7 +20,21 @@
 -- Rows explicitly at 'MCP' are LEFT ALONE: that value can only have been
 -- written by an owner deliberately flipping the switch, and it still wins.
 --
--- Idempotent: re-running matches nothing the second time.
+-- THE UPDATE IS ONE-WAY, AND THERE IS NO down.sql. Once it has run, a
+-- deliberately-chosen 'SERVER' and a defaulted one are the same string in the
+-- same column and nothing distinguishes them — so this migration cannot be
+-- reversed, and no honest down.sql can be written for it. The argument above
+-- is why that is acceptable and not a hole: the previous migration
+-- (20260831120000) landed hours earlier and wrote every 'SERVER' row itself as
+-- its column default, so on this deployment there is no owner decision to
+-- lose. Anyone porting this file to a database where 'SERVER' could have been
+-- chosen by a human must narrow the WHERE clause (e.g. by `updatedAt`) or
+-- snapshot the column first. Reading "every existing SERVER row is the
+-- migration default" as a property of the schema rather than of this one
+-- deployment's history is how it gets silently wrong.
+--
+-- Idempotent in the sense that matters — re-running matches nothing the second
+-- time — but NOT recoverable.
 ALTER TABLE "workspaces"
   ALTER COLUMN "researchExecution" SET DEFAULT 'AUTO';
 

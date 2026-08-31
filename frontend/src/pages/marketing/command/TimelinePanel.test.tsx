@@ -357,6 +357,25 @@ describe('TimelinePanel — when the platform had to step in', () => {
     expect(line.textContent).not.toMatch(/\$\s*0[.,]00|0[.,]00\s*\$/);
   });
 
+  /**
+   * ...but it must not print NOTHING either. A bare "1 gece" is
+   * indistinguishable from a takeover that genuinely cost nothing, which is
+   * the same sentence `$0.00` would have told — just told by omission. This
+   * panel names its unread sources and its truncated ones rather than
+   * shortening a list; an unpriced takeover gets the same treatment.
+   */
+  it('says the cost is unreadable rather than leaving the number off in silence', async () => {
+    getHomeTimeline.mockResolvedValue(
+      withTakeover({ costUsd: null, costUnknown: 1 }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByTestId('tl-research-takenover')).toHaveTextContent(
+      /okunamadı/i,
+    );
+  });
+
   /** A partially-priced week is a LOWER bound and has to read as one. */
   it('marks a partly-unpriced total as "at least"', async () => {
     getHomeTimeline.mockResolvedValue(
