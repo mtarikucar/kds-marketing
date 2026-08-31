@@ -457,12 +457,50 @@ Workflows gate on `workflows`; research on `research`.
 
 Live measurement put the nightly research agent at **86% of the platform's whole
 Anthropic bill** — and the `@Cron` that builds those jobs spends nothing. All of
-the money is spent by whoever *drains* the queue. So a workspace can set
-`researchExecution = MCP` and have **its own Claude** drain it: the platform's
-runner then leaves those jobs queued, and the reasoning and general web search
-are billed to the owner's subscription instead. The switch lives in **Settings →
-Claude connector**, on the *"Who runs the nightly research"* card, and is
-OWNER-only (`PATCH marketing/workspaces/research-execution`, `@Audit`-logged).
+the money is spent by whoever *drains* the queue. So the queue can be drained by
+the workspace's **own Claude**, with the reasoning and general web search billed
+to the owner's subscription instead.
+
+`researchExecution` decides **who is asked first**, and has three values:
+
+| Value | Behaviour |
+| --- | --- |
+| `AUTO` (default) | `MCP` while a Claude is actually connected to this workspace, `SERVER` otherwise |
+| `SERVER` | the platform's in-process worker drains immediately |
+| `MCP` | the owner's Claude gets first refusal |
+
+**It is not a hard switch, and that is deliberate.** Under `MCP` the platform
+stays off a research job only while it is within `RESEARCH_MCP_GRACE_HOURS` (6)
+of being enqueued; after that it drains the job anyway, on its own key. The
+first version of this lane *was* a hard switch, and a customer who connected
+Claude once and never wrote a scheduled task had their nightly research stop
+dead while the panel showed an empty review queue — indistinguishable from
+"research found nothing". The grace window makes *"research never silently
+stops"* a system-wide invariant, which is the only reason `AUTO` is safe as a
+default: a wrong guess costs six hours of latency, never a night's work.
+
+The connection `AUTO` looks for is an `agent_runs` row with `agent = 'mcp'`
+inside `MCP_CONNECTION_STALE_DAYS` (14) — i.e. a real MCP **tool call**, on
+either the API-key or the OAuth path. Deliberately *not* `ApiKey.lastUsedAt`,
+which the public REST `ApiKeyGuard` stamps as well (a Zapier integration would
+have flipped the lane) and which the Claude.ai/Desktop connectors never touch
+at all.
+
+When the platform does take a job back, **it says so**: the takeover is stamped
+on the job with its measured vendor cost, and the home timeline reports it by
+name — *"your Claude did not take the job, we ran it: N nights ($X) — is your
+scheduled task running?"*. A fallback that quietly keeps the cost on the
+platform is the same trap as a lane that silently stops, approached from the
+other side.
+
+The switch lives in **Settings → Claude connector**, on the *"Who runs the
+nightly research"* card, which also says whether the current lane was **chosen
+or detected**, and is OWNER-only
+(`PATCH marketing/workspaces/research-execution`, `@Audit`-logged). The same
+page hands over a **copy-paste scheduled-task prompt** with this workspace's
+connector address already in it; the first-run checklist's *"Connect your
+Claude"* step points there, and is completed only by a real successful claim —
+never by the existence of a key.
 
 The instruction is **server-authored**. `jeeta.claim_research_job` returns the
 whole brief — ICP, geo, business types, exclusions, language, the hard
