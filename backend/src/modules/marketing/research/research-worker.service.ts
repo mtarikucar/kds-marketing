@@ -8,14 +8,10 @@ import { AgentRunService } from '../agents/agent-run.service';
 import { ResearchSourcesService } from './providers/research-sources.service';
 import { ResearchSpendService } from '../budget/research-spend.service';
 import { RESEARCH_TOOLS, SUBMIT_CANDIDATES_TOOL, dispatchResearchTool, ResearchToolCtx } from './research-toolset';
-import { ResearchCandidateService, StagedCandidate } from './research-candidate.service';
+
 import { ResearchJob } from './research-job.service';
-import {
-  RESEARCH_SYSTEM_PROMPT,
-  buildResearchBrief,
-  researchBatchCap,
-  validateResearchCandidates,
-} from './research-contract';
+import { RESEARCH_SYSTEM_PROMPT, buildResearchBrief } from './research-contract';
+import { ResearchFinalizeService } from './research-finalize.service';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 
 export interface ResearchRunResult {
@@ -54,7 +50,7 @@ export class ResearchWorkerService {
     private readonly runs: AgentRunService,
     private readonly sources: ResearchSourcesService,
     private readonly spend: ResearchSpendService,
-    private readonly candidates: ResearchCandidateService,
+    private readonly finalize: ResearchFinalizeService,
     private readonly brandContext: BrandContextService,
   ) {}
 
@@ -84,7 +80,7 @@ export class ResearchWorkerService {
 
           const brand = await this.brandContext.summaryFor(job.workspaceId);
           const messages: Anthropic.MessageParam[] = [{ role: 'user', content: buildResearchBrief(job, brand) }];
-          let candidates: StagedCandidate[] = [];
+          let candidates: unknown[] = [];
           let everSubmitted = false;
           let toolCalls = 0;
           const deadline = Date.now() + MAX_WALL_MS;
@@ -116,7 +112,7 @@ export class ResearchWorkerService {
             let submitted = false;
             for (const tu of res.toolUses) {
               if (tu.name === 'submit_candidates') {
-                candidates = validateResearchCandidates((tu.input as { candidates?: unknown[] })?.candidates ?? []);
+                candidates = (tu.input as { candidates?: unknown[] })?.candidates ?? [];
                 results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify({ received: candidates.length }) });
                 submitted = true;
                 everSubmitted = true;
@@ -167,30 +163,20 @@ export class ResearchWorkerService {
               turnsCompleted += 1;
               const submitTu = forced.toolUses.find((t) => t.name === 'submit_candidates');
               if (submitTu) {
-                candidates = validateResearchCandidates((submitTu.input as { candidates?: unknown[] })?.candidates ?? []);
-                this.logger.log(`research run ${runId}: forced submit recovered ${candidates.length} candidate(s) (ws ${job.workspaceId})`);
+                candidates = (submitTu.input as { candidates?: unknown[] })?.candidates ?? [];
+                this.logger.log(`research run ${runId}: forced submit recovered ${candidates.length} submitted candidate(s), pre-validation (ws ${job.workspaceId})`);
               }
             } catch (e) {
               this.logger.warn(`research run ${runId}: forced submit failed (ws ${job.workspaceId}): ${(e as Error)?.message ?? e}`);
             }
           }
 
-          // Bound volume relative to what can actually be accepted (cost guard).
-          candidates = candidates.slice(0, researchBatchCap(job));
+          // Validate, clip, stage, meter and stamp — the same five steps the
+          // MCP lane's submit_research_candidates runs, from one place.
+          const { researched, staged, duplicates } = await this.finalize.finalize(job, runId, candidates);
 
-          const { staged, duplicates } = await this.candidates.stage(job.workspaceId, job.profile.id, runId, candidates);
-          if (staged > 0) {
-            await this.spend.settle(job.workspaceId, { unit: 'RESEARCH_LEAD', quantity: staged, ref: runId });
-          }
-          await this.prisma.researchProfile
-            .updateMany({
-              where: { id: job.profile.id, workspaceId: job.workspaceId },
-              data: { lastRunAt: new Date(), lastRunStats: { posted: candidates.length, staged, duplicates, at: new Date().toISOString() } },
-            })
-            .catch(() => undefined);
-
-          this.logger.log(`research run ${runId}: ${candidates.length} qualified, ${staged} staged, ${duplicates} dupes (ws ${job.workspaceId})`);
-          return { runId, researched: candidates.length, staged, duplicates };
+          this.logger.log(`research run ${runId}: ${researched} qualified, ${staged} staged, ${duplicates} dupes (ws ${job.workspaceId})`);
+          return { runId, researched, staged, duplicates };
         } catch (e) {
           // Refund the base and only the turn that did NOT run.
           // Turns whose Anthropic call actually RETURNED are real vendor spend

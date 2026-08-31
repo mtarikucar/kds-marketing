@@ -1,6 +1,7 @@
 import { ResearchWorkerService } from './research-worker.service';
 import { ResearchJob } from './research-job.service';
 import { RESEARCH_SYSTEM_PROMPT, buildResearchBrief, researchBatchCap } from './research-contract';
+import { ResearchFinalizeService } from './research-finalize.service';
 
 const JOB: ResearchJob = {
   workspaceId: 'ws1', workspaceSlug: 'acme', productName: 'Jeeta', productUrl: null,
@@ -31,8 +32,12 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
   // Default: no ACTIVE BrandProfile — keeps every pre-existing test's brief
   // assertions unaffected. Brand-injection tests override per-case.
   const brandContext = { summaryFor: jest.fn().mockResolvedValue(null) };
-  const svc = new ResearchWorkerService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, candidates as any, brandContext as any);
-  return { svc, complete, credits, runs, sources, spend, candidates, prisma, brandContext };
+  // The REAL finalize service over the same fakes: the worker's tail (validate,
+  // clip, stage, meter, stamp) now lives there, and stubbing it out would make
+  // every `candidates.stage` / `spend.settle` assertion below test nothing.
+  const finalize = new ResearchFinalizeService(prisma as any, candidates as any, spend as any);
+  const svc = new ResearchWorkerService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, finalize, brandContext as any);
+  return { svc, complete, credits, runs, sources, spend, candidates, prisma, brandContext, finalize };
 }
 
 const toolUse = (id: string, name: string, input: unknown) => ({ id, name, input });
