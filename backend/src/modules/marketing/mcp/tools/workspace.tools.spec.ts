@@ -57,6 +57,27 @@ describe('workspace MCP tools', () => {
       );
     });
 
+    it('can filter for CLAIMED — the state a research job actually gets stuck in', async () => {
+      // This is the one tool an operator reaches for to find a stuck job, and
+      // it could not name the state a job gets stuck in. `CLAIMED` is the MCP
+      // research lease: invisible to `claimBatch` (PENDING only) and to
+      // `reapStuck` (RUNNING only), so a stranded lease is exactly the row
+      // somebody would come here looking for.
+      const registry = new McpToolRegistry();
+      const d = deps();
+      registerWorkspaceTools(registry, d);
+      await registry
+        .get('jeeta.list_background_jobs')!
+        .handler({ workspaceId: 'ws1', grantedScopes: ['reports.read'] }, { status: 'CLAIMED' });
+      expect(d.jobs.list).toHaveBeenCalledWith('ws1', {
+        kind: undefined,
+        status: 'CLAIMED',
+        limit: undefined,
+      });
+      const shape = registry.get('jeeta.list_background_jobs')!.inputSchema as any;
+      expect(shape.safeParse({ status: 'CLAIMED' }).success).toBe(true);
+    });
+
     it('scopes the read to the caller workspace and passes the filters through', async () => {
       const registry = new McpToolRegistry();
       const d = deps();

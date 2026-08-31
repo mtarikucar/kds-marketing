@@ -205,10 +205,23 @@ export class ScheduledJobRunnerService {
    *    enqueue time. Stamping is tidier layering — this is the one place the
    *    generic runner knows a feature's kind — but it leaves a real bug:
    *    rows stamped MCP are orphaned forever the moment an owner switches back
-   *    to SERVER, drained by nobody, noticed by nothing. Reading live means
-   *    flipping the switch releases the queue in the very next tick, in either
-   *    direction. `workspaces` is small and this is a PK lookup per candidate
-   *    row; the honest version is also the cheap one.
+   *    to SERVER, drained by nobody, noticed by nothing.
+   *
+   *    Reading live means flipping the switch releases every PENDING row in the
+   *    very next tick, in either direction. It does NOT release a row that is
+   *    already CLAIMED: this predicate only ever sees PENDING, so a job an MCP
+   *    client holds is untouched by the flip and stays that way until
+   *    `ResearchLeaseService.releaseExpired` returns it to the queue. That is
+   *    precisely why the sweep runs from `queueStatus()` — mode-independent, no
+   *    client needed — and not only from `claim()` behind the mode check;
+   *    without that second caller the stamped-row bug described above simply
+   *    reappeared one status later, and just as invisibly.
+   *
+   *    Cost: the planner does NOT do a PK lookup per candidate row. `EXPLAIN`
+   *    on this predicate shows `(kind <> 'research.run') OR (NOT (hashed
+   *    SubPlan))` — one pass over the MCP workspaces, hashed once, then probed
+   *    per row. `workspaces` is read once per tick, not once per job. The
+   *    honest version is cheaper than it was described as.
    *
    * `RESEARCH_RUN_KIND` is imported from the import-free `research-kinds.ts`
    * rather than from the research runner, which imports this file.

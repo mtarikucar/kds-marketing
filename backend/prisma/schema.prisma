@@ -1541,7 +1541,17 @@ model ScheduledJob {
   /// Deterministic key; rescheduling collapses onto the same PENDING row
   /// (enforced by a raw partial-unique index, see the migration).
   dedupKey    String?
-  status      String    @default("PENDING") // PENDING, RUNNING, DONE, FAILED, CANCELLED
+  /// PENDING, CLAIMED, RUNNING, DONE, FAILED, CANCELLED.
+  ///
+  /// CLAIMED is the MCP research lease (`RESEARCH_JOB_CLAIMED`): a client holds
+  /// the job while it works it. Deliberately a state the GENERIC sweepers do not
+  /// know — `ScheduledJobRunnerService.claimBatch` takes only PENDING and its
+  /// `reapStuck` revives only RUNNING — so `ResearchLeaseService` owns its whole
+  /// lifetime, expiry included, and sweeps it from both `claim()` and
+  /// `queueStatus()`. The partial-unique index behind (kind, dedupKey) is
+  /// `WHERE status = 'PENDING'`, so a CLAIMED row does not block tonight's cron
+  /// from enqueueing the same profile again.
+  status      String    @default("PENDING")
   attempts    Int       @default(0)
   maxAttempts Int       @default(5)
   lastError   String?
