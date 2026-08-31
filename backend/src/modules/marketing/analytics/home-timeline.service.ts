@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
+import { ResearchLeaseService, ResearchQueueStatus } from '../research/research-lease.service';
 
 /**
  * Per-source row cap. The window comes from the caller, so an unbounded
@@ -32,6 +33,7 @@ const SOURCE = {
   bookings: 'randevular',
   socials: 'sosyal kampanyalar',
   campaigns: 'kampanyalar',
+  research: 'araştırma kuyruğu',
 } as const;
 
 export type TimelineKind = 'system' | 'task' | 'appointment' | 'campaign';
@@ -59,6 +61,22 @@ export interface HomeTimeline {
    * and a reader who cannot tell them apart is back where the daily brief was.
    */
   truncated: string[];
+  /**
+   * The nightly research queue and who is (not) draining it. `null` ONLY when
+   * the read failed — in which case `research` is named in `unread`.
+   *
+   * A workspace can hand research execution to its own Claude
+   * (`researchExecution: 'MCP'`), and from that moment the platform stops
+   * draining the queue. If nothing drains it on the other side the jobs simply
+   * pile up: no candidates, an empty review queue, and a screen that looks
+   * exactly like "research ran and found nothing". Those need opposite fixes,
+   * so the count and the age of the oldest waiting job are stated outright.
+   *
+   * `pendingApprovals` covers the other silent stop: `submit_research_candidates`
+   * is approval-gated, so on an APPROVAL-mode workspace the night's work can be
+   * complete and still show nothing until a human clicks.
+   */
+  research: ResearchQueueStatus | null;
 }
 
 /**
@@ -91,6 +109,7 @@ export class HomeTimelineService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobs: ScheduledJobService,
+    private readonly researchQueue: ResearchLeaseService,
   ) {}
 
   async timeline(workspaceId: string, from: Date, to: Date): Promise<HomeTimeline> {
@@ -105,7 +124,7 @@ export class HomeTimelineService {
         return fallback;
       };
 
-    const [system, tasks, bookings, socials, campaigns] = await Promise.all([
+    const [system, tasks, bookings, socials, campaigns, research] = await Promise.all([
       this.jobs
         .listCronHeartbeats()
         .then((r) => r.registered)
@@ -154,6 +173,14 @@ export class HomeTimelineService {
           take: CAP + 1,
         })
         .catch(soft(SOURCE.campaigns, [])),
+      // Not a calendar lane — it has no time axis and nothing to draw. It rides
+      // here because it obeys the same rule the four above do: a source that
+      // could not be read NAMES itself instead of shrinking into a zero. The
+      // fallback is `null`, never `{ pending: 0 }`, because "nothing is waiting"
+      // and "we could not look" must not render as the same sentence.
+      this.researchQueue
+        .queueStatus(workspaceId)
+        .catch(soft(SOURCE.research, null as ResearchQueueStatus | null)),
     ]);
 
     const truncated: string[] = [];
@@ -222,6 +249,7 @@ export class HomeTimelineService {
       items,
       unread: unread.sort(),
       truncated: truncated.sort(),
+      research,
     };
   }
 }

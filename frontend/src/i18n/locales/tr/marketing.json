@@ -4078,7 +4078,13 @@
     "none": {
       "title": "Planlanmış bir şey yok",
       "desc": "Bir görev, randevu ya da kampanya zamanlandığında burada görürsün."
-    }
+    },
+    "researchWaitingMcp": "araştırma işi senin Claude'unu bekliyor",
+    "researchWaitingServer": "araştırma işi kuyrukta bekliyor",
+    "researchOldest": "en eskisi",
+    "researchDays": "gündür",
+    "researchHours": "saattir",
+    "researchAwaitingApproval": "araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez"
   },
   "surface": {
     "sales": {

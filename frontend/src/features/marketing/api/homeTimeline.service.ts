@@ -21,6 +21,25 @@ export interface HomeTimeline {
    *  back is the EARLIEST of them, not an arbitrary slice. Kept apart from
    *  `unread` because the two failures need different fixes. */
   truncated: string[];
+  /**
+   * The nightly research queue and who is (not) draining it. `null` ONLY when
+   * the backend could not read it — in which case it has already named itself
+   * in `unread`, so the panel adds nothing of its own.
+   *
+   * `mode: 'MCP'` means the workspace handed research execution to its OWN
+   * Claude and the platform stopped draining the queue. A backlog there is the
+   * owner's scheduled task to fix; a backlog under `'SERVER'` is ours, and
+   * saying the wrong one sends somebody to fix something that is not theirs.
+   */
+  research: {
+    mode: 'SERVER' | 'MCP';
+    pending: number;
+    claimed: number;
+    oldestPendingAt: string | null;
+    oldestPendingAgeHours: number | null;
+    /** Nights fully researched but held in the human approval queue. */
+    pendingApprovals: number;
+  } | null;
 }
 
 /**

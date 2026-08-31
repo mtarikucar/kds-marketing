@@ -1081,7 +1081,13 @@
     "none": {
       "title": "Rejalashtirilgan hech narsa yo'q",
       "desc": "Vazifa, uchrashuv yoki kampaniya rejalashtirilganda shu yerda ko'rasiz."
-    }
+    },
+    "researchWaitingMcp": "tadqiqot vazifasi sizning Claude'ingizni kutmoqda",
+    "researchWaitingServer": "tadqiqot vazifasi navbatda kutmoqda",
+    "researchOldest": "eng eskisi",
+    "researchDays": "kun",
+    "researchHours": "soat",
+    "researchAwaitingApproval": "tadqiqot natijasi tasdiqingizni kutmoqda — tasdiqlanmaguncha hech bir nomzod saqlanmaydi"
   },
   "opportunities": {
     "notInPipeline": {

@@ -38,7 +38,7 @@ beforeEach(() => {
   listAgentRuns.mockResolvedValue([]);
   listPendingApprovals.mockResolvedValue([] as never);
   getHomeTimeline.mockResolvedValue({
-    from: '', to: '', items: [], unread: [], truncated: [],
+    from: '', to: '', items: [], unread: [], truncated: [], research: null,
   });
 });
 

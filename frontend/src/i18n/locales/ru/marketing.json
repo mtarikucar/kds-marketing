@@ -1081,7 +1081,13 @@
     "none": {
       "title": "Ничего не запланировано",
       "desc": "Когда появится задача, встреча или кампания, вы увидите её здесь."
-    }
+    },
+    "researchWaitingMcp": "заданий исследования ждут ваш Claude",
+    "researchWaitingServer": "заданий исследования ждут в очереди",
+    "researchOldest": "самому старому",
+    "researchDays": "дн.",
+    "researchHours": "ч.",
+    "researchAwaitingApproval": "результатов исследования ждут вашего одобрения — до одобрения ни один кандидат не сохраняется"
   },
   "opportunities": {
     "notInPipeline": {

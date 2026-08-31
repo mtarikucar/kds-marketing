@@ -3211,7 +3211,13 @@
     "none": {
       "title": "Nothing is scheduled",
       "desc": "When a task, appointment or campaign is scheduled, you will see it here."
-    }
+    },
+    "researchWaitingMcp": "research job(s) waiting for your Claude",
+    "researchWaitingServer": "research job(s) waiting in the queue",
+    "researchOldest": "oldest is",
+    "researchDays": "day(s) old",
+    "researchHours": "hour(s) old",
+    "researchAwaitingApproval": "research result(s) waiting for your approval — no candidate is saved until you approve"
   },
   "budget": {
     "kind": {

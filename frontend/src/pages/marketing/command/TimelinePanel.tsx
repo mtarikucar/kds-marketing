@@ -69,6 +69,14 @@ export function TimelinePanel() {
   const items = q.data?.items ?? [];
   const unread = q.data?.unread ?? [];
   const truncated = q.data?.truncated ?? [];
+  // `null` means the backend could not read the queue — and it already said so
+  // by name in `unread`. Rendering our own line here would either repeat that
+  // or, worse, dress a failed read up as a count.
+  const research = q.data?.research ?? null;
+  const waitingDays =
+    research?.oldestPendingAgeHours != null
+      ? Math.floor(research.oldestPendingAgeHours / 24)
+      : null;
 
   return (
     <QueryStateBoundary
@@ -88,6 +96,44 @@ export function TimelinePanel() {
           <p data-testid="tl-truncated" role="status" className="pb-1.5 text-xs text-muted-foreground">
             {t('timeline.truncated', 'Sığmayan kaynaklar')}: {truncated.join(', ')} —{' '}
             {t('timeline.truncatedHint', 'bu pencerenin yalnızca en erken kayıtları gösteriliyor, devamı var')}
+          </p>
+        )}
+
+        {research && research.pending > 0 && (
+          <p data-testid="tl-research-waiting" role="status" className="pb-1.5 text-xs text-warning">
+            {research.pending}{' '}
+            {research.mode === 'MCP'
+              ? t('timeline.researchWaitingMcp', "araştırma işi senin Claude'unu bekliyor")
+              : t('timeline.researchWaitingServer', 'araştırma işi kuyrukta bekliyor')}
+            {research.oldestPendingAgeHours != null && (
+              <>
+                {' — '}
+                {waitingDays != null && waitingDays >= 1 ? (
+                  <>
+                    {t('timeline.researchOldest', 'en eskisi')} {waitingDays}{' '}
+                    {t('timeline.researchDays', 'gündür')}
+                  </>
+                ) : (
+                  <>
+                    {t('timeline.researchOldest', 'en eskisi')} {research.oldestPendingAgeHours}{' '}
+                    {t('timeline.researchHours', 'saattir')}
+                  </>
+                )}
+              </>
+            )}
+          </p>
+        )}
+        {research && research.pendingApprovals > 0 && (
+          <p
+            data-testid="tl-research-approvals"
+            role="status"
+            className="pb-1.5 text-xs text-muted-foreground"
+          >
+            {research.pendingApprovals}{' '}
+            {t(
+              'timeline.researchAwaitingApproval',
+              'araştırma sonucu onayını bekliyor — onaylanana kadar hiçbir aday kaydedilmez',
+            )}
           </p>
         )}
 
