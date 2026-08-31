@@ -24,6 +24,9 @@ describe('ResearchRunnerService.nightly — absolute caps', () => {
       {} as any,
       { usage: jest.fn().mockResolvedValue(UNLIMITED) } as any,
       { mayRunBackground: jest.fn().mockResolvedValue(platformOk) } as any,
+      // The lane resolver / takeover recorder. Untouched by nightly(), which is
+      // all this file covers; the handler side has its own spec.
+      { modeFor: jest.fn(), recordPlatformTakeover: jest.fn() } as any,
     );
     return { svc, scheduledJob };
   }

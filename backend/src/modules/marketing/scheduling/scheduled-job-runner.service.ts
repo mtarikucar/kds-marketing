@@ -4,6 +4,11 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { RESEARCH_RUN_KIND } from '../research/research-kinds';
+import {
+  MCP_ACTIVITY_AGENT,
+  mcpActivityCutoff,
+  researchGraceCutoff,
+} from '../research/research-execution';
 
 export interface ClaimedJob {
   id: string;
@@ -223,11 +228,64 @@ export class ScheduledJobRunnerService {
    *    per row. `workspaces` is read once per tick, not once per job. The
    *    honest version is cheaper than it was described as.
    *
-   * `RESEARCH_RUN_KIND` is imported from the import-free `research-kinds.ts`
-   * rather than from the research runner, which imports this file.
+   * ## The exclusion EXPIRES, and that is what makes it safe to default on
+   *
+   * The mode no longer means "who drains", it means "who is asked FIRST"
+   * (`research-execution.ts`). Left as a hard switch it had a fatal edge: a
+   * connection is not evidence that anyone will drain the queue at 3AM, so a
+   * customer who connected Claude once and never scheduled a task had their
+   * research stop dead while the panel showed an empty review queue — a broken
+   * thing wearing the costume of an empty result, which is the failure this
+   * repo keeps paying for.
+   *
+   * So the exclusion is bounded by `createdAt > now - RESEARCH_MCP_GRACE_MS`.
+   * Inside the window the row is the owner's Claude's to lease; outside it, the
+   * platform drains it like any other job and `ResearchRunnerService.handle`
+   * records that it had to (which the home timeline then says by name — a
+   * fallback that quietly keeps the cost on the platform is the same trap from
+   * the other direction).
+   *
+   * `createdAt` and NOT `runAt` is deliberate. `runAt` is rewritten by the retry
+   * backoff, so a takeover run that fails once would push its own row back
+   * inside the window and hand first refusal to a client that already declined
+   * it — the job would then ping-pong instead of retrying. `createdAt` is
+   * immutable, so the clock runs from the moment the cron enqueued the night.
+   * It is also the same column `queueStatus()` ages the queue by, so the panel
+   * and this predicate cannot disagree about how old a job is.
+   *
+   * A job whose MCP lease EXPIRED comes back to PENDING with its original
+   * `createdAt`, so it is claimable immediately — correct, since an abandoned
+   * lease is precisely the case the fallback exists for.
+   *
+   * ## AUTO, and what actually counts as "a Claude is connected"
+   *
+   * The default mode is `AUTO`, resolved live here: MCP while this workspace
+   * has MCP TRAFFIC inside `MCP_CONNECTION_STALE_MS`, SERVER otherwise.
+   *
+   * The signal is an `agent_runs` row with `agent = 'mcp'`. `McpInvokerService`
+   * opens exactly one per tool call and a tool call cannot happen any other
+   * way, so the row IS a Claude that reached this workspace. Deliberately NOT
+   * `ApiKey.lastUsedAt`: `ApiKeysService.authenticate()` is shared by the MCP
+   * verifier and the public REST `ApiKeyGuard` and stamps `lastUsedAt` for
+   * both, so a workspace whose Zapier integration polls the REST API would be
+   * auto-switched to a lane no Claude is on. The agent-run signal is also the
+   * only one that sees the OAuth connectors (Claude.ai / Desktop), which never
+   * touch `ApiKey` at all.
+   *
+   * The whole three-way decision is duplicated in TypeScript by
+   * `effectiveResearchExecution()`, because `ResearchLeaseService` has to
+   * answer the same question for a client. Two implementations of one rule
+   * drift; `research-mcp-fallback.realdb.e2e-spec.ts` pins them against each
+   * other over the full matrix on real Postgres.
+   *
+   * `RESEARCH_RUN_KIND` and the two windows are imported from the import-free
+   * `research-kinds.ts` / `research-execution.ts` rather than from the research
+   * runner, which imports this file.
    */
   private async claimBatch(): Promise<ClaimedJob[]> {
     const now = new Date();
+    const graceCutoff = researchGraceCutoff(now);
+    const mcpSeenSince = mcpActivityCutoff(now);
     const rows = await this.prisma.$queryRaw<
       Array<{ id: string; workspaceId: string; kind: string; payload: any; attempts: number }>
     >`
@@ -238,10 +296,22 @@ export class ScheduledJobRunnerService {
           WHERE s."status" = 'PENDING' AND s."runAt" <= ${now}
             AND NOT (
               s."kind" = ${RESEARCH_RUN_KIND}
+              AND s."createdAt" > ${graceCutoff}
               AND EXISTS (
                 SELECT 1 FROM "workspaces" w
                  WHERE w."id" = s."workspaceId"
-                   AND w."researchExecution" = 'MCP'
+                   AND (
+                     w."researchExecution" = 'MCP'
+                     OR (
+                       w."researchExecution" = 'AUTO'
+                       AND EXISTS (
+                         SELECT 1 FROM "agent_runs" r
+                          WHERE r."workspaceId" = w."id"
+                            AND r."agent" = ${MCP_ACTIVITY_AGENT}
+                            AND r."startedAt" > ${mcpSeenSince}
+                       )
+                     )
+                   )
               )
             )
           ORDER BY s."runAt"

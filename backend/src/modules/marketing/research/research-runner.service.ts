@@ -6,6 +6,7 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { PlatformAiSpendService } from '../ai/platform-ai-spend.service';
 import { ResearchJobService } from './research-job.service';
 import { ResearchWorkerService } from './research-worker.service';
+import { ResearchLeaseService } from './research-lease.service';
 import { RESEARCH_RUN_KIND } from './research-kinds';
 
 // Re-exported so every existing importer keeps its `from './research-runner.service'`
@@ -51,6 +52,9 @@ export class ResearchRunnerService implements OnModuleInit {
     private readonly worker: ResearchWorkerService,
     private readonly credits: AiCreditsService,
     private readonly platformSpend: PlatformAiSpendService,
+    // The lane resolver and the takeover record. NOT a cycle:
+    // ResearchLeaseService knows nothing about this file.
+    private readonly lease: ResearchLeaseService,
   ) {}
 
   onModuleInit(): void {
@@ -173,11 +177,50 @@ export class ResearchRunnerService implements OnModuleInit {
     });
   }
 
+  /**
+   * Run one queued profile — and, if this job was reserved for somebody else,
+   * say so.
+   *
+   * Reaching this handler on a workspace whose effective lane is `MCP` means
+   * exactly one thing: the owner's Claude was offered the job first and did not
+   * take it inside `RESEARCH_MCP_GRACE_HOURS`, so the grace window in
+   * `ScheduledJobRunnerService.claimBatch` expired and the job was handed to us
+   * anyway. That fallback is what makes defaulting to MCP safe — research can
+   * no longer silently stop — but an UNRECORDED fallback is the same trap from
+   * the other side: research keeps appearing, the owner never discovers their
+   * scheduled task died, and the bill this feature exists to move stays with us
+   * indefinitely. So the takeover is stamped on the job with what it cost, and
+   * the home timeline reads it back by name.
+   *
+   * The stamp is written in a `finally`, for two reasons. A run that THREW
+   * still spent vendor money before it threw, and its retry accumulates onto
+   * the same row, so recording only on success would report a takeover night as
+   * free. And the recording is best-effort: a failed JSON stamp must never turn
+   * a completed research night into a retry, and three of those into a DLQ.
+   */
   private async handle(job: ClaimedJob): Promise<void> {
     const profileId = (job.payload as { profileId?: string })?.profileId;
     if (!profileId) return;
     const built = await this.jobs.buildJob(job.workspaceId, profileId);
     if (!built) return; // profile paused/deleted or quota exhausted since enqueue
-    await this.worker.runProfile(built);
+
+    // Read AFTER buildJob: a job that can produce nothing is not a takeover of
+    // anything, and flagging it would put a "your drainer is broken" line on
+    // the panel for a night where no work — and no cost — ever existed.
+    const takeover = (await this.lease.modeFor(job.workspaceId)) === 'MCP';
+    const startedAt = new Date();
+    try {
+      await this.worker.runProfile(built);
+    } finally {
+      if (takeover) {
+        await this.lease
+          .recordPlatformTakeover(job.workspaceId, job.id, startedAt)
+          .catch((e) =>
+            this.logger.warn(
+              `takeover record failed for job ${job.id} (ws ${job.workspaceId}): ${(e as Error)?.message ?? e}`,
+            ),
+          );
+      }
+    }
   }
 }

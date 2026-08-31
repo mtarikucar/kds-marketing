@@ -5,7 +5,14 @@ import { BrandContextService } from '../brand-brain/brand-context.service';
 import { ResearchJob, ResearchJobService } from './research-job.service';
 import { ResearchFinalizeService, ResearchFinalizeResult } from './research-finalize.service';
 import { RESEARCH_RUN_KIND } from './research-kinds';
+import {
+  MCP_ACTIVITY_AGENT,
+  mcpActivityCutoff,
+  effectiveResearchExecution,
+  type EffectiveResearchExecution,
+} from './research-execution';
 import { buildMcpResearchInstruction, researchTargetVolume } from './research-contract';
+import { usdFor } from '../ai/ai-model-prices';
 
 /**
  * The `ScheduledJob.status` a job sits in while an MCP client holds it.
@@ -43,6 +50,73 @@ const MAX_CLAIM_ATTEMPTS = 5;
 
 /** The MCP tool whose approvals the queue report has to surface. */
 export const SUBMIT_RESEARCH_CANDIDATES_TOOL = 'jeeta.submit_research_candidates';
+
+/**
+ * The `ScheduledJob.payload` keys that record "the owner's Claude did not take
+ * this job, so we ran it ourselves".
+ *
+ * Stored on the JOB rather than in a table of its own because that is where
+ * the fact belongs: one takeover is one job, the row already carries the
+ * `workspaceId` every isolation assertion in this lane keys off, and
+ * `scheduled_jobs` is never purged. A side table would be a second source of
+ * truth for something with exactly one home — and v2.286.0 already set the
+ * precedent by stamping `mcpAgentRunId` here.
+ */
+export const TAKEOVER_FLAG_KEY = 'platformTookOver';
+const TAKEOVER_AT_KEY = 'platformTookOverAt';
+const TAKEOVER_USD_KEY = 'platformTookOverUsd';
+const TAKEOVER_RUNS_KEY = 'platformTookOverRuns';
+
+/**
+ * How far back the panel looks for takeovers.
+ *
+ * A day would be truer to the sentence ("last night") and would also mean an
+ * owner who does not open the panel on Saturday never learns their scheduled
+ * task died on Friday. A week survives a weekend and a short holiday, which is
+ * exactly the window in which a broken drainer goes unnoticed, so the copy is
+ * written to be true over the window rather than the window trimmed to fit a
+ * nicer sentence.
+ */
+export const TAKEOVER_WINDOW_DAYS = 7;
+const TAKEOVER_WINDOW_MS = TAKEOVER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Rows to read for that window. Ten nightly runs a workspace (the cron's own
+ * cap) over seven days is 70; a manual "Run now" spree cannot push a JSON scan
+ * into anything unbounded behind this.
+ */
+const TAKEOVER_READ_CAP = 200;
+
+/**
+ * The `AiUsageLog.action` keys a research run can bill.
+ *
+ * Enumerated rather than matched on a `research.` prefix so a future action
+ * that merely mentions research cannot silently inflate a takeover's price —
+ * and so that adding one is a decision somebody makes here.
+ */
+export const RESEARCH_USAGE_ACTIONS = [
+  'research.turn',
+  'research.native_search',
+  'research.native_scrape',
+] as const;
+
+/** What the panel needs to say the platform had to step in. */
+export interface PlatformTakeoverReport {
+  /** Nights the platform drained a job reserved for the owner's Claude. */
+  count: number;
+  /** The most recent of them. Null only when `count` is 0. */
+  lastAt: string | null;
+  /**
+   * What those nights cost the platform in vendor spend, USD. `null` when
+   * nothing is priced at all — never `0`, which would read as free.
+   */
+  costUsd: number | null;
+  /**
+   * How many of `count` could not be priced. Non-zero means `costUsd` is a
+   * LOWER BOUND and must be presented as one.
+   */
+  costUnknown: number;
+}
 
 export interface ClaimedResearchJob {
   jobId: string;
@@ -90,6 +164,17 @@ export interface ResearchQueueStatus {
   oldestClaimedAgeMinutes: number | null;
   /** `submit_research_candidates` calls sitting in the human approval queue. */
   pendingApprovals: number;
+  /**
+   * Nights the PLATFORM had to drain a job reserved for the owner's Claude,
+   * because the grace window ran out with nobody claiming it.
+   *
+   * The counterweight to everything else on this object. `pending`, `claimed`
+   * and `pendingApprovals` all describe research NOT happening; this one
+   * describes research that happened on the wrong side's money. Without it the
+   * fallback is invisible and the owner never finds out their scheduled task
+   * stopped — the cost just quietly stays with us.
+   */
+  takenOver: PlatformTakeoverReport;
 }
 
 /** The context the Jeeta-keyed data tools need, resolved from the leased job. */
@@ -140,18 +225,59 @@ export class ResearchLeaseService {
   ) {}
 
   /**
-   * Which side drains this workspace. Fail-safe in the SERVER direction:
-   * anything that is not exactly `'MCP'` — a NULL from a row this code did not
+   * Which side gets FIRST REFUSAL on this workspace's research.
+   *
+   * Fail-safe in the SERVER direction: anything that is not exactly `'MCP'`, or
+   * `'AUTO'` with a live connection — a NULL from a row this code did not
    * create, a typo, a value from a future migration — means the platform's own
    * worker is still draining, and leasing on top of that would run the night
    * twice.
+   *
+   * The AUTO branch asks one question: has a Claude actually reached this
+   * workspace lately? The signal is an `agent_runs` row with `agent = 'mcp'` —
+   * `McpInvokerService` opens exactly one per tool call, on both the api-key
+   * and the OAuth paths, and nothing else writes that value.
+   *
+   * Deliberately NOT `ApiKey.lastUsedAt`, which the design proposed.
+   * `ApiKeysService.authenticate()` is shared by this surface and the PUBLIC
+   * REST `ApiKeyGuard`, and stamps `lastUsedAt` from both, so a workspace whose
+   * only `mk_live_` key belongs to a Zapier integration would be auto-switched
+   * into a lane no Claude is on. It would also MISS the Claude.ai / Desktop
+   * connectors entirely: those authenticate through `mcp_oauth_tokens` and
+   * never touch `ApiKey` at all. An `agent_runs` row has neither problem, and
+   * it is a stronger claim besides — a tool call, not a credential check.
+   *
+   * The query is skipped outright for an explicit mode: it is wasted work on a
+   * hot path (`queueStatus()` runs on every panel load and every sixty-second
+   * refetch) and a read that must not be able to override a decision somebody
+   * made.
+   *
+   * `findFirst` rather than `count`: the question is "any?", and
+   * `agent_runs_workspaceId_agent_startedAt_idx` answers that with one index
+   * probe instead of counting a connector's whole history.
+   *
+   * The identical decision is re-expressed in raw SQL inside
+   * `ScheduledJobRunnerService.claimBatch`, which cannot call this. The two are
+   * pinned against each other over the full matrix on real Postgres in
+   * `research-mcp-fallback.realdb.e2e-spec.ts`.
    */
-  async modeFor(workspaceId: string): Promise<'SERVER' | 'MCP'> {
+  async modeFor(workspaceId: string): Promise<EffectiveResearchExecution> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { researchExecution: true },
     });
-    return ws?.researchExecution === 'MCP' ? 'MCP' : 'SERVER';
+    const stored = ws?.researchExecution;
+    if (stored !== 'AUTO') return effectiveResearchExecution(stored, false);
+
+    const seen = await this.prisma.agentRun.findFirst({
+      where: {
+        workspaceId,
+        agent: MCP_ACTIVITY_AGENT,
+        startedAt: { gt: mcpActivityCutoff() },
+      },
+      select: { id: true },
+    });
+    return effectiveResearchExecution(stored, seen !== null);
   }
 
   /** Lease the next queued research job for this workspace, with its brief. */
@@ -379,7 +505,8 @@ export class ResearchLeaseService {
     // in the queue.
     await this.releaseExpired(workspaceId);
 
-    const [mode, pending, claimed, oldest, oldestLease, pendingApprovals] = await Promise.all([
+    const [mode, pending, claimed, oldest, oldestLease, pendingApprovals, takenOver] =
+      await Promise.all([
       this.modeFor(workspaceId),
       this.prisma.scheduledJob.count({
         where: { workspaceId, kind: RESEARCH_RUN_KIND, status: 'PENDING' },
@@ -411,6 +538,12 @@ export class ResearchLeaseService {
           payload: { path: ['tool'], equals: SUBMIT_RESEARCH_CANDIDATES_TOOL },
         },
       }),
+      // Deliberately UNGUARDED, like every other read here. If this rejects the
+      // whole status rejects, HomeTimelineService names the research source in
+      // `unread`, and the panel says it could not read the queue. A local catch
+      // would turn 'we could not look' into 'the platform never stepped in' —
+      // the single most reassuring lie this object could tell.
+      this.recentPlatformTakeovers(workspaceId),
     ]);
 
     const oldestAt = oldest?.createdAt ?? null;
@@ -428,6 +561,167 @@ export class ResearchLeaseService {
         ? Math.floor((Date.now() - leaseAt.getTime()) / 60_000)
         : null,
       pendingApprovals,
+      takenOver,
+    };
+  }
+
+  /**
+   * Record that the PLATFORM drained a job the owner's Claude was asked first.
+   *
+   * Called by `ResearchRunnerService.handle` once the in-process worker has
+   * finished a job whose effective lane was MCP — i.e. the grace window ran out
+   * with nobody claiming it. Without this the fallback is the same trap as the
+   * hard switch it replaced, approached from the other side: research keeps
+   * appearing, the owner never learns their scheduled task is dead, and the
+   * bill this whole feature exists to move stays on the platform forever.
+   *
+   * `since` is when the run STARTED, and the cost is every research call this
+   * workspace billed from that instant. Attribution by window is exact here,
+   * not approximate: `ScheduledJobRunnerService` dispatches its batch
+   * sequentially under a single-replica advisory lock, so a workspace cannot
+   * have two research runs in flight, and the three actions counted are emitted
+   * by nothing except the research worker.
+   *
+   * A FAILED run is recorded too — it spent real money before it failed, and
+   * the retry accumulates onto the same row rather than overwriting it, so a
+   * night that took three attempts reports what three attempts cost.
+   */
+  async recordPlatformTakeover(workspaceId: string, jobId: string, since: Date): Promise<void> {
+    const costUsd = await this.researchSpendSince(workspaceId, since);
+
+    // Read-modify-write rather than a JSON merge: `payload` also carries
+    // `profileId` (which `handle()` and `requireLeased()` both need) and may
+    // carry `mcpAgentRunId`, and clobbering either would strand the job.
+    const row = await this.prisma.scheduledJob.findFirst({
+      where: { id: jobId, workspaceId, kind: RESEARCH_RUN_KIND },
+      select: { payload: true },
+    });
+    const payload = ((row?.payload ?? {}) as Record<string, unknown>) || {};
+    const priorUsd = typeof payload[TAKEOVER_USD_KEY] === 'number'
+      ? (payload[TAKEOVER_USD_KEY] as number)
+      : null;
+    const priorRuns = typeof payload[TAKEOVER_RUNS_KEY] === 'number'
+      ? (payload[TAKEOVER_RUNS_KEY] as number)
+      : 0;
+
+    await this.prisma.scheduledJob.updateMany({
+      where: { id: jobId, workspaceId },
+      data: {
+        payload: {
+          ...payload,
+          [TAKEOVER_FLAG_KEY]: true,
+          [TAKEOVER_AT_KEY]: new Date().toISOString(),
+          // null + a number is the number; null + null stays null. A cost we
+          // could not measure must not collapse into a confident zero.
+          [TAKEOVER_USD_KEY]:
+            costUsd === null && priorUsd === null ? null : (priorUsd ?? 0) + (costUsd ?? 0),
+          [TAKEOVER_RUNS_KEY]: priorRuns + 1,
+        },
+      },
+    });
+  }
+
+  /**
+   * What this workspace's research actually billed since `since`, in USD.
+   *
+   * `null` on a read failure, never `0`: "we cannot say what it cost" and "it
+   * was free" are different sentences and the panel prints different ones.
+   *
+   * Priced through `usdFor`, which counts cache reads/writes at their own
+   * multipliers AND server-tool `webSearches` per request. Dropping the last of
+   * those would under-report exactly the search-driven runs — `native_search`
+   * bills $10/1000 requests against a handful of cheap Haiku tokens, so a
+   * token-only total reads as almost free.
+   */
+  private async researchSpendSince(workspaceId: string, since: Date): Promise<number | null> {
+    try {
+      const rows = await this.prisma.aiUsageLog.findMany({
+        where: {
+          workspaceId,
+          action: { in: [...RESEARCH_USAGE_ACTIONS] },
+          createdAt: { gte: since },
+        },
+        select: {
+          model: true,
+          inputTokens: true,
+          outputTokens: true,
+          cacheWriteTokens: true,
+          cacheReadTokens: true,
+          webSearches: true,
+        },
+      });
+      const usd = rows.reduce(
+        (total, r) =>
+          total +
+          usdFor(r.model, {
+            inputTokens: r.inputTokens,
+            outputTokens: r.outputTokens,
+            cacheWriteTokens: r.cacheWriteTokens,
+            cacheReadTokens: r.cacheReadTokens,
+            webSearches: r.webSearches,
+          }),
+        0,
+      );
+      return Math.round(usd * 1e6) / 1e6;
+    } catch (e) {
+      this.logger.warn(
+        `takeover cost unreadable for ${workspaceId}: ${(e as Error)?.message ?? e}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * The takeovers of the last `TAKEOVER_WINDOW_DAYS`, for the panel.
+   *
+   * Deliberately NOT wrapped in a catch: a read that fails must reach
+   * `queueStatus()`'s caller as a rejection so the home timeline names the
+   * research source in `unread` instead of drawing "0 nights" — which is the
+   * one sentence this whole surface exists to stop being a lie.
+   *
+   * The JSON predicate is re-checked in memory below. It is the same filter
+   * shape `queueStatus` already uses for pending approvals, and the re-check
+   * costs nothing over at most `TAKEOVER_READ_CAP` rows — but it means loosening
+   * the SQL cannot silently start counting ordinary MCP-drained nights as
+   * takeovers.
+   */
+  async recentPlatformTakeovers(workspaceId: string): Promise<PlatformTakeoverReport> {
+    const rows = await this.prisma.scheduledJob.findMany({
+      where: {
+        workspaceId,
+        kind: RESEARCH_RUN_KIND,
+        completedAt: { gte: new Date(Date.now() - TAKEOVER_WINDOW_MS) },
+        payload: { path: [TAKEOVER_FLAG_KEY], equals: true },
+      },
+      select: { completedAt: true, payload: true },
+      orderBy: { completedAt: 'desc' },
+      take: TAKEOVER_READ_CAP,
+    });
+
+    let count = 0;
+    let costUsd: number | null = null;
+    let costUnknown = 0;
+    let lastAt: string | null = null;
+
+    for (const row of rows) {
+      const payload = (row.payload ?? {}) as Record<string, unknown>;
+      if (payload[TAKEOVER_FLAG_KEY] !== true) continue;
+      count += 1;
+      const at =
+        typeof payload[TAKEOVER_AT_KEY] === 'string'
+          ? (payload[TAKEOVER_AT_KEY] as string)
+          : (row.completedAt?.toISOString() ?? null);
+      if (at && (lastAt === null || at > lastAt)) lastAt = at;
+      const usd = payload[TAKEOVER_USD_KEY];
+      if (typeof usd === 'number') costUsd = (costUsd ?? 0) + usd;
+      else costUnknown += 1;
+    }
+
+    return {
+      count,
+      lastAt,
+      costUsd: costUsd === null ? null : Math.round(costUsd * 1e6) / 1e6,
+      costUnknown,
     };
   }
 

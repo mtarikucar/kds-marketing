@@ -6,6 +6,7 @@ import {
 } from './research-lease.service';
 import { RESEARCH_RUN_KIND } from './research-kinds';
 import { ResearchJob } from './research-job.service';
+import { MCP_CONNECTION_STALE_MS } from './research-execution';
 
 const WS = 'ws-a';
 const FOREIGN = 'ws-b';
@@ -113,6 +114,9 @@ function build(
       findFirst,
       updateMany,
       count: jest.fn().mockResolvedValue(0),
+      // The takeover read `queueStatus` now makes. Empty here: these specs are
+      // about the queue counts; the takeover report has its own file.
+      findMany: jest.fn().mockResolvedValue([]),
     },
     approvalRequest: { count: jest.fn().mockResolvedValue(0) },
   };
@@ -608,5 +612,121 @@ describe('ResearchLeaseService — a DONE job is only submittable if it was ever
       staged: 2,
     });
     expect(finalize.finalize).toHaveBeenCalled();
+  });
+});
+
+/**
+ * AUTO — the default lane, resolved against real MCP traffic.
+ *
+ * The owner's instruction was "if Claude is connected, default to MCP". A
+ * connection is not evidence anyone will drain the queue at 3AM, which is why
+ * the platform now takes an unclaimed job back after the grace window; what is
+ * left for THIS resolver is only the question of whether a Claude is there.
+ *
+ * The fixture below is deliberately NOT the one above: it hands the service a
+ * real `agentRun.findFirst` that applies its own predicates, so a missing
+ * `workspaceId` / `agent` / `startedAt` filter shows up as a wrong answer
+ * rather than as a stub returning whatever the test wanted.
+ */
+describe('ResearchLeaseService — the AUTO lane', () => {
+  const OTHER = 'ws-elsewhere';
+
+  function buildAuto(
+    stored: string,
+    runs: Array<{ workspaceId: string; agent: string; startedAt: Date }>,
+  ) {
+    const seen: Array<Record<string, unknown>> = [];
+    const prisma = {
+      workspace: {
+        findUnique: jest.fn().mockResolvedValue({ researchExecution: stored }),
+      },
+      agentRun: {
+        findFirst: jest.fn(async (args: { where: Record<string, any> }) => {
+          seen.push(args.where);
+          const hit = runs.find(
+            (r) =>
+              r.workspaceId === args.where.workspaceId &&
+              r.agent === args.where.agent &&
+              (!args.where.startedAt?.gt || r.startedAt > args.where.startedAt.gt),
+          );
+          return hit ? { id: 'ar-1' } : null;
+        }),
+      },
+      scheduledJob: { findFirst: jest.fn().mockResolvedValue(null), updateMany: jest.fn(), count: jest.fn() },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const svc = new ResearchLeaseService(
+      prisma as never,
+      { buildJob: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { svc, prisma, seen };
+  }
+
+  const fresh = (ws: string) => ({
+    workspaceId: ws,
+    agent: 'mcp',
+    startedAt: new Date(Date.now() - 60_000),
+  });
+  const ancient = (ws: string) => ({
+    workspaceId: ws,
+    agent: 'mcp',
+    startedAt: new Date(Date.now() - MCP_CONNECTION_STALE_MS - 60_000),
+  });
+
+  it('reads MCP when this workspace made an MCP tool call recently', async () => {
+    const { svc } = buildAuto('AUTO', [fresh(WS)]);
+    expect(await svc.modeFor(WS)).toBe('MCP');
+  });
+
+  it('reads SERVER when the last MCP tool call is older than the threshold', async () => {
+    const { svc } = buildAuto('AUTO', [ancient(WS)]);
+    expect(await svc.modeFor(WS)).toBe('SERVER');
+  });
+
+  it('reads SERVER when this workspace has never used MCP at all', async () => {
+    const { svc } = buildAuto('AUTO', []);
+    expect(await svc.modeFor(WS)).toBe('SERVER');
+  });
+
+  /**
+   * TENANT ISOLATION, failing on its own. The ONLY MCP run in the fixture
+   * belongs to a different workspace, so dropping `workspaceId` from the
+   * predicate answers MCP instead of SERVER — the fixture cannot mask it.
+   */
+  it("never counts a NEIGHBOUR's MCP traffic as this workspace's connection", async () => {
+    const { svc } = buildAuto('AUTO', [fresh(OTHER)]);
+    expect(await svc.modeFor(WS)).toBe('SERVER');
+  });
+
+  /**
+   * Same shape for the agent filter: the only recent run is a RESEARCH run,
+   * which the platform's own worker opens on every SERVER night. Counting it
+   * would make every workspace the platform researches look "connected".
+   */
+  it('never counts a non-MCP agent run as a connection', async () => {
+    const { svc } = buildAuto('AUTO', [
+      { workspaceId: WS, agent: 'research', startedAt: new Date() },
+    ]);
+    expect(await svc.modeFor(WS)).toBe('SERVER');
+  });
+
+  it('does not look for traffic at all when the mode is explicit', async () => {
+    const explicitMcp = buildAuto('MCP', []);
+    expect(await explicitMcp.svc.modeFor(WS)).toBe('MCP');
+    expect(explicitMcp.prisma.agentRun.findFirst).not.toHaveBeenCalled();
+
+    const explicitServer = buildAuto('SERVER', [fresh(WS)]);
+    expect(await explicitServer.svc.modeFor(WS)).toBe('SERVER');
+    expect(explicitServer.prisma.agentRun.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('still fails safe towards SERVER on a value nothing here wrote', async () => {
+    for (const junk of ['auto', 'mcp', '', null]) {
+      const { svc } = buildAuto(junk as never, [fresh(WS)]);
+      expect(await svc.modeFor(WS)).toBe('SERVER');
+    }
   });
 });
