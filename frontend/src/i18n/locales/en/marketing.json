@@ -378,6 +378,7 @@
     "platformDefaultIs": "Platform default ({{label}})",
     "platformDefaultHint": "Keeps following the platform if it changes this.",
     "inUse": "In use",
+    "retired": "This workspace is set to \"{{retired}}\", which is no longer in the catalogue, so it cannot be priced or run. {{label}} runs instead ({{price}}). Pick a model below to replace the stored choice.",
     "priceVideo": "{{credits}} credits/sec ({{usd}}/sec)",
     "priceImage": "{{credits}} credits / image ({{usd}})",
     "overrideNote": "A campaign that sets its own model keeps it — this is the default for everything that does not.",
@@ -2570,6 +2571,11 @@
     "loadFailed": "The distribution plan could not be loaded. This is a load failure — it does not mean there is nothing to distribute.",
     "itemNotApproved": "Nothing in this campaign has been approved yet, so there is no published post to distribute. This is a stage of the pipeline, not a decision that the video needs no promotion.",
     "noItems": "This campaign has no approved or published post yet, so there is nothing to distribute.",
+    "confirmSend": {
+      "title": "Send this message now?",
+      "body": "It goes to {{to}} on {{channel}} as a real message from this workspace. A draft can only be sent once, so this cannot be undone from here.",
+      "confirm": "Yes, send it"
+    },
     "send": "Send",
     "sent": "Message sent.",
     "sendFailed": "The message was not sent.",

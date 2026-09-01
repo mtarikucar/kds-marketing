@@ -188,6 +188,38 @@ export function registerContentConceptTools(
     },
   });
 
+  /**
+   * THE GATING ASYMMETRY ON THIS TOOL, RECORDED AS A DECISION.
+   *
+   * `jeeta.review_content_concept` is `risk: 'WRITE'`, `requiresApproval: false`
+   * — and approving one concept triggers N video generations server-side, one
+   * per beat of its shot plan. That is the LARGEST single spend anything in this
+   * catalogue can start. `jeeta.generate_video`, which buys exactly ONE clip, is
+   * `risk: 'SPEND'` with `requiresApproval: true` and `approvalKind:
+   * 'MEDIA_SPEND'`, so it queues for a human in every write mode including
+   * AUTONOMOUS. The bigger spend is gated LESS than the smaller one.
+   *
+   * That is not an oversight, and the reason is what `requiresApproval` gates.
+   * It gates the CALL, and the caller here is a human: the tool refuses outright
+   * when `ctx.userId` is absent ("this session has no person behind it, and
+   * there is nothing honest to record as the reviewer"), so an unattended
+   * API-key session cannot reach the spend at all. The approval card would be
+   * asking the person who just approved the concept to approve their own
+   * approval. `generate_video` carries no such requirement — an unattended
+   * session CAN call it — which is exactly why it needs the broker's gate.
+   *
+   * The concept docblock in `ConceptPromotionService` argues the rest: routing
+   * the clips through `generate_video` instead would raise N approval cards for
+   * one decision, and the approval executor returns the tool result to the
+   * APPROVER's HTTP response rather than the agent's turn, so the `assetId`
+   * would never reach anything that could record it on the item.
+   *
+   * So the gate is the signed-in reviewer, once, on the idea — which is the
+   * shape the owner asked for. Do NOT "fix" this by adding `requiresApproval`
+   * or by reclassifying the risk; if the trade is to be revisited, it is the
+   * `ctx.userId` requirement and the N-cards problem that have to be revisited
+   * with it.
+   */
   registry.register({
     name: 'jeeta.review_content_concept',
     description:

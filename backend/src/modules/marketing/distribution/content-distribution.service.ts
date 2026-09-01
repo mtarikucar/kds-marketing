@@ -66,12 +66,37 @@ export const DISTRIBUTABLE_ITEM_STATUSES = ['APPROVED', 'SCHEDULED', 'PUBLISHED'
  */
 export const OUTREACH_LIMIT = 25;
 
-/** Gap between one cross-post and the next. Simultaneous posting to every
- *  network is itself a pattern platforms score as automation, and it wastes the
- *  second and third audience on the same hour. */
-export const CROSS_POST_STAGGER_MS = Number(
-  process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS ?? 4 * 60 * 60 * 1000,
-);
+const DEFAULT_CROSS_POST_STAGGER_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Gap between one cross-post and the next. Simultaneous posting to every
+ * network is itself a pattern platforms score as automation, and it wastes the
+ * second and third audience on the same hour.
+ *
+ * The env value is VALIDATED rather than trusted, because the failure of a bare
+ * `Number(...)` here is not a wrong number — it is a crash in a place nothing
+ * would connect to a typo. `Number('4h')` is `NaN`, `NaN` propagates through
+ * the `runAt` arithmetic, and `new Date(NaN).toISOString()` throws a
+ * RangeError: every plan in the workspace, including the drafts and the tags
+ * that have nothing to do with scheduling, fails with "Invalid time value".
+ * A non-positive value is refused for the same reason it exists — a zero
+ * stagger IS simultaneous posting.
+ */
+export const CROSS_POST_STAGGER_MS = (() => {
+  const raw = process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_CROSS_POST_STAGGER_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    // Said out loud, not swallowed: the operator set this on purpose and the
+    // whole point of falling back is that they must be able to find out it did
+    // not take.
+    new Logger('ContentDistributionConfig').warn(
+      `DISTRIBUTION_CROSS_POST_STAGGER_MS="${raw}" is not a positive number of milliseconds; falling back to ${DEFAULT_CROSS_POST_STAGGER_MS}ms (4h).`,
+    );
+    return DEFAULT_CROSS_POST_STAGGER_MS;
+  }
+  return parsed;
+})();
 
 export type GapArea = 'crossPost' | 'tags' | 'outreach';
 

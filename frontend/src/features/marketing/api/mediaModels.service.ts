@@ -34,9 +34,16 @@ export interface MediaModelDefaults {
   /** The workspace's CHOICE. `null` = it has not made one. */
   defaultImageModel: string | null;
   defaultVideoModel: string | null;
-  /** What would actually run today: the choice, or the platform constant. */
+  /** What would actually run today: the choice, or the platform constant. Always
+   *  an id present in `models`, so the card can always show its price. */
   effectiveImageModel: string;
   effectiveVideoModel: string;
+  /** A stored choice the catalogue no longer carries — `null` in the normal
+   *  case. Non-null means `default*` and `effective*` DISAGREE, and the card has
+   *  to say which one wins: the RadioGroup's value would otherwise match no
+   *  option, leaving a blank selection and no "In use" badge anywhere. */
+  retiredImageModel: string | null;
+  retiredVideoModel: string | null;
   models: PricedMediaModel[];
 }
 

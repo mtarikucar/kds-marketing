@@ -3,7 +3,11 @@ import { DistributionSendService } from './distribution-send.service';
 
 const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
-const HUMAN = { id: 'u-1', role: 'MANAGER' };
+/** An ACTIVE membership of THIS workspace, which is what the send gate reads —
+ *  `MarketingUser.workspaceId/role/status` is the frozen home mirror and is
+ *  deliberately NOT what authorises a send. `user.role` is the home role and is
+ *  read only to keep the SYSTEM sentinel excluded. */
+const HUMAN = { role: 'MANAGER', status: 'ACTIVE', user: { id: 'u-1', role: 'REP' } };
 
 const baseDraft = {
   id: 'draft-1',
@@ -20,7 +24,7 @@ const baseDraft = {
 
 function makeSvc(over: { draft?: unknown; claim?: number; start?: jest.Mock } = {}) {
   const prisma: any = {
-    marketingUser: { findFirst: jest.fn().mockResolvedValue(HUMAN) },
+    workspaceMembership: { findFirst: jest.fn().mockResolvedValue(HUMAN) },
     distributionDraft: {
       findFirst: jest
         .fn()

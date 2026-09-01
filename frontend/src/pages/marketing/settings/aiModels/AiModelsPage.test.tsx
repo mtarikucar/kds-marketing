@@ -44,6 +44,8 @@ function payload(over: Partial<Record<string, unknown>> = {}) {
     defaultVideoModel: null,
     effectiveImageModel: 'fal-ai/seedream',
     effectiveVideoModel: 'fal-ai/seedance-lite',
+    retiredImageModel: null,
+    retiredVideoModel: null,
     models: CATALOGUE,
     ...over,
   };
@@ -76,6 +78,23 @@ beforeEach(() => {
  */
 function card(name: string) {
   return within(screen.getByRole('radiogroup', { name }));
+}
+
+/**
+ * The label of the ONE option carrying the "In use" badge in a card, or null.
+ *
+ * Returns the label rather than a boolean so a badge on the WRONG row fails
+ * with the row it landed on — "some element says In use" would pass on exactly
+ * the screen this is meant to catch. Exactly one badge, or the card is claiming
+ * two models are running.
+ */
+function badgedInUse(name: string): string | null {
+  const badges = card(name).queryAllByText('In use');
+  expect(badges.length).toBeLessThanOrEqual(1);
+  if (!badges[0]) return null;
+  // The badge sits beside the option's <Label id="…-label"> in one flex row.
+  const label = badges[0].closest('div')?.querySelector('[id$="-label"]');
+  return label?.textContent ?? null;
 }
 
 describe('AiModelsPage', () => {
@@ -190,5 +209,56 @@ describe('AiModelsPage', () => {
       await screen.findByText(/could not be loaded/i),
     ).toBeInTheDocument();
     expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The retired-choice state, which is the one this card used to render as a
+   * blank.
+   *
+   * A model can leave the catalogue (it is a TypeScript constant, so a deploy
+   * does it) while a workspace's stored choice still names it. Generation is
+   * already correct — `MediaGenService` ignores the stored id and runs the
+   * platform constant — so the ONLY thing at stake here is whether the screen
+   * admits it. Before the fix it did not: the server echoed the retired id back
+   * as `effectiveVideoModel`, so the RadioGroup's value matched no option, no
+   * row was badged "In use", and the one screen whose purpose is to price the
+   * decision said nothing about what the next clip would cost.
+   */
+  it('says what actually runs when the stored choice has left the catalogue', async () => {
+    vi.mocked(getMediaModelDefaults).mockResolvedValue(
+      payload({
+        defaultVideoModel: 'fal-ai/kling-v1-retired',
+        // The server applies the fallback; `effective*` is always catalogued.
+        effectiveVideoModel: 'fal-ai/seedance-lite',
+        retiredVideoModel: 'fal-ai/kling-v1-retired',
+      }) as never,
+    );
+    renderPage();
+
+    await screen.findByRole('radiogroup', { name: 'Video model' });
+
+    // Names the choice that no longer exists...
+    expect(await screen.findByText(/fal-ai\/kling-v1-retired/)).toBeInTheDocument();
+    // ...says what runs instead, WITH its price, which is the decision at stake.
+    expect(screen.getByText(/Short video runs instead \(3 credits\/sec \(\$0\.025\/sec\)\)/)).toBeInTheDocument();
+    // ...and the badge is back on a real row, so the card is not silently blank.
+    // Asserted ON the row rather than anywhere on the page: an "In use" badge
+    // rendered beside the wrong model is the same lie in a different place.
+    expect(badgedInUse('Video model')).toBe('Short video');
+  });
+
+  /** The warning is not permanent furniture: an ordinary workspace must not be
+   *  told something is wrong with its configuration. */
+  it('says nothing of the sort when the stored choice is fine', async () => {
+    vi.mocked(getMediaModelDefaults).mockResolvedValue(
+      payload({
+        defaultVideoModel: 'fal-ai/veo3/fast',
+        effectiveVideoModel: 'fal-ai/veo3/fast',
+      }) as never,
+    );
+    renderPage();
+    await screen.findByRole('radiogroup', { name: 'Video model' });
+    expect(screen.queryByText(/no longer in the catalogue/i)).not.toBeInTheDocument();
+    expect(badgedInUse('Video model')).toBe('Video + audio');
   });
 });

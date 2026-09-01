@@ -4149,6 +4149,16 @@ model DistributionDraft {
   /// Stamped ONLY by a human send. The pair is the audit trail: a SENT row with
   /// a null sentById would mean something sent without a person, which is the
   /// one outcome this stage exists to make impossible.
+  ///
+  /// ENFORCED IN POSTGRES, not merely intended: migration
+  /// 20260902100000_distribution_draft_sent_by_required adds
+  /// `CHECK (status <> 'SENT' OR "sentById" IS NOT NULL)` under the name
+  /// `distribution_drafts_sent_by_present`. Prisma's datamodel cannot express a
+  /// CHECK, so this comment is where a Prisma-only reader learns it exists.
+  /// The reason it exists: the source scan in distribution-send.boundary.spec.ts
+  /// looks for two service NAMES, which a caller reaching MessageSenderService
+  /// directly simply does not use. `sentById` stays nullable because DRAFT,
+  /// DISMISSED and FAILED rows all legitimately have nobody attached to them.
   sentAt         DateTime?
   sentById       String?
   conversationId String?

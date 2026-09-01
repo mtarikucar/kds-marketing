@@ -38,6 +38,67 @@ describe('MediaModelDefaultsService.get', () => {
     const res = await svc.get(WS);
     expect(res.defaultVideoModel).toBe('fal-ai/veo3/fast');
     expect(res.effectiveVideoModel).toBe('fal-ai/veo3/fast');
+    // Nothing retired, so nothing to explain away.
+    expect(res.retiredVideoModel).toBeNull();
+    expect(res.retiredImageModel).toBeNull();
+  });
+
+  /**
+   * A RETIRED choice: catalogued the day it was stored, gone from the catalogue
+   * today. `validated()` cannot prevent this — the catalogue is a TypeScript
+   * constant, and a deploy that drops a model leaves the id in every workspace
+   * that picked it.
+   *
+   * `MediaGenService.resolveModel` already ignores it and runs the platform
+   * constant, so generation is correct. The READ was the part that lied: it
+   * returned the retired id as `effectiveVideoModel`, so the settings card
+   * rendered a RadioGroup whose value matched no option, badged no row "In
+   * use", and never said what the next video would cost.
+   */
+  it('falls back to the platform model when the stored choice has left the catalogue', async () => {
+    const { svc } = makeSvc({
+      defaultImageModel: 'fal-ai/retired-image-v1',
+      defaultVideoModel: 'fal-ai/retired-video-v1',
+    });
+    const res = await svc.get(WS);
+
+    // What will actually run, which is what the generator will actually do.
+    expect(res.effectiveVideoModel).toBe(DEFAULT_VIDEO_MODEL);
+    expect(res.effectiveImageModel).toBe(DEFAULT_IMAGE_MODEL);
+    // The choice is NOT scrubbed — reporting null here would tell a manager
+    // their choice never happened.
+    expect(res.defaultVideoModel).toBe('fal-ai/retired-video-v1');
+    // And the disagreement is REPORTED, so the card can name it.
+    expect(res.retiredVideoModel).toBe('fal-ai/retired-video-v1');
+    expect(res.retiredImageModel).toBe('fal-ai/retired-image-v1');
+  });
+
+  /** A catalogued id of the WRONG KIND is retired too: the two kinds bill in
+   *  different units, so an image id as the video default cannot be priced as a
+   *  clip any more than an unknown one can. Same rule `validated` applies at the
+   *  write and `MediaGenService` applies at generation. */
+  it('treats a catalogued id of the wrong kind as retired, not as a choice', async () => {
+    const { svc } = makeSvc({
+      defaultImageModel: null,
+      defaultVideoModel: DEFAULT_IMAGE_MODEL,
+    });
+    const res = await svc.get(WS);
+    expect(res.effectiveVideoModel).toBe(DEFAULT_VIDEO_MODEL);
+    expect(res.retiredVideoModel).toBe(DEFAULT_IMAGE_MODEL);
+  });
+
+  /** The effective model is always something the card can actually show a
+   *  price for — that is the entire contract this screen depends on. */
+  it('always names an effective model that is IN the catalogue', async () => {
+    for (const row of [
+      { defaultImageModel: null, defaultVideoModel: null },
+      { defaultImageModel: 'fal-ai/qwen-image', defaultVideoModel: 'fal-ai/veo3/fast' },
+      { defaultImageModel: 'gone', defaultVideoModel: 'also-gone' },
+    ]) {
+      const res = await makeSvc(row).svc.get(WS);
+      expect(res.models.some((m) => m.id === res.effectiveVideoModel && m.type === 'VIDEO')).toBe(true);
+      expect(res.models.some((m) => m.id === res.effectiveImageModel && m.type === 'IMAGE')).toBe(true);
+    }
   });
 
   /**

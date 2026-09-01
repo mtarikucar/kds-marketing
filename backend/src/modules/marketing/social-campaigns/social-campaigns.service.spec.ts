@@ -171,3 +171,95 @@ describe('SocialCampaignsService — editable modes after activation', () => {
     expect(prisma.socialCampaign.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The campaign's model override, refused where it is CHOSEN.
+ *
+ * `defaultImageModel` / `defaultVideoModel` are the first term of
+ * `campaign override ?? workspace default ?? code constant`, and the columns
+ * took any string at all. The failure that shape produces is not "a bad id" —
+ * it is every item of the campaign failing at generation time, hours later, on
+ * the scheduled-job path, with the reason on an item row instead of on the form
+ * where the choice was made. `ConceptPromotionService.produce` turns it into
+ * "clip 1/5 could not be generated" on a FAILED item, over and over.
+ */
+describe('SocialCampaignsService — the model override is checked at the write', () => {
+  const INPUT = {
+    name: 'Launch', brief: {}, automationMode: 'APPROVAL' as const,
+    planningMode: 'AI_FULL' as const,
+    cadence: { daysOfWeek: [1], timeOfDay: '09:00' } as never,
+    startDate: new Date(), targetAccountIds: ['acc-1'], mediaKinds: ['VIDEO'],
+    createdById: 'u-1',
+  };
+
+  it('refuses an uncatalogued video model on create, and never writes the row', async () => {
+    const { svc, prisma } = build();
+    await expect(
+      svc.create(WS, { ...INPUT, defaultVideoModel: 'fal-ai/some-new-thing' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.socialCampaign.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The one a picker actually produces. `fal-ai/qwen-image` IS catalogued — as
+   * an IMAGE model — and the two kinds bill in different units, so accepting it
+   * as the video default is not a mislabel, it is a clip priced at the flat
+   * per-image rate. Same question `isCataloguedModel` asks everywhere else.
+   */
+  it('refuses a catalogued id of the WRONG KIND', async () => {
+    const { svc, prisma } = build();
+    await expect(
+      svc.create(WS, { ...INPUT, defaultVideoModel: 'fal-ai/qwen-image' }),
+    ).rejects.toThrow(/not a catalogued video model/);
+    await expect(
+      svc.create(WS, {
+        ...INPUT,
+        defaultImageModel: 'fal-ai/bytedance/seedance/v1/lite/text-to-video',
+      }),
+    ).rejects.toThrow(/not a catalogued image model/);
+    expect(prisma.socialCampaign.create).not.toHaveBeenCalled();
+  });
+
+  /** The same sentence the workspace-level card gives, because it is the same
+   *  function — the person is choosing between the same five options either
+   *  way, and the message is what lists them. */
+  it('names the options a caller may choose instead', async () => {
+    const { svc } = build();
+    await expect(
+      svc.create(WS, { ...INPUT, defaultVideoModel: 'nope' }),
+    ).rejects.toThrow(/fal-ai\/veo3\/fast/);
+  });
+
+  it('accepts a catalogued id of the right kind — the guard is not always-refuse', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.create.mockResolvedValue(makeCampaign());
+    await svc.create(WS, { ...INPUT, defaultVideoModel: 'fal-ai/veo3/fast' });
+    expect(prisma.socialCampaign.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ defaultVideoModel: 'fal-ai/veo3/fast' }),
+      }),
+    );
+  });
+
+  it('refuses on update too, before the campaign is even read', async () => {
+    const { svc, prisma } = build();
+    await expect(
+      svc.update(WS, 'c-1', { defaultVideoModel: 'fal-ai/qwen-image' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.socialCampaign.findFirst).not.toHaveBeenCalled();
+    expect(prisma.socialCampaign.update).not.toHaveBeenCalled();
+  });
+
+  /** Clearing the override back to the workspace default is not a bad id. */
+  it('lets an update clear the override', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValue(makeCampaign({ status: 'DRAFT' }));
+    prisma.socialCampaign.update.mockResolvedValue(makeCampaign());
+    await svc.update(WS, 'c-1', { defaultVideoModel: null as never });
+    expect(prisma.socialCampaign.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ defaultVideoModel: null }),
+      }),
+    );
+  });
+});

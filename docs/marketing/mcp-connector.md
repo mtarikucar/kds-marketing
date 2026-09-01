@@ -506,6 +506,42 @@ account and activate a campaign; from there the chat can do the rest. That is th
 intended shape — the alternative is an agent switching on an unattended
 publisher — and it is documented rather than half-closed.
 
+**THE THREE MANUAL STEPS, IN FULL.** Two of them are one-time and are already
+described above; the third happens on EVERY promoted concept and was documented
+nowhere. Listing all three together because the difference matters: a one-time
+step is set-up, and a per-item step is a person who has to come back.
+
+1. **Connect a social account** — panel only. `jeeta.create_social_campaign`
+   requires at least one `targetAccountIds` entry, so a workspace with nothing
+   connected cannot even create the campaign.
+2. **Activate the campaign** — panel only, once per campaign.
+   `jeeta.create_social_campaign` writes a `DRAFT`, and approving a concept into
+   a `DRAFT` campaign is refused by name.
+3. **Approve the produced item** — panel only, once per ITEM, *every time*. This
+   is the one nothing said out loud.
+
+On step 3, precisely: `ConceptPromotionService.produce()` finishes by setting the
+item to `NEEDS_APPROVAL` and arming NO confirm job. That is not the same as the
+cadence-planned path. `SocialCampaignsService.generateItem` schedules the confirm
+gate for `FULL_AUTO` (from `SCHEDULED`) **and** for `SEMI_AUTO` (from
+`NEEDS_APPROVAL`, publish-unless-rejected); only `APPROVAL` mode waits for a
+person. A promoted concept waits for a person in **every mode, including
+`FULL_AUTO`** — the clips are bought, the caption is written, the post row
+exists, and the item sits there until someone opens the campaign's approval
+queue and approves it.
+
+The only thing that clears it is `SocialCampaignsService.approveItem`, which is
+`POST /marketing/social-campaigns/items/:id/approve` and has **no MCP tool**. So
+an agent can plan concepts, get one approved, watch production spend real credits
+on one clip per beat — and cannot publish the result, or even see that it is
+waiting, except through `jeeta.list_social_campaigns`' item statuses.
+
+The money is already spent when the waiting starts, which is why this is written
+down rather than left to be discovered. It is deliberately NOT being changed
+here: waiting is the conservative direction, and whether a `FULL_AUTO` campaign
+should auto-publish a promoted concept is the owner's decision, not a bug to be
+quietly fixed in a review.
+
 **If production never happened, it can be repaired.** Approval and production are
 two steps, and a failure between them used to be terminal: the concept was
 `APPROVED` with `promotedItemId` null and `jeeta.review_content_concept` answered

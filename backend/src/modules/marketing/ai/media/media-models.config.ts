@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { GeneratedAssetType } from './media-asset.constants';
 
 export interface MediaModel {
@@ -53,6 +54,34 @@ export function getMediaModel(id: string): MediaModel | undefined {
  */
 export function isCataloguedModel(id: string, type: GeneratedAssetType): boolean {
   return MEDIA_MODELS[id]?.type === type;
+}
+
+/**
+ * The refusal, in ONE place, for every surface that stores a model id.
+ *
+ * There are two such surfaces — the workspace default
+ * (`MediaModelDefaultsService.set`) and the CAMPAIGN override
+ * (`SocialCampaignsService.create` / `update`) — and only the first had it.
+ * The campaign columns took any string at all, so a catalogued id of the WRONG
+ * KIND (`fal-ai/qwen-image` as `defaultVideoModel`, one keystroke away in a
+ * picker that lists both) was accepted, and then hard-failed EVERY item of that
+ * campaign at generation time with `MEDIA_GEN_UNKNOWN_MODEL` — hours later, on
+ * the scheduled-job path, one item at a time, with the reason on an item row
+ * rather than on the screen where the mistake was made.
+ *
+ * Same message from both doors deliberately: the person reading it is choosing
+ * between the same five options either way, and the message is what tells them
+ * what those options are.
+ */
+export function assertCataloguedModel(id: string, type: GeneratedAssetType): string {
+  if (isCataloguedModel(id, type)) return id;
+  const options = Object.values(MEDIA_MODELS)
+    .filter((m) => m.type === type)
+    .map((m) => m.id)
+    .join(', ');
+  throw new BadRequestException(
+    `"${id}" is not a catalogued ${type.toLowerCase()} model, so its price is unknown and it cannot be run. Choose one of: ${options}.`,
+  );
 }
 
 /** The code constant for a kind — the last term of the resolution order

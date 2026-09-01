@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Callout } from '@/components/ui/Callout';
 import { Textarea } from '@/components/ui/Textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import {
   getDistributionPlan,
@@ -32,11 +33,17 @@ import type { SocialCampaignItem } from '../../../features/marketing/api/socialC
  * video is not already on. Then it stops, and stores the messages unsent.
  *
  * This panel is where they stop. **Every send is one person, one message, one
- * click** — there is deliberately no "send all", and `DistributionPanel.test.tsx`
- * asserts its absence rather than trusting that nobody adds one. The reason is
- * the owner's own: automated outreach to accounts that never asked to hear from
- * us is what platform spam detection is built to catch, and the cost is a
- * restricted account rather than a bad number.
+ * CONFIRMED decision** — there is deliberately no "send all", and
+ * `DistributionPanel.test.tsx` asserts its absence rather than trusting that
+ * nobody adds one. The reason is the owner's own: automated outreach to accounts
+ * that never asked to hear from us is what platform spam detection is built to
+ * catch, and the cost is a restricted account rather than a bad number.
+ *
+ * The Send button opens a `ConfirmDialog` naming the recipient and the channel.
+ * One stray click on this screen was a real message to a real person, and the
+ * row cannot be sent twice — so there is no undo to fall back on, which is
+ * exactly the case a confirm step is for. Dismiss stays one click, because
+ * dismissing is undone by re-planning.
  *
  * ## Error is never emptiness, on every branch
  *
@@ -389,6 +396,15 @@ function DraftRow({
   onDismiss: (id: string) => void;
 }) {
   const [text, setText] = useState(draft.body);
+  /**
+   * The step between the click and the message.
+   *
+   * This button is not a save. It puts a real message in front of a real
+   * person, on a channel the workspace pays for, and the row cannot be sent
+   * twice — so a misclick is not recoverable by clicking again. Dismiss stays
+   * one click because dismissing is reversible by re-planning.
+   */
+  const [confirming, setConfirming] = useState(false);
   const pending = draft.status === 'DRAFT' || draft.status === 'FAILED';
 
   return (
@@ -444,12 +460,29 @@ function DraftRow({
               size="sm"
               loading={busy}
               disabled={busy || !text.trim()}
-              onClick={() => onSend(draft.id, text.trim())}
+              onClick={() => setConfirming(true)}
             >
               <Check className="h-4 w-4" aria-hidden="true" />
               {t('contentDistribution.send', 'Send')}
             </Button>
           </div>
+          <ConfirmDialog
+            open={confirming}
+            onOpenChange={setConfirming}
+            title={t('contentDistribution.confirmSend.title', 'Send this message now?')}
+            description={t(
+              'contentDistribution.confirmSend.body',
+              'It goes to {{to}} on {{channel}} as a real message from this workspace. A draft can only be sent once, so this cannot be undone from here.',
+              { to: draft.toAddress, channel: draft.channelType },
+            )}
+            confirmLabel={t('contentDistribution.confirmSend.confirm', 'Yes, send it')}
+            cancelLabel={t('common.cancel', 'Cancel')}
+            loading={busy}
+            onConfirm={() => {
+              setConfirming(false);
+              onSend(draft.id, text.trim());
+            }}
+          />
         </>
       ) : (
         <p className="whitespace-pre-wrap text-caption text-muted-foreground">{draft.body}</p>

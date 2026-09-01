@@ -633,6 +633,7 @@
     "platformDefaultIs": "Platform varsayılanı ({{label}})",
     "platformDefaultHint": "Platform bunu değiştirirse takip etmeye devam eder.",
     "inUse": "Kullanımda",
+    "retired": "Bu çalışma alanı \"{{retired}}\" olarak ayarlı; bu model artık katalogda yok, bu yüzden fiyatlandırılamaz ve çalıştırılamaz. Onun yerine {{label}} çalışıyor ({{price}}). Kayıtlı seçimi değiştirmek için aşağıdan bir model seçin.",
     "priceVideo": "saniyede {{credits}} kredi ({{usd}}/sn)",
     "priceImage": "görsel başına {{credits}} kredi ({{usd}})",
     "overrideNote": "Kendi modelini belirleyen kampanya onu korur — bu, belirlemeyen her şeyin varsayılanıdır.",
@@ -3040,6 +3041,11 @@
     "loadFailed": "Dağıtım planı yüklenemedi. Bu bir yükleme hatası — dağıtılacak bir şey olmadığı anlamına gelmez.",
     "itemNotApproved": "Bu kampanyada henüz hiçbir şey onaylanmadı, yani dağıtılacak yayımlanmış bir gönderi yok. Bu, hattın bir aşaması — videonun tanıtıma ihtiyacı olmadığı kararı değil.",
     "noItems": "Bu kampanyanın henüz onaylanmış veya yayımlanmış bir gönderisi yok, dolayısıyla dağıtılacak bir şey de yok.",
+    "confirmSend": {
+      "title": "Bu mesaj şimdi gönderilsin mi?",
+      "body": "{{to}} adresine {{channel}} üzerinden, bu çalışma alanından gerçek bir mesaj olarak gider. Bir taslak yalnızca bir kez gönderilebilir, bu yüzden buradan geri alınamaz.",
+      "confirm": "Evet, gönder"
+    },
     "send": "Gönder",
     "sent": "Mesaj gönderildi.",
     "sendFailed": "Mesaj gönderilemedi.",

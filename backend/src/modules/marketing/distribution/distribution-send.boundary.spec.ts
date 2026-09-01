@@ -49,6 +49,25 @@ import { DistributionSendService } from './distribution-send.service';
  * stub now returns what was written. A mock that answers "there is nothing
  * there" makes every assertion downstream of it vacuous.
  *
+ * ## What THIS file cannot hold, and what does
+ *
+ * Scan A is a scan for two NAMES. Review added a plausible cron to the
+ * distribution folder that dispatched unattended through `MessageSenderService`
+ * directly — neither name involved — and wrote `status: 'SENT'` with a null
+ * `sentById`. 593 suites and 6618 tests stayed green.
+ *
+ * Two answers, and only the second is un-evadable:
+ *
+ *   - A's third test narrows the scan INSIDE this folder to any dispatcher at
+ *     all, `MessageSenderService` included. Cheap, and it catches the exact
+ *     shape that got through. It is still a scan for names.
+ *   - `distribution_drafts` now carries
+ *     `CHECK (status <> 'SENT' OR "sentById" IS NOT NULL)`
+ *     (`distribution_drafts_sent_by_present`, migration 20260902100000). No
+ *     caller can route around a constraint: an unattended writer that marks a
+ *     row SENT with nobody attached is refused by Postgres, whatever it is
+ *     called and wherever it lives. The real-DB spec proves it bites.
+ *
  * If you are changing this file to make a build pass, that is the signal to
  * stop and go and read the design decision instead.
  */
@@ -155,6 +174,37 @@ describe('A — nothing outside the written-down list can reach a send path', ()
    * private readonly send: DistributionSendService)` fails here as well as in
    * the scan above.
    */
+  /**
+   * The narrow scan, for the hole the wide one has.
+   *
+   * `SEND_PATH_NAMES` is two service names, and a caller that reaches
+   * `MessageSenderService` directly uses neither — which is exactly what a
+   * review-time mutation did, from a file inside this very folder, without
+   * failing anything. Repo-wide, naming `MessageSenderService` is ordinary
+   * (every channel adapter does). INSIDE the distribution folder it is not:
+   * this folder composes plans and holds one send path, so any OTHER file here
+   * that can dispatch is a second one.
+   */
+  it('no file in the distribution folder reaches a dispatcher except the send path', () => {
+    const DISPATCHERS = [...SEND_PATH_NAMES, 'MessageSenderService'];
+    const offenders = walk(__dirname)
+      .filter((f) => DISPATCHERS.some((n) => code(f).includes(n)))
+      .map((f) => relative(SRC_ROOT, f).split(sep).join('/'))
+      .filter((rel) => !(rel in ALLOWED_SEND_REFERENCES));
+    const hint =
+      'A file in the distribution folder can now dispatch a message. The folder composes plans and holds ONE send path; a second one is the thing this feature must not have.';
+    expect({ hint, offenders }).toEqual({ hint, offenders: [] });
+  });
+
+  /** The scan above would pass vacuously on a folder where nothing matched at
+   *  all — e.g. if `code()` stopped returning source. */
+  it('that narrow scan actually matches the send path itself', () => {
+    const matched = walk(__dirname).filter((f) =>
+      ['DistributionSendService', 'MessageSenderService'].some((n) => code(f).includes(n)),
+    );
+    expect(matched.length).toBeGreaterThan(0);
+  });
+
   it('the planner cannot dispatch: it takes prisma and nothing else', () => {
     expect(ContentDistributionService.length).toBe(1);
     const src = code(join(__dirname, 'content-distribution.service.ts'));
@@ -169,6 +219,23 @@ describe('B — producing a plan dispatches nothing', () => {
    *  not a path that had nothing to send anyway. */
   function planningWorld() {
     const writes: Array<{ table: string; data: unknown }> = [];
+    /**
+     * The rows as they END UP, not as they were first inserted.
+     *
+     * `createMany` alone is not the state of the table. The mutation run for
+     * this brief added a caller that wrote its drafts at DRAFT and then flipped
+     * them with an `updateMany`, and an assertion on the createMany payload
+     * walked straight past it — the rows were SENT and every test was green. So
+     * this fake applies the updates too, and B asserts what is left.
+     */
+    const rows = new Map<string, Record<string, unknown>>();
+    const applies = (row: Record<string, unknown>, where: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(where ?? {})) {
+        if (v === undefined || v === null || typeof v === 'object') continue;
+        if (row[k] !== v) return false;
+      }
+      return true;
+    };
     const prisma: any = {
       socialCampaignItem: {
         findFirst: jest.fn().mockResolvedValue({
@@ -230,6 +297,10 @@ describe('B — producing a plan dispatches nothing', () => {
       distributionDraft: {
         createMany: jest.fn().mockImplementation(({ data }: any) => {
           writes.push(...data.map((d: unknown) => ({ table: 'draft', data: d })));
+          data.forEach((d: Record<string, unknown>, i: number) => {
+            const id = `draft-${rows.size + i}`;
+            rows.set(id, { id, sentAt: null, sentById: null, conversationId: null, ...d });
+          });
           return Promise.resolve({ count: data.length });
         }),
         // Reads back what was WRITTEN, with ids, rather than an empty array.
@@ -240,19 +311,32 @@ describe('B — producing a plan dispatches nothing', () => {
         // spy stayed clean and this test passed while the code sent messages on
         // its own. A mock that answers "there is nothing there" makes any test
         // downstream of it vacuous.
-        findMany: jest
-          .fn()
-          .mockImplementation(() =>
-            Promise.resolve(
-              writes.map((w, i) => ({ id: `draft-${i}`, ...(w.data as object) })),
-            ),
-          ),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        update: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockImplementation(() => Promise.resolve([...rows.values()])),
+        // Updates LAND, so the final state is observable. A stub that accepted
+        // them and forgot them would make the state assertion vacuous in the
+        // same way the empty findMany did.
+        updateMany: jest.fn().mockImplementation(({ where, data }: any) => {
+          let count = 0;
+          for (const row of rows.values()) {
+            if (!applies(row, where)) continue;
+            Object.assign(row, data);
+            count++;
+          }
+          return Promise.resolve({ count });
+        }),
+        update: jest.fn().mockImplementation(({ where, data }: any) => {
+          const row = rows.get(where?.id);
+          if (row) Object.assign(row, data);
+          return Promise.resolve(row ?? {});
+        }),
       },
-      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'user-1', role: 'OWNER' }) },
+      workspaceMembership: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ role: 'OWNER', status: 'ACTIVE', user: { id: 'user-1', role: 'OWNER' } }),
+      },
     };
-    return { prisma, writes };
+    return { prisma, writes, rows };
   }
 
   it('never touches the send path while planning', async () => {
@@ -282,6 +366,25 @@ describe('B — producing a plan dispatches nothing', () => {
       expect(d.conversationId).toBeUndefined();
     }
   });
+
+  /**
+   * The same question asked of the ROW rather than of the INSERT, because they
+   * are not the same question. A planner that inserts at DRAFT and then flips
+   * the rows with an `updateMany` passes the test above and leaves a table full
+   * of SENT rows — which is what the mutation for this review actually did.
+   */
+  it('leaves every row DRAFT AFTER every write it makes, not merely at insert', async () => {
+    const { prisma, rows } = planningWorld();
+    await new ContentDistributionService(prisma).plan('ws-1', 'item-1', 'user-1');
+
+    expect(rows.size).toBeGreaterThan(0);
+    for (const row of rows.values()) {
+      expect(row.status).toBe('DRAFT');
+      expect(row.sentAt ?? null).toBeNull();
+      expect(row.sentById ?? null).toBeNull();
+      expect(row.conversationId ?? null).toBeNull();
+    }
+  });
 });
 
 describe('C — the actor is verified, not declared', () => {
@@ -297,9 +400,32 @@ describe('C — the actor is verified, not declared', () => {
     status: 'DRAFT',
   };
 
-  function world(actor: unknown) {
+  /** An ACTIVE membership of the SENDING workspace, at an ordinary role. */
+  function member(over: Record<string, unknown> = {}) {
+    return {
+      role: 'MANAGER',
+      status: 'ACTIVE',
+      user: { id: 'u-1', role: 'REP' },
+      ...over,
+    };
+  }
+
+  /**
+   * `member` is a `WorkspaceMembership` row, not a `MarketingUser` one, and that
+   * is what this block now pins. The membership is the live truth
+   * (`MarketingGuard` resolves the request's workspace AND role from it); the
+   * user row's `workspaceId/role/status` are a mirror frozen at creation, so a
+   * manager created in one workspace and holding an ACTIVE membership of the
+   * SENDING one used to be refused from their own screen.
+   */
+  function world(member: unknown) {
     const prisma: any = {
-      marketingUser: { findFirst: jest.fn().mockResolvedValue(actor) },
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue(member) },
+      // Present AND answering with a perfectly good OWNER, so a regression back
+      // to the frozen mirror cannot pass by looking like a refusal.
+      marketingUser: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'u-1', role: 'OWNER', status: 'ACTIVE' }),
+      },
       distributionDraft: {
         findFirst: jest.fn().mockResolvedValue(DRAFT),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -325,9 +451,32 @@ describe('C — the actor is verified, not declared', () => {
   });
 
   it('refuses an empty actor id without even asking the database', async () => {
-    const { svc, prisma, outbound } = world({ id: 'u', role: 'OWNER' });
+    const { svc, prisma, outbound } = world(member());
     await expect(svc.send('ws-1', 'draft-1', '')).rejects.toBeInstanceOf(ForbiddenException);
-    expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
+    expect(prisma.workspaceMembership.findFirst).not.toHaveBeenCalled();
+    expect(outbound.start).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The shape no other fixture in this repo expresses: a MANAGER whose
+   * `MarketingUser` row was created in ANOTHER workspace, holding an ACTIVE
+   * membership of the one they are sending from. The old read
+   * (`marketingUser {id, workspaceId, status}`) refused this person from their
+   * own screen, and nothing noticed — every fixture happened to be a user whose
+   * home workspace and active workspace were the same one.
+   */
+  it('admits a manager whose HOME workspace is a different one', async () => {
+    const { svc, outbound } = world(
+      member({ role: 'MANAGER', user: { id: 'u-1', role: 'REP', workspaceId: 'ws-elsewhere' } }),
+    );
+    const res = await svc.send('ws-1', 'draft-1', 'u-1');
+    expect(res.conversationId).toBe('conv-1');
+    expect(outbound.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a membership that is not ACTIVE — a revoked member is not a member', async () => {
+    const { svc, outbound } = world(member({ status: 'SUSPENDED' }));
+    await expect(svc.send('ws-1', 'draft-1', 'u-1')).rejects.toBeInstanceOf(ForbiddenException);
     expect(outbound.start).not.toHaveBeenCalled();
   });
 
@@ -338,24 +487,41 @@ describe('C — the actor is verified, not declared', () => {
    * feature accepts it happily, because every other write is inert.
    */
   it('refuses the SYSTEM sentinel an unattended MCP session resolves to', async () => {
-    const { svc, outbound } = world({ id: 'sys-1', role: 'SYSTEM' });
+    // Handed a MEMBERSHIP on purpose, so the refusal is the ROLE check rather
+    // than the "no membership" one. The sentinel has no membership row today,
+    // which is exactly how this exclusion would rot into dead code nobody can
+    // tell is still working.
+    const { svc, outbound } = world(
+      member({ role: 'SYSTEM', user: { id: 'sys-1', role: 'SYSTEM' } }),
+    );
     await expect(svc.send('ws-1', 'draft-1', 'sys-1')).rejects.toBeInstanceOf(ForbiddenException);
     await expect(svc.send('ws-1', 'draft-1', 'sys-1')).rejects.toThrow(/person/i);
     expect(outbound.start).not.toHaveBeenCalled();
   });
 
-  it('looks the actor up scoped to the workspace AND to being active', async () => {
-    const { svc, prisma } = world({ id: 'u-1', role: 'OWNER' });
-    await svc.send('ws-1', 'draft-1', 'u-1');
-    expect(prisma.marketingUser.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'u-1', workspaceId: 'ws-1', status: 'ACTIVE' },
-      }),
+  /** The other half of the same exclusion: a sentinel behind an ordinary
+   *  membership role is still the sentinel. */
+  it('refuses the sentinel even behind a MANAGER membership', async () => {
+    const { svc, outbound } = world(
+      member({ role: 'MANAGER', user: { id: 'sys-1', role: 'SYSTEM' } }),
     );
+    await expect(svc.send('ws-1', 'draft-1', 'sys-1')).rejects.toThrow(/person/i);
+    expect(outbound.start).not.toHaveBeenCalled();
+  });
+
+  it('looks the actor up by MEMBERSHIP of the sending workspace, not by the mirror', async () => {
+    const { svc, prisma } = world(member());
+    await svc.send('ws-1', 'draft-1', 'u-1');
+    expect(prisma.workspaceMembership.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u-1', workspaceId: 'ws-1' } }),
+    );
+    // The frozen mirror is not consulted AT ALL. Asserted rather than assumed:
+    // an `OR` across the two reads would pass every other test in this block.
+    expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
   });
 
   it('admits a real, active human — the harness is not just always-refuse', async () => {
-    const { svc, outbound } = world({ id: 'u-1', role: 'MANAGER' });
+    const { svc, outbound } = world(member());
     const res = await svc.send('ws-1', 'draft-1', 'u-1');
     expect(res.conversationId).toBe('conv-1');
     expect(outbound.start).toHaveBeenCalledWith('ws-1', {
@@ -366,7 +532,7 @@ describe('C — the actor is verified, not declared', () => {
   });
 
   it('stamps who sent it, together with the status, in one claim', async () => {
-    const { svc, prisma } = world({ id: 'u-1', role: 'MANAGER' });
+    const { svc, prisma } = world(member());
     await svc.send('ws-1', 'draft-1', 'u-1');
     const claim = prisma.distributionDraft.updateMany.mock.calls[0][0];
     expect(claim.where).toMatchObject({ id: 'draft-1', workspaceId: 'ws-1' });
@@ -375,7 +541,7 @@ describe('C — the actor is verified, not declared', () => {
   });
 
   it('cannot send the same draft twice: a lost claim is refused, not re-dispatched', async () => {
-    const { svc, prisma, outbound } = world({ id: 'u-1', role: 'MANAGER' });
+    const { svc, prisma, outbound } = world(member());
     prisma.distributionDraft.updateMany.mockResolvedValue({ count: 0 });
     await expect(svc.send('ws-1', 'draft-1', 'u-1')).rejects.toBeInstanceOf(BadRequestException);
     expect(outbound.start).not.toHaveBeenCalled();

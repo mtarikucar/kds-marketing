@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { ContentDistributionService } from '../../src/modules/marketing/distribution/content-distribution.service';
 import { DistributionSendService } from '../../src/modules/marketing/distribution/distribution-send.service';
+import { SocialCampaignsService } from '../../src/modules/marketing/social-campaigns/social-campaigns.service';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
 /**
@@ -26,9 +27,20 @@ import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-
  *    returns THEIR customer as a person to message about OUR video. Each
  *    predicate gets its own assertion.
  * 4. **THE SEND BOUNDARY, end to end.** The unit spec proves the human check
- *    with a mocked actor. This proves it against real `marketing_users` rows:
- *    the workspace's actual SYSTEM sentinel — created the way
- *    `McpPrincipalService` creates it — is refused, and a real OWNER is not.
+ *    with a mocked actor. This proves it against real rows: the workspace's
+ *    actual SYSTEM sentinel — created the way `McpPrincipalService` creates it —
+ *    is refused, a real OWNER is not, and a MANAGER whose `MarketingUser` row
+ *    lives in ANOTHER workspace but who holds an ACTIVE membership of this one
+ *    is ADMITTED. That last shape is the one neither existing test covered and
+ *    the one the frozen `MarketingUser` mirror got wrong: the guard resolves the
+ *    request's workspace from the MEMBERSHIP, so a multi-workspace manager was
+ *    403'd from a screen their own session had just opened.
+ * 5. **The CHECK constraint, in Postgres.** `distribution_drafts_sent_by_present`
+ *    refuses `status = 'SENT'` with a null `sentById`, on INSERT and on UPDATE.
+ *    That is the only part of this design a future caller cannot route around —
+ *    the source scan in `distribution-send.boundary.spec.ts` looks for two
+ *    service names, and a job that dispatches through `MessageSenderService`
+ *    directly uses neither. A constraint can only be observed against real SQL.
  *
  * `OutboundConversationService` is the ONE seam cut, and only at its dispatch:
  * a test that put a message on the wire would be sending real email. Everything
@@ -52,6 +64,12 @@ describeRealDb('Content distribution, real DB (e2e)', () => {
   const ownerId = randomUUID();
   const systemId = randomUUID();
   const otherOwnerId = randomUUID();
+  // The multi-workspace shape. Created in the NEIGHBOUR workspace (so the frozen
+  // `MarketingUser.workspaceId` mirror says "not ours"), holding an ACTIVE
+  // membership of OURS — which is what `MarketingGuard` resolves the request's
+  // workspace and role from. prod already contains memberships of this shape;
+  // see `McpPrincipalService.assertActiveMember`.
+  const managerElsewhereId = randomUUID();
 
   const campaignId = randomUUID();
   const itemId = randomUUID();
@@ -156,6 +174,49 @@ describeRealDb('Content distribution, real DB (e2e)', () => {
           status: 'ACTIVE',
           password: 'x',
         },
+        {
+          id: managerElsewhereId,
+          // HOME workspace is the neighbour's. The mirror is wrong about this
+          // person on purpose.
+          workspaceId: otherWorkspaceId,
+          email: `${SEED}-manager-elsewhere@example.com`,
+          firstName: 'Mira',
+          lastName: 'Multi',
+          role: 'REP',
+          status: 'ACTIVE',
+          password: 'x',
+        },
+      ],
+    });
+
+    // The LIVE truth. `MarketingUser.workspaceId/role/status` are stamped at row
+    // creation and never re-derived; these rows are what the guard — and now the
+    // send gate — actually read.
+    await prisma.workspaceMembership.createMany({
+      data: [
+        { userId: ownerId, workspaceId, role: 'OWNER', status: 'ACTIVE', acceptedAt: new Date() },
+        // Ours by membership, the neighbour's by birth, and a MANAGER here even
+        // though the mirror calls them a REP over there.
+        {
+          userId: managerElsewhereId,
+          workspaceId,
+          role: 'MANAGER',
+          status: 'ACTIVE',
+          acceptedAt: new Date(),
+        },
+        {
+          userId: otherOwnerId,
+          workspaceId: otherWorkspaceId,
+          role: 'OWNER',
+          status: 'ACTIVE',
+          acceptedAt: new Date(),
+        },
+        // The sentinel with a membership it does not have in prod
+        // (`createResearchSentinel` mints no membership row). Given one HERE on
+        // purpose: it is the harder case, and it is what keeps the SYSTEM
+        // exclusion load-bearing instead of dead code shadowed by "no
+        // membership".
+        { userId: systemId, workspaceId, role: 'SYSTEM', status: 'ACTIVE', acceptedAt: new Date() },
       ],
     });
 
@@ -381,8 +442,11 @@ describeRealDb('Content distribution, real DB (e2e)', () => {
     await prisma.conversation.deleteMany({ where: { workspaceId: all } });
     await prisma.channel.deleteMany({ where: { workspaceId: all } });
     await prisma.lead.deleteMany({ where: { workspaceId: all } });
+    await prisma.workspaceMembership.deleteMany({
+      where: { userId: { in: [ownerId, systemId, otherOwnerId, managerElsewhereId] } },
+    });
     await prisma.marketingUser.deleteMany({
-      where: { id: { in: [ownerId, systemId, otherOwnerId] } },
+      where: { id: { in: [ownerId, systemId, otherOwnerId, managerElsewhereId] } },
     });
     await prisma.workspaceSubscription.deleteMany({ where: { workspaceId: all } });
     await prisma.package.deleteMany({ where: { id: packageId } });
@@ -520,6 +584,91 @@ describeRealDb('Content distribution, real DB (e2e)', () => {
       expect(start).not.toHaveBeenCalled();
     });
 
+    /**
+     * THE multi-workspace case, and the reason this file grew a fourth user.
+     *
+     * Mira's `MarketingUser` row says workspace B — she was created there — and
+     * her mirrored role says REP. Her ACTIVE `WorkspaceMembership` says
+     * workspace A, MANAGER. `MarketingGuard` resolves the request from the
+     * MEMBERSHIP, so her session is a perfectly ordinary manager session of A;
+     * the old gate read the mirror and 403'd her from a screen her own token
+     * had just opened, with "requires an active member of this workspace".
+     *
+     * It failed SAFE, which is why nothing caught it — and it made the feature
+     * unusable for everyone in more than one workspace.
+     */
+    it('admits a MANAGER whose home workspace is the neighbour but whose membership is ours', async () => {
+      // Her own draft: the one above has been claimed by the owner's send, and
+      // the point of this test is the ACTOR, not the row.
+      const mine = await prisma.distributionDraft.findFirstOrThrow({ where: { workspaceId } });
+      const hers = await prisma.distributionDraft.create({
+        data: {
+          workspaceId,
+          planId: mine.planId,
+          campaignItemId: itemId,
+          leadId: optedOutLeadId,
+          channelType: 'SMS',
+          channelId,
+          toAddress: '+905551112233',
+          body: 'Mira kendi cümleleriyle.',
+          status: 'DRAFT',
+        },
+      });
+
+      const conversationId = randomUUID();
+      const { svc, start } = sender(
+        jest.fn().mockResolvedValue({ conversationId, to: '+905551112233', channel: 'SMS' }),
+      );
+      const res = await svc.send(workspaceId, hers.id, managerElsewhereId);
+      expect(res.conversationId).toBe(conversationId);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      const after = await prisma.distributionDraft.findUniqueOrThrow({ where: { id: hers.id } });
+      expect(after.status).toBe('SENT');
+      // Stamped with HER, not with the workspace her row was created in.
+      expect(after.sentById).toBe(managerElsewhereId);
+
+      await prisma.distributionDraft.delete({ where: { id: hers.id } });
+    });
+
+    /** The same person, membership revoked. A mirror-based read would still let
+     *  her through — that is the direction of this bug that actually matters. */
+    it('refuses her the moment the membership stops being ACTIVE', async () => {
+      const mine = await prisma.distributionDraft.findFirstOrThrow({ where: { workspaceId } });
+      const hers = await prisma.distributionDraft.create({
+        data: {
+          workspaceId,
+          planId: mine.planId,
+          campaignItemId: itemId,
+          leadId: optedOutLeadId,
+          channelType: 'WHATSAPP',
+          channelId,
+          toAddress: '+905551112233',
+          body: 'Bu gitmemeli.',
+          status: 'DRAFT',
+        },
+      });
+      await prisma.workspaceMembership.updateMany({
+        where: { userId: managerElsewhereId, workspaceId },
+        data: { status: 'SUSPENDED' },
+      });
+
+      const { svc, start } = sender();
+      await expect(svc.send(workspaceId, hers.id, managerElsewhereId)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(start).not.toHaveBeenCalled();
+      expect(
+        (await prisma.distributionDraft.findUniqueOrThrow({ where: { id: hers.id } })).status,
+      ).toBe('DRAFT');
+
+      await prisma.workspaceMembership.updateMany({
+        where: { userId: managerElsewhereId, workspaceId },
+        data: { status: 'ACTIVE' },
+      });
+      await prisma.distributionDraft.delete({ where: { id: hers.id } });
+    });
+
     it('sends for a real, active human — and stamps the row with who did it', async () => {
       const conversationId = randomUUID();
       const { svc, start } = sender(
@@ -554,6 +703,119 @@ describeRealDb('Content distribution, real DB (e2e)', () => {
       const rows = await prisma.distributionDraft.findMany({ where: { workspaceId } });
       expect(rows).toHaveLength(1);
       expect(rows[0].status).toBe('SENT');
+    });
+  });
+
+  /**
+   * The part of the boundary no caller can route around.
+   *
+   * `distribution-send.boundary.spec.ts` scans the source for two service
+   * NAMES. A scheduled job that dispatches through `MessageSenderService`
+   * directly uses neither, and one added during review wrote `status: 'SENT'`
+   * with a null `sentById` while all 593 suites stayed green.
+   * `distribution_drafts_sent_by_present` is the answer, and a CHECK constraint
+   * is a thing only real SQL can be asked about.
+   */
+  describe('the constraint: a SENT row must name the person who sent it', () => {
+    const base = () => ({
+      workspaceId,
+      planId: randomUUID(),
+      campaignItemId: itemId,
+      leadId,
+      channelType: 'EMAIL',
+      channelId,
+      toAddress: 'x@example.com',
+      body: 'nope',
+    });
+
+    it('refuses an INSERT of a SENT row with nobody attached', async () => {
+      await expect(
+        prisma.distributionDraft.create({
+          data: { ...base(), status: 'SENT', sentAt: new Date(), sentById: null },
+        }),
+      ).rejects.toThrow(/distribution_drafts_sent_by_present/);
+    });
+
+    it('refuses an UPDATE that flips a DRAFT to SENT without one', async () => {
+      const row = await prisma.distributionDraft.create({ data: { ...base(), status: 'DRAFT' } });
+      await expect(
+        prisma.distributionDraft.update({
+          where: { id: row.id },
+          data: { status: 'SENT', sentAt: new Date() },
+        }),
+      ).rejects.toThrow(/distribution_drafts_sent_by_present/);
+      // Raw SQL too — the constraint is not something an ORM is choosing to do.
+      await expect(
+        prisma.$executeRawUnsafe(
+          `UPDATE "distribution_drafts" SET "status" = 'SENT', "sentById" = NULL WHERE "id" = $1`,
+          row.id,
+        ),
+      ).rejects.toThrow(/distribution_drafts_sent_by_present/);
+      await prisma.distributionDraft.delete({ where: { id: row.id } });
+    });
+
+    /** The control. Without it, a constraint that refused EVERYTHING would pass
+     *  both tests above and take the whole feature down with it. */
+    it('allows the same row when a person IS named, and every other status freely', async () => {
+      const sent = await prisma.distributionDraft.create({
+        data: { ...base(), status: 'SENT', sentAt: new Date(), sentById: ownerId },
+      });
+      expect(sent.sentById).toBe(ownerId);
+      await prisma.distributionDraft.delete({ where: { id: sent.id } });
+
+      for (const status of ['DRAFT', 'DISMISSED', 'FAILED'] as const) {
+        const row = await prisma.distributionDraft.create({
+          data: { ...base(), status, sentById: null },
+        });
+        expect(row.status).toBe(status);
+        await prisma.distributionDraft.delete({ where: { id: row.id } });
+      }
+    });
+  });
+
+  /**
+   * Claim 9, asserted instead of assumed.
+   *
+   * `jeeta.plan_content_distribution` REQUIRES a `campaignItemId`, and
+   * `jeeta.list_social_campaigns` is the only tool in the catalogue that
+   * returns one — which is what makes `ID_SOURCES`' entry for `campaignItemId`
+   * true rather than aspirational. `ID_SOURCES` only checks that the NAMED TOOL
+   * EXISTS, so removing the `include: { items }` from `SocialCampaignsService
+   * .list` left the whole suite green (593/6618), tsc clean, and the MCP tool
+   * impossible to call.
+   */
+  describe('the campaign item id is discoverable, which is what makes planning possible', () => {
+    it('list() carries each campaign’s items, and every item carries its id', async () => {
+      const campaigns = await app.get(SocialCampaignsService).list(workspaceId);
+      const ours = campaigns.find((c) => c.id === campaignId) as unknown as {
+        items?: Array<{ id: string; status: string }>;
+      };
+      expect(ours).toBeDefined();
+      expect(Array.isArray(ours.items)).toBe(true);
+      expect(ours.items!.length).toBeGreaterThan(0);
+      for (const item of ours.items!) expect(typeof item.id).toBe('string');
+      // And the specific id planning needs is actually in there.
+      expect(ours.items!.map((i) => i.id)).toContain(itemId);
+    });
+
+    /** End to end, so this cannot pass on an id that the planner would reject:
+     *  the id discovered from `list()` is the one `plan()` accepts. */
+    it('the id it returns is one plan() will accept', async () => {
+      const campaigns = await app.get(SocialCampaignsService).list(workspaceId);
+      const discovered = (
+        campaigns.find((c) => c.id === campaignId) as unknown as { items: Array<{ id: string }> }
+      ).items[0].id;
+      await expect(distribution.plan(workspaceId, discovered, ownerId)).resolves.toMatchObject({
+        campaignItemId: discovered,
+      });
+    });
+
+    it('does not carry the neighbour’s items', async () => {
+      const campaigns = await app.get(SocialCampaignsService).list(workspaceId);
+      const allItemIds = campaigns.flatMap(
+        (c) => ((c as unknown as { items?: Array<{ id: string }> }).items ?? []).map((i) => i.id),
+      );
+      expect(allItemIds).not.toContain(otherItemId);
     });
   });
 });

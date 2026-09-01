@@ -31,7 +31,9 @@ const SENDABLE = ['DRAFT', 'FAILED'] as const;
  *    not import this service and cannot dispatch anything. The boundary is
  *    between OBJECTS, not between two branches of one method.
  * 2. **The actor is VERIFIED, not declared.** `send` takes an actor id and
- *    looks it up: it must be an ACTIVE `MarketingUser` of THIS workspace, and
+ *    looks it up: it must hold an ACTIVE `WorkspaceMembership` of THIS
+ *    workspace — the live truth the guard itself resolves the request's
+ *    workspace and role from, never the frozen `MarketingUser` mirror — and
  *    it must not be the `SYSTEM` sentinel that MCP sessions resolve to. A
  *    caller cannot satisfy this by passing a string it made up, and an
  *    unattended agent cannot satisfy it at all — the sentinel is precisely the
@@ -162,12 +164,39 @@ export class DistributionSendService {
   /**
    * The gate that makes "a human sends" enforceable.
    *
-   * The `SYSTEM` role is excluded by name and that exclusion is the load-bearing
-   * line: it is the per-workspace sentinel `McpPrincipalService.resolve` hands
+   * ## It reads the MEMBERSHIP, not the `MarketingUser` mirror
+   *
+   * `MarketingUser.workspaceId/role/status` are stamped when the row is created
+   * and never re-derived — they describe the user's HOME workspace, frozen.
+   * `WorkspaceMembership` is the live truth, and it is what `MarketingGuard`
+   * resolves `user.workspaceId` and `user.role` FROM before this method ever
+   * runs. Reading the mirror here failed in both directions, exactly the way
+   * `McpPrincipalService.assertActiveMember` failed before it was fixed (whose
+   * comment records that "prod already contains such a membership"):
+   *
+   *  - a manager whose account was created in workspace A but who holds an
+   *    ACTIVE membership of workspace B was refused while sending B's own
+   *    drafts, from B's own screen, on a session B's guard had just admitted;
+   *  - a member whose membership was revoked still matched the frozen mirror.
+   *
+   * The first only made the feature unusable for anyone in more than one
+   * workspace. The second is the direction that matters.
+   *
+   * ## The `SYSTEM` exclusion, and why it is asked TWICE
+   *
+   * `SYSTEM` is the per-workspace sentinel `McpPrincipalService.resolve` hands
    * back when no person is behind a call, so an unattended agent that found a
    * way to reach this method would still be refused here. Every other write in
-   * this feature falls back to that sentinel happily — because every other write
-   * is inert.
+   * this feature accepts that sentinel happily — because every other write is
+   * inert.
+   *
+   * `MarketingAuthService.createResearchSentinel` mints the sentinel as a
+   * `MarketingUser` row with NO membership, so a membership read ALONE would
+   * refuse it for the other reason ("not an active member") and the role check
+   * would quietly become dead code — which is how a guard rots. Both the
+   * membership's role and the user row's own role are therefore checked: the
+   * exclusion keeps biting if a sentinel ever gains a membership, and the
+   * assertion that names the role stays load-bearing.
    */
   private async assertHumanActor(workspaceId: string, actorId: string): Promise<void> {
     if (!actorId) {
@@ -175,16 +204,19 @@ export class DistributionSendService {
         'Sending a distribution draft requires a signed-in person. Nothing in this feature sends on its own.',
       );
     }
-    const actor = await this.prisma.marketingUser.findFirst({
-      where: { id: actorId, workspaceId, status: 'ACTIVE' },
-      select: { id: true, role: true },
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId: actorId, workspaceId },
+      select: { role: true, status: true, user: { select: { id: true, role: true } } },
     });
-    if (!actor) {
+    if (!membership || membership.status !== 'ACTIVE') {
       throw new ForbiddenException(
         'Sending a distribution draft requires an active member of this workspace.',
       );
     }
-    if (actor.role === MCP_ATTRIBUTION_PRINCIPAL_ROLE) {
+    if (
+      membership.role === MCP_ATTRIBUTION_PRINCIPAL_ROLE ||
+      membership.user.role === MCP_ATTRIBUTION_PRINCIPAL_ROLE
+    ) {
       throw new ForbiddenException(
         'The workspace automation principal cannot send a distribution draft. Sending is a per-message decision a person makes — that is the whole design of this feature, not a permission that can be granted.',
       );

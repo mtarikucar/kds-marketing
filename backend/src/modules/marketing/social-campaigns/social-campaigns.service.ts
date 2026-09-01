@@ -13,6 +13,7 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { assertCataloguedModel } from '../ai/media/media-models.config';
 import { Cadence, nextCadenceSlot } from './cadence.util';
 import {
   CONCEPT_PRODUCE_KIND,
@@ -86,7 +87,37 @@ export class SocialCampaignsService implements OnModuleInit {
 
   // ───────────────────────────────────────────────────────────── CRUD
 
+  /**
+   * The campaign's model override, checked WHERE IT IS CHOSEN.
+   *
+   * `defaultImageModel` / `defaultVideoModel` are the FIRST term of
+   * `campaign override ?? workspace default ?? code constant`, and until this
+   * check the columns took any string. Two failures came out of that, and
+   * neither of them looked like a bad model id:
+   *
+   *  - an id catalogued as the WRONG KIND (`fal-ai/qwen-image` as the video
+   *    model — one row away in a picker that lists both) passed here and was
+   *    then refused by `MediaGenService` with `MEDIA_GEN_UNKNOWN_MODEL` at
+   *    generation time, which is hours later, on the scheduled-job path, once
+   *    per item, with the reason on an item row instead of on the screen where
+   *    the choice was made;
+   *  - a typo'd id did the same, and `ConceptPromotionService.produce` turns
+   *    that into "clip 1/5 could not be generated" on a FAILED item, for a
+   *    campaign that will fail every item it ever plans.
+   *
+   * Same function and same sentence the workspace-level card uses, so the two
+   * doors onto one decision cannot drift.
+   */
+  private assertModels(input: {
+    defaultImageModel?: string | null;
+    defaultVideoModel?: string | null;
+  }): void {
+    if (input.defaultImageModel) assertCataloguedModel(input.defaultImageModel, 'IMAGE');
+    if (input.defaultVideoModel) assertCataloguedModel(input.defaultVideoModel, 'VIDEO');
+  }
+
   async create(workspaceId: string, input: CreateSocialCampaignInput) {
+    this.assertModels(input);
     return this.prisma.socialCampaign.create({
       data: {
         workspaceId,
@@ -155,6 +186,7 @@ export class SocialCampaignsService implements OnModuleInit {
   }
 
   async update(workspaceId: string, id: string, patch: Partial<CreateSocialCampaignInput>) {
+    this.assertModels(patch);
     const c = await this.getOwned(workspaceId, id);
 
     // A "mode-only" patch touches ONLY automationMode and/or planningMode. Those

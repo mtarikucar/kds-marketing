@@ -221,6 +221,11 @@ function ModelChoiceCard({
   const models = data.models.filter((m) => m.type === kind);
   const platformDefault = models.find((m) => m.isPlatformDefault);
   const effective = kind === 'VIDEO' ? data.effectiveVideoModel : data.effectiveImageModel;
+  // A stored choice the catalogue has since dropped. The server applies the
+  // fallback and REPORTS it, so `effective` is always an id in `models` and the
+  // "In use" badge below always lands somewhere.
+  const retired = kind === 'VIDEO' ? data.retiredVideoModel : data.retiredImageModel;
+  const effectiveModel = models.find((m) => m.id === effective);
 
   // A catalogue with no entry for this kind is a BROKEN catalogue, not an empty
   // choice — every deploy ships at least the platform default. Saying so beats
@@ -256,7 +261,28 @@ function ModelChoiceCard({
         </CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        {/*
+          The one state this card must not render silently. A retired choice
+          means the RadioGroup's value matches no option — nothing is selected,
+          nothing is badged "In use" — and the screen whose entire purpose is to
+          stop the spending decision being blind would say nothing about what
+          the next generation actually costs. So it says all three things: the
+          choice that no longer exists, what runs instead, and at what price.
+        */}
+        {retired && (
+          <Callout tone="warning">
+            {t(
+              'aiModels.retired',
+              'This workspace is set to "{{retired}}", which is no longer in the catalogue, so it cannot be priced or run. {{label}} runs instead ({{price}}). Pick a model below to replace the stored choice.',
+              {
+                retired,
+                label: effectiveModel?.label ?? effective,
+                price: effectiveModel ? priceLine(effectiveModel, t) : effective,
+              },
+            )}
+          </Callout>
+        )}
         <RadioGroup
           value={value}
           onValueChange={onChange}

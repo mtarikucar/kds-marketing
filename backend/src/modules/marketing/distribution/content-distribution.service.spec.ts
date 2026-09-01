@@ -57,7 +57,7 @@ interface Fixture {
   existingPlan?: unknown;
 }
 
-function makeSvc(f: Fixture = {}) {
+function makeSvc(f: Fixture = {}, Ctor: typeof ContentDistributionService = ContentDistributionService) {
   const created: unknown[] = [];
   const prisma: any = {
     socialCampaignItem: {
@@ -126,7 +126,7 @@ function makeSvc(f: Fixture = {}) {
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
-  return { svc: new ContentDistributionService(prisma), prisma, created };
+  return { svc: new Ctor(prisma), prisma, created };
 }
 
 describe('ContentDistributionService.plan — refusals that are not emptiness', () => {
@@ -352,6 +352,12 @@ describe('ContentDistributionService — tenant isolation', () => {
       prisma.channel.findMany,
       prisma.lead.findMany,
       prisma.contentConcept.findFirst,
+      // The one that was missing. `publishedNetworks()` reads
+      // social_post_targets by post id, and a post id is not tenant-scoped on
+      // its own — dropping the workspaceId there was silent across the WHOLE
+      // suite, and the consequence is not an empty list: it is the neighbour's
+      // publish history deciding which networks OUR video still needs.
+      prisma.socialPostTarget.findMany,
     ]) {
       expect(call).toHaveBeenCalledWith(
         expect.objectContaining({ where: expect.objectContaining({ workspaceId: OTHER_WS }) }),
@@ -362,9 +368,91 @@ describe('ContentDistributionService — tenant isolation', () => {
     }
   });
 
+  /** The loop above proves each predicate is PRESENT. This proves the query it
+   *  is on actually ran — a read that never happens is trivially well-scoped,
+   *  and `toHaveBeenCalledWith` on an uncalled mock is not what fails. */
+  it('actually performs every read the loop above checks', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.plan(OTHER_WS, ITEM, ACTOR);
+    for (const call of [
+      prisma.socialCampaignItem.findFirst,
+      prisma.socialAccount.findMany,
+      prisma.channel.findMany,
+      prisma.lead.findMany,
+      prisma.contentConcept.findFirst,
+      prisma.socialPostTarget.findMany,
+    ]) {
+      expect(call).toHaveBeenCalled();
+    }
+  });
+
   it('stamps every draft it writes with the calling workspace', async () => {
     const { svc, created } = makeSvc();
     await svc.plan(OTHER_WS, ITEM, ACTOR);
     expect(created.every((d: any) => d.workspaceId === OTHER_WS)).toBe(true);
+  });
+});
+
+/**
+ * The stagger, and the crash a typo used to cause.
+ *
+ * `Number(process.env.X ?? 4h_default)` returns `NaN` for any non-numeric
+ * value, `NaN` survives the `base + (i + 1) * stagger` arithmetic, and
+ * `new Date(NaN).toISOString()` throws `RangeError: Invalid time value`. The
+ * failure is not a wrong schedule — it is EVERY plan in the workspace failing,
+ * including the outreach drafts and the tag list, which have nothing to do with
+ * scheduling and would give the operator no way to connect the error to the
+ * variable they set.
+ */
+describe('CROSS_POST_STAGGER_MS — a junk env value must not break every plan', () => {
+  const ORIGINAL = process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS;
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS;
+    else process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS = ORIGINAL;
+    jest.resetModules();
+  });
+
+  /** Re-imported per case: the constant is read once, at module load, which is
+   *  exactly why a bad value is a deploy-time landmine rather than a bad row. */
+  function load(value: string | undefined) {
+    if (value === undefined) delete process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS;
+    else process.env.DISTRIBUTION_CROSS_POST_STAGGER_MS = value;
+    let mod!: typeof import('./content-distribution.service');
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      mod = require('./content-distribution.service');
+    });
+    return mod;
+  }
+
+  it.each([
+    ['a duration nobody told it not to write', '4h'],
+    ['empty', ''],
+    ['whitespace', '   '],
+    ['literally NaN', 'NaN'],
+    ['zero, which IS simultaneous posting', '0'],
+    ['negative, which schedules into the past', '-3600000'],
+  ])('falls back to four hours when the value is %s', (_why, value) => {
+    expect(load(value).CROSS_POST_STAGGER_MS).toBe(4 * 60 * 60 * 1000);
+  });
+
+  it('still honours a legitimate override', () => {
+    expect(load('60000').CROSS_POST_STAGGER_MS).toBe(60_000);
+  });
+
+  /**
+   * The assertion that the constant test cannot make: that a plan still comes
+   * out. Before the guard this threw RangeError from `toISOString()` and the
+   * whole feature was down for that workspace.
+   */
+  it('produces a plan with real timestamps even so', async () => {
+    const mod = load('4h');
+    const { svc } = makeSvc({}, mod.ContentDistributionService);
+    const res = await svc.plan(WS, ITEM, ACTOR);
+    expect(res.plan.crossPosts.length).toBeGreaterThan(0);
+    for (const c of res.plan.crossPosts) {
+      expect(Number.isNaN(Date.parse(c.runAt))).toBe(false);
+    }
   });
 });

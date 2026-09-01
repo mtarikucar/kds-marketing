@@ -4,6 +4,7 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import {
   MEDIA_MODELS,
   MediaModel,
+  assertCataloguedModel,
   defaultModelFor,
   isCataloguedModel,
 } from './media-models.config';
@@ -17,12 +18,26 @@ export interface PricedMediaModel extends MediaModel {
 }
 
 export interface MediaModelDefaults {
-  /** The workspace's CHOICE. `null` means it has not made one. */
+  /** The workspace's CHOICE, verbatim — including one the catalogue has since
+   *  dropped. `null` means it has not made one. Reported unchanged rather than
+   *  scrubbed: a manager who chose a model and finds the card silently back on
+   *  "Platform default" has been told their choice never happened. */
   defaultImageModel: string | null;
   defaultVideoModel: string | null;
   /** What would actually run today — the choice, or the platform constant. */
   effectiveImageModel: string;
   effectiveVideoModel: string;
+  /**
+   * The stored choice this workspace can no longer run, when there is one.
+   *
+   * `null` in the normal case (no choice, or a choice the catalogue still
+   * knows). Non-null means the two pairs above DISAGREE, and the card has to
+   * say which one wins — otherwise it renders a RadioGroup whose value matches
+   * no option, badges nothing "In use", and never states what the next video
+   * will actually be billed at.
+   */
+  retiredImageModel: string | null;
+  retiredVideoModel: string | null;
   models: PricedMediaModel[];
 }
 
@@ -99,25 +114,42 @@ export class MediaModelDefaultsService {
     if (value === null) return null;
     const id = String(value).trim();
     if (!id) return null;
-    if (!isCataloguedModel(id, type)) {
-      const options = Object.values(MEDIA_MODELS)
-        .filter((m) => m.type === type)
-        .map((m) => m.id)
-        .join(', ');
-      throw new BadRequestException(
-        `"${id}" is not a catalogued ${type.toLowerCase()} model, so its price is unknown and it cannot be run. Choose one of: ${options}.`,
-      );
-    }
-    return id;
+    // The message lives in the catalogue, not here: the campaign override
+    // (`SocialCampaignsService`) enforces the same rule at its own write, and
+    // the two doors must not tell a manager two different things about the same
+    // five options.
+    return assertCataloguedModel(id, type);
   }
 
+  /**
+   * The read model, with the catalogue re-checked at READ time.
+   *
+   * `validated()` gates the write, so a stored id was catalogued the day it was
+   * chosen. That is not the same as being catalogued TODAY: the catalogue is a
+   * TypeScript constant, and a deploy that retires a model leaves the old id in
+   * every workspace that picked it. `MediaGenService` already handles this —
+   * an uncatalogued stored default is ignored and the platform constant runs,
+   * with a log line — so nothing generates on an unpriced model.
+   *
+   * The screen was the part that lied. Returning the stored id as
+   * `effectiveVideoModel` made the card render a RadioGroup whose value matched
+   * no option, so no row carried the "In use" badge and the one screen whose
+   * entire purpose is to stop the spending decision being blind stopped saying
+   * what the next video would cost. The fallback is therefore applied here too,
+   * and REPORTED — the retired id travels beside it so the card can name the
+   * choice that is no longer honoured instead of quietly dropping it.
+   */
   private project(image: string | null, video: string | null): MediaModelDefaults {
     const platform = new Set([defaultModelFor('IMAGE'), defaultModelFor('VIDEO')]);
+    const imageLive = image !== null && isCataloguedModel(image, 'IMAGE');
+    const videoLive = video !== null && isCataloguedModel(video, 'VIDEO');
     return {
       defaultImageModel: image,
       defaultVideoModel: video,
-      effectiveImageModel: image ?? defaultModelFor('IMAGE'),
-      effectiveVideoModel: video ?? defaultModelFor('VIDEO'),
+      effectiveImageModel: imageLive ? (image as string) : defaultModelFor('IMAGE'),
+      effectiveVideoModel: videoLive ? (video as string) : defaultModelFor('VIDEO'),
+      retiredImageModel: image !== null && !imageLive ? image : null,
+      retiredVideoModel: video !== null && !videoLive ? video : null,
       models: Object.values(MEDIA_MODELS).map((m) => ({ ...m, isPlatformDefault: platform.has(m.id) })),
     };
   }

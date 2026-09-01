@@ -85,6 +85,20 @@ function plan(over: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * Click the row's Send, then confirm.
+ *
+ * TWO steps, because the screen has two: the first opens a `ConfirmDialog`
+ * naming the recipient, the second is the decision. A helper that hid the
+ * second would make every send test pass on a panel with no confirm at all,
+ * which is the assertion below.
+ */
+async function sendFrom(row: HTMLElement | typeof screen) {
+  const scope = row === screen ? screen : within(row as HTMLElement);
+  await userEvent.click((scope as typeof screen).getByRole('button', { name: /^Send$/ }));
+  await userEvent.click(await screen.findByRole('button', { name: /Yes, send it/i }));
+}
+
 function renderPanel(items = [ITEM]) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -143,10 +157,45 @@ describe('DistributionPanel — nothing sends itself', () => {
     renderPanel();
 
     const row = (await screen.findByText('mert@example.com')).closest('li') as HTMLElement;
-    await userEvent.click(within(row).getByRole('button', { name: /^Send$/ }));
+    await sendFrom(row);
 
     await waitFor(() => expect(sendDistributionDraft).toHaveBeenCalledTimes(1));
     expect(sendDistributionDraft).toHaveBeenCalledWith('draft-2', 'Bunun motoru yok.');
+  });
+
+  /**
+   * The click that used to BE the send.
+   *
+   * One press of this button put a real message in front of a real person, and
+   * the row cannot be sent twice — so a misclick had no undo anywhere in the
+   * product. The button now opens a confirm; the assertion is that NOTHING has
+   * gone out at that point, which is the only version of this test that can
+   * fail if the dialog is removed.
+   */
+  it('sends nothing until the confirmation is accepted', async () => {
+    vi.mocked(getDistributionPlan).mockResolvedValue(plan() as never);
+    renderPanel();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Send$/ }));
+    expect(sendDistributionDraft).not.toHaveBeenCalled();
+
+    // And the dialog says WHO it is about — a confirm that does not name the
+    // recipient is a speed bump, not a check.
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByText(/ayse@example\.com/)).toBeInTheDocument();
+    expect(dialog.getByText(/EMAIL/)).toBeInTheDocument();
+  });
+
+  it('sends nothing when the confirmation is declined', async () => {
+    vi.mocked(getDistributionPlan).mockResolvedValue(plan() as never);
+    renderPanel();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Send$/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Yes, send it/i })).not.toBeInTheDocument(),
+    );
+    expect(sendDistributionDraft).not.toHaveBeenCalled();
   });
 
   it('sends the text as EDITED, so the record is of what went out', async () => {
@@ -157,13 +206,15 @@ describe('DistributionPanel — nothing sends itself', () => {
     const box = await screen.findByLabelText(/message to ayse@example.com/i);
     await userEvent.clear(box);
     await userEvent.type(box, 'Kendi cümlelerim.');
-    await userEvent.click(screen.getByRole('button', { name: /^Send$/ }));
+    await sendFrom(screen);
 
     await waitFor(() => expect(sendDistributionDraft).toHaveBeenCalledTimes(1));
     expect(sendDistributionDraft).toHaveBeenCalledWith('draft-1', 'Kendi cümlelerim.');
   });
 
-  it('dismisses without sending', async () => {
+  /** Dismiss stays ONE click: it dispatches nothing and re-planning brings the
+   *  draft back, so there is nothing here a confirm would protect. */
+  it('dismisses without sending, and without a confirmation', async () => {
     vi.mocked(getDistributionPlan).mockResolvedValue(plan() as never);
     vi.mocked(dismissDistributionDraft).mockResolvedValue(draft({ status: 'DISMISSED' }) as never);
     renderPanel();

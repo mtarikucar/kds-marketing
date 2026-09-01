@@ -176,28 +176,62 @@ describe('Faz 5 D2 — AI media generation', () => {
  * `socialCampaignId = null` — which put it on `sweepOrphanAssets`' 30-day
  * delete list and off the armed-budget path.
  */
-describe('jeeta.generate_video — the campaign an MCP generation belongs to', () => {
-  it('forwards both linkage ids so the asset is not orphan-reaped', async () => {
-    const { registry, media } = build();
-    await registry.get('jeeta.generate_video')!.handler(ctx(), {
-      prompt: 'a walking sculpture',
-      durationSec: 4,
-      socialCampaignId: 'camp-1',
-      campaignItemId: 'item-1',
-    });
-    expect(media.requestGeneration).toHaveBeenCalledWith(
-      'ws1',
-      expect.objectContaining({ socialCampaignId: 'camp-1', campaignItemId: 'item-1' }),
-    );
-  });
+describe('the campaign an MCP generation belongs to', () => {
+  /**
+   * BOTH media tools, in one table.
+   *
+   * The commit that added the ids claimed "every MCP-generated asset was an
+   * orphan" and then only fixed `generate_video`, so `generate_image` — the
+   * PRIMARY media entry point, the one that is not even deferred — went on
+   * writing `socialCampaignId = null` and went on being deleted at 30 days.
+   * The single-tool spec is what let that read as done, so the table is the
+   * fix: a tool added to the media family without its linkage now has to be
+   * added here, or left out on purpose.
+   */
+  it.each(['jeeta.generate_image', 'jeeta.generate_video'])(
+    '%s forwards both linkage ids so the asset is not orphan-reaped',
+    async (name) => {
+      const { registry, media } = build();
+      await registry.get(name)!.handler(ctx(), {
+        prompt: 'a walking sculpture',
+        socialCampaignId: 'camp-1',
+        campaignItemId: 'item-1',
+      });
+      expect(media.requestGeneration).toHaveBeenCalledWith(
+        'ws1',
+        expect.objectContaining({ socialCampaignId: 'camp-1', campaignItemId: 'item-1' }),
+      );
+    },
+  );
 
-  it('omits them entirely when the caller named neither', async () => {
-    // Not `undefined` — omitted. The service distinguishes "no campaign" from
-    // "a campaign I could not resolve", and only the second is an error.
-    const { registry, media } = build();
-    await registry.get('jeeta.generate_video')!.handler(ctx(), { prompt: 'x' });
-    const dto = media.requestGeneration.mock.calls[0][1];
-    expect('socialCampaignId' in dto).toBe(false);
-    expect('campaignItemId' in dto).toBe(false);
-  });
+  /** The schema is the gate, not the handler: a handler that forwards an id its
+   *  zod schema strips is a handler that forwards nothing. */
+  it.each(['jeeta.generate_image', 'jeeta.generate_video'])(
+    '%s accepts both ids in its declared input schema',
+    (name) => {
+      const shape = (registryOf().get(name)!.inputSchema as never as {
+        shape: Record<string, unknown>;
+      }).shape;
+      expect(Object.keys(shape)).toEqual(
+        expect.arrayContaining(['socialCampaignId', 'campaignItemId']),
+      );
+    },
+  );
+
+  it.each(['jeeta.generate_image', 'jeeta.generate_video'])(
+    '%s omits them entirely when the caller named neither',
+    async (name) => {
+      // Not `undefined` — omitted. The service distinguishes "no campaign" from
+      // "a campaign I could not resolve", and only the second is an error.
+      const { registry, media } = build();
+      await registry.get(name)!.handler(ctx(), { prompt: 'x' });
+      const dto = media.requestGeneration.mock.calls[0][1];
+      expect('socialCampaignId' in dto).toBe(false);
+      expect('campaignItemId' in dto).toBe(false);
+    },
+  );
 });
+
+function registryOf() {
+  return build().registry;
+}
