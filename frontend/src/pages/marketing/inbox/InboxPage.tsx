@@ -31,8 +31,17 @@ const AgentStudioPage = lazy(() => import('../AgentStudioPage'));
 const KnowledgeBasePage = lazy(() => import('../KnowledgeBasePage'));
 const LeadsPage = lazy(() => import('../leads/LeadsPage'));
 
-/** The conversation-domain config surfaces, reachable at `?tab=`. */
-const CONFIG_TABS = ['channels', 'snippets', 'agents', 'knowledge'] as const;
+/**
+ * The conversation-domain config surfaces, reachable at `?tab=`.
+ *
+ * EXPORTED for one reason: `tab` is the only search-param name two pages read
+ * (see the table on this component), and the two vocabularies not colliding is
+ * a coincidence rather than a design. `tabParam.contract.test.ts` imports this
+ * list and TasksPage's, and fails the moment they overlap — so the next value
+ * added to either side is caught here instead of on a surface where a deep
+ * link silently opens the wrong thing.
+ */
+export const CONFIG_TABS = ['channels', 'snippets', 'agents', 'knowledge'] as const;
 type ConfigTab = (typeof CONFIG_TABS)[number];
 const isConfigTab = (v: string | null): v is ConfigTab =>
   (CONFIG_TABS as readonly string[]).includes(v ?? '');
@@ -139,8 +148,10 @@ function Lazy({ children }: { children: ReactNode }) {
  * because the value sets are disjoint AND the config branch replaces the whole
  * surface, so the two are never mounted together — but that is a coincidence
  * of two vocabularies, not a design, and the next value added to either side
- * is where it stops being true. `isConfigTab` is the guard: an unrecognised
- * `tab` falls back to the surface rather than blanking it.
+ * is where it stops being true — so `tabParam.contract.test.ts` imports both
+ * lists and fails on the overlap, which turns that sentence from a warning into
+ * a check. `isConfigTab` is the guard at runtime: an unrecognised `tab` falls
+ * back to the surface rather than blanking it.
  *
  * **Nobody strips anybody else's.** Every setter here uses the callback form of
  * `setParams` and touches exactly its own key, which is why switching the left

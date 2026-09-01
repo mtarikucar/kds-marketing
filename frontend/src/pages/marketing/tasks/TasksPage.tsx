@@ -97,6 +97,20 @@ export function buildTaskPayload(values: TaskFormValues, isEdit: boolean): Recor
   return payload;
 }
 
+/**
+ * This page's `?tab=` vocabulary — the tab strip's order, and the values the
+ * deep link accepts.
+ *
+ * EXPORTED for the same reason as InboxPage's `CONFIG_TABS`: `tab` is the one
+ * search-param name two pages read, and this page is rendered INSIDE that one
+ * as its Görevler view. The two sets being disjoint is what keeps a
+ * `?tab=overdue` link from opening a config surface, and it is a coincidence of
+ * two vocabularies rather than anything either side enforces — so
+ * `tabParam.contract.test.ts` enforces it, over these two lists.
+ */
+export const TASK_TABS = ['all', 'today', 'overdue'] as const;
+export type TaskTab = (typeof TASK_TABS)[number];
+
 export interface TasksPageProps {
   /**
    * Rendered inside another page's surface rather than at `/tasks`.
@@ -143,7 +157,7 @@ export default function TasksPage({
   const initialTab = searchParams.get('tab');
 
   // Tab filter (all / today / overdue) — seeded from ?tab= URL param
-  const [tab, setTab] = useState<'all' | 'today' | 'overdue'>(
+  const [tab, setTab] = useState<TaskTab>(
     initialTab === 'today' || initialTab === 'overdue' ? initialTab : 'all',
   );
 
@@ -499,7 +513,7 @@ export default function TasksPage({
       <FilterBar>
         {/* Tab buttons */}
         <div className="flex items-center gap-1 rounded-lg border border-border p-1">
-          {(['all', 'today', 'overdue'] as const).map((tabKey) => (
+          {TASK_TABS.map((tabKey) => (
             <button
               key={tabKey}
               type="button"
