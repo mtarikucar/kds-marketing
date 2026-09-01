@@ -2532,7 +2532,8 @@
     "provisioned": "Social campaign created",
     "provisionFailed": "Could not create social content",
     "subtitleAuto": "AI content campaigns the Autopilot runs for you",
-    "modesReadonlyHint": "How automatic this campaign is — set by the Growth Autopilot."
+    "modesReadonlyHint": "How automatic this campaign is — set by the Growth Autopilot.",
+    "regenerateCost": "Builds this post again from scratch and generates its media again, which spends credits. Video costs substantially more than an image."
   },
   "landing": {
     "a11y": {

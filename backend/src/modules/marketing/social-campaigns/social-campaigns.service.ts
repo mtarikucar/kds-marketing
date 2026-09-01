@@ -320,11 +320,31 @@ export class SocialCampaignsService implements OnModuleInit {
     // PLANNED item with a topic is exactly what confirmPlan sweeps into that
     // same generic generator.
     if (item.contentConceptId) {
+      // Whether the paid-for cursor (`generatedAssetIds`) survives is decided by
+      // the SOURCE STATE, because that is what distinguishes two different
+      // requests wearing one button.
+      //
+      // FAILED = production stopped part-way through a spend. The concept's shot
+      // plan is immutable (nothing in the product edits it), so beats already
+      // bought are byte-for-byte the beats a rebuild would buy again. Keeping the
+      // cursor is therefore never worse than clearing it — same output, and at
+      // worst the same cost, since an item that failed on beat 1 has an empty
+      // cursor and resume IS rebuild. Clearing it meant an item that died on
+      // beat 3 of 5 for a transient provider blip re-bought beats 1-2 for
+      // nothing, on the most expensive action in the product.
+      //
+      // Anything else (NEEDS_APPROVAL above all) = a human has SEEN the finished
+      // clips and is asking for DIFFERENT ones. There the cursor must go, or
+      // "regenerate" hands back the same video.
+      const resume = item.status === 'FAILED';
       await this.prisma.socialCampaignItem.update({
         where: { id: itemId },
-        // Regenerating has always meant "buy it again", so the paid-for cursor
-        // (generatedAssetIds) is cleared along with the post it produced.
-        data: { status: 'GENERATING', error: null, generatedAssetIds: [], socialPostId: null },
+        data: {
+          status: 'GENERATING',
+          error: null,
+          socialPostId: null,
+          ...(resume ? {} : { generatedAssetIds: [] }),
+        },
       });
       await this.scheduledJobs.schedule({
         workspaceId, kind: CONCEPT_PRODUCE_KIND, runAt: new Date(),

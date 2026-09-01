@@ -3002,7 +3002,8 @@
     "modesTitle": "Modlar",
     "modesHint": "Sonraki gönderilerin nasıl işleneceğini değiştir. Bir gönderi üretim aşamasındaysa kampanyayı duraklat.",
     "subtitleAuto": "Autopilot senin için yürüttüğü AI içerik kampanyaları",
-    "modesReadonlyHint": "Bu kampanyanın ne kadar otomatik olduğu — Growth Autopilot belirler."
+    "modesReadonlyHint": "Bu kampanyanın ne kadar otomatik olduğu — Growth Autopilot belirler.",
+    "regenerateCost": "Bu gönderiyi sıfırdan yeniden kurar ve medyasını yeniden üretir; bu kredi harcar. Video, görsele göre belirgin biçimde daha pahalıdır."
   },
   "landing": {
     "a11y": {

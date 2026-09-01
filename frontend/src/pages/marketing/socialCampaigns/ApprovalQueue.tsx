@@ -130,7 +130,24 @@ export function ApprovalQueue({ items, onReview, pendingId, pendingAction }: App
                     <Check className="h-4 w-4" />
                     {t('socialCampaign.approve', 'Approve')}
                   </Button>
-                  <Button size="sm" variant="secondary" loading={loadingFor('regenerate')} disabled={busy} onClick={() => onReview(it.id, 'regenerate')}>
+                  {/* An item in this queue is one the reviewer has SEEN, so
+                      regenerating it means "make me a different one" and buys
+                      the media again from scratch. Video is the most expensive
+                      action in the product; the button says so rather than
+                      letting the invoice say it later. (A FAILED item, which
+                      never reaches this queue, resumes instead — it keeps the
+                      clips already paid for.) */}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={loadingFor('regenerate')}
+                    disabled={busy}
+                    title={t(
+                      'socialCampaign.regenerateCost',
+                      'Builds this post again from scratch and generates its media again, which spends credits. Video costs substantially more than an image.',
+                    )}
+                    onClick={() => onReview(it.id, 'regenerate')}
+                  >
                     <RefreshCw className="h-4 w-4" />
                     {t('socialCampaign.regenerate', 'Regenerate')}
                   </Button>
