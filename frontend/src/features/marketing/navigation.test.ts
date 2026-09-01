@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   NAV_HUBS,
+  UNLISTED_DESTINATIONS,
   visibleNav,
+  visibleUnlisted,
   findActiveHub,
   findActiveChild,
   splitByTier,
@@ -43,9 +45,9 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
     // …and their pages are inside a surface, still filtered exactly as before:
     // /inbox (conversationAi), /calls (telephony), /appointments (funnels +
     // managerOnly) and both /voice pages all stay hidden from an unentitled rep.
-    expect(childPaths(hubs, 'inbox')).toEqual([
-      '/leads', '/companies', '/opportunities', '/documents', '/calendar', '/tasks',
-    ]);
+    // ONE entry since 2026-09-01 (stage 4). The other six are routes and
+    // palette destinations, not menu items — see the collapse suite below.
+    expect(childPaths(hubs, 'inbox')).toEqual(['/leads']);
     // Growth Studio itself is managerOnly, so a rep's Studio surface is Reports.
     expect(childPaths(hubs, 'studio')).toEqual(['/reports']);
     expect(childPaths(hubs, 'settings')).toEqual(['/settings/two-factor']);
@@ -222,10 +224,28 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * freeze honest about that rather than letting a "collapse the menu" refactor
    * quietly delete a path.
    */
-  const allPaths = NAV_HUBS.flatMap((h) => [
-    ...(h.path ? [h.path] : []),
-    ...(h.children?.flatMap((c) => [c.path, ...(c.aliases ?? [])]) ?? []),
-  ]);
+  const allPaths = [
+    ...NAV_HUBS.flatMap((h) => [
+      ...(h.path ? [h.path] : []),
+      ...(h.children?.flatMap((c) => [c.path, ...(c.aliases ?? [])]) ?? []),
+    ]),
+    /**
+     * The UNLISTED destinations count too, as of stage 4 (2026-09-01).
+     *
+     * Six pages left the Inbox menu that day and stayed routes — which is the
+     * whole point of a menu collapse — so a sum built from the hubs alone would
+     * have reported six deletions, forcing either a third list of "exceptions"
+     * or an edit to the frozen fifty. Both make this assertion weaker.
+     *
+     * Counting them here is not a loophole, it is the more accurate question.
+     * `UNLISTED_DESTINATIONS` is not a graveyard: `useNavCommands` renders it
+     * into the command palette under the SAME role and plan gates the sidebar
+     * applies (`visibleUnlisted`), and Breadcrumbs names it. A path in neither
+     * a hub nor this list is genuinely unreachable except by typing, and that
+     * is exactly what the freeze is for.
+     */
+    ...UNLISTED_DESTINATIONS.map((d) => d.path),
+  ];
 
   /**
    * Every route the sidebar could reach on 2026-08-28, the day BEFORE the
@@ -272,8 +292,15 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * did not contain it. Stage 4 removes `/opportunities` from the menu, which
    * would have made a typed URL the only way to configure the stages every
    * deal moves through. See the item's own comment in navigation.ts.
+   *
+   * `/dashboard` and `/help` (2026-09-01): NOT new pages and not newly
+   * reachable — both have been in `UNLISTED_DESTINATIONS`, and therefore in the
+   * command palette, since before the snapshot. They appear here because the
+   * sum above now counts that list, which is what stage 4 required. The honest
+   * way to record "the question widened" is a line each, not a quiet edit to a
+   * photograph of one day.
    */
-  const PATHS_ADDED_SINCE = ['/settings/pipelines'];
+  const PATHS_ADDED_SINCE = ['/settings/pipelines', '/dashboard', '/help'];
 
   it('keeps every retired hub reachable by route, so nothing is lost', () => {
     expect([...allPaths].sort()).toEqual(
@@ -309,6 +336,79 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
       visibleNav(NAV_HUBS, { isManager: false, isOwner: false, has: entitle(), isAgency: false }),
       'settings',
     )).not.toContain('/settings/pipelines');
+  });
+
+  /**
+   * Stage 4 (2026-09-01): the Inbox hub collapses to ONE entry.
+   *
+   * Six pages leave the menu and stay routes. WHERE each capability is reached
+   * from afterwards is the audit that had to come first: all six are in the
+   * command palette under the same gates, and the three the surface embeds
+   * carry a link to their own full page from the view that embeds them.
+   */
+  const DEPARTED_FROM_THE_INBOX_MENU = [
+    '/companies', '/opportunities', '/documents', '/calendar', '/appointments', '/tasks',
+  ];
+
+  it('leaves the Inbox surface with exactly one entry: the person', () => {
+    const hubs = visibleNav(NAV_HUBS, {
+      isManager: true, isOwner: true, has: () => true, isAgency: false,
+    });
+    // The count is the assertion. "Contains /leads" would pass with all nine.
+    expect(childPaths(hubs, 'inbox')).toEqual(['/leads']);
+  });
+
+  it('keeps every departed page reachable, as an unlisted destination', () => {
+    const unlisted = UNLISTED_DESTINATIONS.map((d) => d.path);
+    expect(DEPARTED_FROM_THE_INBOX_MENU.filter((p) => !unlisted.includes(p))).toEqual([]);
+  });
+
+  /**
+   * The gates come WITH them. `UNLISTED_DESTINATIONS` used to be ungated by
+   * construction — its own comment said "only add pages every signed-in member
+   * may open" — and `/appointments` (funnels + managerOnly) is not one of
+   * those. Dropping it in unguarded would have offered a rep a page whose every
+   * backend route is `@MarketingRoles('MANAGER')` + `@RequiresFeature`, which
+   * is a permission change dressed up as a packaging change.
+   */
+  it('carries the departed pages gates into the palette, not just their paths', () => {
+    const rep = visibleUnlisted({ isManager: false, has: () => true }).map((d) => d.path);
+    const unentitled = visibleUnlisted({ isManager: true, has: (f) => !f }).map((d) => d.path);
+    const manager = visibleUnlisted({ isManager: true, has: () => true }).map((d) => d.path);
+
+    expect(manager).toContain('/appointments');
+    expect(rep).not.toContain('/appointments');
+    expect(unentitled).not.toContain('/appointments');
+    // …and the ungated five stay offered to everyone, which is the other half:
+    // a gate copied onto the wrong item hides a page a rep works in daily.
+    for (const open of ['/companies', '/opportunities', '/documents', '/calendar', '/tasks']) {
+      expect(rep).toContain(open);
+    }
+  });
+
+  /**
+   * Ses and Telefon Ağacı are channel CONFIGURATION, not daily work — the same
+   * class as the call log that moved on 2026-08-31. They move to Settings with
+   * both of their gates, and this is the test that says the move kept them.
+   */
+  it('files Ses and Telefon Ağacı under Settings, with their gates intact', () => {
+    const entitled = childPaths(
+      visibleNav(NAV_HUBS, { isManager: true, has: entitle('voiceAi') }),
+      'settings',
+    );
+    expect(entitled).toEqual(expect.arrayContaining(['/voice', '/voice/ivr']));
+    expect(
+      childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle('voiceAi') }), 'inbox'),
+    ).not.toContain('/voice');
+
+    // Plan gate.
+    expect(
+      childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle() }), 'settings'),
+    ).not.toContain('/voice');
+    // Role gate.
+    expect(
+      childPaths(visibleNav(NAV_HUBS, { isManager: false, has: entitle('voiceAi') }), 'settings'),
+    ).not.toContain('/voice/ivr');
   });
 
   it('never lands the same page in two surfaces', () => {
@@ -362,11 +462,10 @@ describe('findActiveHub — path → owning hub', () => {
   it('resolves every page to its new surface (not by URL prefix)', () => {
     // Work — the pages that arrive with a person attached.
     expect(findActiveHub(NAV_HUBS, '/inbox')?.id).toBe('inbox');
-    expect(findActiveHub(NAV_HUBS, '/companies')?.id).toBe('inbox');
-    expect(findActiveHub(NAV_HUBS, '/documents')?.id).toBe('inbox');
-    expect(findActiveHub(NAV_HUBS, '/calendar')?.id).toBe('inbox');
-    expect(findActiveHub(NAV_HUBS, '/tasks')?.id).toBe('inbox');
-    expect(findActiveHub(NAV_HUBS, '/voice/ivr')?.id).toBe('inbox');
+    expect(findActiveHub(NAV_HUBS, '/leads')?.id).toBe('inbox');
+    // Set up — Ses and Telefon Ağacı joined the call log here in stage 4.
+    expect(findActiveHub(NAV_HUBS, '/voice')?.id).toBe('settings');
+    expect(findActiveHub(NAV_HUBS, '/voice/ivr')?.id).toBe('settings');
     // Make & measure.
     expect(findActiveHub(NAV_HUBS, '/reports')?.id).toBe('studio');
     expect(findActiveHub(NAV_HUBS, '/prospecting')?.id).toBe('studio');

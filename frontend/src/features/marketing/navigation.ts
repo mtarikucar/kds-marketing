@@ -233,18 +233,66 @@ export interface NavHub {
  * it lost its rail slot to the home screen, but a power user hitting the
  * command palette should still land on it instead of discovering it is gone.
  *
- * `visibleNav` does not gate these, so only add pages every signed-in member
- * may open. This is also the mechanism for retiring a page from the rail
- * without breaking anyone who relies on it.
+ * This is the mechanism for retiring a page from a menu without breaking
+ * anyone who relies on it, and stage 4 of the one-screen brief (2026-09-01) is
+ * the first time it carries real weight: SIX pages left the Inbox menu that day
+ * and every one of them still opens, still appears in the command palette, and
+ * still names itself in the breadcrumb.
+ *
+ * ## The gates
+ *
+ * Until that day this list was ungated by construction, and its own comment
+ * said so ("only add pages every signed-in member may open"). `/appointments`
+ * is not one of those - every route on MarketingBookingController is
+ * `@MarketingRoles('MANAGER')` + `@RequiresFeature('funnels')` - so the list
+ * grew the same two gate fields a `NavChild` carries, and `visibleUnlisted`
+ * applies them. Listing a page here is a packaging decision; it must never
+ * become a permission one.
+ *
+ * ## Where the departed six are reached from now
+ *
+ * The palette is the door this list opens, and it is not the only one:
+ *
+ * - `/opportunities`, `/calendar`, `/tasks` - the person surface RENDERS these
+ *   three, embedded, as the Hat / Takvim / Gorevler arrangements of its left
+ *   column (stage 2), so their capabilities are on the daily screen rather than
+ *   one door away. What `embedded` drops is chrome plus the month GRID, which
+ *   is why the view switcher carries a link to the full page. `/opportunities`
+ *   also keeps its two links from the lead detail's Sales tab, and `/tasks`
+ *   keeps the dashboard's overdue CTA.
+ * - `/documents` - the offers / estimates / e-signature hub. Its per-person
+ *   half is the record card's Teklifler and Tahmini fiyat sections; EDITING an
+ *   offer, the estimate line-item editor, convert-to-invoice and the whole
+ *   signing flow exist only here, which is why that section links to it. The
+ *   dashboard hero and NeedsAttention still deep-link `?tab=offers`.
+ * - `/appointments` - booking, rescheduling, approving, cancelling. The record
+ *   card's Randevular section is READ-ONLY by design, so it links here.
+ * - `/companies` - creating a company, its rollup dialog, its linked contacts,
+ *   deleting. The lead detail's CompanyPanel links to it, and the person list's
+ *   `Grupla: Sirkete gore` is where a company is met day to day.
+ *
+ * Ses and Telefon Agaci are NOT here: they moved to a menu (Settings >
+ * Telephony) rather than out of one.
  */
 export const UNLISTED_DESTINATIONS: Array<{
   path: string;
   labelKey: string;
   label: string;
   icon: IconType;
+  /** Same meaning as on a NavChild - see `visibleUnlisted`. */
+  feature?: FeatureKey;
+  managerOnly?: boolean;
 }> = [
   { path: '/dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home },
   { path: '/help', labelKey: 'nav.help', label: 'Help', icon: BookOpen },
+  // Left the Inbox menu on 2026-09-01 (stage 4). Gates copied verbatim from the
+  // entries they replace: five were ungated there and stay ungated here.
+  { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
+  { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Pipeline', icon: Target },
+  { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
+  { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
+  { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
+  { path: '/tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList },
 ];
 
 export const NAV_HUBS: NavHub[] = [
@@ -293,15 +341,24 @@ export const NAV_HUBS: NavHub[] = [
         label: 'People',
         icon: Users,
       },
-      { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
-      { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Pipeline', icon: Target },
-      // Offers + Estimates + Documents merged into one tabbed hub.
-      { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
-      { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
-      { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
-      { path: '/tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList },
-      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
-      { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
+      /**
+       * ...and since stage 4 of the one-screen brief (2026-09-01) it is the
+       * ONLY one. Six items left this list that day - Sirketler, Satis Hatti,
+       * Belgeler, Takvim, Randevular, Gorevler - and two more (Ses, Telefon
+       * Agaci) went to Settings.
+       *
+       * NOTHING WAS DELETED. All eight are still routes; the six are in
+       * `UNLISTED_DESTINATIONS` with their gates, which is the palette and the
+       * breadcrumb; and three of them are RENDERED on this very surface as the
+       * left column's Hat / Takvim / Gorevler arrangements. The audit of which
+       * capability is reached from where is written on that list.
+       *
+       * The reason is the owner's own sentence: fit the inbox on one screen
+       * without losing a feature. Nine doors into one person's work is the
+       * inventory this line of work exists to stop being - you picked a page
+       * and then went looking for the person, when the person is the object and
+       * every one of those pages is a view of them.
+       */
     ],
   },
   {
@@ -376,6 +433,22 @@ export const NAV_HUBS: NavHub[] = [
        * belongs to the operations surface, not to a person.
        */
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
+      /**
+       * Ses and Telefon Agaci, moved off the Inbox surface on 2026-09-01 for
+       * the reason the call log moved a day earlier: they are channel
+       * CONFIGURATION, not daily work. You record a greeting, wire a menu of
+       * options and leave it running for months; nothing here arrives with a
+       * person attached, which is the one thing the Inbox surface is for. The
+       * calls those trees produce still land in a person's stream, and the log
+       * of them is now the item directly above.
+       *
+       * Both gates travel unchanged (`voiceAi` + managerOnly), mirroring
+       * VoiceAiController. This is a menu move, not a route deletion or a
+       * permission change: `/voice` and `/voice/ivr` are in the frozen path
+       * set and both still resolve.
+       */
+      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
+      { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
       { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       // Public surfaces you configure once (were their own single-page hubs).
       { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
@@ -439,13 +512,36 @@ export interface NavVisibilityOpts {
   isOwner?: boolean;
 }
 
-function childVisible(c: NavChild, opts: NavVisibilityOpts): boolean {
+/** The four gates, read off anything that carries them. */
+function gatesPass(
+  g: { feature?: FeatureKey; managerOnly?: boolean; ownerOnly?: boolean; agencyOnly?: boolean },
+  opts: NavVisibilityOpts,
+): boolean {
   return (
-    (c.managerOnly ? opts.isManager : true) &&
-    (c.ownerOnly ? !!opts.isOwner : true) &&
-    (c.agencyOnly ? !!opts.isAgency : true) &&
-    opts.has(c.feature)
+    (g.managerOnly ? opts.isManager : true) &&
+    (g.ownerOnly ? !!opts.isOwner : true) &&
+    (g.agencyOnly ? !!opts.isAgency : true) &&
+    opts.has(g.feature)
   );
+}
+
+function childVisible(c: NavChild, opts: NavVisibilityOpts): boolean {
+  return gatesPass(c, opts);
+}
+
+/**
+ * The UNLISTED destinations this user may actually open.
+ *
+ * Shares `gatesPass` with the sidebar rather than re-implementing it, which is
+ * the whole point: the command palette must never jump anyone to a page their
+ * role or plan hides, and a second copy of that rule is a second place for it
+ * to rot. It matters as of 2026-09-01, when six pages moved into that list and
+ * one of them (`/appointments`) is manager-only and plan-gated.
+ */
+export function visibleUnlisted(
+  opts: NavVisibilityOpts,
+): typeof UNLISTED_DESTINATIONS {
+  return UNLISTED_DESTINATIONS.filter((d) => gatesPass(d, opts));
 }
 
 /**

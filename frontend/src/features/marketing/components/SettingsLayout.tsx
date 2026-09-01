@@ -72,11 +72,14 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
      * group mean "and also calls" — which is how the grab-bag this grouping
      * exists to prevent gets rebuilt one exception at a time.
      *
-     * It is a group of one today. /voice and /voice/ivr are the obvious second
-     * and third members the day the phone tree stops being something you visit
-     * from the Inbox rail.
+     * That day was 2026-09-01. /voice and /voice/ivr joined it in stage 4 of
+     * the one-screen brief, for a reason next to the log's rather than the same
+     * one: those two are channel CONFIGURATION — record a greeting, wire a menu
+     * of options, leave it running — and nothing you configure once arrives
+     * with a person attached, which is what the Inbox surface is for. The group
+     * now reads as the whole telephone: what you set up, and what it did.
      */
-    paths: ['/calls'],
+    paths: ['/calls', '/voice', '/voice/ivr'],
   },
   {
     key: 'billing',

@@ -80,4 +80,26 @@ describe('SettingsLayout — sub-grouping', () => {
     expect(within(group).getByRole('link', { name: 'Calls' })).toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
   });
+
+  /**
+   * …and on 2026-09-01 they followed. Ses and Telefon Ağacı are channel
+   * CONFIGURATION — you record a greeting, wire a menu of options, leave it
+   * running — so they belong beside the log rather than on the surface for
+   * work that arrives with a person attached.
+   *
+   * Same trap as the call log: arriving in this area is half the move. An item
+   * in no group falls into "Other", which the first test holds empty, so a
+   * silent regression would show up as a THIRD assertion failing rather than
+   * as these two.
+   */
+  it('files Ses and Telefon Ağacı in that same telephony group', () => {
+    renderSettings();
+    const group = screen.getByText('Telephony').parentElement as HTMLElement;
+    // The translated labels, not the inline fallbacks: nav.voice is "Voice AI"
+    // and nav.ivr is "IVR Menus" ("Sesli AI" / "Sesli Menü (IVR)" in Turkish),
+    // which is what a user actually reads in this list.
+    expect(within(group).getByRole('link', { name: 'Voice AI' })).toBeInTheDocument();
+    expect(within(group).getByRole('link', { name: 'IVR Menus' })).toBeInTheDocument();
+    expect(screen.queryByText('Other')).not.toBeInTheDocument();
+  });
 });

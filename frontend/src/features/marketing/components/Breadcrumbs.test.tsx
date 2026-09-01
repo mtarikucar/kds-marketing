@@ -45,6 +45,29 @@ describe('Breadcrumbs', () => {
     expect(screen.queryByText('Detail')).not.toBeInTheDocument();
   });
 
+  /**
+   * Six pages left the Inbox menu on 2026-09-01 and stayed routes. A trail
+   * built from the hubs alone would render NOTHING on any of them — the one
+   * state this component treats as "I do not know where you are" — so a page
+   * that is deliberately unlisted would have become a page that cannot say its
+   * own name, which is a worse regression than the menu entry it lost.
+   *
+   * No group segment: an unlisted destination belongs to no surface, and
+   * inventing one would be the trail disagreeing with the rail again.
+   */
+  it('names an unlisted destination, which has no hub to be filed under', () => {
+    renderAt('/companies');
+    expect(screen.getByText('Companies')).toBeInTheDocument();
+    expect(screen.queryByText('Inbox')).not.toBeInTheDocument();
+  });
+
+  it('still resolves a detail route under an unlisted destination', () => {
+    useBreadcrumbStore.setState({ detailLabel: 'Acme Corp' });
+    renderAt('/documents/xyz');
+    expect(screen.getByText('Documents')).toBeInTheDocument();
+    expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+  });
+
   it('keeps New/Edit leaves literal even when a record name is set', () => {
     useBreadcrumbStore.setState({ detailLabel: 'Acme Corp' });
     renderAt('/leads/new');
