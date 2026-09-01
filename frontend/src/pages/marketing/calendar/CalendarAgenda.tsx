@@ -32,17 +32,29 @@ interface CalendarAgendaProps {
   /** Who the host has open, so the agenda can mark their tasks. */
   selectedLeadId?: string | null;
   /**
-   * Replaces the default `md:hidden`. The agenda is the phone layout of
-   * `/calendar`, but it is also the ONLY layout of the surface's Takvim view:
-   * Tailwind v3 has no container queries, so `md:` reads the viewport and the
-   * seven-column grid would render at ~85px a cell inside a 40% column. The
-   * host passes a visibility of its own rather than this file guessing at one.
+   * The agenda's own VISIBILITY, stated by the host. REQUIRED, and required on
+   * purpose.
+   *
+   * The agenda is the phone layout of `/calendar` — where CalendarGrid takes
+   * over at md+ and this must be `md:hidden` — but it is also the ONLY layout
+   * of the surface's Takvim view, where it must be visible at every width:
+   * Tailwind v3 has no container queries, so `md:` reads the VIEWPORT and the
+   * seven-column grid would render at ~85px a cell inside a 40% column.
+   *
+   * This prop used to be optional with a `?? 'md:hidden'` default, and that
+   * default is what broke the Takvim view: the surface passed `undefined`
+   * meaning "do not hide me", the `??` read it as "not stated" and hid the
+   * agenda at every desktop width — so the Takvim column rendered a month
+   * navigation bar above nothing at all. Both branches of the host's ternary
+   * produced `md:hidden`. Making it required moves that from a runtime
+   * default nobody can see to a compile error: a caller must SAY what it
+   * wants, and `''` (always visible) is a different sentence from silence.
    */
-  className?: string;
+  className: string;
 }
 
-/** Agenda list — one row per day of the month. Hidden md+ by default, where
- *  CalendarGrid takes over; see `className`. */
+/** Agenda list — one row per day of the month. Its visibility is the host's
+ *  to state; see `className`. */
 export function CalendarAgenda({
   currentMonthDays,
   tasksByDate,
@@ -57,7 +69,7 @@ export function CalendarAgenda({
       data-testid="calendar-agenda"
       className={cn(
         'rounded-xl border border-border bg-surface overflow-hidden divide-y divide-border',
-        className ?? 'md:hidden',
+        className,
       )}
     >
       {currentMonthDays.map(({ date }) => {

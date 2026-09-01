@@ -256,7 +256,17 @@ export default function CalendarPage({
         )}
 
         {/* Agenda list — phone layout on `/calendar`, the only layout of the
-            surface's Takvim view. */}
+            surface's Takvim view.
+
+            The visibility is spelled out both ways because `md:` reads the
+            VIEWPORT: on `/calendar` the grid above takes over at md+ so the
+            agenda hides, and EMBEDDED there is no grid, so it must stay
+            visible at every width. `''` says that out loud. It used to say
+            `undefined`, which CalendarAgenda's `?? 'md:hidden'` default read
+            as "not stated" — so both branches hid the agenda and the Takvim
+            column rendered the month nav above empty space at every desktop
+            width. The prop is required now; there is no default left to fall
+            into. */}
         <CalendarAgenda
           currentMonthDays={currentMonthDays}
           tasksByDate={tasksByDate}
@@ -264,7 +274,7 @@ export default function CalendarPage({
           onDayClick={openDayModal}
           onSelectPerson={onSelectPerson}
           selectedLeadId={selectedLeadId}
-          className={embedded ? undefined : 'md:hidden'}
+          className={embedded ? '' : 'md:hidden'}
         />
       </QueryStateBoundary>
 

@@ -795,6 +795,59 @@ describe('OpportunitiesPage — embedded as the surface Hat view', () => {
     expect(onSelectPerson).not.toHaveBeenCalled();
   });
 
+  /**
+   * A keyboard reaches the same people a mouse does — from EVERY column.
+   *
+   * The "Hatta değil" cards took `role="button"`, a tab stop and Enter/Space
+   * when the surface started listening; the deal cards took `onClick` and
+   * `aria-current` and nothing else. So a keyboard user could select a person
+   * out of the one column that is only a SOURCE — nothing is ever dropped back
+   * into "Hatta değil" — and out of none of the seven stages beside it. The
+   * board was mouse-only for the half of it that carries the deals.
+   *
+   * Enter AND Space, because a `role="button"` promises both, and `preventDefault`
+   * on Space or the page scrolls under the user instead.
+   */
+  it.each([
+    ['{Enter}', 'Enter'],
+    [' ', 'Space'],
+  ])('selects the person behind a deal card from the keyboard (%s)', async (key) => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    expect(card).toHaveAttribute('role', 'button');
+    expect(card).toHaveAttribute('tabindex', '0');
+
+    card.focus();
+    expect(card).toHaveFocus();
+    await user.keyboard(key);
+
+    expect(onSelectPerson).toHaveBeenCalledWith(expect.objectContaining({ id: 'lead-1' }));
+  });
+
+  /**
+   * The edit control is a real `<button>`, so it must not be INSIDE the card's
+   * `role="button"` — a nested interactive is flattened by screen readers and
+   * the pencil stops being announced as its own thing. It sits over the card
+   * as a sibling instead, which is also why it no longer needs to stop the
+   * card's click from propagating: a sibling's click was never the card's.
+   */
+  it('keeps the edit control out of the card, so neither swallows the other', async () => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    const edit = screen.getByTestId('deal-edit-o1');
+    expect(card.contains(edit)).toBe(false);
+
+    await user.click(edit);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(onSelectPerson).not.toHaveBeenCalled();
+  });
+
   it('marks the person the surface has open, so a view switch is visible', async () => {
     renderEmbedded({ onSelectPerson: vi.fn(), selectedLeadId: 'lead-1' });
 

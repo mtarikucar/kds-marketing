@@ -131,31 +131,49 @@ export function PeopleColumn({
       ...(p.phone ? { phone: p.phone } : {}),
     });
 
-  const body =
-    view === 'list' ? (
-      <PeopleList selectedId={selectedId} onSelect={onSelect} className="w-full" />
-    ) : (
-      <ErrorBoundary
-        // Keyed on the view: switching away clears a failure rather than
-        // stranding the column on it.
-        key={view}
-        fallback={(retry) => (
-          <div
-            data-testid="view-failed"
-            role="alert"
-            className="flex flex-col items-center gap-3 rounded-xl border border-border bg-surface py-10"
-          >
-            {/* By NAME. "A view broke" and "the Hat view broke" are different
-                sentences to somebody who has three others to fall back to. */}
-            <p className="text-sm text-danger">
-              {label[view]} — {t('surface.view.failed', 'Bu görünüm açılamadı.')}
-            </p>
-            <Button variant="outline" size="sm" onClick={retry}>
-              {t('common.retry', 'Tekrar dene')}
-            </Button>
-          </div>
-        )}
-      >
+  /**
+   * ALL FOUR views are inside the boundary, Liste included.
+   *
+   * It used to be the one that was not: the list was the original column and
+   * the boundary arrived with the three that came later, so a `PeopleList`
+   * that threw escaped to the ROUTE boundary and took the whole surface —
+   * both other columns, the open person, the composer — down with it, over the
+   * failure of one third of one column. The three lazy views degraded to a
+   * retry button in place and the list did not, which is backwards: Liste is
+   * where a session starts and the one view a user cannot switch away from
+   * before it has rendered.
+   *
+   * Stage 3 puts group-by-company inside this branch, i.e. new grouping logic
+   * exactly where the missing boundary was, so this is cheaper to do now than
+   * to remember then.
+   */
+  const body = (
+    <ErrorBoundary
+      // Keyed on the view: switching away clears a failure rather than
+      // stranding the column on it.
+      key={view}
+      fallback={(retry) => (
+        <div
+          data-testid="view-failed"
+          role="alert"
+          className="flex flex-col items-center gap-3 rounded-xl border border-border bg-surface py-10"
+        >
+          {/* By NAME. "A view broke" and "the Hat view broke" are different
+              sentences to somebody who has three others to fall back to. */}
+          <p className="text-sm text-danger">
+            {label[view]} — {t('surface.view.failed', 'Bu görünüm açılamadı.')}
+          </p>
+          <Button variant="outline" size="sm" onClick={retry}>
+            {t('common.retry', 'Tekrar dene')}
+          </Button>
+        </div>
+      )}
+    >
+      {/* The list is a direct import, so it needs no Suspense of its own —
+          only the three borrowed pages are lazy chunks. */}
+      {view === 'list' ? (
+        <PeopleList selectedId={selectedId} onSelect={onSelect} className="w-full" />
+      ) : (
         <Suspense fallback={<RouteFallback />}>
           {view === 'board' ? (
             <OpportunitiesPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
@@ -165,8 +183,9 @@ export function PeopleColumn({
             <TasksPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
           )}
         </Suspense>
-      </ErrorBoundary>
-    );
+      )}
+    </ErrorBoundary>
+  );
 
   return (
     <div className={`flex min-h-0 flex-col gap-2 ${className ?? ''}`}>

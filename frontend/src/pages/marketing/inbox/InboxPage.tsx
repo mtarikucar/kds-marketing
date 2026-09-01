@@ -471,17 +471,36 @@ export default function InboxPage() {
               someone is picked on a phone; the existing inbox's own answer to
               the same problem.
 
-              The three new arrangements are WIDER than the list, and that is a
-              functional requirement rather than a taste: a kanban whose columns
-              are 288px cannot be dragged BETWEEN columns if only one fits on
-              screen, and a month laid out in a 34% column is unreadable. The
-              stream keeps the remainder, which at 1440px is still ~460px — a
-              readable conversation — and the record card is untouched. */}
+              ONE width for all four arrangements. The three new views briefly
+              had a wider one (46% / 42% at lg) on the argument that a kanban
+              whose columns are 288px cannot be dragged between columns when
+              only one fits. Measured in Chromium at 900px tall against the real
+              stack, that trade did not pay:
+
+                                left    stream   board cols visible (of 7)
+                1280  Hat  wide    409.9   280.3    1.37
+                1280  Hat  this    331.8   358.4    1.33
+                1440  Hat  wide    477.1   331.5    1.60
+                1440  Hat  this    384.0   424.6    1.53
+                1680  Hat  wide    577.9   446.1    1.94
+                1680  Hat  this    384.0   640.0    1.53
+
+              The wide column cost the stream 78px at 1280 and 93px at 1440 to
+              buy a THIRD of a column, and never the two the argument needed —
+              280.3px is a threaded conversation and its composer in less width
+              than an iPhone SE. The board gives up the pixels instead:
+              embedded, its own columns are 240px rather than 288 (see
+              OpportunitiesPage's `columnWidth`), which shows 1.53 of them at
+              1440 against the wide column's 1.60 — 0.07 of a column traded
+              for 93px of conversation, and 0.04 for 78px at 1280.
+
+              Dragging between columns survives because `board-columns` is
+              `overflow-x-auto`: a stage that is off screen is one scroll away
+              rather than unreachable. Measured embedded at 1440: clientWidth
+              384, scrollWidth 1752, and it scrolls. */}
           <div
             data-testid="surface-list"
-            className={`${selected ? 'hidden md:flex' : 'flex w-full'} min-h-0 md:shrink-0 ${
-              leftView === 'list' ? 'md:w-[34%] md:max-w-sm' : 'md:w-[46%] lg:w-[42%]'
-            }`}
+            className={`${selected ? 'hidden md:flex' : 'flex w-full'} min-h-0 md:w-[34%] md:max-w-sm md:shrink-0`}
           >
             <PeopleColumn
               view={leftView}

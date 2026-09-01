@@ -71,10 +71,21 @@ test('the left column switches between four arrangements without disturbing the 
   // so, rather than being replaced by the board.
   await expect(app.getByText('Soldan bir kişi seç.').first()).toBeVisible();
 
-  // Takvim — the month of tasks. "Bugün" is the month navigation's own control.
+  // Takvim — the month of tasks.
+  //
+  // NOT anchored on "Bugün". That button lives in the month-navigation Card
+  // ABOVE the agenda, so it is visible whether or not the month itself
+  // rendered — which is exactly how this view shipped broken and green: the
+  // agenda was `display:none` at every width >= 768px (CalendarPage passed
+  // `undefined`, CalendarAgenda's `?? 'md:hidden'` read that as "hide me"), so
+  // the Takvim column was a nav bar over empty space and every test in the
+  // repo still passed. jsdom cannot see it either — `findByTestId` matches a
+  // display:none node happily, and Tailwind's classes are never applied there.
+  // The agenda's own BOX is the only witness. `calendar-has-a-task` below goes
+  // one further and puts a real task chip in it.
   await tabs.getByRole('tab', { name: 'Takvim' }).click();
   await expect(app).toHaveURL(/left=calendar/);
-  await expect(app.getByRole('button', { name: 'Bugün' })).toBeVisible(LAZY);
+  await expect(app.getByTestId('calendar-agenda')).toBeVisible(LAZY);
   await expect(app.getByTestId('column-not-in-pipeline')).toHaveCount(0);
 
   // Görevler — the task list, empty on a fresh workspace and SAYING so.
@@ -163,4 +174,119 @@ test('every page the left column borrows still resolves at its own URL', async (
   await app.goto('/tasks');
   await expect(app.getByRole('heading', { level: 1 })).toBeVisible();
   await expect(app.getByText('Burada görev yok.')).toBeVisible(LAZY);
+});
+
+
+/**
+ * The Takvim view shows a task, at a desktop width, INSIDE the agenda.
+ *
+ * The regression this exists for was not "the calendar is missing" — it was
+ * "the calendar is present, mounted, in the DOM, and 0px tall". Only a real
+ * browser can tell those apart: Tailwind's `md:hidden` is a stylesheet rule,
+ * jsdom applies no stylesheet, and `getByTestId` resolves a `display:none`
+ * node like any other. So the whole unit suite was green against a view a user
+ * could not see.
+ *
+ * Asserting on the CHIP rather than on the agenda container is what makes this
+ * hard to fool. A container can be visible and empty; a chip is visible only
+ * if the agenda painted, the month resolved the task onto the right day, and
+ * nothing above it collapsed the column. It is scoped `within` the agenda so
+ * a title rendered anywhere else on the surface cannot stand in for it.
+ *
+ * Two widths, because the bug was width-dependent in one direction: `md:` is a
+ * min-width rule, so the broken build was correct below 768px and wrong above
+ * it. A test that only ran narrow would have passed on the broken code.
+ */
+test('the Takvim view shows a real task chip inside the agenda, at desktop width', async ({
+  app,
+  api,
+  workspace,
+}) => {
+  // Mid-month at noon, so no timezone or month-boundary rounding can move the
+  // task into a month the view is not showing. The page opens on the current
+  // month and the agenda lists only current-month days.
+  const now = new Date();
+  const due = new Date(now.getFullYear(), now.getMonth(), 15, 12, 0, 0);
+  const title = `Takvim görevi ${stamp()}`;
+
+  const created = await api.post(apiUrl('/marketing/tasks'), {
+    headers: { Authorization: `Bearer ${workspace.session.accessToken}` },
+    data: { title, type: 'CALL', priority: 'HIGH', dueDate: due.toISOString() },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+
+  for (const width of [1440, 900]) {
+    await app.setViewportSize({ width, height: 900 });
+    await app.goto('/inbox?left=calendar');
+
+    const agenda = app.getByTestId('calendar-agenda');
+    await expect(agenda, `agenda must have a box at ${width}px`).toBeVisible(LAZY);
+
+    // The chip itself, scoped to the agenda. `toBeVisible` fails on an empty
+    // bounding box, which is what a `display:none` ancestor produces — the
+    // exact shape of the bug.
+    const chip = agenda.getByText(title, { exact: true });
+    await expect(chip, `task chip must be visible at ${width}px`).toBeVisible(LAZY);
+
+    // …and really INSIDE it, rather than merely matching the same string
+    // somewhere the locator happened to reach.
+    const outer = await agenda.boundingBox();
+    const inner = await chip.boundingBox();
+    expect(outer, `agenda box at ${width}px`).not.toBeNull();
+    expect(inner, `chip box at ${width}px`).not.toBeNull();
+    expect(outer!.height).toBeGreaterThan(inner!.height);
+    expect(inner!.y).toBeGreaterThanOrEqual(outer!.y);
+    expect(inner!.y + inner!.height).toBeLessThanOrEqual(outer!.y + outer!.height + 1);
+  }
+});
+
+/**
+ * The left column is ONE width, and the board scrolls instead of the
+ * conversation shrinking.
+ *
+ * The three non-list views briefly had a wider column so the kanban would show
+ * more than one stage. Measured, that cost the message stream 93px at 1440 and
+ * 78px at 1280 and bought a third of a column — see InboxPage's comment for
+ * the table. This pins the outcome of that trade in the only place it is real:
+ * layout, in a browser.
+ *
+ * The scroll assertion is the other half. Narrow columns are only acceptable
+ * because an off-screen stage is reachable — if `overflow-x-auto` were ever
+ * dropped from `board-columns`, dragging a deal to a stage you cannot see
+ * would become impossible rather than awkward, and nothing else would notice.
+ */
+test('the left column keeps one width across views, and the board scrolls instead', async ({
+  app,
+}) => {
+  await app.setViewportSize({ width: 1440, height: 900 });
+
+  await app.goto('/inbox');
+  await expect(app.getByTestId('surface-list')).toBeVisible(LAZY);
+  const listWidth = (await app.getByTestId('surface-list').boundingBox())!.width;
+  const listStream = (await app.getByTestId('surface-pane').boundingBox())!.width;
+
+  await app.goto('/inbox?left=board');
+  await expect(app.getByTestId('column-not-in-pipeline')).toBeVisible(LAZY);
+  const boardWidth = (await app.getByTestId('surface-list').boundingBox())!.width;
+  const boardStream = (await app.getByTestId('surface-pane').boundingBox())!.width;
+
+  // Same column, whichever way the people are arranged.
+  expect(Math.abs(boardWidth - listWidth)).toBeLessThan(1);
+  expect(Math.abs(boardStream - listStream)).toBeLessThan(1);
+  // And the conversation is not squeezed below a width you can read a thread
+  // in. 280.3px was what the wide column left at 1280; this is the floor that
+  // says never again.
+  expect(boardStream).toBeGreaterThan(400);
+
+  // The board overflows its column — as it must, with seven stages — and can
+  // be scrolled to reach the ones off screen.
+  const scrolled = await app.evaluate(() => {
+    const el = document.querySelector('[data-testid="board-columns"]') as HTMLElement | null;
+    if (!el) return null;
+    el.scrollLeft = 600;
+    return { client: el.clientWidth, scroll: el.scrollWidth, left: el.scrollLeft };
+  });
+  expect(scrolled).not.toBeNull();
+  expect(scrolled!.scroll).toBeGreaterThan(scrolled!.client);
+  expect(scrolled!.left).toBeGreaterThan(0);
 });

@@ -44,7 +44,9 @@ const BORA = person('p2', 'Bora');
 // The list has its own file and its own thirteen tests. Here it is reduced to
 // the one thing the SURFACE is answerable for: it hands a person up.
 vi.mock('./PeopleList', () => ({
-  PeopleList: ({ selectedId, onSelect }: any) => (
+  PeopleList: ({ selectedId, onSelect }: any) => {
+    if (LIST_BROKEN.value) throw new Error('list failed');
+    return (
     <div>
       <span data-testid="list-selected">selected:{selectedId ?? 'none'}</span>
       {[ALICE, BORA].map((p) => (
@@ -53,7 +55,8 @@ vi.mock('./PeopleList', () => ({
         </button>
       ))}
     </div>
-  ),
+    );
+  },
 }));
 
 // PersonPane is REAL below — the composer it owns is what proves per-person
@@ -87,6 +90,8 @@ vi.mock('../leads/LeadsPage', () => ({
  * failed chunk load looks like to React.
  */
 const BOARD_BROKEN = vi.hoisted(() => ({ value: false }));
+/** The same switch for the LIST, which was the view outside the boundary. */
+const LIST_BROKEN = vi.hoisted(() => ({ value: false }));
 const viewDouble = (testid: string) =>
   function View({ embedded, onSelectPerson, selectedLeadId }: any) {
     if (testid === 'view-board' && BOARD_BROKEN.value) throw new Error('chunk failed');
@@ -154,6 +159,7 @@ function renderAt(path = '/leads', qc = new QueryClient({ defaultOptions: { quer
 beforeEach(() => {
   vi.clearAllMocks();
   BOARD_BROKEN.value = false;
+  LIST_BROKEN.value = false;
   auth.role = 'MANAGER';
   FEATURES = new Set(['conversationAi']);
   seenPath = '';
@@ -761,6 +767,35 @@ describe('The person surface — the left column switches views', () => {
     expect(await screen.findByTestId('view-failed')).toHaveTextContent('Hat');
     expect(screen.getByTestId('surface-pane')).toBeInTheDocument();
     expect(screen.getByTestId('surface-card')).toBeInTheDocument();
+  });
+
+  /**
+   * …and the LIST is one of the views that can do that, which it was not.
+   *
+   * The boundary arrived with the three borrowed pages, so Liste — the
+   * original column, the one a session opens on, the one a user cannot switch
+   * away from before it has rendered — was the only arrangement whose failure
+   * escaped to the ROUTE boundary and took the stream, the composer and the
+   * record card down with it. Backwards: the three views that CAN be switched
+   * away from degraded in place, and the one that cannot did not.
+   *
+   * Stage 3 adds group-by-company inside this exact branch, so the boundary
+   * has to be here before the grouping is.
+   */
+  it('names the LIST when it is the view that could not be opened', async () => {
+    LIST_BROKEN.value = true;
+
+    renderAt('/leads');
+
+    // Failure, by name — not the surface's own empty state and not a blank
+    // column. `label.list` is "Liste".
+    expect(await screen.findByTestId('view-failed')).toHaveTextContent('Liste');
+    // The rest of the surface is untouched, which is the whole point of a
+    // boundary this deep: the other two columns are still standing.
+    expect(screen.getByTestId('surface-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-card')).toBeInTheDocument();
+    // And the switcher still works, so the failure is escapable.
+    expect(tab(/^Hat$/)).toBeInTheDocument();
   });
 
   /**

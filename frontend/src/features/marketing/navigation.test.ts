@@ -255,8 +255,60 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
     '/users', '/voice', '/voice/ivr',
   ];
 
+  /**
+   * Paths the sidebar config has GAINED since that snapshot, each one a
+   * deliberate line rather than a drifting baseline.
+   *
+   * The frozen list above is a photograph of one day and its name says so, so
+   * a page that joins the menu later does not belong in it — editing it would
+   * make "captured verbatim" a lie and quietly relicense the whole list as
+   * something an author may edit to make a test pass. Additions land here
+   * instead, and the assertion stays an EXACT equality against the sum: a
+   * deletion still fails, and an addition nobody wrote down still fails.
+   *
+   * `/settings/pipelines` (2026-09-01): already a route in App.tsx and already
+   * linked from the `/opportunities` PageHeader, but never a menu entry — so
+   * `allPaths`, which is the sidebar's paths and not the router's, genuinely
+   * did not contain it. Stage 4 removes `/opportunities` from the menu, which
+   * would have made a typed URL the only way to configure the stages every
+   * deal moves through. See the item's own comment in navigation.ts.
+   */
+  const PATHS_ADDED_SINCE = ['/settings/pipelines'];
+
   it('keeps every retired hub reachable by route, so nothing is lost', () => {
-    expect([...allPaths].sort()).toEqual([...PATHS_BEFORE_THE_SURFACE_MERGE].sort());
+    expect([...allPaths].sort()).toEqual(
+      [...PATHS_BEFORE_THE_SURFACE_MERGE, ...PATHS_ADDED_SINCE].sort(),
+    );
+  });
+
+  /**
+   * The half of the freeze that stage 4 exists to survive. Stated separately
+   * because the equality above would also pass if somebody deleted a frozen
+   * path AND added one — the counts would still line up under a careless
+   * edit that "fixed" both sides at once.
+   */
+  it('never drops a path that was in the pre-merge snapshot', () => {
+    const have = new Set(allPaths);
+    expect(PATHS_BEFORE_THE_SURFACE_MERGE.filter((p) => !have.has(p))).toEqual([]);
+    expect(PATHS_BEFORE_THE_SURFACE_MERGE).toHaveLength(50);
+  });
+
+  /**
+   * Reachability, not merely listedness. `/settings/pipelines` was a route
+   * whose ONLY door was a button on another page; this asserts the menu now
+   * owns a door of its own, and that it is gated the way App.tsx gates the
+   * route (requiredRole={MANAGER}) rather than being offered to a rep who
+   * would only meet a redirect.
+   */
+  it('gives /settings/pipelines a Settings entry, manager-gated like its route', () => {
+    const settings = NAV_HUBS.find((h) => h.id === 'settings');
+    const item = settings?.children?.find((c) => c.path === '/settings/pipelines');
+    expect(item).toBeDefined();
+    expect(item?.managerOnly).toBe(true);
+    expect(childPaths(
+      visibleNav(NAV_HUBS, { isManager: false, isOwner: false, has: entitle(), isAgency: false }),
+      'settings',
+    )).not.toContain('/settings/pipelines');
   });
 
   it('never lands the same page in two surfaces', () => {

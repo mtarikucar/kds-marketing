@@ -149,9 +149,16 @@ export interface OpportunitiesPageProps {
  * - The `PageHeader` goes, because the host already has one and two `<h1>`s on
  *   a page is the bug that started this line of work. "New deal" moves into the
  *   pipeline row, so creation is not chrome-shaped. The manage-PIPELINES link
- *   goes with the header: it is configuration, it navigates OFF a surface whose
- *   one rule is that clicking selects, and it is still on `/opportunities` and
- *   in Settings.
+ *   goes with the header: it is configuration, and it navigates OFF a surface
+ *   whose one rule is that clicking selects.
+ *
+ *   That was written claiming the link was "still on /opportunities and in
+ *   Settings". Only the first half was true: `/settings/pipelines` was a route
+ *   with no menu entry anywhere, so the button below was its ONLY door — and
+ *   stage 4 takes `/opportunities` out of the menu, which would have left the
+ *   page reachable by typed URL alone. It is a Settings › Workspace item now
+ *   (navigation.ts), so removing the link here costs a click rather than the
+ *   page.
  * - A card CLICK reports a person up rather than opening the deal dialog —
  *   "hattan birine tıklayıp aynı ekranda yazışmasını okursun" is the point of
  *   the view. The dialog therefore gets its own control on the card, because
@@ -478,6 +485,30 @@ export default function OpportunitiesPage({
   const isOpenPerson = (leadId: string | null | undefined) =>
     !!onSelectPerson && !!leadId && leadId === selectedLeadId;
 
+  /**
+   * Column width: 288px on `/opportunities`, 240px embedded.
+   *
+   * The BOARD gives up the pixels here, not the conversation next to it. The
+   * surface first tried the other way round — the left column grew from 34% to
+   * 46/42% for the three non-list views so the kanban would show more than one
+   * column — and measured in Chromium at 1440x900 against the real stack that
+   * bought 1.29 -> 1.60 of seven columns while costing the message stream
+   * 424.6px -> 331.5px. At 1280 it was 1.11 -> 1.37 columns for 358.4px ->
+   * 280.3px of stream: a threaded conversation and its composer in less width
+   * than an iPhone SE, to show a third of an extra column. Neither number was
+   * ever two columns, which was the stated point.
+   *
+   * Narrowing the column instead buys the same board and costs the stream
+   * nothing: at 1440 a 384px left column fits 1.53 of these against the 1.60
+   * the wide column bought, and the stream keeps its 424.6px. Measured, both
+   * of them, not reasoned about.
+   *
+   * Cards stay readable because there is not much on one: a person, an amount,
+   * the deal name, a last-contact line — all already `truncate`. 240 - 20 of
+   * padding - 20 for the grip leaves ~200px of text, against ~248 before.
+   */
+  const columnWidth = embedded ? 'w-60' : 'w-72';
+
   return (
     <div className="space-y-4">
       {!embedded && (
@@ -625,7 +656,7 @@ export default function OpportunitiesPage({
               opened, not by being dragged out of a stage. */}
           <div
             data-testid="column-not-in-pipeline"
-            className="flex-shrink-0 w-72 rounded-lg border border-dashed border-border bg-surface-muted/40 p-2"
+            className={`flex-shrink-0 ${columnWidth} rounded-lg border border-dashed border-border bg-surface-muted/40 p-2`}
           >
             <div className="flex items-center justify-between px-1 py-1.5">
               <span className="font-medium text-sm text-foreground">
@@ -751,7 +782,7 @@ export default function OpportunitiesPage({
               onDragLeave={() => setOverStage((s) => (s === stage.id ? null : s))}
               onDrop={() => onDrop(stage)}
               className={[
-                'flex-shrink-0 w-72 rounded-lg border bg-surface-muted/40 p-2 transition-colors',
+                `flex-shrink-0 ${columnWidth} rounded-lg border bg-surface-muted/40 p-2 transition-colors`,
                 overStage === stage.id ? 'border-primary bg-primary/5' : 'border-border',
               ].join(' ')}
             >
@@ -769,8 +800,18 @@ export default function OpportunitiesPage({
 
               <div className="space-y-2 min-h-[40px]">
                 {stage.opportunities.map((o: BoardOpportunity) => (
+                  /* The card and its edit control are SIBLINGS, not parent and
+                     child. The card is a `role="button"` (see below) and a
+                     `<button>` inside a role=button is the nested-interactive
+                     violation — screen readers flatten it and the inner control
+                     stops being announced as its own thing. Absorbing the pencil
+                     into the card's own click was not an option either: it opens
+                     a dialog the card's click deliberately does NOT open. So the
+                     pencil sits over the card instead of inside it, which also
+                     retires the `stopPropagation` it used to need — a sibling's
+                     click was never the card's to begin with. */
+                  <div key={o.id} className="group relative">
                   <div
-                    key={o.id}
                     data-testid={`deal-card-${o.id}`}
                     draggable
                     onDragStart={() => setDrag({ kind: 'deal', id: o.id })}
@@ -782,11 +823,31 @@ export default function OpportunitiesPage({
                     onClick={() =>
                       onSelectPerson && o.lead ? onSelectPerson(o.lead) : openEdit(o)
                     }
+                    /* A tab stop and Enter/Space, UNCONDITIONALLY — unlike the
+                       "Hatta değil" cards, which take them only when a host is
+                       listening because on `/opportunities` those are drag
+                       handles with no click behind them. A deal card always has
+                       a click: it selects a person when embedded and opens the
+                       deal dialog when not. Without this it had a mouse-only
+                       action in both lives, so a keyboard user could pick a
+                       person out of the "Hatta değil" column and not out of any
+                       stage beside it — the one column they could reach being
+                       the one that is only a SOURCE. */
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e: React.KeyboardEvent) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (onSelectPerson && o.lead) onSelectPerson(o.lead);
+                        else openEdit(o);
+                      }
+                    }}
                     {...(onSelectPerson && o.lead
                       ? { 'aria-current': isOpenPerson(o.lead.id) }
                       : {})}
                     className={[
-                      'group rounded-md border bg-surface p-2.5 shadow-sm cursor-pointer hover:border-primary/50',
+                      'rounded-md border bg-surface p-2.5 shadow-sm cursor-pointer hover:border-primary/50',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       isOpenPerson(o.lead?.id) ? 'border-primary bg-primary/5' : 'border-border',
                       drag?.kind === 'deal' && drag.id === o.id ? 'opacity-50' : '',
                     ].join(' ')}
@@ -840,27 +901,24 @@ export default function OpportunitiesPage({
                           </>
                         )}
                       </div>
-                      {/* The dialog's own door, and only where the card's click
-                          has been taken by selection. Win / Lose / Delete and
-                          every editable field are behind it, and the record
-                          card's SATIŞ section cannot do any of them. */}
-                      {onSelectPerson && o.lead && (
-                        <IconButton
-                          data-testid={`deal-edit-${o.id}`}
-                          variant="ghost"
-                          size="sm"
-                          aria-label={t('opportunities.editDeal', 'Edit deal')}
-                          className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                          onClick={(e) => {
-                            // Editing a deal is not selecting a person.
-                            e.stopPropagation();
-                            openEdit(o);
-                          }}
-                        >
-                          <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
-                        </IconButton>
-                      )}
                     </div>
+                  </div>
+                  {/* The dialog's own door, and only where the card's click has
+                      been taken by selection. Win / Lose / Delete and every
+                      editable field are behind it, and the record card's SATIŞ
+                      section cannot do any of them. */}
+                  {onSelectPerson && o.lead && (
+                    <IconButton
+                      data-testid={`deal-edit-${o.id}`}
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('opportunities.editDeal', 'Edit deal')}
+                      className="absolute end-1.5 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      onClick={() => openEdit(o)}
+                    >
+                      <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                    </IconButton>
+                  )}
                   </div>
                 ))}
               </div>

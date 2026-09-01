@@ -10,6 +10,7 @@ import {
   Wrench,
   Phone,
   Flag,
+  GitBranch,
   Target,
   FlaskConical,
   CreditCard,
@@ -332,6 +333,26 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
       { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: ShieldCheck, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
+      /**
+       * Pipeline + stage configuration — a route since long before this menu,
+       * and until 2026-09-01 it was in NO menu at all.
+       *
+       * It got away with that because `/opportunities` carried a "Pipelines"
+       * button in its own PageHeader, so the page had one door even if the
+       * navigation had none. Stage 2 renders that board EMBEDDED in the person
+       * surface without its header, and stage 4 takes `/opportunities` out of
+       * the menu entirely — at which point the only way to reach the one page
+       * that defines the stages every deal moves through would have been to
+       * type the URL. The button is still there on `/opportunities`; this is
+       * the door that does not depend on it.
+       *
+       * `managerOnly` mirrors the route (`requiredRole={MANAGER}` in App.tsx)
+       * and the API (every pipelines write on
+       * MarketingOpportunitiesController is manager-gated). Filed under
+       * Workspace beside Targets: both are the sales SHAPE a manager sets up
+       * once and everyone then works inside.
+       */
+      { path: '/settings/pipelines', labelKey: 'nav.pipelines', label: 'Pipelines', icon: GitBranch, managerOnly: true },
       { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
       /**
        * The call LOG, moved out of the Inbox surface on 2026-08-31.

@@ -34,6 +34,12 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
       '/users',
       '/settings/roles',
       '/targets',
+      // Pipelines sits beside Targets rather than in a group of its own: both
+      // are the sales SHAPE a manager defines once (the stages a deal moves
+      // through, the numbers it is measured against) and everybody then works
+      // inside. Filing it under Data would make that group mean "what shapes
+      // contact records, and also deals".
+      '/settings/pipelines',
       '/settings/modules',
       '/booking',
       // Public surfaces you configure once, absorbed from the Sites and
