@@ -15,6 +15,7 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'command.request',
       'command.turn',
       'content.compose',
+      'content.concepts',
       'conversation.followup',
       'conversation.reply',
       'funnel.draft',
@@ -114,6 +115,9 @@ describe('ai-credit-costs — cost table tripwire', () => {
     expect(creditCost('workflow.ai_generate')).toBe(2);
     expect(creditCost('review.reply_draft')).toBe(2);
     expect(creditCost('brand.analyze')).toBe(15);
+    // The widest single call in the table: N whole shot plans at maxTokens 6000.
+    expect(creditCost('content.concepts')).toBe(16);
+    expect(tierFor('content.concepts')).toBe('default');
   });
 });
 

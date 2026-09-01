@@ -3938,6 +3938,78 @@ model SocialCampaignItem {
   @@map("social_campaign_items")
 }
 
+enum ContentConceptStatus {
+  PROPOSED
+  APPROVED
+  DISCARDED
+}
+
+/// One video CONCEPT distilled from a single idea — an angle on that idea,
+/// planned shot by shot.
+///
+/// WHY THIS IS NOT A `SocialCampaignItem`. An item is a SLOT in a campaign's
+/// calendar: `socialCampaignId` is a required FK and `scheduledFor` is a
+/// required timestamp, and the moment a row exists the campaign's scheduled-job
+/// handlers own it (plan tick -> generate -> confirm) and it counts toward the
+/// campaign's `stats`. A concept has none of that: it arrives before any
+/// campaign is chosen, before any date is chosen, and most of a batch is meant
+/// to be thrown away. Forcing one into an item would mean inventing a campaign
+/// and a date for an idea that may never be shot, and a DISCARDED idea would
+/// still sit in the calendar counted as planned content.
+///
+/// It is nonetheless shaped so that promoting one is a short step: `hook`
+/// becomes the item's `topic`, `shotPlan` travels across whole, and
+/// `socialCampaignId` is already recorded when the idea arrived scoped to a
+/// campaign.
+model ContentConcept {
+  id          String @id @default(uuid())
+  workspaceId String
+  /// Groups the N concepts distilled from ONE idea in ONE call, so a reviewer
+  /// sees "these five came from that idea" rather than a flat list.
+  batchId     String
+  /// The idea exactly as it was supplied (pasted text or a link). Kept verbatim
+  /// so a reviewer can judge the concept against what was actually asked.
+  sourceIdea  String
+  /// The lens this concept uses — curiosity / engineering / concept / story /
+  /// sensory, and whatever else fits. A free string, not an enum: the taxonomy
+  /// is a prompt, not a contract, and freezing five names here would stop the
+  /// sixth good angle from existing. Uniqueness WITHIN a batch is enforced in
+  /// `concept-distinctness.ts`.
+  angle       String
+  /// The opening line — the thing a viewer reads or hears first. The primary
+  /// distinctness axis.
+  hook        String
+  title       String
+  /// Why this angle is worth shooting. Written for the human deciding.
+  rationale   String?
+  /// Position within the batch, so a list renders in the order proposed.
+  ordinal     Int
+  /// A real `ShotPlan` from `video/video-pipeline.service.ts`: model,
+  /// durationSec, shots[] (ord, scene, onScreenText, voiceover, prompt,
+  /// durationSec, cameraNote, reference), captionSuggestion, qcChecklist.
+  shotPlan    Json
+
+  status       ContentConceptStatus @default(PROPOSED)
+  /// Stamped when a HUMAN decides. Null on a PROPOSED row, and the pair of
+  /// (status, reviewedById) is what distinguishes "nobody has looked yet" from
+  /// "looked at and kept".
+  reviewedAt   DateTime?
+  reviewedById String?
+  reviewNote   String?
+
+  /// Set when the idea arrived already scoped to a campaign. Soft reference,
+  /// matching `linkedCampaignId`'s style on SocialCampaign — a concept must
+  /// outlive a campaign being deleted, since the idea is still good.
+  socialCampaignId String?
+  createdById      String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, batchId])
+  @@map("content_concepts")
+}
+
 /// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).
 ///
 /// A reusable capture of one workspace's CONFIG (custom-field defs, tags,
