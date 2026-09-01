@@ -369,6 +369,39 @@ describe('LeadContextPane — the person’s remaining objects', () => {
     expect(leadReads[0][0]).toBe('/leads/p1');
   });
 
+  /**
+   * TEKLİFLER reads `converted` from the FETCHED record, not from the card's
+   * `lead` prop — and that is the whole point of the line.
+   *
+   * The prop is the row the LIST returned, which has no `convertedTenantId`.
+   * Reading it from there would hide "Teklif" from nobody (`undefined` is
+   * falsy) and quietly offer a new quote to a contact who is already a paying
+   * tenant, on the one surface a rep spends their day on, while the lead detail
+   * one click away refuses. The two tests below are a pair: the second is what
+   * makes the first mean anything.
+   */
+  it('does not offer a new quote to a person who is already a paying tenant', async () => {
+    routes['/leads/:id'] = () =>
+      Promise.resolve({ data: { ...DETAIL_LEAD, convertedTenantId: 'tenant-9' } });
+    renderCard();
+
+    // The section has SETTLED — its offer row is on screen — so the missing
+    // button is a decision and not a half-rendered card.
+    const offers = await screen.findByTestId('record-offers');
+    expect(within(offers).getByText('Kurulum dahil')).toBeInTheDocument();
+
+    expect(within(offers).queryByRole('button', { name: 'Teklif' })).not.toBeInTheDocument();
+  });
+
+  it('offers one to a person who is not', async () => {
+    renderCard();
+
+    const offers = await screen.findByTestId('record-offers');
+    expect(within(offers).getByText('Kurulum dahil')).toBeInTheDocument();
+
+    expect(within(offers).getByRole('button', { name: 'Teklif' })).toBeInTheDocument();
+  });
+
   // The deliberate eager/lazy split: a section whose data is already a field of
   // the person's own record costs nothing extra; a section with its own
   // endpoint waits until someone opens it. Five sections × every click is a lot
