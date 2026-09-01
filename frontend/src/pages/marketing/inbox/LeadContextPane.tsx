@@ -5,8 +5,9 @@ import { ArrowRight, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { IconButton } from '@/components/ui/IconButton';
+import { FeatureGate, RoleGate } from '@/components/ui/access-gates';
 import { fmtDate } from '../../../features/marketing/utils/format';
-import type { Lead } from '../../../features/marketing/types';
+import { MarketingRole, type Lead } from '../../../features/marketing/types';
 import { PersonAppointments } from './PersonAppointments';
 import { PersonDeals } from './PersonDeals';
 import { PersonEstimates } from './PersonEstimates';
@@ -132,13 +133,60 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
       >
         <PersonEstimates leadId={lead.id} />
       </RecordDisclosure>
-      <RecordDisclosure
-        key={`appointments-${lead.id}`}
-        data-testid="record-appointments"
-        title={t('surface.appointments.title', 'Randevular')}
-      >
-        <PersonAppointments leadId={lead.id} />
-      </RecordDisclosure>
+      {/* RANDEVULAR is the one section whose read is not open to everyone.
+          `MarketingBookingController` is `@MarketingRoles('MANAGER')` +
+          `@RequiresFeature('funnels')`, so the section carries the SAME two
+          gates — a control appears with its gate, or it does not appear.
+          Ungated, a REP opening this on `/leads` got two 403s, a global error
+          toast and a permanent "Randevular yüklenemedi." whose Retry could
+          never succeed: a permission answer rendered as a failure.
+
+          The two gates get different answers on purpose, because the reader
+          can act on one and not the other. Role → HIDDEN: a REP cannot buy
+          their way out of their own role, and navigation.ts already hides
+          /appointments from them (`managerOnly`), so naming it here would make
+          this card the only place a rep is told about a surface they can never
+          reach. Plan → NAMED: that is PersonPane's `conversationAi` line one
+          column over, and the rule LeadStream states outright — COULD NOT READ
+          IT and YOUR PLAN DOES NOT INCLUDE IT stay two sentences, because a
+          plan limit told as a failure sends a billing question to support.
+
+          Both gates fail CLOSED while `/billing/summary` is in flight, exactly
+          as the menu and `FeatureGate` do; the summary is already in cache from
+          the shell by the time a card renders, so this costs no request. */}
+      <RoleGate role={MarketingRole.MANAGER}>
+        <FeatureGate
+          feature="funnels"
+          fallback={
+            <section
+              data-testid="record-appointments-gated"
+              className="space-y-2 border-t border-border pt-3"
+            >
+              {/* Deliberately NOT a disclosure: there is nothing behind the
+                  toggle, and an affordance that opens onto a plan notice is
+                  the same empty promise as one that opens onto a 403. */}
+              <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {t('surface.appointments.title', 'Randevular')}
+              </h4>
+              <p className="text-[11px] text-info">
+                {t('surface.appointments.gated', 'Randevular paketinde yok')} —{' '}
+                {t(
+                  'surface.appointments.gatedHint',
+                  'takvim aboneliğinde yok; eklendiğinde bu kişinin randevuları burada görünür',
+                )}
+              </p>
+            </section>
+          }
+        >
+          <RecordDisclosure
+            key={`appointments-${lead.id}`}
+            data-testid="record-appointments"
+            title={t('surface.appointments.title', 'Randevular')}
+          >
+            <PersonAppointments leadId={lead.id} />
+          </RecordDisclosure>
+        </FeatureGate>
+      </RoleGate>
 
       {/* The one door off this surface. */}
       <Link

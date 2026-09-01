@@ -4150,7 +4150,9 @@
     "appointments": {
       "title": "Randevular",
       "none": "Bu kişinin randevusu yok.",
-      "failed": "Randevular yüklenemedi."
+      "failed": "Randevular yüklenemedi.",
+      "gated": "Randevular paketinde yok",
+      "gatedHint": "takvim aboneliğinde yok; eklendiğinde bu kişinin randevuları burada görünür"
     },
     "section": {
       "show": "Göster",

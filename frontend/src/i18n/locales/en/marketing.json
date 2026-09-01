@@ -3299,7 +3299,9 @@
     "appointments": {
       "title": "Appointments",
       "none": "No appointments for this person.",
-      "failed": "Could not load appointments."
+      "failed": "Could not load appointments.",
+      "gated": "Appointments are not in your plan",
+      "gatedHint": "the calendar is not part of your subscription; once it is added, this person’s appointments appear here"
     },
     "section": {
       "show": "Show",

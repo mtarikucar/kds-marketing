@@ -1161,7 +1161,9 @@
     "appointments": {
       "title": "Uchrashuvlar",
       "none": "Bu shaxsda uchrashuv yo‘q.",
-      "failed": "Uchrashuvlar yuklanmadi."
+      "failed": "Uchrashuvlar yuklanmadi.",
+      "gated": "Uchrashuvlar tarifingizga kirmaydi",
+      "gatedHint": "kalendar obunangizga kirmaydi; qoʻshilgach bu shaxsning uchrashuvlari shu yerda koʻrinadi"
     },
     "section": {
       "show": "Ko‘rsatish",

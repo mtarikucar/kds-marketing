@@ -304,6 +304,12 @@ describe('marketing i18n — the person surface and its work queue', () => {
         'surface.estimates.failed',
         'surface.appointments.title',
         'surface.appointments.failed',
+        // Randevular is the one section behind a plan line (`funnels`), and
+        // this is the sentence that keeps that from reading as a breakage.
+        // Degraded to English it becomes the one thing LeadStream refuses to
+        // let it be: a workspace told its calendar "could not be loaded" when
+        // it simply never bought one.
+        'surface.appointments.gated',
         // The two disclosures are unopenable without these two words.
         'surface.section.show',
         'surface.section.hide',

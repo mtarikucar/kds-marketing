@@ -26,6 +26,16 @@ export interface PersonAppointmentsProps {
  * Mounted only while its disclosure is open (see `RecordDisclosure`), so a rep
  * clicking through a queue never pays for this read.
  *
+ * ## This component assumes it is allowed to read
+ *
+ * `MarketingBookingController` is `@MarketingRoles('MANAGER')` +
+ * `@RequiresFeature('funnels')`, and this component carries NO check of its
+ * own — `LeadContextPane` decides whether the section exists at all, because
+ * the gate belongs next to the affordance. A REP must never see a Randevular
+ * heading to click; clicking one and getting a 403 is a permission answer
+ * dressed up as "Randevular yüklenemedi." with a Retry that cannot succeed.
+ * Anyone mounting this from a second place owes the same two gates.
+ *
  * The read is deliberately NOT the appointments screen's: `GET
  * /calendars/bookings?leadId=` is exempt from that screen's rolling 24h window,
  * because a record card is a HISTORY. Showing only what is still ahead would

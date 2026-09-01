@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { LeadContextPane } from './LeadContextPane';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import type { Lead } from '../../../features/marketing/types';
 
 // The card carries a SATIŞ section now, which reads and writes. Mocked at the
@@ -153,20 +154,65 @@ const BOOKINGS = [
   },
 ];
 
+/**
+ * RANDEVULAR is the one section whose read is not open to everyone: the whole
+ * of `marketing/calendars` is MANAGER+ behind `funnels`, so the card gates that
+ * section the same way. Every test that is not ABOUT the gate therefore runs as
+ * a manager in an entitled workspace, which is the only combination that ever
+ * saw the section work.
+ */
+function setRole(role: 'OWNER' | 'MANAGER' | 'REP' | null) {
+  useMarketingAuthStore.setState({
+    user: role
+      ? {
+          id: 'u1',
+          workspaceId: 'ws1',
+          email: 'manager@acme.test',
+          firstName: 'Mehmet',
+          lastName: 'Kaya',
+          role,
+        }
+      : null,
+    isAuthenticated: !!role,
+  });
+}
+
+/** What `GET /billing/summary` says this workspace's plan includes. */
+let features: Record<string, boolean> = {};
+
+/**
+ * The card's reads, as ONE map keyed by URL.
+ *
+ * A test that wants a single read to fail replaces that key. It used to restate
+ * the whole `mockImplementation`, and the moment `/billing/summary` became the
+ * answer to "may this workspace see Randevular at all" every restatement
+ * silently dropped it — a test about a broken estimates read would have been
+ * quietly asserting against an unentitled workspace.
+ */
+type Read = () => Promise<{ data: unknown }>;
+let routes: Record<string, Read>;
+
 beforeEach(() => {
   get.mockReset();
   post.mockReset();
   post.mockResolvedValue({ data: {} });
-  get.mockImplementation((url: string) => {
-    if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
-    if (url === '/opportunities')
-      return Promise.resolve({
+  setRole('MANAGER');
+  features = { funnels: true };
+  routes = {
+    '/pipelines': () => Promise.resolve({ data: PIPELINES }),
+    '/opportunities': () =>
+      Promise.resolve({
         data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
-      });
-    if (url.startsWith('/leads/')) return Promise.resolve({ data: DETAIL_LEAD });
-    if (url === '/estimates') return Promise.resolve({ data: ESTIMATES });
-    if (url === '/calendars/bookings') return Promise.resolve({ data: BOOKINGS });
-    return Promise.resolve({ data: {} });
+      }),
+    // The singular detail read, whatever id it is asked for.
+    '/leads/:id': () => Promise.resolve({ data: DETAIL_LEAD }),
+    '/estimates': () => Promise.resolve({ data: ESTIMATES }),
+    '/calendars/bookings': () => Promise.resolve({ data: BOOKINGS }),
+    '/billing/summary': () => Promise.resolve({ data: { entitlements: { features } } }),
+  };
+  get.mockImplementation((url: string) => {
+    const read = routes[url.startsWith('/leads/') ? '/leads/:id' : url];
+    return read ? read() : Promise.resolve({ data: {} });
   });
 });
 
@@ -377,15 +423,7 @@ describe('LeadContextPane — the person’s remaining objects', () => {
  */
 describe('LeadContextPane — a broken section names itself and stands alone', () => {
   it('names Görevler and Teklifler when their shared read fails, and keeps the card', async () => {
-    get.mockImplementation((url: string) => {
-      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
-      if (url === '/opportunities')
-        return Promise.resolve({
-          data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
-        });
-      if (url.startsWith('/leads/')) return Promise.reject(new Error('boom'));
-      return Promise.resolve({ data: {} });
-    });
+    routes['/leads/:id'] = () => Promise.reject(new Error('boom'));
     renderCard();
 
     // Each section owes its OWN sentence — "something failed" on a five-section
@@ -414,17 +452,7 @@ describe('LeadContextPane — a broken section names itself and stands alone', (
 
   it('names Tahmini fiyat when its read fails, without touching Randevular', async () => {
     const user = userEvent.setup();
-    get.mockImplementation((url: string) => {
-      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
-      if (url === '/opportunities')
-        return Promise.resolve({
-          data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
-        });
-      if (url.startsWith('/leads/')) return Promise.resolve({ data: DETAIL_LEAD });
-      if (url === '/estimates') return Promise.reject(new Error('boom'));
-      if (url === '/calendars/bookings') return Promise.resolve({ data: BOOKINGS });
-      return Promise.resolve({ data: {} });
-    });
+    routes['/estimates'] = () => Promise.reject(new Error('boom'));
     renderCard();
 
     await user.click(await screen.findByRole('button', { name: /Tahmini fiyat/ }));
@@ -438,21 +466,100 @@ describe('LeadContextPane — a broken section names itself and stands alone', (
 
   it('says a person has no estimates in words a failure never uses', async () => {
     const user = userEvent.setup();
-    get.mockImplementation((url: string) => {
-      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
-      if (url === '/opportunities')
-        return Promise.resolve({
-          data: { data: [DEAL], meta: { total: 1, page: 1, limit: 20, totalPages: 1 } },
-        });
-      if (url.startsWith('/leads/')) return Promise.resolve({ data: DETAIL_LEAD });
-      if (url === '/estimates') return Promise.resolve({ data: [] });
-      return Promise.resolve({ data: {} });
-    });
+    routes['/estimates'] = () => Promise.resolve({ data: [] });
     renderCard();
 
     await user.click(await screen.findByRole('button', { name: /Tahmini fiyat/ }));
     expect(await screen.findByTestId('estimates-empty')).toBeInTheDocument();
     expect(screen.queryByText('Tahmini fiyatlar yüklenemedi.')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * RANDEVULAR appears with its gate, or it does not appear.
+ *
+ * `MarketingBookingController` is `@MarketingRoles('MANAGER')` +
+ * `@RequiresFeature('funnels')`, so the read behind this section 403s for a REP
+ * — the role that lives on this surface — and for any workspace without the
+ * add-on. Rendered ungated it produced a global error toast and a permanent
+ * "Randevular yüklenemedi." with a Retry that could never succeed: a permission
+ * answer dressed up as a failure.
+ *
+ * The two gates get DIFFERENT answers, because the person reading them can act
+ * on one and not the other:
+ *
+ * - **Role: hidden.** A REP cannot buy their way out of their own role, and
+ *   `navigation.ts` already hides `/appointments` from them (`managerOnly`).
+ *   Naming it would make this card the only place a REP is told a surface they
+ *   can never reach exists.
+ * - **Plan: named.** This is `PersonPane`'s `conversationAi` case one column
+ *   over, and the same rule LeadStream states outright — COULD NOT READ IT and
+ *   YOUR PLAN DOES NOT INCLUDE IT stay two sentences, because a plan limit told
+ *   as a failure sends a billing question to support.
+ */
+describe('LeadContextPane — RANDEVULAR appears with its gate', () => {
+  it('gives a manager in an entitled workspace the section itself', async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Randevular/ }));
+    expect(await screen.findByText('Demo görüşmesi')).toBeInTheDocument();
+  });
+
+  it('does not show a REP a section that can only 403', async () => {
+    setRole('REP');
+    renderCard();
+
+    // Positive anchor: the card's ungated sections have rendered, so the
+    // absence below is a decision rather than a race with the first paint.
+    expect(await screen.findByText('Ara onu')).toBeInTheDocument();
+
+    expect(screen.queryByTestId('record-appointments')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('record-appointments-gated')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Randevular/ })).not.toBeInTheDocument();
+
+    // Nothing was asked for on its behalf, so there is no 403 to report — and
+    // in particular no failure sentence and no Retry that can never succeed.
+    await waitFor(() =>
+      expect(get).not.toHaveBeenCalledWith('/calendars/bookings', expect.anything()),
+    );
+    expect(screen.queryByText('Randevular yüklenemedi.')).not.toBeInTheDocument();
+
+    // The rest of the person is untouched — a gate on one section is not a
+    // gate on the card.
+    expect(screen.getByTestId('record-card')).toHaveTextContent('Ayşe Yılmaz');
+    expect(await screen.findByRole('button', { name: /Tahmini fiyat/ })).toBeInTheDocument();
+  });
+
+  it('tells a manager without the plan line which line is missing, not that it broke', async () => {
+    features = {};
+    renderCard();
+
+    const gated = await screen.findByTestId('record-appointments-gated');
+    expect(gated).toHaveTextContent('Randevular paketinde yok');
+    // The section still says its own NAME, so a manager can tell WHICH part of
+    // the record their plan is withholding.
+    expect(gated).toHaveTextContent('Randevular');
+
+    // Not a failure, and not an empty person either — the three stay three.
+    expect(screen.queryByText('Randevular yüklenemedi.')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('appointments-empty')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(get).not.toHaveBeenCalledWith('/calendars/bookings', expect.anything()),
+    );
+
+    // And no toggle: a control that opens onto a plan notice is an affordance
+    // for nothing, which is the shape this whole fix exists to remove.
+    expect(screen.queryByRole('button', { name: /Randevular/ })).not.toBeInTheDocument();
+  });
+
+  it('gates on the plan for an OWNER too — the role check is a floor, not an exemption', async () => {
+    setRole('OWNER');
+    features = {};
+    renderCard();
+
+    expect(await screen.findByTestId('record-appointments-gated')).toBeInTheDocument();
+    expect(screen.queryByText('Randevular yüklenemedi.')).not.toBeInTheDocument();
   });
 });
 
