@@ -12,11 +12,13 @@ const POST_STATUSES = ['DRAFT', 'SCHEDULED', 'PUBLISHING', 'PUBLISHED', 'FAILED'
 const POST_STATUS_FILTERS = [...POST_STATUSES, 'ANY'] as const;
 const POST_FORMATS = ['FEED', 'REEL', 'STORY'] as const;
 
-/** Hard ceiling on rows returned to a model in one call. `listPosts` is an
- *  unbounded `findMany`; a workspace with thousands of drafts would otherwise
- *  return them all into a context window (and into the ToolCallLog result
- *  column). Newest-first ordering comes from the service, so the cap keeps the
- *  most recent — the ones a planning agent actually wants. */
+/** Hard ceiling on rows returned to a model in one call — a workspace with
+ *  thousands of drafts would otherwise return them all into a context window
+ *  (and into the ToolCallLog result column). It is now passed DOWN to
+ *  `listPosts` as its page size rather than applied to the returned array:
+ *  the service orders newest-first (or, for a window, chronologically) and
+ *  cuts the page in SQL, so the rows that survive are the ones a planning
+ *  agent actually wants instead of whatever survived a client-side slice. */
 const MAX_POSTS = 100;
 
 /** Parse an ISO date argument, refusing anything the Date constructor would
@@ -73,10 +75,13 @@ function projectAccount(row: Record<string, unknown>): Record<string, unknown> {
  * Social planner tools.
  *
  * ## Faz 1-2 (the original three)
- * `SocialPlannerService.listPosts` is a flat, unfiltered list — it has no
- * server-side status filter — so `jeeta.list_scheduled_posts` filters the
- * result client-side, defaulting to SCHEDULED (matching the tool's name) with
- * an optional override so a caller can still ask for drafts/published/failed.
+ * `jeeta.list_scheduled_posts` defaults to SCHEDULED (matching the tool's name)
+ * with an optional override so a caller can still ask for drafts/published/
+ * failed. It used to apply that default client-side because
+ * `SocialPlannerService.listPosts` was a flat unfiltered list; the service now
+ * takes `from`/`to`/`status`/`limit`, so the filter is pushed into SQL — see
+ * the handler for why leaving it client-side became a correctness bug once the
+ * service grew a page cap.
  * `jeeta.draft_social_post` creates a DRAFT row with no external side effect,
  * so it is deliberately ungated (no approval), but it is still a write: the
  * REST equivalent (`SocialPlannerController.createPost`) is gated
@@ -152,7 +157,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
   registry.register({
     name: 'jeeta.list_scheduled_posts',
     description:
-      'List social posts in this workspace, newest first. Defaults to SCHEDULED (upcoming) posts; pass status to see drafts, publishing, published or failed posts, or status="ANY" for all of them. Optional from/to narrow to a scheduled-time window. Read-only.',
+      'List social posts in this workspace, newest first — or in scheduled order, earliest first, when a from/to window is given. Defaults to SCHEDULED (upcoming) posts; pass status to see drafts, publishing, published or failed posts, or status="ANY" for all of them. Optional from/to narrow to a scheduled-time window; posts with no scheduled time are excluded by a window. Read-only.',
     domain: 'social',
     scopes: ['campaigns.read'],
     risk: 'READ',
@@ -183,12 +188,34 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
       // rather than a silently-empty list the model reads as "no posts".
       const from = optionalDate(args.from, 'from');
       const to = optionalDate(args.to, 'to');
-      const posts = (await deps.social.listPosts(ctx.workspaceId)) as Array<{
+      const status = typeof args.status === 'string' ? args.status : 'SCHEDULED';
+      const limit = typeof args.limit === 'number' ? Math.min(args.limit, MAX_POSTS) : MAX_POSTS;
+
+      // Push the filter DOWN. This used to call `listPosts(workspaceId)` bare
+      // and do all of it below, which was merely wasteful while the service
+      // returned every row — and became wrong the day it grew an unconditional
+      // page cap. The service pages by CREATION time; this handler filters by
+      // SCHEDULED time. So past 500 posts the window was being evaluated over a
+      // set already truncated by the wrong column, and "what is going out next
+      // week" could come back empty for a workspace whose next week is full.
+      //
+      // `ANY` is a tool-level sentinel with no stored equivalent, so it maps to
+      // "no status predicate" rather than being sent down as a literal.
+      const posts = (await deps.social.listPosts(ctx.workspaceId, {
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+        ...(status === 'ANY' ? {} : { status }),
+        limit,
+      })) as Array<{
         status: string;
         scheduledAt?: Date | string | null;
       }>;
-      const status = typeof args.status === 'string' ? args.status : 'SCHEDULED';
-      const limit = typeof args.limit === 'number' ? Math.min(args.limit, MAX_POSTS) : MAX_POSTS;
+
+      // The same predicates again, client-side. They are redundant against the
+      // query above and deliberately kept: this tool's contract (never more
+      // than `limit` rows, never a post outside the requested window or status)
+      // is enforced here, where a reader can see it, and it does not silently
+      // widen if `listPosts`' filter semantics ever shift under it.
       return posts
         .filter((p) => (status === 'ANY' ? true : p.status === status))
         .filter((p) => {

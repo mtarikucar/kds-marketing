@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -17,11 +18,14 @@ import {
   IsArray,
   IsDateString,
   IsIn,
+  IsInt,
   IsObject,
   IsOptional,
   IsString,
   IsUrl,
+  Max,
   MaxLength,
+  Min,
   ArrayMaxSize,
   ValidateNested,
 } from 'class-validator';
@@ -35,8 +39,11 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { SocialPlannerService } from './social-planner.service';
+import { SocialInsightsService } from './social-insights.service';
 
 const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK', 'TWITTER', 'PINTEREST', 'GMB'] as const;
+/** Mirrors the `status` values SocialPost.status is documented to carry. */
+const POST_STATUSES = ['DRAFT', 'SCHEDULED', 'PUBLISHING', 'PUBLISHED', 'FAILED'] as const;
 
 class ConnectAccountDto {
   @IsIn(NETWORKS)
@@ -124,12 +131,46 @@ class SchedulePostDto {
   formats?: Record<string, string>;
 }
 
+/**
+ * Optional narrowing for `GET posts`. Every field is optional: an empty query
+ * is the request this endpoint has always served, so the planner screen and the
+ * MCP tool keep working untouched.
+ *
+ * `limit` needs `@Type(() => Number)` even though the global ValidationPipe runs
+ * `enableImplicitConversion` — implicit conversion coerces against the declared
+ * TYPE, and without the explicit transform an `@IsInt()` on a query string is a
+ * coin flip across class-transformer versions. Note what is NOT here: a boolean.
+ * Query booleans in this codebase carry a documented bug class — implicit
+ * conversion turns `?flag=false` into `true` and `@IsBoolean()` never notices —
+ * so a boolean added later must read the RAW value with `@Transform`, not lean
+ * on the pipe. There is no reason to filter posts by a boolean today.
+ */
+class ListPostsQueryDto {
+  /** Inclusive lower bound on `scheduledAt` (ISO 8601). */
+  @IsOptional() @IsDateString()
+  from?: string;
+
+  /** Inclusive upper bound on `scheduledAt` (ISO 8601). */
+  @IsOptional() @IsDateString()
+  to?: string;
+
+  @IsOptional() @IsIn(POST_STATUSES)
+  status?: (typeof POST_STATUSES)[number];
+
+  /** Page size. The service clamps harder still (SOCIAL_POSTS_MAX_PAGE). */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200)
+  limit?: number;
+}
+
 @MarketingRoute()
 @Controller('marketing/social-planner')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class SocialPlannerController {
-  constructor(private readonly svc: SocialPlannerService) {}
+  constructor(
+    private readonly svc: SocialPlannerService,
+    private readonly insights: SocialInsightsService,
+  ) {}
 
   // ── Network status ──────────────────────────────────────────────────────
 
@@ -196,9 +237,21 @@ export class SocialPlannerController {
 
   // ── Posts CRUD ──────────────────────────────────────────────────────────
 
+  /** List posts, newest first. Pass `from`/`to` to read a scheduling window
+   *  instead (ordered by send time, ascending) — that is the shape the calendar
+   *  and the Growth Studio one-screen need, and without it every caller had to
+   *  download the workspace's entire posting history to find today's. */
   @Get('posts')
-  listPosts(@CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.svc.listPosts(u.workspaceId);
+  listPosts(@CurrentMarketingUser() u: MarketingUserPayload, @Query() q: ListPostsQueryDto) {
+    return this.svc.listPosts(u.workspaceId, {
+      // The DTO guarantees a parseable ISO string, so `new Date` cannot produce
+      // an Invalid Date here; the service re-checks anyway because it is also
+      // reachable from MCP and from other services.
+      from: q.from ? new Date(q.from) : undefined,
+      to: q.to ? new Date(q.to) : undefined,
+      status: q.status,
+      limit: q.limit,
+    });
   }
 
   @Post('posts')
@@ -250,8 +303,12 @@ export class SocialPlannerController {
     );
   }
 
-  /** Pull a scheduled post back to DRAFT so it can be corrected. The reverse
-   *  of `schedule`, and the only non-destructive way to fix a scheduled post. */
+  /** Pull a post back to DRAFT so it can be corrected and re-sent. The reverse
+   *  of `schedule`, and the only non-destructive way to fix a post that is
+   *  already out of the editor: SCHEDULED (the original case), FAILED (the
+   *  retry path — a transient token/network failure must not cost the operator
+   *  the caption and the media), and a PUBLISHING post whose run died. Targets
+   *  that already PUBLISHED are left alone, so a retry never double-posts. */
   @Post('posts/:postId/unschedule')
   @Audit({ action: 'social.post.unschedule', resourceType: 'social-post', resourceIdParam: 'postId' })
   @RequirePermission('campaigns.send')
@@ -264,5 +321,59 @@ export class SocialPlannerController {
   @RequirePermission('campaigns.send')
   publishNow(@Param('postId') postId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.publishNow(u.workspaceId, postId);
+  }
+
+  // ── Organic insights ────────────────────────────────────────────────────
+
+  /**
+   * Organic performance of published posts + connected profiles over a window.
+   *
+   * Range handling is deliberately identical to the unified content calendar
+   * (marketing-content-calendar.controller.ts): defaults applied here rather
+   * than in the service, an explicit NaN check because `new Date('nonsense')`
+   * is a Date and would otherwise reach Prisma as an invalid parameter, and a
+   * hard 180-day ceiling so one URL cannot ask the database to reduce a year of
+   * rows synchronously.
+   *
+   * `reports.read` rather than the `campaigns.send` every write route on this
+   * controller uses: reading what happened is not permission to publish, and a
+   * custom role granted only reporting access should reach this. The
+   * class-level @MarketingRoles('MANAGER') still applies on top — this narrows
+   * the permission, it does not widen the role.
+   */
+  @Get('insights')
+  @RequirePermission('reports.read')
+  insightsSummary(
+    @CurrentMarketingUser() u: MarketingUserPayload,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+  ) {
+    const now = Date.now();
+    const from = fromRaw ? new Date(fromRaw) : new Date(now - 30 * 86_400_000);
+    const to = toRaw ? new Date(toRaw) : new Date(now);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      throw new BadRequestException('invalid date range');
+    }
+    if (to <= from) throw new BadRequestException('`to` must be after `from`');
+    if (to.getTime() - from.getTime() > 180 * 86_400_000) {
+      throw new BadRequestException('range too wide (max 180 days)');
+    }
+    return this.insights.summary(u.workspaceId, from, to);
+  }
+
+  /**
+   * Manual refresh behind the "Refresh" button. `force` bypasses the every-6h
+   * staleness gate the cron applies — that gate exists to protect provider rate
+   * limits on an unattended hourly sweep, and a human who has just published
+   * something and wants to see numbers is a different situation. It is gated on
+   * settings.manage (not reports.read) precisely because it spends the
+   * workspace's provider quota, and audited for the same reason.
+   */
+  @Post('insights/pull')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'social.insights.pull', resourceType: 'social-insights' })
+  pullInsights(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.insights.pullWorkspace(u.workspaceId, { force: true });
   }
 }

@@ -83,7 +83,7 @@ const HEALTH_TONE: Record<Health, 'success' | 'danger' | 'neutral' | 'warning'> 
  * dialog offers every capability), so connecting here affects both marketing and
  * channels at once.
  */
-export default function AccountCenterPage() {
+export default function AccountCenterPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const { data, isLoading, isError, refetch } = useConnections();
@@ -331,13 +331,21 @@ export default function AccountCenterPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('accounts.title', 'Account Center')}
-        description={t(
-          'accounts.subtitle',
-          'Connect and manage every account in one place — publishing, inbox, WhatsApp and ads. One connection can power marketing and channels at once.',
-        )}
-      />
+      {/*
+        `embedded` suppresses only the page header, the same contract every other
+        embeddable page in this app uses. The Growth Studio's tools drawer mounts
+        this inside a Sheet that already carries its own title and description,
+        and two stacked headings inside one panel read as a rendering mistake.
+      */}
+      {!embedded && (
+        <PageHeader
+          title={t('accounts.title', 'Account Center')}
+          description={t(
+            'accounts.subtitle',
+            'Connect and manage every account in one place — publishing, inbox, WhatsApp and ads. One connection can power marketing and channels at once.',
+          )}
+        />
+      )}
 
       <AccountSelectDialog
         context="account-center"

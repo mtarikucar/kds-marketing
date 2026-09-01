@@ -19,6 +19,8 @@ import {
   Inbox,
   Zap,
   Mail,
+  Star,
+  BadgeDollarSign,
   Globe,
   CalendarDays,
   Mic,
@@ -470,6 +472,26 @@ export const NAV_HUBS: NavHub[] = [
       // viewport. See NavChild.fullBleed.
       { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true, fullBleed: true },
       { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
+      /**
+       * Three pages that had no menu entry anywhere.
+       *
+       * They were reachable only as sub-tabs of Growth Studio's "More" tab — a
+       * tab inside a tab inside a mode you had to know to open. When the Studio
+       * collapsed into one working screen (2026-08) that hiding place went away,
+       * and the choice was to give them a permanent home or to lose them.
+       *
+       * Settings is the right home, and not merely the available one: all three
+       * are things a workspace SETS UP and then leaves running — a template
+       * library, a partner programme, the review-request configuration — rather
+       * than work anybody does daily. They are still reachable from the Studio's
+       * tools drawer, so nobody who knew the old route has to learn a new one.
+       *
+       * Adding them moves the frozen path set in navigation.test.ts by exactly
+       * three lines, which that file asks to be done deliberately. This is that.
+       */
+      { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
+      { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
+      { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, managerOnly: true },
       // Products & billing
       // Tax Rates + Coupons are tabs inside Products now.
       { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },

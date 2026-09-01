@@ -3538,10 +3538,26 @@ model SocialAccount {
   enabled        Boolean   @default(true)
   createdAt      DateTime  @default(now())
 
+  /// When the insights sweep last ATTEMPTED this account (success or failure).
+  /// Drives the every-6h staleness gate and rotates a failing account to the
+  /// back of the due queue instead of letting it wedge at the nulls-first
+  /// front — the same role AdAccount.lastPulledAt plays for the paid sweep.
+  insightsPulledAt DateTime?
+  /// Why the last insights read failed, kept SEPARATE from `lastError` on
+  /// purpose: `lastError` feeds needsReconnect (social.tools.ts), so writing a
+  /// missing-scope or rate-limit message there would tell the owner to
+  /// reconnect an account that publishes perfectly well. Only a genuine auth
+  /// failure is allowed to touch `lastError`.
+  insightsError    String?
+
   targets SocialPostTarget[]
+  metrics SocialAccountMetric[]
 
   @@unique([workspaceId, network, externalId])
   @@index([workspaceId, network])
+  /// The cross-workspace due-row probe of the hourly insights sweep:
+  /// enabled accounts whose insightsPulledAt is null or older than the interval.
+  @@index([enabled, insightsPulledAt])
   @@map("social_accounts")
 }
 
@@ -3585,6 +3601,11 @@ model SocialPost {
   targets SocialPostTarget[]
 
   @@index([workspaceId, status])
+  /// Migration 20260831190000 created this index for listPosts' scheduling
+  /// window but never declared it here, so the schema and the database had
+  /// drifted: the next `migrate dev` would have generated a DROP INDEX and
+  /// quietly taken the planner screen back to a sequential scan.
+  @@index([workspaceId, scheduledAt])
   @@index([socialCampaignId])
   @@map("social_posts")
 }
@@ -3604,6 +3625,13 @@ model SocialPostTarget {
 
   metrics SocialPostMetric[]
 
+  /// One target row per (post, account) — the constraint that makes
+  /// `createMany({ skipDuplicates: true })` in SocialPlannerService.attachTargets
+  /// mean anything. Without it a DRAFT that still carries a PUBLISHED target
+  /// (which `unschedulePost` can now produce, by resetting a publish run that
+  /// died mid-fan-out) could take a SECOND PENDING row for the same account on
+  /// the next edit, and publishDuePost would post to that network again.
+  @@unique([postId, socialAccountId])
   @@index([workspaceId, postId])
   @@index([workspaceId, status])
   @@map("social_post_targets")
@@ -3636,6 +3664,42 @@ model SocialPostMetric {
   @@unique([targetId, date])
   @@index([workspaceId, date])
   @@map("social_post_metrics")
+}
+
+/// Daily per-ACCOUNT snapshot — the half SocialPostMetric structurally cannot
+/// express. A follower count belongs to the profile, not to any one post, so
+/// there is no target to hang it on and no way to derive it from post rows.
+/// Idempotent upsert on (socialAccountId, date), exactly like SocialPostMetric
+/// on (targetId, date): the sweep re-pulls the same UTC day every few hours and
+/// overwrites the day's row with the latest reading rather than appending.
+///
+/// `followers` is a STOCK (a level at a point in time) and must never be summed
+/// across days — a chart reads it as a line, a KPI reads the latest row. Every
+/// other counter here is the provider's own per-day figure.
+///
+/// There is deliberately NO `posts` column. How many times we posted on a day
+/// is ours to know rather than the provider's, and SocialPostTarget already
+/// knows it exactly — for every day, including the ones no sweep reached.
+/// A copy written only for the current day, only on the ticks where the
+/// provider read succeeded, would be frozen at whatever the last sweep of that
+/// day saw; summary() derives the figure from the targets instead. See the long
+/// note on SocialInsightsService.writeAccountMetric.
+model SocialAccountMetric {
+  id              String        @id @default(uuid())
+  workspaceId     String
+  socialAccountId String
+  account         SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  date            DateTime      @db.Date // UTC day
+  followers       Int           @default(0)
+  profileViews    Int           @default(0)
+  reach           Int           @default(0)
+  impressions     Int           @default(0)
+  raw             Json?
+  pulledAt        DateTime      @default(now())
+
+  @@unique([socialAccountId, date])
+  @@index([workspaceId, date])
+  @@map("social_account_metrics")
 }
 
 /// One Brand Kit per workspace — logo, palette, tone, 3–5 reference images,

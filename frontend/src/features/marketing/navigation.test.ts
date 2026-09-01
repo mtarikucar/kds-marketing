@@ -261,12 +261,14 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * deleting a page, which is a product decision, not a nav refactor.
    */
   const PATHS_BEFORE_THE_SURFACE_MERGE = [
-    '/accounts', '/agency/locations', '/agency/rebilling', '/agency/snapshots',
+    '/accounts', '/agency/locations', '/agency/rebilling',
+    '/agency/snapshots',
     '/appointments', '/automations', '/billing', '/booking', '/branding',
     '/calendar', '/calls', '/commissions', '/companies', '/documents', '/home',
     '/import', '/inbox', '/installations', '/invoices', '/leads',
     '/memberships/courses', '/opportunities', '/order-forms', '/products',
-    '/prospecting', '/reports', '/research', '/segments', '/settings/api-keys',
+    '/prospecting', '/reports', '/research', '/segments',
+    '/settings/api-keys',
     '/settings/compliance', '/settings/custom-domains', '/settings/custom-fields',
     '/settings/inbound-webhooks', '/settings/mcp-console', '/settings/modules',
     '/settings/roles', '/settings/sending-domains', '/settings/two-factor',
@@ -300,7 +302,18 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * way to record "the question widened" is a line each, not a quiet edit to a
    * photograph of one day.
    */
-  const PATHS_ADDED_SINCE = ['/settings/pipelines', '/dashboard', '/help'];
+  /**
+   * `/email-templates`, `/reviews` and `/affiliates` (2026-09-01): three pages
+   * that were already real routes and had no menu entry ANYWHERE — their only
+   * door was a sub-tab of a "More" tab inside Growth Studio's manual-tools
+   * mode. Collapsing the Studio into one working screen closed that door, so
+   * they were given a home in Settings ("Marketing assets") rather than being
+   * left reachable only by a URL somebody would have to already know.
+   */
+  const PATHS_ADDED_SINCE = [
+    '/settings/pipelines', '/dashboard', '/help',
+    '/email-templates', '/reviews', '/affiliates',
+  ];
 
   it('keeps every retired hub reachable by route, so nothing is lost', () => {
     expect([...allPaths].sort()).toEqual(

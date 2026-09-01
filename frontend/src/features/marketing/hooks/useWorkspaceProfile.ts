@@ -13,6 +13,23 @@ export interface WorkspaceProfile {
   kind?: WorkspaceKind | string;
   productName?: string;
   defaultCurrency?: string;
+  /**
+   * IANA zone the workspace actually operates in (`Workspace.timezone`).
+   *
+   * Additive, and load-bearing for anything that draws a DAY boundary. Until it
+   * existed the client had no choice but to ask "what is today?" of the browser,
+   * which is the operator's laptop and not the business — a Turkey workspace
+   * opened from a laptop still on UTC gets a "today" that starts three hours
+   * late and ends three hours late, silently dropping the early-morning posts
+   * from the top of the list and borrowing tomorrow's. That is the same
+   * server-local-vs-workspace-tz class of bug the dashboard already had to fix
+   * server-side; this field is what lets the client avoid re-introducing it.
+   *
+   * Optional because a client can be served by a backend that predates the
+   * field during a rolling deploy — callers must fall back to the browser zone
+   * rather than assume it is present.
+   */
+  timezone?: string;
 }
 
 interface ProfileResponse {

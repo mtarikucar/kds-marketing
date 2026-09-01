@@ -60,7 +60,24 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
     strategyAction: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
     // No brand profile by default — tests that want grounding override this.
     brandProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+    /**
+     * `persist()` replaces the ActionPlan inside a transaction — the delete and
+     * the insert have to land together or a crash between them leaves the
+     * workspace with no plan at all and no way back to the DONE rows' resultRefs.
+     *
+     * The stub hands the callback THIS SAME object rather than a separate `tx`
+     * double, so the existing assertions keep reading `prisma.strategyAction.*`
+     * and stay true: what they are pinning is which writes happen, not which
+     * client handle issued them. A second double would quietly make every one of
+     * those assertions pass against a call that never happened.
+     */
+    $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prismaSelf())),
   };
+  // `prisma` is referenced by the stub above before the const is initialised, so
+  // the read is deferred behind a function rather than closed over directly.
+  function prismaSelf() {
+    return prisma;
+  }
   const orchestrator = { applyPlan: jest.fn().mockResolvedValue({ lane: 'ASSISTED', applied: 0, skipped: 0 }) };
   // The strategy provisions the default agent itself — best-effort, never fails synthesis.
   const provisioning = { ensureDefaultAgent: jest.fn().mockResolvedValue(undefined) };

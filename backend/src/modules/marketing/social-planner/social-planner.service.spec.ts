@@ -1,5 +1,9 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { SocialPlannerService, SOCIAL_PUBLISH_KIND } from './social-planner.service';
+import {
+  SocialPlannerService,
+  SOCIAL_PUBLISH_KIND,
+  SOCIAL_POSTS_MAX_PAGE,
+} from './social-planner.service';
 import { publishToNetwork } from './network-adapters';
 import { isSecretBoxConfigured, sealSecret } from '../../../common/crypto/secret-box.helper';
 
@@ -102,9 +106,13 @@ describe('SocialPlannerService', () => {
       },
       socialPostTarget: {
         createMany: jest.fn(),
-        findMany: jest.fn(),
+        // Defaults to "this post has no targets yet": attachTargets reads the
+        // rows that survived the caller's deleteMany before it creates
+        // anything, so every path through it needs this to resolve.
+        findMany: jest.fn().mockResolvedValue([]),
         deleteMany: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
     };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
@@ -539,6 +547,126 @@ describe('SocialPlannerService', () => {
       expect.objectContaining({ data: expect.objectContaining({ status: 'PUBLISHED' }) }),
     );
     mockPublish.mockReset();
+  });
+
+  // ── listPosts filtering ───────────────────────────────────────────────────
+
+  /**
+   * `listPosts` was a bare unbounded findMany: no window, no status, no take.
+   * Every caller — the planner screen, the MCP tool, the Growth Studio
+   * one-screen — downloaded the workspace's entire posting history (each row
+   * with its `targets`) to answer "what goes out today?". These tests pin BOTH
+   * halves of the fix: the new filtering works, and the old no-argument call
+   * still issues the query it always did apart from the missing cap.
+   */
+  describe('listPosts', () => {
+    const call = () => prisma.socialPost.findMany.mock.calls[0][0];
+
+    it('is unchanged for an argument-less call, except that it is now bounded', async () => {
+      await svc.listPosts('ws-a');
+
+      expect(call()).toEqual(
+        expect.objectContaining({
+          where: { workspaceId: 'ws-a' },
+          include: { targets: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: SOCIAL_POSTS_MAX_PAGE,
+        }),
+      );
+      // No scheduledAt predicate at all: an unfiltered list must still show the
+      // drafts that have no send time.
+      expect(call().where.scheduledAt).toBeUndefined();
+    });
+
+    it('filters on scheduledAt and orders forwards when a window is given', async () => {
+      const from = new Date('2026-09-01T00:00:00.000Z');
+      const to = new Date('2026-09-01T23:59:59.999Z');
+
+      await svc.listPosts('ws-a', { from, to });
+
+      expect(call().where).toEqual({ workspaceId: 'ws-a', scheduledAt: { gte: from, lte: to } });
+      // A calendar reads forwards — the next thing to go out has to be the
+      // FIRST row, not the last one after a client-side reverse.
+      expect(call().orderBy).toEqual([{ scheduledAt: 'asc' }, { id: 'asc' }]);
+    });
+
+    it('accepts a half-open window', async () => {
+      const from = new Date('2026-09-01T00:00:00.000Z');
+
+      await svc.listPosts('ws-a', { from });
+
+      expect(call().where.scheduledAt).toEqual({ gte: from });
+      expect(call().orderBy).toEqual([{ scheduledAt: 'asc' }, { id: 'asc' }]);
+    });
+
+    it('filters by status without disturbing the default ordering', async () => {
+      await svc.listPosts('ws-a', { status: 'FAILED' });
+
+      expect(call().where).toEqual({ workspaceId: 'ws-a', status: 'FAILED' });
+      expect(call().orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    });
+
+    /**
+     * Neither sort column is unique. A bulk campaign schedules a dozen posts at
+     * the same instant and an imported batch shares a `createdAt`, so without a
+     * tiebreak Postgres may return tied rows in any order it likes — and at the
+     * `take` boundary two identical requests can then disagree about which of
+     * them made the page: a post that appears twice across two reads, or in
+     * neither. The tiebreak has to follow the primary column's direction, or
+     * the two halves of the sort disagree about which end of a tie is first.
+     */
+    it('breaks ties on id so the page boundary is deterministic', async () => {
+      await svc.listPosts('ws-a', { from: new Date('2026-09-01T00:00:00.000Z') });
+      expect(call().orderBy).toEqual([{ scheduledAt: 'asc' }, { id: 'asc' }]);
+
+      prisma.socialPost.findMany.mockClear();
+      await svc.listPosts('ws-a');
+      expect(prisma.socialPost.findMany.mock.calls[0][0].orderBy).toEqual([
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ]);
+    });
+
+    it('honours a smaller limit', async () => {
+      await svc.listPosts('ws-a', { limit: 20 });
+
+      expect(call().take).toBe(20);
+    });
+
+    it('clamps a limit above the hard cap instead of serving an unbounded read', async () => {
+      await svc.listPosts('ws-a', { limit: 10_000 });
+
+      expect(call().take).toBe(SOCIAL_POSTS_MAX_PAGE);
+    });
+
+    it('refuses an inverted range rather than silently returning nothing', async () => {
+      // An empty list reads to a model (and to a user) as "there are no posts",
+      // which is a wrong answer; a refusal is recoverable.
+      await expect(
+        svc.listPosts('ws-a', {
+          from: new Date('2026-09-02T00:00:00.000Z'),
+          to: new Date('2026-09-01T00:00:00.000Z'),
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.socialPost.findMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unparseable bound', async () => {
+      await expect(svc.listPosts('ws-a', { from: new Date('nonsense') })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.socialPost.findMany).not.toHaveBeenCalled();
+    });
+
+    it('stays workspace-scoped whatever the filter', async () => {
+      await svc.listPosts('ws-b', {
+        from: new Date('2026-09-01T00:00:00.000Z'),
+        status: 'SCHEDULED',
+        limit: 5,
+      });
+
+      expect(call().where.workspaceId).toBe('ws-b');
+    });
   });
 
   // ── cross-workspace isolation ─────────────────────────────────────────────

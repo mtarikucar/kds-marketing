@@ -44,13 +44,70 @@ import { money, num, deriveGrowthMultiple, pickLatestObjective, pickTopupProvide
  * The only interrupts are Pause and the kill-switch; an ASSISTED budget keeps
  * the classic approval queue, an armed AUTONOMOUS budget never asks.
  */
-export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean } = {}) {
+export interface BudgetAutopilotPageProps {
+  /**
+   * Hosted inside another surface. Hides the PageHeader, and with it the two
+   * write triggers it carries — so it also stops this page mounting its own
+   * `BudgetDialog` / `EnableAutopilotWizard`, and drops the empty state's CTA.
+   *
+   * The host owns both dialogs instead. That is not tidiness: the only host is
+   * the Studio's tools drawer, which is a modal `<Sheet>`, and a Radix dialog
+   * mounted inside another dialog's content fights it for the focus trap. The
+   * drawer already hoists its own copies of these two components outside the
+   * Sheet for exactly that reason; leaving ours mounted in here meant the
+   * no-budget empty state still handed people the nested one. A host that hides
+   * the triggers takes responsibility for supplying them — the drawer offers
+   * both in both budget states.
+   */
+  embedded?: boolean;
+  /**
+   * Suppress BOTH places this page can render the ApprovalQueue (the Approvals
+   * tab and the standalone page-level queue). Defaults to false, so the page's
+   * own behaviour is untouched.
+   *
+   * For the host that already renders the queue itself. The queue is
+   * WORKSPACE-scoped, not budget-scoped, so when the Growth Studio embeds this
+   * console in its tools drawer while its own right rail shows the approvals,
+   * the exact same list appears twice on one screen — and the moment you act on
+   * one copy the other is stale, which is worse than either placement alone.
+   * The host takes responsibility for the queue being reachable when it passes
+   * this; nothing else in the page changes.
+   */
+  hideApprovals?: boolean;
+}
+
+export default function BudgetAutopilotPage({ embedded, hideApprovals }: BudgetAutopilotPageProps = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
 
-  const budgetsQ = useQuery({ queryKey: ['growth-budgets'], queryFn: listGrowthBudgets });
+  /**
+   * `meta: { silent: true }` on every query this page shares with the Studio's
+   * status bar (`['growth-budgets']`, `['growth-wallet']`, `['growth-budget',
+   * id]`, `['budget-activity', id]`).
+   *
+   * The flag lives on the QUERY, not on the observer, and query-core re-applies
+   * `observer.options` on every fetch — so an observer that omits it CLEARS it
+   * for every other observer of the same key. Without this, opening the console
+   * in the Studio's drawer silently un-silenced the strip's four queries, and
+   * the next failure fired main.tsx's global toast on top of two inline error
+   * states. The flag is earned here on its own merits too: each of these reads
+   * is rendered behind a QueryStateBoundary with its own retry, and a toast for
+   * a poll that already shows its failure in place is pure noise.
+   *
+   * Not `queryClient.setQueryDefaults`, which would also work: it would live in
+   * main.tsx, a file away from the boundaries that justify the flag, would
+   * apply to any future consumer of these keys whether or not it renders an
+   * error state, and — because every test builds its own QueryClient — could
+   * not be pinned by a test. Identical meta on identical keys keeps the reason
+   * next to the code.
+   */
+  const budgetsQ = useQuery({
+    queryKey: ['growth-budgets'],
+    queryFn: listGrowthBudgets,
+    meta: { silent: true },
+  });
   const budgets = budgetsQ.data ?? [];
   const current = budgets[0]; // most recent period first (backend orders desc)
 
@@ -67,7 +124,7 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
    * Render the queue at page level for precisely those two cases — the tab
    * still owns it whenever it exists, so nothing is shown twice.
    */
-  const tabOwnsApprovals = !!current && current.autonomyLevel !== 'AUTONOMOUS';
+  const tabOwnsApprovals = !!current && current.autonomyLevel !== 'AUTONOMOUS' && !hideApprovals;
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['growth-budgets'] });
@@ -107,46 +164,70 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
             icon={<Sparkles className="h-6 w-6" />}
             title={t('budget.empty.title', 'No growth budget yet')}
             description={t('autopilot.empty.desc', 'One click sets up everything: your credit wallet, a monthly budget and allocations for every channel you have connected — then the engine takes it from there.')}
-            action={<Button onClick={() => setWizardOpen(true)}>{t('autopilot.enableCta', 'Enable Autopilot')}</Button>}
+            // No CTA when embedded: the wizard it opened is not mounted in that
+            // case, and a host that hides the PageHeader's triggers supplies
+            // its own outside whatever modal it has put this page inside.
+            action={embedded ? undefined : <Button onClick={() => setWizardOpen(true)}>{t('autopilot.enableCta', 'Enable Autopilot')}</Button>}
           />
         ) : (
-          <BudgetDetail budget={current} />
+          <BudgetDetail budget={current} hideApprovals={hideApprovals} />
         )}
       </QueryStateBoundary>
 
       {/* The only path to a pending approval when the tab that normally holds
           it is absent. Self-hiding: ApprovalQueue renders nothing but its own
-          empty state, which this wrapper suppresses when the queue is clear. */}
-      {!tabOwnsApprovals && <StandaloneApprovals />}
+          empty state, which this wrapper suppresses when the queue is clear.
+          `hideApprovals` skips it too — otherwise suppressing the tab would
+          simply move the duplicate queue down the page rather than remove it. */}
+      {!hideApprovals && !tabOwnsApprovals && <StandaloneApprovals />}
 
-      <BudgetDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        budget={current}
-        onSaved={() => {
-          setDialogOpen(false);
-          refresh();
-        }}
-      />
-      <EnableAutopilotWizard open={wizardOpen} onOpenChange={setWizardOpen} onProvisioned={refresh} />
+      {/* Not mounted when embedded — see the prop's doc. The host has hidden
+          every trigger that opens these, and the one host there is renders its
+          own copies OUTSIDE its Sheet, because a Radix dialog inside another
+          dialog's content fights it for the focus trap. */}
+      {!embedded && (
+        <>
+          <BudgetDialog
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+            budget={current}
+            onSaved={() => {
+              setDialogOpen(false);
+              refresh();
+            }}
+          />
+          <EnableAutopilotWizard open={wizardOpen} onOpenChange={setWizardOpen} onProvisioned={refresh} />
+        </>
+      )}
     </div>
   );
 }
 
-function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
+function BudgetDetail({ budget: summary, hideApprovals }: { budget: GrowthBudget; hideApprovals?: boolean }) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
   const [flagBlocked, setFlagBlocked] = useState(false);
   const [activeTab, setActiveTab] = useState('allocation');
 
-  const detailQ = useQuery({ queryKey: ['growth-budget', summary.id], queryFn: () => getGrowthBudget(summary.id) });
+  // `meta: { silent: true }` on all three for the reason spelled out on
+  // `budgetsQ` above — the flag is per-QUERY, so a sibling observer that omits
+  // it un-silences the Studio's status bar behind this console's back.
+  const detailQ = useQuery({
+    queryKey: ['growth-budget', summary.id],
+    queryFn: () => getGrowthBudget(summary.id),
+    meta: { silent: true },
+  });
   const budget = detailQ.data ?? summary;
   const allocations = budget.allocations ?? [];
   const currency = budget.currency;
 
-  const walletQ = useQuery({ queryKey: ['growth-wallet'], queryFn: getWalletState });
-  const activityQ = useQuery({ queryKey: ['budget-activity', budget.id], queryFn: () => listBudgetActivity(budget.id) });
+  const walletQ = useQuery({ queryKey: ['growth-wallet'], queryFn: getWalletState, meta: { silent: true } });
+  const activityQ = useQuery({
+    queryKey: ['budget-activity', budget.id],
+    queryFn: () => listBudgetActivity(budget.id),
+    meta: { silent: true },
+  });
 
   const planned = useMemo(() => allocations.reduce((s, a) => s + num(a.plannedAmount), 0), [allocations]);
   const spent = useMemo(() => allocations.reduce((s, a) => s + num(a.spentAmount), 0), [allocations]);
@@ -160,14 +241,32 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
     [allocations, activityQ.data],
   );
   const walletBalance = num(walletQ.data?.balance);
+  /**
+   * The wallet read has no error boundary of its own — its only consumers are
+   * the two hero tiles below — so a failure would otherwise be rendered as
+   * `money(0)`: a real currency amount, stating that the workspace has no
+   * credit left, when the truth is that we could not ask.
+   *
+   * That mattered more once this query was silenced. Silencing was right (the
+   * global toaster was firing on top of two inline error states), but silence
+   * plus a fabricated zero is the worst of both: no report anywhere, and a
+   * number confident enough to act on. So the tiles say "okunamadı" instead,
+   * and the derived total refuses to pretend it knows the sum.
+   */
+  const walletUnread = walletQ.isError && walletQ.data === undefined;
   const armed = budget.autonomyLevel === 'AUTONOMOUS';
+  // Two independent reasons the Approvals tab can be absent — the budget is
+  // armed, or the HOST is already rendering the queue elsewhere on the screen.
+  // Derived once so the tab strip, the tab body and the fallback effect below
+  // can never disagree about whether it exists.
+  const showApprovalsTab = !armed && !hideApprovals;
 
-  // Arming removes the Approvals tab. If it was the active tab, Radix (which
-  // holds the selected value internally) would be left pointing at a tab that no
-  // longer exists → a blank body with no active underline. Fall back to Allocation.
+  // Losing the Approvals tab while it is the ACTIVE tab leaves Radix (which
+  // holds the selected value internally) pointing at a tab that no longer
+  // exists → a blank body with no active underline. Fall back to Allocation.
   useEffect(() => {
-    if (armed && activeTab === 'approvals') setActiveTab('allocation');
-  }, [armed, activeTab]);
+    if (!showApprovalsTab && activeTab === 'approvals') setActiveTab('allocation');
+  }, [showApprovalsTab, activeTab]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['growth-budget', budget.id] });
@@ -263,9 +362,25 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
               value={growth.multiple != null ? `${growth.multiple.toFixed(2)}×` : '—'}
               icon={<TrendingUp className="h-4 w-4" />}
             />
-            <StatCard label={t('autopilot.hero.loaded', 'Credit loaded')} value={money(walletBalance + growth.spend, currency)} icon={<CreditCard className="h-4 w-4" />} />
+            <StatCard
+              label={t('autopilot.hero.loaded', 'Credit loaded')}
+              value={
+                walletUnread
+                  ? t('autopilot.hero.balanceUnread', 'okunamadı')
+                  : money(walletBalance + growth.spend, currency)
+              }
+              icon={<CreditCard className="h-4 w-4" />}
+            />
             <StatCard label={t('autopilot.hero.spent', 'Credit spent')} value={money(growth.spend, currency)} icon={<Gauge className="h-4 w-4" />} delta={{ direction: spentPct > 90 ? 'up' : 'flat', value: `${spentPct}%` }} />
-            <StatCard label={t('autopilot.hero.balance', 'Credit balance')} value={money(walletBalance, currency)} icon={<Wallet className="h-4 w-4" />} />
+            <StatCard
+              label={t('autopilot.hero.balance', 'Credit balance')}
+              value={
+                walletUnread
+                  ? t('autopilot.hero.balanceUnread', 'okunamadı')
+                  : money(walletBalance, currency)
+              }
+              icon={<Wallet className="h-4 w-4" />}
+            />
           </div>
 
           {/* THE control row: one switch, two interrupts — the user is never asked anything else. */}
@@ -370,7 +485,7 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
             <TabsList>
               <TabsTrigger value="allocation">{t('budget.tab.allocation', 'Allocation')}</TabsTrigger>
               <TabsTrigger value="activity">{t('autopilot.tab.activity', 'Activity')}</TabsTrigger>
-              {!armed && <TabsTrigger value="approvals">{t('budget.tab.approvals', 'Approvals')}</TabsTrigger>}
+              {showApprovalsTab && <TabsTrigger value="approvals">{t('budget.tab.approvals', 'Approvals')}</TabsTrigger>}
               <TabsTrigger value="history">{t('budget.tab.history', 'History')}</TabsTrigger>
             </TabsList>
 
@@ -382,7 +497,7 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
                 <ActivityFeed items={activityQ.data ?? []} currency={currency} />
               </QueryStateBoundary>
             </TabsContent>
-            {!armed && (
+            {showApprovalsTab && (
               <TabsContent value="approvals" className="pt-4">
                 <ApprovalQueue />
               </TabsContent>

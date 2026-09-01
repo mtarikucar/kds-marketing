@@ -405,6 +405,12 @@ describe('MarketingAuthService — profile()', () => {
       productUrl: null,
       defaultLanguage: 'en',
       defaultCurrency: 'TRY',
+      // The un-migrated default, because that is what this workspace would
+      // actually hold: `timezone` shipped with a 'UTC' default and no writer a
+      // self-serve customer could reach until registration started capturing
+      // one. A fixture claiming a real zone on an otherwise-generic workspace
+      // would be describing a row that could not exist yet.
+      timezone: 'UTC',
       settings: {},
     });
     membership.listActiveMemberships.mockResolvedValue([
@@ -428,6 +434,113 @@ describe('MarketingAuthService — profile()', () => {
     // User fields stay flat at the top level — nothing pre-existing moved.
     expect(res.id).toBe('u1');
     expect(res.email).toBe('a@b.co');
+  });
+
+  /**
+   * The workspace's own IANA zone has to reach the client, because the client
+   * is the only layer that still asks "what is today?" of the browser. The
+   * browser is the operator's laptop, not the business: a Turkey workspace
+   * opened from a laptop on UTC gets a day boundary three hours off at both
+   * ends, which quietly drops the early-morning rows out of every today/this-
+   * week list. The backend aggregates were already rewritten to compute date
+   * boundaries from `Workspace.timezone` rather than server-local time; this
+   * assertion is what keeps the same fix from being undone in the UI, where it
+   * would look like a rendering quirk instead of a timezone bug.
+   *
+   * Two things are asserted deliberately: that the SELECT asks Prisma for the
+   * column (a shape regression that dropped it would otherwise surface as an
+   * `undefined` the frontend silently falls back from), and that the value
+   * lands on the response untouched.
+   *
+   * `Europe/Istanbul` is a value a real self-serve workspace can now hold, and
+   * only now: registration captures the browser's zone into
+   * `RegisterWorkspaceDto.timezone`, and PATCH /marketing/workspaces/timezone
+   * lets an existing one be corrected. Before those two writers landed, this
+   * fixture described a row that could not exist — which is why the companion
+   * case below pins the OTHER value, the un-migrated 'UTC' default that most
+   * rows in production still hold, travelling to the client untouched. The
+   * server must not dress that up as a friendlier answer: the client's
+   * `resolveZone` needs to see the raw 'UTC' to apply its own migration rule.
+   */
+  it('carries the workspace timezone on the profile response', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue({
+      id: 'u1',
+      workspaceId: 'ws-1',
+      email: 'a@b.co',
+      firstName: 'A',
+      lastName: 'B',
+      phone: null,
+      avatar: null,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      lastLogin: null,
+      createdAt: new Date(),
+    });
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      slug: 'acme',
+      name: 'Acme',
+      kind: 'STANDALONE',
+      productName: 'Acme CRM',
+      productUrl: null,
+      productDescription: null,
+      defaultLanguage: 'tr',
+      defaultCurrency: 'TRY',
+      timezone: 'Europe/Istanbul',
+      settings: {},
+    });
+    membership.listActiveMemberships.mockResolvedValue([]);
+
+    const res: any = await svc.profile('u1', 'ws-1');
+
+    expect(prisma.workspace.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ timezone: true }) }),
+    );
+    expect(res.workspace.timezone).toBe('Europe/Istanbul');
+    // Nothing pre-existing may move to make room for it — the FE reads these
+    // off the same object.
+    expect(res.workspace).toMatchObject({ id: 'ws-1', kind: 'STANDALONE', defaultCurrency: 'TRY' });
+  });
+
+  it("passes the un-migrated 'UTC' default through verbatim rather than guessing for the client", async () => {
+    // The overwhelmingly common row in production: a workspace created before
+    // signup captured a zone, holding the schema default because nothing could
+    // ever write anything else. The client is the one that decides what to do
+    // about that (todayBounds.resolveZone treats an exact 'UTC' as "nobody has
+    // said" and prefers the browser), and it can only decide if the server
+    // hands it the raw value. Substituting anything here — a guess, a null, an
+    // omission — takes that decision away and hides the migration.
+    prisma.marketingUser.findUnique.mockResolvedValue({
+      id: 'u1',
+      workspaceId: 'ws-1',
+      email: 'a@b.co',
+      firstName: 'A',
+      lastName: 'B',
+      phone: null,
+      avatar: null,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      lastLogin: null,
+      createdAt: new Date(),
+    });
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      slug: 'acme',
+      name: 'Acme',
+      kind: 'STANDALONE',
+      productName: 'Acme CRM',
+      productUrl: null,
+      productDescription: null,
+      defaultLanguage: 'tr',
+      defaultCurrency: 'TRY',
+      timezone: 'UTC',
+      settings: {},
+    });
+    membership.listActiveMemberships.mockResolvedValue([]);
+
+    const res: any = await svc.profile('u1', 'ws-1');
+
+    expect(res.workspace.timezone).toBe('UTC');
   });
 
   it('throws BadRequestException when the user row is gone', async () => {

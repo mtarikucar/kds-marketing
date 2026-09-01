@@ -36,8 +36,16 @@ export interface AccountRow {
   accountType?: string | null;
 }
 
-/** Returns the access token or null if secret-box not configured / malformed. */
-function revealToken(account: AccountRow): string | null {
+/**
+ * Returns the access token or null if secret-box not configured / malformed.
+ *
+ * EXPORTED so the read path (network-insights.ts) opens a sealed token through
+ * this exact function rather than growing a second copy of the same three
+ * lines. There must be one place where a SocialAccount credential is unsealed:
+ * if the unsealing rule ever changes (key rotation, a different box format), a
+ * second copy is the one that keeps working until it silently does not.
+ */
+export function revealToken(account: AccountRow): string | null {
   try {
     return openSecret(account.accessToken);
   } catch {
@@ -802,8 +810,11 @@ async function publishTikTok(
 // ─────────────────────────────────────── Instagram (direct Instagram Login)
 
 /** Host for the direct "Instagram API with Instagram Login" flow — distinct
- *  from graph.facebook.com (the Page-linked IG_BUSINESS path). */
-const IG_DIRECT_GRAPH = 'https://graph.instagram.com';
+ *  from graph.facebook.com (the Page-linked IG_BUSINESS path). Exported for the
+ *  read path, which has to make the same host distinction for the same reason:
+ *  this flavour uses its own app credentials and carries no appsecret_proof, so
+ *  it cannot go through metaGraphFetch. */
+export const IG_DIRECT_GRAPH = 'https://graph.instagram.com';
 
 /**
  * Publish to a direct-login Instagram account (graph.instagram.com): create a

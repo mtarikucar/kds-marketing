@@ -98,8 +98,22 @@
     --border-strong: #343847;
     --input: #343847;
     --ring: #6e8ff5;
-    --chart-1:#6e8ff5;--chart-2:#fb7a2e;--chart-3:#93a7d6;--chart-4:#10b981;
-    --chart-5:#fb7185;--chart-6:#a78bfa;--chart-7:#2dd4bf;--chart-8:#94a3b8;
+    /*
+      Re-stepped 2026-08 when the first real charts landed (Growth Studio).
+      Slots 1/2/4/5/6 — the categorical ORDER the charts actually assign, see
+      components/charts/palette.ts — were each a little too light for a dark
+      surface: measured in OKLCH they sat at L 0.67–0.72 against a band of
+      0.48–0.67, so a five-series chart read as five equally shouty pastels with
+      no hierarchy. These steps are the same hues pulled into band, verified for
+      the lightness band, the chroma floor, adjacent CVD separation (protan /
+      deutan / tritan), the normal-vision floor and 3:1 contrast against this
+      file's own --surface. Slots 3/7/8 are unchanged and deliberately NOT in the
+      categorical order: #93a7d6 and #94a3b8 are below the chroma floor (they
+      read as gray) and cannot be told apart from each other under deuteranopia.
+      They remain available for non-identity roles.
+    */
+    --chart-1:#5b84f0;--chart-2:#e8681c;--chart-3:#93a7d6;--chart-4:#0da271;
+    --chart-5:#ef4f68;--chart-6:#9575f2;--chart-7:#2dd4bf;--chart-8:#94a3b8;
   }
 }
 

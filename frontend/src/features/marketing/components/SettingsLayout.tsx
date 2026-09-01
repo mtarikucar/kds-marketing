@@ -56,6 +56,25 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     paths: ['/studio/strategy', '/automations', '/trigger-links'],
   },
   {
+    key: 'marketing',
+    label: 'Marketing assets',
+    /**
+     * The three pages that lost their hiding place when Growth Studio collapsed
+     * into one working screen (2026-08). They were sub-tabs of a "More" tab
+     * inside a mode you had to know to open; now they have a home.
+     *
+     * Their own group, for the reason the Telephony note below gives at length.
+     * Workspace is what you configure once about the BUSINESS; Automation is
+     * machinery that runs without you; Products & billing is what you sell.
+     * These three are none of those: they are the reusable assets the outbound
+     * side draws on — the template library a campaign sends from, the
+     * review-request setup, the partner programme. Filing them under Workspace
+     * would make that group mean "and also some marketing", which is exactly
+     * how the grab-bag this grouping exists to prevent gets rebuilt.
+     */
+    paths: ['/email-templates', '/reviews', '/affiliates'],
+  },
+  {
     key: 'telephony',
     label: 'Telephony',
     /**

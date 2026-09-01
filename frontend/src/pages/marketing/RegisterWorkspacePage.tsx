@@ -36,6 +36,35 @@ const isHttpUrl = (v: string) => {
   }
 };
 
+/**
+ * The zone the person signing up is actually in — the closest thing to the
+ * business's own zone that anyone can know at this moment, and the only moment
+ * we can ask without asking.
+ *
+ * `Workspace.timezone` has existed since the first migration with a `'UTC'`
+ * default, and until now nothing on the signup path ever wrote it. Every
+ * self-serve workspace therefore held 'UTC' while the dashboard aggregates, the
+ * tasks list, sales targets, the daily digest and the Growth Studio rail all
+ * read the column as though it meant something — so a Turkish workspace's
+ * "today" ran 03:00 to 03:00 and quietly dropped its own early-morning rows.
+ * A settings screen only fixes the workspaces whose owner goes looking; this
+ * one line is what makes every NEW workspace right without anyone knowing the
+ * field exists.
+ *
+ * It is a hint, not a form field, deliberately: nobody signing up should have
+ * to answer a timezone question, and the answer they would give is the one the
+ * browser already knows. The backend validates it and falls back to the schema
+ * default if it is missing or unusable, so a browser that cannot say (or an
+ * `Intl` that throws) costs the signup nothing.
+ */
+function browserTimezone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const registerSchema = z.object({
   workspaceName: z.string().trim().min(1, 'required').max(120),
   productName: z.string().trim().min(1, 'required').max(120),
@@ -89,6 +118,7 @@ export default function RegisterWorkspacePage() {
         ...values,
         productUrl: values.productUrl || undefined,
         language: i18n.language?.split('-')[0],
+        timezone: browserTimezone(),
       });
       login(data.user, data.accessToken, data.refreshToken);
       // Best-effort membership hydration (parity with MarketingLoginPage): the

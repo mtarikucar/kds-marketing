@@ -46,10 +46,14 @@ describe('SettingsLayout — sub-grouping', () => {
     await i18n.changeLanguage('en');
   });
 
-  it('renders the FOUR labelled setting groups instead of one flat list', () => {
+  it('renders labelled setting groups instead of one flat list', () => {
     renderSettings();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByText('Data')).toBeInTheDocument();
+    // Gained when Growth Studio collapsed into one screen: the template library,
+    // review setup and partner programme had been sub-tabs of a tab and now have
+    // a home. Their own group, so no existing one has to mean "and also these".
+    expect(screen.getByText('Marketing assets')).toBeInTheDocument();
     expect(screen.getByText('Connections & domains')).toBeInTheDocument();
     expect(screen.getByText('Developer & security')).toBeInTheDocument();
     // No leftover ungrouped bucket: every settings child belongs to a group.

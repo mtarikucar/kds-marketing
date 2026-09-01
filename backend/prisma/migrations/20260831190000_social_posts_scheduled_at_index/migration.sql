@@ -1,0 +1,25 @@
+-- The index the scheduling window read has always needed.
+--
+-- `social_posts` carried exactly one index — ("workspaceId", "status") — because
+-- until now the only server-side question anyone asked of it was "give me every
+-- post in this workspace". The planner screen, the MCP `list_scheduled_posts`
+-- tool and the unified content calendar all wanted "what is going out between
+-- these two instants", and every one of them answered it by reading the whole
+-- table and filtering in application code.
+--
+-- SocialPlannerService.listPosts now filters on "scheduledAt" in SQL, which
+-- without this index is a sequential scan of the workspace's entire posting
+-- history on every load of a screen whose whole point is to be opened
+-- constantly. Leading with "workspaceId" (not "scheduledAt") is deliberate:
+-- every query in this module is workspace-scoped first, so the tenant prefix is
+-- what makes the index usable at all — a "scheduledAt"-leading index would have
+-- to scan across tenants before discarding them.
+--
+-- Additive and online-safe in the sense that matters here: it creates no
+-- constraint, so it cannot fail on existing data and cannot stop the container
+-- from booting when `prisma migrate deploy` runs at startup. Rows with a NULL
+-- "scheduledAt" (drafts) still occupy an entry, which is fine — Postgres btrees
+-- index NULLs, and the window query never matches them because a comparison
+-- against NULL is never true.
+CREATE INDEX IF NOT EXISTS "social_posts_workspaceId_scheduledAt_idx"
+    ON "social_posts" ("workspaceId", "scheduledAt");

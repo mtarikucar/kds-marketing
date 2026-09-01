@@ -211,6 +211,60 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
       expect(prisma.workspaceSubscription.create).not.toHaveBeenCalled();
     });
 
+    /**
+     * `Workspace.timezone` shipped with the first migration and a 'UTC'
+     * default, and until this capture nothing on the self-serve path ever wrote
+     * it — the only writer in the whole codebase was agency.service's
+     * createLocation, which a customer never reaches. So every workspace that
+     * ever signed up itself held 'UTC', while five separate consumers read the
+     * column as though it were an answer: the dashboard aggregates, the tasks
+     * list, sales targets, the daily-digest cron, and the Growth Studio rail on
+     * the client. A Turkey workspace's "today" therefore ran 03:00→03:00
+     * Istanbul, dropping its own early-morning rows off the top of every
+     * today/this-week list and borrowing tomorrow's at the bottom.
+     *
+     * Registration is the one moment the zone can be learned without asking
+     * anybody a question, so these three tests pin what it does with the answer:
+     * pass a real zone through, ignore a junk one rather than poisoning the
+     * column with it, and leave the field alone when the client says nothing so
+     * the schema default still applies.
+     */
+    async function registerWith(dtoExtras: Record<string, unknown>) {
+      prisma.marketingUser.findUnique.mockResolvedValue(null);
+      prisma.workspace.findUnique.mockResolvedValue(null);
+      prisma.workspace.create.mockResolvedValue({ ...WORKSPACE, id: 'ws-new' });
+      prisma.marketingUser.create.mockResolvedValue({
+        id: 'owner-1', workspaceId: 'ws-new', email: DTO.email,
+        firstName: 'Ada', lastName: 'Lovelace', phone: null, avatar: null,
+        role: 'OWNER', tokenVersion: 0,
+      });
+      await svc.registerWorkspace({ ...DTO, ...dtoExtras } as any);
+      return prisma.workspace.create.mock.calls[0][0].data;
+    }
+
+    it('captures the browser timezone the client volunteered, so the workspace is not born on UTC', async () => {
+      expect((await registerWith({ timezone: 'Europe/Istanbul' })).timezone).toBe('Europe/Istanbul');
+    });
+
+    it('leaves the column to its schema default when the client sends no zone', async () => {
+      // An older frontend, or a non-browser caller: it must still sign up, and
+      // it must land exactly where every pre-existing workspace already is
+      // rather than on some zone we invented for it.
+      expect((await registerWith({})).timezone).toBeUndefined();
+    });
+
+    it('refuses a junk zone at the service, not just at the DTO', async () => {
+      // The decorator is the gate for HTTP callers, but this method is a plain
+      // function a future path could reach with no ValidationPipe in front of
+      // it — and a bad zone in this column fails NOWHERE loudly: every reader
+      // wraps Intl in a try/catch and falls back, so the only symptom is dates
+      // that are quietly wrong for one workspace forever.
+      for (const junk of ['Mars/Olympus_Mons', '+03:00', '']) {
+        prisma.workspace.create.mockClear();
+        expect((await registerWith({ timezone: junk })).timezone).toBeUndefined();
+      }
+    });
+
     it('rejects an already-registered email before any insert', async () => {
       prisma.marketingUser.findUnique.mockResolvedValue({ id: 'existing' });
       await expect(svc.registerWorkspace(DTO)).rejects.toBeInstanceOf(ConflictException);

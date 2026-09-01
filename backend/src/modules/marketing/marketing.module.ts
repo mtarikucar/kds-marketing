@@ -407,6 +407,10 @@ import { SocialOAuthService } from './social-planner/oauth/social-oauth.service'
 import { AccountCenterController } from './account-center/account-center.controller';
 import { AccountCenterService } from './account-center/account-center.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
+// Organic insights (the READ half of the social integration): provider metric
+// pull-back + the summary read model, and the hourly sweep that feeds them.
+import { SocialInsightsService } from './social-planner/social-insights.service';
+import { SocialInsightsCron } from './social-planner/social-insights.cron';
 
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
@@ -1141,6 +1145,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     SocialOAuthService,
     AccountCenterService,
     SocialTokenRefreshService,
+    SocialInsightsService,
+    SocialInsightsCron,
     // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
     LinkedinAdsOAuthService,
     GoogleAdsOAuthService,
