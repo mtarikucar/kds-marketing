@@ -290,3 +290,143 @@ test('the left column keeps one width across views, and the board scrolls instea
   expect(scrolled!.scroll).toBeGreaterThan(scrolled!.client);
   expect(scrolled!.left).toBeGreaterThan(0);
 });
+
+/**
+ * Stage 3: `Grupla: Şirkete göre`, against the real backend sort.
+ *
+ * `Şirketler` left the menu to become this control, so the two things it has to
+ * be true about are the two this test asserts, in a browser, on CONTENT:
+ *
+ *   1. **it really groups** — the order is the SERVER's (`sortBy=company`,
+ *      settled across the whole filtered set) and not a client-side shuffle of
+ *      whatever landed on the page, so a company's people are contiguous and
+ *      the blocks arrive in name order rather than in companyId order;
+ *   2. **nobody is dropped** — a person with no company gets a named block of
+ *      their own and stays selectable. That is the failure this whole line of
+ *      work exists to prevent, and it is invisible to a test that only checks
+ *      the grouped people are grouped.
+ *
+ * The names are seeded so the two orders DISAGREE: the company created first
+ * (and therefore holding the lexicographically smaller uuid, roughly) is the
+ * one named "ZZZ…". An implementation keyed on companyId gets a different
+ * answer, and a client-side sort of the page would get the right one for the
+ * wrong reason — hence the third person, created LAST, who must nonetheless
+ * come last.
+ */
+test('the people list groups by company, and the ones without a company keep a block', async ({
+  app,
+  api,
+  workspace,
+}) => {
+  const suffix = stamp();
+  const auth = { Authorization: `Bearer ${workspace.session.accessToken}` };
+
+  const company = async (name: string) => {
+    const res = await api.post(apiUrl('/marketing/companies'), { headers: auth, data: { name } });
+    expect(res.status(), await res.text()).toBe(201);
+    return (await res.json()).id as string;
+  };
+  const lead = async (contactPerson: string, companyId?: string) => {
+    const res = await api.post(apiUrl('/marketing/leads'), {
+      headers: auth,
+      data: {
+        businessName: `Firma ${contactPerson}`,
+        contactPerson,
+        businessType: 'OTHER',
+        source: 'WEBSITE',
+        ...(companyId ? { companyId } : {}),
+      },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+  };
+
+  const zeta = await company(`ZZZ Şirket ${suffix}`);
+  const acme = await company(`AAA Şirket ${suffix}`);
+  const inZeta = `Zeynep ${suffix}`;
+  const inAcme = `Ahmet ${suffix}`;
+  const noCompany = `Yalnız ${suffix}`;
+  await lead(inZeta, zeta);
+  await lead(inAcme, acme);
+  await lead(noCompany);
+
+  await app.goto('/inbox');
+  // Ungrouped to begin with: the owner's activity sort, no headers.
+  await expect(app.getByRole('button', { name: new RegExp(noCompany) })).toBeVisible();
+  await expect(app.getByText('Şirketsiz', { exact: true })).toHaveCount(0);
+
+  const toggle = app.getByTestId('group-toggle');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await toggle.click();
+
+  await expect(app).toHaveURL(/group=company/);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+  // Every header, and the trailing one by name. `Şirketsiz` is the assertion
+  // that matters most: it is the block for the majority of most workspaces.
+  await expect(app.getByText(`AAA Şirket ${suffix}`, { exact: true })).toBeVisible();
+  await expect(app.getByText(`ZZZ Şirket ${suffix}`, { exact: true })).toBeVisible();
+  await expect(app.getByText('Şirketsiz', { exact: true })).toBeVisible();
+
+  // ORDER, in the DOM, which is the only place "it grouped" is distinguishable
+  // from "it rendered three headers". Read off the rendered column rather than
+  // from three separate locators, so a header in the wrong block fails here.
+  const order = await app.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="surface-list"] li')).map(
+      (li) => (li.textContent ?? '').trim(),
+    ),
+  );
+  const at = (needle: string) => order.findIndex((line) => line.includes(needle));
+  expect(at(`AAA Şirket ${suffix}`)).toBeGreaterThanOrEqual(0);
+  expect(at(inAcme)).toBeGreaterThan(at(`AAA Şirket ${suffix}`));
+  expect(at(`ZZZ Şirket ${suffix}`)).toBeGreaterThan(at(inAcme));
+  expect(at(inZeta)).toBeGreaterThan(at(`ZZZ Şirket ${suffix}`));
+  // Last, though they were created last and would sort FIRST by activity.
+  expect(at('Şirketsiz')).toBeGreaterThan(at(inZeta));
+  expect(at(noCompany)).toBeGreaterThan(at('Şirketsiz'));
+
+  // A grouping is not a filter, and it is not a navigation either: the person
+  // with no company is still selectable, and the record card opens beside them.
+  await app.getByRole('button', { name: new RegExp(noCompany) }).click();
+  await expect(app.getByRole('link', { name: /Kaydı aç/ })).toBeVisible();
+  await expect(app).toHaveURL(/group=company/);
+});
+
+/**
+ * Stage 4 takes /opportunities, /calendar and /tasks out of the menu, and the
+ * three views that embed them keep a door back to the full page.
+ *
+ * The one capability that genuinely lives only at the full route is the
+ * calendar's seven-column month GRID: `CalendarPage` renders the agenda when
+ * embedded because Tailwind v3 has no container queries, so the grid's `md:`
+ * breakpoints read the VIEWPORT and its cells collapse to ~85px inside this
+ * column. So the link is followed here and the grid asserted on the other side
+ * — a door proved by walking through it, not by reading its `href`.
+ */
+test('each embedded view offers a link to its own full page, and the calendar grid is behind it', async ({
+  app,
+}) => {
+  await app.setViewportSize({ width: 1440, height: 900 });
+
+  await app.goto('/inbox');
+  // Not on Liste: that view IS this page.
+  await expect(app.getByRole('link', { name: /Tam sayfa aç/ })).toHaveCount(0);
+
+  await app.goto('/inbox?left=calendar');
+  await expect(app.getByTestId('calendar-agenda')).toBeVisible(LAZY);
+  // Embedded, the grid is not rendered at all — which is what the link is for.
+  await expect(app.getByTestId('calendar-grid')).toHaveCount(0);
+
+  await app.getByRole('link', { name: /Tam sayfa aç/ }).click();
+  await expect(app).toHaveURL(/\/calendar/);
+  await expect(app.getByTestId('calendar-grid')).toBeVisible(LAZY);
+
+  for (const [left, url] of [
+    ['board', /\/opportunities/],
+    ['tasks', /\/tasks/],
+  ] as const) {
+    await app.goto(`/inbox?left=${left}`);
+    await app.getByRole('link', { name: /Tam sayfa aç/ }).click();
+    await expect(app).toHaveURL(url);
+    await expect(app.getByRole('heading', { level: 1 })).toBeVisible(LAZY);
+  }
+});

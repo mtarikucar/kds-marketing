@@ -59,32 +59,28 @@ test('the catalogue lists what the plan entitles — and nothing else', async ({
   }
 });
 
-test('switching a module off drops its PAGE from the surface — not the surface itself — and back on restores it', async ({
+/**
+ * The entitlement chain, observed where it is still observable.
+ *
+ * This test has been re-aimed three times, and every move is the same story:
+ * the page it watched stopped being a gated child of the Inbox surface.
+ *
+ *   - Until 2026-08-30 it watched /inbox (conversationAi). /inbox became an
+ *     ALIAS of /leads with no menu entry of its own.
+ *   - Until 2026-08-31 it watched /calls (telephony), which moved to Settings.
+ *   - Until 2026-09-01 it watched /voice (voiceAi) — which has now moved to
+ *     Settings too, beside the call log, because a phone tree is channel
+ *     CONFIGURATION and not something that arrives with a person attached.
+ *
+ * There is nothing left to watch on the Inbox surface, and that is the POINT
+ * rather than an inconvenience: stage 4 collapsed it to a single ungated entry.
+ * So the observation moves to the Settings list, and the surface's role in this
+ * test inverts — it becomes the thing that must NOT change when a module is
+ * switched off.
+ */
+test('switching a module off drops its PAGE from the settings menu — live — and back on restores it', async ({
   app,
 }) => {
-  // Start on the Inbox SURFACE. A gated PAGE appears in its surface's sub-nav
-  // strip — which HubSubNav renders only for the ACTIVE surface, and never in
-  // the Settings area — so a surface page is the only place the gate is
-  // observable. /leads is an ungated page in the same surface, which lets it
-  // double as the survival proof below.
-  //
-  // The module under test is `voiceAi` (Sesli AI). This observation point has
-  // now moved twice, and both moves are worth recording, because each time the
-  // page being watched stopped being a gated child of this surface:
-  //
-  //   - Until 2026-08-30 it watched /inbox, gated on conversationAi. /inbox
-  //     became an ALIAS of /leads with no menu entry of its own (the two have
-  //     rendered the identical page since v2.284.0), so conversationAi no
-  //     longer hides anything from this menu — its real effect is inside the
-  //     page, on the message stream.
-  //   - Until 2026-08-31 it watched /calls, gated on telephony. The call log
-  //     moved into the Settings area, so it is no longer a page OF this
-  //     surface and cannot show that a surface survives losing one.
-  //
-  // /voice is the closest replacement available: like /calls before it, its
-  // module gates ONLY pages inside this surface (/voice and /voice/ivr) and
-  // nothing in Settings, so switching it off is a clean per-page observation
-  // rather than one that also empties half the gear area.
   await app.goto('/leads');
 
   // The primary hub rail is the FIRST <aside> — inside the Settings area
@@ -93,12 +89,11 @@ test('switching a module off drops its PAGE from the surface — not the surface
   const rail = app.locator('aside').first();
   const inboxSurface = rail.getByRole('link', { name: 'Gelen Kutusu', exact: true });
   // Every route the chrome offers to the gated PAGE, counted wherever it
-  // appears.
+  // appears. Zero on the Inbox surface as of stage 4.
   const routesToVoice = app.locator('a[href="/voice"]');
-  // The call log is no longer a page of this surface (2026-08-31). Counted
-  // here so the move is OBSERVED rather than merely assumed: a regression that
-  // put it back on the Inbox rail would also quietly re-enable the premise
-  // this test used to rest on.
+  // The page that left this surface before it. Counted here so the move is
+  // OBSERVED rather than assumed: a regression putting it back on the Inbox
+  // rail would also quietly re-enable a premise this test has abandoned.
   const routesToCalls = app.locator('a[href="/calls"]');
   // And the ONE route to the person surface. /inbox is a bookmark, never a
   // menu entry: a link back to it anywhere in the chrome is the duplication
@@ -107,15 +102,21 @@ test('switching a module off drops its PAGE from the surface — not the surface
   const routesToPeople = app.locator('a[href="/leads"]');
 
   await expect(inboxSurface).toBeVisible();
-  await expect(routesToVoice).toHaveCount(1);
+  await expect(routesToVoice).toHaveCount(0);
   await expect(routesToCalls).toHaveCount(0);
   await expect(routesToInbox).toHaveCount(0);
-  // The rail item and the sub-nav tab: the surface targets its first child,
-  // which is the person page, and that page is also a tab.
-  await expect(routesToPeople).toHaveCount(2);
+  // ONE, where it used to be two. The second was the sub-nav tab, and
+  // HubSubNav renders no strip at all for a surface with fewer than two
+  // visible children — the same rule that has always kept Home from growing a
+  // one-tab strip. The rail item is now the whole Inbox menu.
+  await expect(routesToPeople).toHaveCount(1);
   await expect(inboxSurface).toHaveAttribute('href', '/leads');
 
   await app.goto('/settings/modules');
+  const settingsNav = app.locator('aside').nth(1);
+  const voiceLink = settingsNav.getByRole('link', { name: 'Sesli AI', exact: true });
+  await expect(voiceLink).toBeVisible();
+
   const toggle = app.getByRole('switch', { name: 'Sesli AI', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
 
@@ -124,47 +125,45 @@ test('switching a module off drops its PAGE from the surface — not the surface
   expect((await off).status()).toBe(200);
 
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  // No reload: the settings list reads the SAME ['marketing','billing','summary']
+  // query the mutation invalidates, so the menu has to tell the truth without
+  // one. A menu that needs a refresh to stop offering a deactivated page is a
+  // real bug.
+  await expect(voiceLink).toHaveCount(0);
+  await expect(
+    settingsNav.getByRole('link', { name: 'Sesli Menü (IVR)', exact: true }),
+  ).toHaveCount(0);
+  // Only the deactivated children leave. If the whole list emptied, the two
+  // assertions above would pass for entirely the wrong reason — and the owner
+  // would have locked themselves out of the switch they just used.
+  await expect(settingsNav.getByRole('link', { name: 'Modüller', exact: true })).toBeVisible();
+  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
 
-  // Click, do not goto: a full load would re-fetch everything from the server
-  // and prove nothing about the live cache. This is still the same JS heap
-  // that issued the write. The rail reads the SAME
-  // ['marketing','billing','summary'] query the mutation invalidates, so the
-  // menu has to tell the truth without a refresh — one that needs a reload to
-  // stop offering a deactivated page is a real bug.
+  // And the person surface is untouched by any of it — one entry, still there.
   await inboxSurface.click();
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
+  await expect(routesToPeople).toHaveCount(1);
 
-  // The PAGE is gone from the sub-nav…
-  await expect(routesToVoice).toHaveCount(0);
-  // …while the SURFACE survives, which is the entire reason the gate hangs on
-  // the child. It used to hang on the hub, so switching one module off took
-  // People, Pipeline, Calendar and Tasks off the rail with it.
-  await expect(inboxSurface).toBeVisible();
-  await expect(app.getByRole('link', { name: 'Satış Hattı', exact: true })).toBeVisible();
-  await expect(app.getByRole('link', { name: 'Kişiler', exact: true })).toBeVisible();
-
-  // A reload proves the deactivation reached `Workspace.activatedModules` AND
-  // that the server-side entitlements cache was invalidated — not that a tab
-  // merely vanished from a client-side cache for 30 seconds.
-  await app.reload();
-  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
-  await expect(routesToVoice).toHaveCount(0);
-  await expect(inboxSurface).toBeVisible();
+  // A fresh boot proves the deactivation reached `Workspace.activatedModules`
+  // AND that the server-side entitlements cache was invalidated — not that a
+  // link merely vanished from a client-side cache for 30 seconds.
+  await app.goto('/settings/modules');
+  const toggleBack = app.getByRole('switch', { name: 'Sesli AI', exact: true });
+  await expect(toggleBack).toHaveAttribute('aria-checked', 'false');
+  await expect(
+    app.locator('aside').nth(1).getByRole('link', { name: 'Sesli AI', exact: true }),
+  ).toHaveCount(0);
 
   // Turning it back on must be equally live — a one-way door would strand an
   // owner who switched something off to try it out.
-  await app.goto('/settings/modules');
-  const toggleBack = app.getByRole('switch', { name: 'Sesli AI', exact: true });
-  // Still off after a fresh boot: the switch persisted, not just the menu.
-  await expect(toggleBack).toHaveAttribute('aria-checked', 'false');
-
   const on = app.waitForResponse((r) => modulesWrite(r.url(), r.request().method()));
   await toggleBack.click();
   expect((await on).status()).toBe(200);
 
   await expect(toggleBack).toHaveAttribute('aria-checked', 'true');
-  await inboxSurface.click();
-  await expect(routesToVoice).toHaveCount(1);
+  await expect(
+    app.locator('aside').nth(1).getByRole('link', { name: 'Sesli AI', exact: true }),
+  ).toBeVisible();
 });
 
 /**
@@ -180,12 +179,20 @@ test('switching a module off drops its PAGE from the surface — not the surface
  * grab-bag the grouping exists to prevent. So this watches the group heading,
  * not just the link.
  */
-test('the call log is a settings page now, filed under Telephony', async ({ app }) => {
+test('the call log is a settings page now, filed under Telephony — with Ses and the phone tree beside it', async ({ app }) => {
   await app.goto('/settings/modules');
 
   // Second <aside> = SettingsLayout's page list (the first is the hub rail).
   const settingsNav = app.locator('aside').nth(1);
   await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
+  // Stage 4's other half: Ses and the phone tree followed the log here, for the
+  // reason this group's comment always predicted — they are what you SET UP on
+  // the telephone, and the log is what it then did. An item in no group falls
+  // into "Diğer", which is why that last assertion carries the weight.
+  await expect(settingsNav.getByRole('link', { name: 'Sesli AI', exact: true })).toBeVisible();
+  await expect(
+    settingsNav.getByRole('link', { name: 'Sesli Menü (IVR)', exact: true }),
+  ).toBeVisible();
   await expect(settingsNav.getByText('Telefon', { exact: true })).toBeVisible();
   await expect(settingsNav.getByText('Diğer', { exact: true })).toHaveCount(0);
 
@@ -213,20 +220,103 @@ test('the person surface has ONE menu entry, and both of its routes still open i
   await app.goto('/leads');
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
 
-  // Exactly one place in the chrome names it, and nothing links to /inbox.
-  await expect(app.getByRole('link', { name: 'Kişiler', exact: true })).toHaveCount(1);
+  // Exactly one place in the chrome LINKS to it, and nothing links to /inbox.
+  // Since stage 4 that place is the rail item (named for the surface, "Gelen
+  // Kutusu"); the sub-nav strip that used to carry a second "Kişiler" tab is
+  // gone with the other eight entries. The page still says its own name — in
+  // the breadcrumb, asserted below.
+  await expect(app.locator('a[href="/leads"]')).toHaveCount(1);
   await expect(app.locator('a[href="/inbox"]')).toHaveCount(0);
+  await expect(
+    app.getByRole('navigation', { name: 'Breadcrumb' }).getByText('Kişiler', { exact: true }),
+  ).toBeVisible();
   // The old label is gone with the old entry — a menu that still said "Lead'ler"
   // beside a page headed "Kişiler" would be the naming half of the same split.
   await expect(app.getByRole('link', { name: "Lead'ler", exact: true })).toHaveCount(0);
 
   // The bookmark: same page, same chrome, and the surface still resolves — the
-  // rail item lights up and the sub-nav strip renders, which is what an alias
-  // has to keep beyond the router not 404ing.
+  // rail item lights up and the breadcrumb names the page, which is what an
+  // alias has to keep beyond the router not 404ing.
   await app.goto('/inbox');
   await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
-  await expect(app.locator('aside').first().getByRole('link', { name: 'Gelen Kutusu', exact: true })).toBeVisible();
-  await expect(app.getByRole('link', { name: 'Satış Hattı', exact: true })).toBeVisible();
+  await expect(
+    app.locator('aside').first().getByRole('link', { name: 'Gelen Kutusu', exact: true }),
+  ).toBeVisible();
+  await expect(
+    app.getByRole('navigation', { name: 'Breadcrumb' }).getByText('Kişiler', { exact: true }),
+  ).toBeVisible();
+});
+
+/**
+ * Stage 4 (2026-09-01): the Inbox menu collapses to that one entry, and the six
+ * pages that leave it keep working.
+ *
+ * The unit suite pins the CONFIG (navigation.test.ts). Only a browser can say
+ * that six routes really mount a page rather than a blank shell, and that each
+ * still names itself — which is the exact failure mode this branch has already
+ * shipped once, in a view that rendered nothing while 126 jsdom tests stayed
+ * green.
+ */
+test('every page that left the Inbox menu still opens, and still says where it is', async ({
+  app,
+}) => {
+  await app.goto('/leads');
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
+
+  // None of the departed six is offered anywhere in the chrome any more.
+  for (const gone of [
+    '/companies', '/opportunities', '/documents', '/calendar', '/appointments', '/tasks',
+  ]) {
+    await expect(app.locator(`a[href="${gone}"]`), `${gone} left the menu`).toHaveCount(0);
+  }
+
+  // A menu collapse, not a route deletion. Each page mounts, and each names
+  // itself in the breadcrumb — an unlisted destination that could not say where
+  // it was would be a worse loss than the menu entry it gave up.
+  const stillOpens: [string, string][] = [
+    ['/companies', 'Şirketler'],
+    ['/opportunities', 'Satış Hattı'],
+    ['/documents', 'Belgeler'],
+    ['/calendar', 'Takvim'],
+    ['/appointments', 'Randevular'],
+    ['/tasks', 'Görevler'],
+  ];
+  for (const [path, crumb] of stillOpens) {
+    await app.goto(path);
+    await expect(app.getByRole('heading', { level: 1 }), `${path} must mount a page`).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      app.getByRole('navigation', { name: 'Breadcrumb' }).getByText(crumb, { exact: true }),
+      `${path} must still say where it is`,
+    ).toBeVisible();
+  }
+});
+
+/**
+ * The door those six pages have left: the command palette, built from the same
+ * gated config the sidebar uses.
+ *
+ * This is the assertion that makes "they left the menu" honest rather than
+ * "they were hidden". If `visibleUnlisted` ever stopped being wired into
+ * `useNavCommands`, six pages would become reachable only by typing a URL, and
+ * nothing else in this repo would notice.
+ */
+test('the command palette still offers the pages that left the menu', async ({ app }) => {
+  await app.goto('/leads');
+  await expect(app.getByRole('heading', { level: 1, name: 'Kişiler' })).toBeVisible();
+
+  await app.keyboard.press('Control+k');
+  const palette = app.getByRole('combobox');
+  await expect(palette).toBeVisible();
+  await palette.fill('Şirketler');
+
+  const hit = app.getByRole('option', { name: /Şirketler/ }).first();
+  await expect(hit).toBeVisible();
+  await hit.click();
+
+  await expect(app).toHaveURL(/\/companies/);
+  await expect(app.getByRole('heading', { level: 1 })).toBeVisible();
 });
 
 test('deactivating a module also drops its page from the Settings menu', async ({ app }) => {
