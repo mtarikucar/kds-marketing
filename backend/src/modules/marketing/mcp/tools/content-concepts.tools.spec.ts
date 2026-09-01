@@ -217,4 +217,23 @@ describe('jeeta.review_content_concept', () => {
     expect(() => tool.inputSchema.parse({ conceptId: 'c1', decision: 'MAYBE' })).toThrow();
     expect(() => tool.inputSchema.parse({ conceptId: 'c1', decision: 'DISCARDED' })).not.toThrow();
   });
+
+  it('forwards the campaign an approval names, so an unscoped idea can still be produced', async () => {
+    // Approving is what starts production, and production needs a calendar,
+    // target accounts and a model choice — all of which live on the campaign.
+    // A concept pasted into the chat has none, so the reviewer supplies one.
+    const { registry, concepts } = build();
+    await registry
+      .get('jeeta.review_content_concept')!
+      .handler(ctx({ userId: 'u9' }), {
+        conceptId: 'c1',
+        decision: 'APPROVED',
+        socialCampaignId: 'camp-7',
+      });
+    expect(concepts.review).toHaveBeenCalledWith('ws1', 'c1', {
+      decision: 'APPROVED',
+      reviewerId: 'u9',
+      socialCampaignId: 'camp-7',
+    });
+  });
 });

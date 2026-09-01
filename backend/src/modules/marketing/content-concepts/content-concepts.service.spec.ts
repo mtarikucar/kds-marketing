@@ -84,13 +84,18 @@ function deps(over: { aiEnabled?: boolean; completion?: unknown; completeImpl?: 
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
+  const promotion = {
+    requireCampaign: jest.fn().mockResolvedValue({ id: 'camp-1', workspaceId: 'ws1' }),
+    promote: jest.fn().mockResolvedValue({ item: { id: 'item-1', status: 'GENERATING' }, created: true }),
+  };
   const svc = new ContentConceptsService(
     prisma as any,
     anthropic as any,
     credits as any,
     new VideoPipelineService(),
+    promotion as any,
   );
-  return { svc, prisma, credits, complete, anthropic };
+  return { svc, prisma, credits, complete, anthropic, promotion };
 }
 
 const plan = (svc: ContentConceptsService, over: Record<string, unknown> = {}) =>
@@ -362,8 +367,14 @@ describe('ContentConceptsService.review', () => {
     expect(data.reviewedById).toBe('u9');
     expect(data.reviewNote).toBe('bu güzelmiş');
     expect(data.reviewedAt).toBeInstanceOf(Date);
-    // updateMany returns a count, so the decided row is read back and returned.
-    expect(out).toEqual(decided);
+    // updateMany returns a count, so the decided row is read back and returned —
+    // now with the item the approval produced hung off it, which is how the
+    // caller learns that anything was set in motion.
+    expect(out).toMatchObject(decided);
+    expect((out as { campaignItem?: { id: string } }).campaignItem).toEqual({
+      id: 'item-1',
+      status: 'GENERATING',
+    });
   });
 
   it('writes through ONE predicate carrying the workspace AND the PROPOSED state', async () => {
@@ -385,16 +396,100 @@ describe('ContentConceptsService.review', () => {
     expect(prisma.contentConcept.update).not.toHaveBeenCalled();
   });
 
-  it('refuses a concept that belongs to another workspace', async () => {
+  it('a DISCARD is refused by the WRITE predicate, with no preceding read to lean on', async () => {
     const { svc, prisma } = deps();
     prisma.contentConcept.updateMany.mockResolvedValue({ count: 0 });
     prisma.contentConcept.findFirst.mockResolvedValue(null);
     await expect(
+      svc.review('ws1', 'c-next-door', { decision: 'DISCARDED', reviewerId: 'u9' }),
+    ).rejects.toThrow(NotFoundException);
+    // Discarding costs nothing and needs no campaign, so it keeps the original
+    // shape: the write was attempted and its OWN predicate refused it — nothing
+    // depends on a preceding read having been done correctly.
+    expect(prisma.contentConcept.updateMany.mock.calls[0][0].where.workspaceId).toBe('ws1');
+  });
+
+  it('an APPROVAL of a neighbour concept is refused before any verdict is written', async () => {
+    // Approving now starts real spend, so this path acquired a pre-flight read:
+    // the target campaign must exist before a verdict is recorded. That read is
+    // tenant-scoped too, so a neighbour's id never even reaches the write.
+    const { svc, prisma } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue(null);
+    await expect(
       svc.review('ws1', 'c-next-door', { decision: 'APPROVED', reviewerId: 'u9' }),
     ).rejects.toThrow(NotFoundException);
-    // The write was attempted, but its own predicate refused it — that is the
-    // point: nothing depends on a preceding read having been done correctly.
-    expect(prisma.contentConcept.updateMany.mock.calls[0][0].where.workspaceId).toBe('ws1');
+    expect(prisma.contentConcept.findFirst.mock.calls[0][0].where).toEqual({
+      id: 'c-next-door',
+      workspaceId: 'ws1',
+    });
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('approving promotes the concept into a campaign item, on one human decision', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...decided, socialCampaignId: 'camp-1' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+
+    const out = await svc.review('ws1', 'c1', { decision: 'APPROVED', reviewerId: 'u9' });
+
+    expect(promotion.promote).toHaveBeenCalledWith('ws1', 'c1', { socialCampaignId: 'camp-1' });
+    expect((out as { campaignItem?: { id: string } }).campaignItem).toEqual({
+      id: 'item-1',
+      status: 'GENERATING',
+    });
+  });
+
+  it('a DISCARD produces nothing — the gate is on approval, not on every decision', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...decided, status: 'DISCARDED' });
+    await svc.review('ws1', 'c1', { decision: 'DISCARDED', reviewerId: 'u9' });
+    expect(promotion.promote).not.toHaveBeenCalled();
+    expect(promotion.requireCampaign).not.toHaveBeenCalled();
+  });
+
+  it('refuses to approve into a campaign that does not exist, and records NO verdict', async () => {
+    // The concept stays PROPOSED so the human can retry naming a real campaign.
+    // If the verdict landed first, "decided once" would make that retry
+    // impossible and leave an approved concept stranded, unproduced.
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...decided, socialCampaignId: 'camp-gone' });
+    promotion.requireCampaign.mockRejectedValue(new BadRequestException('no such campaign'));
+
+    await expect(svc.review('ws1', 'c1', { decision: 'APPROVED', reviewerId: 'u9' })).rejects.toThrow(
+      /no such campaign/,
+    );
+
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+    expect(promotion.promote).not.toHaveBeenCalled();
+  });
+
+  it('lets the reviewer name a campaign the concept was never scoped to', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...decided, socialCampaignId: null });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+
+    await svc.review('ws1', 'c1', {
+      decision: 'APPROVED',
+      reviewerId: 'u9',
+      socialCampaignId: 'camp-chosen',
+    });
+
+    expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-chosen');
+    expect(promotion.promote).toHaveBeenCalledWith('ws1', 'c1', { socialCampaignId: 'camp-chosen' });
+  });
+
+  it('does not promote a concept whose verdict lost the race', async () => {
+    // count 0 means somebody else decided it first. Promoting anyway would buy
+    // clips for a concept THIS call did not approve.
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...decided, socialCampaignId: 'camp-1' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(svc.review('ws1', 'c1', { decision: 'APPROVED', reviewerId: 'u9' })).rejects.toThrow(
+      /already/i,
+    );
+    expect(promotion.promote).not.toHaveBeenCalled();
   });
 
   it('refuses to re-decide a concept that was already decided, and says which way', async () => {

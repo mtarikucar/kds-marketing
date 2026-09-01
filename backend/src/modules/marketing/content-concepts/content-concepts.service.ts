@@ -19,6 +19,7 @@ import {
   VideoPipelineService,
 } from '../video/video-pipeline.service';
 import { conceptContractViolations, MIN_SHOTS_PER_CONCEPT } from './concept-distinctness';
+import { ConceptPromotionService } from './concept-promotion.service';
 
 /** The owner's own batch size: five angles on one idea. */
 export const DEFAULT_CONCEPT_COUNT = 5;
@@ -201,6 +202,7 @@ export class ContentConceptsService {
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
     private readonly videoPipeline: VideoPipelineService,
+    private readonly promotion: ConceptPromotionService,
   ) {}
 
   async planConcepts(workspaceId: string, input: PlanConceptsInput): Promise<PlanConceptsResult> {
@@ -431,8 +433,42 @@ export class ContentConceptsService {
   async review(
     workspaceId: string,
     conceptId: string,
-    input: { decision: ConceptDecision; reviewerId: string; note?: string },
+    input: {
+      decision: ConceptDecision;
+      reviewerId: string;
+      note?: string;
+      /** Where an approved concept is produced, when the idea did not arrive
+       *  already scoped to a campaign. Ignored on a discard. */
+      socialCampaignId?: string;
+    },
   ) {
+    // APPROVING is now the moment production starts, so it gets a PRE-FLIGHT
+    // that a discard does not need: the concept must exist and must have a real
+    // campaign to be produced into, checked BEFORE the verdict is recorded.
+    //
+    // The order matters and is the opposite of the obvious one. A concept is
+    // decided ONCE; if the verdict were written first and the campaign turned
+    // out not to exist, the human could neither retry (the row is decided) nor
+    // undo it, and an approved concept would sit unproduced forever with no
+    // trace of why. Failing first leaves it PROPOSED and retryable.
+    //
+    // This read does NOT weaken the write below: the conditional update still
+    // carries `workspaceId` and `status: 'PROPOSED'` itself, so nothing here
+    // depends on the read having been done correctly — it only decides whether
+    // the write is worth attempting. The discard path keeps the original shape
+    // exactly, with no preceding read at all.
+    if (input.decision === 'APPROVED') {
+      const target = await this.prisma.contentConcept.findFirst({
+        where: { id: conceptId, workspaceId },
+        select: { id: true, socialCampaignId: true },
+      });
+      if (!target) throw new NotFoundException('Concept not found');
+      await this.promotion.requireCampaign(
+        workspaceId,
+        input.socialCampaignId ?? target.socialCampaignId,
+      );
+    }
+
     const { count } = await this.prisma.contentConcept.updateMany({
       where: { id: conceptId, workspaceId, status: 'PROPOSED' },
       data: {
@@ -448,11 +484,26 @@ export class ContentConceptsService {
     });
     if (!concept) throw new NotFoundException('Concept not found');
     if (!count) {
+      // Including the race the pre-flight cannot close: somebody else decided
+      // this concept between the two statements. Nothing is promoted, because
+      // THIS call did not approve anything.
       throw new BadRequestException(
         `This concept was already ${concept.status.toLowerCase()} and cannot be decided again.`,
       );
     }
-    return concept;
+
+    if (input.decision !== 'APPROVED') return concept;
+
+    // One human decision, then production. Promotion is idempotent, so a retry
+    // of this whole call after a crash below adds nothing.
+    const { item } = await this.promotion.promote(workspaceId, conceptId, {
+      ...(input.socialCampaignId !== undefined
+        ? { socialCampaignId: input.socialCampaignId }
+        : concept.socialCampaignId
+          ? { socialCampaignId: concept.socialCampaignId }
+          : {}),
+    });
+    return { ...concept, promotedItemId: item.id, campaignItem: item };
   }
 
   private systemPrompt(count: number): string {

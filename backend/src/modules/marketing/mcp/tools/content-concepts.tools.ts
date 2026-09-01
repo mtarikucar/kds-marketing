@@ -165,7 +165,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.review_content_concept',
     description:
-      'Approve or discard one proposed video concept on behalf of the signed-in person. Approving marks it as the one to produce; discarding takes it out of the queue. A concept can only be decided once. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
+      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item and one video clip is generated per beat of its shot plan, which SPENDS the workspace credits (video is the most expensive action in the product) — this single decision is the whole human gate, there is no second approval per clip. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into: the one the idea was scoped to, or socialCampaignId. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
     domain: 'content',
     // Deferred (spec §3): follows list_content_concepts, which is itself
     // deferred; a model that has found one has found both.
@@ -177,6 +177,13 @@ export function registerContentConceptTools(
       conceptId: z.string().min(1).max(64).describe('The concept to decide (see jeeta.list_content_concepts).'),
       decision: z.enum(DECISIONS).describe('APPROVED keeps it for production; DISCARDED drops it.'),
       note: z.string().max(1000).optional().describe("The person's reason, in their own words."),
+      socialCampaignId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'Which social campaign to produce this concept into (see jeeta.list_social_campaigns). Required when the concept was not already scoped to one — the campaign carries the calendar slot, the target accounts and the video model. Ignored when discarding.',
+        ),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
@@ -189,6 +196,9 @@ export function registerContentConceptTools(
         decision: args.decision as 'APPROVED' | 'DISCARDED',
         reviewerId: ctx.userId,
         ...(args.note !== undefined ? { note: String(args.note) } : {}),
+        ...(args.socialCampaignId !== undefined
+          ? { socialCampaignId: String(args.socialCampaignId) }
+          : {}),
       });
     },
   });
