@@ -1075,7 +1075,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "Could not load the calendar."
   },
   "commissions": {
     "title": "Commissions",

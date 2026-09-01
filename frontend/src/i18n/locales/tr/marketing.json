@@ -1345,7 +1345,8 @@
       "Cum",
       "Cmt"
     ],
-    "noTasksThisDay": "Bu gün için planlanmış görev yok."
+    "noTasksThisDay": "Bu gün için planlanmış görev yok.",
+    "loadFailed": "Takvim yüklenemedi."
   },
   "commissions": {
     "title": "Komisyonlar",

@@ -14,6 +14,7 @@ import {
   CardContent,
   Button,
   IconButton,
+  QueryStateBoundary,
   Skeleton,
 } from '@/components/ui';
 import { CalendarGrid } from './CalendarGrid';
@@ -31,7 +32,47 @@ interface RepRow extends MarketingUserInfo {
   role: string;
 }
 
-export default function CalendarPage() {
+export interface CalendarPageProps {
+  /**
+   * Rendered inside another page's surface rather than at `/calendar`.
+   *
+   * Swaps the page CHROME for the host's, and lays the month out as the AGENDA
+   * rather than the seven-column grid — see the render for why that is a layout
+   * choice and not a lost capability. The month navigation, the day dialog and
+   * the create mutation are the same code.
+   */
+  embedded?: boolean;
+  /** Report the person a task belongs to, instead of doing nothing with it. */
+  onSelectPerson?: (person: NonNullable<MarketingTask['lead']>) => void;
+  /** Who the host has open, so this month can mark their tasks. */
+  selectedLeadId?: string | null;
+}
+
+/**
+ * The month calendar of TASKS (`GET /tasks/calendar`). Also the person
+ * surface's **Takvim** view (2026-09-01 design, stage 2).
+ *
+ * ## Why this page is the surface's Takvim and `/appointments` is not
+ *
+ * "Takvim" could have meant either. `MarketingBookingController` — which
+ * `/appointments` reads — is `@MarketingRoles('MANAGER')` +
+ * `@RequiresFeature('funnels')`, and `navigation.ts` marks that entry
+ * `managerOnly` with `feature: 'funnels'` to match. Sourcing a whole VIEW of
+ * the surface from there would put one of its four arrangements behind a role a
+ * rep cannot buy out of AND a plan line most workspaces have not bought.
+ * `/tasks/calendar` carries neither gate (no `@MarketingRoles`, no
+ * `@RequiresFeature` on the read; the service scopes a REP to their own rows
+ * instead), so every user who can reach the surface can reach this view.
+ *
+ * The person's RANDEVULAR are not lost by that choice: they are on the record
+ * card, behind their own two gates, as stage 1 shipped them — and `/appointments`
+ * still resolves at its own URL.
+ */
+export default function CalendarPage({
+  embedded,
+  onSelectPerson,
+  selectedLeadId,
+}: CalendarPageProps = {}) {
   const queryClient = useQueryClient();
   const { t, i18n } = useTranslation('marketing');
   const locale = i18n.language || 'tr';
@@ -60,7 +101,7 @@ export default function CalendarPage() {
   const dateFrom = toLocalDateKey(new Date(year, month, 1));
   const dateTo = toLocalDateKey(new Date(year, month + 1, 0));
 
-  const { data: tasks, isLoading } = useQuery({
+  const { data: tasks, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'tasks', 'calendar', year, month],
     queryFn: () =>
       marketingApi
@@ -72,6 +113,10 @@ export default function CalendarPage() {
     mutationFn: (data: Record<string, unknown>) => marketingApi.post('/tasks', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'tasks'] });
+      // The task belongs to somebody, and on the person surface their record
+      // card is two columns away. Same round trip, and the same PREFIX reason,
+      // as TasksPage's own invalidate.
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'lead'] });
       setSelectedDate(null);
       toast.success('Task created');
     },
@@ -141,10 +186,9 @@ export default function CalendarPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={t('calendar.title')}
-        description={t('calendar.subtitle')}
-      />
+      {!embedded && (
+        <PageHeader title={t('calendar.title')} description={t('calendar.subtitle')} />
+      )}
 
       {/* Navigation bar */}
       <Card>
@@ -176,34 +220,53 @@ export default function CalendarPage() {
         </CardContent>
       </Card>
 
-      {/* Loading skeleton */}
-      {isLoading && (
-        <div className="rounded-xl border border-border bg-surface p-4 grid grid-cols-7 gap-1">
-          {Array.from({ length: 35 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 rounded-lg" />
-          ))}
-        </div>
-      )}
+      {/* A month that could not be READ and a month with nothing due are
+          different answers, and this page used to give them the same one: it
+          read `isLoading` alone, so a failed /tasks/calendar drew an empty
+          month. On a calendar that is the most expensive thing to get wrong. */}
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('calendar.loadFailed', { defaultValue: 'Could not load the calendar.' })}
+        retryLabel={t('common.retry', { defaultValue: 'Retry' })}
+        loading={
+          <div className="rounded-xl border border-border bg-surface p-4 grid grid-cols-7 gap-1">
+            {Array.from({ length: 35 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 rounded-lg" />
+            ))}
+          </div>
+        }
+      >
+        {/* Desktop month grid — NOT when embedded. Tailwind v3 has no container
+            queries, so this component's `hidden md:block` reads the VIEWPORT:
+            inside the surface's ~40% left column on a desktop the seven columns
+            still render, at about 85px a cell, with every task title truncated
+            to nothing. The agenda below is the same month, the same day click
+            into the same dialog, and it shows ALL of a day's tasks where the
+            grid caps at three plus a "+n more" — so this is a layout choice,
+            not a capability. `/calendar` keeps the grid. */}
+        {!embedded && (
+          <CalendarGrid
+            calendarDays={calendarDays}
+            tasksByDate={tasksByDate}
+            weekdayShort={weekdayShort}
+            onDayClick={openDayModal}
+          />
+        )}
 
-      {/* Desktop month grid */}
-      {!isLoading && (
-        <CalendarGrid
-          calendarDays={calendarDays}
-          tasksByDate={tasksByDate}
-          weekdayShort={weekdayShort}
-          onDayClick={openDayModal}
-        />
-      )}
-
-      {/* Mobile agenda list */}
-      {!isLoading && (
+        {/* Agenda list — phone layout on `/calendar`, the only layout of the
+            surface's Takvim view. */}
         <CalendarAgenda
           currentMonthDays={currentMonthDays}
           tasksByDate={tasksByDate}
           locale={locale}
           onDayClick={openDayModal}
+          onSelectPerson={onSelectPerson}
+          selectedLeadId={selectedLeadId}
+          className={embedded ? undefined : 'md:hidden'}
         />
-      )}
+      </QueryStateBoundary>
 
       {/* Day detail + create-task dialog */}
       <DayDialog

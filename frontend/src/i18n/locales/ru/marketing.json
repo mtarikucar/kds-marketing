@@ -490,7 +490,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "Не удалось загрузить календарь."
   },
   "commissions": {
     "title": "Commissions",

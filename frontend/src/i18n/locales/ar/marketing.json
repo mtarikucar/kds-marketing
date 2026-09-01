@@ -490,7 +490,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "تعذّر تحميل التقويم."
   },
   "commissions": {
     "title": "Commissions",
