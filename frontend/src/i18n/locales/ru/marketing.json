@@ -471,6 +471,7 @@
       "assignedTo": "Owner"
     },
     "empty": "No tasks here.",
+    "loadFailed": "Не удалось загрузить задачи.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",

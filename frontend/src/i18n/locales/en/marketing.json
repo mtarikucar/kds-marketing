@@ -1046,6 +1046,7 @@
       "assignedTo": "Owner"
     },
     "empty": "No tasks here.",
+    "loadFailed": "Could not load tasks.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",

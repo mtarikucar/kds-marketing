@@ -1316,6 +1316,7 @@
       "assignedTo": "Sahibi"
     },
     "empty": "Burada görev yok.",
+    "loadFailed": "Görevler yüklenemedi.",
     "completeSuccess": "Görev tamamlandı",
     "createSuccess": "Görev oluşturuldu",
     "deleteSuccess": "Görev silindi",

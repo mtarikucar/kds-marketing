@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/Badge';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FilterBar } from '@/components/ui/FilterBar';
+import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import {
   Select,
   SelectContent,
@@ -96,7 +97,36 @@ export function buildTaskPayload(values: TaskFormValues, isEdit: boolean): Recor
   return payload;
 }
 
-export default function TasksPage() {
+export interface TasksPageProps {
+  /**
+   * Rendered inside another page's surface rather than at `/tasks`.
+   *
+   * Swaps the page CHROME — its own `<h1>` and header action — for the host's,
+   * and nothing else. The tabs, the status filter, the server-driven sort, the
+   * per-row complete / edit / delete and the create dialog are the same code.
+   */
+  embedded?: boolean;
+  /**
+   * Report the person a task belongs to, instead of navigating into their
+   * record. Present only when a host is listening: `/tasks` passes nothing and
+   * keeps its link, because there is no surface there to report to.
+   */
+  onSelectPerson?: (person: { id: string; businessName?: string }) => void;
+  /** Who the host has open, so this list can mark them across a view switch. */
+  selectedLeadId?: string | null;
+}
+
+/**
+ * The workspace task list. Also the person surface's **Görevler** view
+ * (2026-09-01 design, stage 2) — one of four arrangements of the same people in
+ * its left column, and the same `embedded` chrome swap the other pages on that
+ * surface already take.
+ */
+export default function TasksPage({
+  embedded,
+  onSelectPerson,
+  selectedLeadId,
+}: TasksPageProps = {}) {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
 
@@ -148,7 +178,7 @@ export default function TasksPage() {
         ? ['marketing', 'tasks', 'overdue']
         : ['marketing', 'tasks', { status, sortBy, sortOrder }];
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey,
     queryFn: () => {
       if (tab === 'today') return marketingApi.get('/tasks/today').then((r) => r.data);
@@ -163,7 +193,25 @@ export default function TasksPage() {
 
   // ── Mutations ────────────────────────────────────────────────────────────
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'tasks'] });
+  /**
+   * A task write moves two things: the task lists, and the RECORD of whoever
+   * the task belongs to.
+   *
+   * `['marketing','lead']` is the prefix, not one id: this list shows many
+   * people's tasks and the row being completed need not be the person the host
+   * has open. Invalidating the prefix refetches only the lead records that are
+   * actually mounted — at most the one on screen — and leaves the rest to go
+   * stale in cache, which is what a prefix invalidation is for.
+   *
+   * This is the mirror of `useLeadRecordInvalidate`, which names
+   * ['marketing','tasks'] so a write on the record CARD refreshes this list.
+   * Both directions or neither: half of the round trip is a section that
+   * disagrees with the column beside it about a task somebody just ticked off.
+   */
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'tasks'] });
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'lead'] });
+  };
 
   const completeMutation = useMutation({
     mutationFn: (taskId: string) => marketingApi.patch(`/tasks/${taskId}/complete`),
@@ -234,7 +282,9 @@ export default function TasksPage() {
   };
 
   // Honor ?create=1 from the global "+ Create" menu / command palette.
-  useCreateParam(openCreate);
+  // Not when embedded: `?create=1` belongs to whichever page owns the URL, and
+  // consuming it also strips it. See useCreateParam's `enabled`.
+  useCreateParam(openCreate, !embedded);
 
   const handleDialogClose = (open: boolean) => {
     setFormOpen(open);
@@ -283,14 +333,29 @@ export default function TasksPage() {
             >
               {task.title}
             </p>
-            {task.lead && (
-              <Link
-                to={`/leads/${task.lead.id}`}
-                className="text-xs text-primary hover:underline"
-              >
-                {task.lead.businessName}
-              </Link>
-            )}
+            {/* Whose task it is. Embedded, this SELECTS — reading the person's
+                conversation beside their task is the whole point of the view,
+                and the surface's one rule is that clicking selects rather than
+                navigates. On /tasks it stays the link it has always been. */}
+            {task.lead &&
+              (onSelectPerson ? (
+                <button
+                  type="button"
+                  data-testid={`task-lead-${task.id}`}
+                  aria-current={!!selectedLeadId && task.lead.id === selectedLeadId}
+                  onClick={() => onSelectPerson(task.lead!)}
+                  className="text-xs text-primary hover:underline aria-[current=true]:font-semibold"
+                >
+                  {task.lead.businessName}
+                </button>
+              ) : (
+                <Link
+                  to={`/leads/${task.lead.id}`}
+                  className="text-xs text-primary hover:underline"
+                >
+                  {task.lead.businessName}
+                </Link>
+              ))}
           </div>
         );
       },
@@ -417,16 +482,18 @@ export default function TasksPage() {
   return (
     <div className="space-y-5">
       {/* Page header */}
-      <PageHeader
-        title={t('tasks.title')}
-        description={t('tasks.subtitle')}
-        actions={
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t('tasks.createButton')}
-          </Button>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('tasks.title')}
+          description={t('tasks.subtitle')}
+          actions={
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('tasks.createButton')}
+            </Button>
+          }
+        />
+      )}
 
       {/* Filter / tab row */}
       <FilterBar>
@@ -452,6 +519,15 @@ export default function TasksPage() {
           ))}
         </div>
 
+        {/* Creating a task is a CAPABILITY, so when the header goes it follows
+            the list rather than disappearing with the chrome. */}
+        {embedded && (
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            {t('tasks.createButton')}
+          </Button>
+        )}
+
         {/* Status filter (only meaningful on "all" tab) */}
         {tab === 'all' && (
           <Select value={status || '__ALL__'} onValueChange={(v) => setStatus(v === '__ALL__' ? '' : v)}>
@@ -468,28 +544,42 @@ export default function TasksPage() {
         )}
       </FilterBar>
 
-      {/* Task table */}
-      <DataTable
-        columns={columns}
-        data={tasks}
-        isLoading={isLoading}
-        loadingRowCount={6}
-        sorting={sorting}
-        onSortingChange={setSorting}
-        emptyState={
-          <EmptyState
-            icon={<ClipboardList className="h-10 w-10" />}
-            title={t('tasks.empty')}
-            description={t('tasks.emptyHint')}
-            action={
-              <Button onClick={openCreate} variant="outline">
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                {t('tasks.createButton')}
-              </Button>
-            }
-          />
-        }
-      />
+      {/* Task table.
+
+          A broken read and an empty queue are different screens, and this list
+          did not tell them apart: it read only `isLoading`, so a failed /tasks
+          fell through to the DataTable's empty state — "No tasks here." with a
+          "New task" button under it. On a page that is somebody's work queue,
+          and now a COLUMN of the person surface, that is the most expensive
+          thing a list can lie about. */}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('tasks.loadFailed', 'Could not load tasks.')}
+        retryLabel={t('common.retry', 'Retry')}
+      >
+        <DataTable
+          columns={columns}
+          data={tasks}
+          isLoading={isLoading}
+          loadingRowCount={6}
+          sorting={sorting}
+          onSortingChange={setSorting}
+          emptyState={
+            <EmptyState
+              icon={<ClipboardList className="h-10 w-10" />}
+              title={t('tasks.empty')}
+              description={t('tasks.emptyHint')}
+              action={
+                <Button onClick={openCreate} variant="outline">
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  {t('tasks.createButton')}
+                </Button>
+              }
+            />
+          }
+        />
+      </QueryStateBoundary>
 
       {/* Create / edit dialog */}
       <TaskFormDialog
