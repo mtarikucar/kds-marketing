@@ -47,7 +47,7 @@ const LAZY = { timeout: 20_000 };
 
 const stamp = () => `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-test('the left column switches between four arrangements without disturbing the other two', async ({
+test('the left column switches between five arrangements without disturbing the other two', async ({
   app,
 }) => {
   await app.goto('/inbox');
@@ -55,7 +55,11 @@ test('the left column switches between four arrangements without disturbing the 
 
   const tabs = app.getByRole('tablist', { name: 'Görünüm' });
   await expect(tabs).toBeVisible();
-  await expect(tabs.getByRole('tab')).toHaveCount(4);
+  // Five since Aramalar joined them: the call log was recurring daily work
+  // sitting behind the gear, and this column is where the person it is about
+  // already is. The tab is withheld from a workspace without `telephony`, so
+  // this count is the ENTITLED one — the e2e workspace has the feature.
+  await expect(tabs.getByRole('tab')).toHaveCount(5);
   // Liste is where a session starts — the daily arrangement.
   await expect(tabs.getByRole('tab', { name: 'Liste' })).toHaveAttribute('aria-selected', 'true');
 
@@ -92,6 +96,15 @@ test('the left column switches between four arrangements without disturbing the 
   await tabs.getByRole('tab', { name: 'Görevler' }).click();
   await expect(app).toHaveURL(/left=tasks/);
   await expect(app.getByText('Burada görev yok.')).toBeVisible(LAZY);
+
+  // Aramalar — the call log, likewise empty and saying so. Anchored on the
+  // empty state rather than the tab strip inside it: CallsPage brings its own
+  // Calls / Power Dialer / (gated) AI tabs, and asserting on those would pin
+  // this test to that page's internals instead of to the arrangement.
+  await tabs.getByRole('tab', { name: 'Aramalar' }).click();
+  await expect(app).toHaveURL(/left=calls/);
+  await expect(app.getByText('No calls yet')).toBeVisible(LAZY);
+  await expect(app.getByText('Soldan bir kişi seç.').first()).toBeVisible();
 
   // …and back to the list, which drops the parameter rather than spelling the
   // default out.
