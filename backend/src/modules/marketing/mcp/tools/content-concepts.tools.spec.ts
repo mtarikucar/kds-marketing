@@ -1,4 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
+import { z } from 'zod';
+import { McpBrokerService } from '../mcp-broker.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerContentConceptTools } from './content-concepts.tools';
 
@@ -90,6 +92,77 @@ describe('jeeta.plan_content_concepts', () => {
   });
 });
 
+describe('jeeta.plan_content_concepts through the real broker', () => {
+  /**
+   * The premise of the whole classification, asserted as BEHAVIOUR.
+   *
+   * The design says: this tool must be usable from the chat, and the chat runs
+   * in a workspace's default `APPROVAL` write mode. Everything else — the
+   * docblock, the `requiresApproval: false`, the note about the approval
+   * executor answering the approver instead of the agent — is downstream of
+   * that one sentence. Before this test, flipping `requiresApproval` to `true`
+   * made the feature unreachable from its only surface and only a literal
+   * restatement of the field noticed.
+   */
+  const withBroker = () => {
+    const built = build();
+    const enqueue = jest.fn().mockResolvedValue({ id: 'appr-1' });
+    const supersedePending = jest.fn().mockResolvedValue(undefined);
+    const recordTool = jest.fn().mockResolvedValue(undefined);
+    const broker = new McpBrokerService(
+      built.registry,
+      { enqueue, supersedePending } as never,
+      { recordTool } as never,
+    );
+    return { ...built, broker, enqueue };
+  };
+
+  const brokerCtx = {
+    workspaceId: 'ws1',
+    grantedScopes: ['campaigns.write'],
+    agentRunId: 'run-1',
+    requireAudit: true,
+    writeMode: 'APPROVAL' as const,
+  };
+
+  it('RUNS INLINE in APPROVAL mode and hands the concepts back to the caller', async () => {
+    const { broker, concepts, enqueue } = withBroker();
+
+    const res = await broker.invoke(brokerCtx, 'jeeta.plan_content_concepts', {
+      idea: 'Strandbeest',
+    });
+
+    // OK, not PENDING_APPROVAL: the agent turn that asked receives the batch.
+    expect(res.status).toBe('OK');
+    expect(res.result).toEqual({ batchId: 'b1', sourceIdea: 'idea', concepts: [] });
+    expect(concepts.planConcepts).toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('and the same broker, same mode, DOES queue a gated tool', async () => {
+    // The control. Without it, the assertion above could pass because this
+    // broker/ctx gates nothing at all rather than because the tool is ungated.
+    const { registry, broker, enqueue } = withBroker();
+    const gatedHandler = jest.fn();
+    registry.register({
+      name: 'jeeta.control_gated',
+      description: 'a gated control tool',
+      domain: 'content',
+      scopes: ['campaigns.write'],
+      risk: 'WRITE',
+      requiresApproval: true,
+      inputSchema: z.object({}),
+      handler: gatedHandler,
+    });
+
+    const res = await broker.invoke(brokerCtx, 'jeeta.control_gated', {});
+
+    expect(res.status).toBe('PENDING_APPROVAL');
+    expect(enqueue).toHaveBeenCalled();
+    expect(gatedHandler).not.toHaveBeenCalled();
+  });
+});
+
 describe('jeeta.list_content_concepts', () => {
   it('is a plain read', () => {
     const tool = build().registry.get('jeeta.list_content_concepts')!;
@@ -127,11 +200,15 @@ describe('jeeta.review_content_concept', () => {
     // other write tool here, this one does NOT fall back to the service
     // principal — there is no honest value to put in `reviewedById`.
     const { registry, concepts } = build();
-    await expect(
+    const call = () =>
       registry
         .get('jeeta.review_content_concept')!
-        .handler(ctx(), { conceptId: 'c1', decision: 'APPROVED' }),
-    ).rejects.toThrow(/human|signed-in/i);
+        .handler(ctx(), { conceptId: 'c1', decision: 'APPROVED' });
+    // The 403 itself, not just the wording — a refusal that changed class (to a
+    // 400, say) would still match the message and would still be a different
+    // answer to the caller.
+    await expect(call()).rejects.toThrow(ForbiddenException);
+    await expect(call()).rejects.toThrow(/human|signed-in/i);
     expect(concepts.review).not.toHaveBeenCalled();
   });
 
