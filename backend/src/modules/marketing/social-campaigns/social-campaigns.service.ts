@@ -14,6 +14,10 @@ import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { Cadence, nextCadenceSlot } from './cadence.util';
+import {
+  CONCEPT_PRODUCE_KIND,
+  produceDedup,
+} from '../content-concepts/concept-promotion.service';
 
 export const SOCIAL_CAMPAIGN_PLAN_KIND = 'social.campaign.plan';
 export const SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND = 'social.campaign.item.generate';
@@ -308,6 +312,27 @@ export class SocialCampaignsService implements OnModuleInit {
     if (!REGENERATABLE_STATES.includes(item.status)) {
       throw new BadRequestException(`Cannot regenerate an item in status ${item.status}`);
     }
+    // A PROMOTED item (one that came from an approved ContentConcept) has to go
+    // back through the CONCEPT producer, not this one. The generic path composes
+    // fresh copy and a stock image, which for this item would overwrite the shot
+    // plan a human approved — and the shot plan IS the content here, not an
+    // illustration of it. Resetting it to PLANNED would be worse still: a
+    // PLANNED item with a topic is exactly what confirmPlan sweeps into that
+    // same generic generator.
+    if (item.contentConceptId) {
+      await this.prisma.socialCampaignItem.update({
+        where: { id: itemId },
+        // Regenerating has always meant "buy it again", so the paid-for cursor
+        // (generatedAssetIds) is cleared along with the post it produced.
+        data: { status: 'GENERATING', error: null, generatedAssetIds: [], socialPostId: null },
+      });
+      await this.scheduledJobs.schedule({
+        workspaceId, kind: CONCEPT_PRODUCE_KIND, runAt: new Date(),
+        payload: { itemId, workspaceId, waits: 0 }, dedupKey: produceDedup(itemId),
+      });
+      return item;
+    }
+
     // Reset to PLANNED so generateItem's atomic PLANNED→GENERATING claim matches.
     await this.prisma.socialCampaignItem.update({
       where: { id: itemId }, data: { status: 'PLANNED', error: null },

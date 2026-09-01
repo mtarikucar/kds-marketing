@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SocialCampaignsService, SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, generateDedup } from './social-campaigns.service';
+import { CONCEPT_PRODUCE_KIND, produceDedup } from '../content-concepts/concept-promotion.service';
 
 const WS = 'ws-1';
 const SLOT = new Date('2026-07-08T09:00:00Z');
@@ -178,6 +179,32 @@ describe('item approve / reject / regenerate', () => {
     await svc.regenerateItem(WS, 'i-1');
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
       kind: SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, dedupKey: generateDedup('i-1'),
+    }));
+  });
+
+  it('regenerateItem on a PROMOTED item re-runs the CONCEPT, not the generic planner', async () => {
+    // Regenerating through the generic path would compose fresh copy and a
+    // stock image over the shot plan a human approved — the shot plan is the
+    // whole content, and the generic generator has never heard of it. It would
+    // also leave the item PLANNED with a topic, which confirmPlan then sweeps
+    // into that same generator.
+    const { svc, prisma, scheduledJobs } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      makeItem({ status: 'FAILED', contentConceptId: 'concept-1', generatedAssetIds: ['a-1'] }),
+    );
+
+    await svc.regenerateItem(WS, 'i-1');
+
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
+      kind: CONCEPT_PRODUCE_KIND, dedupKey: produceDedup('i-1'),
+    }));
+    expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({
+      kind: SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND,
+    }));
+    // GENERATING, not PLANNED, and the paid-for cursor is cleared — REGENERATE
+    // means buy the clips again, which is what it already meant for copy+media.
+    expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'GENERATING', error: null, generatedAssetIds: [], socialPostId: null },
     }));
   });
 
