@@ -3,7 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, TrendingUp, ChevronDown } from 'lucide-react';
+import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, Pencil, TrendingUp, ChevronDown } from 'lucide-react';
 import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
 import { fmtSlot } from '../../../features/marketing/utils/format';
 
@@ -43,6 +43,7 @@ import {
   Input,
   Textarea,
   Badge,
+  IconButton,
   QueryStateBoundary,
   Skeleton,
 } from '@/components/ui';
@@ -109,14 +110,60 @@ function Labeled({
   );
 }
 
+export interface OpportunitiesPageProps {
+  /**
+   * Rendered inside another page's surface rather than at `/opportunities`.
+   *
+   * Swaps the page CHROME — its own `<h1>`, its header actions — for the host's,
+   * and nothing else. The columns, the drag handlers, the dialog and every
+   * mutation are the same code, which is the whole reason the person surface
+   * can carry this board at all: a second kanban would be a second answer to
+   * "what stage is this deal in".
+   */
+  embedded?: boolean;
+  /**
+   * Report a person to the host instead of navigating. Present only when a host
+   * is listening; `/opportunities` passes nothing and behaves exactly as it did.
+   */
+  onSelectPerson?: (person: PersonCard) => void;
+  /** Who the host has open, so this board can mark them across a view switch. */
+  selectedLeadId?: string | null;
+}
+
 /**
  * Opportunities kanban board (GoHighLevel parity). A pipeline selector across
  * the top, one column per stage, draggable deal cards. Dropping a card on
  * another column moves it (and resolves it WON/LOST when dropped on a terminal
  * stage). Managers can jump to pipeline settings; reps see only their own deals
  * (the backend scopes the board).
+ *
+ * ## Two lives, one implementation
+ *
+ * `/opportunities` renders it whole. The person surface renders it `embedded`
+ * as the **Hat** view of its left column, where the same people are arranged
+ * four ways (2026-09-01 design, stage 2). The brief's hardest constraint is
+ * "hiçbir özelliği kaybetmeden", so the embedded board keeps drag-between-
+ * stages, the "Hatta değil" column, the load-more, the forecast and the whole
+ * create/edit/win/lose/delete dialog. What changes is chrome and one gesture:
+ *
+ * - The `PageHeader` goes, because the host already has one and two `<h1>`s on
+ *   a page is the bug that started this line of work. "New deal" moves into the
+ *   pipeline row, so creation is not chrome-shaped. The manage-PIPELINES link
+ *   goes with the header: it is configuration, it navigates OFF a surface whose
+ *   one rule is that clicking selects, and it is still on `/opportunities` and
+ *   in Settings.
+ * - A card CLICK reports a person up rather than opening the deal dialog —
+ *   "hattan birine tıklayıp aynı ekranda yazışmasını okursun" is the point of
+ *   the view. The dialog therefore gets its own control on the card, because
+ *   Kazanıldı / Kaybedildi / Sil / value / notes / close date live nowhere
+ *   else. The record card's SATIŞ section moves a stage and opens a deal; it
+ *   cannot close or delete one.
  */
-export default function OpportunitiesPage() {
+export default function OpportunitiesPage({
+  embedded,
+  onSelectPerson,
+  selectedLeadId,
+}: OpportunitiesPageProps = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const user = useMarketingAuthStore((s) => s.user);
@@ -345,7 +392,12 @@ export default function OpportunitiesPage() {
   // from a lead's Satış tab, the `?leadId=` that says who the deal is for. Read
   // into form state at open time rather than at save time, so the param lingering
   // in the URL cannot silently attach that lead to the NEXT deal created here.
-  useCreateParam(() => openNew(undefined, searchParams.get('leadId') ?? undefined));
+  // Not when embedded: `?create=1` belongs to whichever page owns the URL, and
+  // consuming it also strips it. See useCreateParam's `enabled`.
+  useCreateParam(
+    () => openNew(undefined, searchParams.get('leadId') ?? undefined),
+    !embedded,
+  );
   const openEdit = (o: Opportunity) => {
     setForm({
       id: o.id,
@@ -422,28 +474,34 @@ export default function OpportunitiesPage() {
     moveMutation.mutate({ id: held.id, stageId: stage.id });
   };
 
+  /** Whether this card is the person the host currently has open. */
+  const isOpenPerson = (leadId: string | null | undefined) =>
+    !!onSelectPerson && !!leadId && leadId === selectedLeadId;
+
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={t('opportunities.title', 'Opportunities')}
-        description={t('opportunities.subtitle', 'Track deals across your sales pipelines.')}
-        actions={
-          <div className="flex items-center gap-2">
-            {isManager && (
-              <Button asChild variant="outline" size="md">
-                <Link to="/settings/pipelines">
-                  <Settings className="w-4 h-4" aria-hidden="true" />
-                  {t('opportunities.managePipelines', 'Pipelines')}
-                </Link>
+      {!embedded && (
+        <PageHeader
+          title={t('opportunities.title', 'Opportunities')}
+          description={t('opportunities.subtitle', 'Track deals across your sales pipelines.')}
+          actions={
+            <div className="flex items-center gap-2">
+              {isManager && (
+                <Button asChild variant="outline" size="md">
+                  <Link to="/settings/pipelines">
+                    <Settings className="w-4 h-4" aria-hidden="true" />
+                    {t('opportunities.managePipelines', 'Pipelines')}
+                  </Link>
+                </Button>
+              )}
+              <Button size="md" onClick={() => openNew()}>
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                {t('opportunities.newDeal', 'New deal')}
               </Button>
-            )}
-            <Button size="md" onClick={() => openNew()}>
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              {t('opportunities.newDeal', 'New deal')}
-            </Button>
-          </div>
-        }
-      />
+            </div>
+          }
+        />
+      )}
 
       {/* Pipeline selector + total */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -468,6 +526,15 @@ export default function OpportunitiesPage() {
             <p className="text-sm text-muted-foreground">
               {t('opportunities.openTotal', 'Open total')}: {fmtBoard(boardTotal)}
             </p>
+          )}
+          {/* Creation is a CAPABILITY, so it follows the board rather than the
+              header it used to sit in. (Each non-terminal column also has its
+              own "+ Add"; this is the stage-less entry the header offered.) */}
+          {embedded && (
+            <Button variant="outline" size="sm" onClick={() => openNew()}>
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              {t('opportunities.newDeal', 'New deal')}
+            </Button>
           )}
           <Button variant="outline" size="sm" onClick={() => setShowForecast((v) => !v)}>
             <TrendingUp className="w-4 h-4" aria-hidden="true" />
@@ -608,8 +675,27 @@ export default function OpportunitiesPage() {
                       draggable
                       onDragStart={() => setDrag({ kind: 'person', id: p.id })}
                       onDragEnd={() => setDrag(null)}
+                      // Only when a host is listening. On `/opportunities` these
+                      // cards are drag handles and nothing else, exactly as
+                      // before; a role and a tab stop with no click behind them
+                      // would be a promise the page cannot keep.
+                      {...(onSelectPerson
+                        ? {
+                            role: 'button',
+                            tabIndex: 0,
+                            'aria-current': isOpenPerson(p.id),
+                            onClick: () => onSelectPerson(p),
+                            onKeyDown: (e: React.KeyboardEvent) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                onSelectPerson(p);
+                              }
+                            },
+                          }
+                        : {})}
                       className={[
-                        'group rounded-md border border-border bg-surface p-2.5 shadow-sm cursor-grab hover:border-primary/50',
+                        'group rounded-md border bg-surface p-2.5 shadow-sm cursor-grab hover:border-primary/50',
+                        isOpenPerson(p.id) ? 'border-primary bg-primary/5' : 'border-border',
                         drag?.kind === 'person' && drag.id === p.id ? 'opacity-50' : '',
                       ].join(' ')}
                     >
@@ -689,9 +775,19 @@ export default function OpportunitiesPage() {
                     draggable
                     onDragStart={() => setDrag({ kind: 'deal', id: o.id })}
                     onDragEnd={() => setDrag(null)}
-                    onClick={() => openEdit(o)}
+                    // Embedded, the card SELECTS the person behind the deal —
+                    // that is what the Hat view is for. A deal filed against
+                    // nobody has no one to select, so it keeps the dialog on its
+                    // click rather than becoming inert.
+                    onClick={() =>
+                      onSelectPerson && o.lead ? onSelectPerson(o.lead) : openEdit(o)
+                    }
+                    {...(onSelectPerson && o.lead
+                      ? { 'aria-current': isOpenPerson(o.lead.id) }
+                      : {})}
                     className={[
-                      'group rounded-md border border-border bg-surface p-2.5 shadow-sm cursor-pointer hover:border-primary/50',
+                      'group rounded-md border bg-surface p-2.5 shadow-sm cursor-pointer hover:border-primary/50',
+                      isOpenPerson(o.lead?.id) ? 'border-primary bg-primary/5' : 'border-border',
                       drag?.kind === 'deal' && drag.id === o.id ? 'opacity-50' : '',
                     ].join(' ')}
                   >
@@ -744,6 +840,26 @@ export default function OpportunitiesPage() {
                           </>
                         )}
                       </div>
+                      {/* The dialog's own door, and only where the card's click
+                          has been taken by selection. Win / Lose / Delete and
+                          every editable field are behind it, and the record
+                          card's SATIŞ section cannot do any of them. */}
+                      {onSelectPerson && o.lead && (
+                        <IconButton
+                          data-testid={`deal-edit-${o.id}`}
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('opportunities.editDeal', 'Edit deal')}
+                          className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                          onClick={(e) => {
+                            // Editing a deal is not selecting a person.
+                            e.stopPropagation();
+                            openEdit(o);
+                          }}
+                        >
+                          <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                        </IconButton>
+                      )}
                     </div>
                   </div>
                 ))}
