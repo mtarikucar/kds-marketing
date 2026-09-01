@@ -437,7 +437,7 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.pause_social_campaign` | Pause a RUNNING AI social campaign and cancel its scheduled plan job | `campaigns.write` | WRITE | CAMPAIGN_PAUSE | no |
 | `jeeta.unschedule_social_post` | Pull a SCHEDULED post back to DRAFT so its copy, media or targets can be corrected, then schedule it again | `campaigns.send` | WRITE | — | no |
 | `jeeta.plan_content_concepts` | Open ONE idea into several genuinely different video concepts, each planned shot by shot — **spends AI credits (one Opus call)** | `campaigns.write` | WRITE | — | no |
-| `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans | `campaigns.read` | READ | — | no |
+| `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans — newest 40 (five batches); `batchId` returns a batch whole | `campaigns.read` | READ | — | no |
 | `jeeta.review_content_concept` | Approve or discard one concept — **requires a signed-in human** | `campaigns.write` | WRITE | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.

@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import {
   ContentConceptsService,
+  CONCEPT_LIST_LIMIT,
   MAX_CONCEPT_COUNT,
   MAX_SHOT_SEC,
   MIN_SHOT_SEC,
@@ -292,6 +293,41 @@ describe('ContentConceptsService.list', () => {
     const { svc, prisma } = deps();
     await svc.list('ws1', {});
     expect(prisma.contentConcept.findMany.mock.calls[0][0].where).toEqual({ workspaceId: 'ws1' });
+  });
+
+  it('BOUNDS an unfiltered read — every concept ever planned is not an answer', async () => {
+    // Each row carries a whole ShotPlan. Unbounded, "list the concepts" put
+    // every batch this workspace has ever planned into one agent turn.
+    const { svc, prisma } = deps();
+    await svc.list('ws1', {});
+    const args = prisma.contentConcept.findMany.mock.calls[0][0];
+    expect(args.take).toBe(CONCEPT_LIST_LIMIT);
+    // The cap is a whole number of maximum-size batches, so the newest five
+    // batches are always complete rather than cut in half.
+    expect(CONCEPT_LIST_LIMIT % MAX_CONCEPT_COUNT).toBe(0);
+  });
+
+  it('keeps the cap when a filter narrows the read', async () => {
+    const { svc, prisma } = deps();
+    await svc.list('ws1', { batchId: 'b1' });
+    expect(prisma.contentConcept.findMany.mock.calls[0][0].take).toBe(CONCEPT_LIST_LIMIT);
+    // One batch is at most MAX_CONCEPT_COUNT rows, so a batch read is never
+    // truncated by it.
+    expect(MAX_CONCEPT_COUNT).toBeLessThanOrEqual(CONCEPT_LIST_LIMIT);
+  });
+
+  it('refuses a status it does not recognise instead of handing it to Prisma', () => {
+    // Safe from MCP (`z.enum`), unsafe from anywhere else: the value used to be
+    // cast `as never` straight into a Prisma enum, where an unknown string is a
+    // runtime error from the driver rather than a stated refusal.
+    const { svc, prisma } = deps();
+    expect(() => svc.list('ws1', { status: 'ARCHIVED' })).toThrow(BadRequestException);
+    // Case matters — the column holds the enum's own spelling.
+    expect(() => svc.list('ws1', { status: 'proposed' })).toThrow(/PROPOSED/);
+    expect(prisma.contentConcept.findMany).not.toHaveBeenCalled();
+    // Anchored on the positive: the recognised value still reaches Prisma.
+    svc.list('ws1', { status: 'DISCARDED' });
+    expect(prisma.contentConcept.findMany.mock.calls[0][0].where.status).toBe('DISCARDED');
   });
 
   it('narrows by status and batch without dropping the tenant predicate', async () => {

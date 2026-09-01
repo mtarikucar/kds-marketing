@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
-import { Prisma } from '@prisma/client';
+import { Prisma, type ContentConceptStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
@@ -80,6 +80,31 @@ function clampShotSeconds(raw: number): number {
 
 const MAX_IDEA_CHARS = 4000;
 const MAX_OUTPUT_TOKENS = 6000;
+
+/**
+ * The `ContentConceptStatus` enum, restated as values so a caller can be
+ * checked against it at runtime — the Prisma enum is a TYPE, and a type refuses
+ * nothing to a string that arrived over HTTP or from a tool call. Exported so
+ * the MCP tool's `z.enum` and this validation cannot drift apart.
+ */
+export const CONCEPT_STATUSES = ['PROPOSED', 'APPROVED', 'DISCARDED'] as const;
+
+function isConceptStatus(value: string): value is ContentConceptStatus {
+  return (CONCEPT_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * How many concepts one `list` call may return.
+ *
+ * Five maximum-size batches. Expressed as a multiple of {@link
+ * MAX_CONCEPT_COUNT} rather than a round 100 (the number
+ * `MediaGenService.listAssets` uses) because the unit that matters here is the
+ * BATCH — a reviewer thinks in "the last few ideas I opened up", and a cap that
+ * is a whole number of batches never returns half of one. It is also much
+ * smaller than 100 on purpose: an asset row is metadata, a concept row is a
+ * whole shot plan, and these go into an agent's context window.
+ */
+export const CONCEPT_LIST_LIMIT = MAX_CONCEPT_COUNT * 5;
 
 export type ConceptDecision = 'APPROVED' | 'DISCARDED';
 
@@ -336,14 +361,43 @@ export class ContentConceptsService {
     return { batchId, sourceIdea: idea, concepts };
   }
 
+  /**
+   * The review queue, newest batch first.
+   *
+   * BOUNDED, because every row carries a whole `ShotPlan` and the only caller
+   * is an MCP tool: unbounded, "list the concepts" put every batch a workspace
+   * has ever planned into a single agent turn. `MediaGenService.listAssets`
+   * caps at 100, but its rows are asset metadata; a concept row is kilobytes of
+   * shot plan, so the cap here is tighter and expressed in the unit the domain
+   * actually has — {@link CONCEPT_LIST_LIMIT} is five maximum-size batches.
+   *
+   * At the boundary the read simply stops: the 41st-newest concept is not
+   * returned and the array does not say so. That is survivable only because of
+   * the ordering — `createdAt desc` means what is missing is always the OLDEST
+   * work — and because the two filters reach past it: one batch is at most
+   * {@link MAX_CONCEPT_COUNT} rows, so `batchId` always returns that batch
+   * whole, and `status: 'PROPOSED'` returns the queue that actually needs a
+   * human rather than the decided history filling it up.
+   *
+   * The status is validated rather than cast: from MCP it arrives through a
+   * `z.enum`, but the cast (`as never`) that used to be here would hand any
+   * string from any other caller straight to the Prisma enum, where it is a
+   * driver-level error instead of a stated refusal.
+   */
   list(workspaceId: string, filter: { status?: string; batchId?: string }) {
+    if (filter.status && !isConceptStatus(filter.status)) {
+      throw new BadRequestException(
+        `Unknown concept status "${filter.status}". Use one of: ${CONCEPT_STATUSES.join(', ')}.`,
+      );
+    }
     return this.prisma.contentConcept.findMany({
       where: {
         workspaceId,
-        ...(filter.status ? { status: filter.status as never } : {}),
+        ...(filter.status ? { status: filter.status as ContentConceptStatus } : {}),
         ...(filter.batchId ? { batchId: filter.batchId } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { ordinal: 'asc' }],
+      take: CONCEPT_LIST_LIMIT,
     });
   }
 

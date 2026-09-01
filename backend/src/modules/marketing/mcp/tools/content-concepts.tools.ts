@@ -2,6 +2,8 @@ import { ForbiddenException } from '@nestjs/common';
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import {
+  CONCEPT_LIST_LIMIT,
+  CONCEPT_STATUSES,
   ContentConceptsService,
   MAX_CONCEPT_COUNT,
   MIN_CONCEPT_COUNT,
@@ -18,7 +20,6 @@ export interface ContentConceptToolDeps {
 }
 
 const VIDEO_MODELS = ['seedance', 'veo', 'kling', 'higgsfield'] as const;
-const CONCEPT_STATUSES = ['PROPOSED', 'APPROVED', 'DISCARDED'] as const;
 const DECISIONS = ['APPROVED', 'DISCARDED'] as const;
 
 /**
@@ -137,7 +138,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.list_content_concepts',
     description:
-      'List the video concepts in this workspace with their angle, hook and full shot plan, newest batch first. Filter by status (PROPOSED = waiting on a human, APPROVED = kept, DISCARDED = rejected) or by batchId to see the concepts that came out of one idea. Read-only.',
+      `List the video concepts in this workspace with their angle, hook and full shot plan, newest batch first. Returns at most the ${CONCEPT_LIST_LIMIT} newest concepts (about five batches); older ones are reachable only by narrowing. Filter by status (PROPOSED = waiting on a human, APPROVED = kept, DISCARDED = rejected) or by batchId, which always returns that batch whole. Read-only.`,
     domain: 'content',
     // Deferred (spec §3): a review-queue browse, not a per-turn action.
     defer: true,
