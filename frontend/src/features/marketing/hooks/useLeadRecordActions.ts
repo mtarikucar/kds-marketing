@@ -29,20 +29,30 @@ import {
  * named separately; without them a task created here left the row's counts
  * stale until the next poll.
  *
+ * `['marketing','tasks']` is the WORKSPACE task reads — `/tasks`, `/tasks/today`,
+ * `/tasks/overdue`, `/tasks/calendar`. The person surface's Görevler and Takvim
+ * views render from them, and none of the three keys above prefix-matches that
+ * one, so before it was named here completing a task on the record card left
+ * the left column still listing the task that had just been closed. Predicted
+ * by this file's own warning, one stage before it happened.
+ *
  * ## A NEW CONSUMER MUST ADD ITS KEY HERE
  *
  * This set is "everything on screen that a write to one person can make wrong",
  * and it is only complete for the surfaces that exist today. A view that
- * renders a person's objects off a key none of these three PREFIX-MATCHES — a
- * task-list key of its own is the obvious next one — goes stale the moment
- * somebody completes a task from the record card, silently, which is precisely
- * the drift this hook was extracted to prevent. Name the key here rather than
- * invalidating it from the new view: two invalidation sets is the state this
- * file exists to end.
+ * renders a person's objects off a key none of these four PREFIX-MATCHES goes
+ * stale the moment somebody writes from the record card, silently, which is
+ * precisely the drift this hook was extracted to prevent. Name the key here
+ * rather than invalidating it from the new view: two invalidation sets is the
+ * state this file exists to end.
+ *
+ * The set is asserted BY NAME in `useLeadRecordActions.test.tsx`, because
+ * dropping one of these lines breaks no component test — every such test mounts
+ * the one surface whose key is still listed.
  *
  * Exported for the same reason: the lead detail page kept its own copy of these
- * three keys for status / reopen / activity / convert, and a fourth key added
- * to one copy and not the other is invisible in review.
+ * keys for status / reopen / activity / convert, and a key added to one copy
+ * and not the other is invisible in review.
  */
 export function useLeadRecordInvalidate(leadId: string) {
   const queryClient = useQueryClient();
@@ -50,6 +60,7 @@ export function useLeadRecordInvalidate(leadId: string) {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', leadId] });
     queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
     queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'tasks'] });
   };
 }
 
