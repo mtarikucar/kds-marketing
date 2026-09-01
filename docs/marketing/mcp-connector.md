@@ -441,6 +441,8 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans — newest 40 (five batches); `batchId` returns a batch whole | `campaigns.read` | READ | — | no |
 | `jeeta.review_content_concept` | Approve or discard one concept. **Approving starts production and spends credits** — the concept becomes a campaign item and one clip is generated per beat. **Requires a signed-in human** | `campaigns.write` | WRITE | — | no |
 | `jeeta.produce_content_concept` | Produce a concept a human ALREADY approved — the repair for one that never became a campaign item, or an item stuck `GENERATING`. Idempotent: a produced concept is returned unchanged, a partly produced one resumes at the next unbought beat. **Spends when the concept was approved and never produced** | `campaigns.write` | WRITE | — | no |
+| `jeeta.plan_content_distribution` | For an APPROVED/SCHEDULED/PUBLISHED campaign item: the cross-post schedule, what to tag, and a PREPARED (unsent) message per contactable person. **Sends nothing** | `campaigns.write` | WRITE | — | no |
+| `jeeta.list_distribution_drafts` | Prepared outreach messages and their state (DRAFT / SENT / DISMISSED / FAILED) | `campaigns.read` | READ | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 
@@ -513,6 +515,38 @@ never enqueued sat at `GENERATING`, which the regenerate path excludes.
 It is safe to call repeatedly by construction rather than by care: the
 concept-to-item link is a UNIQUE index, and production resumes from the clips
 already paid for.
+
+**Distribution: there is no send tool, and that is the design.**
+
+`jeeta.plan_content_distribution` produces the plan a published video needs —
+which connected networks to cross-post to and when, which of the workspace's own
+accounts and hashtags to tag, and a prepared message for each contactable person
+in the CRM. Every message is stored as an unsent DRAFT. Nothing in the MCP
+catalogue can send one.
+
+The obvious objection is that a send tool could carry `requiresApproval: true`.
+It could, and that would not be the same thing. `requiresApproval` is a
+WORKSPACE-level gate: `AUTONOMOUS` mode bypasses it for every risk except
+`DESTRUCTIVE` (`ALWAYS_APPROVED_RISKS` holds that one and nothing else). So an
+approval-gated send tool is a send tool that a single settings toggle converts
+into an unattended one — and the decision here was per-message, not
+per-workspace. Automated outreach to accounts that never asked to hear from us
+is what platform spam detection is built to catch, and the cost of being caught
+is a restricted account rather than a bad metric.
+
+Sending is `POST /marketing/content-distribution/drafts/:id/send`, where the
+actor comes from the authenticated principal and is verified to be an active
+human of the workspace — the per-workspace `SYSTEM` automation principal, which
+is exactly what an unattended MCP session resolves to, is refused there by name.
+
+A workspace with **no connected social account** is refused with a message
+saying so, not handed an empty plan: there would be nowhere to cross-post and no
+account to tag, and a document titled "distribution plan" that omitted both
+would read as "nothing to distribute". Parts of a plan that could not be
+produced come back as `gaps` with reasons, never as empty lists.
+
+`campaignItemId` comes from `jeeta.list_social_campaigns`, which returns each
+campaign's recent calendar slots.
 
 #### Ads
 

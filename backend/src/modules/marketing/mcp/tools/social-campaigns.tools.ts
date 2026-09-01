@@ -78,7 +78,7 @@ export function registerSocialCampaignTools(
   registry.register({
     name: 'jeeta.list_social_campaigns',
     description:
-      'List the AI social campaigns in this workspace (name, goal, automation/planning mode, cadence, status and pipeline stats), newest first. Read-only.',
+      'List the AI social campaigns in this workspace (name, goal, automation/planning mode, cadence, status and pipeline stats), each with its most recent calendar slots (`items`: id, status, scheduledFor, topic). Those item ids are what jeeta.plan_content_distribution needs. Newest first, read-only.',
     domain: 'social',
     // Deferred in D4 (spec §3): the campaigns surface already advertises
     // `jeeta.list_campaigns` and `jeeta.get_campaign_performance`; the AI

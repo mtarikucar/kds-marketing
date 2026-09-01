@@ -293,6 +293,10 @@ import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
 import { registerContentConceptTools } from './mcp/tools/content-concepts.tools';
+import { registerContentDistributionTools } from './mcp/tools/content-distribution.tools';
+import { ContentDistributionService } from './distribution/content-distribution.service';
+import { DistributionSendService } from './distribution/distribution-send.service';
+import { MarketingContentDistributionController } from './controllers/marketing-content-distribution.controller';
 import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
@@ -669,6 +673,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MarketingAiController,
     // Phase F P2 — inbox + channel config (workspace) and the public webhooks.
     MarketingConversationsController,
+    MarketingContentDistributionController,
     MarketingChannelsController,
     WebchatPublicController,
     MetaWebhookController,
@@ -1003,6 +1008,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // rather than through jeeta.generate_video — see its class docblock for the
     // three measured reasons the MCP route cannot carry this.
     ConceptPromotionService,
+    ContentDistributionService,
+    DistributionSendService,
     McpToolRegistry,
     McpBrokerService,
     // MCP Faz 5 D1 — resolves the REAL actor a tool WRITE is attributed to
@@ -1286,6 +1293,7 @@ export class MarketingModule {
     mediaGen: MediaGenService,
     socialCampaigns: SocialCampaignsService,
     contentConcepts: ContentConceptsService,
+    contentDistribution: ContentDistributionService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
     salesCalls: SalesCallService,
@@ -1338,6 +1346,11 @@ export class MarketingModule {
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerContentConceptTools(registry, { concepts: contentConcepts, principals, entitlements });
+    registerContentDistributionTools(registry, {
+      distribution: contentDistribution,
+      principals,
+      entitlements,
+    });
     registerCampaignWriteTools(registry, { campaigns, entitlements });
     registerEmailTools(registry, { templates: emailTemplates, campaigns, entitlements });
     registerVoiceTools(registry, { calls: salesCalls, leads, campaigns, principals, entitlements });

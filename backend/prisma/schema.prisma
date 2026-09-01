@@ -4069,6 +4069,103 @@ model ContentConcept {
   @@map("content_concepts")
 }
 
+/// The state of ONE prepared outreach message.
+///
+/// DRAFT is where every row starts and where every row stays until a PERSON
+/// says otherwise — the whole stage is built so that no code path can move a
+/// row out of DRAFT except `DistributionSendService.send`, which requires a
+/// verified human of the workspace. See that service for how the boundary is
+/// enforced and `distribution-send.boundary.spec.ts` for what fails if it moves.
+enum DistributionDraftStatus {
+  DRAFT
+  SENT
+  DISMISSED
+  FAILED
+}
+
+/// The distribution plan for one published/approved campaign item: who to
+/// contact, what to tag, and when to cross-post — produced by the system,
+/// executed by a human.
+///
+/// One plan per item (`campaignItemId` is UNIQUE). Re-planning REPLACES the
+/// plan's content and keeps its identity, so the drafts a human has already
+/// sent keep pointing at a row that still exists.
+model ContentDistributionPlan {
+  id             String @id @default(uuid())
+  workspaceId    String
+  /// The item this distributes. UNIQUE: a second plan for one item would mean
+  /// two competing answers to "who has been contacted about this video", and
+  /// the drafts hang off the plan.
+  campaignItemId String @unique
+  /// Denormalised from the item so a plan read needs no join, and so the plan
+  /// survives as a record of what was distributed even if the calendar moves.
+  socialCampaignId String
+  contentConceptId String?
+
+  /// The plan itself:
+  /// { publishedNetworks: string[], tags: { accounts: [...], hashtags: string[] },
+  ///   crossPosts: [{ network, socialAccountId, accountName, runAt, note }],
+  ///   outreachCount: number,
+  ///   gaps: [{ area, reason }] }
+  ///
+  /// `gaps` is why this is Json rather than four columns. A part of the plan
+  /// that could NOT be produced has to travel WITH the plan and say why — an
+  /// empty `crossPosts` array that reads as "no cross-posting needed" is the
+  /// exact failure this feature is forbidden to have.
+  plan Json
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("content_distribution_plans")
+}
+
+/// One prepared, UNSENT message to one lead about one published video.
+///
+/// The row exists so that a human can read what would be said before anything
+/// is said. It carries the resolved channel and address rather than only a
+/// leadId, because the point of preparing it is that the decision — which
+/// channel, which address, what words — is visible BEFORE the send, not
+/// computed at the moment of it.
+model DistributionDraft {
+  id             String @id @default(uuid())
+  workspaceId    String
+  planId         String
+  campaignItemId String
+  leadId         String
+
+  /// SMS | WHATSAPP | EMAIL — only the three a conversation can be STARTED on
+  /// (channels/outbound-conversation.service.ts's INITIABLE map, which is the
+  /// platforms' limit, not ours). A draft proposing an Instagram DM would be
+  /// proposing something no send path in this product can execute.
+  channelType String
+  channelId   String
+  toAddress   String
+  body        String @db.Text
+
+  status         DistributionDraftStatus @default(DRAFT)
+  /// Stamped ONLY by a human send. The pair is the audit trail: a SENT row with
+  /// a null sentById would mean something sent without a person, which is the
+  /// one outcome this stage exists to make impossible.
+  sentAt         DateTime?
+  sentById       String?
+  conversationId String?
+  error          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One draft per lead per channel per plan. Re-planning is then idempotent:
+  /// it cannot stack a second copy of the same message beside one a human has
+  /// already read, edited or sent.
+  @@unique([planId, leadId, channelType])
+  @@index([workspaceId, status])
+  @@index([planId, status])
+  @@map("distribution_drafts")
+}
+
 /// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).
 ///
 /// A reusable capture of one workspace's CONFIG (custom-field defs, tags,

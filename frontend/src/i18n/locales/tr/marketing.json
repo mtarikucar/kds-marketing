@@ -3027,7 +3027,42 @@
     "modesHint": "Sonraki gönderilerin nasıl işleneceğini değiştir. Bir gönderi üretim aşamasındaysa kampanyayı duraklat.",
     "subtitleAuto": "Autopilot senin için yürüttüğü AI içerik kampanyaları",
     "modesReadonlyHint": "Bu kampanyanın ne kadar otomatik olduğu — Growth Autopilot belirler.",
-    "regenerateCost": "Bu gönderiyi sıfırdan yeniden kurar ve medyasını yeniden üretir; bu kredi harcar. Video, görsele göre belirgin biçimde daha pahalıdır."
+    "regenerateCost": "Bu gönderiyi sıfırdan yeniden kurar ve medyasını yeniden üretir; bu kredi harcar. Video, görsele göre belirgin biçimde daha pahalıdır.",
+    "tabDistribution": "Dağıtım"
+  },
+  "contentDistribution": {
+    "title": "Dağıtım",
+    "notPlanned": "Bu gönderi için henüz bir dağıtım planı üretilmedi — kiminle iletişime geçilecek, ne etiketlenecek, nereye çapraz paylaşım yapılacak. Plan ürettiğinde hiçbir şey gönderilmez: mesajlar hazırlanır ve seni bekler.",
+    "produce": "Planı üret",
+    "replan": "Planı yenile",
+    "planned": "Dağıtım planı üretildi.",
+    "produceFailed": "Dağıtım planı üretilemedi. Bu bir üretim hatası — dağıtım gerekmediği anlamına gelmez.",
+    "loadFailed": "Dağıtım planı yüklenemedi. Bu bir yükleme hatası — dağıtılacak bir şey olmadığı anlamına gelmez.",
+    "itemNotApproved": "Bu kampanyada henüz hiçbir şey onaylanmadı, yani dağıtılacak yayımlanmış bir gönderi yok. Bu, hattın bir aşaması — videonun tanıtıma ihtiyacı olmadığı kararı değil.",
+    "noItems": "Bu kampanyanın henüz onaylanmış veya yayımlanmış bir gönderisi yok, dolayısıyla dağıtılacak bir şey de yok.",
+    "send": "Gönder",
+    "sent": "Mesaj gönderildi.",
+    "sendFailed": "Mesaj gönderilemedi.",
+    "dismiss": "Vazgeç",
+    "dismissFailed": "Vazgeçilemedi.",
+    "messageTo": "{{to}} adresine gidecek mesaj",
+    "status": {
+      "sent": "Gönderildi",
+      "dismissed": "Vazgeçildi",
+      "failed": "Başarısız"
+    },
+    "crossPost": {
+      "title": "Çapraz paylaşım takvimi",
+      "desc": "Şu anda {{networks}} üzerinde yayında. Bunlar yönlendirme yapılacak diğer akışlar — hepsi aynı anda değil, aralıklı.",
+      "descUnpublished": "Bunun nereye paylaşılacağı — hepsi aynı anda değil, aralıklı."
+    },
+    "tags": {
+      "title": "Ne etiketlenecek"
+    },
+    "outreach": {
+      "title": "Haber verilecek kişiler",
+      "desc": "Hazırlandı, gönderilmedi. İstersen her mesajı düzenle, sonra tek tek gönder — bilerek toplu gönderim yok."
+    }
   },
   "landing": {
     "a11y": {

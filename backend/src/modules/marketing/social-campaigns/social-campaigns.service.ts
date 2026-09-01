@@ -57,6 +57,9 @@ export interface CreateSocialCampaignInput {
   createdById: string;
 }
 
+/** How many calendar slots ride along with each campaign in `list`. */
+export const CAMPAIGN_ITEM_PREVIEW = 20;
+
 @Injectable()
 export class SocialCampaignsService implements OnModuleInit {
   private readonly logger = new Logger(SocialCampaignsService.name);
@@ -109,9 +112,41 @@ export class SocialCampaignsService implements OnModuleInit {
     });
   }
 
+  /**
+   * The campaigns, each carrying its most recent calendar slots.
+   *
+   * The items came with it on 2026-09-01 and the reason is a discoverability
+   * one, not a convenience one: `jeeta.plan_content_distribution` REQUIRES a
+   * `campaignItemId`, and until this include there was no tool anywhere in the
+   * catalogue that returned one. `jeeta.list_content_concepts` supplies
+   * `promotedItemId` for items that came from a concept, but a cadence-planned
+   * item had no source at all — which is the exact shape of the three bugs
+   * `tool-catalogue.spec.ts`'s undiscoverable-prerequisite tripwire was written
+   * to catch (an operation that is not awkward but impossible).
+   *
+   * Bounded by {@link CAMPAIGN_ITEM_PREVIEW} rather than unbounded: a
+   * long-running campaign accumulates hundreds of slots, and putting all of
+   * them in a list response would put them in every MCP session's context too.
+   */
   list(workspaceId: string) {
     return this.prisma.socialCampaign.findMany({
-      where: { workspaceId }, orderBy: { createdAt: 'desc' },
+      where: { workspaceId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        items: {
+          orderBy: { scheduledFor: 'desc' },
+          take: CAMPAIGN_ITEM_PREVIEW,
+          select: {
+            id: true,
+            status: true,
+            scheduledFor: true,
+            sequenceIndex: true,
+            topic: true,
+            contentConceptId: true,
+            socialPostId: true,
+          },
+        },
+      },
     });
   }
 

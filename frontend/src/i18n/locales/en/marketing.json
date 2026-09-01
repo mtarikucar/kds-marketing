@@ -2557,7 +2557,42 @@
     "provisionFailed": "Could not create social content",
     "subtitleAuto": "AI content campaigns the Autopilot runs for you",
     "modesReadonlyHint": "How automatic this campaign is — set by the Growth Autopilot.",
-    "regenerateCost": "Builds this post again from scratch and generates its media again, which spends credits. Video costs substantially more than an image."
+    "regenerateCost": "Builds this post again from scratch and generates its media again, which spends credits. Video costs substantially more than an image.",
+    "tabDistribution": "Distribution"
+  },
+  "contentDistribution": {
+    "title": "Distribution",
+    "notPlanned": "No distribution plan has been produced for this post yet — who to contact, what to tag, and where to cross-post. Nothing is sent when you produce one: the messages are prepared and wait for you.",
+    "produce": "Produce the plan",
+    "replan": "Refresh the plan",
+    "planned": "Distribution plan produced.",
+    "produceFailed": "The distribution plan could not be produced. This is a failure to produce it, not a finding that no distribution is needed.",
+    "loadFailed": "The distribution plan could not be loaded. This is a load failure — it does not mean there is nothing to distribute.",
+    "itemNotApproved": "Nothing in this campaign has been approved yet, so there is no published post to distribute. This is a stage of the pipeline, not a decision that the video needs no promotion.",
+    "noItems": "This campaign has no approved or published post yet, so there is nothing to distribute.",
+    "send": "Send",
+    "sent": "Message sent.",
+    "sendFailed": "The message was not sent.",
+    "dismiss": "Dismiss",
+    "dismissFailed": "Could not dismiss it.",
+    "messageTo": "Message to {{to}}",
+    "status": {
+      "sent": "Sent",
+      "dismissed": "Dismissed",
+      "failed": "Failed"
+    },
+    "crossPost": {
+      "title": "Cross-post schedule",
+      "desc": "Already live on {{networks}}. These are the other timelines to redirect from, spaced out rather than posted at once.",
+      "descUnpublished": "Where to post this, spaced out rather than all at once."
+    },
+    "tags": {
+      "title": "What to tag"
+    },
+    "outreach": {
+      "title": "People to tell",
+      "desc": "Prepared, not sent. Edit each message if you want to, then send them one at a time — there is no bulk send, on purpose."
+    }
   },
   "landing": {
     "a11y": {
