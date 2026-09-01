@@ -61,6 +61,23 @@ function renderProbeInAgency() {
   );
 }
 
+/**
+ * Seeds the entitlement cache the way the shell warms it, so `has()` answers a
+ * RESOLVED yes/no instead of the fail-closed "no" it gives while
+ * `/billing/summary` is in flight. Without this every plan-gated destination is
+ * absent for the same reason, and an absence assertion about ONE gate would
+ * pass on a hook that had no gates at all.
+ */
+function renderProbeWithPlan(features: Record<string, boolean>) {
+  const qc = makeQC();
+  qc.setQueryData(['marketing', 'billing', 'summary'], { entitlements: { features } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <Probe />
+    </QueryClientProvider>,
+  );
+}
+
 describe('useNavCommands', () => {
   it('includes core destinations for a manager', () => {
     loginAs(MANAGER);
@@ -95,5 +112,53 @@ describe('useNavCommands', () => {
     const { container } = renderProbeInAgency();
     const paths = pathsOf(container);
     expect(paths).not.toContain('/agency/locations');
+  });
+
+  /**
+   * THE UNLISTED DESTINATIONS ARRIVE GATED — asserted here, at the wiring.
+   *
+   * navigation.test.ts already holds `visibleUnlisted` to these three answers,
+   * but a pure function nobody calls gates nothing: reverting this hook's loop
+   * to a raw `for (const d of UNLISTED_DESTINATIONS)` left the whole frontend
+   * suite, `tsc` and the browser test green, because the pure test still passed
+   * and Playwright runs as an entitled OWNER. That revert now fails HERE.
+   *
+   * `/appointments` is the one that matters and the reason the gates were added
+   * at all: every route on `MarketingBookingController` is
+   * `@MarketingRoles('MANAGER')` + `@RequiresFeature('funnels')`. Since stage 4
+   * this palette is the only door those six pages have, so an ungated read here
+   * is not a cosmetic slip — it is the product offering a rep a jump into a
+   * page that can only answer 403.
+   *
+   * Each absence is anchored on a POSITIVE hit from the same list, so "the rep
+   * is not offered /appointments" can never pass because the loop produced
+   * nothing at all.
+   */
+  it('does not offer /appointments to a REP, even where the plan includes funnels', () => {
+    loginAs(REP);
+    const { container } = renderProbeWithPlan({ funnels: true });
+    const paths = pathsOf(container);
+    // The unlisted loop ran, and the ungated departures are on the rep's list.
+    expect(paths).toContain('/companies');
+    expect(paths).toContain('/tasks');
+    expect(paths).not.toContain('/appointments');
+  });
+
+  it('does not offer /appointments to a manager whose plan lacks funnels', () => {
+    loginAs(MANAGER);
+    const { container } = renderProbeWithPlan({ funnels: false });
+    const paths = pathsOf(container);
+    expect(paths).toContain('/companies');
+    expect(paths).toContain('/tasks');
+    expect(paths).not.toContain('/appointments');
+  });
+
+  it('offers /appointments to a manager whose plan includes funnels', () => {
+    loginAs(MANAGER);
+    const { container } = renderProbeWithPlan({ funnels: true });
+    const paths = pathsOf(container);
+    // The other half of the gate: hiding it from everyone would satisfy the two
+    // assertions above and take the page away from the people it belongs to.
+    expect(paths).toContain('/appointments');
   });
 });
