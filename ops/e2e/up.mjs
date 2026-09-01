@@ -62,6 +62,15 @@ const env = {
   FRONTEND_URL: E2E_APP_ORIGIN,
   APP_URL: E2E_APP_ORIGIN,
 
+  // ── Safety + parity: seal test rows with a THROWAWAY master key ──────────
+  // `.env` carries the REAL AES-256-GCM key. Two reasons not to use it here:
+  // encrypting throwaway rows with the production key is needless exposure,
+  // and inheriting it made the harness MORE permissive than CI — a spec that
+  // connects a social account passed locally and 400'd in CI, which has no
+  // `.env`. Same value as ci.yml's frontend-e2e job, so the two agree.
+  // Must decode to exactly 32 bytes (see secret-box.helper.ts).
+  MARKETING_SECRET_KEY: 'Y2ktZTJlLXRocm93YXdheS1zZWNyZXQta2V5LTAwMDA=',
+
   // ── Safety: never send real mail from a test run ─────────────────────────
   EMAIL_HOST: '',
   EMAIL_PORT: '',
