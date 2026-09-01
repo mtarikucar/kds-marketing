@@ -20,6 +20,17 @@ export interface PersonaLock {
 export interface Shot {
   ord: number;
   scene: string;
+  /**
+   * Words the viewer READS, kept separate from the words they hear.
+   *
+   * The two are not the same channel and routinely disagree: the reference
+   * concept this seam was built for opens on a silent tracking shot with
+   * "Bunun motoru yok." burned into frame. Folding on-screen text into
+   * `voiceover` would either invent narration for a silent shot or drop the
+   * only line in it. Undefined on the built-in ad template, which has never
+   * had a text layer.
+   */
+  onScreenText?: string;
   voiceover: string;
   prompt: string;
   durationSec: number;
@@ -33,6 +44,35 @@ export interface ShotPlan {
   shots: Shot[];
   captionSuggestion: string;
   qcChecklist: string[];
+}
+
+/**
+ * A caller-supplied scene — the seam that lets a CONCEPT drive the plan.
+ *
+ * `SCENES` below is a fixed hook -> demo -> proof -> CTA template: for one
+ * brief it returns the same four scenes every time, which is correct for a UGC
+ * ad and wrong for "several genuinely different angles on one idea" (five calls
+ * would return five identical structures with the product name swapped). The
+ * creative decision — how many shots, what happens in each, what is read and
+ * what is heard — therefore comes from the caller, while everything this
+ * service already owns (per-model prompt formatting, persona identity-lock
+ * threaded into EVERY shot, caption, QC checklist) keeps applying unchanged.
+ *
+ * Plain data, deliberately, not `SceneSpec`'s closures: this shape has to
+ * survive a round trip through an LLM tool-call payload and a JSONB column.
+ */
+export interface ConceptScene {
+  /** Human label for the beat — the owner writes these as time ranges ("0-2s"). */
+  scene: string;
+  cameraNote: string;
+  /** See {@link Shot.onScreenText}. */
+  onScreenText?: string;
+  /** May legitimately be empty: a purely visual beat has nothing to hear. */
+  voiceover: string;
+  /** What is IN frame. Becomes the model prompt via `buildModelPrompt`. */
+  description: string;
+  /** This beat's own length. Omitted = the plan's even split, as before. */
+  durationSec?: number;
 }
 
 interface SceneSpec {
@@ -52,21 +92,34 @@ interface SceneSpec {
  */
 @Injectable()
 export class VideoPipelineService {
-  planShots(brief: VideoBrief, model: VideoModel = 'seedance', persona?: PersonaLock): ShotPlan {
-    const durationSec = brief.durationSec ?? 15;
-    const specs = SCENES;
-    const per = Math.max(2, Math.round(durationSec / specs.length));
+  planShots(
+    brief: VideoBrief,
+    model: VideoModel = 'seedance',
+    persona?: PersonaLock,
+    scenes?: ConceptScene[],
+  ): ShotPlan {
+    const target = brief.durationSec ?? 15;
+    // An explicitly-supplied empty list is a caller that produced nothing, and
+    // falling through to SCENES would hand back a generic hook/demo/proof/CTA
+    // ad while calling it the caller's concept. Error is not emptiness.
+    if (scenes && scenes.length === 0) {
+      throw new Error('planShots needs at least one scene when a scene list is supplied');
+    }
+    const specs: Array<ConceptScene | SceneSpec> = scenes ?? SCENES;
+    const per = Math.max(2, Math.round(target / specs.length));
 
     const shots: Shot[] = specs.map((s, i) => {
-      const prompt = this.buildModelPrompt(model, s.desc(brief), persona);
+      const custom = 'description' in s ? s : undefined;
+      const desc = custom ? custom.description : (s as SceneSpec).desc(brief);
       const shot: Shot = {
         ord: i,
         scene: s.scene,
-        voiceover: s.vo(brief),
-        prompt,
-        durationSec: per,
-        cameraNote: s.camera,
+        voiceover: custom ? custom.voiceover : (s as SceneSpec).vo(brief),
+        prompt: this.buildModelPrompt(model, desc, persona),
+        durationSec: custom?.durationSec ?? per,
+        cameraNote: custom ? custom.cameraNote : (s as SceneSpec).camera,
       };
+      if (custom?.onScreenText !== undefined) shot.onScreenText = custom.onScreenText;
       if (persona && persona.referenceImageUrls.length) {
         shot.reference = { images: persona.referenceImageUrls, seed: persona.lockedSeed ?? undefined };
       }
@@ -75,7 +128,11 @@ export class VideoPipelineService {
 
     return {
       model,
-      durationSec,
+      // A concept's length is what its beats actually add up to. The template
+      // path keeps reporting the requested duration, because its even split is
+      // a rounding of that number rather than an independent decision (30s over
+      // 4 scenes is 4x8, and reporting 32 there would be a regression).
+      durationSec: scenes ? shots.reduce((n, sh) => n + sh.durationSec, 0) : target,
       shots,
       captionSuggestion: this.caption(brief),
       qcChecklist: this.qcChecklist(persona),
