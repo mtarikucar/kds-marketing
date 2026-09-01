@@ -285,3 +285,129 @@ describe('PeopleList — a failure is never an empty list', () => {
     await waitFor(() => expect(listCalls().length).toBeGreaterThan(before));
   });
 });
+
+/**
+ * Stage 3 of the one-screen brief. `Şirketler` is not a field of a person —
+ * `Company` has no `leadId` — so it does not become a section of the record
+ * card. It becomes a GROUPING of this list, and `/companies` keeps its route
+ * and every capability it has.
+ *
+ * The grouping is an ORDER the server settles across the whole filtered set
+ * (`sortBy=company`), not a bucketing of the 25 rows this column happens to
+ * hold. Bucketing the page would have been cheaper and would have lied: a
+ * header reading "Acme · 3" over a company with forty contacts is worse than
+ * no grouping at all.
+ */
+describe('PeopleList — grouping by company', () => {
+  const grouped = (rows: Lead[]) =>
+    listLeads.mockImplementation((p: { limit?: number }) =>
+      Promise.resolve(p.limit === 1 ? page([], 0, 1) : page(rows)),
+    );
+
+  it('is off by default: the owner’s activity sort, and no headers', async () => {
+    renderList();
+
+    await screen.findByTestId('person-row-p1');
+    expect(listCalls()[0]).toMatchObject({ sortBy: 'lastActivityAt' });
+    expect(screen.queryByTestId('people-group-none')).not.toBeInTheDocument();
+    expect(screen.getByTestId('group-toggle')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('asks the SERVER to group, and says so in the URL', async () => {
+    const user = userEvent.setup();
+    renderList();
+    await screen.findByTestId('person-row-p1');
+
+    await user.click(screen.getByTestId('group-toggle'));
+
+    await waitFor(() => {
+      expect(listCalls()[listCalls().length - 1]).toMatchObject({ sortBy: 'company' });
+    });
+    // In the URL for PeopleList's own two reasons: a colleague can be sent one,
+    // and a reload must not silently rearrange somebody's queue.
+    expect(seenPath).toContain('group=company');
+  });
+
+  it('reads ?group=company from a deep link and heads each company’s block', async () => {
+    grouped([
+      person({ id: 'a1', contactPerson: 'Ali', company: { id: 'c-2', name: 'Acme AŞ' } }),
+      person({ id: 'z1', contactPerson: 'Zehra', company: { id: 'c-1', name: 'Zeta Ltd' } }),
+    ]);
+
+    renderList({}, ['/leads?group=company']);
+
+    await screen.findByTestId('person-row-a1');
+    expect(screen.getByTestId('group-toggle')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('people-group-c-2')).toHaveTextContent('Acme AŞ');
+    expect(screen.getByTestId('people-group-c-1')).toHaveTextContent('Zeta Ltd');
+  });
+
+  /**
+   * The failure this whole line of work exists to prevent. A person with no
+   * company is not a person without a place: they get a NAMED trailing block,
+   * and they stay selectable exactly like anyone else.
+   */
+  it('gives the people with no company a block of their own, and keeps them selectable', async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    grouped([
+      person({ id: 'a1', company: { id: 'c-2', name: 'Acme AŞ' } }),
+      person({ id: 'solo', contactPerson: 'Yalnız Kişi', company: null }),
+    ]);
+
+    renderList({ onSelect }, ['/leads?group=company']);
+
+    // Anchored on a positive find, so "the header is absent" can never pass by
+    // rendering nothing at all.
+    await screen.findByTestId('person-row-solo');
+    expect(screen.getByTestId('people-group-none')).toHaveTextContent('Şirketsiz');
+
+    await user.click(screen.getByTestId('person-row-solo'));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'solo' }));
+  });
+
+  it('never drops a person the server sent, grouped or not', async () => {
+    grouped([
+      person({ id: 'a1', company: { id: 'c-2', name: 'Acme AŞ' } }),
+      person({ id: 'a2', company: { id: 'c-2', name: 'Acme AŞ' } }),
+      person({ id: 'solo', company: null }),
+      person({ id: 'ghost' }), // the field absent entirely, not merely null
+    ]);
+
+    renderList({}, ['/leads?group=company']);
+
+    await screen.findByTestId('person-row-a1');
+    for (const id of ['a1', 'a2', 'solo', 'ghost']) {
+      expect(screen.getByTestId(`person-row-${id}`)).toBeInTheDocument();
+    }
+    // One header per company, not one per row.
+    expect(screen.getAllByTestId('people-group-c-2')).toHaveLength(1);
+  });
+
+  it('turns the grouping off again, restoring the activity sort', async () => {
+    const user = userEvent.setup();
+    renderList({}, ['/leads?group=company']);
+    await screen.findByTestId('person-row-p1');
+
+    await user.click(screen.getByTestId('group-toggle'));
+
+    await waitFor(() => {
+      expect(listCalls()[listCalls().length - 1]).toMatchObject({ sortBy: 'lastActivityAt' });
+    });
+    expect(seenPath).not.toContain('group=');
+    expect(screen.queryByTestId('people-group-none')).not.toBeInTheDocument();
+  });
+
+  it('keeps the queue chips working while grouped — a grouping is not a filter', async () => {
+    const user = userEvent.setup();
+    renderList({}, ['/leads?group=company']);
+    await screen.findByTestId('person-row-p1');
+
+    await user.click(screen.getByRole('button', { name: /Atanmamış/ }));
+
+    await waitFor(() => {
+      const last = listCalls()[listCalls().length - 1];
+      expect(last).toMatchObject({ assignmentStatus: 'unassigned', sortBy: 'company' });
+    });
+  });
+});

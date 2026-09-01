@@ -326,6 +326,16 @@ describe('marketing i18n — the person surface and its work queue', () => {
         // line: without it a broken arrangement is an empty box.
         'surface.view.label',
         'surface.view.failed',
+        // The list's grouping (2026-09-01, stage 3). `Şirketler` left the menu
+        // to become this control, so these three words are now the only way a
+        // ru/ar/uz operator meets companies on the daily surface at all: the
+        // toggle's accessible name, its one-word label, and — the load-bearing
+        // one — the header over the people who belong to NO company. Degraded
+        // to English that last block reads as a stray English word over the
+        // majority of most workspaces' contacts.
+        'surface.people.group.byCompany',
+        'surface.people.group.short',
+        'surface.people.group.none',
         'leads.queue.waiting',
         'leads.queue.unassigned',
         'leads.queue.all',

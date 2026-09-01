@@ -111,6 +111,42 @@ function Lazy({ children }: { children: ReactNode }) {
  * tooling (`LeadsPage` gates the checkbox column and the bulk toolbar on
  * `isManager`), so it belongs where the other manager-only surfaces already are.
  *
+ * ## Who owns which query parameter on this surface
+ *
+ * Asked for by stage 2's review, before a seventh parameter was added to a
+ * namespace six things were already writing into. This surface is unusual:
+ * three whole PAGES render inside its left column, each keeps its own
+ * `useSearchParams`, and they all share ONE URL. So "who owns it" and "who may
+ * strip it" are not the same question, and neither is obvious from any single
+ * file.
+ *
+ * | Param | Written by | Read by | Who may strip it |
+ * |---|---|---|---|
+ * | `left` | InboxPage (`setLeftView`) | InboxPage | InboxPage only |
+ * | `view=table` | InboxPage (`setView`) | InboxPage | InboxPage only |
+ * | `tab` | InboxPage (`setTab`), TasksPage (seed only) | both, disjoint values | InboxPage's "Back to inbox" |
+ * | `group=company` | PeopleList (`toggleGroup`) | PeopleList | PeopleList only |
+ * | `assignmentStatus`, `waiting` | PeopleList (`selectQueue`) | PeopleList, LeadsPage | PeopleList's chips |
+ * | `deal` | SalesTab (link in) | OpportunitiesPage | OpportunitiesPage, once it has opened the dialog |
+ * | `pipelineId`, `leadId` | SalesTab (link in) | OpportunitiesPage | nobody — read once at mount |
+ * | `create=1` | quickActions (link in) | the three pages' `useCreateParam`, DISABLED while embedded | `useCreateParam` |
+ *
+ * Two facts this table exists to make visible:
+ *
+ * **`tab` is the one genuinely shared name.** InboxPage reads it as a config
+ * surface (`channels|snippets|agents|knowledge`) and the embedded TasksPage
+ * reads it as a task filter (`today|overdue`). They do not collide today
+ * because the value sets are disjoint AND the config branch replaces the whole
+ * surface, so the two are never mounted together — but that is a coincidence
+ * of two vocabularies, not a design, and the next value added to either side
+ * is where it stops being true. `isConfigTab` is the guard: an unrecognised
+ * `tab` falls back to the surface rather than blanking it.
+ *
+ * **Nobody strips anybody else's.** Every setter here uses the callback form of
+ * `setParams` and touches exactly its own key, which is why switching the left
+ * view keeps your queue, your grouping and your deep-linked deal. A setter that
+ * built a fresh `URLSearchParams` would silently drop the other six.
+ *
  * The two parameters are guarded DIFFERENTLY, on purpose. `?tab=` opens pages
  * that CONFIGURE the workspace, so a rep's deep link is bounced to the surface.
  * `?view=table` shows the same people a rep already sees in the left column,

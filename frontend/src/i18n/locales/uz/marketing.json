@@ -1192,6 +1192,11 @@
       "empty": {
         "title": "Bu navbatda hech kim yoʻq",
         "desc": "Boshqa navbatni tanlang yoki qidiruvni tozalang."
+      },
+      "group": {
+        "byCompany": "Kompaniya boʻyicha guruhlash",
+        "short": "Kompaniya",
+        "none": "Kompaniyasiz"
       }
     },
     "pane": {

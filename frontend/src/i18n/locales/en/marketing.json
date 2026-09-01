@@ -3331,6 +3331,11 @@
       "empty": {
         "title": "Nobody in this queue",
         "desc": "Pick another queue or clear the search."
+      },
+      "group": {
+        "byCompany": "Group by company",
+        "short": "Company",
+        "none": "No company"
       }
     },
     "pane": {

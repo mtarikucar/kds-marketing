@@ -4182,6 +4182,11 @@
       "empty": {
         "title": "Bu kuyrukta kimse yok",
         "desc": "Başka bir kuyruk seç ya da aramayı temizle."
+      },
+      "group": {
+        "byCompany": "Şirkete göre grupla",
+        "short": "Şirket",
+        "none": "Şirketsiz"
       }
     },
     "pane": {
