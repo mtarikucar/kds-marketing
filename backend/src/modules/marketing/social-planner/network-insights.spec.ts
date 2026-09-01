@@ -347,13 +347,29 @@ describe('Instagram insights (Page-linked)', () => {
     expect(r.data).toMatchObject({ impressions: 900, reach: 700, saves: 11, likes: 60, engagements: 78 });
   });
 
+  it('post: asks for the CURRENT metric names first, not the retired ones', async () => {
+    // Meta retired `impressions` and `plays` for media insights in the 2025-04
+    // wave. Both sets this file used to send were made of retired names, so a
+    // correctly-scoped token could only ever get an error back.
+    metaFetch.mockResolvedValueOnce(
+      graphOk({ data: [metric('views', 900), metric('reach', 700), metric('saved', 11)] }),
+    );
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'IGMEDIA1');
+    expect(metaFetch).toHaveBeenCalledTimes(1);
+    const asked = metaFetch.mock.calls[0][1].query.metric;
+    expect(asked).toContain('views');
+    expect(asked).not.toContain('impressions');
+    // A feed view IS the impression count under the new name.
+    expect(r.data).toMatchObject({ impressions: 900, reach: 700, saves: 11 });
+  });
+
   it('post: a Reel 400 on the feed metric set is retried with the reels set', async () => {
     metaFetch
       .mockResolvedValueOnce(graphFail(metaError('(#100) metric[0] must be a valid insights metric', 100)))
       .mockResolvedValueOnce(
         graphOk({
           data: [
-            metric('plays', 5000),
+            metric('views', 5000),
             metric('reach', 4200),
             metric('likes', 300),
             metric('comments', 20),
@@ -365,9 +381,42 @@ describe('Instagram insights (Page-linked)', () => {
     const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'REEL1');
     expect(r.ok).toBe(true);
     expect(metaFetch).toHaveBeenCalledTimes(2);
-    expect(metaFetch.mock.calls[1][1].query.metric).toContain('plays');
-    // plays is a VIDEO VIEW, never folded into impressions.
+    // The Reels set is the one without `saved` — that is what distinguishes it
+    // now that both kinds report the same view metric.
+    const asked = metaFetch.mock.calls[1][1].query.metric;
+    expect(asked).toContain('total_interactions');
+    expect(asked).not.toContain('saved');
+    // A REEL's view is a video play, never folded into impressions — across a
+    // mixed feed that would count the same eyeball twice.
     expect(r.data).toMatchObject({ videoViews: 5000, impressions: 0, reach: 4200, engagements: 400 });
+  });
+
+  it('post: falls back to the retired names for an app still on an older Graph version', async () => {
+    // Both modern sets rejected, then the legacy feed set answers. This is the
+    // only reason the legacy sets are still sent at all.
+    const mismatch = graphFail(metaError('(#100) metric[0] must be a valid insights metric', 100));
+    metaFetch
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(graphOk({ data: [metric('impressions', 120), metric('reach', 90)] }));
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'OLDMEDIA');
+    expect(r.ok).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(3);
+    expect(metaFetch.mock.calls[2][1].query.metric).toContain('impressions');
+    expect(r.data).toMatchObject({ impressions: 120, reach: 90 });
+  });
+
+  it('post: a legacy Reel keeps plays out of impressions', async () => {
+    const mismatch = graphFail(metaError('(#100) metric[0] must be a valid insights metric', 100));
+    metaFetch
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(graphOk({ data: [metric('plays', 777), metric('reach', 600)] }));
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'OLDREEL');
+    expect(r.ok).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(4);
+    expect(r.data).toMatchObject({ videoViews: 777, impressions: 0, reach: 600 });
   });
 
   it('post: a non-metric error is NOT retried', async () => {
@@ -408,6 +457,47 @@ describe('Instagram insights (Page-linked)', () => {
       );
     const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
     expect(r.data).toMatchObject({ followers: 5000, impressions: 30, reach: 25, profileViews: 7 });
+  });
+
+  it('account: asks for `views`, not the retired account-level `impressions`', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 5000, media_count: 40 }))
+      .mockResolvedValueOnce(
+        graphOk({ data: [metric('views', 30), metric('reach', 25), metric('profile_views', 7)] }),
+      );
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    // Call 0 is the node read; call 1 is the insights edge.
+    const asked = metaFetch.mock.calls[1][1].query.metric;
+    expect(asked).toContain('views');
+    expect(asked).not.toContain('impressions');
+    expect(r.data).toMatchObject({ impressions: 30, reach: 25, profileViews: 7 });
+  });
+
+  it('account: narrows on a metric complaint the Instagram edge words its own way', async () => {
+    // The account edge has not been consistent about the error CODE across
+    // versions, so the Instagram predicate matches on the wording alone —
+    // otherwise a retired metric would surface as a hard failure and take the
+    // followers count down with it.
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 5000 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#12) metric[0] does not support this period', 12)))
+      .mockResolvedValueOnce(
+        graphOk({ data: [metric('impressions', 9), metric('reach', 8), metric('profile_views', 2)] }),
+      );
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    expect(r.ok).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(3);
+    expect(r.data).toMatchObject({ followers: 5000, impressions: 9, reach: 8, profileViews: 2 });
+  });
+
+  it('account: a permission error is NOT narrowed — it degrades on the first try', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 5000 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#10) requires instagram_manage_insights', 10)));
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    expect(metaFetch).toHaveBeenCalledTimes(2);
+    expect(r.data).toMatchObject({ followers: 5000 });
+    expect(r.permissionDenied).toBe(true);
   });
 });
 
