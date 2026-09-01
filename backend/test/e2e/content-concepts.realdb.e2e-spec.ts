@@ -411,6 +411,54 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
     ).rejects.toThrow(/already/i);
   });
 
+  it('review: two people deciding at once produce ONE verdict, not the last write', async () => {
+    // Check-then-act cannot be tested against a mock — both callers pass the
+    // check and both writes "succeed" there. Only real row locking settles it:
+    // the conditional write's `status: 'PROPOSED'` predicate is re-checked
+    // against the committed row, so the loser matches nothing.
+    const racedId = randomUUID();
+    await prisma.contentConcept.create({
+      data: {
+        id: racedId,
+        workspaceId,
+        batchId: randomUUID(),
+        sourceIdea: SHARED_IDEA,
+        angle: 'race',
+        hook: 'Ayni anda iki kisi karar verirse ne olur?',
+        title: 'Race',
+        ordinal: 0,
+        shotPlan: { model: 'seedance', durationSec: 4, shots: [], captionSuggestion: '', qcChecklist: [] },
+        createdById: ownerId,
+      },
+    });
+
+    const svc = new ContentConceptsService(
+      prisma,
+      { isEnabled: () => true, complete: jest.fn() } as never,
+      credits,
+      pipeline,
+    );
+    const [a, b] = await Promise.allSettled([
+      svc.review(workspaceId, racedId, { decision: 'APPROVED', reviewerId: ownerId, note: 'kabul' }),
+      svc.review(workspaceId, racedId, { decision: 'DISCARDED', reviewerId: ownerId, note: 'ret' }),
+    ]);
+
+    const fulfilled = [a, b].filter((r) => r.status === 'fulfilled');
+    const rejected = [a, b].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String((rejected[0] as PromiseRejectedResult).reason?.message)).toMatch(/already/i);
+
+    // And the row carries exactly the winner's verdict — not a status from one
+    // decision with a note from the other.
+    const row = await prisma.contentConcept.findUnique({ where: { id: racedId } });
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ status: string; reviewNote: string | null }>)
+      .value;
+    expect(row!.status).toBe(winner.status);
+    expect(row!.reviewNote).toBe(winner.reviewNote);
+    expect(row!.reviewNote).toBe(row!.status === 'APPROVED' ? 'kabul' : 'ret');
+  });
+
   // ────────────────────────────────────────────────── error is not emptiness
 
   it('refuses a paraphrase batch and leaves the table exactly as it was', async () => {

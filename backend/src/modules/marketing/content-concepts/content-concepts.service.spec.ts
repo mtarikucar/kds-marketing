@@ -81,6 +81,7 @@ function deps(over: { aiEnabled?: boolean; completion?: unknown; completeImpl?: 
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
       update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
   const svc = new ContentConceptsService(
@@ -342,36 +343,79 @@ describe('ContentConceptsService.list', () => {
 });
 
 describe('ContentConceptsService.review', () => {
+  /** The row as it looks after a successful decision. */
+  const decided = { id: 'c1', workspaceId: 'ws1', status: 'APPROVED', reviewedById: 'u9' };
+
   it('records WHO decided and when, not just the new status', async () => {
     const { svc, prisma } = deps();
-    prisma.contentConcept.findFirst.mockResolvedValue({ id: 'c1', workspaceId: 'ws1', status: 'PROPOSED' });
-    prisma.contentConcept.update.mockResolvedValue({ id: 'c1', status: 'APPROVED' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+    prisma.contentConcept.findFirst.mockResolvedValue(decided);
 
-    await svc.review('ws1', 'c1', { decision: 'APPROVED', reviewerId: 'u9', note: 'bu güzelmiş' });
+    const out = await svc.review('ws1', 'c1', {
+      decision: 'APPROVED',
+      reviewerId: 'u9',
+      note: 'bu güzelmiş',
+    });
 
-    expect(prisma.contentConcept.findFirst.mock.calls[0][0].where).toEqual({ id: 'c1', workspaceId: 'ws1' });
-    const data = prisma.contentConcept.update.mock.calls[0][0].data;
+    const data = prisma.contentConcept.updateMany.mock.calls[0][0].data;
     expect(data.status).toBe('APPROVED');
     expect(data.reviewedById).toBe('u9');
     expect(data.reviewNote).toBe('bu güzelmiş');
     expect(data.reviewedAt).toBeInstanceOf(Date);
+    // updateMany returns a count, so the decided row is read back and returned.
+    expect(out).toEqual(decided);
+  });
+
+  it('writes through ONE predicate carrying the workspace AND the PROPOSED state', async () => {
+    // Both halves of the fix live in this `where`. Without `workspaceId` the
+    // write lands on a neighbour's row (the `findFirst` above it used to be the
+    // only thing in the way); without `status` two concurrent reviews both pass
+    // a check-then-act and both write.
+    const { svc, prisma } = deps();
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+    prisma.contentConcept.findFirst.mockResolvedValue(decided);
+
+    await svc.review('ws1', 'c1', { decision: 'APPROVED', reviewerId: 'u9' });
+
+    expect(prisma.contentConcept.updateMany.mock.calls[0][0].where).toEqual({
+      id: 'c1',
+      workspaceId: 'ws1',
+      status: 'PROPOSED',
+    });
+    expect(prisma.contentConcept.update).not.toHaveBeenCalled();
   });
 
   it('refuses a concept that belongs to another workspace', async () => {
     const { svc, prisma } = deps();
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 0 });
     prisma.contentConcept.findFirst.mockResolvedValue(null);
     await expect(
       svc.review('ws1', 'c-next-door', { decision: 'APPROVED', reviewerId: 'u9' }),
     ).rejects.toThrow(NotFoundException);
-    expect(prisma.contentConcept.update).not.toHaveBeenCalled();
+    // The write was attempted, but its own predicate refused it — that is the
+    // point: nothing depends on a preceding read having been done correctly.
+    expect(prisma.contentConcept.updateMany.mock.calls[0][0].where.workspaceId).toBe('ws1');
   });
 
-  it('refuses to re-decide a concept that was already decided', async () => {
+  it('refuses to re-decide a concept that was already decided, and says which way', async () => {
+    // The loser of a race and a plain second click take the same path: the
+    // conditional write matched nothing, so the row is re-read to say WHY.
     const { svc, prisma } = deps();
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 0 });
     prisma.contentConcept.findFirst.mockResolvedValue({ id: 'c1', workspaceId: 'ws1', status: 'APPROVED' });
     await expect(
       svc.review('ws1', 'c1', { decision: 'DISCARDED', reviewerId: 'u9' }),
-    ).rejects.toThrow(/already/i);
-    expect(prisma.contentConcept.update).not.toHaveBeenCalled();
+    ).rejects.toThrow(/already approved/i);
+  });
+
+  it('does not report a vanished concept as "already decided"', async () => {
+    // count 0 has two causes. Reading the row back is what tells them apart —
+    // error is not emptiness applies to the two errors as well.
+    const { svc, prisma } = deps();
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 0 });
+    prisma.contentConcept.findFirst.mockResolvedValue(null);
+    await expect(svc.review('ws1', 'gone', { decision: 'APPROVED', reviewerId: 'u9' })).rejects.toThrow(
+      NotFoundException,
+    );
   });
 });

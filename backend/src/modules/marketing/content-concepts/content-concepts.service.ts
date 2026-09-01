@@ -404,28 +404,37 @@ export class ContentConceptsService {
   /**
    * A human's decision on one concept.
    *
-   * `findFirst({ id, workspaceId })` rather than `findUnique({ id })`: the id is
-   * a uuid a caller can hold from anywhere, and the workspace clause is the only
-   * thing that stops one workspace deciding on another's idea.
+   * ONE conditional write, not a check followed by a write. The read-then-update
+   * this replaces was wrong twice over:
+   *
+   *  - **Unscoped.** The guard read `findFirst({ id, workspaceId })` but the
+   *    write was `update({ where: { id } })`. The id is a uuid a caller can hold
+   *    from anywhere, so the tenant predicate existed only in a statement that
+   *    did not perform the write — and a dropped predicate in the read wrote
+   *    `APPROVED`, with OUR reviewer's id, onto the neighbour's concept.
+   *  - **Check-then-act.** Two reviewers (or one impatient double-click) both
+   *    read `PROPOSED` and both wrote, the second silently overwriting the
+   *    first's verdict, reviewer and note. Stage 2 turns an APPROVED concept
+   *    into a campaign item; flipping it afterwards would orphan that item with
+   *    no trace of why.
+   *
+   * `updateMany({ where: { id, workspaceId, status: 'PROPOSED' } })` closes both
+   * in the database: the tenant clause is IN the write, and Postgres re-checks
+   * the `status` predicate against the committed row version, so the loser of a
+   * race matches nothing.
+   *
+   * `count === 0` then has two causes, and they are different answers to the
+   * caller — not found vs already decided — so the row is read back to say
+   * which. That read is on the failure path only; the happy path pays for one
+   * extra read to return the decided row, since `updateMany` returns a count.
    */
   async review(
     workspaceId: string,
     conceptId: string,
     input: { decision: ConceptDecision; reviewerId: string; note?: string },
   ) {
-    const concept = await this.prisma.contentConcept.findFirst({
-      where: { id: conceptId, workspaceId },
-    });
-    if (!concept) throw new NotFoundException('Concept not found');
-    if (concept.status !== 'PROPOSED') {
-      // Stage 2 turns an APPROVED concept into a campaign item; flipping it
-      // back afterwards would orphan that item with no trace of why.
-      throw new BadRequestException(
-        `This concept was already ${concept.status.toLowerCase()} and cannot be decided again.`,
-      );
-    }
-    return this.prisma.contentConcept.update({
-      where: { id: conceptId },
+    const { count } = await this.prisma.contentConcept.updateMany({
+      where: { id: conceptId, workspaceId, status: 'PROPOSED' },
       data: {
         status: input.decision,
         reviewedAt: new Date(),
@@ -433,6 +442,17 @@ export class ContentConceptsService {
         ...(input.note !== undefined ? { reviewNote: input.note } : {}),
       },
     });
+
+    const concept = await this.prisma.contentConcept.findFirst({
+      where: { id: conceptId, workspaceId },
+    });
+    if (!concept) throw new NotFoundException('Concept not found');
+    if (!count) {
+      throw new BadRequestException(
+        `This concept was already ${concept.status.toLowerCase()} and cannot be decided again.`,
+      );
+    }
+    return concept;
   }
 
   private systemPrompt(count: number): string {
