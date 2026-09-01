@@ -88,6 +88,29 @@ export class MarketingLeadsService {
   }
 
   /**
+   * companyId -> name, for the list's `company` field and for the group order
+   * behind `sortBy=company`.
+   *
+   * `ids` narrows it to a page; omitting them reads the workspace's companies,
+   * which is what settling a group ORDER across the whole filtered set needs.
+   * Either way `workspaceId` is spelled at the call site and spread LAST, so no
+   * argument can widen the read past the caller's tenant — an id belonging to
+   * another workspace simply does not come back, and the caller then treats
+   * that person as ungrouped rather than naming somebody else's company.
+   *
+   * Archived companies are INCLUDED: archiving a company does not unlink its
+   * contacts (only deleting does, see CompaniesService.remove), so excluding
+   * them here would strand those people under a header with no name.
+   */
+  private async companyNames(workspaceId: string, ids?: string[]): Promise<Map<string, string>> {
+    const rows = await this.prisma.company.findMany({
+      where: { ...(ids ? { id: { in: ids } } : {}), workspaceId },
+      select: { id: true, name: true },
+    });
+    return new Map(rows.map((c) => [c.id, c.name]));
+  }
+
+  /**
    * The assignment-eligibility read, from the CORRECT source of truth.
    *
    * `MarketingUsersService.update()` splits its dto and writes role/status ONLY
@@ -315,10 +338,19 @@ export class MarketingLeadsService {
       'nextFollowUp',
       // The person-primary surface's sort. NOT a column - resolved below.
       'lastActivityAt',
+      // The person-primary surface's GROUPING ("Grupla: Şirkete göre", the
+      // 2026-09-01 design's "Karar 2"). Also not a column: the company NAME
+      // lives in a table with no foreign key back to `leads`. Resolved below,
+      // in the same branch as lastActivityAt.
+      'company',
     ];
     const sortByActivity = filter.sortBy === 'lastActivityAt';
+    const sortByCompany = filter.sortBy === 'company';
+    // Both are ranked in memory rather than by Postgres — see the branch below
+    // for why, and for what it costs.
+    const rankInMemory = sortByActivity || sortByCompany;
     const orderBy: Prisma.LeadOrderByWithRelationInput = {};
-    if (filter.sortBy && allowedSortFields.includes(filter.sortBy) && !sortByActivity) {
+    if (filter.sortBy && allowedSortFields.includes(filter.sortBy) && !rankInMemory) {
       (orderBy as any)[filter.sortBy] = filter.sortOrder || 'desc';
     } else {
       orderBy.createdAt = 'desc';
@@ -367,8 +399,14 @@ export class MarketingLeadsService {
 
     let leads: any[];
     let total: number;
+    /**
+     * The workspace's company names, when the branch below has already had to
+     * read them all to settle the group order. Kept so the row resolution at
+     * the bottom does not read a subset of the same table a second time.
+     */
+    let allCompanyNames: Map<string, string> | null = null;
 
-    if (sortByActivity) {
+    if (rankInMemory) {
       /**
        * `lastActivityAt` is not a column. It is the newest of three instants -
        * the last message on any of the person's threads, their newest
@@ -387,26 +425,64 @@ export class MarketingLeadsService {
        * to the page (an order cannot be settled from a page). The two GROUP BYs
        * are bounded by the number of people ever messaged or touched, not by
        * the number of messages or activities.
+       *
+       * ## `sortBy=company` rides the same branch
+       *
+       * "Grupla: Şirkete göre" on the person surface is this ORDER, not a
+       * bucketing of the page. Bucketing the page would have needed no backend
+       * at all - the column already holds 25 rows - and it would have lied: the
+       * list is paginated, so a company's people are scattered, and a header
+       * reading "Acme - 3" over a company with forty contacts is worse than no
+       * grouping at all. Settled across the whole filtered set, every member of
+       * a company is CONTIGUOUS and the page is a window onto that; pagination
+       * cuts the order, it does not scramble it.
+       *
+       * The company name is in `companies`, which reaches the tenant by a soft
+       * `workspaceId` and has no foreign key to `leads` - the same reason the
+       * activity sort is here. One extra read, workspace-scoped, bounded by the
+       * number of companies.
+       *
+       * `sortOrder` is deliberately NOT consulted for the group key: groups are
+       * always A-Z and the people with no company are always LAST. A "descending
+       * grouping" is not a thing anyone asked for, and it would move the
+       * ungrouped block to the top where it reads as the most important one.
+       * Inside a group the owner's own sort survives - newest activity first.
        */
-      const [candidates, msgAt, actAt] = await Promise.all([
+      const [candidates, msgAt, actAt, groupNames] = await Promise.all([
         this.prisma.lead.findMany({
           where: { ...where, workspaceId },
-          select: { id: true, createdAt: true },
+          select: { id: true, createdAt: true, companyId: true },
         }),
         workspaceLastMessageAt(this.prisma, workspaceId),
         workspaceLastActivityAt(this.prisma, workspaceId),
+        sortByCompany ? this.companyNames(workspaceId) : Promise.resolve(new Map<string, string>()),
       ]);
+      if (sortByCompany) allCompanyNames = groupNames;
 
       const dir = filter.sortOrder === 'asc' ? 1 : -1;
       const ranked = candidates
         .map((c) => ({
           id: c.id,
           at: newestOf(c.createdAt, msgAt.get(c.id), actAt.get(c.id)).getTime(),
+          // Empty string = "no group". A companyId this workspace cannot NAME
+          // counts as no group too, which is the honest reading of both ways it
+          // happens: a company deleted by a racing request, and an id that
+          // belongs to another tenant - `companyNames` is workspace-scoped, so
+          // it can never resolve the second one.
+          group: (c.companyId && groupNames.get(c.companyId)) || '',
         }))
-        // Ties break on id so two people who moved in the same millisecond keep
-        // a stable order between requests - otherwise a page boundary could
-        // show one of them twice and the other never.
-        .sort((a, b) => (a.at === b.at ? a.id.localeCompare(b.id) : (a.at - b.at) * dir));
+        .sort((a, b) => {
+          if (sortByCompany && a.group !== b.group) {
+            // The ungrouped block is last whichever way the names compare.
+            if (!a.group) return 1;
+            if (!b.group) return -1;
+            return a.group.localeCompare(b.group, 'tr');
+          }
+          // Ties break on id so two people who moved in the same millisecond
+          // keep a stable order between requests - otherwise a page boundary
+          // could show one of them twice and the other never.
+          return a.at === b.at ? a.id.localeCompare(b.id) : (a.at - b.at) * (sortByCompany ? -1 : dir);
+        });
 
       total = candidates.length;
       const pageIds = ranked.slice(skip, skip + limit).map((r) => r.id);
@@ -450,11 +526,33 @@ export class MarketingLeadsService {
       leads.map((l) => l.id),
     );
 
+    /**
+     * The company behind each row's `companyId`, resolved for EVERY sort and
+     * not only for `sortBy=company`.
+     *
+     * A field that appears under one sort and vanishes under another is a
+     * second shape of the same payload for every other caller to guess at, and
+     * the surface reads `company` off the rows it was handed. It costs one
+     * indexed read of at most `limit` ids - and nothing at all in a workspace
+     * where nobody is linked to a company, which is most of them.
+     */
+    const pageCompanyIds = Array.from(
+      new Set(leads.map((l) => l.companyId).filter((id): id is string => !!id)),
+    );
+    const companyNames = pageCompanyIds.length
+      ? (allCompanyNames ?? (await this.companyNames(workspaceId, pageCompanyIds)))
+      : new Map<string, string>();
+
     const data = leads.map((lead) => {
       const { activities, ...rest } = lead as any;
       const summary = summaries.get(lead.id);
+      const companyName = lead.companyId ? companyNames.get(lead.companyId) : undefined;
       return {
         ...rest,
+        // NULL, never a bare id: a company this workspace cannot name is not a
+        // group, and printing the uuid would put a header on the surface that
+        // means nothing to the person reading it.
+        company: companyName ? { id: lead.companyId as string, name: companyName } : null,
         lastMessageAt: summary?.lastMessageAt ?? null,
         lastMessagePreview: summary?.lastMessagePreview ?? null,
         unreadCount: summary?.unreadCount ?? 0,
