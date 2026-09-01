@@ -46,7 +46,11 @@ CREATE TABLE IF NOT EXISTS "content_concepts" (
     "socialCampaignId" TEXT,
     "createdById" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- No DB default, matching every other @updatedAt column in this schema:
+    -- Prisma writes the value on every update from the client, and a
+    -- CURRENT_TIMESTAMP default here is real drift — `prisma migrate diff`
+    -- fails the CI parity gate on it.
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "content_concepts_pkey" PRIMARY KEY ("id")
 );
