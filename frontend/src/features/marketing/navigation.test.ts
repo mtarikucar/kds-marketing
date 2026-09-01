@@ -310,9 +310,17 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * they were given a home in Settings ("Marketing assets") rather than being
    * left reachable only by a URL somebody would have to already know.
    */
+  /**
+   * `/settings/ai-models` (2026-09-01): a genuinely NEW page, not a relocation —
+   * the workspace-level default image/video model, with each model's price on
+   * the option. Added here rather than to the photograph above, per this list's
+   * own rule: the frozen fifty is never edited, and an addition nobody wrote
+   * down still fails the exact-equality assertion below.
+   */
   const PATHS_ADDED_SINCE = [
     '/settings/pipelines', '/dashboard', '/help',
     '/email-templates', '/reviews', '/affiliates',
+    '/settings/ai-models',
   ];
 
   it('keeps every retired hub reachable by route, so nothing is lost', () => {

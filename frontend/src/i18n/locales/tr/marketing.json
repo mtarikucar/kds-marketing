@@ -619,7 +619,31 @@
     "personas": "UGC Personaları",
     "brandBrain": "Marka Beyni",
     "brand": "Marka",
-    "home": "Ana ekran"
+    "home": "Ana ekran",
+    "aiModels": "Yapay zeka modelleri"
+  },
+  "aiModels": {
+    "title": "Yapay zeka üretim modelleri",
+    "subtitle": "Bu çalışma alanının görsel ve videoları hangi modelle ürettiği ve her birinin maliyeti. Bir kampanya kendi modelini seçebilir; kampanyası olmayan her üretim burada seçtiğini kullanır.",
+    "loadFailed": "Model kataloğu yüklenemedi, bu yüzden hiçbir seçenek gösterilemiyor. Bu bir yükleme hatası — katalog boş değil.",
+    "noModels": "Sunucu bu türden hiç model döndürmedi. Bu bir katalog arızası, paket sınırı değil — düzeltilene kadar üretim yapılandırılamaz.",
+    "saved": "Model varsayılanları güncellendi.",
+    "saveFailed": "Model varsayılanları kaydedilemedi.",
+    "platformDefault": "Platform varsayılanı",
+    "platformDefaultIs": "Platform varsayılanı ({{label}})",
+    "platformDefaultHint": "Platform bunu değiştirirse takip etmeye devam eder.",
+    "inUse": "Kullanımda",
+    "priceVideo": "saniyede {{credits}} kredi ({{usd}}/sn)",
+    "priceImage": "görsel başına {{credits}} kredi ({{usd}})",
+    "overrideNote": "Kendi modelini belirleyen kampanya onu korur — bu, belirlemeyen her şeyin varsayılanıdır.",
+    "video": {
+      "title": "Video modeli",
+      "desc": "Video bu üründeki en pahalı eylem ve saniye başına ücretlendiriliyor; yani beş çekimlik bir konsept, burada seçtiğinin tüm süreyle çarpımı kadara mal olur."
+    },
+    "image": {
+      "title": "Görsel modeli",
+      "desc": "Görsel başına sabit ücretlendirilir — gönderi görselleri ve referans kareler için kullanılır."
+    }
   },
   "common": {
     "save": "Kaydet",

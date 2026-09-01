@@ -102,6 +102,24 @@ model Workspace {
   /// `research/research-execution.ts`.
   researchExecution String @default("AUTO")
 
+  /// WHICH fal.ai model this workspace's generations run on, by kind — the
+  /// middle term of `campaign override ?? workspace default ?? code constant`.
+  ///
+  /// Video is the most expensive action in the product and the catalogue spans
+  /// a 10x price range (3 credits/sec to 25 credits/sec), so this is a spending
+  /// decision, not a preference. NULL means "no choice made" and falls through
+  /// to DEFAULT_IMAGE_MODEL / DEFAULT_VIDEO_MODEL in
+  /// `ai/media/media-models.config.ts` — it is NOT the same as a stored copy of
+  /// the constant, because a stored copy would pin a workspace to a model the
+  /// platform later moves off.
+  ///
+  /// Only a CATALOGUED id of the MATCHING kind may be written here (the write
+  /// path validates, `MediaGenService` validates again on read): an id with no
+  /// catalogue entry has no price, and an image id on the video field would bill
+  /// a per-second clip at the flat per-image rate.
+  defaultImageModel String?
+  defaultVideoModel String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -18,6 +18,10 @@ function makeSvc(links: { campaign?: unknown; item?: unknown } = {}) {
         .fn()
         .mockResolvedValue(links.campaign === undefined ? { id: 'c1' } : links.campaign),
     },
+    // Stage 3: requestGeneration now resolves the workspace-level default model
+    // when the caller names none. No default set here -> the code constant, which
+    // is what every assertion in this file was written against.
+    workspace: { findUnique: jest.fn().mockResolvedValue({ defaultImageModel: null, defaultVideoModel: null }) },
     socialCampaignItem: {
       findFirst: jest
         .fn()

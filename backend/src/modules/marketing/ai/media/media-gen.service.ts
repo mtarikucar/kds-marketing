@@ -17,7 +17,7 @@ import {
   MediaProvider, MEDIA_PROVIDER, MediaGenResult,
 } from '../providers/media-provider.interface';
 import {
-  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, estimateMediaCredits, estimateMediaUsd, getMediaModel,
+  defaultModelFor, estimateMediaCredits, estimateMediaUsd, isCataloguedModel,
 } from './media-models.config';
 import { TERMINAL_ASSET_STATUSES, isTerminalAssetStatus } from './media-asset.constants';
 
@@ -112,6 +112,51 @@ export class MediaGenService implements OnModuleInit {
     }).catch(() => undefined);
   }
 
+  /**
+   * The middle term of the resolution order — `campaign override ?? THIS ?? code
+   * constant` — and the only place it is applied.
+   *
+   * WHY HERE and not in the producers. Two services buy clips
+   * (`concept-promotion.service.ts` and `social-campaigns.service.ts`) and both
+   * already pass the campaign's override when it has one and pass nothing when
+   * it does not. Resolving in either leaves the other on the constant. Resolving
+   * at this single shared write also makes a sentence that has been printed in
+   * `jeeta.generate_image` / `jeeta.generate_video`'s published descriptions
+   * since they shipped — "Defaults to the workspace default" — true for the
+   * first time.
+   *
+   * Only reached when the caller named NO model, so an override still costs no
+   * query.
+   *
+   * A stored default that is no longer catalogued, or is of the wrong kind,
+   * falls back to the constant AND SAYS SO. Running it is not an option (its
+   * price is unknown, which is precisely what the guard above refuses), and
+   * refusing the generation outright is worse: retiring one entry from the
+   * catalogue would stop every workspace that had chosen it from generating at
+   * all, at deploy time, with no warning. The log line is what keeps that from
+   * being silent — a workspace billed at a rate its settings screen does not
+   * show is the failure this comment exists to make findable.
+   */
+  private async workspaceDefaultModel(
+    workspaceId: string,
+    type: 'IMAGE' | 'VIDEO',
+  ): Promise<string> {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { defaultImageModel: true, defaultVideoModel: true },
+    });
+    const stored = (type === 'VIDEO' ? ws?.defaultVideoModel : ws?.defaultImageModel) ?? null;
+    if (!stored) return defaultModelFor(type);
+    if (!isCataloguedModel(stored, type)) {
+      this.logger.warn(
+        `workspace ${workspaceId} has "${stored}" as its default ${type} model, which is not in the catalogue for that kind — ` +
+          `falling back to ${defaultModelFor(type)}. The stored value cannot be priced, so it cannot be run.`,
+      );
+      return defaultModelFor(type);
+    }
+    return stored;
+  }
+
   async requestGeneration(workspaceId: string, dto: RequestGenerationDto): Promise<{ assetId: string }> {
     if (!this.provider.isConfigured()) {
       throw new ServiceUnavailableException({ code: 'MEDIA_GEN_NOT_CONFIGURED', message: 'Media generation is not configured' });
@@ -120,8 +165,16 @@ export class MediaGenService implements OnModuleInit {
     // Only catalogued models (known pricing) may be requested — an arbitrary
     // model id would be billed at the cheap fallback estimate while the provider
     // charges the real (possibly far higher) rate.
-    if (dto.model && !getMediaModel(dto.model)) {
-      throw new BadRequestException({ code: 'MEDIA_GEN_UNKNOWN_MODEL', message: `Unknown media model: ${dto.model}` });
+    //
+    // The membership question includes the KIND. It did not used to, and the
+    // hole was the same one this guard exists to close: `fal-ai/qwen-image` on a
+    // VIDEO request passed (it IS catalogued) and then priced the clip at the
+    // flat 2-credit per-image rate instead of per second.
+    if (dto.model && !isCataloguedModel(dto.model, dto.type)) {
+      throw new BadRequestException({
+        code: 'MEDIA_GEN_UNKNOWN_MODEL',
+        message: `Unknown ${dto.type.toLowerCase()} model: ${dto.model}`,
+      });
     }
 
     // The campaign linkage is PROVEN, not trusted, and it is checked before the
@@ -166,7 +219,7 @@ export class MediaGenService implements OnModuleInit {
       throw new BadRequestException({ code: 'MEDIA_GEN_TOO_MANY', message: `Too many running generations (max ${MAX_INFLIGHT})` });
     }
 
-    const model = dto.model ?? (dto.type === 'VIDEO' ? DEFAULT_VIDEO_MODEL : DEFAULT_IMAGE_MODEL);
+    const model = dto.model ?? (await this.workspaceDefaultModel(workspaceId, dto.type));
     const durationSec = dto.type === 'VIDEO' ? Math.min(dto.durationSec ?? 5, MAX_VIDEO_SEC) : undefined;
     const estimate = estimateMediaCredits(model, durationSec);
     const estimateUsd = estimateMediaUsd(model, durationSec);

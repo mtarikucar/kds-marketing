@@ -399,6 +399,7 @@ import { R2StorageService } from '../../common/storage/r2-storage.service';
 import { MarketingMediaController } from './controllers/marketing-media.controller';
 import { MarketingMediaWebhookController } from './controllers/marketing-media-webhook.controller';
 import { MediaGenService } from './ai/media/media-gen.service';
+import { MediaModelDefaultsService } from './ai/media/media-model-defaults.service';
 import { BrandKitService } from './ai/media/brand-kit.service';
 import { FalProvider } from './ai/providers/fal.provider';
 import { MEDIA_PROVIDER } from './ai/providers/media-provider.interface';
@@ -1148,6 +1149,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     FalProvider,
     { provide: MEDIA_PROVIDER, useExisting: FalProvider },
     MediaGenService,
+    MediaModelDefaultsService,
     BrandKitService,
     SocialCampaignsService,
     SocialCampaignLinkService,

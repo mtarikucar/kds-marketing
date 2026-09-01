@@ -15,6 +15,7 @@ import {
   FlaskConical,
   CreditCard,
   Sparkles,
+  Clapperboard,
   BookOpen,
   Inbox,
   Zap,
@@ -471,6 +472,10 @@ export const NAV_HUBS: NavHub[] = [
       // fullBleed: the builder (/automations/new, /automations/:id/edit) owns the
       // viewport. See NavChild.fullBleed.
       { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true, fullBleed: true },
+      // Which fal.ai model — and therefore what per-clip price — this workspace
+      // generates on. `managerOnly` mirrors the route's MANAGER gate in App.tsx
+      // and the PATCH's own MANAGER + settings.manage floor.
+      { path: '/settings/ai-models', labelKey: 'nav.aiModels', label: 'AI models', icon: Clapperboard, managerOnly: true },
       { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
       /**
        * Three pages that had no menu entry anywhere.

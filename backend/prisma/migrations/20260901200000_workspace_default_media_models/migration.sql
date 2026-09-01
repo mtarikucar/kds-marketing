@@ -1,0 +1,32 @@
+-- The workspace-level media model default — the middle term of
+-- `campaign override ?? workspace default ?? code constant`.
+--
+-- Until now the only per-tenant model choice was per CAMPAIGN
+-- (social_campaigns.defaultImageModel / defaultVideoModel), and everything with
+-- no campaign — every jeeta.generate_image / generate_video call, every manual
+-- panel generation — fell straight to a constant in TypeScript that no customer
+-- could see, let alone change. Both of those tools' published descriptions have
+-- said "Defaults to the workspace default" since the day they shipped; this is
+-- the column that makes the sentence true.
+--
+-- Two columns rather than one JSON blob, and rather than a key inside the
+-- existing free-shape `workspaces.settings`: this is a SPEND control (the video
+-- catalogue spans 3 to 25 credits per second, a 10x range), it mirrors the
+-- per-campaign columns it overrides exactly, and a typed column is what lets a
+-- future "which workspaces are on the expensive tier" question be a query
+-- instead of a scan.
+--
+-- NULL is the only sane default and is NOT a stored copy of the code constant.
+-- NULL means "this workspace has not chosen", so it keeps following the
+-- platform's constant when that constant moves; backfilling today's constant
+-- would silently pin every existing workspace to a model they never picked.
+--
+-- Nothing validates the CONTENT at the database level on purpose. The
+-- catalogue lives in code (media-models.config.ts) and changes with a deploy,
+-- so a CHECK constraint here would turn "retire a model" into a migration that
+-- can fail on customer data. The rule is enforced on the write (the settings
+-- endpoint refuses an uncatalogued id, and one of the wrong kind) and again on
+-- the read (MediaGenService falls back to the constant and logs, rather than
+-- running a model whose price it cannot compute).
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "defaultImageModel" TEXT;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "defaultVideoModel" TEXT;

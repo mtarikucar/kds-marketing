@@ -3,6 +3,8 @@ import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_VIDEO_MODEL,
   getMediaModel,
+  isCataloguedModel,
+  defaultModelFor,
   estimateMediaCredits,
   estimateMediaUsd,
 } from './media-models.config';
@@ -34,5 +36,58 @@ describe('media-models config', () => {
 
   it('falls back to a safe non-zero estimate for an unknown model', () => {
     expect(estimateMediaCredits('fal-ai/unknown')).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Stage 3 — the workspace-level default.
+ *
+ * These two helpers are the whole vocabulary the resolution order needs, and
+ * they are PURE on purpose: the order itself (campaign override ?? workspace
+ * default ?? code constant) is enforced at one call site in MediaGenService,
+ * and putting the catalogue rules here keeps that call site readable.
+ */
+describe('media-models config — catalogue membership by KIND', () => {
+  it('accepts a catalogued id only for its own kind', () => {
+    expect(isCataloguedModel(DEFAULT_VIDEO_MODEL, 'VIDEO')).toBe(true);
+    expect(isCataloguedModel(DEFAULT_IMAGE_MODEL, 'IMAGE')).toBe(true);
+  });
+
+  /**
+   * The check the plain `getMediaModel(id)` guard could not make. An IMAGE model
+   * accepted for a VIDEO request is not a harmless mislabel: `estimateMediaCredits`
+   * would bill the flat 3-credit image rate for a clip fal charges per second for,
+   * which is the exact failure the "unknown model" refusal already exists to stop.
+   */
+  it('refuses a catalogued id of the WRONG kind', () => {
+    expect(isCataloguedModel(DEFAULT_IMAGE_MODEL, 'VIDEO')).toBe(false);
+    expect(isCataloguedModel(DEFAULT_VIDEO_MODEL, 'IMAGE')).toBe(false);
+  });
+
+  it('refuses an uncatalogued id for either kind', () => {
+    expect(isCataloguedModel('fal-ai/whatever', 'VIDEO')).toBe(false);
+    expect(isCataloguedModel('fal-ai/whatever', 'IMAGE')).toBe(false);
+  });
+
+  it('names the code constant for each kind', () => {
+    expect(defaultModelFor('VIDEO')).toBe(DEFAULT_VIDEO_MODEL);
+    expect(defaultModelFor('IMAGE')).toBe(DEFAULT_IMAGE_MODEL);
+  });
+
+  /**
+   * The settings card is a PRICE list, so the catalogue has to be readable as
+   * one. Every entry must carry the number its kind is billed by — an entry
+   * with no price would render as a free option next to paid ones.
+   */
+  it('prices every catalogued model in the unit its kind is billed in', () => {
+    for (const m of Object.values(MEDIA_MODELS)) {
+      if (m.type === 'VIDEO') {
+        expect(m.pricePerSecUsd).toBeGreaterThan(0);
+        expect(m.creditsPerSec).toBeGreaterThan(0);
+      } else {
+        expect(m.priceUsd).toBeGreaterThan(0);
+        expect(m.credits).toBeGreaterThan(0);
+      }
+    }
   });
 });

@@ -40,6 +40,27 @@ export function getMediaModel(id: string): MediaModel | undefined {
   return MEDIA_MODELS[id];
 }
 
+/**
+ * Is `id` in the catalogue AS a model of this kind?
+ *
+ * Stricter than `getMediaModel(id) !== undefined`, and the extra strictness is
+ * the point. The catalogue is what prices a generation, and it prices the two
+ * kinds in different UNITS — images flat per image, video per second. So an
+ * IMAGE id accepted for a VIDEO request is not a cosmetic mislabel: it bills a
+ * per-second clip at the flat 3-credit image rate, which is the same
+ * under-charge the "unknown model" refusal was written to stop. Membership and
+ * kind are one question, so they are one function.
+ */
+export function isCataloguedModel(id: string, type: GeneratedAssetType): boolean {
+  return MEDIA_MODELS[id]?.type === type;
+}
+
+/** The code constant for a kind — the last term of the resolution order
+ *  (campaign override ?? workspace default ?? THIS). */
+export function defaultModelFor(type: GeneratedAssetType): string {
+  return type === 'VIDEO' ? DEFAULT_VIDEO_MODEL : DEFAULT_IMAGE_MODEL;
+}
+
 export function estimateMediaCredits(modelId: string, durationSec?: number): number {
   const m = MEDIA_MODELS[modelId];
   if (!m) return FALLBACK_IMAGE_CREDITS;

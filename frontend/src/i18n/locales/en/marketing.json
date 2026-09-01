@@ -364,7 +364,31 @@
     "help": "Help",
     "appointments": "Appointments",
     "brand": "Brand",
-    "home": "Home"
+    "home": "Home",
+    "aiModels": "AI models"
+  },
+  "aiModels": {
+    "title": "AI generation models",
+    "subtitle": "Which model this workspace generates images and videos with, and what each one costs. A campaign can still override it; anything with no campaign uses what you choose here.",
+    "loadFailed": "The model catalogue could not be loaded, so no choice can be shown. This is a load failure, not an empty catalogue.",
+    "noModels": "The server returned no models of this kind. That is a catalogue fault, not a plan limit — generation cannot be configured until it is fixed.",
+    "saved": "Model defaults updated.",
+    "saveFailed": "The model defaults could not be saved.",
+    "platformDefault": "Platform default",
+    "platformDefaultIs": "Platform default ({{label}})",
+    "platformDefaultHint": "Keeps following the platform if it changes this.",
+    "inUse": "In use",
+    "priceVideo": "{{credits}} credits/sec ({{usd}}/sec)",
+    "priceImage": "{{credits}} credits / image ({{usd}})",
+    "overrideNote": "A campaign that sets its own model keeps it — this is the default for everything that does not.",
+    "video": {
+      "title": "Video model",
+      "desc": "Video is the most expensive action in this product and is billed per second, so a five-beat concept costs whatever you pick here multiplied by its whole runtime."
+    },
+    "image": {
+      "title": "Image model",
+      "desc": "Billed flat, per image — used for post creatives and reference frames."
+    }
   },
   "common": {
     "save": "Save",

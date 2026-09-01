@@ -53,7 +53,13 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     label: 'Automation',
     // Set-and-forget machinery, absorbed from the Strategy and Automation hubs:
     // you configure the plan, the system runs it without you.
-    paths: ['/studio/strategy', '/automations', '/trigger-links'],
+    //
+    // /settings/ai-models joined on 2026-09-01 and belongs here for exactly that
+    // reason: it is the model — and therefore the PRICE PER CLIP — that the
+    // content engine spends on when nobody is watching. Grouping it with the
+    // things that run unattended is more honest than filing it under Workspace
+    // beside the logo and the timezone.
+    paths: ['/studio/strategy', '/automations', '/settings/ai-models', '/trigger-links'],
   },
   {
     key: 'marketing',
@@ -204,7 +210,17 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
             {t('nav.group.settings', { defaultValue: 'Settings' })}
           </h2>
         </div>
-        <nav className="min-h-0 flex-1 space-y-4 p-3">
+        {/*
+          Named landmark. Without it this nav and the mobile strip below are two
+          anonymous lists of the same links, and nothing — a screen reader or a
+          browser test — can say which one it is looking at. The strip is
+          `md:hidden` and this one `hidden md:flex`, so exactly one is on screen
+          at a time, but only in a real browser: in jsdom both are "present".
+        */}
+        <nav
+          aria-label={t('nav.group.settings', { defaultValue: 'Settings' })}
+          className="min-h-0 flex-1 space-y-4 p-3"
+        >
           {grouped.map((g) => (
             <div key={g.key} className="space-y-1">
               <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">

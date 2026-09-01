@@ -23,6 +23,10 @@ function makeSvc(opts: { budget?: unknown; walletEntry?: unknown; asset?: unknow
     // The linkage ids on an engine DTO are now proven against the workspace
     // before anything is reserved (see media-gen.service.request.spec.ts).
     socialCampaign: { findFirst: jest.fn().mockResolvedValue({ id: 'c1' }) },
+    // Stage 3: requestGeneration now resolves the workspace-level default model
+    // when the caller names none. No default set here -> the code constant, which
+    // is what every assertion in this file was written against.
+    workspace: { findUnique: jest.fn().mockResolvedValue({ defaultImageModel: null, defaultVideoModel: null }) },
     socialCampaignItem: { findFirst: jest.fn().mockResolvedValue({ id: 'ci-1' }) },
     growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(opts.walletEntry ?? null) },
   };
