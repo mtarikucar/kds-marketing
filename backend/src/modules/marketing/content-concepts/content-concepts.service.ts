@@ -423,10 +423,10 @@ export class ContentConceptsService {
    * the `status` predicate against the committed row version, so the loser of a
    * race matches nothing.
    *
-   * `count === 0` then has two causes, and they are different answers to the
-   * caller — not found vs already decided — so the row is read back to say
-   * which. That read is on the failure path only; the happy path pays for one
-   * extra read to return the decided row, since `updateMany` returns a count.
+   * The row is then read back once, for two reasons: `updateMany` returns a
+   * count rather than the row, and `count === 0` has two causes that are
+   * different answers to the caller — not found vs already decided — which only
+   * the row itself can tell apart.
    */
   async review(
     workspaceId: string,
