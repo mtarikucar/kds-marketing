@@ -48,6 +48,38 @@ export const PRODUCE_MAX_WAITS = Number(process.env.CONCEPT_PRODUCE_MAX_WAITS ??
  *  over an exhausted cadence would throw the approved work away. */
 const NO_SLOT_FALLBACK_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The campaign statuses a concept may be produced into.
+ *
+ * A MONEY guard, not a tidiness one. Production buys one clip per beat, and the
+ * item it produces is only ever published by
+ * `SocialCampaignsService.confirmItem`, which opens with
+ * `if (c.status !== 'ACTIVE')` and — for everything except PAUSED — returns with
+ * no reschedule, no error and no trace. A concept produced into a DRAFT campaign
+ * is therefore bought in full, reaches NEEDS_APPROVAL, is approved by a human to
+ * SCHEDULED, and parks there forever: money spent, no video published, no reason
+ * recorded anywhere.
+ *
+ * That was not hypothetical. DRAFT is the ONLY campaign an agent can create
+ * (`jeeta.create_social_campaign`: "activation is deliberately not available to
+ * agents"), so the agent-driven path led straight into it.
+ *
+ * PAUSED is IN, and the asymmetry is the point rather than an oversight: it is
+ * the one non-ACTIVE status the gate actually handles, rescheduling itself
+ * hourly so a resume publishes the item it has been holding. COMPLETED and
+ * CANCELLED are refused for DRAFT's reason — nothing puts them back to ACTIVE.
+ *
+ * The generic path has always had this guard: `generateItem` opens with
+ * `item.campaign.status !== 'ACTIVE'`. The spend path is the one that dropped it.
+ */
+const PRODUCIBLE_CAMPAIGN_STATUSES: readonly string[] = ['ACTIVE', 'PAUSED'];
+
+/** Item statuses from which re-driving the produce queue is meaningful. Only
+ *  GENERATING: it is the state `produce()` acts on, the state a promoted item is
+ *  created in, and — because `REGENERATABLE_STATES` excludes it — the one state
+ *  no other surface in the product can reach. */
+const RESCUABLE_ITEM_STATUS = 'GENERATING';
+
 export interface PromoteResult {
   item: { id: string; status: string; socialCampaignId: string; scheduledFor: Date };
   /** False when an item already existed — the caller can tell a no-op apart
@@ -134,8 +166,26 @@ export class ConceptPromotionService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.runner.registerHandler(CONCEPT_PRODUCE_KIND, (job: ClaimedJob) =>
-      this.produce(job.payload.itemId, job.payload.workspaceId, Number(job.payload.waits ?? 0)),
+    this.runner.registerHandler(
+      CONCEPT_PRODUCE_KIND,
+      (job: ClaimedJob) =>
+        this.produce(job.payload.itemId, job.payload.workspaceId, Number(job.payload.waits ?? 0)),
+      // The DLQ hook. `produce` swallows GENERATION errors on purpose, but a DB
+      // error anywhere else in it — the opening findFirst, the socialPost.create,
+      // the closing update — escapes, and the runner then retries five times and
+      // DLQs the job. Without this the item is left at GENERATING with
+      // `error: null`, which reads as work that has not started yet while it is
+      // in fact holding clips the workspace has already been charged for; and
+      // GENERATING is the one status no other surface can act on.
+      //
+      // `fail()` is best-effort and never throws, which is what the runner wants
+      // from a hook it calls while already handling a failure.
+      async (job: ClaimedJob, error: string) => {
+        await this.fail(
+          String(job.payload.itemId),
+          `production was abandoned after every retry attempt failed (${error}) — any clips already generated are on this item and were paid for, so regenerating buys the rest, not all of them`,
+        );
+      },
     );
   }
 
@@ -173,7 +223,22 @@ export class ConceptPromotionService implements OnModuleInit {
       // If it is GONE (its campaign was deleted, cascading the item away) we
       // fall through and produce again — the work no longer exists, so
       // "already promoted" would be a lie, and the unique index is free again.
-      if (existing) return { item: existing, created: false };
+      if (existing) {
+        // THE RESCUE. An item still at GENERATING is an item whose production
+        // never finished: the enqueue crashed, the job was DLQ'd, the process
+        // died between the create and the schedule. Nothing else in the product
+        // can reach it — `REGENERATABLE_STATES` excludes GENERATING precisely so
+        // that a human cannot yank an item out from under a run that is
+        // mid-spend — so re-driving the queue here is the only way back.
+        //
+        // It is free and it cannot double-buy: `schedule` collapses onto the
+        // PENDING job under the same dedup key, and `produce()` resumes from
+        // `generatedAssetIds`, the clips already paid for.
+        if (existing.status === RESCUABLE_ITEM_STATUS) {
+          await this.enqueueProduction(workspaceId, existing.id, 0);
+        }
+        return { item: existing, created: false };
+      }
     }
 
     const campaign = await this.requireCampaign(
@@ -190,7 +255,16 @@ export class ConceptPromotionService implements OnModuleInit {
         // that was rolled back, are both states this makes impossible.
         await tx.contentConcept.updateMany({
           where: { id: conceptId, workspaceId },
-          data: { promotedItemId: created.id },
+          data: {
+            promotedItemId: created.id,
+            // The campaign is written back, not merely used. A concept promoted
+            // under a campaign the REVIEWER named (rather than one the idea
+            // arrived scoped to) otherwise reads as unscoped forever, and the
+            // documented "item cascaded away -> promote again" recovery would
+            // demand the campaign be named a second time — which no surface
+            // does, and which nothing on the row would even tell a caller.
+            socialCampaignId: campaign.id,
+          },
         });
         return created;
       });
@@ -234,6 +308,15 @@ export class ConceptPromotionService implements OnModuleInit {
     if (!campaign) {
       throw new BadRequestException(
         `Social campaign ${campaignId} does not exist in this workspace, so the concept has nowhere to be produced.`,
+      );
+    }
+    // See PRODUCIBLE_CAMPAIGN_STATUSES: refused BY NAME, and refused HERE —
+    // before any verdict is recorded and before a single clip is bought.
+    if (!PRODUCIBLE_CAMPAIGN_STATUSES.includes(campaign.status)) {
+      throw new BadRequestException(
+        `Social campaign "${campaign.name}" is ${campaign.status}, and only an ACTIVE or PAUSED campaign can publish what this would produce. ` +
+          `Producing into it would generate — and CHARGE FOR — one video clip per beat that the publish gate would then never release. ` +
+          `Activate the campaign in the panel first (activation is deliberately a human act, not an agent one), or pass a different socialCampaignId; see jeeta.list_social_campaigns.`,
       );
     }
     return campaign;

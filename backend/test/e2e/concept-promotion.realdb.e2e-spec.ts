@@ -12,6 +12,8 @@ import {
 } from '../../src/modules/marketing/content-concepts/concept-promotion.service';
 import { McpToolRegistry } from '../../src/modules/marketing/mcp/mcp-tool-registry';
 import { registerContentTools } from '../../src/modules/marketing/mcp/tools/content.tools';
+import { MediaGenService } from '../../src/modules/marketing/ai/media/media-gen.service';
+import { MEDIA_PROVIDER } from '../../src/modules/marketing/ai/providers/media-provider.interface';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
 /**
@@ -331,11 +333,20 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     expect(second.item.id).toBe(first.item.id);
 
     // The property, counted in the table rather than inferred from a return
-    // value: exactly one item names this concept, and no second production job
-    // was queued to pay for a second set of clips.
+    // value: exactly one item names this concept, so there is no second set of
+    // clips to pay for.
     const items = await prisma.socialCampaignItem.findMany({ where: { contentConceptId: conceptId } });
     expect(items).toHaveLength(1);
-    expect(scheduled).toHaveLength(1);
+
+    // The second call DOES re-drive the queue — that is the rescue (an item
+    // stranded at GENERATING is otherwise unreachable). It cannot double-buy:
+    // every enqueue carries the same per-item dedup key, so `ScheduledJobService`
+    // collapses them onto ONE pending row, and `produce` resumes from
+    // `generatedAssetIds` in any case.
+    expect(scheduled).toHaveLength(2);
+    expect(new Set(scheduled.map((j) => j.dedupKey))).toEqual(
+      new Set([produceDedup(first.item.id)]),
+    );
   });
 
   it('two promotions at the SAME time still leave one item', async () => {
@@ -700,5 +711,498 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     });
     expect(siblings).toHaveLength(2);
     expect(siblings.every((c) => c.status === 'PROPOSED' && c.promotedItemId === null)).toBe(true);
+  });
+
+  // ─────────────────────────────────── the campaign has to be able to publish
+  //
+  // Blocker 1. The only campaign an agent can create is a DRAFT, and a DRAFT is
+  // exactly the campaign whose publish gate never fires: `confirmItem` opens
+  // with `if (c.status !== 'ACTIVE')` and, for anything that is not PAUSED,
+  // returns with no reschedule and no trace. Producing into one generated —
+  // and CHARGED FOR — every beat of the shot plan, parked the item at
+  // SCHEDULED after a human approved it, and recorded no reason anywhere.
+
+  /** A campaign of ours in any status, cleaned up by the caller. */
+  const seedCampaign = async (status: string, name = 'Seeded') => {
+    const id = randomUUID();
+    await prisma.socialCampaign.create({
+      data: {
+        id,
+        workspaceId,
+        name,
+        brief: {},
+        status: status as never,
+        automationMode: 'APPROVAL',
+        planningMode: 'AI_PROPOSE',
+        cadence: { daysOfWeek: [1, 2, 3, 4, 5], timeOfDay: '09:00' },
+        startDate: new Date(Date.now() - 86_400_000),
+        targetAccountIds: [],
+        mediaKinds: ['VIDEO'],
+        createdById: ownerId,
+      },
+    });
+    return id;
+  };
+
+  it('refuses to produce into a DRAFT campaign, by name, and generates NOTHING', async () => {
+    // DRAFT is the DEFAULT status and the only one jeeta.create_social_campaign
+    // writes, so this was the agent-driven path, not an edge case.
+    const draftCampaign = await seedCampaign('DRAFT', 'Not launched yet');
+    const conceptId = await seedApproved({ socialCampaignId: draftCampaign });
+
+    await expect(promotionSvc().promote(workspaceId, conceptId)).rejects.toThrow(/DRAFT/);
+
+    // ZERO generations is the assertion that matters: the refusal is worth
+    // nothing if the clips were bought on the way to it.
+    expect(requests).toHaveLength(0);
+    expect(fakeMediaGen.requestGeneration).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(0);
+    // And nothing was written: no item, and the concept keeps its approval so a
+    // human can activate the campaign and produce it for real.
+    expect(await prisma.socialCampaignItem.count({ where: { contentConceptId: conceptId } })).toBe(0);
+    const row = await prisma.contentConcept.findUnique({ where: { id: conceptId } });
+    expect(row!.status).toBe('APPROVED');
+    expect(row!.promotedItemId).toBeNull();
+
+    await prisma.socialCampaign.delete({ where: { id: draftCampaign } });
+  });
+
+  it('refuses a COMPLETED or a CANCELLED campaign for the same reason', async () => {
+    for (const status of ['COMPLETED', 'CANCELLED']) {
+      const id = await seedCampaign(status, `Over — ${status}`);
+      const conceptId = await seedApproved({ socialCampaignId: id });
+      await expect(promotionSvc().promote(workspaceId, conceptId)).rejects.toThrow(
+        new RegExp(status),
+      );
+      expect(requests).toHaveLength(0);
+      expect(await prisma.socialCampaignItem.count({ where: { contentConceptId: conceptId } })).toBe(0);
+      await prisma.socialCampaign.delete({ where: { id } });
+    }
+  });
+
+  it('produces into a PAUSED campaign — its gate reschedules, so the item is not lost', async () => {
+    // The asymmetry is deliberate. PAUSED is the ONE non-ACTIVE status
+    // `confirmItem` handles: it reschedules hourly instead of dropping, so a
+    // resume publishes what it has been holding. Refusing it would throw
+    // approved work away over a temporary state.
+    const pausedCampaign = await seedCampaign('PAUSED', 'On hold');
+    const conceptId = await seedApproved({ socialCampaignId: pausedCampaign });
+
+    const { item, created } = await promotionSvc().promote(workspaceId, conceptId);
+
+    expect(created).toBe(true);
+    expect(item.socialCampaignId).toBe(pausedCampaign);
+
+    await prisma.socialCampaignItem.deleteMany({ where: { id: item.id } });
+    await prisma.socialCampaign.delete({ where: { id: pausedCampaign } });
+  });
+
+  it('review(APPROVED) into a DRAFT campaign leaves the concept PROPOSED and retryable', async () => {
+    // The order the pre-flight exists for. A concept is decided ONCE; if the
+    // verdict were written first, the human could neither retry nor undo, and
+    // an approved concept would sit unproduced forever with no trace of why.
+    const draftCampaign = await seedCampaign('DRAFT', 'Still a draft');
+    const res = await conceptsSvc().planConcepts(workspaceId, {
+      idea: SHARED_IDEA,
+      count: 3,
+      createdById: ownerId,
+      socialCampaignId: campaignId,
+    });
+    const conceptId = res.concepts[0].id;
+
+    await expect(
+      conceptsSvc().review(workspaceId, conceptId, {
+        decision: 'APPROVED',
+        reviewerId: ownerId,
+        socialCampaignId: draftCampaign,
+      }),
+    ).rejects.toThrow(/DRAFT/);
+
+    const row = await prisma.contentConcept.findUnique({ where: { id: conceptId } });
+    expect(row!.status).toBe('PROPOSED');
+    expect(row!.reviewedById).toBeNull();
+    expect(requests).toHaveLength(0);
+
+    // Retryable, which is the whole point of failing before the verdict.
+    const ok = (await conceptsSvc().review(workspaceId, conceptId, {
+      decision: 'APPROVED',
+      reviewerId: ownerId,
+    })) as { status: string };
+    expect(ok.status).toBe('APPROVED');
+
+    await prisma.socialCampaign.delete({ where: { id: draftCampaign } });
+  });
+
+  it('planning refuses an unpublishable campaign BEFORE the Opus call is made', async () => {
+    // Fix 5: `socialCampaignId` was accepted optional and unvalidated, so the
+    // refusal arrived after the batch had been paid for.
+    const draftCampaign = await seedCampaign('DRAFT', 'Draft for planning');
+    const before = await prisma.contentConcept.count({ where: { workspaceId } });
+    const anthropic = {
+      isEnabled: () => true,
+      complete: jest.fn().mockResolvedValue(submission(GOOD_CONCEPTS)),
+    };
+    const svc = new ContentConceptsService(
+      prisma,
+      anthropic as never,
+      credits,
+      pipeline,
+      promotionSvc(),
+    );
+
+    await expect(
+      svc.planConcepts(workspaceId, {
+        idea: SHARED_IDEA,
+        count: 3,
+        createdById: ownerId,
+        socialCampaignId: draftCampaign,
+      }),
+    ).rejects.toThrow(/DRAFT/);
+
+    // The model was never called, and no row was written: the refusal is BEFORE
+    // the money, not after it.
+    expect(anthropic.complete).not.toHaveBeenCalled();
+    expect(await prisma.contentConcept.count({ where: { workspaceId } })).toBe(before);
+
+    await prisma.socialCampaign.delete({ where: { id: draftCampaign } });
+  });
+
+  // ────────────────────────────────────────────────────────────── the rescue
+
+  it('rescues an APPROVED concept whose item was created but never enqueued', async () => {
+    // Blocker 2, against real rows. `promote()` had ONE caller — `review()` —
+    // and `review()` refuses a concept it has already decided, so a crash after
+    // the item create and before the enqueue left the item at GENERATING with
+    // no job: unreachable from review (already decided), from regenerate
+    // (REGENERATABLE_STATES excludes GENERATING) and from anywhere else.
+    const conceptId = await seedApproved();
+    const svc = promotionSvc();
+    const { item } = await svc.promote(workspaceId, conceptId);
+    expect(scheduled).toHaveLength(1);
+
+    // Exactly the crash: the item exists, GENERATING, nothing queued for it.
+    scheduled.length = 0;
+    fakeJobs.schedule.mockClear();
+
+    const rescued = await svc.promote(workspaceId, conceptId);
+
+    // No second item — the rescue would be worthless if it bought a second set
+    // of clips.
+    expect(rescued.created).toBe(false);
+    expect(rescued.item.id).toBe(item.id);
+    expect(await prisma.socialCampaignItem.count({ where: { contentConceptId: conceptId } })).toBe(1);
+    // But production IS re-queued, which is what was missing.
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]).toMatchObject({
+      kind: CONCEPT_PRODUCE_KIND,
+      dedupKey: produceDedup(item.id),
+    });
+
+    // And the rescued job runs to the end, for real.
+    await svc.produce(item.id, workspaceId);
+    const row = await prisma.socialCampaignItem.findUnique({ where: { id: item.id } });
+    expect(row!.status).toBe('NEEDS_APPROVAL');
+    expect(row!.generatedAssetIds).toHaveLength(3);
+  });
+
+  it('the rescue does not re-queue an item the pipeline has already moved past', async () => {
+    const conceptId = await seedApproved();
+    const svc = promotionSvc();
+    const { item } = await svc.promote(workspaceId, conceptId);
+    await svc.produce(item.id, workspaceId); // -> NEEDS_APPROVAL
+    scheduled.length = 0;
+
+    await svc.promote(workspaceId, conceptId);
+
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it('the DLQ hook FAILS a stranded item instead of leaving it looking unstarted', async () => {
+    // Blocker 3. `produce` swallows GENERATION errors, but a DB error elsewhere
+    // in it escapes; the runner then retries five times and DLQs the job,
+    // leaving the item GENERATING with `error: null` — which reads as work that
+    // has not started while it is in fact holding clips that were paid for.
+    const conceptId = await seedApproved();
+    const svc = promotionSvc();
+    const { item } = await svc.promote(workspaceId, conceptId);
+    await prisma.socialCampaignItem.update({
+      where: { id: item.id },
+      data: { generatedAssetIds: ['paid-for-0'] },
+    });
+
+    const runner = { registerHandler: jest.fn() };
+    const hooked = new ConceptPromotionService(
+      prisma,
+      fakeMediaGen as never,
+      fakeJobs as never,
+      runner as never,
+    );
+    hooked.onModuleInit();
+    const onExhausted = runner.registerHandler.mock.calls[0][2] as (
+      job: unknown,
+      err: string,
+    ) => Promise<void>;
+    expect(typeof onExhausted).toBe('function');
+
+    await onExhausted({ payload: { itemId: item.id, workspaceId } }, 'Connection terminated');
+
+    const row = await prisma.socialCampaignItem.findUnique({ where: { id: item.id } });
+    expect(row!.status).toBe('FAILED');
+    expect(row!.error).toMatch(/Connection terminated/);
+    // The clip already bought is still ON the row, so a reader can see that a
+    // regenerate resumes rather than starting from zero.
+    expect(row!.generatedAssetIds).toEqual(['paid-for-0']);
+  });
+
+  // ──────────────────────────────────────────── the campaign is written back
+
+  it('records the campaign the reviewer NAMED onto the concept', async () => {
+    // Fix 6: the concept used to read as unscoped forever, and the documented
+    // "the item cascaded away — promote again" recovery then needed the campaign
+    // named a second time, which no surface does.
+    const conceptId = await seedApproved({ socialCampaignId: null });
+    const before = await prisma.contentConcept.findUnique({ where: { id: conceptId } });
+    expect(before!.socialCampaignId).toBeNull();
+
+    await promotionSvc().promote(workspaceId, conceptId, { socialCampaignId: campaignId });
+
+    const after = await prisma.contentConcept.findUnique({ where: { id: conceptId } });
+    expect(after!.socialCampaignId).toBe(campaignId);
+
+    // Which is what makes the documented recovery work with no arguments: the
+    // row now knows where it belongs.
+    const item = await prisma.socialCampaignItem.findFirst({
+      where: { contentConceptId: conceptId },
+    });
+    await prisma.socialCampaignItem.delete({ where: { id: item!.id } });
+    const again = await promotionSvc().promote(workspaceId, conceptId);
+    expect(again.created).toBe(true);
+    expect(again.item.socialCampaignId).toBe(campaignId);
+  });
+});
+
+/**
+ * The ownership guard on `MediaGenService.requestGeneration`, driven for REAL.
+ *
+ * The promotion suite above stubs `MediaGenService` wholesale, and the four
+ * mocked unit tests of this guard survive DELETING the predicate from the query:
+ * the two behavioural ones mock the read to `null`, so dropping `workspaceId`
+ * from the `where` changes nothing they observe, and only the two
+ * `toHaveBeenCalledWith({ id, workspaceId })` assertions notice — and those
+ * assert the SQL we wrote, not what Postgres does with it.
+ *
+ * This drives the real method against real rows, with the neighbour's campaign
+ * and item CROSS-STAMPED: same name, same status, same everything a query could
+ * filter on except whose they are. The provider is stubbed (fal.ai charges real
+ * money); `AiCreditsService` is the real one and `reserve` is watched, because
+ * "refused" and "refused before spending" are different guarantees and only the
+ * second is worth having. Each absence assertion is anchored on the positive
+ * outcome in the last test — a predicate that refused everything would satisfy
+ * the two refusals on its own.
+ */
+describeRealDb('MediaGenService — the campaign linkage proven against real rows (e2e)', () => {
+  let app: NestExpressApplication;
+  let prisma: PrismaService;
+  let media: MediaGenService;
+  let credits: AiCreditsService;
+  let reserveSpy: jest.SpyInstance;
+
+  const SEED = `mglink-${randomUUID().slice(0, 8)}`;
+  const workspaceId = randomUUID(); // ours
+  const otherWorkspaceId = randomUUID(); // the neighbour
+  const packageId = randomUUID();
+  const ownerId = randomUUID();
+  const ourCampaignId = randomUUID();
+  const theirCampaignId = randomUUID();
+  let ourItemId: string;
+  let theirItemId: string;
+
+  beforeAll(async () => {
+    if (!realDbEnabled()) return;
+    ({ app, prisma } = await createRealDbTestApp());
+    media = app.get(MediaGenService);
+    credits = app.get(AiCreditsService);
+
+    // fal.ai is not configured in a test env, and an unconfigured provider
+    // refuses BEFORE the ownership check — which would make every assertion
+    // below pass for the wrong reason.
+    const provider = app.get(MEDIA_PROVIDER) as { isConfigured: () => boolean };
+    jest.spyOn(provider, 'isConfigured').mockReturnValue(true);
+
+    await prisma.workspace.createMany({
+      data: [
+        { id: workspaceId, slug: `${SEED}-a`, name: 'Link A', productName: 'Ours' },
+        { id: otherWorkspaceId, slug: `${SEED}-b`, name: 'Link B', productName: 'Theirs' },
+      ],
+    });
+    await prisma.package.create({
+      data: {
+        id: packageId,
+        code: `${SEED}-PKG`,
+        name: 'Link Plan',
+        dailyLeadQuota: -1,
+        maxUsers: 10,
+        maxResearchProfiles: 1,
+        features: { socialCampaigns: true, mediaGen: true },
+        limits: { aiCreditsMonthly: -1 },
+        priceMonthlyTRY: 1,
+        priceMonthlyUSD: 1,
+      },
+    });
+    for (const ws of [workspaceId, otherWorkspaceId]) {
+      await prisma.workspaceSubscription.create({
+        data: {
+          workspaceId: ws,
+          packageId,
+          status: 'ACTIVE',
+          currency: 'TRY',
+          currentPeriodStart: new Date(Date.now() - 86_400_000),
+          currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+        },
+      });
+    }
+    await prisma.marketingUser.create({
+      data: {
+        id: ownerId,
+        workspaceId,
+        email: `${SEED}-owner@example.com`,
+        firstName: 'Olive',
+        lastName: 'Owner',
+        role: 'OWNER',
+        status: 'ACTIVE',
+        password: 'x',
+      },
+    });
+
+    // CROSS-STAMPED: identical in every column a query could filter on.
+    for (const [id, ws] of [
+      [ourCampaignId, workspaceId],
+      [theirCampaignId, otherWorkspaceId],
+    ] as const) {
+      await prisma.socialCampaign.create({
+        data: {
+          id,
+          workspaceId: ws,
+          name: 'Strandbeest',
+          brief: { audience: 'makers' },
+          status: 'ACTIVE',
+          automationMode: 'APPROVAL',
+          planningMode: 'AI_PROPOSE',
+          cadence: { daysOfWeek: [1, 2, 3, 4, 5], timeOfDay: '09:00' },
+          startDate: new Date(Date.now() - 86_400_000),
+          targetAccountIds: [],
+          mediaKinds: ['VIDEO'],
+          createdById: ownerId,
+        },
+      });
+    }
+    const mkItem = async (campaign: string, ws: string) =>
+      (
+        await prisma.socialCampaignItem.create({
+          data: {
+            socialCampaignId: campaign,
+            workspaceId: ws,
+            sequenceIndex: 0,
+            scheduledFor: new Date(Date.now() + 86_400_000),
+            status: 'PLANNED',
+            topic: 'Strandbeest',
+          },
+          select: { id: true },
+        })
+      ).id;
+    ourItemId = await mkItem(ourCampaignId, workspaceId);
+    theirItemId = await mkItem(theirCampaignId, otherWorkspaceId);
+  });
+
+  beforeEach(() => {
+    if (!realDbEnabled()) return;
+    // A spy on a real class method, not on a Prisma delegate — so it sticks.
+    reserveSpy = jest.spyOn(credits, 'reserve');
+  });
+
+  afterEach(() => reserveSpy?.mockRestore());
+
+  afterAll(async () => {
+    if (!realDbEnabled()) return;
+    jest.restoreAllMocks();
+    const both = { in: [workspaceId, otherWorkspaceId] };
+    await prisma.generatedAsset.deleteMany({ where: { workspaceId: both } });
+    await prisma.socialCampaignItem.deleteMany({ where: { workspaceId: both } });
+    await prisma.socialCampaign.deleteMany({ where: { workspaceId: both } });
+    await prisma.usageCounter.deleteMany({ where: { workspaceId: both } });
+    await prisma.marketingUser.deleteMany({ where: { id: ownerId } });
+    await prisma.workspaceSubscription.deleteMany({ where: { workspaceId: both } });
+    await prisma.package.deleteMany({ where: { id: packageId } });
+    await prisma.workspace.deleteMany({ where: { id: { in: [workspaceId, otherWorkspaceId] } } });
+    await closeTestApp(app);
+  });
+
+  it('refuses the neighbour campaign — a real FK, refused before a credit moves', async () => {
+    // The error is CAUGHT rather than asserted inline so the money claim below
+    // is checked first and on its own: a mutation that lets the request through
+    // must fail on "nothing was spent", not merely on "a different exception".
+    const err = await media
+      .requestGeneration(workspaceId, {
+        type: 'VIDEO',
+        prompt: 'Strandbeest walking, vertical 9:16',
+        durationSec: 3,
+        createdById: ownerId,
+        socialCampaignId: theirCampaignId,
+      })
+      .then(() => null, (e: unknown) => e);
+
+    // Refused BEFORE the reservation: an unowned id is a rejected request, not
+    // a refunded one.
+    expect(reserveSpy).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(BadRequestException);
+    // Anchored on rows rather than on query shape: nothing was hung off their
+    // campaign, by us or by anyone.
+    expect(
+      await prisma.generatedAsset.count({ where: { socialCampaignId: theirCampaignId } }),
+    ).toBe(0);
+  });
+
+  it('refuses the neighbour campaign ITEM — the armed-budget path, refused before a credit moves', async () => {
+    const err = await media
+      .requestGeneration(workspaceId, {
+        type: 'VIDEO',
+        prompt: 'Strandbeest walking, vertical 9:16',
+        durationSec: 3,
+        createdById: ownerId,
+        // OUR campaign, THEIR item: the campaign predicate passes, so only the
+        // item predicate can refuse this one.
+        socialCampaignId: ourCampaignId,
+        campaignItemId: theirItemId,
+      })
+      .then(() => null, (e: unknown) => e);
+
+    expect(reserveSpy).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(await prisma.generatedAsset.count({ where: { workspaceId } })).toBe(0);
+  });
+
+  it('and the guard is not simply refusing everything: OUR ids go through', async () => {
+    // The positive outcome the two absence assertions above are anchored on — a
+    // predicate that refused every request would satisfy both of them.
+    const provider = app.get(MEDIA_PROVIDER) as Record<string, unknown>;
+    const submit = jest
+      .spyOn(provider as never, 'submit')
+      .mockResolvedValue({ providerRequestId: `req-${randomUUID().slice(0, 6)}` } as never);
+
+    const { assetId } = await media.requestGeneration(workspaceId, {
+      type: 'VIDEO',
+      prompt: 'Strandbeest walking, vertical 9:16',
+      durationSec: 3,
+      createdById: ownerId,
+      socialCampaignId: ourCampaignId,
+      campaignItemId: ourItemId,
+    });
+
+    expect(assetId).toBeTruthy();
+    expect(reserveSpy).toHaveBeenCalled();
+    const asset = await prisma.generatedAsset.findUnique({ where: { id: assetId } });
+    expect(asset!.workspaceId).toBe(workspaceId);
+    expect(asset!.socialCampaignId).toBe(ourCampaignId);
+    submit.mockRestore();
   });
 });

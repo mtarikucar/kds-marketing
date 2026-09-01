@@ -130,9 +130,26 @@ describe('ConceptPromotionService.promote — an approved concept becomes exactl
     expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ id: CONCEPT_ID, workspaceId: WS }),
-        data: { promotedItemId: ITEM_ID },
+        data: { promotedItemId: ITEM_ID, socialCampaignId: CAMPAIGN_ID },
       }),
     );
+  });
+
+  it('writes the campaign it was produced INTO back onto the concept', async () => {
+    // The reviewer may name a campaign the concept never carried. Forwarding it
+    // to promote() and not recording it leaves the concept reading as unscoped
+    // forever, and the documented "the item cascaded away, promote again"
+    // recovery then needs the campaign named a second time — which no surface
+    // does and nothing on the row hints at.
+    const OTHER = 'camp-named-by-reviewer';
+    const { svc, prisma } = harness({
+      conceptRow: concept({ socialCampaignId: null }),
+      campaignRow: campaign({ id: OTHER }),
+    });
+
+    await svc.promote(WS, CONCEPT_ID, { socialCampaignId: OTHER });
+
+    expect(prisma.contentConcept.updateMany.mock.calls[0][0].data.socialCampaignId).toBe(OTHER);
   });
 
   it('a second run creates nothing and returns the item the first one made', async () => {
@@ -352,5 +369,132 @@ describe('ConceptPromotionService.produce — the clips, and what happens when t
     expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ id: CONCEPT_ID, workspaceId: WS }) }),
     );
+  });
+});
+
+/**
+ * The campaign a concept is produced into must be one that can PUBLISH it.
+ *
+ * The only campaign an agent can create is a DRAFT (`jeeta.create_social_campaign`
+ * says activation "is deliberately not available to agents"), and a DRAFT is
+ * exactly the campaign whose publish gate never fires: `confirmItem` opens with
+ * `if (c.status !== 'ACTIVE')` and, for anything that is not PAUSED, returns
+ * with no reschedule and no trace. Without this guard the whole shot plan is
+ * generated and PAID FOR, the item reaches NEEDS_APPROVAL, a human approves it
+ * to SCHEDULED — and it parks there forever.
+ *
+ * PAUSED is allowed because it is the one non-ACTIVE status the gate handles:
+ * it reschedules hourly, so a resume publishes the item it has been holding.
+ */
+describe('ConceptPromotionService.requireCampaign — the campaign has to be able to publish', () => {
+  it.each(['DRAFT', 'COMPLETED', 'CANCELLED'])(
+    'refuses a %s campaign BY NAME and creates no item',
+    async (status) => {
+      const { svc, createItem, scheduledJobs } = harness({ campaignRow: campaign({ status }) });
+      await expect(svc.promote(WS, CONCEPT_ID)).rejects.toThrow(BadRequestException);
+      await expect(svc.promote(WS, CONCEPT_ID)).rejects.toThrow(new RegExp(status));
+      expect(createItem).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    },
+  );
+
+  it('says what to do about it, in the surface that can do it', async () => {
+    const { svc } = harness({ campaignRow: campaign({ status: 'DRAFT' }) });
+    await expect(svc.promote(WS, CONCEPT_ID)).rejects.toThrow(/activate/i);
+  });
+
+  it.each(['ACTIVE', 'PAUSED'])('allows a %s campaign — its gate still fires', async (status) => {
+    const { svc, createItem } = harness({ campaignRow: campaign({ status }) });
+    const res = await svc.promote(WS, CONCEPT_ID);
+    expect(res.created).toBe(true);
+    expect(createItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Blocker 2 — an APPROVED concept must never be able to strand.
+ *
+ * `promote()` short-circuits on `promotedItemId` and used to return the existing
+ * item without touching the queue. That is right for a finished item and wrong
+ * for the one state this method exists to close: an item created but never
+ * enqueued (a crash, a deadlock, a DLQ'd job) sits at GENERATING, which
+ * `REGENERATABLE_STATES` excludes, so nothing else in the product can reach it.
+ * Re-driving the queue is free — the dedup key collapses onto a PENDING job —
+ * and `produce()` itself no-ops unless the item is still GENERATING.
+ */
+describe('ConceptPromotionService.promote — the rescue', () => {
+  it('re-queues production for an item stranded at GENERATING', async () => {
+    const { svc, scheduledJobs, createItem } = harness({
+      conceptRow: concept({ promotedItemId: ITEM_ID }),
+      itemRow: { id: ITEM_ID, workspaceId: WS, contentConceptId: CONCEPT_ID, status: 'GENERATING' },
+    });
+
+    const res = await svc.promote(WS, CONCEPT_ID);
+
+    expect(res.created).toBe(false);
+    expect(createItem).not.toHaveBeenCalled();
+    expect(scheduledJobs.schedule).toHaveBeenCalledTimes(1);
+    expect(scheduledJobs.schedule.mock.calls[0][0]).toMatchObject({
+      dedupKey: `content-concept-produce-${ITEM_ID}`,
+    });
+  });
+
+  it('does NOT re-queue an item the pipeline has already moved on', async () => {
+    for (const status of ['NEEDS_APPROVAL', 'SCHEDULED', 'PUBLISHED', 'FAILED']) {
+      const { svc, scheduledJobs } = harness({
+        conceptRow: concept({ promotedItemId: ITEM_ID }),
+        itemRow: { id: ITEM_ID, workspaceId: WS, contentConceptId: CONCEPT_ID, status },
+      });
+      await svc.promote(WS, CONCEPT_ID);
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    }
+  });
+});
+
+/**
+ * Blocker 3 — a DLQ'd produce job must not leave a paid-for item looking like
+ * work that never started.
+ *
+ * `produce()` catches generation errors, but a DB error in its opening
+ * `findFirst`, in `socialPost.create` or in the closing `update` escapes: five
+ * retries, then the runner DLQs the job. The item stays GENERATING with
+ * `error: null` while holding assets the workspace has already been charged
+ * for, and (per the rescue above) GENERATING is the state nothing else touches.
+ * The runner has supported `onExhausted` all along.
+ */
+describe('ConceptPromotionService.onModuleInit — the DLQ hook', () => {
+  it('registers an onExhausted hook alongside the handler', () => {
+    const { svc, prisma } = harness();
+    const runner = { registerHandler: jest.fn() };
+    (svc as unknown as { runner: unknown }).runner = runner;
+    svc.onModuleInit();
+    expect(runner.registerHandler).toHaveBeenCalledTimes(1);
+    expect(typeof runner.registerHandler.mock.calls[0][2]).toBe('function');
+    expect(prisma).toBeTruthy();
+  });
+
+  it('the hook FAILS the item with the DLQ reason on the row', async () => {
+    const { svc, prisma } = harness();
+    const runner = { registerHandler: jest.fn() };
+    (svc as unknown as { runner: unknown }).runner = runner;
+    svc.onModuleInit();
+    const onExhausted = runner.registerHandler.mock.calls[0][2] as (
+      job: unknown,
+      err: string,
+    ) => Promise<void>;
+
+    await onExhausted({ payload: { itemId: ITEM_ID, workspaceId: WS } }, 'connection terminated');
+
+    expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: ITEM_ID },
+        data: expect.objectContaining({ status: 'FAILED' }),
+      }),
+    );
+    const { data } = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
+    expect(data.error).toMatch(/connection terminated/);
+    // And it says the item is not merely broken but possibly half-PAID-for, so
+    // whoever reads the row knows a regenerate is not free.
+    expect(data.error).toMatch(/retr|attempt/i);
   });
 });

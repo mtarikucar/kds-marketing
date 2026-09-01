@@ -232,6 +232,17 @@ export class ContentConceptsService {
 
     const videoModel: VideoModel = input.videoModel ?? 'seedance';
 
+    // The SAME check approval performs, performed here — where it is still free.
+    // `socialCampaignId` used to be accepted optional and unvalidated, so an id
+    // that was a typo, a neighbour's, or a campaign that cannot publish bought a
+    // whole batch (one Opus call, credits reserved and spent) and only met
+    // `requireCampaign` afterwards, in `review()`. The refusal was right and
+    // arrived after the money. Planning UNSCOPED stays legitimate — a reviewer
+    // may name the campaign later — so the check only runs when one was named.
+    if (input.socialCampaignId) {
+      await this.promotion.requireCampaign(workspaceId, input.socialCampaignId);
+    }
+
     await this.credits.reserve(workspaceId, creditCost('content.concepts'));
 
     let res: Awaited<ReturnType<AnthropicService['complete']>>;
@@ -504,6 +515,52 @@ export class ContentConceptsService {
           : {}),
     });
     return { ...concept, promotedItemId: item.id, campaignItem: item };
+  }
+
+  /**
+   * Produce an APPROVED concept — the SECOND caller of promotion, and the reason
+   * `promotedItemId` being null on an APPROVED row is a recoverable state rather
+   * than a permanent one.
+   *
+   * Until this existed, `review()` was promotion's only caller, and `review()`
+   * refuses a concept it has already decided. So ANY failure between the verdict
+   * write and the item — the campaign deleted in the pre-flight window, a
+   * deadlock, `enqueueProduction` throwing — left the concept APPROVED with
+   * `promotedItemId` null and every surface answering "already approved and
+   * cannot be decided again", forever. The schema names that exact state as "the
+   * one `ConceptPromotionService.promote` exists to close"; nothing could call
+   * it.
+   *
+   * Exposing it is safe BY CONSTRUCTION rather than by care, which is why it
+   * needs no gate of its own:
+   *
+   *  - `promote` short-circuits on `promotedItemId` when the item still exists,
+   *    so the common case is a read and nothing else;
+   *  - `SocialCampaignItem.contentConceptId` is UNIQUE, so even two simultaneous
+   *    calls cannot both insert, and the loser reads the winner back;
+   *  - `produce` resumes from `generatedAssetIds` — the clips already PAID FOR —
+   *    so a re-run buys the remainder, never the set.
+   *
+   * It cannot approve anything, so it does not carry `review()`'s
+   * signed-in-human requirement: the human decision it acts on was already made
+   * and is on the row. What it CAN do is spend, on a concept that was approved
+   * and never produced, which the tool description states plainly.
+   */
+  async produce(
+    workspaceId: string,
+    conceptId: string,
+    opts: { socialCampaignId?: string } = {},
+  ) {
+    const { item, created } = await this.promotion.promote(workspaceId, conceptId, opts);
+    return {
+      conceptId,
+      itemId: item.id,
+      socialCampaignId: item.socialCampaignId,
+      status: item.status,
+      scheduledFor: item.scheduledFor,
+      // The caller can tell a rescue from a no-op without comparing timestamps.
+      created,
+    };
   }
 
   private systemPrompt(count: number): string {

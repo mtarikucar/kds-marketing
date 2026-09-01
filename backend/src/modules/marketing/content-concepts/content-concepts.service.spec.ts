@@ -102,6 +102,37 @@ const plan = (svc: ContentConceptsService, over: Record<string, unknown> = {}) =
   svc.planConcepts('ws1', { idea: IDEA, count: 3, createdById: 'u1', ...over });
 
 describe('ContentConceptsService.planConcepts', () => {
+  /**
+   * The campaign a batch is scoped to is checked BEFORE the Opus call, not at
+   * approval time.
+   *
+   * `socialCampaignId` used to be accepted optional and unvalidated, so a bad
+   * (or unpublishable, or somebody else's) campaign id cost a full concept
+   * batch — one Opus call, credits reserved and spent — and only then met
+   * `requireCampaign` in `review()`, which refused. The refusal was correct and
+   * arrived after the money.
+   */
+  it('validates the named campaign BEFORE reserving credits or calling the model', async () => {
+    const { svc, credits, promotion, complete } = deps();
+    promotion.requireCampaign.mockRejectedValue(
+      new BadRequestException('Social campaign "Draft" is DRAFT'),
+    );
+
+    await expect(plan(svc, { socialCampaignId: 'camp-draft' })).rejects.toThrow(/DRAFT/);
+
+    expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-draft');
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('does not read a campaign when the idea arrived unscoped', async () => {
+    // Planning without a campaign is legitimate — the reviewer names one at
+    // approval. A lookup with nothing to look up would be a round trip per call.
+    const { svc, promotion } = deps();
+    await plan(svc);
+    expect(promotion.requireCampaign).not.toHaveBeenCalled();
+  });
+
   it('turns one idea into N concepts, each carrying a real shot plan', async () => {
     const { svc } = deps();
     const res = await plan(svc);
