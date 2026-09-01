@@ -24,7 +24,7 @@ const DECISIONS = ['APPROVED', 'DISCARDED'] as const;
 
 /**
  * İçerik üretim hattı, aşama 1 — the idea -> concepts step, reachable from the
- * chat.
+ * chat, plus the repair for stage 2 stalling.
  *
  * The owner's chosen entry point is `POST /marketing/ai/command`, which runs the
  * model against this very catalogue through `McpBrokerService`. So the feature
@@ -75,7 +75,33 @@ const DECISIONS = ['APPROVED', 'DISCARDED'] as const;
  * there is no honest value to write into `reviewedById`. A signed-in human on
  * the chat lane satisfies it; an API-key MCP session does not.
  *
- * All three sit behind the `socialCampaigns` package feature — the same gate the
+ * ## Why there is a fourth tool, and why it needs no human
+ *
+ * `ConceptPromotionService.promote` had exactly ONE caller — `review()` — and
+ * `review()` refuses a concept it has already decided. Any failure between the
+ * verdict write and the item (the campaign deleted in the pre-flight window, a
+ * deadlock, the enqueue throwing) therefore left the concept APPROVED with
+ * `promotedItemId` null and every surface answering "already approved and cannot
+ * be decided again", permanently; and an item created but never enqueued sat at
+ * `GENERATING`, which `REGENERATABLE_STATES` excludes. There was no controller,
+ * no route and no tool that could reach either. `jeeta.produce_content_concept`
+ * is that second caller.
+ *
+ * It is a TOOL rather than a REST route because there is no content-concepts
+ * controller to add a route to and no screen that would call one: this whole
+ * feature is reached through `POST /marketing/ai/command`, which runs the model
+ * against this catalogue. A route would have been a surface with no caller, and
+ * the moment the repair is needed is the moment a human is reading
+ * `jeeta.list_content_concepts` and seeing an APPROVED concept with no item.
+ *
+ * Unlike the review tool it does NOT require a signed-in human. The distinction
+ * is what the call writes: `review` records a person's verdict in
+ * `reviewedById`, and an unattended session has nothing honest to put there.
+ * This tool records no verdict — it acts on one already on the row — and adding
+ * a human gate would only make the repair unreachable from the lane the problem
+ * is noticed in.
+ *
+ * All four sit behind the `socialCampaigns` package feature — the same gate the
  * campaign engine these concepts feed runs behind.
  */
 export function registerContentConceptTools(
@@ -85,7 +111,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.plan_content_concepts',
     description:
-      `Turn ONE idea (pasted text, notes, a link) into several genuinely DIFFERENT video concepts — different angles, not rewordings — each planned shot by shot with its own on-screen text, voiceover, camera note and duration. Defaults to ${DEFAULT_CONCEPT_COUNT} concepts. This SPENDS AI credits (one Opus call). The concepts are saved as PROPOSED for a human to approve or discard with jeeta.review_content_concept; nothing is generated or published. If the concepts come back as variations of one another the whole batch is refused and nothing is saved — that is a generation failure, not a verdict on the idea.`,
+      `Turn ONE idea (pasted text, notes, a link) into several genuinely DIFFERENT video concepts — different angles, not rewordings — each planned shot by shot with its own on-screen text, voiceover, camera note and duration. Defaults to ${DEFAULT_CONCEPT_COUNT} concepts. This SPENDS AI credits (one Opus call). The concepts are saved as PROPOSED for a human to approve or discard with jeeta.review_content_concept; nothing is generated or published here. APPROVING one later REQUIRES a social campaign to produce it into, and that campaign must be ACTIVE or PAUSED — a DRAFT campaign is refused, because the publish gate would never release what approving it would pay to generate. Pass socialCampaignId now to have that checked BEFORE this call spends anything, or leave it off and let the reviewer name one. If the concepts come back as variations of one another the whole batch is refused and nothing is saved — that is a generation failure, not a verdict on the idea.`,
     domain: 'content',
     // Deferred (spec §3): the advertised surface is at its 45-tool ceiling, and
     // a wave that wants room must defer rather than raise the number. Reachable
@@ -116,7 +142,7 @@ export function registerContentConceptTools(
         .string()
         .max(64)
         .optional()
-        .describe('Scope these concepts to an existing social campaign (see jeeta.list_social_campaigns).'),
+        .describe('Scope these concepts to an existing ACTIVE or PAUSED social campaign (see jeeta.list_social_campaigns). Validated before any credits are spent.'),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
@@ -165,7 +191,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.review_content_concept',
     description:
-      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item and one video clip is generated per beat of its shot plan, which SPENDS the workspace credits (video is the most expensive action in the product) — this single decision is the whole human gate, there is no second approval per clip. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into: the one the idea was scoped to, or socialCampaignId. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
+      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item and one video clip is generated per beat of its shot plan, which SPENDS the workspace credits (video is the most expensive action in the product) — this single decision is the whole human gate, there is no second approval per clip. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into — the one the idea was scoped to, or socialCampaignId — and that campaign must be ACTIVE or PAUSED; a DRAFT campaign is refused BEFORE the verdict is recorded, so the concept stays PROPOSED and can be approved again once someone activates the campaign in the panel. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
     domain: 'content',
     // Deferred (spec §3): follows list_content_concepts, which is itself
     // deferred; a model that has found one has found both.
@@ -182,7 +208,7 @@ export function registerContentConceptTools(
         .max(64)
         .optional()
         .describe(
-          'Which social campaign to produce this concept into (see jeeta.list_social_campaigns). Required when the concept was not already scoped to one — the campaign carries the calendar slot, the target accounts and the video model. Ignored when discarding.',
+          'Which ACTIVE or PAUSED social campaign to produce this concept into (see jeeta.list_social_campaigns). Required when the concept was not already scoped to one — the campaign carries the calendar slot, the target accounts and the video model. Ignored when discarding.',
         ),
     }),
     handler: async (ctx, args) => {
@@ -196,6 +222,41 @@ export function registerContentConceptTools(
         decision: args.decision as 'APPROVED' | 'DISCARDED',
         reviewerId: ctx.userId,
         ...(args.note !== undefined ? { note: String(args.note) } : {}),
+        ...(args.socialCampaignId !== undefined
+          ? { socialCampaignId: String(args.socialCampaignId) }
+          : {}),
+      });
+    },
+  });
+
+  registry.register({
+    name: 'jeeta.produce_content_concept',
+    description:
+      'Produce a concept a human ALREADY APPROVED — the repair for an approved concept that never became a campaign item. Use it when jeeta.list_content_concepts shows a concept APPROVED with no promotedItemId, or an item stuck GENERATING with nothing happening: approval and production are two steps, and a crash between them used to be unrecoverable because a concept can only be decided once. Safe to call repeatedly — a concept already produced is returned unchanged and buys nothing, and a partly produced one resumes at the next unbought beat rather than re-buying the clips it already owns. It DOES spend when the concept was approved and never produced: one video clip per beat of its shot plan. It approves nothing; only jeeta.review_content_concept can do that.',
+    domain: 'content',
+    // Deferred (spec §3): a repair reached after list_content_concepts, which is
+    // itself deferred — and the advertised surface stays at its 45-tool ceiling.
+    defer: true,
+    scopes: ['campaigns.write'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      conceptId: z
+        .string()
+        .min(1)
+        .max(64)
+        .describe('The APPROVED concept to produce (see jeeta.list_content_concepts).'),
+      socialCampaignId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'Which ACTIVE or PAUSED social campaign to produce into (see jeeta.list_social_campaigns). Only needed when the concept is not already scoped to one, or when the campaign it named has since been deleted.',
+        ),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
+      return deps.concepts.produce(ctx.workspaceId, String(args.conceptId), {
         ...(args.socialCampaignId !== undefined
           ? { socialCampaignId: String(args.socialCampaignId) }
           : {}),

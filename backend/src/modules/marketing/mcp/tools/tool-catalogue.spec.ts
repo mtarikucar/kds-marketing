@@ -453,6 +453,11 @@ describe('MCP tool catalogue', () => {
         'jeeta.plan_content_concepts',
         'jeeta.list_content_concepts',
         'jeeta.review_content_concept',
+        // Promotion's SECOND caller. Without it, any failure between the verdict
+        // write and the item left a concept APPROVED with promotedItemId null
+        // and review() answering "already approved" forever — a paid-for
+        // decision with no way to act on it.
+        'jeeta.produce_content_concept',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -463,7 +468,16 @@ describe('MCP tool catalogue', () => {
     // the retry queue behind every deferred action had no reader at all, so a
     // job's lastError was recorded and then unreachable from anywhere.
     // 120 -> 123: the three content-concept tools, every one of them deferred.
-    expect(names).toHaveLength(123);
+    // 123 -> 124: jeeta.produce_content_concept, also deferred.
+    //
+    // MEASURED, not counted by grep. `grep -c 'registry.register('` over the
+    // non-spec tool files is a legitimate cross-check and currently agrees:
+    // 123 calls for 123 names before this tool, 124/124 after. An earlier note
+    // recorded "125 register calls but 123 registered names" and claimed grep
+    // over-counts; re-measured, grep did not — the counts have always matched,
+    // and the figure to trust is the one this assertion takes from a built
+    // registry.
+    expect(names).toHaveLength(124);
   });
 
   /**
@@ -549,13 +563,13 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 123 total, 45 advertised (+2 discovery) and 76 deferred: everything a
+    // 124 total, 45 advertised (+2 discovery) and 77 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
     // hundred. The number in this comment said 120 while the assertion below
     // said 123; a comment that disagrees with its own assertion is how a
     // measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(123);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(124);
   });
 });
 

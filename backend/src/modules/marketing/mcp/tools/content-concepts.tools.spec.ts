@@ -10,6 +10,7 @@ function build(over: { features?: Record<string, boolean> } = {}) {
     planConcepts: jest.fn().mockResolvedValue({ batchId: 'b1', sourceIdea: 'idea', concepts: [] }),
     list: jest.fn().mockResolvedValue([]),
     review: jest.fn().mockResolvedValue({ id: 'c1', status: 'APPROVED' }),
+    produce: jest.fn().mockResolvedValue({ conceptId: 'c1', itemId: 'i1', created: true }),
   };
   const principals = {
     resolve: jest.fn().mockResolvedValue({ id: 'sys-1', workspaceId: 'ws1', role: 'SYSTEM' }),
@@ -235,5 +236,68 @@ describe('jeeta.review_content_concept', () => {
       reviewerId: 'u9',
       socialCampaignId: 'camp-7',
     });
+  });
+});
+
+/**
+ * Blocker 2's second caller, at the tool boundary.
+ *
+ * `promote()` had exactly one caller — `review()` — and `review()` refuses a
+ * concept it has already decided. So an APPROVED concept whose item never got
+ * made had no route back from ANY surface: no controller, no route, no tool.
+ * This is the route.
+ */
+describe('jeeta.produce_content_concept', () => {
+  it('is declared like its siblings: deferred, campaigns.write, content, ungated', () => {
+    const tool = build().registry.get('jeeta.produce_content_concept')!;
+    expect(tool.defer).toBe(true);
+    expect(tool.scopes).toEqual(['campaigns.write']);
+    expect(tool.domain).toBe('content');
+    expect(tool.requiresApproval).toBe(false);
+  });
+
+  it('says both that it is safe to repeat and that it can spend', () => {
+    // Either half alone is a lie. "Idempotent" without the spend hides that a
+    // never-produced concept buys a clip per beat; "spends" without the
+    // idempotency discourages the very repair it exists to perform.
+    const d = build().registry.get('jeeta.produce_content_concept')!.description;
+    expect(d).toMatch(/repeatedly|idempotent/i);
+    expect(d).toMatch(/spend/i);
+    expect(d).toMatch(/resume|already own|already paid/i);
+  });
+
+  it('forwards the concept and the optional campaign, workspace-scoped', async () => {
+    const { registry, concepts } = build();
+    await registry.get('jeeta.produce_content_concept')!.handler(ctx(), {
+      conceptId: 'c1',
+      socialCampaignId: 'camp-9',
+    });
+    expect(concepts.produce).toHaveBeenCalledWith('ws1', 'c1', { socialCampaignId: 'camp-9' });
+  });
+
+  it('omits the campaign entirely when none was named, rather than passing undefined', async () => {
+    const { registry, concepts } = build();
+    await registry.get('jeeta.produce_content_concept')!.handler(ctx(), { conceptId: 'c1' });
+    expect(concepts.produce).toHaveBeenCalledWith('ws1', 'c1', {});
+  });
+
+  it('needs no signed-in human — it acts on a decision a human already made', async () => {
+    // The opposite of review_content_concept, deliberately: there is no
+    // reviewer field to fill in dishonestly here, and refusing an unattended
+    // session would make the repair unreachable from the only lane an agent
+    // notices the problem in.
+    const { registry, concepts } = build();
+    await expect(
+      registry.get('jeeta.produce_content_concept')!.handler(ctx(), { conceptId: 'c1' }),
+    ).resolves.toBeTruthy();
+    expect(concepts.produce).toHaveBeenCalled();
+  });
+
+  it('is gated on the socialCampaigns package feature like the rest', async () => {
+    const { registry, concepts } = build({ features: { socialCampaigns: false } });
+    await expect(
+      registry.get('jeeta.produce_content_concept')!.handler(ctx(), { conceptId: 'c1' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(concepts.produce).not.toHaveBeenCalled();
   });
 });
