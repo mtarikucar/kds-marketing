@@ -263,10 +263,19 @@ export interface NavHub {
  * - `/documents` - the offers / estimates / e-signature hub. Its per-person
  *   half is the record card's Teklifler and Tahmini fiyat sections; EDITING an
  *   offer, the estimate line-item editor, convert-to-invoice and the whole
- *   signing flow exist only here, which is why that section links to it. The
- *   dashboard hero and NeedsAttention still deep-link `?tab=offers`.
+ *   signing flow exist only here. NEITHER SECTION LINKS HERE - the record card
+ *   carries exactly ONE link, to `/leads/:id`, and LeadContextPane.test.tsx
+ *   counts them ("adds no second way off the surface"), because "selecting is
+ *   not navigating" stops being true the moment a second door opens on that
+ *   card. So from the card the door is the palette, like everything else on
+ *   this list. What links in from ELSEWHERE is unchanged: the dashboard hero
+ *   and NeedsAttention still deep-link `?tab=offers`.
  * - `/appointments` - booking, rescheduling, approving, cancelling. The record
- *   card's Randevular section is READ-ONLY by design, so it links here.
+ *   card's Randevular section is READ-ONLY by design and links NOWHERE, for the
+ *   same one-link reason - and for a second one: the section carries this
+ *   entry's two gates, so the only readers who could follow such a link are
+ *   managers on a `funnels` plan, and naming the page to anyone else would
+ *   advertise a surface they can never open. The door is the palette.
  * - `/companies` - creating a company, its rollup dialog, its linked contacts,
  *   deleting. The lead detail's CompanyPanel links to it, and the person list's
  *   `Grupla: Sirkete gore` is where a company is met day to day.
