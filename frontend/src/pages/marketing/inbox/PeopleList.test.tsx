@@ -384,6 +384,38 @@ describe('PeopleList — grouping by company', () => {
     expect(screen.getAllByTestId('people-group-c-2')).toHaveLength(1);
   });
 
+  /**
+   * The header boundary must be the SERVER's boundary.
+   *
+   * `sortBy=company` groups on the resolved company NAME (`a.group !== b.group`
+   * over `groupNames.get(companyId)`), so two different companies that share a
+   * name arrive as one contiguous run. A client that opened a new header
+   * whenever the company ID changed drew a boundary the server did not: two
+   * consecutive, identical headers, reading as two blocks with the same name —
+   * which is precisely the "how many are in this company?" confusion the
+   * count-less header was designed to avoid.
+   *
+   * Same-named companies are not a curiosity: "Acme" as a chain's branch rows,
+   * or a duplicate created by two reps on the same day, is how most workspaces
+   * meet this.
+   */
+  it('heads two same-named companies ONCE, because the server grouped them as one', async () => {
+    grouped([
+      person({ id: 'a1', contactPerson: 'Ali', company: { id: 'c-1', name: 'Acme AŞ' } }),
+      person({ id: 'a2', contactPerson: 'Ayşe', company: { id: 'c-2', name: 'Acme AŞ' } }),
+      person({ id: 'z1', contactPerson: 'Zehra', company: { id: 'c-3', name: 'Zeta Ltd' } }),
+    ]);
+
+    renderList({}, ['/leads?group=company']);
+
+    // Positive anchor: the run really rendered, both people and all.
+    await screen.findByTestId('person-row-a1');
+    expect(screen.getByTestId('person-row-a2')).toBeInTheDocument();
+
+    const headers = screen.getAllByTestId(/^people-group-/);
+    expect(headers.map((h) => h.textContent)).toEqual(['Acme AŞ', 'Zeta Ltd']);
+  });
+
   it('turns the grouping off again, restoring the activity sort', async () => {
     const user = userEvent.setup();
     renderList({}, ['/leads?group=company']);

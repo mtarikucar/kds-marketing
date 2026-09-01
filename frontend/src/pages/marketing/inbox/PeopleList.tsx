@@ -265,9 +265,24 @@ export function PeopleList({ selectedId, onSelect, className }: PeopleListProps)
                 // header is simply "the company changed since the row above".
                 // The client never RE-sorts: it could only sort the 25 rows it
                 // holds, which would fight the ranking the page was cut from.
-                const groupId = p.company?.id ?? null;
+                //
+                // "Changed" is measured on the NAME, because the name is what
+                // the server grouped on (`sortBy=company` compares the resolved
+                // company name, and treats an unnameable id as no group at
+                // all). Keyed on the ID instead, two DIFFERENT companies that
+                // share a name — a chain's two branch records, or a duplicate
+                // two reps created on the same day — arrive as one contiguous
+                // run from the server and got two consecutive, identical
+                // headers here: a boundary the client invented, reading as two
+                // blocks of the same company.
+                const groupName = p.company?.name ?? null;
                 const opensGroup =
-                  groupByCompany && (i === 0 || (people[i - 1].company?.id ?? null) !== groupId);
+                  groupByCompany &&
+                  (i === 0 || (people[i - 1].company?.name ?? null) !== groupName);
+                // The test id still names the company this block OPENED with —
+                // an id is stable and safe in a selector where a name is
+                // neither. It identifies the block, not its membership.
+                const groupId = p.company?.id ?? null;
                 return (
                   <Fragment key={p.id}>
                     {opensGroup && (
