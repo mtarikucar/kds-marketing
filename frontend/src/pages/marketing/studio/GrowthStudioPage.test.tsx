@@ -24,7 +24,10 @@ vi.mock('../social/AiStudioPage', () => nul);
 vi.mock('../personas/PersonasPage', () => nul);
 vi.mock('../emailTemplates', () => nul);
 vi.mock('../ReviewsPage', () => nul);
-vi.mock('../affiliate-portal/AffiliatePortalPage', () => nul);
+// The workspace's affiliate MANAGEMENT page. The tab used to mount the public
+// token-authenticated portal instead — pinning the module path here is what
+// stops that coming back.
+vi.mock('../experiments/affiliates', () => nul);
 
 function renderAt(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><GrowthStudioPage /></MemoryRouter>);

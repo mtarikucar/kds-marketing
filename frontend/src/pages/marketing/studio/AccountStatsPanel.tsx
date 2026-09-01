@@ -46,7 +46,8 @@ type Range = (typeof RANGES)[number];
  * The panel also refuses to draw a chart it cannot back. Organic insights depend
  * on per-network permissions this workspace may simply not hold, and a flat zero
  * line is indistinguishable from a real zero — so an unreadable network is named
- * in words instead of being averaged into silence.
+ * in words instead of being averaged into silence, and so is each account whose
+ * last pull was refused, with the provider's own reason next to it.
  */
 export default function AccountStatsPanel() {
   const { t, i18n } = useTranslation('marketing');
@@ -85,7 +86,13 @@ export default function AccountStatsPanel() {
     meta: { silent: true },
   });
 
-  const connections = useConnections();
+  // `enabled: isManager` for the same reason as `insights` above, and it is the
+  // one that was missing: `GET marketing/connections` is MANAGER-only, so a REP
+  // landing here — including via a `/budget` bookmark, which App.tsx redirects
+  // to `/studio` — fired it, collected a 403 and got a global "Forbidden" toast
+  // on the front door. The panel's own promise three comments up is the half you
+  // are allowed to see plus one quiet sentence, not a toast.
+  const connections = useConnections({ enabled: isManager });
 
   const pull = useMutation({
     mutationFn: pullSocialInsights,
@@ -101,7 +108,21 @@ export default function AccountStatsPanel() {
           : t('studio.stats.pulled', 'Hesap istatistikleri güncellendi'),
       );
     },
-    onError: () => toast.error(t('studio.stats.pullFailed', 'İstatistikler güncellenemedi')),
+    onError: (err: unknown) => {
+      // 409 is not a failure. The backend takes a per-workspace lock on the
+      // pull, so a second click — or a click that lands while the hourly sweep
+      // is working this workspace — is told somebody is already doing it. An
+      // error toast there would report a problem where the only thing that
+      // happened is that the numbers are on their way.
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        toast.info(
+          t('studio.stats.pullBusy', 'İstatistikler zaten güncelleniyor — birazdan hazır'),
+        );
+        return;
+      }
+      toast.error(t('studio.stats.pullFailed', 'İstatistikler güncellenemedi'));
+    },
   });
 
   const data = insights.data;
@@ -187,10 +208,15 @@ export default function AccountStatsPanel() {
       return {
         key: a.socialAccountId,
         label: a.displayName,
+        // `null` before the first reading, the carried level after it. Null is
+        // a GAP in the plot, not a zero — the days before we first sampled an
+        // account are days whose follower count we do not know, and drawing
+        // them on the axis would show an audience appearing out of nothing on
+        // the day our sweep happened to start.
         points: labels.map((d) => {
           const seen = byDate.get(d)?.[a.socialAccountId];
           if (typeof seen === 'number') last = seen;
-          return last ?? 0;
+          return last;
         }),
       };
     });
@@ -411,7 +437,13 @@ export default function AccountStatsPanel() {
           </>
         )}
 
-        {!nothingConnected && <CoverageNote coverage={data?.coverage} canSee={isManager} />}
+        {!nothingConnected && (
+          <CoverageNote
+            coverage={data?.coverage}
+            accounts={data?.byAccount}
+            canSee={isManager}
+          />
+        )}
       </div>
     </div>
   );
@@ -501,12 +533,23 @@ function AccountStrip({
  * posting nothing. Naming the network is the difference between "we are doing
  * badly there" and "we cannot see there", and only one of those is a reason to
  * change what you publish.
+ *
+ * TWO KINDS OF BLIND SPOT, KEPT APART. `unsupportedNetworks` is permanent —
+ * there is no API to call, however the grant is fixed — and reads as a fact
+ * about the platform. A per-account `insightsError` is the opposite: we asked,
+ * we were refused, and the refusal has a reason and often a fix (an app review
+ * clears the scope; a rate limit clears itself). Folding them into one warning
+ * would tell the owner nothing can be done about a problem that can, so they get
+ * separate sentences and the failing accounts are named individually with the
+ * provider's own words next to them.
  */
 function CoverageNote({
   coverage,
+  accounts,
   canSee,
 }: {
   coverage?: SocialInsightsResponse['coverage'];
+  accounts?: SocialInsightsResponse['byAccount'];
   canSee: boolean;
 }) {
   const { t, i18n } = useTranslation('marketing');
@@ -524,6 +567,12 @@ function CoverageNote({
   if (!coverage) return null;
 
   const unread = coverage.unsupportedNetworks ?? [];
+  // Named from byAccount rather than counted from coverage: a count tells the
+  // owner that something is wrong somewhere, which is the least actionable
+  // possible version of the truth. Capped at three so one broken workspace does
+  // not push the charts off the panel; the rest are summarised as a remainder.
+  const failing = (accounts ?? []).filter((a) => Boolean(a.insightsError));
+  const shown = failing.slice(0, 3);
   const stale = coverage.lastPulledAt
     ? new Date(coverage.lastPulledAt).toLocaleString(i18n.language, {
         day: 'numeric',
@@ -550,6 +599,33 @@ function CoverageNote({
             )}
           </span>
         </p>
+      )}
+      {shown.length > 0 && (
+        <div role="status" className="flex items-start gap-1.5 text-micro text-warning">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <div>
+            <span>{t('studio.stats.readFailed', 'Okunamayan hesaplar')}:</span>
+            <ul className="mt-0.5 space-y-0.5">
+              {shown.map((a) => (
+                <li key={a.socialAccountId}>
+                  <span className="font-medium">{a.displayName}</span>
+                  {' — '}
+                  {/* The provider's own message, verbatim. A paraphrase would
+                      lose the one string that tells a developer which scope to
+                      request, and the owner can paste it into a support note. */}
+                  <span className="text-muted-foreground">{a.insightsError}</span>
+                </li>
+              ))}
+            </ul>
+            {failing.length > shown.length && (
+              <span className="text-muted-foreground">
+                {t('studio.stats.readFailedMore', 've {{n}} hesap daha', {
+                  n: failing.length - shown.length,
+                })}
+              </span>
+            )}
+          </div>
+        </div>
       )}
       {coverage.accountsWithData < coverage.accounts && (
         <p role="status" className="text-micro text-muted-foreground">

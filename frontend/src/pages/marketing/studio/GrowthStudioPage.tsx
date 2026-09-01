@@ -20,7 +20,21 @@ const AiStudioPage = lazy(() => import('../social/AiStudioPage'));
 const PersonasPage = lazy(() => import('../personas/PersonasPage'));
 const EmailTemplatesPage = lazy(() => import('../emailTemplates'));
 const ReviewsPage = lazy(() => import('../ReviewsPage'));
-const AffiliatePortalPage = lazy(() => import('../affiliate-portal/AffiliatePortalPage'));
+/**
+ * The workspace's affiliate MANAGEMENT page, not `affiliate-portal`.
+ *
+ * This tab mounted `AffiliatePortalPage` for as long as it has existed, and
+ * that page is the PUBLIC, token-authenticated self-serve portal an affiliate
+ * opens at /affiliate-portal — it asks the visitor to paste a bearer token and
+ * has no idea a marketing session exists. So a logged-in manager clicking
+ * "Ortaklar" met a token form for an account they already were.
+ *
+ * The mismatch predates the one-screen work; what changed is that it became
+ * load-bearing. This tab is now justified by the claim that it duplicates the
+ * Settings entry for people with the old bookmark — and a duplicate that opens
+ * a different page is not a duplicate, it is a second wrong answer.
+ */
+const AffiliatesPage = lazy(() => import('../experiments/affiliates'));
 
 const TOOL_TABS = ['calendar', 'create', 'campaigns', 'trends', 'more'] as const;
 type ToolTab = (typeof TOOL_TABS)[number];
@@ -213,7 +227,7 @@ function MoreTab() {
         </FeatureGate>
       </TabsContent>
       <TabsContent value="reviews" className="pt-4"><Lazy><ReviewsPage /></Lazy></TabsContent>
-      <TabsContent value="affiliates" className="pt-4"><Lazy><AffiliatePortalPage /></Lazy></TabsContent>
+      <TabsContent value="affiliates" className="pt-4"><Lazy><AffiliatesPage /></Lazy></TabsContent>
     </Tabs>
   );
 }

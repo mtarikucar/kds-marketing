@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { ChevronDown, Sparkles } from 'lucide-react';
+import { ChevronDown, Lock, Sparkles } from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/DropdownMenu';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { FeatureGate } from '@/components/ui/access-gates';
 import { useEntitlements } from '@/features/marketing/hooks/useEntitlements';
@@ -72,6 +73,54 @@ const AccountCenterPage = lazy(() => import('../accounts/AccountCenterPage'));
  */
 export type StudioTool = 'autopilot' | 'calendar' | 'create' | 'connections';
 
+/**
+ * What each tool's UNDERLYING page actually requires — the audit, written down,
+ * because getting it wrong is how this drawer shipped a role bypass.
+ *
+ * The trap is structural, not a slip: `/studio` sits in App.tsx's plain
+ * auth-only group, and every one of these tools is a page that lives (or would
+ * live) somewhere else with its own gate. Mounting one here silently re-hosts it
+ * under `/studio`'s weaker guard. `?tool=connections` did exactly that — it
+ * rendered `AccountCenterPage`, the page App.tsx puts behind
+ * `requiredRole={MarketingRole.MANAGER}` at `/accounts`, to anybody who could
+ * reach the Studio at all. Hiding the menu row is not the fix, because the row
+ * is not the door: the URL is. So the refusal lives HERE, at the mount, and
+ * StudioToolsMenu's filter is only there to stop offering a door that will not
+ * open.
+ *
+ *   autopilot   — no role. `GET marketing/budget`, `/budget/:id`, `/wallet`,
+ *                 `/runs` and `/activity` are all `reports.read` with no
+ *                 `@MarketingRoles`, so a REP may genuinely READ the console.
+ *                 Every write (`POST /budget`, `/quick-start`, the kill switch,
+ *                 the autonomy and status patches) is MANAGER + `settings.manage`,
+ *                 and the two triggers this header owns are `canManage`-gated
+ *                 below. Honoured.
+ *   calendar    — no role. `GET marketing/content-calendar` is `reports.read`
+ *                 with no role, so the month is readable by everyone. Its one
+ *                 manager-shaped affordance is the "generate weekly plan" CTA
+ *                 (it POSTs a SocialCampaign, MANAGER + `campaigns.send`, and
+ *                 reads `GET /social-planner/accounts`, MANAGER) — gated inside
+ *                 StudioCalendarTab, not here, because the calendar underneath
+ *                 it is not manager-only and wrapping the whole tab would hide a
+ *                 page a REP is entitled to. Honoured.
+ *   create      — MANAGER, plus the `mediaGen` entitlement. `MarketingMediaController`
+ *                 carries BOTH `@MarketingRoles('MANAGER')` and
+ *                 `@RequiresFeature('mediaGen')` at class level, so for a REP
+ *                 the library query 403s on mount (and AiStudioPage does not set
+ *                 `meta.silent`, so it toasts) and every generate 403s on click.
+ *                 The drawer used to check only the entitlement — half the gate.
+ *   connections — MANAGER. `/accounts` is `requiredRole={MarketingRole.MANAGER}`
+ *                 in App.tsx and `AccountCenterController` is
+ *                 `@MarketingRoles('MANAGER')` on every route it has.
+ *
+ * A tool absent from this map requires no role. Keep it in step with App.tsx: a
+ * tool that becomes manager-only there and not here is the same bug again.
+ */
+const TOOL_MIN_ROLE: Partial<Record<StudioTool, MarketingRole>> = {
+  create: MarketingRole.MANAGER,
+  connections: MarketingRole.MANAGER,
+};
+
 export interface StudioToolsDrawerProps {
   open: boolean;
   /** Which tool to mount. `null` while the drawer is closed. */
@@ -108,6 +157,14 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
    * right default: it is what `/studio` showed before this screen existed.
    */
   const active: StudioTool = tool ?? 'autopilot';
+
+  /**
+   * The gate, applied at the MOUNT rather than at the menu — see TOOL_MIN_ROLE.
+   * `?tool=` is a URL anyone can type, so filtering the dropdown hides the
+   * entry, not the page; this is what actually refuses it.
+   */
+  const required = TOOL_MIN_ROLE[active];
+  const allowed = !required || hasMarketingRole(user?.role, required);
 
   // Same key the console and the status bar use, so this is a cache hit in
   // practice; `enabled` keeps a closed drawer from ever issuing it. It exists
@@ -188,7 +245,18 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
         >
           <SheetHeader className="shrink-0 pe-10">
             <SheetTitle>{meta[active].title}</SheetTitle>
-            <SheetDescription>{meta[active].description}</SheetDescription>
+            {/* The description is a promise about what you can do in here, so a
+                refused tool must not keep making it — "connect or refresh your
+                accounts" over a panel that will never show you one is worse than
+                no description at all. */}
+            <SheetDescription>
+              {allowed
+                ? meta[active].description
+                : t(
+                    'studio.tools.deniedDesc',
+                    'Bu araç yönetici yetkisi gerektiriyor. Erişim için çalışma alanı yöneticinle konuş.',
+                  )}
+            </SheetDescription>
 
             <div className="flex flex-wrap items-center gap-2 pt-2">
               {/**
@@ -243,7 +311,14 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
               it the budget triggers and the deep links) stays put while a long
               allocation table or a month of calendar scrolls underneath. */}
           <div className="min-h-0 flex-1 overflow-y-auto" data-testid="studio-tools-body">
-            {active === 'autopilot' && (
+            {/* Refused before anything is mounted or fetched. Not `return null`:
+                the person typed (or bookmarked, or was sent) this URL and is
+                owed a reason, and a blank drawer reads as a broken one. The
+                lazy import is never reached either, so a REP does not even
+                download the page they may not see. */}
+            {!allowed && <ToolDenied />}
+
+            {allowed && active === 'autopilot' && (
               <Lazy>
                 {/* `hideApprovals`: the Studio's right rail renders the same
                     workspace-scoped ApprovalQueue. The same queue twice on one
@@ -253,7 +328,7 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
               </Lazy>
             )}
 
-            {active === 'calendar' && (
+            {allowed && active === 'calendar' && (
               // No FeatureGate around this one: StudioCalendarTab already gates
               // the part that needs an entitlement (the weekly-plan CTA, which
               // provisions a SocialCampaign) and shows the calendar regardless.
@@ -264,7 +339,7 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
               </Lazy>
             )}
 
-            {active === 'create' && (
+            {allowed && active === 'create' && (
               <SettledFeatureGate feature="mediaGen">
                 <Lazy>
                   {/* Do NOT re-home AiStudioPage's "Add to post": it navigates
@@ -278,7 +353,7 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
               </SettledFeatureGate>
             )}
 
-            {active === 'connections' && (
+            {allowed && active === 'connections' && (
               <Lazy>
                 <AccountCenterPage embedded />
               </Lazy>
@@ -312,6 +387,31 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
+
+/**
+ * The refusal a REP gets on `?tool=create` or `?tool=connections`.
+ *
+ * Deliberately shaped like the router's own outcome and not like a 403: the
+ * backend would refuse too, but by then four requests have gone out and the
+ * global toaster has shouted four times. This says the same thing once, before
+ * anything is fetched, and names WHO can lift it — "ask an admin" is the only
+ * next step a REP actually has, so it is the only one offered. No retry button:
+ * nothing here is going to change on a retry.
+ */
+function ToolDenied() {
+  const { t } = useTranslation('marketing');
+  return (
+    <EmptyState
+      data-testid="studio-tool-denied"
+      icon={<Lock className="h-5 w-5" />}
+      title={t('studio.tools.denied', 'Bu araç yöneticilere açık')}
+      description={t(
+        'studio.tools.deniedDesc',
+        'Bu araç yönetici yetkisi gerektiriyor. Erişim için çalışma alanı yöneticinle konuş.',
+      )}
+    />
+  );
 }
 
 /**
@@ -384,22 +484,30 @@ function SettledFeatureGate({ feature, children }: { feature: FeatureKey; childr
  * NOT deep links into this drawer; rewriting them to `?tool=` would point at a
  * four-entry union that does not contain a single one of them.
  */
-const DEEP_LINKS: Array<{ to: string; key: string; label: string }> = [
+const DEEP_LINKS: Array<{ to: string; key: string; label: string; role?: MarketingRole }> = [
   { to: '/studio?view=tools&tab=campaigns&sub=standard', key: 'studio.tools.link.campaigns', label: 'Kampanyalar' },
   { to: '/studio?view=tools&tab=campaigns&sub=social', key: 'studio.tools.link.socialCampaigns', label: 'Sosyal kampanyalar' },
   { to: '/studio?view=tools&tab=campaigns&sub=planner', key: 'studio.tools.link.planner', label: 'Sosyal planlayıcı' },
   { to: '/studio?view=tools&tab=trends', key: 'studio.tools.link.trends', label: 'Trendler' },
   { to: '/studio?view=tools&tab=create&sub=personas', key: 'studio.tools.link.personas', label: 'UGC personaları' },
-  { to: '/email-templates', key: 'studio.tools.link.emailTemplates', label: 'E-posta şablonları' },
-  { to: '/reviews', key: 'studio.tools.link.reviews', label: 'Yorumlar' },
-  { to: '/affiliates', key: 'studio.tools.link.affiliates', label: 'Ortaklar' },
+  // The four routes App.tsx puts behind `requiredRole={MarketingRole.MANAGER}`.
+  // Unlike the drawer's own tools these are real navigations, so the router does
+  // refuse them correctly — a REP who clicks one is bounced to /home. That is a
+  // dead row, not a hole: it offers a door that closes in your face. Filtered for
+  // the same reason StudioToolsMenu filters `connections`, and no more strongly,
+  // because the gate that matters is still App.tsx's.
+  { to: '/email-templates', key: 'studio.tools.link.emailTemplates', label: 'E-posta şablonları', role: MarketingRole.MANAGER },
+  { to: '/reviews', key: 'studio.tools.link.reviews', label: 'Yorumlar', role: MarketingRole.MANAGER },
+  { to: '/affiliates', key: 'studio.tools.link.affiliates', label: 'Ortaklar', role: MarketingRole.MANAGER },
   { to: '/reports', key: 'studio.tools.link.reports', label: 'Raporlar' },
   { to: '/studio/strategy', key: 'studio.tools.link.strategy', label: 'Strateji' },
-  { to: '/accounts', key: 'studio.tools.link.connections', label: 'Bağlantılar' },
+  { to: '/accounts', key: 'studio.tools.link.connections', label: 'Bağlantılar', role: MarketingRole.MANAGER },
 ];
 
 function DeepLinksMenu({ onNavigate }: { onNavigate: () => void }) {
   const { t } = useTranslation('marketing');
+  const role = useMarketingAuthStore((s) => s.user?.role);
+  const links = DEEP_LINKS.filter((l) => !l.role || hasMarketingRole(role, l.role));
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -411,7 +519,7 @@ function DeepLinksMenu({ onNavigate }: { onNavigate: () => void }) {
       <DropdownMenuContent align="start" className="w-60">
         <DropdownMenuLabel>{t('studio.tools.more', 'Diğer araçlar')}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {DEEP_LINKS.map((l) => (
+        {links.map((l) => (
           <DropdownMenuItem key={l.to} asChild onSelect={onNavigate}>
             <Link to={l.to}>{t(l.key, l.label)}</Link>
           </DropdownMenuItem>

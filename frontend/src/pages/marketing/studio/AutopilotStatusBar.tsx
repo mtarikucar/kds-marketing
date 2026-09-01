@@ -260,7 +260,12 @@ export function AutopilotStatusBar({ onOpenConsole, className }: AutopilotStatus
         label={t('studio.autopilotBar.balance', 'Bakiye')}
         testId="autopilot-balance"
         value={
-          walletQ.isError ? (
+          // `data === undefined` too, not the bare error flag: React Query keeps
+          // the last good balance and merely flips status on a failed BACKGROUND
+          // refetch, and replacing a number we still hold with "okunamadı" tells
+          // the operator we lost something we did not. Same rule the budget query
+          // above uses, and the same one BudgetAutopilotPage's wallet tiles use.
+          walletQ.isError && walletQ.data === undefined ? (
             <span className="text-xs font-normal text-warning">
               {t('studio.autopilotBar.balanceUnread', 'okunamadı')}
             </span>

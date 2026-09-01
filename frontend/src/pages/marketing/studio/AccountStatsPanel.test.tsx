@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { toast } from 'sonner';
 import AccountStatsPanel from './AccountStatsPanel';
 import * as insightsService from '../../../features/marketing/api/socialInsights.service';
 import type { SocialInsightsResponse } from '../../../features/marketing/api/socialInsights.service';
@@ -19,6 +20,11 @@ vi.mock('../../../features/marketing/api/socialInsights.service', async (orig) =
   pullSocialInsights: vi.fn(),
 }));
 vi.mock('../../../features/marketing/api/ads.service');
+// The refresh button's outcome is a toast, so the toaster is the only place the
+// 409-vs-failure distinction is observable.
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
 vi.mock('../accounts/hooks', async (orig) => ({
   ...(await orig<typeof connectionHooks>()),
   useConnections: vi.fn(),
@@ -67,7 +73,26 @@ const insights = (over: Partial<SocialInsightsResponse> = {}): SocialInsightsRes
   byNetwork: {},
   byAccount: [],
   followersByDay: [],
-  coverage: { accounts: 0, accountsWithData: 0, lastPulledAt: null, unsupportedNetworks: [] },
+  coverage: {
+    accounts: 0,
+    accountsWithData: 0,
+    accountsWithErrors: 0,
+    lastPulledAt: null,
+    unsupportedNetworks: [],
+  },
+  ...over,
+});
+
+const accountRow = (over: Partial<SocialInsightsResponse['byAccount'][number]> = {}) => ({
+  socialAccountId: 'a1',
+  network: 'INSTAGRAM',
+  displayName: '@jeeta',
+  followers: 0,
+  impressions: 0,
+  reach: 0,
+  engagements: 0,
+  posts: 0,
+  insightsError: null,
   ...over,
 });
 
@@ -198,6 +223,7 @@ describe('AccountStatsPanel', () => {
         coverage: {
           accounts: 3,
           accountsWithData: 1,
+          accountsWithErrors: 0,
           lastPulledAt: '2026-08-31T06:00:00Z',
           unsupportedNetworks: ['TIKTOK'],
         },
@@ -207,6 +233,55 @@ describe('AccountStatsPanel', () => {
 
     expect(await screen.findByText(/Okunamayan ağlar/)).toHaveTextContent('TikTok');
     expect(screen.getByText(/3 hesabın 1 tanesinden veri geldi/)).toBeInTheDocument();
+  });
+
+  it('names the accounts that failed AND why, instead of a silent gap in the charts', async () => {
+    // The backend has recorded a reason on every failed pull since the sweep
+    // was written, and nothing ever read it: summary() did not select the
+    // column and coverage returned only counts. So the panel built to say "we
+    // could not read this" had a warning triangle and no facts behind it — a
+    // denied scope looked exactly like a quiet month.
+    getSocialInsights.mockResolvedValue(
+      insights({
+        byAccount: [
+          accountRow({
+            socialAccountId: 'a1',
+            // Deliberately NOT the name in the connection strip above: the
+            // assertion below must land on the coverage note, not on a chip.
+            displayName: '@jeeta_ig',
+            insightsError: '(#10) Requires instagram_manage_insights permission',
+          }),
+          accountRow({ socialAccountId: 'a2', displayName: 'Jeeta Page', network: 'FACEBOOK' }),
+        ],
+        coverage: {
+          accounts: 2,
+          accountsWithData: 1,
+          accountsWithErrors: 1,
+          lastPulledAt: '2026-08-31T06:00:00Z',
+          unsupportedNetworks: [],
+        },
+      }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText('Okunamayan hesaplar:')).toBeInTheDocument();
+    // Named, not counted: "1 account failed" is the least actionable version of
+    // the truth. And the provider's own words, verbatim — that string is the
+    // only thing that says which scope to go and ask for.
+    const failure = screen.getByText('@jeeta_ig').closest('li')!;
+    expect(failure).toHaveTextContent('instagram_manage_insights');
+    // The healthy account is not listed as broken.
+    expect(screen.queryByText('Jeeta Page')).not.toBeInTheDocument();
+  });
+
+  it('says nothing about failures when every account read cleanly', async () => {
+    getSocialInsights.mockResolvedValue(
+      insights({ byAccount: [accountRow({ insightsError: null })] }),
+    );
+    renderPanel();
+
+    await screen.findByText('Bağlı hesaplar');
+    expect(screen.queryByText('Okunamayan hesaplar:')).not.toBeInTheDocument();
   });
 
   it('says the numbers were never pulled rather than implying they are current', async () => {
@@ -308,9 +383,20 @@ describe('AccountStatsPanel', () => {
 
     expect(await screen.findByText(/yalnızca yöneticiler görebilir/)).toBeInTheDocument();
     expect(getSocialInsights).not.toHaveBeenCalled();
+    // The connection strip is manager-only too (`GET marketing/connections` is
+    // `@MarketingRoles('MANAGER')`), and this was the one that got missed: an
+    // unconditional call 403s and main.tsx toasts it, so the rep's front door
+    // opened on a "Forbidden" instead of on the quiet sentence above.
+    expect(useConnections).toHaveBeenCalledWith({ enabled: false });
     // The ad charts need only reports.read, so a rep still gets that half.
     expect(getAdMetrics).toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'İstatistikleri yenile' })).not.toBeInTheDocument();
+  });
+
+  it('does ask for the connection strip when the reader is allowed to see it', async () => {
+    renderPanel();
+    await screen.findByText('Bağlı hesaplar');
+    expect(useConnections).toHaveBeenCalledWith({ enabled: true });
   });
 
   it('pulls fresh insights on demand', async () => {
@@ -318,5 +404,20 @@ describe('AccountStatsPanel', () => {
     renderPanel();
     await user.click(await screen.findByRole('button', { name: 'İstatistikleri yenile' }));
     expect(pullSocialInsights).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats "already refreshing" as news, not as a failure', async () => {
+    // The backend takes a per-workspace lock on the pull, so a second click —
+    // or one that lands while the hourly sweep is on this workspace — comes
+    // back 409. An error toast there reports a problem where the only thing
+    // that happened is that the numbers are already on their way.
+    const user = userEvent.setup();
+    pullSocialInsights.mockRejectedValue({ response: { status: 409 } });
+    renderPanel();
+    await user.click(await screen.findByRole('button', { name: 'İstatistikleri yenile' }));
+
+    await waitFor(() => expect(toast.info).toHaveBeenCalled());
+    expect(vi.mocked(toast.info).mock.calls[0][0]).toMatch(/zaten güncelleniyor/);
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

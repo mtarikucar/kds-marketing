@@ -614,6 +614,169 @@ describe('unsupported networks', () => {
   });
 });
 
+/**
+ * `permissionDenied` — the flag that lets the sweep stop.
+ *
+ * Every case below already returned ok:false with isAuthError:false, which was
+ * correct and useless: the caller could tell it was not a reconnect, and had no
+ * way to tell it was pointless to keep asking. A scope verdict belongs to the
+ * (app, token, scope) triple and not to the object being asked about, so the
+ * first refusal is the answer for every remaining call on that account — up to
+ * five hundred of them per account per sweep, on the guaranteed day-one state of
+ * this feature (none of the insights scopes is in social-oauth.config.ts yet).
+ *
+ * The two things it must NOT be are asserted alongside: never a reauth, and
+ * never a throttle.
+ */
+describe('permissionDenied', () => {
+  it('Meta: each of the four permission codes is a scope denial, and none is a reauth', async () => {
+    // #200/#10 carry "Requires <scope> permission", #3 is "not available to your
+    // app", #803 is the object-not-addressable-by-this-token Page variant.
+    for (const code of [3, 10, 200, 803]) {
+      metaFetch.mockResolvedValueOnce(graphFail(metaError(`(#${code}) denied`, code)));
+      const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'P1');
+      expect({ code, denied: r.permissionDenied, auth: r.isAuthError }).toEqual({
+        code,
+        denied: true,
+        auth: false,
+      });
+    }
+  });
+
+  it('Meta: a THROTTLE is not a permission denial — the next tick may well answer', async () => {
+    for (const code of [4, 17, 32, 613]) {
+      metaFetch.mockResolvedValueOnce(graphFail(metaError(`(#${code}) limit reached`, code)));
+      const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'P1');
+      // Stopping the sweep here would drop the posts a transient limit would
+      // have let through a second later.
+      expect({ code, denied: r.permissionDenied }).toEqual({ code, denied: false });
+    }
+  });
+
+  it('Meta: a dead token is a reauth and NOT a permission denial', async () => {
+    metaFetch.mockResolvedValueOnce(graphFail(metaError('Error validating access token', 190)));
+    const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'P1');
+    expect(r.isAuthError).toBe(true);
+    expect(r.permissionDenied).toBe(false);
+  });
+
+  it('Facebook account: a denied page-insights edge keeps the followers AND flags the scope', async () => {
+    // The day-one shape for every connected Page: pages_read_engagement grants
+    // the node (followers), read_insights grants the edge — and the SAME grant
+    // gates the per-post edge, so this refusal predicts every post read the
+    // sweep was about to make.
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 1234 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#200) Requires read_insights permission', 200)));
+    const r = await fetchAccountInsights(account({ network: 'FACEBOOK' }));
+
+    expect(r.ok).toBe(true);
+    expect(r.data.followers).toBe(1234);
+    expect(r.permissionDenied).toBe(true);
+    // The reason travels with the success, so the row can record WHY the rest
+    // is missing.
+    expect(r.error).toContain('read_insights');
+    expect(r.isAuthError).toBeFalsy();
+  });
+
+  it('Facebook account: a TRANSIENT page-insights failure degrades without flagging the scope', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 1234 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#4) Application request limit reached', 4)));
+    const r = await fetchAccountInsights(account({ network: 'FACEBOOK' }));
+    expect(r.ok).toBe(true);
+    expect(r.permissionDenied).toBeFalsy();
+  });
+
+  it('Instagram account: a denied insights edge flags the scope (same grant as the media edge)', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 77 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#10) requires instagram_manage_insights', 10)));
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    expect(r.data.followers).toBe(77);
+    expect(r.permissionDenied).toBe(true);
+  });
+
+  it('Instagram Login: an OAuthException permission code off the raw body is a scope denial', async () => {
+    safeFetch.mockResolvedValueOnce(
+      httpRes(
+        { error: { message: '(#10) Application does not have permission', type: 'OAuthException', code: 10 } },
+        false,
+        400,
+      ),
+    );
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM_LOGIN' }), 'M1');
+    expect(r.permissionDenied).toBe(true);
+    expect(r.isAuthError).toBe(false);
+  });
+
+  it('LinkedIn: a 403 on share stats is a scope denial; a 401 is a reauth', async () => {
+    liRest.mockResolvedValueOnce(liFail('Not enough permissions to access', 403));
+    const denied = await fetchPostInsights(
+      account({ network: 'LINKEDIN', accountType: 'LI_ORG' }),
+      'urn:li:share:1',
+    );
+    expect(denied.permissionDenied).toBe(true);
+    expect(denied.isAuthError).toBe(false);
+
+    liRest.mockResolvedValueOnce(liFail('Invalid access token', 401));
+    const dead = await fetchPostInsights(
+      account({ network: 'LINKEDIN', accountType: 'LI_ORG' }),
+      'urn:li:share:1',
+    );
+    expect(dead.isAuthError).toBe(true);
+    expect(dead.permissionDenied).toBe(false);
+  });
+
+  it('LinkedIn account: a denied PAGE-STATS call does NOT flag the scope', async () => {
+    // The deliberate exception to the Meta rule, and the reason the flag is set
+    // per call rather than per network. LinkedIn's split is two calls behind TWO
+    // grants: organizationPageStatistics wants the organization-admin product,
+    // while the post reads want r_organization_social. Denying page views says
+    // nothing about share statistics, and stopping the post loop on it would
+    // throw away numbers we can actually read.
+    liRest
+      .mockResolvedValueOnce(liOk({ firstDegreeSize: 8400 }))
+      .mockResolvedValueOnce(liFail('Not enough permissions', 403));
+    const r = await fetchAccountInsights(
+      account({ network: 'LINKEDIN', accountType: 'LI_ORG', externalId: '5' }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.data.followers).toBe(8400);
+    expect(r.permissionDenied).toBeFalsy();
+  });
+
+  it('TikTok: scope_not_authorized is a scope denial, an invalid token is not', async () => {
+    safeFetch.mockResolvedValueOnce(
+      httpRes({ error: { code: 'scope_not_authorized', message: 'video.list not granted' } }),
+    );
+    const denied = await fetchPostInsights(account({ network: 'TIKTOK' }), '77');
+    expect(denied.permissionDenied).toBe(true);
+    expect(denied.isAuthError).toBe(false);
+
+    safeFetch.mockResolvedValueOnce(
+      httpRes({ error: { code: 'access_token_invalid', message: 'token invalid' } }, false, 401),
+    );
+    const dead = await fetchPostInsights(account({ network: 'TIKTOK' }), '77');
+    expect(dead.isAuthError).toBe(true);
+    expect(dead.permissionDenied).toBe(false);
+  });
+
+  it('X: a 403 is a scope denial, a 401 is a reauth', async () => {
+    safeFetch.mockResolvedValueOnce(
+      httpRes({ title: 'Forbidden', detail: 'not configured with tweet.read' }, false, 403),
+    );
+    const denied = await fetchPostInsights(account({ network: 'TWITTER' }), '1');
+    expect(denied.permissionDenied).toBe(true);
+    expect(denied.isAuthError).toBe(false);
+
+    safeFetch.mockResolvedValueOnce(httpRes({ title: 'Unauthorized' }, false, 401));
+    const dead = await fetchPostInsights(account({ network: 'TWITTER' }), '1');
+    expect(dead.isAuthError).toBe(true);
+    expect(dead.permissionDenied).toBe(false);
+  });
+});
+
 describe('never throws', () => {
   it('a transport throw (SSRF block / DNS failure) becomes ok:false', async () => {
     safeFetch.mockRejectedValue(new Error('SsrfBlockedError: blocked host'));

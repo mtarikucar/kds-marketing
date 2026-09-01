@@ -102,6 +102,44 @@ describe('LineTrend', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  it('draws a gap for a not-measured point instead of a zero', async () => {
+    /**
+     * `null` is not `0`. A flow nobody recorded really was zero; a STOCK — a
+     * follower count — that nobody sampled still had a value we do not know,
+     * and putting it on the axis draws an audience appearing out of nothing on
+     * the day our sweep happened to start.
+     *
+     * Asserted three ways because the plot, the tooltip and the table are three
+     * separate places the lie could survive.
+     */
+    const user = userEvent.setup();
+    const { container } = render(
+      <LineTrend
+        labels={DAYS}
+        series={[{ key: 'f', label: 'Takipçi', points: [null, null, 30, 40] }]}
+        title="t"
+        ariaLabel="a"
+      />,
+    );
+
+    // The line starts at the first measured point — the run covers two points,
+    // not four, so it cannot have been drawn down to the axis and back.
+    const line = container.querySelector('polyline[stroke]');
+    expect(line?.getAttribute('points')?.trim().split(/\s+/)).toHaveLength(2);
+    // A partly-measured series gets no area wash: filling under a broken line
+    // would shade a region the data does not cover.
+    expect(container.querySelector('polygon')).toBeNull();
+
+    const table = screen.getByRole('table', { name: 'a' });
+    expect(within(table).getByRole('row', { name: /2026-03-01/ })).toHaveTextContent('—');
+    expect(within(table).getByRole('row', { name: /2026-03-03/ })).toHaveTextContent('30');
+
+    // Home lands the keyboard cursor on the first day, which is unmeasured.
+    await user.tab();
+    await user.keyboard('{Home}');
+    expect(screen.getByRole('status')).toHaveTextContent('—');
+  });
+
   it('survives a single-point series without dividing by zero', () => {
     render(
       <LineTrend

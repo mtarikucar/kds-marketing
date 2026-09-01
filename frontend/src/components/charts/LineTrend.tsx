@@ -14,8 +14,18 @@ import { seriesVar } from './palette';
 export interface LineSeries {
   key: string;
   label: string;
-  /** One value per label, same length and order. Zero-fill before passing. */
-  points: number[];
+  /**
+   * One value per label, same length and order.
+   *
+   * `null` means NOT MEASURED, and it is drawn as a gap rather than as a zero.
+   * The distinction is the whole reason it exists: a FLOW (impressions on a
+   * day) that nobody recorded really was zero, and callers zero-fill those. A
+   * STOCK (a follower count) that nobody sampled still had a value — we simply
+   * do not know it — and plotting 0 there draws an audience that did not exist
+   * and then appeared, which is a claim about the business rather than about
+   * our sampling.
+   */
+  points: (number | null)[];
   /** Override the slot colour. Leave unset to take the next categorical slot. */
   colorVar?: string;
 }
@@ -87,7 +97,9 @@ export function LineTrend({
 
   const max = useMemo(() => {
     let m = 0;
-    for (const s of resolved) for (const p of s.points) if (Number.isFinite(p) && p > m) m = p;
+    for (const s of resolved) {
+      for (const p of s.points) if (typeof p === 'number' && Number.isFinite(p) && p > m) m = p;
+    }
     return m;
   }, [resolved]);
 
@@ -102,7 +114,8 @@ export function LineTrend({
     PAD.left + (labels.length <= 1 ? plotW / 2 : (i / (labels.length - 1)) * plotW);
   const yAt = (v: number) => PAD.top + plotH - (max > 0 ? (Math.max(v, 0) / max) * plotH : 0);
 
-  const isEmpty = !labels.length || resolved.every((s) => s.points.every((p) => !p));
+  const isEmpty =
+    !labels.length || resolved.every((s) => s.points.every((p) => p === null || !p));
 
   const nearest = (clientX: number, rect: DOMRect) => {
     if (labels.length <= 1) return 0;
@@ -133,7 +146,12 @@ export function LineTrend({
         <ChartDataTable
           caption={tableCaption ?? ariaLabel}
           columns={['', ...resolved.map((s) => s.label)]}
-          rows={labels.map((l, i) => [fmtLabel(l), ...resolved.map((s) => fmtValue(s.points[i] ?? 0))])}
+          rows={labels.map((l, i) => [
+            fmtLabel(l),
+            // An em dash, not a zero: the table is the accessible twin of the
+            // plot and must not assert a value the line refuses to draw.
+            ...resolved.map((s) => (typeof s.points[i] === 'number' ? fmtValue(s.points[i] as number) : '—')),
+          ])}
         />
       }
     >
@@ -176,12 +194,36 @@ export function LineTrend({
           />
 
           {resolved.map((s) => {
-            const pts = labels.map((_, i) => `${xAt(i)},${yAt(s.points[i] ?? 0)}`).join(' ');
+            // Split into runs of consecutive MEASURED points. Each run is its
+            // own polyline, so an unmeasured stretch is a break in the line
+            // rather than a dive to the axis and back.
+            const runs: { i: number; v: number }[][] = [];
+            let run: { i: number; v: number }[] = [];
+            labels.forEach((_, i) => {
+              const v = s.points[i];
+              if (typeof v === 'number') run.push({ i, v });
+              else if (run.length) { runs.push(run); run = []; }
+            });
+            if (run.length) runs.push(run);
+            const last = runs.length ? runs[runs.length - 1][runs[runs.length - 1].length - 1] : null;
+            const pts = runs
+              .map((r) => r.map((pt) => `${xAt(pt.i)},${yAt(pt.v)}`).join(' '))
+              .join(' ');
             return (
               <g key={s.key}>
                 {/* The area wash is for a lone series only: overlapping fills at
                     10% stop being washes and start being mud. */}
-                {resolved.length === 1 && labels.length > 1 && (
+                {/*
+                  The wash is only honest for a series with NO gaps. It is
+                  anchored to the plot's left and right edges, so with an
+                  unmeasured stretch it would shade a region the line itself
+                  refuses to cross — a filled area asserting coverage the data
+                  does not have.
+                */}
+                {resolved.length === 1 &&
+                  labels.length > 1 &&
+                  runs.length === 1 &&
+                  runs[0].length === labels.length && (
                   <polygon
                     points={`${PAD.left},${PAD.top + plotH} ${pts} ${width - PAD.right},${PAD.top + plotH}`}
                     fill={s.colorVar}
@@ -189,24 +231,29 @@ export function LineTrend({
                   />
                 )}
                 {labels.length > 1 ? (
-                  <polyline
-                    points={pts}
-                    fill="none"
-                    stroke={s.colorVar}
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
+                  runs.map((r, ri) => (
+                    <polyline
+                      key={ri}
+                      points={r.map((pt) => `${xAt(pt.i)},${yAt(pt.v)}`).join(' ')}
+                      fill="none"
+                      stroke={s.colorVar}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  ))
                 ) : (
-                  <circle cx={xAt(0)} cy={yAt(s.points[0] ?? 0)} r={4} fill={s.colorVar} />
+                  typeof s.points[0] === 'number' && (
+                    <circle cx={xAt(0)} cy={yAt(s.points[0])} r={4} fill={s.colorVar} />
+                  )
                 )}
                 {/* The end marker, direct-labelled by the headline value above —
                     never a number on every point. The 2px surface ring keeps it
                     legible where two series cross. */}
-                {labels.length > 1 && (
+                {labels.length > 1 && last && (
                   <circle
-                    cx={xAt(labels.length - 1)}
-                    cy={yAt(s.points[labels.length - 1] ?? 0)}
+                    cx={xAt(last.i)}
+                    cy={yAt(last.v)}
                     r={4}
                     fill={s.colorVar}
                     stroke="var(--surface)"
@@ -227,17 +274,19 @@ export function LineTrend({
                 stroke="var(--border-strong)"
                 strokeWidth={1}
               />
-              {resolved.map((s) => (
-                <circle
-                  key={s.key}
-                  cx={xAt(active)}
-                  cy={yAt(s.points[active] ?? 0)}
-                  r={4}
-                  fill={s.colorVar}
-                  stroke="var(--surface)"
-                  strokeWidth={2}
-                />
-              ))}
+              {resolved.map((s) =>
+                typeof s.points[active] === 'number' ? (
+                  <circle
+                    key={s.key}
+                    cx={xAt(active)}
+                    cy={yAt(s.points[active] as number)}
+                    r={4}
+                    fill={s.colorVar}
+                    stroke="var(--surface)"
+                    strokeWidth={2}
+                  />
+                ) : null,
+              )}
             </g>
           )}
         </svg>
@@ -256,7 +305,7 @@ export function LineTrend({
                   {/* Value leads, label follows: the reader already knows which
                       series they are looking at and came for the number. */}
                   <span className="font-medium tabular-nums text-foreground">
-                    {fmtValue(s.points[active] ?? 0)}
+                    {typeof s.points[active] === 'number' ? fmtValue(s.points[active] as number) : '—'}
                   </span>
                   {resolved.length > 1 && (
                     <span className="truncate text-muted-foreground">{s.label}</span>

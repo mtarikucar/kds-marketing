@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AccountRow, isNetworkConfigured } from './network-adapters';
@@ -53,6 +53,18 @@ export interface InsightsAccountRow {
   reach: number;
   engagements: number;
   posts: number;
+  /**
+   * Why this account contributed nothing, in the provider's own words — the
+   * missing scope, the rate limit, the transport failure — or null when the last
+   * attempt succeeded.
+   *
+   * This is SocialAccount.insightsError, and it is deliberately not
+   * SocialAccount.lastError: a scope gap or a five-minute Graph outage says
+   * nothing about the publishing credential, and lastError is the column that
+   * makes the UI demand a reconnect. Reporting the reason and demanding a
+   * reconnect are different acts and only one of them is honest here.
+   */
+  insightsError: string | null;
 }
 
 export interface InsightsFollowersDay {
@@ -65,6 +77,19 @@ export interface InsightsCoverage {
   accounts: number;
   /** How many of them produced ANY metric row inside the window. */
   accountsWithData: number;
+  /**
+   * How many enabled accounts came back from their last pull with a recorded
+   * reason for failing.
+   *
+   * The counterpart of unsupportedNetworks and NOT the same question.
+   * `unsupported` means there is no API to call and nothing to fix;
+   * `accountsWithErrors` means we tried, we were refused, and the refusal is
+   * written down on the row — a missing scope waiting on an app review, a rate
+   * limit, a dead token. One of those is permanent and the other is a to-do
+   * list, so a UI that folded them together would be telling the owner nothing
+   * can be done about a problem that can.
+   */
+  accountsWithErrors: number;
   /** Last time the sweep touched any account (attempt, not success). */
   lastPulledAt: string | null;
   /** Networks whose numbers can never be read, however the OAuth grant is fixed. */
@@ -83,6 +108,22 @@ export interface InsightsSummary {
 /** Fields the sweep needs off a SocialAccount — a superset of AccountRow. */
 interface DueAccount extends AccountRow {
   workspaceId: string;
+}
+
+export interface PullResult {
+  posts: number;
+  accounts: number;
+  errors: number;
+}
+
+/** A pull that may not have run, because somebody else was already pulling. */
+export interface ExclusivePullResult extends PullResult {
+  skipped: boolean;
+}
+
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
 }
 
 /**
@@ -127,6 +168,28 @@ export class SocialInsightsService {
   private static readonly ACCOUNT_LIMIT = 100;
   /** Targets re-read per pullWorkspace call. */
   private static readonly TARGET_LIMIT = 500;
+  /**
+   * Targets re-read per INTERACTIVE pull — an order of magnitude below the
+   * cron's, because a human is holding an HTTP request open behind it.
+   *
+   * The unattended sweep can afford five hundred serial provider calls: nobody
+   * is waiting, and the wall-clock budget in the cron catches an overrun. The
+   * refresh button cannot. At ~1s per provider round-trip the cron's cap is a
+   * request that hangs for eight minutes and then almost certainly loses to a
+   * proxy timeout, having burnt the workspace's rate limit on the way. Fifty
+   * targets is a handful of seconds and covers the case the button actually
+   * exists for: "I published something this morning, show me its numbers".
+   * Whatever it does not reach, the hourly sweep picks up.
+   */
+  private static readonly INTERACTIVE_TARGET_LIMIT = 50;
+  /**
+   * Upper bound on the transaction that HOLDS the interactive lock. The lock is
+   * a pg_try_advisory_xact_lock, so it lives exactly as long as its transaction
+   * — the body has to be bounded or the lock outlives its usefulness. Sized well
+   * above a realistic interactive pull (a handful of accounts × the cap above)
+   * and well below any sane gateway timeout.
+   */
+  private static readonly INTERACTIVE_LOCK_TIMEOUT_MS = 3 * 60 * 1000;
   /** Hard caps on the summary reads. Ordered so truncation drops the OLDEST rows. */
   private static readonly POST_METRIC_ROW_LIMIT = 50_000;
   private static readonly ACCOUNT_METRIC_ROW_LIMIT = 20_000;
@@ -140,6 +203,105 @@ export class SocialInsightsService {
   // ────────────────────────────────────────────────────────────────── Pull
 
   /**
+   * pullWorkspace under a PER-WORKSPACE exclusive lock. `skipped: true` means
+   * somebody else was already pulling this workspace and nothing was done.
+   *
+   * WHY A LOCK AT ALL, when every write here is an idempotent upsert. Because
+   * the expensive half of this method is not the writes — it is several hundred
+   * serial calls against provider APIs that meter us. Two concurrent pulls of
+   * one workspace produce exactly the same rows and burn exactly twice the rate
+   * limit, and the second one is pure waste. There were three ways to get one
+   * before this existed: the hourly sweep meeting a manager pressing Refresh,
+   * two managers pressing it at once, and one manager pressing it twice because
+   * the first press had not visibly finished.
+   *
+   * TRY, NEVER WAIT. `pg_try_advisory_xact_lock` returns false immediately
+   * rather than queueing, which is the only behaviour that suits either caller:
+   * an HTTP request must not sit on a socket behind a sweep that may run for
+   * minutes, and the cron has better things to do than block — the workspace it
+   * skipped keeps its accounts unstamped and therefore still due, so the next
+   * tick picks them up. `hashtext(key)` matches the ai-credits / research-profile
+   * idiom so per-workspace locks across the codebase share one derivation.
+   *
+   * XACT, NEVER SESSION, and held inside an interactive transaction — the same
+   * connection-safety rule advisory-lock.ts documents at length: a session lock
+   * acquired and released on two different pooled connections leaks forever, and
+   * a re-acquire on the holding connection is re-entrant and lets the caller run
+   * twice. The body executes on the normal pool; this transaction exists only to
+   * own the lock, so it must be BOUNDED — hence the required timeout, and hence
+   * the interactive path's much smaller target cap.
+   */
+  async pullWorkspaceExclusive(
+    workspaceId: string,
+    opts: {
+      lockTimeoutMs: number;
+      force?: boolean;
+      accountIds?: string[];
+      targetLimit?: number;
+    },
+  ): Promise<ExclusivePullResult> {
+    const { lockTimeoutMs, ...pullOpts } = opts;
+    let result: PullResult = { posts: 0, accounts: 0, errors: 0 };
+    let ran = false;
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRawUnsafe<Array<{ locked: boolean }>>(
+            `SELECT pg_try_advisory_xact_lock(hashtext(${escapeLockKey(
+              `social-insights:${workspaceId}`,
+            )})) AS locked`,
+          );
+          if (!rows?.[0]?.locked) return;
+          ran = true;
+          result = await this.pullWorkspace(workspaceId, pullOpts);
+        },
+        { maxWait: 5_000, timeout: lockTimeoutMs },
+      );
+    } catch (e) {
+      // pullWorkspace itself never throws, so anything landing here is the
+      // TRANSACTION — a pool timeout, or a body that outran lockTimeoutMs. Both
+      // are worth counting and neither is worth propagating: this method has the
+      // same never-throw contract as the one it wraps, so a sweep of forty
+      // workspaces is not taken out by one slow one. Note the danger the
+      // timeout leaves behind, which is why the cron ALSO budgets by wall clock:
+      // Prisma rolls the transaction back and releases the lock, but the body it
+      // was guarding is still running out on the normal pool.
+      result.errors++;
+      this.logger.error(
+        `insights pull: exclusive pull failed for ${workspaceId}: ${(e as Error)?.message ?? e}`,
+      );
+      return { ...result, skipped: false };
+    }
+    return { ...result, skipped: !ran };
+  }
+
+  /**
+   * The interactive refresh behind the button. Same work, different budget.
+   *
+   * A human is holding an HTTP request open, so this trades completeness for
+   * latency: the newest INTERACTIVE_TARGET_LIMIT posts rather than the sweep's
+   * five hundred, and a hard "somebody is already doing this" instead of a
+   * silent second run against the provider's rate limit. Nothing it skips is
+   * lost — the hourly sweep covers the rest.
+   */
+  async pullNow(workspaceId: string): Promise<PullResult> {
+    const { skipped, ...counts } = await this.pullWorkspaceExclusive(workspaceId, {
+      force: true,
+      targetLimit: SocialInsightsService.INTERACTIVE_TARGET_LIMIT,
+      lockTimeoutMs: SocialInsightsService.INTERACTIVE_LOCK_TIMEOUT_MS,
+    });
+    if (skipped) {
+      // 409 rather than a cheerful 200 reporting zero accounts: the caller asked
+      // for a refresh and did not get one, and a zeroed success would read as
+      // "we looked and there was nothing", which is a different and false fact.
+      throw new ConflictException(
+        'A statistics refresh is already running for this workspace — try again in a moment',
+      );
+    }
+    return counts;
+  }
+
+  /**
    * Refresh one workspace's organic numbers. Idempotent: both writes are
    * upserts keyed on a UTC day, so calling this four times an hour produces the
    * same rows as calling it once. Never throws — every failure is counted and
@@ -148,15 +310,37 @@ export class SocialInsightsService {
    * `force` bypasses the every-6h staleness gate (the manual refresh button);
    * without it only accounts that are actually due are touched, which is what
    * makes the hourly cron cheap.
+   *
+   * `accountIds` is an ALLOWLIST, and it is what makes the cron's batch size
+   * mean anything. The sweep picks its BATCH of due account rows globally and
+   * then hands each workspace the ids it picked; without the allowlist this
+   * method would re-derive its own set and re-read up to ACCOUNT_LIMIT accounts
+   * per workspace, so a batch of 200 due accounts spread over 200 workspaces
+   * would touch up to 20,000 — a hundred times the number the cron believes it
+   * is bounded to. Ads-pull avoids this by iterating the due ROWS themselves;
+   * this is the same shape, expressed as a filter because the reads below need
+   * the full account row and the token on it.
+   *
+   * `targetLimit` lets the interactive path buy a much shorter body than the
+   * unattended one — see INTERACTIVE_TARGET_LIMIT.
+   *
+   * This is the UNGUARDED worker. Both real callers reach it through
+   * pullWorkspaceExclusive; it stays public and lockless because the lock is a
+   * policy about who may run it, not part of doing the work.
    */
   async pullWorkspace(
     workspaceId: string,
-    opts: { force?: boolean } = {},
-  ): Promise<{ posts: number; accounts: number; errors: number }> {
+    opts: { force?: boolean; accountIds?: string[]; targetLimit?: number } = {},
+  ): Promise<PullResult> {
     const result = { posts: 0, accounts: 0, errors: 0 };
     const now = new Date();
     const today = SocialPostMetricService.utcDay(now);
     const dueBefore = new Date(now.getTime() - SocialInsightsService.PULL_INTERVAL_MS);
+
+    // An empty allowlist means "these zero accounts", NOT "no allowlist" — the
+    // `?.`-derived-scope trap in reverse. Spreading `{}` for an empty array
+    // would silently widen the read to the whole workspace.
+    if (opts.accountIds && opts.accountIds.length === 0) return result;
 
     // The staleness gate is expressed as a where-fragment rather than an
     // inline ternary so `force` can drop it entirely. Note it is spread into an
@@ -165,13 +349,20 @@ export class SocialInsightsService {
     const stale = opts.force
       ? {}
       : { OR: [{ insightsPulledAt: null }, { insightsPulledAt: { lt: dueBefore } }] };
+    // Re-applied on top of the allowlist rather than trusted from it: the ids
+    // were chosen by an earlier query and another replica may have swept them in
+    // between. Belt and braces, and free — it is the same index.
+    const allow = opts.accountIds ? { id: { in: opts.accountIds } } : {};
 
     let accounts: DueAccount[];
     try {
       accounts = await this.prisma.socialAccount.findMany({
-        where: { workspaceId, enabled: true, ...stale },
+        where: { workspaceId, enabled: true, ...stale, ...allow },
         orderBy: { insightsPulledAt: { sort: 'asc', nulls: 'first' } },
-        take: SocialInsightsService.ACCOUNT_LIMIT,
+        take: Math.min(
+          SocialInsightsService.ACCOUNT_LIMIT,
+          opts.accountIds?.length ?? SocialInsightsService.ACCOUNT_LIMIT,
+        ),
         select: {
           id: true,
           workspaceId: true,
@@ -202,9 +393,10 @@ export class SocialInsightsService {
     // this workspace one tick of post metrics; the account snapshots and the
     // stamping still happen.
     const since = new Date(now.getTime() - SocialInsightsService.POST_WINDOW_DAYS * 86_400_000);
+    const targetLimit = opts.targetLimit ?? SocialInsightsService.TARGET_LIMIT;
     let byAccount = new Map<string, Array<{ id: string; externalPostId: string }>>();
     try {
-      byAccount = await this.dueTargets(workspaceId, accounts.map((a) => a.id), since);
+      byAccount = await this.dueTargets(workspaceId, accounts.map((a) => a.id), since, targetLimit);
     } catch (e) {
       result.errors++;
       this.logger.error(
@@ -244,6 +436,7 @@ export class SocialInsightsService {
     workspaceId: string,
     accountIds: string[],
     since: Date,
+    limit: number,
   ): Promise<Map<string, Array<{ id: string; externalPostId: string }>>> {
     const out = new Map<string, Array<{ id: string; externalPostId: string }>>();
     if (accountIds.length === 0) return out;
@@ -255,8 +448,11 @@ export class SocialInsightsService {
         externalPostId: { not: null },
         post: { publishedAt: { gte: since } },
       },
+      // Newest first, so a cap sheds the OLDEST posts. A post published this
+      // morning is the one whose numbers are still moving and the one somebody
+      // is asking about; a post from three weeks ago has all but settled.
       orderBy: { post: { publishedAt: 'desc' } },
-      take: SocialInsightsService.TARGET_LIMIT,
+      take: limit,
       select: { id: true, socialAccountId: true, externalPostId: true },
     });
     for (const t of targets) {
@@ -317,6 +513,36 @@ export class SocialInsightsService {
       }
     }
 
+    // THE SAME STOP, FOR THE OPPOSITE REASON, AND IT IS THE COMMON CASE.
+    //
+    // A denied SCOPE is not an auth failure and must never become one — that
+    // distinction is deliberate and load-bearing (see `stamp()`: any string in
+    // lastError tells the owner to reconnect an account that publishes
+    // perfectly well). But it was only ever half a decision. `authFailed` also
+    // stopped the sweep from spending calls it knew would fail, and a scope
+    // denial has exactly the same predictive power: a permission verdict
+    // belongs to the (app, token, scope) triple, not to the post being asked
+    // about, so the refusal we just received is the refusal all five hundred of
+    // the calls below would receive.
+    //
+    // And this is the GUARANTEED day-one state, not an edge case. None of
+    // instagram_manage_insights, read_insights, r_organization_social or
+    // user.info.stats is in social-oauth.config.ts, so on the first sweep after
+    // deploy every Meta, LinkedIn and TikTok account in the database answers
+    // exactly this way. Without the stop, that is one denied provider call per
+    // published post per account per hour, forever, for a fact we established
+    // in the first call of the sweep.
+    //
+    // Note where this sits: AFTER the account write. A permission denial can
+    // arrive on an `ok:true` result (the Meta account reads are a cheap profile
+    // call plus a scoped insights edge, and the follower count survives the
+    // denial), and that number is real and gets stored. Only the post loop is
+    // skipped. The reason is recorded either way, and `lastError` is untouched.
+    if (acct.permissionDenied) {
+      outcome.error = outcome.error ?? acct.error ?? 'insights permission denied';
+      return outcome;
+    }
+
     for (const target of targets) {
       const res = await fetchPostInsights(account, target.externalPostId);
       if (res.ok && res.data && !res.unsupported) {
@@ -334,6 +560,13 @@ export class SocialInsightsService {
           outcome.authFailed = true;
           // A dead token fails identically for every remaining post on this
           // account. Stop hammering the provider with calls we know will fail.
+          break;
+        }
+        if (res.permissionDenied) {
+          // The mirror of the account-level stop above, for the case where the
+          // account read succeeded outright and only the post edge is gated
+          // (X's tweet.read, TikTok's video.list). One refusal is the whole
+          // answer for this account; no reauth flag, the reason is recorded.
           break;
         }
       }
@@ -404,9 +637,13 @@ export class SocialInsightsService {
    * credential — the account still posts fine — and marking it needs-reconnect
    * would send the owner round an OAuth loop that cannot fix the problem, and
    * would do it to every workspace at once the day we ship this. Those failures
-   * go to `insightsError`, which is reportable and inert. A real 190/401 does
-   * write 'reauth_required', matching the convention publish and the token
-   * refresher already use.
+   * go to `insightsError`, which is reportable and inert — and REPORTABLE is
+   * meant literally: summary() selects it, returns it per account on `byAccount`
+   * and counts it as `coverage.accountsWithErrors`, and the studio's coverage
+   * note names the account and the reason. It was write-only for a while, which
+   * made this whole distinction a private one between the sweep and the
+   * database. A real 190/401 does write 'reauth_required', matching the
+   * convention publish and the token refresher already use.
    *
    * The account is NOT disabled on an auth failure either (the refresher does
    * disable, on a different signal): disabling would silently stop publishing,
@@ -439,6 +676,14 @@ export class SocialInsightsService {
    * Σ byDay === totals exactly. A post published before `from` is not in the
    * window at all, even if it was measured inside it.
    *
+   * COVERAGE IS PART OF THE ANSWER, not a footnote to it. Every number below is
+   * a floor: it counts what we were able to read. So the same call reports what
+   * we could not — the networks with no API at all (unsupportedNetworks), and
+   * the accounts whose last pull was refused, per account with the provider's
+   * own words (`byAccount[].insightsError`) and in total
+   * (`coverage.accountsWithErrors`). A caller that draws the series without
+   * reading those is drawing a zero line over a blind spot.
+   *
    * ZERO-FILL IS THE CLIENT'S JOB. byDay contains ONLY days that actually have
    * a published target; a quiet Tuesday is simply absent from the array rather
    * than present as a row of zeros. That is deliberate — the server must not
@@ -462,6 +707,12 @@ export class SocialInsightsService {
         accountType: true,
         enabled: true,
         insightsPulledAt: true,
+        // The sweep has written this column since the day it was added and
+        // nothing ever read it: summary() did not select it and coverage
+        // reported only counts, so the one surface built to explain WHY a number
+        // is missing had no access to the explanation the sweep had already
+        // saved. A write-only column is not a record, it is a habit.
+        insightsError: true,
       },
     });
 
@@ -528,6 +779,7 @@ export class SocialInsightsService {
         reach: 0,
         engagements: 0,
         posts: 0,
+        insightsError: account.insightsError ?? null,
       });
     }
 
@@ -579,6 +831,8 @@ export class SocialInsightsService {
           reach: 0,
           engagements: 0,
           posts: 0,
+          // No row to read a reason off; the display name is the explanation.
+          insightsError: null,
         };
       a.impressions += m?.impressions ?? 0;
       a.reach += m?.reach ?? 0;
@@ -622,6 +876,9 @@ export class SocialInsightsService {
       coverage: {
         accounts: enabled.length,
         accountsWithData: [...accountsWithData].filter((id) => enabled.some((a) => a.id === id)).length,
+        // Enabled accounts only, matching `accounts` — a disabled account not
+        // being read is not a failure, it is the setting working.
+        accountsWithErrors: enabled.filter((a) => Boolean(a.insightsError)).length,
         lastPulledAt: lastPulled ? lastPulled.toISOString() : null,
         unsupportedNetworks: unreadableNetworks(enabled),
       },

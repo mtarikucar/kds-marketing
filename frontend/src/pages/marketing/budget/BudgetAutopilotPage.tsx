@@ -366,7 +366,7 @@ function BudgetDetail({ budget: summary, hideApprovals }: { budget: GrowthBudget
               label={t('autopilot.hero.loaded', 'Credit loaded')}
               value={
                 walletUnread
-                  ? t('autopilot.hero.balanceUnread', 'okunamadı')
+                  ? t('studio.autopilotBar.balanceUnread', 'okunamadı')
                   : money(walletBalance + growth.spend, currency)
               }
               icon={<CreditCard className="h-4 w-4" />}
@@ -376,7 +376,7 @@ function BudgetDetail({ budget: summary, hideApprovals }: { budget: GrowthBudget
               label={t('autopilot.hero.balance', 'Credit balance')}
               value={
                 walletUnread
-                  ? t('autopilot.hero.balanceUnread', 'okunamadı')
+                  ? t('studio.autopilotBar.balanceUnread', 'okunamadı')
                   : money(walletBalance, currency)
               }
               icon={<Wallet className="h-4 w-4" />}

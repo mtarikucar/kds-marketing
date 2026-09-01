@@ -75,6 +75,16 @@ export interface OrganicAccountRow {
   reach: number;
   engagements: number;
   posts: number;
+  /**
+   * Why this account contributed nothing, in the provider's own words — or null
+   * when its last pull succeeded.
+   *
+   * This is the difference between "this account did badly" and "we could not
+   * see this account", and only one of those is a reason to change what you
+   * publish. Optional on the type because a client can be served by an older
+   * backend during a rolling deploy; absent means unknown, not healthy.
+   */
+  insightsError?: string | null;
 }
 
 export interface OrganicFollowersDay {
@@ -87,14 +97,30 @@ export interface OrganicFollowersDay {
  * How much of the picture we actually have.
  *
  * Read this BEFORE drawing anything. `accountsWithData < accounts` means some
- * connected account contributed nothing to the numbers below, and
- * `unsupportedNetworks` names the ones that structurally cannot contribute —
- * either the platform has no organic insights API for that account type, or the
- * workspace's OAuth grant does not include the insights scope.
+ * connected account contributed nothing to the numbers below, and the two
+ * remaining fields say which KIND of nothing it is — a distinction the UI has to
+ * keep, because one of them is a to-do list and the other is not.
+ *
+ * `unsupportedNetworks` names the networks that structurally cannot contribute:
+ * the platform publishes no organic insights API for that account type at all
+ * (Pinterest, Google Business Profile, a LinkedIn personal profile). Nothing to
+ * retry, nothing to ask for.
+ *
+ * `accountsWithErrors` counts the accounts we DID try and were refused — a
+ * missing scope waiting on an app review, a rate limit, a dead token. The reason
+ * for each is on the account row itself (`byAccount[].insightsError`), so a
+ * coverage note can name the account and quote the provider rather than
+ * gesturing at a count.
  */
 export interface OrganicCoverage {
   accounts: number;
   accountsWithData: number;
+  /**
+   * Enabled accounts whose last pull recorded a failure. Optional: an older
+   * backend during a rolling deploy does not send it, and 0 and "not reported"
+   * must not be drawn as the same claim.
+   */
+  accountsWithErrors?: number;
   /** ISO instant of the most recent successful pull, or null if never pulled. */
   lastPulledAt: string | null;
   unsupportedNetworks: string[];
@@ -125,8 +151,17 @@ export const socialInsightsKey = (q: SocialInsightsQuery = {}) =>
   ['marketing', 'social', 'insights', q.from ?? '', q.to ?? ''] as const;
 
 /**
- * The organic read model. `reports.read`, so a rep can see it — unlike the rest
- * of the planner, which is manager-only.
+ * The organic read model. MANAGER **and** `reports.read` — both, not either.
+ *
+ * The earlier version of this line said "`reports.read`, so a rep can see it",
+ * which is the opposite of what ships. `SocialPlannerController` carries a
+ * class-level `@MarketingRoles('MANAGER')`, and `@RequirePermission('reports.read')`
+ * on this handler NARROWS it — a custom role inside MANAGER that holds only
+ * reporting access still reaches it, while the write routes' `campaigns.send`
+ * does not. A permission never widens a role. The handler's own doc block says
+ * exactly this; only the client-side copy was wrong, and it was wrong in the
+ * dangerous direction: it is the sentence that would justify deleting
+ * AccountStatsPanel's `enabled: isManager` gate and shipping a rep-facing 403.
  *
  * The backend rejects `to <= from` and any window wider than 180 days with a
  * 400; callers building a range picker must clamp rather than rely on catching.
@@ -142,6 +177,10 @@ export const getSocialInsights = (q: SocialInsightsQuery = {}) =>
  * MANAGER + `settings.manage`, audited. It talks to every connected network in
  * series, so it is slow and rate-limit-sensitive — wire it to an explicit
  * "refresh" affordance with a spinner, never to a mount effect or a poll.
+ *
+ * EXCLUSIVE per workspace: 409 when a pull is already in flight, whether that is
+ * the hourly sweep or another manager's click. Treat it as "already happening",
+ * not as a failure — the numbers are being fetched either way.
  */
 export const pullSocialInsights = () =>
   marketingApi

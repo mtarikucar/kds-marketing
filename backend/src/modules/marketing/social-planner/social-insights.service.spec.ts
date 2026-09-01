@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { SocialInsightsService } from './social-insights.service';
 import * as insights from './network-insights';
 
@@ -42,6 +43,13 @@ function makePrisma(seed: {
     return Promise.resolve(value);
   };
   const prisma = {
+    // The per-workspace pull lock lives inside an interactive transaction (see
+    // pullWorkspaceExclusive). Here it is a pass-through that hands the body a
+    // `tx` whose raw query reports the lock ACQUIRED — the contended case gets
+    // its own double below, in the exclusivity tests.
+    $transaction: jest.fn(async (body: any) =>
+      body({ $queryRawUnsafe: jest.fn(async () => [{ locked: true }]) }),
+    ),
     socialAccount: {
       findMany: jest.fn((a: any) => record('socialAccount.findMany', a, seed.accounts ?? [])),
       updateMany: jest.fn((a: any) => record('socialAccount.updateMany', a, { count: 1 })),
@@ -334,6 +342,139 @@ describe('SocialInsightsService.pullWorkspace', () => {
     expect(r).toEqual({ posts: 0, accounts: 0, errors: 2 });
   });
 
+  it('touches ONLY the allowlisted accounts when the sweep names them', async () => {
+    // The cron picks a global BATCH of due account rows and hands each
+    // workspace its share. Without the allowlist this method re-derives its own
+    // due set with its own take: 100, so BATCH=200 rows spread over 200
+    // workspaces authorise 20,000 account reads instead of 200.
+    const { prisma, calls } = makePrisma({ accounts: [account()], targets: [] });
+    fetchAccount.mockResolvedValue({ ok: true, data: { followers: 1 } });
+
+    await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspace(WS, {
+      accountIds: ['a1', 'a7'],
+    });
+
+    const args = calls['socialAccount.findMany'][0];
+    expect(args.where.id).toEqual({ in: ['a1', 'a7'] });
+    // The take follows the allowlist rather than the class-wide cap: two ids
+    // can never cost a hundred rows.
+    expect(args.take).toBe(2);
+    // And the staleness gate is still applied on top — the ids were chosen by an
+    // earlier query and another replica may have swept them in between.
+    expect(args.where.OR).toEqual([
+      { insightsPulledAt: null },
+      { insightsPulledAt: { lt: expect.any(Date) } },
+    ]);
+  });
+
+  it('an EMPTY allowlist reads nothing at all — it is not the absence of an allowlist', async () => {
+    // `{ id: { in: [] } }` and `{}` are opposite instructions, and spreading an
+    // empty fragment would silently widen the read to the whole workspace — the
+    // same shape as the Prisma undefined-where trap.
+    const { prisma } = makePrisma({ accounts: [account()] });
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspace(WS, {
+      accountIds: [],
+    });
+    expect(prisma.socialAccount.findMany).not.toHaveBeenCalled();
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0 });
+  });
+
+  it('caps the target read at the caller’s limit, newest posts first', async () => {
+    const { prisma, calls } = makePrisma({ accounts: [account()], targets: [] });
+    fetchAccount.mockResolvedValue({ ok: true, data: { followers: 1 } });
+
+    const svc = new SocialInsightsService(prisma, makeMetrics().svc);
+    await svc.pullWorkspace(WS);
+    expect(calls['socialPostTarget.findMany'][0].take).toBe(500);
+
+    // The interactive path buys a much shorter body: a human is holding an HTTP
+    // request open, and five hundred serial provider calls is not a request, it
+    // is a timeout.
+    await svc.pullWorkspace(WS, { force: true, targetLimit: 25 });
+    expect(calls['socialPostTarget.findMany'][1].take).toBe(25);
+    // Newest-first, so the cap sheds the OLDEST posts — the settled ones.
+    expect(calls['socialPostTarget.findMany'][1].orderBy).toEqual({ post: { publishedAt: 'desc' } });
+  });
+
+  it('does not enter the post loop once the account read proved the SCOPE is missing', async () => {
+    // The guaranteed day-one state: none of instagram_manage_insights,
+    // read_insights, r_organization_social or user.info.stats is in the OAuth
+    // config, so the first sweep after deploy meets this on every Meta,
+    // LinkedIn and TikTok account at once. Walking the loop anyway spends one
+    // denied provider call per published post, per account, per hour, to
+    // re-establish a fact the first call already gave us.
+    const { prisma, calls } = makePrisma({
+      accounts: [account()],
+      targets: [target({ id: 't1' }), target({ id: 't2' }), target({ id: 't3' })],
+    });
+    fetchAccount.mockResolvedValue({
+      ok: false,
+      error: '(#10) Requires instagram_manage_insights permission',
+      isAuthError: false,
+      permissionDenied: true,
+    });
+
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspace(WS);
+
+    expect(fetchPost).not.toHaveBeenCalled();
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1 });
+    // …and it is still NOT a reconnect. The account publishes perfectly well;
+    // the app was simply never granted the read scope, and no OAuth loop the
+    // owner can walk will grant a scope nobody asked for.
+    const data = calls['socialAccount.updateMany'][0].data;
+    expect(data).not.toHaveProperty('lastError');
+    expect(data.insightsError).toContain('instagram_manage_insights');
+  });
+
+  it('keeps the follower count it DID get when only the scoped edge was denied', async () => {
+    // The Meta account read is two calls: a cheap profile fetch and a scoped
+    // insights edge. A denial of the second still returns followers, so the
+    // result is ok:true carrying permissionDenied — the number is stored, and
+    // only the post loop (gated by the same grant) is skipped.
+    const { prisma, calls } = makePrisma({
+      accounts: [account()],
+      targets: [target({ id: 't1' }), target({ id: 't2' })],
+    });
+    fetchAccount.mockResolvedValue({
+      ok: true,
+      data: { followers: 4200 },
+      permissionDenied: true,
+      error: 'FB page insights: (#200) Requires read_insights permission',
+    });
+
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspace(WS);
+
+    expect(calls['socialAccountMetric.upsert'][0].create).toMatchObject({ followers: 4200 });
+    expect(fetchPost).not.toHaveBeenCalled();
+    expect(r).toEqual({ posts: 0, accounts: 1, errors: 0 });
+    // A successful read is not an error, but the missing half still needs a
+    // reason on the row or the coverage note has nothing to say.
+    const data = calls['socialAccount.updateMany'][0].data;
+    expect(data.insightsError).toContain('read_insights');
+    expect(data).not.toHaveProperty('lastError');
+  });
+
+  it('stops the post loop at the first scope refusal, without demanding a reconnect', async () => {
+    // The mirror case: the account read succeeded outright and only the post
+    // edge is gated (X's tweet.read, TikTok's video.list).
+    const { prisma, calls } = makePrisma({
+      accounts: [account()],
+      targets: [target({ id: 't1' }), target({ id: 't2' }), target({ id: 't3' })],
+    });
+    fetchAccount.mockResolvedValue({ ok: true, data: { followers: 1 } });
+    fetchPost.mockResolvedValue({
+      ok: false,
+      error: 'TikTok video query: scope_not_authorized',
+      isAuthError: false,
+      permissionDenied: true,
+    });
+
+    await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspace(WS);
+
+    expect(fetchPost).toHaveBeenCalledTimes(1);
+    expect(calls['socialAccount.updateMany'][0].data).not.toHaveProperty('lastError');
+  });
+
   it('only reads PUBLISHED targets with an externalPostId, inside the 30-day window', async () => {
     const { prisma, calls } = makePrisma({ accounts: [account()], targets: [] });
     fetchAccount.mockResolvedValue({ ok: true, data: { followers: 1 } });
@@ -348,6 +489,91 @@ describe('SocialInsightsService.pullWorkspace', () => {
     const since: Date = where.post.publishedAt.gte;
     const days = (Date.now() - since.getTime()) / 86_400_000;
     expect(Math.round(days)).toBe(SocialInsightsService.POST_WINDOW_DAYS);
+  });
+});
+
+describe('SocialInsightsService — exclusive pulls', () => {
+  /** A prisma double whose advisory-lock SELECT answers `locked`. */
+  function lockingPrisma(locked: boolean) {
+    const { prisma, calls } = makePrisma({ accounts: [account()], targets: [] });
+    const queryRawUnsafe = jest.fn(async () => [{ locked }]);
+    const transaction = jest.fn(async (body: any, opts: any) => {
+      (transaction as any).opts = opts;
+      return body({ $queryRawUnsafe: queryRawUnsafe });
+    });
+    prisma.$transaction = transaction;
+    return { prisma, calls, queryRawUnsafe, transaction };
+  }
+
+  beforeEach(() => {
+    fetchAccount.mockResolvedValue({ ok: true, data: { followers: 1 } });
+  });
+
+  it('runs the pull under a per-workspace TRY lock, never a waiting one', async () => {
+    const { prisma, queryRawUnsafe, transaction } = lockingPrisma(true);
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspaceExclusive(WS, {
+      lockTimeoutMs: 60_000,
+    });
+
+    const sql = String(queryRawUnsafe.mock.calls[0][0]);
+    // TRY, not wait: an HTTP request must not queue behind a sweep that may run
+    // for minutes, and the cron has better things to do than block.
+    expect(sql).toContain('pg_try_advisory_xact_lock');
+    // Per WORKSPACE — a global lock here would make one workspace's refresh
+    // block every other workspace's.
+    expect(sql).toContain(WS);
+    // XACT inside an interactive transaction, so the lock cannot leak onto an
+    // idle pooled connection, and BOUNDED, because it is held for the body.
+    expect(transaction.mock.calls[0][1].timeout).toBe(60_000);
+    expect(r).toMatchObject({ skipped: false, accounts: 1 });
+  });
+
+  it('does nothing at all when another pull already holds the lock', async () => {
+    const { prisma } = lockingPrisma(false);
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspaceExclusive(WS, {
+      lockTimeoutMs: 60_000,
+    });
+
+    // Two concurrent pulls of one workspace write identical rows and burn twice
+    // the provider's rate limit; the second is pure waste.
+    expect(prisma.socialAccount.findMany).not.toHaveBeenCalled();
+    expect(fetchAccount).not.toHaveBeenCalled();
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0, skipped: true });
+  });
+
+  it('pullNow answers 409 rather than a cheerful zero when a pull is already running', async () => {
+    const { prisma } = lockingPrisma(false);
+    const svc = new SocialInsightsService(prisma, makeMetrics().svc);
+
+    // A zeroed 200 would read as "we looked and there was nothing", which is a
+    // different and false fact from "we did not look".
+    await expect(svc.pullNow(WS)).rejects.toThrow(ConflictException);
+  });
+
+  it('pullNow forces past the staleness gate but with the small interactive target cap', async () => {
+    const { prisma, calls } = lockingPrisma(true);
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullNow(WS);
+
+    // force: a human who has just published something is not the unattended
+    // sweep the every-6h gate exists to throttle.
+    expect(calls['socialAccount.findMany'][0].where.OR).toBeUndefined();
+    // …but the body must stay short: at ~1s per provider round-trip the cron's
+    // 500-target cap is an eight-minute HTTP request.
+    expect(calls['socialPostTarget.findMany'][0].take).toBe(50);
+    // The response shape the client knows — no internal `skipped` leaking out.
+    expect(r).toEqual({ posts: 0, accounts: 1, errors: 0 });
+  });
+
+  it('never throws when the lock transaction itself fails — it counts and moves on', async () => {
+    const { prisma } = lockingPrisma(true);
+    prisma.$transaction = jest.fn().mockRejectedValue(new Error('transaction timed out'));
+
+    // The sweep calls this once per workspace; a pool timeout on one of them
+    // must not take out the forty queued behind it.
+    const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspaceExclusive(WS, {
+      lockTimeoutMs: 60_000,
+    });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1, skipped: false });
   });
 });
 
@@ -494,6 +720,53 @@ describe('SocialInsightsService.summary', () => {
     expect(s.coverage.lastPulledAt).toBe('2026-06-30T07:30:00.000Z');
   });
 
+  it('reports WHY an account contributed nothing, in the provider’s own words', async () => {
+    // insightsError was written by every sweep and read by nothing: summary()
+    // did not select it and coverage returned only counts. So the one screen
+    // built to say "we could not read this network" had no access to the reason
+    // the sweep had already saved, and a permanently-denied scope was
+    // indistinguishable from an account that simply had a quiet month.
+    const { prisma } = makePrisma({
+      accounts: [
+        { id: 'a1', network: 'INSTAGRAM', displayName: 'IG', accountType: null, enabled: true, insightsPulledAt: new Date('2026-06-30T06:00:00.000Z'), insightsError: '(#10) Requires instagram_manage_insights permission' },
+        { id: 'a2', network: 'TWITTER', displayName: 'X', accountType: null, enabled: true, insightsPulledAt: new Date('2026-06-30T06:00:00.000Z'), insightsError: null },
+        // Disabled, and failing. Not counted: an account nobody asked us to read
+        // is not a coverage problem, it is the setting working.
+        { id: 'a3', network: 'TIKTOK', displayName: 'TT', accountType: null, enabled: false, insightsPulledAt: null, insightsError: 'scope_not_authorized' },
+      ],
+      targets: [],
+    });
+    const s = await new SocialInsightsService(prisma, makeMetrics().svc).summary(WS, from, to);
+
+    const a1 = s.byAccount.find((a) => a.socialAccountId === 'a1');
+    expect(a1.insightsError).toContain('instagram_manage_insights');
+    // Null rather than absent for a healthy account: the field is the answer to
+    // "why is this empty", and "no reason, it just is" is a real answer.
+    expect(s.byAccount.find((a) => a.socialAccountId === 'a2').insightsError).toBeNull();
+    expect(s.coverage.accountsWithErrors).toBe(1);
+  });
+
+  it('counts errors separately from unsupported networks — one is fixable, the other is not', async () => {
+    const { prisma } = makePrisma({
+      accounts: [
+        { id: 'a1', network: 'INSTAGRAM', displayName: 'IG', accountType: null, enabled: true, insightsPulledAt: null, insightsError: 'rate limited' },
+        { id: 'a2', network: 'PINTEREST', displayName: 'Pins', accountType: null, enabled: true, insightsPulledAt: null, insightsError: null },
+      ],
+      targets: [],
+    });
+    supports.mockImplementation((n: string) =>
+      ['FACEBOOK', 'INSTAGRAM', 'INSTAGRAM_LOGIN', 'LINKEDIN', 'TIKTOK', 'TWITTER'].includes(n),
+    );
+    const s = await new SocialInsightsService(prisma, makeMetrics().svc).summary(WS, from, to);
+
+    // Pinterest has no insights API at all — nothing to retry, nothing to ask
+    // for. Instagram was refused this time and may well answer next time. A UI
+    // that folded them together would tell the owner nothing can be done about
+    // a problem that can.
+    expect(s.coverage.unsupportedNetworks).toEqual(['PINTEREST']);
+    expect(s.coverage.accountsWithErrors).toBe(1);
+  });
+
   it('a LinkedIn company page keeps LINKEDIN off the unreadable list', async () => {
     const { prisma } = makePrisma({
       accounts: [
@@ -518,7 +791,13 @@ describe('SocialInsightsService.summary', () => {
     expect(s.byNetwork).toEqual({});
     expect(s.byAccount).toEqual([]);
     expect(s.followersByDay).toEqual([]);
-    expect(s.coverage).toEqual({ accounts: 0, accountsWithData: 0, lastPulledAt: null, unsupportedNetworks: [] });
+    expect(s.coverage).toEqual({
+      accounts: 0,
+      accountsWithData: 0,
+      accountsWithErrors: 0,
+      lastPulledAt: null,
+      unsupportedNetworks: [],
+    });
     // No targets → no point asking for their metrics at all.
     expect(prisma.socialPostMetric.findMany).not.toHaveBeenCalled();
   });

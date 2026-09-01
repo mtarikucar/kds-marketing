@@ -3637,6 +3637,45 @@ model SocialPostTarget {
   @@map("social_post_targets")
 }
 
+/// Forensic record of the rows the 20260901110000 dedup migration destroyed.
+///
+/// That migration had to delete the second `social_post_targets` row of every
+/// (post, account) pair before it could put a UNIQUE constraint on them, and
+/// the losers are not all noise: a second PUBLISHED row is the evidence that a
+/// double-post reached a real customer's feed, and it holds the
+/// `externalPostId` of the copy that is still sitting on that network. Deleting
+/// it silently would destroy the only record of which post that is — including
+/// the SocialPostMetric rows, which cascade away with their target.
+///
+/// So the losers are copied here first: the whole row as it stood, plus which
+/// row won (`keeperId`) and when. Nothing in the application reads this table.
+/// It is modeled only so the migrations↔schema parity gate stays green, and an
+/// operator who has looked at the rows (or found none — on almost every
+/// database it is empty) may drop it.
+///
+/// No relations on purpose: an archived row has to outlive the post and the
+/// account it pointed at, and an FK would either block their deletion or
+/// cascade the evidence away, which is the exact failure being recorded.
+model SocialPostTargetDedupArchive {
+  id String @id @default(uuid())
+
+  /// The destroyed row's own id, kept as data.
+  targetId        String
+  workspaceId     String
+  postId          String
+  socialAccountId String
+  network         String
+  status          String
+  externalPostId  String?
+  error           String?
+
+  /// The row that kept the pair — see the migration for the ranking.
+  keeperId   String
+  archivedAt DateTime @default(now())
+
+  @@map("social_post_targets_dedup_archive")
+}
+
 /// Organic performance of a published social post, pulled back per network per
 /// UTC day (idempotent upsert on targetId+date — a re-pull never duplicates).
 /// The organic mirror of AdMetric: the Performance Loop reads these to attribute

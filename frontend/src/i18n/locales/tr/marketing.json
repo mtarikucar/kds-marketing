@@ -705,7 +705,16 @@
     "namePlaceholder": "örn. İkinci Mağazam",
     "createButton": "Oluştur",
     "createSuccess": "\"{{name}}\" workspace'i oluşturuldu — artık içindesiniz",
-    "createError": "Workspace oluşturulamadı"
+    "createError": "Workspace oluşturulamadı",
+    "tz": {
+      "title": "Saat dilimi",
+      "desc": "Raporlardaki ve listelerdeki \"bugün\" bu saat diliminde başlar. İşletmenin saatini seç — tarayıcının değil.",
+      "label": "Çalışma alanı saat dilimi",
+      "browserHint": "Bu tarayıcı {{zone}} diliminde — kayıtlı değer {{stored}}.",
+      "useBrowser": "Tarayıcınınkini kullan",
+      "saved": "Çalışma alanı saat dilimi güncellendi",
+      "saveFailed": "Saat dilimi kaydedilemedi"
+    }
   },
   "dashboard": {
     "title": "Gösterge Paneli",
@@ -3934,6 +3943,7 @@
       "publishedAria": "Gün başına yayınlanan içerik sayısı",
       "publishedCaption": "Kaç içerik çıktı — kaç kişiye ulaştığı değil.",
       "publishedTitle": "Yayınlanan içerik",
+      "pullBusy": "İstatistikler zaten güncelleniyor — birazdan hazır",
       "pullFailed": "İstatistikler güncellenemedi",
       "pulled": "Hesap istatistikleri güncellendi",
       "pulledWithErrors": "{{ok}} hesap güncellendi, {{bad}} tanesi okunamadı",
@@ -3941,6 +3951,8 @@
       "rangeLabel": "Zaman aralığı",
       "reach": "Erişim",
       "reachAria": "Günlük organik erişim",
+      "readFailed": "Okunamayan hesaplar",
+      "readFailedMore": "ve {{n}} hesap daha",
       "reauth": "Yeniden bağla",
       "refresh": "İstatistikleri yenile",
       "spend": "Reklam harcaması",
@@ -4029,18 +4041,34 @@
         "title": "AI stüdyo"
       },
       "createBudget": "Bütçe oluştur",
+      "denied": "Bu araç yöneticilere açık",
+      "deniedDesc": "Bu araç yönetici yetkisi gerektiriyor. Erişim için çalışma alanı yöneticinle konuş.",
       "editBudget": "Bütçeyi düzenle",
       "enableAutopilot": "Otomatik pilotu etkinleştir",
       "more": "Diğer araçlar",
       "subtitle": "Growth Studio ekranına sığmayan tam sayfa araçlar. Günlük işin ekranda; buradakiler tek seferlik kurulum ve derin çalışma için.",
-      "title": "Tüm araçlar"
+      "title": "Tüm araçlar",
+      "link": {
+        "campaigns": "Kampanyalar",
+        "socialCampaigns": "Sosyal kampanyalar",
+        "planner": "Sosyal planlayıcı",
+        "trends": "Trendler",
+        "personas": "UGC personaları",
+        "emailTemplates": "E-posta şablonları",
+        "reviews": "Yorumlar",
+        "affiliates": "Ortaklar",
+        "reports": "Raporlar",
+        "strategy": "Strateji",
+        "connections": "Bağlantılar"
+      }
     },
     "toolsMenu": {
       "trigger": "Araçlar",
       "calendar": "İçerik takvimi",
       "create": "AI stüdyo",
       "connections": "Bağlı hesaplar",
-      "all": "Tüm araçlar"
+      "all": "Tüm araçlar",
+      "autopilot": "Otomatik pilot konsolu"
     }
   },
   "documentsHub": {

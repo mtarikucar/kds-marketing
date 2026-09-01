@@ -8,6 +8,7 @@ import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import BudgetAutopilotPage from '../budget/BudgetAutopilotPage';
 import { AutopilotStatusBar } from './AutopilotStatusBar';
 import { StudioToolsDrawer, type StudioTool } from './StudioToolsDrawer';
+import { StudioToolsMenu } from './StudioToolsMenu';
 import * as svc from '../../../features/marketing/api/growthBudget.service';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -490,6 +491,7 @@ describe('StudioToolsDrawer', () => {
    */
   it('lists every deep link, with its exact href', async () => {
     const user = setupUser();
+    setRole('MANAGER');
     renderDrawer('autopilot');
 
     await user.click(await screen.findByRole('button', { name: /Diğer araçlar/ }));
@@ -513,6 +515,30 @@ describe('StudioToolsDrawer', () => {
     }
     // Nothing silently added or dropped alongside them.
     expect(screen.getAllByRole('menuitem')).toHaveLength(expected.length);
+  });
+
+  /**
+   * The same guarantee, one role down. These four are real navigations to routes
+   * App.tsx puts behind `requiredRole=MANAGER`, so the router already refuses
+   * them — a REP who clicked one landed on /home. Offering a door that closes in
+   * your face is not reachability, so they are filtered out; everything a REP CAN
+   * reach is still listed, which is the half this test exists to protect.
+   */
+  it('does not offer a REP the four rows the router would bounce them from', async () => {
+    const user = setupUser();
+    setRole('REP');
+    renderDrawer('autopilot');
+
+    await user.click(await screen.findByRole('button', { name: /Diğer araçlar/ }));
+
+    for (const gone of ['E-posta şablonları', 'Yorumlar', 'Ortaklar', 'Bağlantılar']) {
+      expect(screen.queryByRole('menuitem', { name: gone })).not.toBeInTheDocument();
+    }
+    // Still reachable, and still listed: /reports, /studio/strategy and the
+    // ?view=tools surfaces are all in App.tsx's auth-only group.
+    for (const kept of ['Raporlar', 'Strateji', 'Trendler', 'Sosyal planlayıcı']) {
+      expect(await screen.findByRole('menuitem', { name: kept })).toBeInTheDocument();
+    }
   });
 
   it('suppresses the console approvals queue it embeds, because the Studio rail already shows it', async () => {
@@ -593,5 +619,137 @@ describe('BudgetAutopilotPage — embedded', () => {
     await user.click(await screen.findByRole('button', { name: 'Edit budget' }));
     // The dialog's own heading — the PageHeader button carries the same words.
     expect(await screen.findByRole('heading', { name: 'Edit budget' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The gate this menu shipped without.
+ *
+ * `/studio` is auth-only; `/accounts` is `requiredRole=MANAGER`; and
+ * `?tool=connections` mounts the page behind `/accounts` INSIDE `/studio`. The
+ * menu offering that row to every role was a one-click path around the router's
+ * own guard, and the same is true of `?tool=create`, whose whole backend
+ * controller is `@MarketingRoles('MANAGER')`.
+ *
+ * Both ends are pinned, and they are not the same assertion: this one says the
+ * menu stops OFFERING the door, the drawer's says the door does not OPEN. A
+ * menu-only fix would pass here and still hand the page to anyone who typed the
+ * URL.
+ */
+describe('StudioToolsMenu', () => {
+  const openMenu = async () => {
+    const user = setupUser();
+    wrap(<StudioToolsMenu />);
+    await user.click(screen.getByRole('button', { name: /Araçlar/ }));
+    return user;
+  };
+
+  it('offers a manager every tool, plus the full-page surface', async () => {
+    setRole('MANAGER');
+    await openMenu();
+
+    for (const label of ['İçerik takvimi', 'AI stüdyo', 'Bağlı hesaplar', 'Tüm araçlar']) {
+      expect(await screen.findByRole('menuitem', { name: label })).toBeInTheDocument();
+    }
+  });
+
+  /**
+   * The door to the kill switch, and the reason it is the FIRST row.
+   *
+   * The Autopilot console holds the caps, the pause and the kill switch for an
+   * engine that spends money. Its only affordance used to be the status bar's
+   * button — and that bar renders nothing but an error strip and a Retry when
+   * the budget read fails with no cached data. So the one state in which an
+   * operator most needs to stop the engine was the state in which no route
+   * reached the stop button.
+   *
+   * Roleless on purpose: the console's reads are `reports.read` with no
+   * `@MarketingRoles`, and every write inside it is gated on its own.
+   */
+  it('always offers the autopilot console, to every role, first', async () => {
+    await openMenu();
+    const first = screen.getAllByRole('menuitem')[0];
+    expect(first).toHaveAccessibleName('Otomatik pilot konsolu');
+    expect(first).toHaveAttribute('href', '/studio?tool=autopilot');
+  });
+
+  it('keeps the autopilot door for a REP too', async () => {
+    setRole('REP');
+    await openMenu();
+    expect(
+      await screen.findByRole('menuitem', { name: 'Otomatik pilot konsolu' }),
+    ).toHaveAttribute('href', '/studio?tool=autopilot');
+  });
+
+  it('does not offer a REP the manager-only tools', async () => {
+    setRole('REP');
+    await openMenu();
+
+    // The calendar stays: GET marketing/content-calendar is reports.read with
+    // no role, so a REP may genuinely read the month.
+    expect(await screen.findByRole('menuitem', { name: 'İçerik takvimi' })).toBeInTheDocument();
+    // …and so does the door to the full-page surface, which is auth-only and
+    // carries destinations a REP can use.
+    expect(screen.getByRole('menuitem', { name: 'Tüm araçlar' })).toBeInTheDocument();
+
+    expect(screen.queryByRole('menuitem', { name: 'Bağlı hesaplar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'AI stüdyo' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The other half: the drawer is driven by `?tool=`, which is a URL, so hiding a
+ * menu row hides nothing. Every assertion here forces the tool directly, the way
+ * a typed URL or an old bookmark would.
+ */
+describe('StudioToolsDrawer — role gate', () => {
+  const renderDrawer = (tool: StudioTool | null, open = true) =>
+    wrap(<StudioToolsDrawer open={open} tool={tool} onOpenChange={vi.fn()} />);
+
+  it('refuses a REP the Account Center rather than mounting the page /accounts would have refused', async () => {
+    setRole('REP');
+    renderDrawer('connections');
+
+    expect(await screen.findByTestId('studio-tool-denied')).toBeInTheDocument();
+    expect(screen.queryByText('connections-tool')).not.toBeInTheDocument();
+  });
+
+  it('refuses a REP the AI Studio, whose whole controller is MANAGER-only', async () => {
+    setRole('REP');
+    renderDrawer('create');
+
+    expect(await screen.findByTestId('studio-tool-denied')).toBeInTheDocument();
+    expect(screen.queryByText('create-tool')).not.toBeInTheDocument();
+  });
+
+  it('stops promising, in the header, what it is refusing in the body', async () => {
+    setRole('REP');
+    renderDrawer('connections');
+
+    await screen.findByTestId('studio-tool-denied');
+    expect(
+      screen.queryByText('Reklam, sosyal ve mesajlaşma hesaplarını bağla veya yenile.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still gives a REP the two tools that carry no role of their own', async () => {
+    setRole('REP');
+    renderDrawer('calendar');
+    expect(await screen.findByText('calendar-tool')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-tool-denied')).not.toBeInTheDocument();
+  });
+
+  it('still gives a REP the read-only Autopilot console (its reads are reports.read)', async () => {
+    setRole('REP');
+    renderDrawer('autopilot');
+    expect(await screen.findByText('Growth Multiple')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-tool-denied')).not.toBeInTheDocument();
+  });
+
+  it('gives a manager both gated tools', async () => {
+    setRole('MANAGER');
+    renderDrawer('connections');
+    expect(await screen.findByText('connections-tool')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-tool-denied')).not.toBeInTheDocument();
   });
 });

@@ -55,6 +55,15 @@ import { OrganicInsights } from './social-post-metric.service';
  * permission or throttle error arrives stamped OAuthException too, and on this
  * side of the integration that must not read as "reconnect".
  *
+ * `permissionDenied` narrows the third case the OTHER way: the token is fine and
+ * the SCOPE was never granted. It must never reach lastError (that is the whole
+ * reason isAuthError is narrow), but it is not inert either — a scope verdict
+ * belongs to the (app, token, scope) triple and not to the object asked about,
+ * so one refusal answers for every remaining call this sweep would make on that
+ * account. The caller stops there instead of spending five hundred requests
+ * proving the same point. A THROTTLE is deliberately not part of it: a rate
+ * limit is transient, and the next object may well answer.
+ *
  * ─────────────────────────────────────────────────────────────────────────────
  * OAUTH SCOPES — READ THIS BEFORE FILING AN APP REVIEW
  *
@@ -115,6 +124,25 @@ export interface InsightsResult<T> {
   error?: string;
   /** True when the failure is a token problem needing reconnect (not a scope gap). */
   isAuthError?: boolean;
+  /**
+   * True when the provider refused for want of an OAuth SCOPE rather than a
+   * working token — Meta #3/#10/#200/#803, TikTok `scope_not_authorized`, a
+   * LinkedIn or X 403.
+   *
+   * Deliberately DISJOINT from `isAuthError`, and that separation is the whole
+   * point of the flag. A missing scope must never be written to
+   * SocialAccount.lastError (it would tell the owner to reconnect an account
+   * that publishes perfectly well — see the long note on `stamp()`), but it is
+   * still a fact the caller must act on: the same token will be refused by every
+   * other insights call it is about to make, so there is no reason to make them.
+   *
+   * MAY BE SET ALONGSIDE `ok: true`. The Facebook and Instagram ACCOUNT reads
+   * are two calls — a cheap profile fetch and a scoped insights edge — and a
+   * denial of the second still returns the follower count the first one got. The
+   * result is a genuine success carrying a warning, so `error` is populated as
+   * the REASON the scope-gated half is missing, not as a failure.
+   */
+  permissionDenied?: boolean;
   /** True when this network/account has no insights API to call at all. */
   unsupported?: boolean;
 }
@@ -122,12 +150,28 @@ export interface InsightsResult<T> {
 // ──────────────────────────────────────────────────────────── small helpers
 
 const okResult = <T>(data: T): InsightsResult<T> => ({ ok: true, data });
+/**
+ * A read that SUCCEEDED but whose scope-gated half was refused. The data we did
+ * get is returned (it is real), and the denial travels with it so the caller can
+ * stop spending calls on the same scope — see `permissionDenied` above.
+ */
+const degradedResult = <T>(data: T, reason: string): InsightsResult<T> => ({
+  ok: true,
+  data,
+  error: String(reason).slice(0, 500),
+  permissionDenied: true,
+});
 /** Nothing to call and nothing to fix — see "THE THREE OUTCOMES" above. */
 const unsupportedResult = <T>(): InsightsResult<T> => ({ ok: true, unsupported: true });
-const failResult = <T>(error: string, isAuthError = false): InsightsResult<T> => ({
+const failResult = <T>(
+  error: string,
+  isAuthError = false,
+  permissionDenied = false,
+): InsightsResult<T> => ({
   ok: false,
   error: String(error).slice(0, 500),
   isAuthError,
+  permissionDenied,
   unsupported: false,
 });
 
@@ -229,6 +273,26 @@ function isMetaReauthError(
 }
 
 /**
+ * True when a Meta failure means THE SCOPE WAS NEVER GRANTED — the exact
+ * complement of isMetaReauthError over the codes above, and the reason
+ * META_PERMISSION_CODES exists as a named set rather than as four numbers
+ * inlined in a boolean.
+ *
+ * The caller uses this to stop early. A permission verdict is a property of the
+ * (app, token, scope) triple and not of the object being asked about, so once
+ * one call on an account has been refused for want of `read_insights`, every
+ * remaining call on that account in this sweep will be refused the same way —
+ * up to five hundred of them on a busy workspace. Throttle codes are pointedly
+ * NOT included: a rate limit is transient and the next object might well answer.
+ */
+function isMetaPermissionError(
+  err: { code?: number | null } | null | undefined,
+): boolean {
+  const code = typeof err?.code === 'number' ? err.code : null;
+  return code !== null && META_PERMISSION_CODES.has(code);
+}
+
+/**
  * True when a network has ANY post/account insights endpoint we can call.
  *
  * Deliberately network-level and therefore coarse: a LinkedIn PERSONAL profile
@@ -293,7 +357,13 @@ async function facebookPostInsights(
       },
       timeoutMs: 15_000,
     });
-    if (!r.ok) return failResult(`FB post insights: ${r.error.message}`, isMetaReauthError(r.error));
+    if (!r.ok) {
+      return failResult(
+        `FB post insights: ${r.error.message}`,
+        isMetaReauthError(r.error),
+        isMetaPermissionError(r.error),
+      );
+    }
     const rows = r.data?.data;
     if (!Array.isArray(rows) || rows.length === 0) {
       return failResult('FB post insights: empty payload (page token / read_insights missing?)');
@@ -331,6 +401,14 @@ async function facebookPostInsights(
  * preserved in `raw.insightsError`, which lands in SocialAccountMetric.raw, so
  * the reason for the missing columns is recorded in the row itself rather than
  * only in a log line nobody will read six weeks from now.
+ *
+ * AND when that second call is refused for want of a SCOPE, the result carries
+ * `permissionDenied`. The Page-level `/insights` edge and the per-post
+ * `/{post-id}/insights` edge are gated by the SAME grant — `read_insights` —
+ * so a #200 here is proof that every post read this sweep was about to make
+ * would be refused identically. That is the guaranteed day-one state of this
+ * feature (read_insights is not in social-oauth.config.ts), and without the flag
+ * it costs one denied Graph call per published post per account per sweep.
  */
 async function facebookAccountInsights(account: AccountRow): Promise<InsightsResult<AccountInsights>> {
   if (!isNetworkConfigured('FACEBOOK')) {
@@ -344,7 +422,13 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
       query: { fields: 'followers_count,fan_count' },
       timeoutMs: 15_000,
     });
-    if (!prof.ok) return failResult(`FB page: ${prof.error.message}`, isMetaReauthError(prof.error));
+    if (!prof.ok) {
+      return failResult(
+        `FB page: ${prof.error.message}`,
+        isMetaReauthError(prof.error),
+        isMetaPermissionError(prof.error),
+      );
+    }
     // followers_count is the modern field; fan_count is the legacy "likes" and
     // is the only one some older Pages return. Either answers the question.
     const followers = num(prof.data?.followers_count ?? prof.data?.fan_count);
@@ -356,10 +440,10 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
     });
     if (!ins.ok) {
       logger.warn(`FB page insights degraded (${account.externalId}): ${ins.error.message}`);
-      return okResult({
-        followers,
-        raw: { profile: prof.data, insightsError: ins.error.message },
-      });
+      const data = { followers, raw: { profile: prof.data, insightsError: ins.error.message } };
+      return isMetaPermissionError(ins.error)
+        ? degradedResult(data, `FB page insights: ${ins.error.message}`)
+        : okResult(data);
     }
     const rows = ins.data?.data;
     return okResult({
@@ -436,7 +520,13 @@ async function instagramPostInsights(
         timeoutMs: 15_000,
       });
     }
-    if (!r.ok) return failResult(`IG media insights: ${r.error.message}`, isMetaReauthError(r.error));
+    if (!r.ok) {
+      return failResult(
+        `IG media insights: ${r.error.message}`,
+        isMetaReauthError(r.error),
+        isMetaPermissionError(r.error),
+      );
+    }
     const rows = r.data?.data;
     if (!Array.isArray(rows) || rows.length === 0) return failResult('IG media insights: empty payload');
     return okResult(mapIgMediaMetrics(rows, r.data));
@@ -479,7 +569,10 @@ function mapIgMediaMetrics(rows: unknown, raw: unknown): PostInsights {
  * media_count come off the node with instagram_basic.
  *
  * Same primary/best-effort split as the Facebook page read, for the same
- * reason: the follower number must survive a denied insights permission.
+ * reason: the follower number must survive a denied insights permission — and
+ * the same `permissionDenied` verdict on the edge, because the account
+ * `/insights` edge and the media `/insights` edge are both gated by
+ * instagram_manage_insights. One refusal answers for all of them.
  */
 async function instagramAccountInsights(account: AccountRow): Promise<InsightsResult<AccountInsights>> {
   if (!isNetworkConfigured('INSTAGRAM')) {
@@ -493,7 +586,13 @@ async function instagramAccountInsights(account: AccountRow): Promise<InsightsRe
       query: { fields: 'followers_count,media_count' },
       timeoutMs: 15_000,
     });
-    if (!prof.ok) return failResult(`IG account: ${prof.error.message}`, isMetaReauthError(prof.error));
+    if (!prof.ok) {
+      return failResult(
+        `IG account: ${prof.error.message}`,
+        isMetaReauthError(prof.error),
+        isMetaPermissionError(prof.error),
+      );
+    }
     const followers = num(prof.data?.followers_count);
 
     const ins = await metaGraphFetch(`/${account.externalId}/insights`, {
@@ -503,7 +602,10 @@ async function instagramAccountInsights(account: AccountRow): Promise<InsightsRe
     });
     if (!ins.ok) {
       logger.warn(`IG account insights degraded (${account.externalId}): ${ins.error.message}`);
-      return okResult({ followers, raw: { profile: prof.data, insightsError: ins.error.message } });
+      const data = { followers, raw: { profile: prof.data, insightsError: ins.error.message } };
+      return isMetaPermissionError(ins.error)
+        ? degradedResult(data, `IG account insights: ${ins.error.message}`)
+        : okResult(data);
     }
     const rows = ins.data?.data;
     return okResult({
@@ -568,6 +670,12 @@ function isIgDirectAuthError(status: number, json: any): boolean {
   });
 }
 
+/** The scope-gap half of the same question, off the same raw body. */
+function isIgDirectPermissionError(json: any): boolean {
+  const e = json?.error ?? {};
+  return isMetaPermissionError({ code: typeof e.code === 'number' ? e.code : null });
+}
+
 async function instagramDirectPostInsights(
   account: AccountRow,
   externalPostId: string,
@@ -585,7 +693,11 @@ async function instagramDirectPostInsights(
     }
     if (!r.ok) {
       const msg = String(r.json?.error?.message ?? `HTTP ${r.status}`);
-      return failResult(`IG media insights: ${msg}`, isIgDirectAuthError(r.status, r.json));
+      return failResult(
+        `IG media insights: ${msg}`,
+        isIgDirectAuthError(r.status, r.json),
+        isIgDirectPermissionError(r.json),
+      );
     }
     const rows = r.json?.data;
     if (!Array.isArray(rows) || rows.length === 0) return failResult('IG media insights: empty payload');
@@ -613,7 +725,11 @@ async function instagramDirectAccountInsights(account: AccountRow): Promise<Insi
     const r = await igDirectGet(token, `/${account.externalId}`, { fields: 'followers_count,media_count' });
     if (!r.ok) {
       const msg = String(r.json?.error?.message ?? `HTTP ${r.status}`);
-      return failResult(`IG account: ${msg}`, isIgDirectAuthError(r.status, r.json));
+      return failResult(
+        `IG account: ${msg}`,
+        isIgDirectAuthError(r.status, r.json),
+        isIgDirectPermissionError(r.json),
+      );
     }
     return okResult({ followers: num(r.json?.followers_count), raw: r.json });
   } catch (e: any) {
@@ -635,6 +751,16 @@ async function instagramDirectAccountInsights(account: AccountRow): Promise<Insi
  * parameter. A bare numeric id (older rows, or a hand-entered account) is
  * treated as a share, which is what the Posts API returns by default.
  */
+/**
+ * LinkedIn answers a missing product grant with a 403 (ACCESS_DENIED /
+ * "Not enough permissions"), and keeps 401 for a dead or revoked token —
+ * linkedinRest already maps only the 401 to `isAuthError`. So the scope
+ * question here is exactly the status code.
+ */
+function isLinkedinPermissionError(status: number): boolean {
+  return status === 403;
+}
+
 function linkedinShareFilter(externalPostId: string): { key: 'shares' | 'ugcPosts'; urn: string } {
   const id = String(externalPostId);
   if (id.includes('ugcPost')) return { key: 'ugcPosts', urn: id };
@@ -685,7 +811,13 @@ async function linkedinPostInsights(
         [filter.key]: `List(${filter.urn})`,
       },
     });
-    if (!r.ok) return failResult(`LinkedIn share stats: ${r.error.message}`, r.error.isAuthError);
+    if (!r.ok) {
+      return failResult(
+        `LinkedIn share stats: ${r.error.message}`,
+        r.error.isAuthError,
+        isLinkedinPermissionError(r.error.status),
+      );
+    }
     const stats = r.data?.elements?.[0]?.totalShareStatistics;
     if (!stats) return failResult('LinkedIn share stats: no statistics for this share yet');
     const likes = num(stats.likeCount);
@@ -716,6 +848,15 @@ async function linkedinPostInsights(
  * Statistics carries page views and needs the heavier admin grant, so it is
  * best-effort exactly like the Meta page-insights call: its failure is recorded
  * in raw.pageStatsError and the follower number still lands.
+ *
+ * AND UNLIKE the Meta arms, a 403 on that second call does NOT set
+ * `permissionDenied`. The Meta split is two calls behind ONE grant, so a refusal
+ * of the second predicts the post reads exactly; LinkedIn's is two calls behind
+ * TWO grants — organizationPageStatistics wants the organization-admin product,
+ * while the post reads want r_organization_social. Denying page views says
+ * nothing about share statistics, and stopping the post loop on it would drop
+ * numbers we can actually read. The primary call's 403 does set the flag,
+ * because that IS r_organization_social.
  */
 async function linkedinAccountInsights(account: AccountRow): Promise<InsightsResult<AccountInsights>> {
   if (!isNetworkConfigured('LINKEDIN')) {
@@ -731,7 +872,13 @@ async function linkedinAccountInsights(account: AccountRow): Promise<InsightsRes
       method: 'GET',
       query: { edgeType: 'CompanyFollowedByMember' },
     });
-    if (!sizes.ok) return failResult(`LinkedIn networkSizes: ${sizes.error.message}`, sizes.error.isAuthError);
+    if (!sizes.ok) {
+      return failResult(
+        `LinkedIn networkSizes: ${sizes.error.message}`,
+        sizes.error.isAuthError,
+        isLinkedinPermissionError(sizes.error.status),
+      );
+    }
     const followers = num(sizes.data?.firstDegreeSize);
 
     const page = await linkedinRest('/rest/organizationPageStatistics', {
@@ -775,6 +922,18 @@ function isTiktokAuthError(status: number, json: any): boolean {
     /access_token_invalid|access_token_expired|token_revoked/i.test(code) ||
     /^4010\d$/.test(code)
   );
+}
+
+/**
+ * The other half of the same string: TikTok's own names for "your app never
+ * asked for this scope". `scope_not_authorized` is what the Display API returns
+ * for a missing video.list / user.info.stats; `scope_permission_missed` is the
+ * variant the Content Posting endpoints answer with. Both mean every other call
+ * on this token that needs the same scope will be refused too.
+ */
+function isTiktokPermissionError(json: any): boolean {
+  const code = String(json?.error?.code ?? '');
+  return /scope_not_authorized|scope_permission_missed/i.test(code);
 }
 
 async function tiktokFetch(
@@ -850,7 +1009,11 @@ async function tiktokPostInsights(
     );
     if (!r.ok) {
       const msg = String(r.json?.error?.message ?? r.json?.error?.code ?? `HTTP ${r.status}`);
-      return failResult(`TikTok video query: ${msg}`, isTiktokAuthError(r.status, r.json));
+      return failResult(
+        `TikTok video query: ${msg}`,
+        isTiktokAuthError(r.status, r.json),
+        isTiktokPermissionError(r.json),
+      );
     }
     const video = r.json?.data?.videos?.[0];
     if (!video) return failResult('TikTok video query: video not found (deleted or not yet indexed)');
@@ -895,7 +1058,11 @@ async function tiktokAccountInsights(account: AccountRow): Promise<InsightsResul
     );
     if (!r.ok) {
       const msg = String(r.json?.error?.message ?? r.json?.error?.code ?? `HTTP ${r.status}`);
-      return failResult(`TikTok user info: ${msg}`, isTiktokAuthError(r.status, r.json));
+      return failResult(
+        `TikTok user info: ${msg}`,
+        isTiktokAuthError(r.status, r.json),
+        isTiktokPermissionError(r.json),
+      );
     }
     const user = r.json?.data?.user ?? {};
     return okResult({ followers: num(user.follower_count), raw: r.json });
@@ -926,6 +1093,16 @@ function xError(json: any, status: number): string {
 }
 
 /**
+ * …and 403 is the scope signal ("Your client app is not configured with the
+ * appropriate OAuth2 scopes"), or a project tier that does not include the
+ * endpoint. Neither is fixed by a reconnect, and both apply to every subsequent
+ * call the sweep would make with this token.
+ */
+function isXPermissionError(status: number): boolean {
+  return status === 403;
+}
+
+/**
  * Tweet public metrics.
  * SCOPE: tweet.read — already requested by the connect flow, so X is the one
  * network where insights should work the day it is connected.
@@ -946,7 +1123,13 @@ async function twitterPostInsights(
   if (!token) return failResult('accessToken could not be decrypted');
   try {
     const r = await xFetch(token, `/2/tweets/${encodeURIComponent(externalPostId)}?tweet.fields=public_metrics`);
-    if (!r.ok) return failResult(`X tweet metrics: ${xError(r.json, r.status)}`, r.status === 401);
+    if (!r.ok) {
+      return failResult(
+        `X tweet metrics: ${xError(r.json, r.status)}`,
+        r.status === 401,
+        isXPermissionError(r.status),
+      );
+    }
     const m = r.json?.data?.public_metrics;
     if (!m) return failResult('X tweet metrics: no public_metrics on the response');
     const likes = num(m.like_count);
@@ -983,7 +1166,13 @@ async function twitterAccountInsights(account: AccountRow): Promise<InsightsResu
   if (!token) return failResult('accessToken could not be decrypted');
   try {
     const r = await xFetch(token, '/2/users/me?user.fields=public_metrics');
-    if (!r.ok) return failResult(`X user metrics: ${xError(r.json, r.status)}`, r.status === 401);
+    if (!r.ok) {
+      return failResult(
+        `X user metrics: ${xError(r.json, r.status)}`,
+        r.status === 401,
+        isXPermissionError(r.status),
+      );
+    }
     const m = r.json?.data?.public_metrics;
     if (!m) return failResult('X user metrics: no public_metrics on the response');
     return okResult({ followers: num(m.followers_count), raw: r.json });

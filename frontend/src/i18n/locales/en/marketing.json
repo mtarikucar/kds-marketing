@@ -449,7 +449,16 @@
     "namePlaceholder": "e.g. My Second Shop",
     "createButton": "Create",
     "createSuccess": "Workspace \"{{name}}\" created — you're now in it",
-    "createError": "Failed to create workspace"
+    "createError": "Failed to create workspace",
+    "tz": {
+      "title": "Time zone",
+      "desc": "\"Today\" in reports and lists starts in this zone. Pick the business's clock, not the browser's.",
+      "label": "Workspace time zone",
+      "browserHint": "This browser is in {{zone}} — the saved value is {{stored}}.",
+      "useBrowser": "Use this browser's",
+      "saved": "Workspace time zone updated",
+      "saveFailed": "Could not save the time zone"
+    }
   },
   "dashboard": {
     "title": "Dashboard",
@@ -3067,6 +3076,7 @@
       "publishedAria": "Posts published per day",
       "publishedCaption": "How much went out — not how many people it reached.",
       "publishedTitle": "Published content",
+      "pullBusy": "The stats are already being refreshed — ready in a moment",
       "pullFailed": "Couldn't refresh the stats",
       "pulled": "Account stats refreshed",
       "pulledWithErrors": "{{ok}} accounts refreshed, {{bad}} couldn't be read",
@@ -3074,6 +3084,8 @@
       "rangeLabel": "Time range",
       "reach": "Reach",
       "reachAria": "Daily organic reach",
+      "readFailed": "Accounts we couldn't read",
+      "readFailedMore": "and {{n}} more account(s)",
       "reauth": "Reconnect",
       "refresh": "Refresh stats",
       "spend": "Ad spend",
@@ -3162,18 +3174,34 @@
         "title": "AI studio"
       },
       "createBudget": "Create a budget",
+      "denied": "This tool is for managers",
+      "deniedDesc": "This tool needs manager access. Ask a workspace admin if you need it.",
       "editBudget": "Edit the budget",
       "enableAutopilot": "Enable autopilot",
       "more": "More tools",
       "subtitle": "Full-page tools that don't fit on the Growth Studio screen. Your day-to-day work lives on the screen; these are for one-time setup and deep work.",
-      "title": "All tools"
+      "title": "All tools",
+      "link": {
+        "campaigns": "Campaigns",
+        "socialCampaigns": "Social campaigns",
+        "planner": "Social planner",
+        "trends": "Trends",
+        "personas": "UGC personas",
+        "emailTemplates": "Email templates",
+        "reviews": "Reviews",
+        "affiliates": "Affiliates",
+        "reports": "Reports",
+        "strategy": "Strategy",
+        "connections": "Connections"
+      }
     },
     "toolsMenu": {
       "trigger": "Tools",
       "calendar": "Content calendar",
       "create": "AI studio",
       "connections": "Connected accounts",
-      "all": "All tools"
+      "all": "All tools",
+      "autopilot": "Autopilot console"
     }
   },
   "documentsHub": {

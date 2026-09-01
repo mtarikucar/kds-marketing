@@ -362,18 +362,27 @@ export class SocialPlannerController {
   }
 
   /**
-   * Manual refresh behind the "Refresh" button. `force` bypasses the every-6h
-   * staleness gate the cron applies — that gate exists to protect provider rate
-   * limits on an unattended hourly sweep, and a human who has just published
-   * something and wants to see numbers is a different situation. It is gated on
-   * settings.manage (not reports.read) precisely because it spends the
+   * Manual refresh behind the "Refresh" button. `pullNow` forces past the
+   * every-6h staleness gate the cron applies — that gate exists to protect
+   * provider rate limits on an unattended hourly sweep, and a human who has just
+   * published something and wants to see numbers is a different situation. It is
+   * gated on settings.manage (not reports.read) precisely because it spends the
    * workspace's provider quota, and audited for the same reason.
+   *
+   * It is also EXCLUSIVE per workspace and answers 409 when a pull is already in
+   * flight. Two managers on the same workspace, or one manager clicking twice
+   * because the first click had not visibly finished, used to mean two full
+   * sweeps against the provider for identical rows — and the hourly cron could
+   * be the second party without either knowing. The lock lives in the service
+   * (pullWorkspaceExclusive) rather than here, because the cron takes the same
+   * one; a guard on the HTTP route alone would only ever have covered half the
+   * callers. The route stays thin: policy in the service, wiring here.
    */
   @Post('insights/pull')
   @MarketingRoles('MANAGER')
   @RequirePermission('settings.manage')
   @Audit({ action: 'social.insights.pull', resourceType: 'social-insights' })
   pullInsights(@CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.insights.pullWorkspace(u.workspaceId, { force: true });
+    return this.insights.pullNow(u.workspaceId);
   }
 }

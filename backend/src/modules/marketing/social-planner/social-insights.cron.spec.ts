@@ -8,15 +8,18 @@ jest.mock('../../../common/scheduling/advisory-lock', () => ({
   withAdvisoryLock: jest.fn(async (_prisma: any, _job: string, run: () => Promise<void>) => run()),
 }));
 
-function makePrisma(due: Array<{ workspaceId: string }>) {
+function makePrisma(due: Array<{ id: string; workspaceId: string }>) {
   const findMany = jest.fn().mockResolvedValue(due);
   return { prisma: { socialAccount: { findMany } } as any, findMany };
 }
 
 function makeInsights() {
-  const pullWorkspace = jest.fn().mockResolvedValue({ posts: 2, accounts: 1, errors: 0 });
-  return { svc: { pullWorkspace } as any, pullWorkspace };
+  const pull = jest.fn().mockResolvedValue({ posts: 2, accounts: 1, errors: 0, skipped: false });
+  return { svc: { pullWorkspaceExclusive: pull } as any, pull };
 }
+
+/** A due account row, the shape the cron now selects. */
+const dueRow = (id: string, workspaceId: string) => ({ id, workspaceId });
 
 /** Every credential pair that could make an insights network "configured".
  *  The suite may run with a real .env loaded, so the inert test has to clear
@@ -58,22 +61,22 @@ describe('SocialInsightsCron', () => {
     expect(isAnyInsightsNetworkConfigured()).toBe(false);
 
     const { prisma, findMany } = makePrisma([]);
-    const { svc, pullWorkspace } = makeInsights();
+    const { svc, pull } = makeInsights();
     await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
 
     expect(findMany).not.toHaveBeenCalled();
-    expect(pullWorkspace).not.toHaveBeenCalled();
+    expect(pull).not.toHaveBeenCalled();
   });
 
   it('is inert without the secret box — every sealed token would fail to open', async () => {
     delete process.env.MARKETING_SECRET_KEY;
-    const { prisma, findMany } = makePrisma([{ workspaceId: 'w1' }]);
+    const { prisma, findMany } = makePrisma([dueRow('a1', 'w1')]);
     const { svc } = makeInsights();
     await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
     expect(findMany).not.toHaveBeenCalled();
   });
 
-  it('reads DUE accounts oldest-first, capped, selecting only the workspace id', async () => {
+  it('reads DUE accounts oldest-first, capped, selecting only the two ids', async () => {
     const { prisma, findMany } = makePrisma([]);
     await new SocialInsightsCron(prisma, makeInsights().svc).pullDueWorkspaces();
 
@@ -88,7 +91,9 @@ describe('SocialInsightsCron', () => {
     // account cannot hold that position and starve the rest.
     expect(args.orderBy).toEqual({ insightsPulledAt: { sort: 'asc', nulls: 'first' } });
     expect(args.take).toBe(200);
-    expect(args.select).toEqual({ workspaceId: true });
+    // The ACCOUNT id is what makes `take` mean anything — see the allowlist
+    // test below. Still no row data: no token, no externalId, nothing readable.
+    expect(args.select).toEqual({ id: true, workspaceId: true });
 
     const dueBefore: Date = args.where.OR[1].insightsPulledAt.lt;
     const ageMs = Date.now() - dueBefore.getTime();
@@ -97,35 +102,115 @@ describe('SocialInsightsCron', () => {
 
   it('sweeps each workspace once, in due order, and does nothing when nothing is due', async () => {
     const { prisma } = makePrisma([
-      { workspaceId: 'w2' },
-      { workspaceId: 'w1' },
-      { workspaceId: 'w2' },
-      { workspaceId: 'w3' },
+      dueRow('a1', 'w2'),
+      dueRow('a2', 'w1'),
+      dueRow('a3', 'w2'),
+      dueRow('a4', 'w3'),
     ]);
-    const { svc, pullWorkspace } = makeInsights();
+    const { svc, pull } = makeInsights();
     await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
 
-    expect(pullWorkspace.mock.calls.map((c) => c[0])).toEqual(['w2', 'w1', 'w3']);
+    expect(pull.mock.calls.map((c) => c[0])).toEqual(['w2', 'w1', 'w3']);
     // No `force`: the every-6h gate is re-applied per account inside the puller,
     // so a workspace with one due account does not re-read all twelve.
-    expect(pullWorkspace.mock.calls[0][1]).toBeUndefined();
+    expect(pull.mock.calls[0][1].force).toBeUndefined();
+  });
+
+  it('hands each workspace ONLY the due accounts it read, so a tick cannot exceed BATCH', async () => {
+    // THE BUG THIS PINS. The sweep used to select workspaceId alone, de-dupe it
+    // to a workspace list, and let pullWorkspace re-derive its own due set with
+    // its own take: 100. A batch of due rows spread across N workspaces
+    // therefore authorised N × 100 account reads — 20,000 at BATCH=200 — while
+    // the class doc claimed the bound was 200. Passing the ids forward makes
+    // the batch size the real bound: three due rows, three accounts touched.
+    const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w2'), dueRow('a3', 'w1')]);
+    const { svc, pull } = makeInsights();
+    await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
+
+    const allowlists = pull.mock.calls.map((c) => [c[0], c[1].accountIds]);
+    expect(allowlists).toEqual([
+      // Due order is preserved in both directions: w1 first because it holds
+      // the oldest row, and a1 before a3 inside it.
+      ['w1', ['a1', 'a3']],
+      ['w2', ['a2']],
+    ]);
+    const touched = allowlists.reduce((n, [, ids]) => n + (ids as string[]).length, 0);
+    expect(touched).toBe(3);
+  });
+
+  it('takes the per-workspace lock, so the cron and a manual refresh cannot both pull one workspace', async () => {
+    const { prisma } = makePrisma([dueRow('a1', 'w1')]);
+    const { svc, pull } = makeInsights();
+    await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
+
+    // The tick's own advisory lock is global (one replica sweeps); it says
+    // nothing about a manager pressing Refresh on w1 at the same moment. The
+    // per-workspace lock is what makes that impossible, and it needs a bounded
+    // timeout because it is held inside a transaction.
+    expect(pull.mock.calls[0][1].lockTimeoutMs).toBeGreaterThan(0);
+  });
+
+  it('skips a workspace a manual refresh is already pulling, and keeps sweeping the rest', async () => {
+    const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w2')]);
+    const { svc, pull } = makeInsights();
+    pull
+      .mockResolvedValueOnce({ posts: 0, accounts: 0, errors: 0, skipped: true })
+      .mockResolvedValueOnce({ posts: 3, accounts: 1, errors: 0, skipped: false });
+
+    await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
+
+    // Nothing is lost by the skip: w1's accounts were never stamped, so they
+    // are still due — and the manual pull holding the lock stamps them anyway.
+    expect(pull).toHaveBeenCalledTimes(2);
   });
 
   it('does not sweep at all when no account is due', async () => {
     const { prisma } = makePrisma([]);
-    const { svc, pullWorkspace } = makeInsights();
+    const { svc, pull } = makeInsights();
     await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
-    expect(pullWorkspace).not.toHaveBeenCalled();
+    expect(pull).not.toHaveBeenCalled();
   });
 
   it('one failing workspace never aborts the tick', async () => {
-    const { prisma } = makePrisma([{ workspaceId: 'w1' }, { workspaceId: 'w2' }]);
-    const { svc, pullWorkspace } = makeInsights();
-    pullWorkspace
+    const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w2')]);
+    const { svc, pull } = makeInsights();
+    pull
       .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce({ posts: 1, accounts: 1, errors: 0 });
+      .mockResolvedValueOnce({ posts: 1, accounts: 1, errors: 0, skipped: false });
 
     await expect(new SocialInsightsCron(prisma, svc).pullDueWorkspaces()).resolves.toBeUndefined();
-    expect(pullWorkspace).toHaveBeenCalledTimes(2);
+    expect(pull).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops at the wall-clock budget instead of overrunning into the next tick', async () => {
+    // WHY A WALL CLOCK AND NOT JUST THE LOCK. withAdvisoryLock holds
+    // pg_try_advisory_xact_lock inside a transaction with a 55-minute body
+    // timeout; when the body overruns, Prisma rolls back — RELEASING the lock —
+    // while the body keeps running on the normal pool. The next hourly tick then
+    // finds the lock free and starts a second concurrent sweep. Only finishing
+    // in time prevents that.
+    const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w2'), dueRow('a3', 'w3')]);
+    const { svc, pull } = makeInsights();
+
+    // Each workspace "takes" half an hour of wall clock. Time is faked rather
+    // than spent: the assertion is about the budget check, not about waiting.
+    const start = Date.now();
+    let elapsed = 0;
+    const now = jest.spyOn(Date, 'now').mockImplementation(() => start + elapsed);
+    pull.mockImplementation(async () => {
+      elapsed += 30 * 60_000;
+      return { posts: 0, accounts: 0, errors: 0, skipped: false };
+    });
+
+    try {
+      await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
+    } finally {
+      now.mockRestore();
+    }
+
+    // One workspace fits inside the 20-minute budget; the loop then breaks
+    // rather than running for another hour. The two it dropped were never
+    // stamped, so they stay due and lead the next tick's queue.
+    expect(pull).toHaveBeenCalledTimes(1);
   });
 });

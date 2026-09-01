@@ -230,11 +230,29 @@ export class StrategyController {
   // live research, billed as one `strategy.synthesize` reserve plus a
   // `strategy.turn` per turn, plus firecrawl/apify money against the RESEARCH
   // budget. The credit meter is the long-run budget but is unbounded on a -1
-  // (unlimited) plan, so burst spend has to be capped at the edge — the same
+  // (unlimited) plan, so burst spend gets a cap at the edge — the same
   // reasoning, and the same decorator, that /ai/compose (10) and /ai/command (6)
   // already carry. Tighter than either of them because one call here costs more
   // than a hundred of those, and because a legitimate operator has no reason to
   // ask for a third new strategy inside a minute.
+  //
+  // READ THIS AS PER-IP, NOT PER-WORKSPACE. `PrincipalThrottlerGuard` would
+  // rather key on the principal, but its own doc block says why it cannot here:
+  // the global APP_GUARD throttler runs BEFORE the controller-scoped
+  // MarketingGuard that populates `req.marketingUser`, so on every marketing
+  // route the tracker falls back to `req.ip`. Two managers of two different
+  // workspaces behind one office NAT therefore share this 2/min budget and one
+  // of them gets a spurious 429, while a caller who can change source IP is not
+  // bounded by it at all. It is a blunt burst brake on a single client, nothing
+  // more.
+  //
+  // The control that actually holds per workspace is `withRefreshLock` below:
+  // `pg_try_advisory_xact_lock` keyed on the workspace id, which answers 409
+  // rather than starting a second synthesis. That is the one to reason about
+  // when asking "can this workspace burn credit twice at once"; making the
+  // throttle genuinely tenant-scoped would mean overriding `getTracker` to read
+  // the workspace claim off the JWT before any auth guard has run, which is a
+  // change to a global guard and not one to make in a release-hardening pass.
   @Throttle({ default: { limit: 2, ttl: 60_000 } })
   @Audit({ action: 'strategy.refresh', resourceType: 'marketing_strategy' })
   refresh(@CurrentMarketingUser() a: MarketingUserPayload) {
