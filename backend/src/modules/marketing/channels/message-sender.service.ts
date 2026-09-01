@@ -159,8 +159,16 @@ export class MessageSenderService {
       throw e;
     }
 
-    // Best-effort live fan-out, only after the tx has committed.
-    this.stream.push(workspaceId, { kind: 'message', conversationId, payload: message });
+    // Best-effort live fan-out, only after the tx has committed. `leadId` says
+    // WHOSE frame this is, so the agent surface refreshes the person it names
+    // rather than whoever happens to be open. The conversation is already in
+    // hand here, so saying it costs nothing.
+    this.stream.push(workspaceId, {
+      kind: 'message',
+      conversationId,
+      leadId: convo.leadId,
+      payload: message,
+    });
 
     // Price + debit the per-segment SMS cost against the growth budget. Best-
     // effort and fire-and-forget: ConversationSpendService.settleSms never

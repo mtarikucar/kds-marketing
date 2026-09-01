@@ -20,7 +20,7 @@ describe('MessageSenderService.send', () => {
   let tx: any;
   let service: MessageSenderService;
 
-  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
   const channel = { id: 'ch1', workspaceId: 'w1', type: 'SMS', configSealed: 'x', configPublic: null };
   const identity = { id: 'ci1', workspaceId: 'w1', value: '+905551112233' };
   const input = { workspaceId: 'w1', conversationId: 'c1', text: 'hi', authorType: 'AGENT' as const, authorId: 'u1' };
@@ -93,6 +93,18 @@ describe('MessageSenderService.send', () => {
     expect(quota.refund).toHaveBeenCalledTimes(1);
   });
 
+  // The agent surface keeps one PERSON open beside a whole-workspace stream.
+  // A frame that does not say whose it is forces that client to refetch the
+  // open person's record on every event in the workspace — so the send that
+  // already has the conversation in hand names its lead.
+  it('names the person the outbound message is about', async () => {
+    await service.send(input);
+    expect(stream.push).toHaveBeenCalledWith(
+      'w1',
+      expect.objectContaining({ kind: 'message', conversationId: 'c1', leadId: 'lead-9' }),
+    );
+  });
+
   it('does not push to the SSE stream when persistence fails', async () => {
     prisma.$transaction.mockRejectedValue(new Error('DB write failed'));
     await expect(service.send(input)).rejects.toThrow();
@@ -153,7 +165,7 @@ describe('MessageSenderService.send', () => {
  * likely case: the channel gets disabled while conversations are already open.
  */
 describe('MessageSenderService.send — channel status', () => {
-  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
   const input = { workspaceId: 'w1', conversationId: 'c1', text: 'hi', authorType: 'AGENT' as const, authorId: 'u1' };
 
   const build = (status: string | null) => {
@@ -219,7 +231,7 @@ describe('MessageSenderService.send — channel status', () => {
  * opening the thread saw a blank outbound message, or copy that never went out.
  */
 describe('MessageSenderService.send — template body', () => {
-  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
   const TPL = { name: 'intro', languageCode: 'tr' };
 
   const build = () => {

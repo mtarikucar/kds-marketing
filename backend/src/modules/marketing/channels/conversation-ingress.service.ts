@@ -162,6 +162,10 @@ export class ConversationIngressService {
     this.stream.push(workspaceId, {
       kind: 'message',
       conversationId: result.conversationId,
+      // The funnel has just resolved (or created) this person; saying so is what
+      // lets the agent surface refresh the one record on screen rather than
+      // every record on screen, for every inbound anywhere in the workspace.
+      leadId: result.leadId,
       payload: { id: result.messageId, direction: 'INBOUND', authorType: 'CUSTOMER', body: inbound.text },
     });
     return result;

@@ -84,6 +84,13 @@ describe('ConversationIngressService', () => {
       'marketing.conversation.message.received.v1',
     ]);
     expect(stream.push).toHaveBeenCalled();
+    // The inbound frame already knows whose it is — the funnel just resolved
+    // the lead. Naming it here is what lets the person surface refresh the one
+    // record on screen instead of every record on screen.
+    expect(stream.push).toHaveBeenCalledWith(
+      WS,
+      expect.objectContaining({ kind: 'message', conversationId: 'conv-1', leadId: 'lead-1' }),
+    );
   });
 
   it('does not cache a NULL sentinel — a SYSTEM user created after the first message is picked up', async () => {

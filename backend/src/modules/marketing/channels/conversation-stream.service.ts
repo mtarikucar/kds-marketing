@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
-import { filter } from 'rxjs/operators';
+import { filter, map } from 'rxjs/operators';
 
 /** A live inbox/widget event. `kind` lets the client route it. `note` is an
  *  INTERNAL (team-only) kind — it reaches the agent Inbox (forWorkspace) but is
@@ -8,6 +8,24 @@ import { filter } from 'rxjs/operators';
 export interface ConversationStreamEvent {
   kind: 'message' | 'conversation' | 'ai_typing' | 'note' | 'status';
   conversationId: string;
+  /**
+   * WHOSE event this is — the `leadId` of the conversation it happened on.
+   *
+   * The agent surface subscribes to the WHOLE workspace stream and keeps one
+   * person open beside it. Without this field a client cannot tell a frame
+   * about the person on screen from a frame about anybody else, so it had to
+   * refetch the open person's record on EVERY frame in the workspace — a
+   * payload carrying their activities, offers and tasks, re-read because
+   * somebody else got an SMS. With it, a frame refreshes the person it names.
+   *
+   * OPTIONAL, and the client keeps its broad refresh as the fallback when it is
+   * absent. A publisher that cannot cheaply resolve the lead must degrade to
+   * "refresh everything", never to "refresh nothing" — a missed inbound message
+   * is a rep replying to a customer whose last line they cannot see.
+   *
+   * It never reaches the visitor: `forConversation` strips it. See there.
+   */
+  leadId?: string;
   payload: unknown;
 }
 
@@ -49,15 +67,36 @@ export class ConversationStreamService {
     return this.subjectFor(workspaceId).asObservable();
   }
 
-  /** Single-conversation stream — the PUBLIC web-chat widget. Restricted to
-   *  contact-safe kinds so internal events (notes, metadata) never reach the
-   *  visitor's EventSource even if pushed onto the shared workspace Subject. */
+  /**
+   * Single-conversation stream — the PUBLIC web-chat widget.
+   *
+   * Two server-side restrictions, both because the subscriber here is the
+   * CONTACT rather than an agent, and both enforced on the way OUT rather than
+   * trusted at the push sites:
+   *
+   * 1. **Kinds.** Only `CONTACT_SAFE_KINDS`, so internal events (notes,
+   *    conversation metadata) never reach the visitor's EventSource even if
+   *    pushed onto the shared workspace Subject.
+   * 2. **Fields.** `leadId` is REMOVED, not blanked. It is an internal
+   *    identifier for a CRM record the visitor is not a party to, and it exists
+   *    on the event solely so the agent surface can tell whose frame it is
+   *    reading. Deleting the key (rather than setting it to null or undefined)
+   *    is the difference that shows on the wire: `JSON.stringify` drops an
+   *    undefined value but serialises `null`, which would still tell a visitor
+   *    that their thread carries a lead id.
+   *
+   * The rebuild is unconditional and shallow — one small object per frame on a
+   * stream that already serialises every frame to text.
+   */
   forConversation(
     workspaceId: string,
     conversationId: string,
   ): Observable<ConversationStreamEvent> {
     return this.subjectFor(workspaceId)
       .asObservable()
-      .pipe(filter((e) => e.conversationId === conversationId && CONTACT_SAFE_KINDS.has(e.kind)));
+      .pipe(
+        filter((e) => e.conversationId === conversationId && CONTACT_SAFE_KINDS.has(e.kind)),
+        map(({ leadId: _internalLeadId, ...contactSafe }) => contactSafe),
+      );
   }
 }
