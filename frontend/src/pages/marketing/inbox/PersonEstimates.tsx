@@ -28,14 +28,18 @@ export interface PersonEstimatesProps {
  *
  * ## Why this one is a READ and the two above it are not
  *
- * `Estimate` has no per-lead component to reuse: `/estimates` is a single
+ * `Estimate` has no per-lead component to reuse: `EstimatesPage` is a single
  * 629-line page whose editor is a line-item table with per-line tax rates and a
  * live minor-unit total. There is nothing to embed, and rebuilding that editor
  * into a 26%-wide column would be exactly the second implementation this stage
  * exists to avoid — with money arithmetic as the thing that drifts. So the card
  * ANSWERS the question ("has this person been quoted, for how much, and did
- * they accept?") and `/estimates` keeps the editing. The route is untouched and
- * nothing is lost; what changed is that the answer is now beside the person.
+ * they accept?") and the editor keeps the editing.
+ *
+ * The editor is at `/documents?tab=estimates` — `DocumentsHubPage` renders
+ * `<EstimatesPage embedded />`. There is no standalone `/estimates` route; it
+ * is in navigation.test.ts's `never references a deleted standalone route` set,
+ * and sending anyone there from here would send them nowhere.
  *
  * Totals are MINOR units on the wire (kuruş/cents), matching invoices.
  */
