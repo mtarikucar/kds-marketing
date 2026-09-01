@@ -27,22 +27,35 @@
  *
  * ## Measured, not assumed
  *
- * Against the reference batch the five genuinely-different hooks score 0.00 to
- * 0.10 pairwise, a re-punctuated copy of a hook scores 1.00, and a real
- * paraphrase — "Bu Strandbeest'in motoru yok" against "Bunun motoru yok" —
- * scores 0.40. That last number is the honest limit of this instrument: it sits
- * BELOW the ceiling and passes.
+ * Every number below is measured and pinned by a test in
+ * `concept-distinctness.spec.ts`, so none of them can quietly stop being true.
  *
- * The ceiling is not tightened to 0.35 to catch it, because word overlap cuts
- * both ways: two legitimately different hooks cast in one template ("Diş
- * implantı ne kadar sürer?" / "Diş implantı ne kadar dayanır?") score 0.67 and
- * would be rejected by any ceiling this side of 0.7. A tighter number would buy
- * one paraphrase and cost real concepts, so the hook axis is deliberately tuned
- * to catch mechanical copies and nothing subtler.
+ * HOOKS. Against the reference batch the five genuinely-different hooks score
+ * 0.00 to 0.10 pairwise, and a re-punctuated copy scores 1.00. A real
+ * paraphrase — "Bu Strandbeest'in motoru yok" against "Bunun motoru yok" —
+ * scores **0.33**: below the ceiling, so it passes. (The apostrophe is not a
+ * letter, so "Strandbeest'in" tokenises as two words and the score is lower
+ * than counting by eye suggests.)
+ *
+ * The ceiling is not tightened to catch it, because word overlap cuts both
+ * ways: two legitimately different hooks cast in one template ("Diş implantı ne
+ * kadar sürer?" / "Diş implantı ne kadar dayanır?") score 0.67 and would be
+ * rejected by any ceiling this side of 0.7. A tighter number would buy one
+ * paraphrase and cost real concepts, so the hook axis is deliberately tuned to
+ * catch mechanical copies and nothing subtler.
+ *
+ * BODIES. The same instrument, the same limit, and worth stating separately
+ * because the body axis is the one that sounds strongest. A body reused
+ * VERBATIM under a new hook scores 1.00 and is caught. The same three beats,
+ * same order, same claims, REWORDED the way a model rewords score **0.12** —
+ * nowhere near the 0.70 ceiling, and accepted. So "catches a re-skin of the
+ * same shot list" means a re-skin that reuses the WORDS; it does not mean
+ * paraphrase.
  *
  * Honest limits, stated so nobody reads a green suite as more than it is:
- *  - a semantic paraphrase that shares few words passes. Catching that needs a
- *    judge model, not a set operation.
+ *  - a semantic paraphrase that shares few words passes, on either axis
+ *    (0.33 hook / 0.12 body, both measured). Catching that needs a judge model,
+ *    not a set operation.
  *  - the ceilings are calibrated against one reference batch, not a corpus.
  *  - passing says "these are not copies of each other". It does not say
  *    "these are good".

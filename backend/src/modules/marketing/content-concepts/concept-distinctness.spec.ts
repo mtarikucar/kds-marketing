@@ -103,14 +103,52 @@ describe('conceptContractViolations — the five-angles contract', () => {
     expect(conceptContractViolations(dupHook).join(' ')).toMatch(/hook/i);
   });
 
-  it('catches two concepts whose SHOTS are the same body reworded', () => {
-    // Distinct hooks + distinct angles, identical content underneath — the
-    // shape a hook-only check would wave through.
+  it('catches two concepts whose SHOTS are the IDENTICAL body', () => {
+    // Distinct hooks + distinct angles, the same shot objects underneath — the
+    // shape a hook-only check would wave through. This is verbatim reuse, and
+    // the title says so: the fixture is literally `strandbeest[0]`'s shots
+    // twice, which scores 1.00. What it does NOT prove is that a REWORDED body
+    // is caught — see the test below, which measures that and finds it is not.
     const sameBody = [
       { ...strandbeest[0], angle: 'a1', hook: 'Tamamen farkli bir kanca cumlesi' },
       { ...strandbeest[0], angle: 'a2', hook: 'Bambaska bir acilis ifadesi burada' },
     ];
     expect(conceptContractViolations(sameBody).join(' ')).toMatch(/shot|body|content/i);
+  });
+
+  it('MEASURES the limit: a genuinely reworded body scores 0.12 and passes', () => {
+    // The honest counterpart to the test above, and the number quoted in this
+    // module's docblock. Same three beats, same order, same claims, rewritten
+    // the way a model rewrites when told to say it differently: word overlap
+    // collapses to 0.12, nowhere near the 0.70 ceiling, and the batch is
+    // accepted. Catching this needs a judge model, not a set operation — the
+    // docblock says so and this is the evidence, not a promise.
+    const reworded = {
+      angle: 'yeniden',
+      hook: 'Bambaska bir acilis ifadesi burada duruyor',
+      shots: [
+        { onScreenText: 'Bir motoru yok.', voiceover: '', description: 'Strandbeest kumsalda ilerliyor, uzaktan cekim' },
+        { onScreenText: 'Batarya da tasimiyor.', voiceover: '', description: 'ustteki carklar havayla suruluyor' },
+        { onScreenText: 'Yalnizca geometri.', voiceover: 'Hollandali sanatci bu tasarimi 1990larda yapti', description: 'eklemlere makro cekim' },
+      ],
+    };
+    const bodyOf = (c: { shots: Array<{ onScreenText?: string; voiceover?: string; description: string }> }) =>
+      c.shots.map((s) => `${s.onScreenText ?? ''} ${s.voiceover ?? ''} ${s.description ?? ''}`).join(' ');
+
+    expect(tokenOverlap(bodyOf(strandbeest[0]), bodyOf(reworded))).toBeCloseTo(0.12, 2);
+    expect(conceptContractViolations([strandbeest[0], reworded])).toEqual([]);
+  });
+
+  it('MEASURES the limit: a hook paraphrase scores 0.33 and passes', () => {
+    // The other number in the docblock. Below HOOK_SIMILARITY_CEILING, so it is
+    // accepted — and the ceiling is deliberately not tightened to catch it,
+    // because two legitimately different hooks cast in one template score
+    // higher still.
+    expect(tokenOverlap("Bu Strandbeest'in motoru yok", 'Bunun motoru yok')).toBeCloseTo(0.33, 2);
+    expect(tokenOverlap('Dis implanti ne kadar surer', 'Dis implanti ne kadar dayanir')).toBeCloseTo(
+      0.67,
+      2,
+    );
   });
 
   it('rejects a concept that is not actually planned shot by shot', () => {
