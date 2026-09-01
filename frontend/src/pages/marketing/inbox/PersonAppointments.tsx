@@ -1,9 +1,10 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Badge, type BadgeProps } from '@/components/ui/Badge';
 import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { listBookings } from '../../../features/marketing/api/booking.service';
+import { listBookings, type Booking } from '../../../features/marketing/api/booking.service';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 
 const statusTone: Record<string, BadgeProps['tone']> = {
@@ -18,6 +19,50 @@ const statusTone: Record<string, BadgeProps['tone']> = {
 export interface PersonAppointmentsProps {
   /** Whose appointments. */
   leadId: string;
+}
+
+/**
+ * UPCOMING FIRST, then the past most-recent first.
+ *
+ * The wire order is the appointments SCREEN's order — `booking.findMany` is
+ * `startAt: 'asc'`, and it has to be: that screen is a schedule, read top to
+ * bottom, and its 500-row cap is only safe because a rolling 24h `from`
+ * keeps the window on what is current. The record card is the one caller
+ * EXEMPT from that window (a card is a history), which is exactly what makes
+ * the shared ascending order wrong here: a person seen four times last year
+ * pushed the meeting on Thursday to the bottom of a section most readers
+ * never scroll.
+ *
+ * So the reordering is the CARD's, done here rather than on the wire — the
+ * screen's order is correct for the screen, and this is a handful of rows for
+ * one person, nowhere near the cap.
+ *
+ * Not newest-first, which is the other obvious answer. That puts the most
+ * DISTANT commitment on top and buries the next one under it, and the
+ * question this section answers first is the component's own sentence: "when
+ * are we meeting". Upcoming ascending puts the next meeting at line one; the
+ * past follows it descending, so "did they turn up" is answered by the line
+ * underneath rather than at the end of the list. A booking whose `startAt` is
+ * unreadable sorts with the past, where a stale row belongs, instead of
+ * claiming the top of the section.
+ *
+ * Pure, and returns a NEW array: `bookings` is React Query's cached object and
+ * sorting it in place would reorder the cache under every other reader.
+ */
+export function orderForCard<T extends Pick<Booking, 'startAt'>>(
+  bookings: readonly T[],
+  now: number = Date.now(),
+): T[] {
+  const at = (b: T) => new Date(b.startAt).getTime();
+  const upcoming: T[] = [];
+  const past: T[] = [];
+  for (const b of bookings) {
+    const t = at(b);
+    (Number.isFinite(t) && t >= now ? upcoming : past).push(b);
+  }
+  upcoming.sort((a, b) => at(a) - at(b));
+  past.sort((a, b) => at(b) - at(a));
+  return [...upcoming, ...past];
 }
 
 /**
@@ -56,7 +101,9 @@ export function PersonAppointments({ leadId }: PersonAppointmentsProps) {
     queryFn: () => listBookings({ leadId }),
   });
 
-  const bookings = query.data ?? [];
+  // `query.data` is a stable reference between renders, so the ordering is paid
+  // for once per fetch rather than on every keystroke elsewhere in the card.
+  const bookings = useMemo(() => orderForCard(query.data ?? []), [query.data]);
 
   return (
     <QueryStateBoundary
