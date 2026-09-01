@@ -3927,6 +3927,25 @@ model SocialCampaignItem {
   scheduledFor      DateTime
   status            SocialCampaignItemStatus @default(PLANNED)
   topic             String?
+  /// Set when this item was PROMOTED from an approved `ContentConcept` instead
+  /// of being planned by the campaign's own cadence tick. Soft reference (no
+  /// FK), matching `ContentConcept.socialCampaignId`'s style: a concept is a
+  /// workspace-owned row with no foreign key of its own, and the item must not
+  /// be pinned alive by the idea it came from.
+  ///
+  /// **UNIQUE, and that index IS the idempotency guarantee of promotion.** Two
+  /// concurrent promotions of one concept both reach `create` — a
+  /// `findFirst`-then-`create` guard passes in both, because neither
+  /// transaction can see the other's uncommitted row. Postgres rejects the
+  /// second insert on this index instead, and the loser reads the winner's item
+  /// back. Everything else in the promotion path (the `promotedItemId`
+  /// short-circuit, the P2002 recovery) is an optimisation on top of this one
+  /// constraint.
+  ///
+  /// It is also how the shot plan reaches production: the producer loads the
+  /// concept through this id rather than a copy of the plan being frozen onto
+  /// the item. See `ConceptPromotionService`.
+  contentConceptId  String?                  @unique
   socialPostId      String?
   generatedAssetIds String[]
   error             String?
@@ -4001,6 +4020,28 @@ model ContentConcept {
   /// matching `linkedCampaignId`'s style on SocialCampaign — a concept must
   /// outlive a campaign being deleted, since the idea is still good.
   socialCampaignId String?
+  /// The `SocialCampaignItem` this concept BECAME when a human approved it.
+  ///
+  /// This is the answer to "approved, or approved and already in production?",
+  /// which `status` alone cannot give: `ContentConceptStatus` records the
+  /// HUMAN'S VERDICT, and production progress is a different axis with a much
+  /// richer home already — the item's own
+  /// PLANNED -> GENERATING -> NEEDS_APPROVAL -> APPROVED -> SCHEDULED ->
+  /// PUBLISHED lifecycle. A `PROMOTED` status value would be a two-value shadow
+  /// of that lifecycle stored in a second place, guaranteed to disagree with it
+  /// the first time an item FAILS; and it would break `review()`'s "decided
+  /// once" guard, which is written against the verdict, not against progress.
+  ///
+  /// Written in the SAME transaction as the item, so the two links cannot
+  /// disagree. Null on PROPOSED/DISCARDED rows, and on an APPROVED row it means
+  /// promotion has not happened yet — the state a pre-promotion concept (or a
+  /// crash between the verdict and the item) leaves behind, and the one
+  /// `ConceptPromotionService.promote` exists to close.
+  ///
+  /// NOT the uniqueness constraint: `SocialCampaignItem.contentConceptId` is.
+  /// A unique index here would only forbid two concepts naming one item, which
+  /// is not the race that exists.
+  promotedItemId   String?
   createdById      String
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
