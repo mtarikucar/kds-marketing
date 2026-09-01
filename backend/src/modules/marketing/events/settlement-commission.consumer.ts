@@ -294,7 +294,14 @@ export class SettlementCommissionConsumer
           data: {
             workspaceId,
             userId: creditedMarketerId,
-            type: "FOLLOW_UP_REMINDER",
+            // A credited referral commission, not a follow-up. The old label
+            // also collided with the follow-up cron's dedup probe, which keys
+            // on (userId, type FOLLOW_UP_REMINDER, metadata.leadId, today) and
+            // would skip a real reminder for this lead — see
+            // marketing-scheduler.service.ts. Rows already in prod keep the old
+            // string and still resolve to their lead via metadata.leadId, so
+            // there is no migration or backfill.
+            type: "COMMISSION_EARNED",
             title: "Yeni referans kaydı",
             message: `${p.tenantName} kodunuzla abone oldu — komisyon: ${commissionAmount.toString()} TL (onay bekliyor)`,
             metadata: {

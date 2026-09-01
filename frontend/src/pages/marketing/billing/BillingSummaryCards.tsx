@@ -34,6 +34,8 @@ interface Props {
   usage?: Usage;
   aiUsage?: Usage;
   summaryLoading: boolean;
+  /** Only an OWNER can buy a pack, so only an OWNER is told to buy one. */
+  isOwner?: boolean;
 }
 
 function subBadgeTone(status?: string): 'success' | 'info' | 'warning' | 'neutral' {
@@ -43,7 +45,7 @@ function subBadgeTone(status?: string): 'success' | 'info' | 'warning' | 'neutra
   return 'neutral';
 }
 
-export function BillingSummaryCards({ sub, ent, usage, aiUsage, summaryLoading }: Props) {
+export function BillingSummaryCards({ sub, ent, usage, aiUsage, summaryLoading, isOwner }: Props) {
   const { t } = useTranslation('marketing');
 
   const quotaPct =
@@ -147,11 +149,29 @@ export function BillingSummaryCards({ sub, ent, usage, aiUsage, summaryLoading }
         <p
           className={`text-xs ${aiPct >= 80 && !aiUsage?.walletBalance ? 'font-medium text-warning' : 'text-muted-foreground'}`}
         >
+          {/* "add more below" is an instruction, and a non-owner cannot follow
+              it — the Buy buttons below are disabled for them. Each branch
+              therefore forks on the role: same fact, different next step. */}
           {aiUsage && aiUsage.limit !== -1 && aiPct >= 100 && !aiUsage.walletBalance
-            ? t('billing.aiCreditsOut', 'Out of AI credits — add more below to keep the AI working.')
+            ? isOwner
+              ? t('billing.aiCreditsOut', 'Out of AI credits — add more below to keep the AI working.')
+              : t(
+                  'billing.aiCreditsOutMember',
+                  'Out of AI credits — only the workspace owner can buy a pack.',
+                )
             : aiUsage && aiUsage.limit !== -1 && aiPct >= 80 && !aiUsage.walletBalance
-              ? t('billing.aiCreditsLow', 'Running low on AI credits — top up below before they run out.')
-              : t('billing.aiCreditsHint', 'Resets monthly. Add a boost below to raise the cap.')}
+              ? isOwner
+                ? t('billing.aiCreditsLow', 'Running low on AI credits — top up below before they run out.')
+                : t(
+                    'billing.aiCreditsLowMember',
+                    'Running low on AI credits — ask the workspace owner to buy one of the packs below before they run out.',
+                  )
+              : isOwner
+                ? t('billing.aiCreditsHint', 'Resets monthly. Add a boost below to raise the cap.')
+                : t(
+                    'billing.aiCreditsHintMember',
+                    'Resets monthly. The workspace owner can buy a pack below to raise the cap.',
+                  )}
         </p>
       </Card>
 

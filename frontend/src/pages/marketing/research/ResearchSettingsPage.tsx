@@ -51,7 +51,7 @@ interface ResearchProfile {
  * researches against, the daily lead-quota meter, and ingest-token
  * management. Manager+ surface.
  */
-export default function ResearchSettingsPage() {
+export default function ResearchSettingsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
@@ -159,27 +159,29 @@ export default function ResearchSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('research.title', 'AI Research')}
-        description={t(
-          'research.subtitle',
-          'Tell the nightly research agent who to find — it fills your pipeline up to your daily quota.',
-        )}
-        actions={
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" size="md">
-              <Link to="/research/suggestions">
-                <Inbox className="h-4 w-4" />
-                {t('research.suggestions', 'AI suggestions')}
-              </Link>
-            </Button>
-            <Button onClick={openCreate} size="md">
-              <Plus className="h-4 w-4" />
-              {t('research.newProfile', 'New research profile')}
-            </Button>
-          </div>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('research.title', 'AI Research')}
+          description={t(
+            'research.subtitle',
+            'Tell the nightly research agent who to find — it fills your pipeline up to your daily quota.',
+          )}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button asChild variant="outline" size="md">
+                <Link to="/research/suggestions">
+                  <Inbox className="h-4 w-4" />
+                  {t('research.suggestions', 'AI suggestions')}
+                </Link>
+              </Button>
+              <Button onClick={openCreate} size="md">
+                <Plus className="h-4 w-4" />
+                {t('research.newProfile', 'New research profile')}
+              </Button>
+            </div>
+          }
+        />
+      )}
 
       {status && !status.enabled && (
         <Callout tone="info" title={t('research.notConfiguredTitle', 'Research engine not connected yet')}>

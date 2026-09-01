@@ -45,7 +45,7 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-export default function TriggerLinksPage() {
+export default function TriggerLinksPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -109,18 +109,20 @@ export default function TriggerLinksPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('triggerLinks.title', { defaultValue: 'Trigger Links' })}
-        description={t('triggerLinks.subtitle', {
-          defaultValue: 'Trackable short links that fire a workflow on every click, with QR codes.',
-        })}
-        actions={
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t('triggerLinks.new', { defaultValue: 'New link' })}
-          </Button>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('triggerLinks.title', { defaultValue: 'Trigger Links' })}
+          description={t('triggerLinks.subtitle', {
+            defaultValue: 'Trackable short links that fire a workflow on every click, with QR codes.',
+          })}
+          actions={
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('triggerLinks.new', { defaultValue: 'New link' })}
+            </Button>
+          }
+        />
+      )}
 
       {isLoading ? (
         <Skeleton className="h-40" />

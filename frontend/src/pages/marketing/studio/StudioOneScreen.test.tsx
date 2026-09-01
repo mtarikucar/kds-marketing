@@ -104,6 +104,17 @@ describe('StudioOneScreen', () => {
     expect(await screen.findByText('drawer:calendar')).toBeInTheDocument();
   });
 
+  /**
+   * This array is what VALIDATES `?tool=`, and a value missing from it does not
+   * error — it falls through to `null` and the drawer opens on the Autopilot
+   * console. So a tool added to the drawer's union but forgotten here is a link
+   * that silently opens the wrong thing, with no type error anywhere.
+   */
+  it.each(['money', 'ops', 'audience'])('resolves ?tool=%s to that tool, not the fallback', async (tool) => {
+    renderAt(`/studio?tool=${tool}`);
+    expect(await screen.findByText(`drawer:${tool}`)).toBeInTheDocument();
+  });
+
   it('ignores a ?tool= value that is not a real tool', async () => {
     renderAt('/studio?tool=not-a-tool');
     await screen.findByText('today-panel');

@@ -21,6 +21,7 @@ import {
 } from '../../../features/marketing/api/strategy.service';
 import { hasMarketingRole, MarketingRole } from '../../../features/marketing/types';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { useOutOfCredits } from '../../../features/marketing/hooks/useOutOfCredits';
 import { actionKindMeta, priorityMeta, resultRefLabel } from './actionKinds';
 
 /**
@@ -55,6 +56,9 @@ import { actionKindMeta, priorityMeta, resultRefLabel } from './actionKinds';
  */
 export default function IdeasPanel() {
   const { t } = useTranslation('marketing');
+  // Approve/dismiss/refresh all run Opus turns, so all three can hit the
+  // credit wall and all three used to echo the backend's English sentence.
+  const { notify: notifyOutOfCredits } = useOutOfCredits();
   const qc = useQueryClient();
 
   /**
@@ -200,11 +204,8 @@ export default function IdeasPanel() {
             ),
       );
     },
-    onError: (e: any) =>
-      toast.error(
-        e?.response?.data?.message ??
-          t('strategy.ideas.approveFailed', 'Fikir onaylanamadı'),
-      ),
+    onError: (e: unknown) =>
+      notifyOutOfCredits(e, t('strategy.ideas.approveFailed', 'Fikir onaylanamadı')),
     // The confirm stays open for the whole (slow) round trip so its button can
     // carry the spinner; it closes once we know something, success or not.
     onSettled: () => setConfirming(null),
@@ -216,10 +217,8 @@ export default function IdeasPanel() {
       setFailure((f) => (f?.id === id ? null : f));
       invalidateProposed();
     },
-    onError: (e: any) =>
-      toast.error(
-        e?.response?.data?.message ?? t('strategy.ideas.dismissFailed', 'Fikir yoksayılamadı'),
-      ),
+    onError: (e: unknown) =>
+      notifyOutOfCredits(e, t('strategy.ideas.dismissFailed', 'Fikir yoksayılamadı')),
   });
 
   /**
@@ -269,10 +268,8 @@ export default function IdeasPanel() {
           : t('strategy.ideas.refreshDoneNoCount', 'Yeni plan hazır'),
       );
     },
-    onError: (e: any) =>
-      toast.error(
-        e?.response?.data?.message ?? t('strategy.ideas.refreshFailed', 'Fikirler yenilenemedi'),
-      ),
+    onError: (e: unknown) =>
+      notifyOutOfCredits(e, t('strategy.ideas.refreshFailed', 'Fikirler yenilenemedi')),
     onSettled: () => setRefreshOpen(false),
   });
 

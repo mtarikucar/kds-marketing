@@ -291,6 +291,36 @@ describe('TodayQueuePanel — what goes out today', () => {
   });
 
   /**
+   * A target killed by exhausted AI credits used to surface ONLY as a `title=`
+   * tooltip carrying the backend's raw error code, in English, on hover — the
+   * one failure on this rail whose cause is money and whose fix is a purchase.
+   */
+  it('names an out-of-credits target failure instead of showing the raw error code', async () => {
+    listContentCalendar.mockResolvedValue([calPost('p-1', at(-30), 'PUBLISHED')]);
+    listSocialPosts.mockResolvedValue([
+      post({
+        status: 'PUBLISHED',
+        publishedAt: at(-30),
+        scheduledAt: at(-30),
+        targets: [
+          target({
+            id: 'tg-x',
+            network: 'TWITTER',
+            status: 'FAILED',
+            error: 'AI_CREDITS_EXHAUSTED: Monthly AI credit limit reached (100) and prepaid credits are insufficient',
+          }),
+        ],
+      }),
+    ]);
+
+    renderPanel();
+
+    const chip = await screen.findByTestId('tq-target-tg-x');
+    expect(chip.getAttribute('title')).toMatch(/Out of AI credits/i);
+    expect(document.body.innerHTML).not.toContain('AI_CREDITS_EXHAUSTED');
+  });
+
+  /**
    * SCHEDULED is an intent, not a queue position: the job can have been
    * cancelled or have exhausted its retries with the row still reading
    * SCHEDULED. The badge is allowed to say the post was planned for a time; it
@@ -671,6 +701,43 @@ describe('TodayQueuePanel — what goes out today', () => {
       ),
     );
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A publish killed by exhausted AI credits RESOLVES 200 — the reason rides on
+   * the targets as a string — so the billing wall left no trace outside one
+   * chip's hover tooltip.
+   */
+  it('raises the out-of-credits surface when a target died on credits', async () => {
+    const user = userEvent.setup();
+    listContentCalendar.mockResolvedValue([calPost('p-1', at(30))]);
+    listSocialPosts.mockResolvedValue([post({ scheduledAt: at(30) })]);
+    publishSocialPostNow.mockResolvedValue(
+      post({
+        status: 'FAILED',
+        targets: [
+          target({
+            id: 'tg-x',
+            network: 'TWITTER',
+            status: 'FAILED',
+            error: 'AI_CREDITS_EXHAUSTED: Monthly AI credit limit reached (100)',
+          }),
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await screen.findByTestId('tq-row-p-1');
+    await user.click(screen.getByTestId('tq-actions-p-1'));
+    await user.click(await screen.findByTestId('tq-publish-p-1'));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        expect.stringMatching(/out of AI credits/i),
+        expect.objectContaining({ id: 'ai-credits-exhausted' }),
+      ),
+    );
   });
 
   /**

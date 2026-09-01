@@ -94,11 +94,13 @@ describe('ConversationsService — notes + bulk', () => {
     it('notifies only for threads this workspace actually owns', async () => {
       prisma.workspaceMembership.findFirst.mockResolvedValue({ status: 'ACTIVE' });
       prisma.conversation.updateMany.mockResolvedValue({ count: 1 });
-      prisma.conversation.findMany.mockResolvedValue([{ id: 'a' }]);
+      prisma.conversation.findMany.mockResolvedValue([{ id: 'a', leadId: 'lead-a' }]);
       await svc.bulk(WS, ['a', 'foreign-1', 'foreign-2'], 'assign', { assignedToId: 'u2' });
       expect(notifications.create).toHaveBeenCalledTimes(1);
+      // leadId rides along here too: a conversationId has no URL to open, so
+      // without it the bulk-assign announcement is a dead click.
       expect(notifications.create.mock.calls[0][0]).toMatchObject({
-        metadata: { conversationId: 'a', source: 'inbox' },
+        metadata: { conversationId: 'a', leadId: 'lead-a', source: 'inbox' },
       });
     });
 

@@ -1,6 +1,8 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+// The composer's AI panel routes credit failures through useOutOfCredits (useNavigate).
+import { MemoryRouter } from 'react-router-dom';
 import { PostComposerDialog } from './PostComposerDialog';
 import type { SocialAccount } from './types';
 
@@ -27,7 +29,7 @@ describe('PostComposerDialog — LinkedinControls', () => {
     const onSubmit = vi.fn();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <QueryClientProvider client={qc}>
+      <MemoryRouter><QueryClientProvider client={qc}>
         <PostComposerDialog
           open
           onOpenChange={() => {}}
@@ -35,7 +37,7 @@ describe('PostComposerDialog — LinkedinControls', () => {
           onSubmit={onSubmit}
           isPending={false}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider></MemoryRouter>,
     );
     // type content
     fireEvent.change(screen.getByPlaceholderText('What do you want to share?'), {
@@ -56,7 +58,7 @@ describe('PostComposerDialog — LinkedinControls', () => {
     const onSubmit = vi.fn();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <QueryClientProvider client={qc}>
+      <MemoryRouter><QueryClientProvider client={qc}>
         <PostComposerDialog
           open
           onOpenChange={() => {}}
@@ -64,7 +66,7 @@ describe('PostComposerDialog — LinkedinControls', () => {
           onSubmit={onSubmit}
           isPending={false}
         />
-      </QueryClientProvider>,
+      </QueryClientProvider></MemoryRouter>,
     );
     fireEvent.change(screen.getByPlaceholderText('What do you want to share?'), {
       target: { value: 'hello' },

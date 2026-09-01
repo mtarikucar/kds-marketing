@@ -29,7 +29,7 @@ function apiError(e: unknown, fallback: string): string {
   return msg ?? fallback;
 }
 
-export default function SegmentsPage() {
+export default function SegmentsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const { data, isLoading } = useSegments();
   const { data: defs } = useCustomFields(false);
@@ -163,16 +163,18 @@ export default function SegmentsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('crm.seg.title', { defaultValue: 'Segments' })}
-        description={t('crm.seg.subtitle', { defaultValue: 'Saved, live filters over your leads.' })}
-        actions={
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t('crm.seg.createTitle', { defaultValue: 'New segment' })}
-          </Button>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('crm.seg.title', { defaultValue: 'Segments' })}
+          description={t('crm.seg.subtitle', { defaultValue: 'Saved, live filters over your leads.' })}
+          actions={
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('crm.seg.createTitle', { defaultValue: 'New segment' })}
+            </Button>
+          }
+        />
+      )}
 
       <DataTable
         columns={columns}

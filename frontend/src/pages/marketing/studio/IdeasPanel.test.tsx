@@ -433,3 +433,44 @@ describe('resultRefLabel', () => {
     expect(resultRefLabel('newthing:9')).toMatchObject({ failed: false, id: 'newthing:9' });
   });
 });
+
+/**
+ * Approve / dismiss / refresh all run Opus turns, so all three can hit the AI
+ * credit wall. All three used to toast `e.response.data.message` — the
+ * backend's English sentence — into this Turkish panel.
+ */
+describe('IdeasPanel — running out of AI credits', () => {
+  it('replaces the backend English with role-aware copy and a way to act', async () => {
+    const user = userEvent.setup();
+    approveAction.mockRejectedValue({
+      response: {
+        status: 403,
+        data: {
+          code: 'AI_CREDITS_EXHAUSTED',
+          message: 'Monthly AI credit limit reached (100) and prepaid credits are insufficient',
+        },
+      },
+    });
+    renderPanel();
+    await screen.findByText('Atölye reels serisi');
+
+    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const [message, opts] = vi.mocked(toast.error).mock.calls[0];
+    expect(message).toMatch(/out of AI credits/i);
+    expect(message).not.toMatch(/Monthly AI credit limit reached/);
+    expect((opts as { action?: { label: string } })?.action?.label).toBe('Add credits');
+  });
+
+  it('keeps the panel’s own Turkish message for an ordinary failure', async () => {
+    const user = userEvent.setup();
+    approveAction.mockRejectedValue({ response: { status: 500, data: { message: 'boom' } } });
+    renderPanel();
+    await screen.findByText('Atölye reels serisi');
+
+    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Fikir onaylanamadı'));
+  });
+});

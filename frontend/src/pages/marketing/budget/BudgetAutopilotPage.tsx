@@ -15,6 +15,7 @@ import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { ApprovalQueue } from '../../../features/marketing/components/ApprovalQueue';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 import {
@@ -205,6 +206,10 @@ export default function BudgetAutopilotPage({ embedded, hideApprovals }: BudgetA
 
 function BudgetDetail({ budget: summary, hideApprovals }: { budget: GrowthBudget; hideApprovals?: boolean }) {
   const { t } = useTranslation('marketing');
+  // POST /billing/wallet-topup is @MarketingRoles('OWNER'), so for anyone else
+  // this button was a visible, enabled, guaranteed 403 rendered as "Could not
+  // start the top-up".
+  const isOwner = useMarketingAuthStore((s) => s.user)?.role === 'OWNER';
   const qc = useQueryClient();
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
   const [flagBlocked, setFlagBlocked] = useState(false);
@@ -408,10 +413,16 @@ function BudgetDetail({ budget: summary, hideApprovals }: { budget: GrowthBudget
                   variant="secondary"
                   size="sm"
                   onClick={() => topup.mutate(Math.max(100, Math.round(total / 3)))}
-                  disabled={topup.isPending || walletQ.isLoading}
+                  disabled={!isOwner || topup.isPending || walletQ.isLoading}
                 >
-                  <CreditCard className="mr-1 h-4 w-4" aria-hidden="true" />{t('autopilot.topup', 'Top up')}
+                  <CreditCard className="mr-1 h-4 w-4" aria-hidden="true" />
+                  {isOwner ? t('autopilot.topup', 'Top up') : t('billing.ownerOnly', 'Owner only')}
                 </Button>
+                {!isOwner && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('autopilot.topupOwnerOnly', 'Only the workspace owner can top up the balance.')}
+                  </p>
+                )}
                 {budget.status === 'PAUSED' ? (
                   <Button size="sm" onClick={() => pauseResume.mutate('ACTIVE')} disabled={pauseResume.isPending}>
                     <Play className="mr-1 h-4 w-4" aria-hidden="true" />{t('autopilot.resume', 'Resume')}

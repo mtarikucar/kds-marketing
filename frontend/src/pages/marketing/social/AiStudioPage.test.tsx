@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import AiStudioPage from './AiStudioPage';
 import * as mediaService from '../../../features/marketing/api/media.service';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 const navigate = vi.fn();
 vi.mock('react-router-dom', async (orig) => ({
@@ -133,5 +134,58 @@ describe('AiStudioPage', () => {
     expect(navigate).toHaveBeenCalledWith('/studio?view=tools&tab=campaigns&sub=planner', {
       state: { seedMedia: [{ url: 'https://r2/img.png', key: 'social/ws/img.png', mime: 'image/png' }] },
     });
+  });
+});
+
+/**
+ * The generate mutation used to toast `e.response.data.message` — the backend's
+ * own English sentence ("Monthly AI credit limit reached (100) and prepaid
+ * credits are insufficient") — straight into a Turkish UI, and it named neither
+ * the cause nor who could clear it.
+ */
+describe('AiStudioPage — running out of AI credits', () => {
+  const creditsRejection = {
+    response: {
+      status: 403,
+      data: {
+        code: 'AI_CREDITS_EXHAUSTED',
+        message: 'Monthly AI credit limit reached (100) and prepaid credits are insufficient',
+      },
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(mediaService.listGenerations).mockResolvedValue([READY] as never);
+    vi.mocked(mediaService.getGeneration).mockResolvedValue(READY as never);
+    useMarketingAuthStore.setState({
+      user: { id: 'u1', workspaceId: 'w1', email: 'a@b.c', firstName: 'A', lastName: 'B', role: 'OWNER' },
+    });
+  });
+
+  it('says it is a credit wall, with a way to act, and never echoes the backend English', async () => {
+    vi.mocked(mediaService.generateMedia).mockRejectedValue(creditsRejection as never);
+    render(<AiStudioPage />, { wrapper });
+
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const [message, opts] = vi.mocked(toast.error).mock.calls[0];
+    expect(message).toMatch(/out of AI credits/i);
+    expect(message).not.toMatch(/Monthly AI credit limit reached/);
+    expect((opts as { action?: { label: string } })?.action?.label).toBe('Add credits');
+  });
+
+  it('still reports an ordinary failure with the page own message', async () => {
+    vi.mocked(mediaService.generateMedia).mockRejectedValue({
+      response: { status: 500, data: { message: 'boom' } },
+    } as never);
+    render(<AiStudioPage />, { wrapper });
+
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Generation failed'));
   });
 });

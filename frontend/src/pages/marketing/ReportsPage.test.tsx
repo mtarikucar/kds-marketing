@@ -17,9 +17,16 @@ vi.mock('./PerformancePage', () => ({ default: () => <div>performance-page-stub<
 vi.mock('./analytics/AnalyticsPage', () => ({ default: () => <div>analytics-page-stub</div> }));
 vi.mock('./reports/InboundCallStatsPanel', () => ({ default: () => <div>inbound-stats-stub</div> }));
 
+// TargetsPage is deliberately NOT stubbed: the assertions below are about its
+// OWN role gate, and a stub would pin nothing at all.
 vi.mock('../../features/marketing/api/marketingApi', () => ({
-  default: { get: vi.fn(() => Promise.resolve({ data: [] })) },
+  default: {
+    get: vi.fn(() => Promise.resolve({ data: [] })),
+    post: vi.fn(() => Promise.resolve({ data: {} })),
+    delete: vi.fn(() => Promise.resolve({ data: {} })),
+  },
 }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 // Mutable so each test can pick the role (manager vs rep).
 const auth = vi.hoisted(() => ({ role: 'MANAGER' }));
@@ -150,5 +157,61 @@ describe('ReportsPage', () => {
       'data-state',
       'active',
     );
+  });
+});
+
+/**
+ * Targets and Performance are the goal and the result of the SAME three metrics
+ * (WON_LEADS / COMMISSION_AMOUNT / CONNECTED_CALLS). They were two pages in two
+ * chrome AREAS — `/targets` is a child of the settings hub — so reading the
+ * target next to the attainment meant a trip through the gear and back.
+ */
+describe('ReportsPage — the targets table on the performance tab', () => {
+  // Its own reset: `auth` is module-level and the block above leaves it on REP.
+  beforeEach(() => {
+    auth.role = 'MANAGER';
+    entitlements.telephony = false;
+  });
+
+  it('carries the targets table above the performance report', async () => {
+    renderAt('/reports?tab=performance');
+
+    expect(await screen.findByText('Aylık hedefler')).toBeInTheDocument();
+    // The targets table's own empty state, i.e. the page really mounted.
+    expect(await screen.findByText('No targets set')).toBeInTheDocument();
+    expect(await screen.findByText('performance-page-stub')).toBeInTheDocument();
+  });
+
+  it('does not repeat the targets page header inside the tab', async () => {
+    renderAt('/reports?tab=performance');
+
+    await screen.findByText('Aylık hedefler');
+    // `embedded` — the tab already has a heading, and a second PageHeader in a
+    // tab body reads as a second page.
+    expect(screen.queryByText('Sales Targets')).not.toBeInTheDocument();
+  });
+
+  /**
+   * `GET marketing/targets` is roleless, `POST /targets` and
+   * `DELETE /targets/:id` are `@MarketingRoles('MANAGER')`, and `/reports`
+   * carries no role of its own. So a rep must READ the table and meet no write
+   * affordance — without the gate they met a form that 403s on submit.
+   */
+  it('shows a REP the table but neither write affordance', async () => {
+    auth.role = 'REP';
+    renderAt('/reports?tab=performance');
+
+    // Positive anchor: the table IS there for them.
+    expect(await screen.findByText('No targets set')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set target' })).not.toBeInTheDocument();
+    // …and the empty state stops pointing at a form they cannot see.
+    expect(screen.queryByText(/Use the form above/)).not.toBeInTheDocument();
+  });
+
+  it('gives a manager the set-a-target form', async () => {
+    auth.role = 'MANAGER';
+    renderAt('/reports?tab=performance');
+
+    expect(await screen.findByRole('button', { name: 'Set target' })).toBeInTheDocument();
   });
 });

@@ -153,7 +153,7 @@ function Labeled({
  * workspace then collects via the normal invoice flow. Create/edit a plan with a
  * line-item editor + cadence, and pause/resume/cancel.
  */
-export default function SubscriptionsPage() {
+export default function SubscriptionsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -261,16 +261,18 @@ export default function SubscriptionsPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={t('subscriptions.title', 'Subscriptions')}
-        description={t('subscriptions.subtitle', 'Recurring plans that auto-generate invoices each period.')}
-        actions={
-          <Button size="md" onClick={openNew}>
-            <Plus className="w-4 h-4" aria-hidden="true" />
-            {t('subscriptions.newPlan', 'New subscription')}
-          </Button>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('subscriptions.title', 'Subscriptions')}
+          description={t('subscriptions.subtitle', 'Recurring plans that auto-generate invoices each period.')}
+          actions={
+            <Button size="md" onClick={openNew}>
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              {t('subscriptions.newPlan', 'New subscription')}
+            </Button>
+          }
+        />
+      )}
 
       <QueryStateBoundary
         isLoading={isLoading}

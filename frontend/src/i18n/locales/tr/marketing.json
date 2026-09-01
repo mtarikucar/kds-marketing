@@ -57,6 +57,9 @@
       "ads": "Reklamlar",
       "performance": "Performans",
       "analytics": "Analitik"
+    },
+    "targets": {
+      "title": "Aylık hedefler"
     }
   },
   "performance": {
@@ -1753,7 +1756,13 @@
     "oneOff": "tek seferlik, süresi dolmaz",
     "thisPeriod": "bu dönem için",
     "smsOtpWord": "SMS ile doğrulama (OTP)",
-    "voiceCampaignsWord": "Sesli kampanyalar"
+    "voiceCampaignsWord": "Sesli kampanyalar",
+    "addonsOwnerOnly": "Ödemeyi yalnızca çalışma alanı sahibi yapabilir. Hangi pakete ihtiyacın olduğunu buradan görüp ona iletebilirsin.",
+    "aiCreditsHintMember": "Her ay sıfırlanır. Sınırı yükseltmek için çalışma alanı sahibi aşağıdan bir paket alabilir.",
+    "aiCreditsLowMember": "AI kredin azalıyor — bitmeden çalışma alanı sahibinden aşağıdaki paketlerden birini almasını iste.",
+    "aiCreditsOutMember": "AI kredin bitti — paket satın almayı yalnızca çalışma alanı sahibi yapabilir.",
+    "faxNote": "Bir aday veya görüşmeden faks gönder ve al. Ayrıca NetGSM hesabında faks paketi gerekir.",
+    "voiceCampaignsNote": "Sesli yayınlar (TTS veya kayıtlı ses) ve Power Dialer’ın paralel modu. Ayrıca NetGSM hesabında “Otomatik Arama” paketi gerekir."
   },
   "commission": {
     "detailTitle": "Komisyon detayı",
@@ -3379,6 +3388,9 @@
       "SEND": "Mesaj gönderimi",
       "STRATEGY_ACTION": "Strateji işlemi",
       "TARGET_CHANGE": "Hedefleme değişikliği"
+    },
+    "approvals": {
+      "readOnly": "Onaylamak için yönetici yetkisi gerekiyor — burada yalnızca bekleyenleri görebilirsin."
     }
   },
   "persona": {
@@ -3727,7 +3739,8 @@
       "title": "İçeriği otomatik yayınla",
       "onDesc": "Motor hesaplarına onaysız yayın yapar — tamamen elini sürmeden.",
       "offDesc": "Her gönderi önce Onaylar’da gösterilir ve reddetmezsen otomatik yayınlanır — yayın geri alınamaz."
-    }
+    },
+    "topupOwnerOnly": "Bakiyeyi yalnızca çalışma alanı sahibi yükleyebilir."
   },
   "strategy": {
     "onboarding": {
@@ -4071,6 +4084,34 @@
       "managerOnly": {
         "title": "Bu araç yönetici yetkisi istiyor",
         "desc": "Sayfanın kendisi yönetici hesaplarına açık. Yöneticinden yetki isteyebilir ya da ekrandaki günlük işine dönebilirsin."
+      },
+      "audience": {
+        "desc": "Listen nereden geliyor ve nasıl bölünüyor: AI önerileri, içe aktarım, segmentler.",
+        "title": "Kitle"
+      },
+      "money": {
+        "desc": "Kim sana borçlu, sen neye abonesin, cüzdanda ne var — ayarlara gitmeden.",
+        "title": "Para"
+      },
+      "ops": {
+        "desc": "Otomasyonların çalıştı mı, teslimatlar düştü mü, bekleyen veri talebin var mı.",
+        "title": "İşleyiş"
+      },
+      "section": {
+        "billing": "Kredi ve paket",
+        "coupons": "Kuponlar",
+        "dataRequests": "Veri talepleri (KVKK/GDPR)",
+        "import": "İçe aktarım",
+        "invoices": "Faturalar",
+        "mcpSessions": "Claude oturumları",
+        "rebilling": "Yeniden faturalama",
+        "researchProfiles": "Araştırma profilleri",
+        "researchQueue": "AI aday önerileri",
+        "segments": "Segmentler",
+        "subscriptions": "Abonelikler",
+        "triggerLinks": "Tetikleyici linkler",
+        "webhooks": "Webhook teslimatları",
+        "workflows": "Workflow'lar"
       }
     },
     "toolsMenu": {
@@ -4079,7 +4120,13 @@
       "create": "AI stüdyo",
       "connections": "Bağlı hesaplar",
       "all": "Tüm araçlar",
-      "autopilot": "Otomatik pilot konsolu"
+      "autopilot": "Otomatik pilot konsolu",
+      "audience": "Kitle",
+      "group": {
+        "recurring": "Her hafta dönüp bakılan işler"
+      },
+      "money": "Para",
+      "ops": "İşleyiş"
     }
   },
   "documentsHub": {
@@ -4155,7 +4202,8 @@
   "calls": {
     "tab": {
       "calls": "Aramalar",
-      "dialer": "Güçlü Arayıcı"
+      "dialer": "Güçlü Arayıcı",
+      "voice": "Yapay zekâ görüşmeleri"
     },
     "dial": {
       "call": "Ara",
@@ -4354,6 +4402,11 @@
       "title": "Aktif abonelik gerekiyor",
       "body": "Aboneliğin şu an bunu kapsamıyor. Paketi etkinleştirince açılır.",
       "cta": "Paketi gör"
+    },
+    "addOn": {
+      "body": "Bu, pakete dahil değil. Faturalandırma sayfasındaki Ek Paketler’den bir kez alınır, sonra çalışma alanındaki herkes için açılır.",
+      "cta": "Ek paketlere bak",
+      "title": "ücretli ek paket"
     }
   },
   "command": {
@@ -4499,7 +4552,51 @@
       "tasks": "Görevler",
       "label": "Görünüm",
       "failed": "Bu görünüm açılamadı.",
-      "fullPage": "Tam sayfa aç"
+      "fullPage": "Tam sayfa aç",
+      "calls": "Aramalar"
+    },
+    "consents": {
+      "title": "Onaylar ve veri talepleri"
+    },
+    "courses": {
+      "active": "Devam ediyor",
+      "completed": "Tamamlandı",
+      "empty": "Bu kişi hiçbir eğitime kayıtlı değil.",
+      "title": "Eğitimler",
+      "unknown": "Eğitim"
+    }
+  },
+  "agency": {
+    "switcher": {
+      "subAccounts": "Alt hesaplar"
+    }
+  },
+  "compliance": {
+    "actionsHint": "Dışa aktarma veri paketini hemen indirir. Silme talebi inceleme için beklemeye alınır — hiçbir zaman kendiliğinden silmez.",
+    "erasureDesc": "Bu, inceleme için BEKLEYEN bir silme talebi kaydeder. Hiçbir veri kendiliğinden silinmez.",
+    "erasureDone": "Silme talebi kaydedildi (inceleme bekliyor)",
+    "erasureError": "Silme talebi oluşturulamadı",
+    "erasureTitle": "Veri silme talebi",
+    "exportDone": "Veri dışa aktarımı indirildi",
+    "exportError": "Veri dışa aktarılamadı",
+    "granted": "Verildi",
+    "noConsent": "Bu aday için onay kaydı yok.",
+    "requestErasure": "Silme talebi oluştur",
+    "requestExport": "Veriyi dışa aktar",
+    "withdrawn": "Geri çekildi"
+  },
+  "credits": {
+    "exhausted": {
+      "manager": {
+        "cta": "Faturalandırmayı aç"
+      },
+      "member": {
+        "body": "Bu çalışma alanının AI kredisi bitti. Paketi yalnızca çalışma alanı sahibi alabilir — Faturalandırma’dan kredi eklemesini iste."
+      },
+      "owner": {
+        "cta": "Kredi ekle"
+      },
+      "short": "AI kredisi bitti"
     }
   }
 }

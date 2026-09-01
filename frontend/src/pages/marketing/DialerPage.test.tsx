@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import DialerPage from './DialerPage';
 
 const postMock = vi.fn();
@@ -17,12 +18,17 @@ const toastSuccess = vi.fn();
 const toastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) } }));
 
+// Both call shapes, because real i18next takes both: DialerPage passes
+// `{ defaultValue }`, UpgradeCallout (rendered by the locked branch) passes the
+// default as a bare second argument.
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, opts?: unknown) =>
-      opts && typeof opts === 'object' && 'defaultValue' in (opts as Record<string, unknown>)
+    t: (key: string, opts?: unknown) => {
+      if (typeof opts === 'string') return opts;
+      return opts && typeof opts === 'object' && 'defaultValue' in (opts as Record<string, unknown>)
         ? (opts as { defaultValue: string }).defaultValue
-        : key,
+        : key;
+    },
   }),
 }));
 
@@ -40,8 +46,9 @@ vi.mock('../../features/marketing/webphone/WebphoneHost', () => ({
 // Parallel mode is gated on the voiceCampaigns entitlement (backend route is
 // @RequiresFeature('voiceCampaigns')); grant it so the section renders in tests.
 const hasMock = vi.fn((_k: string) => true);
+let entLoading = false;
 vi.mock('../../features/marketing/hooks/useEntitlements', () => ({
-  useEntitlements: () => ({ has: hasMock }),
+  useEntitlements: () => ({ has: hasMock, isLoading: entLoading }),
 }));
 
 const session = {
@@ -71,10 +78,14 @@ const session = {
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // MemoryRouter: the unentitled branch renders UpgradeCallout, which renders a
+  // react-router <Link>.
   return render(
-    <QueryClientProvider client={qc}>
-      <DialerPage />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <DialerPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -210,5 +221,60 @@ describe('DialerPage — parallel mode (NetGSM Phase 5 Task 5)', () => {
     await userEvent.click(toggle);
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/dialer/parallel/stop', { sessionId: 'auto-1' }));
+  });
+});
+
+/**
+ * Parallel mode used to `return null` when voiceCampaigns was not entitled, so
+ * on JEETA the one thing that makes this a *power* dialer vanished with no
+ * heading, no lock and no trace — a customer sold "Power Dialer" got the
+ * one-lead-at-a-time preview queue and no way to learn parallel mode is a
+ * purchasable add-on.
+ */
+describe('DialerPage — parallel mode is LOCKED, not invisible, without the add-on', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    entLoading = false;
+    hasMock.mockImplementation((k: string) => k !== 'voiceCampaigns');
+    postMock.mockResolvedValue({ data: {} });
+    getMock.mockResolvedValue({ data: null });
+  });
+
+  it('shows a named add-on lock instead of vanishing', async () => {
+    renderPage();
+
+    expect(await screen.findByText(/parallel mode/i)).toBeTruthy();
+    expect(screen.getByText(/dial many leads at once/i)).toBeTruthy();
+    expect(screen.getByText(/Voice campaigns — paid add-on/i)).toBeTruthy();
+    expect(screen.getByRole('link', { name: /see the add-ons/i })).toHaveAttribute(
+      'href',
+      '/billing',
+    );
+  });
+
+  it('does not call the parallel endpoint while unentitled', async () => {
+    renderPage();
+
+    await screen.findByText(/Voice campaigns — paid add-on/i);
+    expect(getMock).not.toHaveBeenCalledWith('/dialer/parallel/active');
+  });
+
+  it('renders nothing at all while entitlements are still loading', async () => {
+    // useEntitlements fails CLOSED in flight, so without the loading flag an
+    // entitled workspace would flash the upsell on every cold load.
+    entLoading = true;
+    renderPage();
+
+    await screen.findByRole('button', { name: /start dialing/i });
+    expect(screen.queryByText(/paid add-on/i)).toBeNull();
+    expect(screen.queryByRole('switch')).toBeNull();
+  });
+
+  it('renders the working controls, not the lock, when the add-on IS granted', async () => {
+    hasMock.mockImplementation(() => true);
+    renderPage();
+
+    expect(await screen.findByRole('switch', { name: /parallel mode/i })).toBeTruthy();
+    expect(screen.queryByText(/paid add-on/i)).toBeNull();
   });
 });

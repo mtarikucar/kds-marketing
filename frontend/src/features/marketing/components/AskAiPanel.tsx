@@ -1,37 +1,41 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { Sparkles, X, Send } from 'lucide-react';
+import { Button, Callout } from '@/components/ui';
 import marketingApi from '../api/marketingApi';
+import { useOutOfCredits } from '../hooks/useOutOfCredits';
 
 /**
  * Ask-AI slide-over, mounted globally in the layout. A read-only natural-
  * language analyst over the workspace's own data (leads/tasks/campaigns).
- * Gated on the `askAi` feature server-side. Note that a 403 here is ambiguous:
- * it can mean the feature is not entitled (FEATURE_NOT_IN_PACKAGE) OR that the
- * workspace has spent its monthly AI credits (AI_CREDITS_EXHAUSTED). Both used
- * to render "Ask AI is not in your plan — upgrade to enable it", which told a
- * paying customer to buy a feature they already own, and pointed nowhere.
+ * Gated on the `askAi` feature server-side. Note that a 403 here is really
+ * THREE states, not one: the feature is not entitled (FEATURE_NOT_IN_PACKAGE);
+ * the workspace has spent its AI credits (AI_CREDITS_EXHAUSTED) and the reader
+ * is the OWNER, who can buy a pack; or it is exhausted and the reader is a
+ * MANAGER/REP, who cannot. All three used to render "Ask AI is not in your plan
+ * — upgrade to enable it", which told a paying customer to buy a feature they
+ * already own, and pointed nowhere.
  */
 export default function AskAiPanel() {
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [answer, setAnswer] = useState<string | null>(null);
+  // Kept separate from `answer` because the out-of-credits state is not an
+  // answer — it is an affordance, and it has to carry a real link.
+  const [creditsOut, setCreditsOut] = useState(false);
+  const { isCreditsExhausted, body: creditsBody, cta: creditsCta } = useOutOfCredits();
 
   const ask = useMutation({
     mutationFn: (question: string) => marketingApi.post('/ai/ask', { question }).then((r) => r.data),
     onSuccess: (d) => setAnswer(d.answer),
     onError: (e: any) => {
       const status = e.response?.status;
-      const code = e.response?.data?.code;
-      if (status === 403 && code === 'AI_CREDITS_EXHAUSTED') {
-        setAnswer(
-          t(
-            'askAi.creditsExhausted',
-            'You have used this month’s AI credits. Add credits from Billing to keep asking.',
-          ),
-        );
+      if (isCreditsExhausted(e)) {
+        setCreditsOut(true);
+        setAnswer(null);
         return;
       }
       if (status === 403) {
@@ -52,7 +56,7 @@ export default function AskAiPanel() {
   // submit() directly, so without it pressing Enter again before the first
   // answer returns fires a SECOND /ai/ask — a duplicate question that bills
   // another 2 credits.
-  const submit = () => { if (q.trim() && !ask.isPending) { setAnswer(null); ask.mutate(q.trim()); } };
+  const submit = () => { if (q.trim() && !ask.isPending) { setAnswer(null); setCreditsOut(false); ask.mutate(q.trim()); } };
 
   return (
     <>
@@ -80,6 +84,18 @@ export default function AskAiPanel() {
                 ))}
               </div>
               {ask.isPending && <div className="text-sm text-muted-foreground">{t('askAi.thinking', 'Thinking…')}</div>}
+              {creditsOut && (
+                <Callout tone="warning">
+                  <div className="flex flex-col items-start gap-3">
+                    <p>{creditsBody}</p>
+                    {creditsCta && (
+                      <Button asChild variant="primary" size="sm">
+                        <Link to={creditsCta.to} onClick={() => setOpen(false)}>{creditsCta.label}</Link>
+                      </Button>
+                    )}
+                  </div>
+                </Callout>
+              )}
               {answer && <div className="bg-muted border border-border rounded-xl p-3 text-sm text-foreground whitespace-pre-wrap">{answer}</div>}
             </div>
             <div className="p-3 border-t border-border flex gap-2">

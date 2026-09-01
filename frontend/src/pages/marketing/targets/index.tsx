@@ -26,10 +26,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Target, Trash2 } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
-import { TARGET_METRICS, TARGET_METRIC_LABELS } from '@/features/marketing/types';
+import {
+  hasMarketingRole,
+  MarketingRole,
+  TARGET_METRICS,
+  TARGET_METRIC_LABELS,
+} from '@/features/marketing/types';
+import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import { formatMoney } from '@/lib/money';
 import type { SalesTarget, MarketingUserInfo } from '@/features/marketing/types';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { RoleGate } from '@/components/ui/access-gates';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -80,8 +87,12 @@ const targetSchema = z.object({
 type TargetFormValues = z.infer<typeof targetSchema>;
 
 // ── Component ──────────────────────────────────────────────────────────────
-export default function TargetsPage() {
+export default function TargetsPage({ embedded }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
+  const canWrite = hasMarketingRole(
+    useMarketingAuthStore((s) => s.user?.role),
+    MarketingRole.MANAGER,
+  );
 
   // Filter state
   const [period, setPeriod] = useState(currentPeriod());
@@ -177,11 +188,27 @@ export default function TargetsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Sales Targets"
-        description="Set monthly targets per rep and track attainment."
-      />
+      {!embedded && (
+        <PageHeader
+          title="Sales Targets"
+          description="Set monthly targets per rep and track attainment."
+        />
+      )}
 
+      {/*
+        The write half, behind the role the SERVER actually enforces.
+
+        `GET marketing/targets` is roleless — a rep is entitled to read the
+        targets set for them, and to see them next to their attainment. But
+        `POST /targets` and `DELETE /targets/:id` are both
+        `@MarketingRoles('MANAGER')` (sales-target.controller.ts:33,40,46).
+        This gate became REQUIRED rather than cosmetic when the table was
+        mounted into `/reports?tab=performance`: that route carries no role of
+        its own, so without it a rep met a form that filled in cleanly and 403'd
+        on submit, and a delete button that 403'd on click. A control appears
+        with its gate, or it does not appear.
+      */}
+      <RoleGate role={MarketingRole.MANAGER}>
       {/* Set a target — RHF+Zod form */}
       <Card>
         <CardHeader>
@@ -296,6 +323,7 @@ export default function TargetsPage() {
           </form>
         </CardContent>
       </Card>
+      </RoleGate>
 
       {/* Filters */}
       <Card>
@@ -345,7 +373,14 @@ export default function TargetsPage() {
           <EmptyState
             icon={<Target className="h-8 w-8" />}
             title="No targets set"
-            description="Use the form above to set a monthly target."
+            // A rep does not have the form: the gate above hides it, because
+            // POST /targets would refuse them. Pointing them at it would be
+            // the empty promise that gate exists to stop.
+            description={
+              canWrite
+                ? 'Use the form above to set a monthly target.'
+                : 'No monthly target has been set for this period yet.'
+            }
             className="border-0"
           />
         ) : (
@@ -382,6 +417,7 @@ export default function TargetsPage() {
                       {t.notes || '—'}
                     </TD>
                     <TD>
+                      <RoleGate role={MarketingRole.MANAGER}>
                       <button
                         onClick={() => setDeleteTarget(t)}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-danger-subtle hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -389,6 +425,7 @@ export default function TargetsPage() {
                       >
                         <Trash2 className="h-4 w-4" aria-hidden="true" />
                       </button>
+                      </RoleGate>
                     </TD>
                   </TR>
                 ))}

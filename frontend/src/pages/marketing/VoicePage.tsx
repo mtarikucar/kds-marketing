@@ -40,7 +40,7 @@ function callStatusTone(status: string) {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function VoicePage() {
+export default function VoicePage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -62,15 +62,22 @@ export default function VoicePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('voice.title', 'Voice AI')}
-        description={t(
-          'voice.subtitle',
-          'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).',
-        )}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('voice.title', 'Voice AI')}
+          description={t(
+            'voice.subtitle',
+            'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).',
+          )}
+        />
+      )}
 
-      <div className="flex gap-4 h-[calc(100vh-12rem)]">
+      {/* A viewport calc inside a host that is NOT the viewport letterboxes the
+          panel — the same trap NavChild.fullBleed's docstring records for the
+          workflow builder. As a tab of the calls hub (itself sometimes a ~34%
+          column of the person surface) the two panels have to fill whatever
+          the host left them, so the calc is the standalone route's alone. */}
+      <div className={`flex gap-4 ${embedded ? 'h-full min-h-0' : 'h-[calc(100vh-12rem)]'}`}>
         {/* Call list panel */}
         <Card
           className={`${selected ? 'hidden sm:flex' : 'flex'} flex-col w-full sm:w-80 sm:shrink-0 overflow-hidden`}

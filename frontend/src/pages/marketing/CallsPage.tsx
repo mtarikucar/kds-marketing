@@ -11,7 +11,8 @@ import CallAnalysisPanel from './calls/CallAnalysisPanel';
 import CallRecordingPlayer from './calls/CallRecordingPlayer';
 import QueueWallboard from './calls/QueueWallboard';
 import { RouteFallback } from '../../components/RouteFallback';
-import { CallStatus, CALL_STATUS_LABELS } from '../../features/marketing/types';
+import { CallStatus, CALL_STATUS_LABELS, MarketingRole } from '../../features/marketing/types';
+import { FeatureGate, RoleGate } from '@/components/ui/access-gates';
 import type { SalesCall, PaginatedResponse, MarketingUserInfo } from '../../features/marketing/types';
 import { fmtDateTime, fmtDuration } from '../../features/marketing/utils/format';
 import {
@@ -45,9 +46,25 @@ import {
 
 // Lazy so the dialer's code only loads when its tab is opened.
 const DialerPage = lazy(() => import('./DialerPage'));
+// Same reason, and one more: the AI-call transcript view is behind two gates
+// most workspaces do not pass, so its chunk must not ride along on /calls.
+const VoicePage = lazy(() => import('./VoicePage'));
 
-const TABS = ['calls', 'dialer'] as const;
-type CallsPageTab = (typeof TABS)[number];
+/**
+ * The three tabs of the calls hub.
+ *
+ * EXPORTED because `?tab=` is read by THREE pages now — InboxPage's config
+ * surfaces, TasksPage's filters, and this one — and the three vocabularies not
+ * colliding is a coincidence rather than a design. `tabParam.contract.test.ts`
+ * imports all three lists and fails the moment any two overlap.
+ *
+ * `voice` is the third value as of 2026-09-01: `/voice` is a route whose whole
+ * subject is calls the AI answered, and reading it meant leaving the call log
+ * for a settings-area page. It is merged in as a TAB, gates and all — see the
+ * branch below — rather than linked to.
+ */
+export const CALLS_TABS = ['calls', 'dialer', 'voice'] as const;
+type CallsPageTab = (typeof CALLS_TABS)[number];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -87,50 +104,118 @@ function TableSkeleton({ cols, rows = 8 }: { cols: number; rows?: number }) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
+export interface CallsPageProps {
+  /** Hosted inside another screen's column: no chrome, and no URL of its own. */
+  embedded?: boolean;
+  /** Who the host is showing; only used to light the matching row. */
+  selectedLeadId?: string | null;
+  /** A SELECTION handed up to the host — never a navigation. */
+  onSelectPerson?: (p: { id: string; phone?: string | null }) => void;
+}
+
 /**
- * Calls hub — the call log plus the Power Dialer as URL-synced (`?tab=`)
- * deep-linkable tabs, so both views survive refresh/back and can be shared.
+ * Calls hub — the call log, the Power Dialer and the AI-answered calls as
+ * URL-synced (`?tab=`) deep-linkable tabs, so every view survives refresh/back
+ * and can be shared.
+ *
+ * ## Why `embedded` drops the URL rather than keeping it
+ *
+ * The Inbox mounts this page as its fifth left arrangement, where it shares ONE
+ * url with InboxPage (`?tab=` = a config surface) and TasksPage (`?tab=` = a
+ * task filter). Three owners for one parameter is not deep-linkability, it is a
+ * race: the left column writing `?tab=dialer` hands InboxPage and TasksPage a
+ * value each of them falls back on, and the surface silently rearranges around
+ * a click that was about the call log. So while embedded the tab is local
+ * state and this page writes NO parameter at all — the same call
+ * `PeopleColumn` already makes about `?create=1`.
  */
-export default function CallsPage() {
+export default function CallsPage({ embedded, selectedLeadId, onSelectPerson }: CallsPageProps = {}) {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
+  const [localTab, setLocalTab] = useState<CallsPageTab>('calls');
   const raw = params.get('tab');
-  const tab: CallsPageTab = (TABS as readonly string[]).includes(raw ?? '') ? (raw as CallsPageTab) : 'calls';
-  const setTab = (v: string) => setParams((p) => {
-    p.set('tab', v);
-    return p;
-  }, { replace: true });
+  const urlTab: CallsPageTab = (CALLS_TABS as readonly string[]).includes(raw ?? '')
+    ? (raw as CallsPageTab)
+    : 'calls';
+  const tab = embedded ? localTab : urlTab;
+  const setTab = (v: string) => {
+    if (embedded) {
+      setLocalTab(v as CallsPageTab);
+      return;
+    }
+    setParams((p) => {
+      p.set('tab', v);
+      return p;
+    }, { replace: true });
+  };
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Sales Calls"
-        description="Single company line — one active call at a time. Your softphone opens via the tel: link; log the outcome when the call ends."
-        actions={<ClickToDialButton />}
-      />
+      {!embedded && (
+        <PageHeader
+          title="Sales Calls"
+          description="Single company line — one active call at a time. Your softphone opens via the tel: link; log the outcome when the call ends."
+          actions={<ClickToDialButton />}
+        />
+      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="calls">{t('calls.tab.calls', 'Calls')}</TabsTrigger>
           <TabsTrigger value="dialer">{t('calls.tab.dialer', 'Power Dialer')}</TabsTrigger>
+          {/* The tab appears with its gates, or it does not appear. navigation.ts
+              gives /voice `feature: 'voiceAi'` + `managerOnly`, mirroring
+              VoiceAiController — merging the page in here may not be a
+              permission change, so the same pair travels with it. Both fail
+              CLOSED while /billing/summary is in flight. */}
+          <FeatureGate feature="voiceAi">
+            <RoleGate role={MarketingRole.MANAGER}>
+              <TabsTrigger value="voice">
+                {t('calls.tab.voice', 'Yapay zekâ görüşmeleri')}
+              </TabsTrigger>
+            </RoleGate>
+          </FeatureGate>
         </TabsList>
 
         <TabsContent value="calls" className="pt-5">
-          <CallsTab />
+          <CallsTab
+            embedded={embedded}
+            selectedLeadId={selectedLeadId}
+            onSelectPerson={onSelectPerson}
+          />
         </TabsContent>
         <TabsContent value="dialer" className="pt-5">
           <Suspense fallback={<RouteFallback />}>
             <DialerPage embedded />
           </Suspense>
         </TabsContent>
+        <TabsContent value="voice" className="pt-5">
+          <FeatureGate feature="voiceAi">
+            <RoleGate role={MarketingRole.MANAGER}>
+              <Suspense fallback={<RouteFallback />}>
+                <VoicePage embedded />
+              </Suspense>
+            </RoleGate>
+          </FeatureGate>
+        </TabsContent>
       </Tabs>
     </div>
   );
 }
 
+/** Static hint only (no cross-origin link) — the actual in-app player lives in
+ *  the expanded detail panel, fetched via the workspace-scoped recording route. */
+function RecordingHint({ title }: { title: string }) {
+  return (
+    <span title={title}>
+      <PlayCircle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+    </span>
+  );
+}
+
 // ─── Calls tab (the original call log) ───────────────────────────────────────
 
-function CallsTab() {
+function CallsTab({ embedded, selectedLeadId, onSelectPerson }: CallsPageProps) {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
@@ -183,8 +268,16 @@ function CallsTab() {
     setPage(1);
   };
 
-  // Column count: toggle, To, Status, Duration, [Rep], Started, Notes
-  const colCount = isManager ? 7 : 6;
+  /**
+   * Three of the seven columns are dropped when this table is a ~34% column of
+   * somebody else's screen: Duration, Rep and Started already hide below `md`
+   * and `lg`, and those breakpoints read the VIEWPORT, so on a wide monitor
+   * they all stay on and the number a rep came for is off the right edge. Notes
+   * goes with them — a truncated note is not a note.
+   */
+  const wide = !embedded;
+  // Column count: toggle, To, Status, [Duration], [Rep], [Started], [Notes]
+  const colCount = 3 + (wide ? (isManager ? 4 : 3) : 0);
 
   return (
     <div className="space-y-6">
@@ -258,10 +351,10 @@ function CallsTab() {
                 <TH className="w-8" />
                 <TH>To</TH>
                 <TH>Status</TH>
-                <TH className="hidden md:table-cell">Duration</TH>
-                {isManager && <TH className="hidden md:table-cell">Rep</TH>}
-                <TH className="hidden lg:table-cell">Started</TH>
-                <TH className="hidden lg:table-cell">Notes</TH>
+                {wide && <TH className="hidden md:table-cell">Duration</TH>}
+                {wide && isManager && <TH className="hidden md:table-cell">Rep</TH>}
+                {wide && <TH className="hidden lg:table-cell">Started</TH>}
+                {wide && <TH className="hidden lg:table-cell">Notes</TH>}
               </TR>
             </THead>
 
@@ -283,41 +376,60 @@ function CallsTab() {
                       )}
                     </TD>
                     <TD className="font-medium text-foreground">
-                      <span className="inline-flex items-center gap-1.5">
-                        {c.toPhone}
-                        {c.recordingUrl && (
-                          // Static hint only (no cross-origin link) — the
-                          // actual in-app player lives in the expanded
-                          // detail panel below, fetched via the
-                          // workspace-scoped recording route.
-                          <span title={t('callRecording.title', 'Recording')}>
-                            <PlayCircle
-                              className="h-4 w-4 text-muted-foreground"
-                              aria-hidden="true"
-                            />
-                          </span>
-                        )}
-                      </span>
+                      {/* A SELECTION, never a navigation — the same contract
+                          every other arrangement of the person surface has.
+                          Only when the call actually MATCHED somebody:
+                          `leadId` is nullable (an inbound call from a number no
+                          lead carries has nobody to hand over), and a button
+                          that selects nothing is worse than plain text. */}
+                      {onSelectPerson && c.leadId ? (
+                        <button
+                          type="button"
+                          data-testid={`call-row-person-${c.id}`}
+                          aria-pressed={selectedLeadId === c.leadId}
+                          onClick={(e) => {
+                            // The row itself toggles the analysis panel; this
+                            // click is about the person, not about the detail.
+                            e.stopPropagation();
+                            onSelectPerson({ id: c.leadId as string, phone: c.toPhone });
+                          }}
+                          className="inline-flex items-center gap-1.5 text-start hover:underline"
+                        >
+                          {c.toPhone}
+                          {c.recordingUrl && <RecordingHint title={t('callRecording.title', 'Recording')} />}
+                        </button>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5">
+                          {c.toPhone}
+                          {c.recordingUrl && <RecordingHint title={t('callRecording.title', 'Recording')} />}
+                        </span>
+                      )}
                     </TD>
                     <TD>
                       <Badge tone={CALL_STATUS_TONE[c.status] ?? 'neutral'}>
                         {CALL_STATUS_LABELS[c.status] || c.status}
                       </Badge>
                     </TD>
-                    <TD className="hidden md:table-cell text-muted-foreground">
-                      {fmtDuration(c.durationSec)}
-                    </TD>
-                    {isManager && (
+                    {wide && (
+                      <TD className="hidden md:table-cell text-muted-foreground">
+                        {fmtDuration(c.durationSec)}
+                      </TD>
+                    )}
+                    {wide && isManager && (
                       <TD className="hidden md:table-cell text-muted-foreground">
                         {repName(c.marketingUserId)}
                       </TD>
                     )}
-                    <TD className="hidden lg:table-cell text-muted-foreground text-xs">
-                      {fmtDateTime(c.startedAt)}
-                    </TD>
-                    <TD className="hidden lg:table-cell text-muted-foreground text-xs max-w-xs truncate">
-                      {c.notes || '—'}
-                    </TD>
+                    {wide && (
+                      <TD className="hidden lg:table-cell text-muted-foreground text-xs">
+                        {fmtDateTime(c.startedAt)}
+                      </TD>
+                    )}
+                    {wide && (
+                      <TD className="hidden lg:table-cell text-muted-foreground text-xs max-w-xs truncate">
+                        {c.notes || '—'}
+                      </TD>
+                    )}
                   </TR>
                   {expandedId === c.id && (
                     <TR>

@@ -517,7 +517,18 @@ export default function AccountStatsPanel() {
           </>
         )}
 
-        {!nothingConnected && (
+        {/* `!isManager ||` — the one line a rep must always get.
+            `nothingConnected` folds in `identities.length === 0`, which for a
+            rep is not a fact about the workspace: the connections query is
+            `enabled: isManager`, so `data` is undefined and the length is zero
+            by construction. Short-circuiting on it took the manager-only
+            sentence away from exactly the reader it was written for — and with
+            AccountStrip already null (`canSee`) and the charts skipped, a rep
+            in a workspace with no ad account got a heading, a range control and
+            nothing else. The honest floor for a rep is the sentence saying what
+            they are not seeing; CoverageNote renders it first thing on
+            `!canSee`, before it looks at coverage at all. */}
+        {(!isManager || !nothingConnected) && (
           <CoverageNote
             coverage={data?.coverage}
             accounts={data?.byAccount}

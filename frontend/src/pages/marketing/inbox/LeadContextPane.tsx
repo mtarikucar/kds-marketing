@@ -9,6 +9,8 @@ import { FeatureGate, RoleGate } from '@/components/ui/access-gates';
 import { fmtDate } from '../../../features/marketing/utils/format';
 import { MarketingRole, type Lead } from '../../../features/marketing/types';
 import { PersonAppointments } from './PersonAppointments';
+import { PersonConsents } from './PersonConsents';
+import { PersonCourses } from './PersonCourses';
 import { PersonDeals } from './PersonDeals';
 import { PersonEstimates } from './PersonEstimates';
 import { PersonOffers } from './PersonOffers';
@@ -210,6 +212,41 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
           </RecordDisclosure>
         </FeatureGate>
       </RoleGate>
+
+      {/* ONAYLAR VE VERİ TALEPLERİ — the per-person half of the compliance
+          console, whose first step there is a lead search this surface has
+          already done. MANAGER for the same reason Randevular is: the whole of
+          `ComplianceController` is class-level `@MarketingRoles('MANAGER')`, so
+          a rep opening this would collect a 403 and a permanent failure notice
+          where a permission answer belongs. HIDDEN rather than named — a rep
+          cannot buy their way out of their own role, and /settings/compliance
+          is `managerOnly` in navigation.ts too, so naming it here would be the
+          only place a rep is told about a surface they can never reach. */}
+      <RoleGate role={MarketingRole.MANAGER}>
+        <RecordDisclosure
+          key={`consents-${lead.id}`}
+          data-testid="record-consents"
+          title={t('surface.consents.title', 'Onaylar ve veri talepleri')}
+        >
+          <PersonConsents leadId={lead.id} />
+        </RecordDisclosure>
+      </RoleGate>
+
+      {/* EĞİTİMLER — no role (a REP may read `GET /enrollments`), but a PLAN
+          line, so this one is gated on the entitlement alone. Hidden rather
+          than named because there is no course to be enrolled in at all
+          without `memberships`: the "your plan does not include it" sentence
+          Randevular owes is about a person's existing appointments, and here
+          there is nothing behind the notice. */}
+      <FeatureGate feature="memberships">
+        <RecordDisclosure
+          key={`courses-${lead.id}`}
+          data-testid="record-courses"
+          title={t('surface.courses.title', 'Eğitimler')}
+        >
+          <PersonCourses leadId={lead.id} />
+        </RecordDisclosure>
+      </FeatureGate>
 
       {/* The one door off this surface. */}
       <Link

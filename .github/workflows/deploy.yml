@@ -223,6 +223,24 @@ jobs:
           # Kill-switch + anomaly auto-stop are the safety rails). Set to 0/unset
           # to instantly fall back to ASSISTED (propose-and-approve) everywhere.
           GROWTH_AUTOPILOT_AUTONOMY: ${{ vars.GROWTH_AUTOPILOT_AUTONOMY }}
+          # Epic-13 platform features. ALL OPTIONAL and ALL OFF unless set —
+          # /billing/summary publishes them as entitlement flags (prospecting /
+          # sendingDomains / customDomains) that the SPA nav reads, so an unset
+          # one keeps its menu item hidden exactly as it is today. Setting one
+          # here is the ONLY thing needed to reveal the feature.
+          # Prospecting audit: a free Google PageSpeed Insights API key.
+          PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
+          # Sending domains / DKIM: the transactional ESP that sends from a
+          # tenant domain (the shared SMTP is not one) + the platform host
+          # tenants add to their SPF record. Non-secret -> repo Variables.
+          SENDING_DOMAIN_ESP: ${{ vars.SENDING_DOMAIN_ESP }}
+          SENDING_DOMAIN_SPF_INCLUDE: ${{ vars.SENDING_DOMAIN_SPF_INCLUDE }}
+          # Custom-domain white-label: set to '1' ONLY once wildcard ingress +
+          # on-demand ACME TLS exist (the app cannot provision them). The CNAME
+          # target is the ingress host tenants point their own hostname at;
+          # unset leaves the placeholder default, so set it with the flag.
+          CUSTOM_DOMAINS_ENABLED: ${{ vars.CUSTOM_DOMAINS_ENABLED }}
+          CUSTOM_DOMAIN_CNAME_TARGET: ${{ vars.CUSTOM_DOMAIN_CNAME_TARGET }}
           # Platform-owner workspace bootstrap (all OPTIONAL — unset = the seed
           # no-ops and the deploy is unaffected). OPERATOR_WORKSPACE_ID puts that
           # one workspace on the internal OPERATOR package on every boot; the two
@@ -332,6 +350,13 @@ jobs:
           # Growth Autopilot autonomy (repo Variable GROWTH_AUTOPILOT_AUTONOMY).
           # '1' arms the AUTONOMOUS lane; empty/0 = ASSISTED fallback everywhere.
           GROWTH_AUTOPILOT_AUTONOMY=${GROWTH_AUTOPILOT_AUTONOMY}
+          # Epic-13 platform features (all optional; empty = feature inert and
+          # its nav item hidden — identical to not rendering the line at all).
+          PAGESPEED_API_KEY=${PAGESPEED_API_KEY}
+          SENDING_DOMAIN_ESP=${SENDING_DOMAIN_ESP}
+          SENDING_DOMAIN_SPF_INCLUDE=${SENDING_DOMAIN_SPF_INCLUDE}
+          CUSTOM_DOMAINS_ENABLED=${CUSTOM_DOMAINS_ENABLED}
+          CUSTOM_DOMAIN_CNAME_TARGET=${CUSTOM_DOMAIN_CNAME_TARGET}
           # Platform-owner bootstrap (optional; empty = each seed no-ops). Both
           # PLATFORM_OPERATOR_* must be set together — the seed rotates the
           # superadmin password (and kills its old sessions) on every deploy.

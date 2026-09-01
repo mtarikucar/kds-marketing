@@ -516,6 +516,39 @@ describe('AccountStatsPanel', () => {
     expect(screen.queryByRole('button', { name: 'İstatistikleri yenile' })).not.toBeInTheDocument();
   });
 
+  it('does not leave a rep with nothing but a heading and a range control', async () => {
+    // The whole top-left third, hollow. `nothingConnected` folds in
+    // `identities.length === 0`, and for a rep that length is zero BY
+    // CONSTRUCTION: useConnections is `enabled: false`, so RQ never fetches,
+    // `data` is undefined and `isLoading` is false. With no ad account either,
+    // the charts short-circuited AND the coverage note short-circuited, while
+    // AccountStrip had already returned null on `canSee` — a heading, a
+    // segmented control, and nothing under them. Reachable today via a
+    // `/budget` bookmark, and every rep's first impression of the surface once
+    // /studio is in the rail.
+    mockRole.mockReturnValue('REP');
+    // The real disabled-query shape, not the suite's default stub: the default
+    // hands back data the component could never have received.
+    useConnections.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as unknown as ReturnType<typeof connectionHooks.useConnections>);
+    listAdAccounts.mockResolvedValue([]);
+    renderPanel();
+
+    // Wait for the SETTLED state, the way the zero-state test above does: while
+    // the ad-account read is still in flight `nothingConnected` is false and the
+    // charts are on screen, so asserting straight away passes on the bug.
+    await waitFor(() => expect(screen.queryByText('Erişim')).not.toBeInTheDocument());
+
+    // What is left must not be a heading and a range control.
+    expect(screen.getByText(/yalnızca yöneticiler görebilir/)).toBeInTheDocument();
+    // And it is the connect-an-account CTA's slot that stayed empty — that one
+    // is manager-only for a reason (a rep cannot connect anything), so the
+    // sentence is the whole of the honest floor here, not a fallback for it.
+    expect(screen.queryByText('Henüz bağlı hesap yok')).not.toBeInTheDocument();
+  });
+
   it('does ask for the connection strip when the reader is allowed to see it', async () => {
     renderPanel();
     await screen.findByText('Bağlı hesaplar');

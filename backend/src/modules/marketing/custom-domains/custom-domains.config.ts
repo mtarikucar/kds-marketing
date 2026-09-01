@@ -7,7 +7,10 @@
  * operator sets CUSTOM_DOMAINS_ENABLED. request() also refuses while disabled.
  */
 export function isCustomDomainsEnabled(): boolean {
-  return !!process.env.CUSTOM_DOMAINS_ENABLED;
+  // Same parse as growth-autonomy.flag.ts: the deploy renders this from a repo
+  // Variable, and an operator spells OFF as '0'/'false' — `!!` read both as ON.
+  const v = (process.env.CUSTOM_DOMAINS_ENABLED ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on';
 }
 
 /** The CNAME target tenants point their hostname at (the platform ingress). */

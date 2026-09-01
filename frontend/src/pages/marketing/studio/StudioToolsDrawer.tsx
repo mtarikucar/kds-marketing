@@ -20,10 +20,12 @@ import {
 } from '@/components/ui/DropdownMenu';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { Disclosure } from '@/components/ui/Disclosure';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { FeatureGate } from '@/components/ui/access-gates';
 import { useEntitlements } from '@/features/marketing/hooks/useEntitlements';
+import { useWorkspaceProfile } from '@/features/marketing/hooks/useWorkspaceProfile';
 import { hasMarketingRole, MarketingRole } from '@/features/marketing/types';
 import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import type { FeatureKey } from '@/features/marketing/navigation';
@@ -57,12 +59,55 @@ const AiStudioPage = lazy(() => import('../social/AiStudioPage'));
  */
 const AccountCenterPage = lazy(() => import('../accounts/AccountCenterPage'));
 
+/*
+ * The recurring operations, each one an existing page mounted here rather than
+ * linked to. A link would be the detour: every one of these routes is a child
+ * of the single `area: 'settings'` hub, so `MarketingLayout` swaps the whole app
+ * chrome for `SettingsLayout` the moment you land on one. Navigating to
+ * /invoices from the Studio IS the gear trip, even from a button on the Studio.
+ *
+ * Each is named for the route it is the page of, because that route still
+ * exists and still works — this drawer is an ADDITIONAL door, not a move.
+ */
+const InvoicesPage = lazy(() => import('../invoices')); // /invoices
+const SubscriptionsPage = lazy(() => import('../subscriptions/SubscriptionsPage')); // /subscriptions
+const BillingPage = lazy(() => import('../billing')); // /billing
+const CouponsPage = lazy(() => import('../settings/coupons')); // /settings/coupons
+const RebillingPage = lazy(() => import('../agency/RebillingPage')); // /agency/rebilling
+const AutomationsListPage = lazy(() => import('../automations/AutomationsListPage')); // /automations
+const TriggerLinksPage = lazy(() => import('../triggerLinks')); // /trigger-links
+const WebhooksPage = lazy(() => import('../settings/webhooks/WebhooksPage')); // /settings/webhooks
+/** Section 4 of the MCP console only — the audit list. Sections 1-3 (endpoint,
+ *  keys, write-mode switch) are one-time setup and stay page-only. */
+const McpSessionsSection = lazy(() =>
+  import('../settings/mcpConsole/McpConsolePage').then((m) => ({ default: m.SessionsSection })),
+);
+/** The request HISTORY half of /settings/compliance. The per-person half moved
+ *  to the Inbox record card, where the person is already selected. */
+const ComplianceRequestsSection = lazy(() =>
+  import('../settings/compliance/CompliancePage').then((m) => ({
+    default: m.ComplianceRequestsSection,
+  })),
+);
+const ResearchSuggestionsPage = lazy(() => import('../research/ResearchSuggestionsPage')); // /research/suggestions
+const ResearchSettingsPage = lazy(() => import('../research/ResearchSettingsPage')); // /research
+const ImportWizardPage = lazy(() => import('../imports')); // /import
+const SegmentsPage = lazy(() => import('../crm/segments')); // /segments
+
 /**
- * The tools that used to be tabs on `/studio`. Deliberately a tiny closed
- * union: `StudioOneScreen` decides which one is open — it is the thing that
- * reads `?tool=` — and this component only renders what it is told. Keeping
- * `useSearchParams` out of here is what lets the same drawer be driven by a
- * URL, by a button, or by a test.
+ * The tools that used to be tabs on `/studio`, plus the recurring operations
+ * Settings was holding. Deliberately a tiny closed union: `StudioOneScreen`
+ * decides which one is open — it is the thing that reads `?tool=` — and this
+ * component only renders what it is told. Keeping `useSearchParams` out of here
+ * is what lets the same drawer be driven by a URL, by a button, or by a test.
+ *
+ * The last three are not new PAGES. Each is a STACK of existing pages, mounted
+ * `embedded` inside a `Disclosure` apiece: `money` is Faturalar · Abonelikler ·
+ * Kredi ve paket · Kuponlar · Yeniden faturalama, `ops` is Workflow'lar ·
+ * Tetikleyici linkler · Webhook teslimatları · Claude oturumları · Veri
+ * talepleri, `audience` is AI aday önerileri · Araştırma profilleri · İçe
+ * aktarım · Segmentler. A closed disclosure never runs its child's function, so
+ * a five-page tool costs exactly one query — the one section that opens itself.
  *
  * Nothing maps the older `?view=tools&tab=…` links onto this drawer, and no
  * code here should be written as though something did. Those URLs are read by
@@ -71,7 +116,14 @@ const AccountCenterPage = lazy(() => import('../accounts/AccountCenterPage'));
  * `ToolsSurface` on the belief that this drawer had absorbed it would take
  * seven live destinations with it.
  */
-export type StudioTool = 'autopilot' | 'calendar' | 'create' | 'connections';
+export type StudioTool =
+  | 'autopilot'
+  | 'calendar'
+  | 'create'
+  | 'connections'
+  | 'money'
+  | 'ops'
+  | 'audience';
 
 /**
  * What each tool's UNDERLYING page actually requires — the audit, written down,
@@ -112,6 +164,19 @@ export type StudioTool = 'autopilot' | 'calendar' | 'create' | 'connections';
  *   connections — MANAGER. `/accounts` is `requiredRole={MarketingRole.MANAGER}`
  *                 in App.tsx and `AccountCenterController` is
  *                 `@MarketingRoles('MANAGER')` on every route it has.
+ *   money       — MANAGER, and this row is the GATE rather than a second layer.
+ *                 Every page in the stack is `managerOnly` in navigation.ts and
+ *                 MANAGER server-side: /invoices, /subscriptions, /billing,
+ *                 /settings/coupons, and /agency/rebilling (which is
+ *                 AGENCY-OWNER on top). Without this row a rep who typed
+ *                 `/studio?tool=money` would reach the AR ledger, because
+ *                 `/studio` is in App.tsx's plain auth-only group and the menu
+ *                 filter below hides the ROW, never the URL.
+ *   ops         — MANAGER. /automations, /trigger-links, /settings/webhooks and
+ *                 /settings/mcp-console are all `managerOnly`; the compliance
+ *                 controller is class-level `@MarketingRoles('MANAGER')`.
+ *   audience    — MANAGER. /research, /research/suggestions, /import and
+ *                 /segments are all `managerOnly`.
  *
  * A tool absent from this map requires no role. Keep it in step with App.tsx: a
  * tool that becomes manager-only there and not here is the same bug again.
@@ -119,6 +184,9 @@ export type StudioTool = 'autopilot' | 'calendar' | 'create' | 'connections';
 const TOOL_MIN_ROLE: Partial<Record<StudioTool, MarketingRole>> = {
   create: MarketingRole.MANAGER,
   connections: MarketingRole.MANAGER,
+  money: MarketingRole.MANAGER,
+  ops: MarketingRole.MANAGER,
+  audience: MarketingRole.MANAGER,
 };
 
 export interface StudioToolsDrawerProps {
@@ -146,6 +214,10 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
   const qc = useQueryClient();
   const user = useMarketingAuthStore((s) => s.user);
   const canManage = hasMarketingRole(user?.role, MarketingRole.MANAGER);
+  // Only the Para stack's last section reads this, and it fails CLOSED while
+  // the profile is in flight — the hook is shared with the sidebar nav, so it
+  // is a cache hit rather than a request of this drawer's own.
+  const { isAgency } = useWorkspaceProfile();
 
   const [budgetDialogOpen, setBudgetDialogOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -228,6 +300,27 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
       description: t(
         'studio.tools.connections.desc',
         'Reklam, sosyal ve mesajlaşma hesaplarını bağla veya yenile.',
+      ),
+    },
+    money: {
+      title: t('studio.tools.money.title', 'Para'),
+      description: t(
+        'studio.tools.money.desc',
+        'Kim sana borçlu, sen neye abonesin, cüzdanda ne var — ayarlara gitmeden.',
+      ),
+    },
+    ops: {
+      title: t('studio.tools.ops.title', 'İşleyiş'),
+      description: t(
+        'studio.tools.ops.desc',
+        'Otomasyonların çalıştı mı, teslimatlar düştü mü, bekleyen veri talebin var mı.',
+      ),
+    },
+    audience: {
+      title: t('studio.tools.audience.title', 'Kitle'),
+      description: t(
+        'studio.tools.audience.desc',
+        'Listen nereden geliyor ve nasıl bölünüyor: AI önerileri, içe aktarım, segmentler.',
       ),
     },
   };
@@ -358,6 +451,140 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
                 <AccountCenterPage embedded />
               </Lazy>
             )}
+
+            {/* PARA. Five surfaces that were five trips through the gear.
+                The per-section gates are a SECOND, independent layer: the tool's
+                MANAGER check above says who may open the stack at all, and says
+                nothing about whether this workspace's plan includes invoicing or
+                whether this manager is the agency's OWNER. */}
+            {allowed && active === 'money' && (
+              <div className="space-y-1">
+                <Section
+                  title={t('studio.tools.section.invoices', 'Faturalar')}
+                  data-testid="tool-section-invoices"
+                  defaultOpen
+                >
+                  <SettledFeatureGate feature="invoicing">
+                    <InvoicesPage embedded />
+                  </SettledFeatureGate>
+                </Section>
+                <Section
+                  title={t('studio.tools.section.subscriptions', 'Abonelikler')}
+                  data-testid="tool-section-subscriptions"
+                >
+                  <SettledFeatureGate feature="invoicing">
+                    <SubscriptionsPage embedded />
+                  </SettledFeatureGate>
+                </Section>
+                <Section
+                  title={t('studio.tools.section.billing', 'Kredi ve paket')}
+                  data-testid="tool-section-billing"
+                >
+                  {/* No `embedded` yet: the prop is another lane's edit to
+                      billing/index.tsx. Passing nothing is correct both before
+                      and after it lands — the only cost until then is the
+                      page's own header inside the section. */}
+                  <BillingPage />
+                </Section>
+                <Section
+                  title={t('studio.tools.section.coupons', 'Kuponlar')}
+                  data-testid="tool-section-coupons"
+                >
+                  <CouponsPage embedded />
+                </Section>
+                {/* ownerOnly + agencyOnly, exactly as navigation.ts states it
+                    for /agency/rebilling. `isAgency` fails CLOSED while the
+                    workspace profile is in flight, so this never flashes for a
+                    standalone workspace. */}
+                {isAgency && hasMarketingRole(user?.role, MarketingRole.OWNER) && (
+                  <Section
+                    title={t('studio.tools.section.rebilling', 'Yeniden faturalama')}
+                    data-testid="tool-section-rebilling"
+                  >
+                    <RebillingPage embedded />
+                  </Section>
+                )}
+              </div>
+            )}
+
+            {/* İŞLEYİŞ — did the machinery run, and is anything waiting on me. */}
+            {allowed && active === 'ops' && (
+              <div className="space-y-1">
+                <Section
+                  title={t('studio.tools.section.workflows', "Workflow'lar")}
+                  data-testid="tool-section-workflows"
+                  defaultOpen
+                >
+                  <SettledFeatureGate feature="workflows">
+                    {/* The builder is a `fullBleed` route of its own, so opening
+                        it leaves this screen entirely. `onNavigate` drops the
+                        `?tool=ops` first (the host's close is a `replace`), so
+                        coming back lands on a plain /studio instead of
+                        reopening a drawer nobody asked for. */}
+                    <AutomationsListPage embedded onNavigate={() => onOpenChange(false)} />
+                  </SettledFeatureGate>
+                </Section>
+                <Section
+                  title={t('studio.tools.section.triggerLinks', 'Tetikleyici linkler')}
+                  data-testid="tool-section-trigger-links"
+                >
+                  <TriggerLinksPage embedded />
+                </Section>
+                <Section
+                  title={t('studio.tools.section.webhooks', 'Webhook teslimatları')}
+                  data-testid="tool-section-webhooks"
+                >
+                  <WebhooksPage embedded />
+                </Section>
+                <Section
+                  title={t('studio.tools.section.mcpSessions', 'Claude oturumları')}
+                  data-testid="tool-section-mcp-sessions"
+                >
+                  <McpSessionsSection />
+                </Section>
+                <Section
+                  title={t('studio.tools.section.dataRequests', 'Veri talepleri (KVKK/GDPR)')}
+                  data-testid="tool-section-data-requests"
+                >
+                  <ComplianceRequestsSection />
+                </Section>
+              </div>
+            )}
+
+            {/* KİTLE — where the list comes from and how it is carved up. */}
+            {allowed && active === 'audience' && (
+              <div className="space-y-1">
+                <Section
+                  title={t('studio.tools.section.researchQueue', 'AI aday önerileri')}
+                  data-testid="tool-section-research-queue"
+                  defaultOpen
+                >
+                  <SettledFeatureGate feature="research">
+                    <ResearchSuggestionsPage embedded />
+                  </SettledFeatureGate>
+                </Section>
+                <Section
+                  title={t('studio.tools.section.researchProfiles', 'Araştırma profilleri')}
+                  data-testid="tool-section-research-profiles"
+                >
+                  <SettledFeatureGate feature="research">
+                    <ResearchSettingsPage embedded />
+                  </SettledFeatureGate>
+                </Section>
+                <Section
+                  title={t('studio.tools.section.import', 'İçe aktarım')}
+                  data-testid="tool-section-import"
+                >
+                  <ImportWizardPage embedded />
+                </Section>
+                <Section
+                  title={t('studio.tools.section.segments', 'Segmentler')}
+                  data-testid="tool-section-segments"
+                >
+                  <SegmentsPage embedded />
+                </Section>
+              </div>
+            )}
           </div>
         </SheetContent>
       </Sheet>
@@ -387,6 +614,32 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
+
+/**
+ * One row of a recurring tool's stack: a heading, and a whole page under it
+ * that does not exist until the heading is clicked.
+ *
+ * The `Suspense` is INSIDE the disclosure rather than around the stack, so a
+ * section still downloading its chunk shows a fallback in its own row instead
+ * of replacing every heading above and below it with one spinner.
+ */
+function Section({
+  title,
+  defaultOpen,
+  children,
+  'data-testid': testId,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+  'data-testid'?: string;
+}) {
+  return (
+    <Disclosure title={title} defaultOpen={defaultOpen} data-testid={testId}>
+      <Lazy>{children}</Lazy>
+    </Disclosure>
+  );
 }
 
 /**

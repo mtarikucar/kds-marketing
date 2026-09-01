@@ -18,6 +18,8 @@ import {
   isMcpApprovalPayload,
 } from '../api/growthBudget.service';
 import { fmtDateTime } from '../utils/format';
+import { hasMarketingRole, MarketingRole } from '../types';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 /**
  * The workspace's human-approval queue.
@@ -36,6 +38,24 @@ export function ApprovalQueue() {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['pending-approvals'], queryFn: listPendingApprovals });
+  /**
+   * The read and the decision are gated differently, and until now only the
+   * read was honoured. `GET /marketing/approvals` needs `reports.read`, which a
+   * REP has — deliberately, so the person whose conversations the agent is
+   * about to send into can see what is queued. Every decision route
+   * (`:id/approve`, `:id/reject`, `:id/apply`, and budget's
+   * `reallocations/:id/apply`) is `@MarketingRoles('MANAGER')` +
+   * `settings.manage`. So a rep was handed three buttons that could only ever
+   * 403, on the home screen they open every morning — and, once `/studio` was
+   * listed for reps, on the Studio's right rail as well.
+   *
+   * Withhold the affordance and say why; do not let the 403 explain it. That is
+   * the rule the rest of this surface already follows (IdeasPanel's
+   * `canDecide`, TodayQueuePanel's `canAct`, AccountStatsPanel's `isManager`),
+   * and this queue was the last component on the screen ignoring it.
+   */
+  const user = useMarketingAuthStore((s) => s.user);
+  const canDecide = hasMarketingRole(user?.role, MarketingRole.MANAGER);
   const [confirmItem, setConfirmItem] = useState<{ id: string; kind: string } | null>(null);
 
   const invalidate = () => {
@@ -177,23 +197,38 @@ export function ApprovalQueue() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      {!approvedUnapplied && (
-                        <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
-                          <X className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.reject', 'Reject')}
-                        </Button>
+                      {!canDecide ? (
+                        /* One line where the two buttons were, per row rather
+                           than once per queue: the rows are cards, and a note
+                           under the list would sit too far from the thing it
+                           is explaining to be read as its explanation. */
+                        <p data-testid="approvals-readonly" className="text-xs text-muted-foreground">
+                          {t(
+                            'budget.approvals.readOnly',
+                            'Onaylamak için yönetici yetkisi gerekiyor — burada yalnızca bekleyenleri görebilirsin.',
+                          )}
+                        </p>
+                      ) : (
+                        <>
+                          {!approvedUnapplied && (
+                            <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
+                              <X className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.reject', 'Reject')}
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              isAutopilotReallocation
+                                ? setConfirmItem({ id: r.id, kind: r.kind })
+                                : approve.mutate({ id: r.id, kind: r.kind, payload: r.payload, status: r.status })
+                            }
+                            disabled={approve.isPending}
+                          >
+                            <Check className="mr-1 h-4 w-4" aria-hidden="true" />
+                            {approvedUnapplied ? t('budget.apply', 'Apply') : t('budget.approve', 'Approve')}
+                          </Button>
+                        </>
                       )}
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          isAutopilotReallocation
-                            ? setConfirmItem({ id: r.id, kind: r.kind })
-                            : approve.mutate({ id: r.id, kind: r.kind, payload: r.payload, status: r.status })
-                        }
-                        disabled={approve.isPending}
-                      >
-                        <Check className="mr-1 h-4 w-4" aria-hidden="true" />
-                        {approvedUnapplied ? t('budget.apply', 'Apply') : t('budget.approve', 'Approve')}
-                      </Button>
                     </div>
                   </CardContent>
                 </Card>

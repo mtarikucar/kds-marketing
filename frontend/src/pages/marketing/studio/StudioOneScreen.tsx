@@ -13,7 +13,17 @@ const AccountStatsPanel = lazy(() => import('./AccountStatsPanel'));
 const IdeasPanel = lazy(() => import('./IdeasPanel'));
 const TodayQueuePanel = lazy(() => import('./TodayQueuePanel'));
 
-const TOOLS: StudioTool[] = ['autopilot', 'calendar', 'create', 'connections'];
+// This array is what VALIDATES `?tool=`; a value missing here does not error,
+// it silently falls back to the autopilot console.
+const TOOLS: StudioTool[] = [
+  'autopilot',
+  'calendar',
+  'create',
+  'connections',
+  'money',
+  'ops',
+  'audience',
+];
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;

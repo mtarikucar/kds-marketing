@@ -6,6 +6,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu';
@@ -104,10 +105,33 @@ const TOOL_LINKS: readonly ToolLink[] = [
   },
 ];
 
+/**
+ * The recurring half: work you come back to weekly, not work you make.
+ *
+ * Each opens a STACK of embedded pages rather than a page — see
+ * StudioToolsDrawer. All three are MANAGER because every page in every stack is
+ * `managerOnly` in navigation.ts and MANAGER-gated server-side; the drawer
+ * refuses the same three at the MOUNT, which is the half that actually holds,
+ * since `?tool=` is a URL and hiding a row hides nothing.
+ *
+ * These rows are also the strongest case for this component's
+ * STATE-INDEPENDENT-EXCEPT-ROLE contract. A door to the AR ledger, to the
+ * webhook delivery log, or to a pending KVKK erasure request may not depend on
+ * whether a budget poll happened to resolve — the pages behind them are how an
+ * operator answers "did I get paid" and "is anything overdue on me", and those
+ * questions are asked most exactly when something else on the screen is broken.
+ */
+const RECURRING_LINKS: readonly ToolLink[] = [
+  { to: '/studio?tool=money', key: 'studio.toolsMenu.money', label: 'Para', role: MarketingRole.MANAGER },
+  { to: '/studio?tool=ops', key: 'studio.toolsMenu.ops', label: 'İşleyiş', role: MarketingRole.MANAGER },
+  { to: '/studio?tool=audience', key: 'studio.toolsMenu.audience', label: 'Kitle', role: MarketingRole.MANAGER },
+];
+
 export function StudioToolsMenu({ className }: { className?: string }) {
   const { t } = useTranslation('marketing');
   const role = useMarketingAuthStore((s) => s.user?.role);
   const links = TOOL_LINKS.filter((l) => !l.role || hasMarketingRole(role, l.role));
+  const recurring = RECURRING_LINKS.filter((l) => !l.role || hasMarketingRole(role, l.role));
 
   return (
     <DropdownMenu>
@@ -124,6 +148,23 @@ export function StudioToolsMenu({ className }: { className?: string }) {
             <Link to={l.to}>{t(l.key, l.label)}</Link>
           </DropdownMenuItem>
         ))}
+        {/* Two groups, not seven flat rows: what you MAKE, then what you come
+            back to. A rep sees only the first group and no heading over it,
+            which is why the label is rendered with the group rather than
+            unconditionally. */}
+        {recurring.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>
+              {t('studio.toolsMenu.group.recurring', 'Her hafta dönüp bakılan işler')}
+            </DropdownMenuLabel>
+            {recurring.map((l) => (
+              <DropdownMenuItem key={l.to} asChild>
+                <Link to={l.to}>{t(l.key, l.label)}</Link>
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
         <DropdownMenuSeparator />
         {/*
           The full-page surface. Kept as ONE entry rather than exploded into its

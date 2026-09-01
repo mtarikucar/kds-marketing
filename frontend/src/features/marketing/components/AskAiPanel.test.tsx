@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import AskAiPanel from './AskAiPanel';
+import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 
 const post = vi.fn();
 vi.mock('../api/marketingApi', () => ({
@@ -16,9 +18,22 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// MemoryRouter: the out-of-credits pane offers a real <Link to="/billing">,
+// which is the whole difference from the old plain-text "add credits from
+// Billing" that pointed nowhere.
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  return (
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    </MemoryRouter>
+  );
+}
+
+function setRole(role: 'OWNER' | 'MANAGER' | 'REP') {
+  useMarketingAuthStore.setState({
+    user: { id: 'u1', workspaceId: 'w1', email: 'a@b.c', firstName: 'A', lastName: 'B', role },
+  });
 }
 
 describe('AskAiPanel', () => {
@@ -56,14 +71,37 @@ describe('AskAiPanel', () => {
     await user.keyboard('{Enter}');
   }
 
-  it('tells an out-of-credits user to top up, not to upgrade', async () => {
-    post.mockRejectedValue({
-      response: { status: 403, data: { code: 'AI_CREDITS_EXHAUSTED' } },
-    });
+  const creditsRejection = {
+    response: { status: 403, data: { code: 'AI_CREDITS_EXHAUSTED' } },
+  };
+
+  it('gives an OWNER a real link to /billing, not the word "Billing"', async () => {
+    setRole('OWNER');
+    post.mockRejectedValue(creditsRejection);
     await ask(userEvent.setup());
 
-    expect(await screen.findByText(/AI credits/i)).toBeInTheDocument();
+    expect(await screen.findByText(/buy a pack in Billing/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /add credits/i })).toHaveAttribute('href', '/billing');
     expect(screen.queryByText(/not in your plan/i)).not.toBeInTheDocument();
+  });
+
+  it('tells a MANAGER who can buy, and still offers the page they can open', async () => {
+    setRole('MANAGER');
+    post.mockRejectedValue(creditsRejection);
+    await ask(userEvent.setup());
+
+    expect(await screen.findByText(/only the workspace owner can buy a pack/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /open billing/i })).toHaveAttribute('href', '/billing');
+  });
+
+  /** /billing is managerOnly in the nav, so a REP gets the name, not a link. */
+  it('names the owner for a REP and offers no dead-end link', async () => {
+    setRole('REP');
+    post.mockRejectedValue(creditsRejection);
+    await ask(userEvent.setup());
+
+    expect(await screen.findByText(/only the workspace owner can buy a pack/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 
   it('still shows the upgrade hint when the feature genuinely is not entitled', async () => {

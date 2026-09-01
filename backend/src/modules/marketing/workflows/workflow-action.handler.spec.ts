@@ -460,3 +460,51 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
     expect(String(res.output?.result)).toContain('NOT sent');
   });
 });
+
+/**
+ * notify_user was the one producer that wrote a notification with no metadata
+ * at all, under the fixed title "Automation" — nothing for the bell to open,
+ * even though the recipient is by definition the lead's own owner.
+ */
+describe('WorkflowActionHandler notify_user', () => {
+  const make = () => {
+    const notifications = { create: jest.fn().mockResolvedValue({}) };
+    const handler = new WorkflowActionHandler(
+      null as any, null as any, null as any, null as any,
+      null as any, notifications as any, null as any, null as any, null as any,
+    );
+    return { handler, notifications };
+  };
+
+  it('stamps the lead it fired on so the notification has somewhere to go', async () => {
+    const { handler, notifications } = make();
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', assignedToId: 'u1' },
+      trigger: {},
+      context: {},
+    };
+
+    const res = await handler.execute({ type: 'notify_user', message: 'ping' } as any, ctx);
+
+    expect(res.output?.result).toBe('notified');
+    expect(notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        userId: 'u1',
+        type: 'WORKFLOW',
+        metadata: { leadId: 'lead-1' },
+      }),
+    );
+  });
+
+  it('still skips (and writes nothing) when the lead has no owner to notify', async () => {
+    const { handler, notifications } = make();
+    const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: null, trigger: {}, context: {} };
+
+    const res = await handler.execute({ type: 'notify_user', message: 'ping' } as any, ctx);
+
+    expect(res.output?.result).toBe('skipped (no user to notify)');
+    expect(notifications.create).not.toHaveBeenCalled();
+  });
+});

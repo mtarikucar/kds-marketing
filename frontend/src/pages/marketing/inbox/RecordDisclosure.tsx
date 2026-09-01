@@ -1,14 +1,6 @@
-import { useState, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Disclosure, type DisclosureProps } from '@/components/ui/Disclosure';
 
-export interface RecordDisclosureProps {
-  /** Section heading — also the section's NAME in its failure sentence. */
-  title: string;
-  /** Mounted only while open, so a closed section fetches nothing. */
-  children: ReactNode;
-  'data-testid'?: string;
-}
+export type RecordDisclosureProps = DisclosureProps;
 
 /**
  * A record-card section that costs nothing until it is opened.
@@ -30,33 +22,13 @@ export interface RecordDisclosureProps {
  * without that, "I opened Randevular for Ayşe" becomes "Randevular is open for
  * whoever is selected next", and the section fetches for someone nobody asked
  * about.
+ *
+ * The implementation now lives in `components/ui/Disclosure`, because the
+ * Studio's recurring tools stack sections of exactly this shape and a second
+ * copy would have drifted from this one. This name stays because it is what the
+ * record card's own vocabulary calls it, and because the essay above is about
+ * THIS card's five sections rather than about a generic control.
  */
-export function RecordDisclosure({
-  title,
-  children,
-  'data-testid': testId,
-}: RecordDisclosureProps) {
-  const { t } = useTranslation('marketing');
-  const [open, setOpen] = useState(false);
-  const Chevron = open ? ChevronDown : ChevronRight;
-
-  return (
-    <section data-testid={testId} className="space-y-2 border-t border-border pt-3">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 text-start"
-      >
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {title}
-        </span>
-        <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-          {open ? t('surface.section.hide', 'Gizle') : t('surface.section.show', 'Göster')}
-          <Chevron className="h-3.5 w-3.5" aria-hidden="true" />
-        </span>
-      </button>
-      {open && children}
-    </section>
-  );
+export function RecordDisclosure(props: RecordDisclosureProps) {
+  return <Disclosure {...props} />;
 }
