@@ -34,9 +34,25 @@ export type RecordCardLead = Pick<Lead, 'id'> &
       | 'source'
       | 'businessType'
       | 'createdAt'
-      | 'assignedTo'
     >
-  >;
+  > & {
+    /**
+     * Three states, not two, and the card is held to all three by a test.
+     *
+     * A user → they own this person. `null` → nobody does, which is what
+     * `GET /leads` sends for an unowned lead (Prisma returns the missing
+     * relation as null) and is a real ANSWER on this surface: it is exactly
+     * what the Atanmamış queue one column over is about. `undefined` → nobody
+     * has SAID, which is what a person handed over by the Hat / Takvim /
+     * Görevler views looks like before their record resolves, and what a person
+     * whose record could not be read looks like forever.
+     *
+     * `Lead` itself carries the null since this landed, so this is `Lead`'s own
+     * type — pulled out of the `Pick` above only so the rule has somewhere to
+     * be written down, on the component that depends on it.
+     */
+    assignedTo?: Lead['assignedTo'];
+  };
 
 export interface LeadContextPaneProps {
   /** Null before anyone is selected — the card says so rather than rendering
@@ -87,13 +103,20 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
       </div>
 
       <dl className="space-y-1 text-xs">
-        <Row label={t('surface.card.owner', 'Sahibi')}>
-          <span data-testid="record-owner">
-            {lead.assignedTo
-              ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}`.trim()
-              : t('leads.assignmentStatus.unassigned', 'Atanmamış')}
-          </span>
-        </Row>
+        {/* Only when the record has actually answered. See `RecordCardLead`:
+            "Atanmamış" is a claim about this person, and printing it because a
+            board card simply does not carry the field would put an unowned
+            label on somebody's own lead — on the one card a rep reads before
+            deciding whether to touch them. */}
+        {lead.assignedTo !== undefined && (
+          <Row label={t('surface.card.owner', 'Sahibi')}>
+            <span data-testid="record-owner">
+              {lead.assignedTo
+                ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}`.trim()
+                : t('leads.assignmentStatus.unassigned', 'Atanmamış')}
+            </span>
+          </Row>
+        )}
         {lead.phone && <Row label={t('surface.card.phone', 'Telefon')}>{lead.phone}</Row>}
         {lead.email && <Row label={t('surface.card.email', 'E-posta')}>{lead.email}</Row>}
         {lead.city && <Row label={t('surface.card.city', 'Şehir')}>{lead.city}</Row>}

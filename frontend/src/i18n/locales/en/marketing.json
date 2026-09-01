@@ -3357,7 +3357,12 @@
     "subtitle": "Everyone in one list — the ones talking and the quiet ones.",
     "view": {
       "list": "List",
-      "table": "Table"
+      "table": "Table",
+      "board": "Pipeline",
+      "calendar": "Calendar",
+      "tasks": "Tasks",
+      "label": "View",
+      "failed": "This view could not be opened."
     }
   }
 }

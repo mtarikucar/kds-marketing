@@ -14,12 +14,13 @@ import {
 } from '@/components/ui';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
 import { API_URL } from '../../../lib/env';
 import { RouteFallback } from '../../../components/RouteFallback';
-import type { Lead } from '../../../features/marketing/types';
-import { PeopleList } from './PeopleList';
+import { PeopleColumn, isLeftView, type LeftView } from './PeopleColumn';
 import { PersonPane } from './PersonPane';
 import { LeadContextPane } from './LeadContextPane';
+import type { SurfacePerson } from './surfacePerson';
 
 // Lazy so a config surface's code only loads when opened — the daily surface
 // must never pay for the config pages' bundles, and the leads TABLE is a
@@ -69,6 +70,25 @@ function Lazy({ children }: { children: ReactNode }) {
  * outcome once: a header kept lead A's phone number and dialled it under lead
  * B's id. Keying is the whole mechanism — there is no second reset-on-change
  * effect, because two mechanisms means one of them can rot unnoticed.
+ *
+ * ## The left column arranges the same people four ways
+ *
+ * `?left=list|board|calendar|tasks` — Liste · Hat · Takvim · Görevler
+ * (2026-09-01 design, "Karar 1"). The switch belongs to the LEFT column only:
+ * the middle column and the record card are identical in all four, and the
+ * SELECTION survives the switch. That pair of facts is the design — clicking a
+ * deal on the pipeline and reading that person's conversation without leaving
+ * the screen is what is being bought, and a switcher that dropped the selection
+ * would be navigation with extra steps.
+ *
+ * It is a separate parameter from `?view=table` on purpose, even though both
+ * words mean "view". `?view=table` replaces the WHOLE surface with the leads
+ * table — three columns become one — and `?left=` rearranges one column of
+ * three. Folding them into one parameter would make `left=table` and
+ * `left=board` two very different kinds of thing under one name.
+ *
+ * See `PeopleColumn` for why each view is the PAGE embedded rather than a
+ * rebuild, and for why none of the four needs a gate.
  *
  * ## Two URL parameters survive from the surface this replaces
  *
@@ -128,11 +148,28 @@ export default function InboxPage() {
   const configTab: ConfigTab | null =
     isConfigTab(requestedTab) && offersConfig ? requestedTab : null;
   const tableView = params.get('view') === 'table';
+  // Unknown values fall back to the list rather than blanking the column —
+  // same rule as `?tab=`, and the same reason: a stale or mistyped deep link
+  // should land somewhere usable.
+  const leftView: LeftView = isLeftView(params.get('left')) ? (params.get('left') as LeftView) : 'list';
 
   const setTab = (v: string) =>
     setParams(
       (p) => {
         p.set('tab', v);
+        return p;
+      },
+      { replace: true },
+    );
+
+  // In the URL rather than in state, for PeopleList's own two reasons: a
+  // colleague can be sent one, and a browser reload should not silently move
+  // somebody back to a different arrangement of their queue.
+  const setLeftView = (v: LeftView) =>
+    setParams(
+      (p) => {
+        if (v === 'list') p.delete('left');
+        else p.set('left', v);
         return p;
       },
       { replace: true },
@@ -148,19 +185,49 @@ export default function InboxPage() {
       { replace: true },
     );
 
-  // The whole row, not just the id: the middle and right columns read this
-  // person's fields, and re-fetching a record the list already returned would
-  // be a third source of truth about who this is.
-  const [selected, setSelected] = useState<Lead | null>(null);
+  // The whole row a view had in hand, not just the id: the middle and right
+  // columns read this person's fields, and re-fetching a record the list
+  // already returned would be a third source of truth about who this is.
+  //
+  // How MUCH of the row depends on which arrangement handed them over.
+  // `PeopleList` has the whole person; a board card has a name and a phone; a
+  // task row has a business name. `handed` is therefore whatever was known at
+  // the moment of the click, and `person` below is that filled in.
+  const [handed, setHanded] = useState<SurfacePerson | null>(null);
   // The SAME answer, in a form the live-stream effect can read without being
   // torn down and rebuilt for it. See the effect below: `selected` in its
   // dependency array reconnected the SSE socket on every click.
-  const selectedRef = useRef<Lead | null>(null);
+  const selectedRef = useRef<SurfacePerson | null>(null);
   /** The one place selection changes, so the ref cannot drift from the state. */
-  const select = (person: Lead | null) => {
+  const select = (person: SurfacePerson | null) => {
     selectedRef.current = person;
-    setSelected(person);
+    setHanded(person);
   };
+
+  /**
+   * The rest of whoever is selected.
+   *
+   * `['marketing','lead', id]` is the key the record card is ALREADY reading
+   * for its Görevler and Teklifler sections, so this is a third observer on one
+   * cache entry rather than a second request — and it is emphatically not a
+   * third source of truth: it is the person's own record, which is the first
+   * one.
+   *
+   * It matters because two of the fields the other columns need are ones the
+   * three new views do not carry. `LeadHeaderActions` renders "Ara" and "Mesaj"
+   * ABSENT — not disabled — when a lead has no phone, so a person picked off
+   * the board would quietly lose both buttons; and the record card must not
+   * call somebody unowned merely because a task row never mentioned an owner.
+   *
+   * The spread order is deliberate: the record WINS where it has an opinion,
+   * and the handed row survives where it does not (the list's
+   * `lastMessagePreview` and `unreadCount` are stitched on by `GET /leads` and
+   * are not on the detail payload).
+   */
+  const record = useLeadRecord(handed?.id ?? null);
+  const selected: SurfacePerson | null = handed
+    ? { ...handed, ...(record.data ?? {}) }
+    : null;
   // Below lg the record card cannot sit beside the other two, so it arrives as
   // a sheet on request.
   const [cardOpen, setCardOpen] = useState(false);
@@ -300,7 +367,7 @@ export default function InboxPage() {
     };
   }, [accessToken, canConverse, queryClient]);
 
-  const onSelect = (person: Lead) => {
+  const onSelect = (person: SurfacePerson) => {
     select(person);
     setCardOpen(false);
   };
@@ -400,15 +467,25 @@ export default function InboxPage() {
         </div>
       ) : (
         <div data-testid="person-surface" className="flex min-h-0 flex-1 gap-0 md:gap-4">
-          {/* Left — people. Full width until someone is picked on a phone;
-              the existing inbox's own answer to the same problem. */}
+          {/* Left — people, arranged one of four ways. Full width until
+              someone is picked on a phone; the existing inbox's own answer to
+              the same problem.
+
+              The three new arrangements are WIDER than the list, and that is a
+              functional requirement rather than a taste: a kanban whose columns
+              are 288px cannot be dragged BETWEEN columns if only one fits on
+              screen, and a month laid out in a 34% column is unreadable. The
+              stream keeps the remainder, which at 1440px is still ~460px — a
+              readable conversation — and the record card is untouched. */}
           <div
             data-testid="surface-list"
-            className={`${
-              selected ? 'hidden md:flex' : 'flex w-full'
-            } min-h-0 md:w-[34%] md:max-w-sm md:shrink-0`}
+            className={`${selected ? 'hidden md:flex' : 'flex w-full'} min-h-0 md:shrink-0 ${
+              leftView === 'list' ? 'md:w-[34%] md:max-w-sm' : 'md:w-[46%] lg:w-[42%]'
+            }`}
           >
-            <PeopleList
+            <PeopleColumn
+              view={leftView}
+              onView={setLeftView}
               selectedId={selected?.id ?? null}
               onSelect={onSelect}
               className="w-full"

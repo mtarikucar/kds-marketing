@@ -129,8 +129,16 @@ export interface Lead {
   notes?: string;
   nextFollowUp?: string;
   priority: string;
-  assignedToId?: string;
-  assignedTo?: MarketingUserInfo;
+  assignedToId?: string | null;
+  /**
+   * Who owns this lead. NULL — not undefined — when nobody does: every producer
+   * of a Lead includes the relation, and Prisma returns a missing relation as
+   * null. The distinction is load-bearing on the person surface's record card,
+   * where "Atanmamış" is an ANSWER (it is what the Atanmamış queue is about)
+   * and must not be printed for a person whose record simply has not been read
+   * yet. See `RecordCardLead`.
+   */
+  assignedTo?: MarketingUserInfo | null;
   convertedTenantId?: string;
   convertedAt?: string;
   createdAt: string;

@@ -252,18 +252,41 @@ describe('LeadContextPane — the record card', () => {
     expect(card).toHaveTextContent('CONTACTED');
   });
 
-  it('names the owner, and says so when there is not one', () => {
+  /**
+   * Three states, not two, and the middle one is the reason the third exists.
+   *
+   * A user → they own this person. NULL → nobody does, which is what
+   * `GET /leads` sends (Prisma returns the missing relation as null) and is a
+   * fact worth reading rather than a blank line: it is the whole point of the
+   * Atanmamış queue one column over. UNDEFINED → nobody has SAID, which is what
+   * the Hat / Takvim / Görevler views hand over before the person's record
+   * resolves, and what a person whose record could not be read looks like
+   * forever.
+   *
+   * Printing "Atanmamış" for the third case would put an unowned label on
+   * somebody else's lead, on the one card a rep reads before deciding whether
+   * to touch them.
+   */
+  it('names the owner', () => {
     renderCard({
       lead: person({
         assignedTo: { id: 'u1', firstName: 'Mehmet', lastName: 'Kaya' } as Lead['assignedTo'],
       }),
     });
     expect(screen.getByTestId('record-owner')).toHaveTextContent('Mehmet Kaya');
+  });
 
-    // Unowned is a fact worth reading, not a blank line — it is the whole
-    // point of the Atanmamış queue one column over.
+  it('says Atanmamış when the record says nobody owns them', () => {
+    renderCard({ lead: person({ assignedTo: null }) });
+    expect(screen.getByTestId('record-owner')).toHaveTextContent('Atanmamış');
+  });
+
+  it('leaves the row out when nobody has said, rather than guessing unowned', () => {
     renderCard({ lead: person({ assignedTo: undefined }) });
-    expect(screen.getAllByTestId('record-owner')[1]).toHaveTextContent('Atanmamış');
+    // Positive anchor first: the card IS up for this person, so the absence
+    // below is a decision rather than an unrendered component.
+    expect(screen.getByTestId('record-card')).toHaveTextContent('Ayşe Yılmaz');
+    expect(screen.queryByTestId('record-owner')).not.toBeInTheDocument();
   });
 
   // The surface's ONE navigation. Everything else on the page is a selection;

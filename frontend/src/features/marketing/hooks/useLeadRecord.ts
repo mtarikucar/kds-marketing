@@ -61,10 +61,17 @@ import { getLead } from '../api/leads.service';
  * the one the surface already names — a `leadId` on ConversationStreamEvent,
  * so a frame refreshes the person it is actually about.
  */
-export function useLeadRecord(leadId: string) {
+/**
+ * `leadId` may be null: the surface calls this for whoever is SELECTED, and
+ * before anyone is there is nobody to read. Null disables the query rather than
+ * asking for `/leads/` — the key still carries the null so the cache does not
+ * confuse "nobody selected" with a real person.
+ */
+export function useLeadRecord(leadId: string | null) {
   return useQuery({
     queryKey: ['marketing', 'lead', leadId],
-    queryFn: () => getLead(leadId),
+    queryFn: () => getLead(leadId!),
+    enabled: !!leadId,
     // A genuine 404 (deleted lead) is the answer, not a transient failure —
     // don't burn retries on it; let the caller's not-found branch render.
     retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),

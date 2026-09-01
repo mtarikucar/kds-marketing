@@ -1219,7 +1219,12 @@
     "subtitle": "Hamma bitta roʻyxatda — yozayotgani ham, jim turgani ham.",
     "view": {
       "list": "Roʻyxat",
-      "table": "Jadval"
+      "table": "Jadval",
+      "board": "Quvur",
+      "calendar": "Kalendar",
+      "tasks": "Vazifalar",
+      "label": "Koʻrinish",
+      "failed": "Bu koʻrinish ochilmadi."
     }
   },
   "callRecording": {
