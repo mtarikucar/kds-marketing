@@ -216,10 +216,19 @@ beforeEach(() => {
   });
 });
 
-/** One QueryClient per render, so no test inherits another's cache. */
+/**
+ * One QueryClient per render, so no test inherits another's cache.
+ *
+ * `retry: false` is the default here but `useLeadRecord` overrides it with its
+ * own policy, which is the point of that hook — so the detail read still runs
+ * its retries in these tests. `retryDelay: 0` collapses their BACKOFF only: the
+ * count is the hook's and is asserted directly in `useLeadRecord.test.tsx`,
+ * while the wall clock is nobody's behaviour. Without it this file waited out a
+ * real 1+2s backoff and its failure test sat ~2s from vitest's per-test cap.
+ */
 function wrap(node: React.ReactNode) {
   const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: { queries: { retry: false, retryDelay: 0 }, mutations: { retry: false } },
   });
   return (
     <QueryClientProvider client={qc}>
@@ -462,13 +471,13 @@ describe('LeadContextPane — a broken section names itself and stands alone', (
     // Each section owes its OWN sentence — "something failed" on a five-section
     // card tells a rep nothing about what they are missing.
     //
-    // The generous timeout is the RETRY, not flake: `useLeadRecord` retries a
-    // non-404 twice before conceding, so a rep does not see a failure sentence
-    // over one dropped packet. The section shows its skeleton in the meantime;
-    // what must never happen is it showing "no tasks".
-    expect(
-      await screen.findByText('Görevler yüklenemedi.', undefined, { timeout: 8000 }),
-    ).toBeInTheDocument();
+    // This used to wait 8s, because `useLeadRecord` retries a non-404 twice
+    // before conceding and the wait was outrunning a real 1+2s backoff. That
+    // made a timing coincidence the only witness to the retry COUNT; the count
+    // is now asserted directly in useLeadRecord.test.tsx and the backoff is
+    // zeroed in `wrap`, so what is left here is the only thing this test was
+    // ever about: which sentence the section ends up showing.
+    expect(await screen.findByText('Görevler yüklenemedi.')).toBeInTheDocument();
     expect(screen.getByText('Teklifler yüklenemedi.')).toBeInTheDocument();
 
     // A failure is not an empty person: the words for "no tasks" must NOT be

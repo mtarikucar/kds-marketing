@@ -13,6 +13,10 @@ import { getLead } from '../api/leads.service';
  * keys the cache, not the policy, so a shared key with unshared options is a
  * behaviour that depends on which surface mounted first.
  *
+ * The policy is asserted by CALL COUNT in `useLeadRecord.test.tsx` — one
+ * request for a 404, three for anything else. It had no direct test until then,
+ * and dropping the 404 clause passed the whole suite.
+ *
  * ## Why this one is eager while two of its neighbours are not
  *
  * The card has five sections now, and firing five requests every time a rep
