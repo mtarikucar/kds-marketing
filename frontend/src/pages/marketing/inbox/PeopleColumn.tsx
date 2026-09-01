@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CalendarDays, ClipboardList, List, Trello } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { CalendarDays, ClipboardList, ExternalLink, List, Trello } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { RouteFallback } from '../../../components/RouteFallback';
@@ -20,6 +21,27 @@ const TasksPage = lazy(() => import('../tasks/TasksPage'));
 
 /** The four arrangements of one set of people. `list` is the default. */
 export const LEFT_VIEWS = ['list', 'board', 'calendar', 'tasks'] as const;
+
+/**
+ * The route each arrangement is an embedded copy of, and the door back to it.
+ *
+ * `list` is deliberately absent: that view IS this page (`/leads`), and a
+ * control offering to open the page you are already on is the kind of dead
+ * affordance that teaches people to stop reading the chrome.
+ *
+ * The other three need it as of stage 4 (2026-09-01), which takes them out of
+ * the menu. Embedding keeps every capability except the pages' own chrome —
+ * with one real exception worth the link on its own: `CalendarPage` renders the
+ * seven-column month GRID only when it is NOT embedded (Tailwind v3 has no
+ * container queries, so its `md:` breakpoints read the viewport and the grid
+ * collapses to ~85px cells inside this column). `?create=1`, which the global
+ * "+ Create" menu deep-links, is also disabled while embedded.
+ */
+const FULL_PAGE: Partial<Record<(typeof LEFT_VIEWS)[number], string>> = {
+  board: '/opportunities',
+  calendar: '/calendar',
+  tasks: '/tasks',
+};
 export type LeftView = (typeof LEFT_VIEWS)[number];
 export const isLeftView = (v: string | null): v is LeftView =>
   (LEFT_VIEWS as readonly string[]).includes(v ?? '');
@@ -187,12 +209,15 @@ export function PeopleColumn({
     </ErrorBoundary>
   );
 
+  const fullPage = FULL_PAGE[view];
+
   return (
     <div className={`flex min-h-0 flex-col gap-2 ${className ?? ''}`}>
+      <div className="flex shrink-0 items-center gap-1.5">
       <div
         role="tablist"
         aria-label={t('surface.view.label', 'Görünüm')}
-        className="flex shrink-0 items-center gap-1 rounded-lg border border-border p-1"
+        className="flex min-w-0 flex-1 items-center gap-1 rounded-lg border border-border p-1"
       >
         {LEFT_VIEWS.map((v) => (
           <button
@@ -212,6 +237,22 @@ export function PeopleColumn({
             {label[v]}
           </button>
         ))}
+      </div>
+      {/* OUTSIDE the tablist: it is not a fifth arrangement, and a link inside
+          a `role="tablist"` is a child with no `role="tab"` — which screen
+          readers are entitled to drop. The accessible name carries the view's
+          own name, so four identical "Tam sayfa aç" links can never be what a
+          user hears. */}
+      {fullPage && (
+        <Link
+          to={fullPage}
+          aria-label={`${label[view]} — ${t('surface.view.fullPage', 'Tam sayfa aç')}`}
+          title={t('surface.view.fullPage', 'Tam sayfa aç')}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ExternalLink className="h-4 w-4" aria-hidden="true" />
+        </Link>
+      )}
       </div>
 
       {/* The list owns its own scrolling (it has a sticky filter row and a

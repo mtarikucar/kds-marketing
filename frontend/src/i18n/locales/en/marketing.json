@@ -3371,7 +3371,8 @@
       "calendar": "Calendar",
       "tasks": "Tasks",
       "label": "View",
-      "failed": "This view could not be opened."
+      "failed": "This view could not be opened.",
+      "fullPage": "Open full page"
     }
   }
 }

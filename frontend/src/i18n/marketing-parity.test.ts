@@ -326,6 +326,12 @@ describe('marketing i18n — the person surface and its work queue', () => {
         // line: without it a broken arrangement is an empty box.
         'surface.view.label',
         'surface.view.failed',
+        // The door back to the full page of the three views that are embedded
+        // PAGES. Stage 4 took those pages out of the menu, so this link is the
+        // in-context way back to what `embedded` drops — the month grid above
+        // all. Untranslated it is the one control on the switcher offering a
+        // capability in a language the operator did not pick.
+        'surface.view.fullPage',
         // The list's grouping (2026-09-01, stage 3). `Şirketler` left the menu
         // to become this control, so these three words are now the only way a
         // ru/ar/uz operator meets companies on the daily surface at all: the

@@ -861,3 +861,36 @@ describe('The person surface — the left column switches views', () => {
     expect(await screen.findByTestId('record-owner')).toHaveTextContent('Atanmamış');
   });
 });
+
+/**
+ * Stage 4 takes /opportunities, /calendar and /tasks out of the menu. Three of
+ * the four arrangements ARE those pages, embedded, so almost nothing is lost —
+ * but `embedded` drops each page's own chrome, and in the calendar's case it
+ * drops the seven-column month GRID, which exists nowhere else. This is the
+ * door back, offered from the very view that is showing the reduced version.
+ *
+ * Deliberately NOT offered on Liste: that view is this page. A link labelled
+ * "open the full page" pointing at the page you are on is the kind of dead
+ * control that teaches people to stop reading the chrome.
+ */
+describe('The person surface — the embedded views keep a door to their own page', () => {
+  const fullPage = () => screen.queryByRole('link', { name: /Tam sayfa/ });
+
+  it('offers no full-page link on the list, which IS this page', async () => {
+    renderAt('/leads');
+    // Anchored on a positive find so "no link" cannot pass on an empty render.
+    await screen.findByTestId('surface-list');
+    expect(fullPage()).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['board', 'view-board', '/opportunities'],
+    ['calendar', 'view-calendar', '/calendar'],
+    ['tasks', 'view-tasks', '/tasks'],
+  ])('offers the %s view a link to its own route', async (left, testid, href) => {
+    renderAt(`/leads?left=${left}`);
+
+    await screen.findByTestId(testid);
+    expect(fullPage()).toHaveAttribute('href', href);
+  });
+});

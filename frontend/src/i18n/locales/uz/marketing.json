@@ -1232,7 +1232,8 @@
       "calendar": "Kalendar",
       "tasks": "Vazifalar",
       "label": "Koʻrinish",
-      "failed": "Bu koʻrinish ochilmadi."
+      "failed": "Bu koʻrinish ochilmadi.",
+      "fullPage": "Toʻliq sahifani ochish"
     }
   },
   "callRecording": {

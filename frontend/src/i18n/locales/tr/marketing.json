@@ -4222,7 +4222,8 @@
       "calendar": "Takvim",
       "tasks": "Görevler",
       "label": "Görünüm",
-      "failed": "Bu görünüm açılamadı."
+      "failed": "Bu görünüm açılamadı.",
+      "fullPage": "Tam sayfa aç"
     }
   }
 }
