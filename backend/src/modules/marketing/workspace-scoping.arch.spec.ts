@@ -133,6 +133,17 @@ const OWNED_DELEGATES = [
   'socialAccount',
   'socialPost',
   'socialPostTarget',
+  // Organic-insights read path: per-post and per-account metric snapshots.
+  // Both carry workspaceId and both are written by an hourly cross-workspace
+  // cron, which is exactly the shape that needs a guard rather than trust.
+  'socialPostMetric',
+  'socialAccountMetric',
+  // NetGSM telephony config — the highest-value row in the module: its
+  // configSealed holds the santral usercode/password. Three system crons
+  // enumerate it across workspaces (they project workspaceId and never touch
+  // the sealed column); those are exempted by name below, so a fourth,
+  // less careful read cannot slip in unnoticed.
+  'telephonyConfig',
   // Epic D1 (GHL parity): agency config snapshots (owned by the capturing agency).
   'snapshot',
   // Epic D1 (GHL parity): agency rebilling / SaaS-mode — per-location SaaS plans +
@@ -260,6 +271,14 @@ const SCOPED_METHODS = [
  * Call sites that are global ON PURPOSE. Key: `<file>:<delegate>.<method>`,
  * value: why it may span workspaces. Keep this list SHORT — every entry is
  * a standing exception auditors must re-justify.
+ *
+ * A key names a FILE and a DELEGATE.METHOD, not a line — so on its own it
+ * would exempt every `channel.findMany` in that file, including a sibling
+ * the justification was never written for. `ALLOWED_GLOBAL_SITES` closes
+ * that: each key is pinned to how many unscoped calls it is allowed to
+ * silence (1 unless stated), so a second one — a NEW global read, or a
+ * scoped sibling that LOSES its `workspaceId` — fails instead of inheriting
+ * a neighbour's exemption. See the 'exemptions are pinned…' test below.
  */
 const ALLOWED_GLOBAL: Record<string, string> = {
   // Already scoped through its parent: the ids come from a
@@ -276,11 +295,11 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // only, never row data, and is keyed on the caller's own userId.
   'services/marketing-auth.service.ts:workspaceMembership.count':
     "createOwnedWorkspace: counts one identity's owned workspaces, deliberately cross-workspace",
-  // Login/refresh resolve identity by globally-unique email/id BEFORE a
-  // workspace context exists; registerWorkspace creates the workspace and
-  // its first users in the same tx (workspaceId comes from tx-local rows).
-  'services/marketing-auth.service.ts:marketingUser.create':
-    'registerWorkspace: rows are created with the tx-created workspace id',
+  // (marketingUser.create needed an entry when registerWorkspace built its
+  // rows through a hoisted `data` variable. Both call sites now pass
+  // `workspaceId` inline, so the detector sees the scope itself and the
+  // exemption is gone — kept as a note because the shape is easy to
+  // reintroduce.)
   // LeadActivity/InstallationTask are scoped via their parent (leadId/jobId
   // is resolved through a workspace-scoped read in the same service call).
   // Creates that pass a parent id resolved in-scope are tolerated wholesale:
@@ -404,6 +423,27 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'inbound-SMS (MO) poller enumerates ACTIVE SMS channels across all workspaces (system cron); ingest is scoped by each row workspaceId',
   'channels/netgsm-voicemail-poll.service.ts:channel.findMany':
     'voicemail poller enumerates ACTIVE SMS channels across all workspaces (system cron); ingest is scoped by each row workspaceId',
+  // CDR-sync sweep: the 5-minute cron asks which workspaces could possibly have
+  // NetGSM CDR credentials, by enumerating ACTIVE SMS channels across ALL
+  // workspaces — the same system-job shape as the four NetGSM pollers above, and
+  // it needed the same written exemption. It did not have one and passed anyway,
+  // because `distinct: ['workspaceId']` satisfied a check that only asked whether
+  // the string appeared outside a select; a de-duplication key restricts nothing.
+  // It reads the workspace id and nothing else, and every call that follows goes
+  // through syncWorkspace(workspaceId), which inlines it.
+  'telephony/call-cdr-sync.service.ts:channel.findMany':
+    'CDR-sync cron enumerates ACTIVE SMS channels across all workspaces to find candidates (system cron); selects and de-dupes on workspaceId only',
+  // The other half of that same candidate query, and the two recording crons.
+  // TelephonyConfig is where the sealed santral credentials live, so the bar
+  // for a global read of it is: project workspaceId (plus a plain, unsealed
+  // policy column), never `configSealed`, and hand every id straight to a
+  // per-workspace call that re-reads with scope. All three do.
+  'telephony/call-cdr-sync.service.ts:telephonyConfig.findMany':
+    'CDR-sync cron enumerates ACTIVE telephony configs across all workspaces (system cron); selects workspaceId only, then syncWorkspace(workspaceId)',
+  'telephony/recording-ingest.service.ts:telephonyConfig.findMany':
+    'recording-ingest cron asks which workspaces have recordCalls ON (system cron); selects workspaceId only, no sealed column read',
+  'telephony/recording-retention.service.ts:telephonyConfig.findMany':
+    'retention sweep reads each workspace recordingRetentionDays (system cron); selects workspaceId + the plain retention column, no sealed column read',
   // Inbound-call routing: the only thing an arriving call carries is the dialled
   // number, so the workspace has to be DERIVED from it. This is the one global
   // read here that is a routing decision rather than a sweep, and it is the most
@@ -546,10 +586,9 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // `where`/`data` variable the static regex can't read through, so the arg slice
   // has no literal "workspaceId". File-specific (not parent-scoped): the scope is
   // real, only the heuristic is blind.
-  'services/marketing-offers.service.ts:leadOffer.findMany':
-    'scoped via a Prisma.LeadOfferWhereInput built with { workspaceId } before the call; heuristic cannot see through the where variable',
-  'services/marketing-offers.service.ts:leadOffer.count':
-    'same workspaceId-scoped where object as the paired findMany; heuristic cannot see through the where variable',
+  // (leadOffer.findMany/count needed entries while their where lived in a
+  // hoisted variable. Both now spread it inline — `{ ...where, workspaceId }`
+  // — so the scope is literally visible and the exemptions are gone.)
   'services/marketing-research.service.ts:researchProfile.create':
     'row created with { workspaceId } via a ResearchProfileUncheckedCreateInput data variable; heuristic cannot see through the data variable',
   'strategy/executors/lead-hunt.executor.ts:researchProfile.create':
@@ -577,6 +616,43 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'getActiveMembership/resolveDefaultWorkspaceId resolve a membership by (userId, workspaceId) or by userId alone (home-pointer fallback) — a user spans workspaces, so this read is workspace-less by design',
   'services/membership.service.ts:workspaceMembership.findMany':
     'listActiveMemberships reads every ACTIVE membership a user holds, across all their workspaces, keyed by userId',
+};
+
+/**
+ * How many unscoped call sites each exemption is allowed to silence.
+ * Absent key = exactly 1. Raise a number ONLY after reading every site it
+ * now covers and judging each one global on purpose; the count is the
+ * audit, so a bare bump defeats the whole mechanism.
+ *
+ * `parent-scoped:` keys are deliberately unpinned — they say "this delegate
+ * is reached through its parent" as a shape that recurs across files, so
+ * counting them would pin an unrelated total that moves with every new
+ * call site.
+ */
+const ALLOWED_GLOBAL_SITES: Record<string, number> = {
+  // Two creates of the SAME `data` object (which carries workspaceId, just
+  // behind a variable): one on the unlimited-plan fast path, one inside the
+  // advisory-lock transaction that enforces the plan cap.
+  'ai/agent-profile.service.ts:agentProfile.create': 2,
+  'ai/knowledge.service.ts:knowledgeDoc.create': 2,
+  'services/marketing-research.service.ts:researchProfile.create': 2,
+  'sites/sites.service.ts:sitePage.create': 2,
+  // open / click / unsubscribe — three race-safe claims, each keyed by the
+  // recipient PRIMARY KEY resolved from the unguessable per-recipient token.
+  'campaigns/campaign-tracking.service.ts:campaignRecipient.updateMany': 3,
+  // byExternalId (routing, ACTIVE-only) + anyByExternalId (registration
+  // guard, status-blind). Both are the webhook identity lookup this file
+  // exists to contain.
+  'channels/public-channel-resolver.service.ts:channel.findFirst': 2,
+  // sign + decline, both keyed by the id from a token-scoped findUnique.
+  'documents/documents.service.ts:document.updateMany': 2,
+  // The (kind, dedupKey) dedup lookup, plus the P2002 loser's re-read of the
+  // winner on the same key.
+  'scheduling/scheduled-job.service.ts:scheduledJob.findFirst': 2,
+  // cancel(kind, dedupKey) + cancelById(id). NOTE: cancelById currently has
+  // no caller outside tests — if it ever gets a route, that route owes a
+  // workspace check, because this write does not carry one.
+  'scheduling/scheduled-job.service.ts:scheduledJob.updateMany': 2,
 };
 
 function walkTs(dir: string): string[] {
@@ -617,15 +693,29 @@ function sliceArgs(src: string, openParen: number): string {
  * while its identical sibling (social-token-refresh) had to be exempted by hand,
  * which is how you can tell it was a hole and not a policy.
  *
+ * `distinct` and groupBy's `by` are the same hole wearing a different bracket.
+ * They take an ARRAY of column names rather than an object, so the first pass at
+ * this stripped neither, and `distinct: ['workspaceId']` — a de-duplication key,
+ * which restricts nothing — read as a tenant filter exactly the way
+ * `select: { workspaceId: true }` used to. That is not hypothetical: the 5-minute
+ * CDR-sync cron's channel read is precisely that shape, and it sat here green and
+ * unexempted while doing the same legitimately-global thing its neighbours had to
+ * write down.
+ *
  * Removing these blocks before the check is deliberately blunt. The cost of a
  * false positive is one line in ALLOWED_GLOBAL with a written justification —
  * which is the process working. The cost of a false negative is a silent
  * cross-tenant read that the suite reports green.
  */
 const NON_FILTER_KEYS = ['select', 'orderBy', 'include', '_count', '_sum', '_avg', '_min', '_max'];
+/** The array-valued ones. Same rule, different bracket. */
+const NON_FILTER_LIST_KEYS = ['distinct', 'by'];
 
 export function stripNonFilterBlocks(args: string): string {
   let out = args;
+  for (const key of NON_FILTER_LIST_KEYS) {
+    out = out.replace(new RegExp(`\\b${key}\\s*:\\s*\\[[^\\]]*\\]`, 'g'), '');
+  }
   for (const key of NON_FILTER_KEYS) {
     const re = new RegExp(`\\b${key}\\s*:\\s*\\{`, 'g');
     let m: RegExpExecArray | null;
@@ -713,6 +803,18 @@ describe('workspace scoping — the projection hole', () => {
     ).toBe(false);
   });
 
+  it('does not count a workspaceId that only appears in a distinct or a groupBy `by`', () => {
+    // The array-bracket version of the same hole, and the one the CDR-sync cron
+    // walked through: de-duplicating BY a column says nothing about which rows
+    // were read in the first place.
+    const distinct = "({ where: { type: 'SMS' }, select: { workspaceId: true }, distinct: ['workspaceId'] })";
+    expect(distinct.includes('workspaceId')).toBe(true); // what the old check saw
+    expect(stripNonFilterBlocks(distinct).includes('workspaceId')).toBe(false);
+    expect(
+      stripNonFilterBlocks("({ by: ['workspaceId'], _sum: { amount: true } })").includes('workspaceId'),
+    ).toBe(false);
+  });
+
   it('still counts a real filter, including one that also projects the column', () => {
     expect(
       stripNonFilterBlocks('({ where: { workspaceId }, select: { id: true } })').includes('workspaceId'),
@@ -722,40 +824,89 @@ describe('workspace scoping — the projection hole', () => {
         'workspaceId',
       ),
     ).toBe(true);
+    // A grouped aggregate that IS scoped keeps its filter: only the `by` goes.
+    expect(
+      stripNonFilterBlocks("({ by: ['workspaceId'], where: { workspaceId } })").includes('workspaceId'),
+    ).toBe(true);
   });
 });
 
+/**
+ * One scan of the module for unscoped calls on workspace-owned delegates.
+ *
+ * `offenders` are the ones nothing excuses. `silenced` records, per
+ * file-scoped exemption key, the call sites that exemption actually
+ * suppressed — which is what makes an over-broad key visible.
+ */
+function scanUnscopedCalls(): { offenders: string[]; silenced: Record<string, string[]> } {
+  const delegates = OWNED_DELEGATES.join('|');
+  const methods = SCOPED_METHODS.join('|');
+  const callRe = new RegExp(`\\.(${delegates})\\.(${methods})\\s*\\(`, 'g');
+
+  const offenders: string[] = [];
+  const silenced: Record<string, string[]> = {};
+  for (const file of walkTs(MODULE_DIR)) {
+    const rel = path.relative(MODULE_DIR, file).replace(/\\/g, '/');
+    const src = fs.readFileSync(file, 'utf8');
+    let m: RegExpExecArray | null;
+    while ((m = callRe.exec(src)) !== null) {
+      const [, delegate, method] = m;
+      const key = `${rel}:${delegate}.${method}`;
+      const parentKey = `parent-scoped:${delegate}.${method}`;
+      if (ALLOWED_GLOBAL[parentKey]) continue;
+
+      // Projections and sorts stripped first — naming the column is not
+      // filtering on it. See stripNonFilterBlocks.
+      const args = stripNonFilterBlocks(sliceArgs(src, callRe.lastIndex - 1));
+      if (args.includes('workspaceId') || hasPublicTokenScope(args)) continue;
+
+      const line = src.slice(0, m.index).split('\n').length;
+      // A file-scoped exemption is applied HERE, after the shape test, so
+      // that what it silenced can be counted. A scoped sibling in the same
+      // file never reaches this point, and so never spends the budget.
+      if (ALLOWED_GLOBAL[key]) {
+        (silenced[key] ??= []).push(`${rel}:${line}`);
+        continue;
+      }
+      offenders.push(`${rel}:${line} ${delegate}.${method}(...) has no workspaceId`);
+    }
+  }
+  return { offenders, silenced };
+}
+
 describe('workspace scoping — multi-tenant isolation (architecture fitness)', () => {
   it('every multi-row/create Prisma call on a workspace-owned delegate carries workspaceId', () => {
-    const delegates = OWNED_DELEGATES.join('|');
-    const methods = SCOPED_METHODS.join('|');
-    const callRe = new RegExp(
-      `\\.(${delegates})\\.(${methods})\\s*\\(`,
-      'g',
-    );
+    expect(scanUnscopedCalls().offenders).toEqual([]);
+  });
 
-    const offenders: string[] = [];
-    for (const file of walkTs(MODULE_DIR)) {
-      const rel = path.relative(MODULE_DIR, file).replace(/\\/g, '/');
-      const src = fs.readFileSync(file, 'utf8');
-      let m: RegExpExecArray | null;
-      while ((m = callRe.exec(src)) !== null) {
-        const [, delegate, method] = m;
-        const key = `${rel}:${delegate}.${method}`;
-        const parentKey = `parent-scoped:${delegate}.${method}`;
-        if (ALLOWED_GLOBAL[key] || ALLOWED_GLOBAL[parentKey]) continue;
-
-        // Projections and sorts stripped first — naming the column is not
-        // filtering on it. See stripNonFilterBlocks.
-        const args = stripNonFilterBlocks(sliceArgs(src, callRe.lastIndex - 1));
-        if (!args.includes('workspaceId') && !hasPublicTokenScope(args)) {
-          const line = src.slice(0, m.index).split('\n').length;
-          offenders.push(`${rel}:${line} ${delegate}.${method}(...) has no workspaceId`);
-        }
+  it('exemptions are pinned to the number of call sites they were written for', () => {
+    // The hole this closes: `telephony/call-cdr-sync.service.ts:channel.findMany`
+    // was written for ONE global cron read, but the key names a file and a
+    // delegate — so it also covered getCreds()'s scoped sibling in the same
+    // file, which returns SEALED NetGSM credentials. Deleting `workspaceId`
+    // from that where used to pass. Now it makes the count 2 and fails here.
+    const { silenced } = scanUnscopedCalls();
+    const over: string[] = [];
+    for (const [key, sites] of Object.entries(silenced)) {
+      const allowed = ALLOWED_GLOBAL_SITES[key] ?? 1;
+      if (sites.length > allowed) {
+        over.push(`${key} silences ${sites.length} call sites (allowed ${allowed}): ${sites.join(', ')}`);
       }
     }
+    expect(over).toEqual([]);
+  });
 
-    expect(offenders).toEqual([]);
+  it('every exemption silences something (no entry kept for a call that is now scoped)', () => {
+    // The other direction: a call site that was fixed to carry workspaceId
+    // leaves a dead exemption behind, which then sits there ready to excuse
+    // a future regression at the same delegate. The staleness test below
+    // only asks whether the call still EXISTS; this asks whether it is
+    // still global.
+    const { silenced } = scanUnscopedCalls();
+    const unused = Object.keys(ALLOWED_GLOBAL).filter(
+      (key) => !key.startsWith('parent-scoped:') && !silenced[key],
+    );
+    expect(unused).toEqual([]);
   });
 
   it('ALLOWED_GLOBAL entries still exist in the code (no stale exemptions)', () => {
