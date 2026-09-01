@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { ArrowLeft, Pencil, Trash2, CheckCircle2, Printer, RotateCcw } from 'lucide-react';
@@ -9,6 +9,7 @@ import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcr
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import {
   useLeadOfferActions,
+  useLeadRecordInvalidate,
   useLeadTaskActions,
 } from '../../../features/marketing/hooks/useLeadRecordActions';
 import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
@@ -65,7 +66,6 @@ import LeadHeaderActions from './LeadHeaderActions';
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { t, i18n } = useTranslation('marketing');
   // Locale-aware date formatting: `toLocaleDateString()` with no arg
   // uses the runtime locale, which on a Turkish admin's browser is
@@ -95,14 +95,13 @@ export default function LeadDetailPage() {
   // there is no state to fall back from.
   const [tab, setTab] = useState('stream');
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
-    // Also refresh the leads LIST + dashboard — the singular detail key does not
-    // prefix-match ['marketing','leads',{filters}], so a convert/status change on
-    // this page otherwise left the row stale in the list until the 30s poll.
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
-  };
+  // The SAME invalidation set the offer/task writes use, from the same place —
+  // status, reopen, activity and convert make the row and the dashboard wrong
+  // in exactly the way a new task does. This page used to restate the three
+  // keys inline, which meant the set that "is the whole point" of
+  // useLeadRecordActions existed twice; a fourth key added to one copy and not
+  // the other is invisible in review and obvious to a rep whose row went stale.
+  const invalidate = useLeadRecordInvalidate(id!);
 
   // The SAME read the person surface's record card makes, through the same
   // hook — one query key with one policy. See useLeadRecord.ts.

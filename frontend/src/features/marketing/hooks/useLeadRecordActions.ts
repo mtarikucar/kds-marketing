@@ -28,8 +28,23 @@ import {
  * match `['marketing','leads',{filters}]`, so the list and the dashboard are
  * named separately; without them a task created here left the row's counts
  * stale until the next poll.
+ *
+ * ## A NEW CONSUMER MUST ADD ITS KEY HERE
+ *
+ * This set is "everything on screen that a write to one person can make wrong",
+ * and it is only complete for the surfaces that exist today. A view that
+ * renders a person's objects off a key none of these three PREFIX-MATCHES — a
+ * task-list key of its own is the obvious next one — goes stale the moment
+ * somebody completes a task from the record card, silently, which is precisely
+ * the drift this hook was extracted to prevent. Name the key here rather than
+ * invalidating it from the new view: two invalidation sets is the state this
+ * file exists to end.
+ *
+ * Exported for the same reason: the lead detail page kept its own copy of these
+ * three keys for status / reopen / activity / convert, and a fourth key added
+ * to one copy and not the other is invisible in review.
  */
-function useLeadRecordInvalidate(leadId: string) {
+export function useLeadRecordInvalidate(leadId: string) {
   const queryClient = useQueryClient();
   return () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', leadId] });
