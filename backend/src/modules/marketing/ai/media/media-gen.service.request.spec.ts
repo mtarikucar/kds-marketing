@@ -3,7 +3,7 @@ import { MediaGenService, MEDIA_GEN_POLL_KIND } from './media-gen.service';
 import { DEFAULT_IMAGE_MODEL } from './media-models.config';
 
 const WS = 'ws-1';
-function makeSvc() {
+function makeSvc(links: { campaign?: unknown; item?: unknown } = {}) {
   const prisma: any = {
     generatedAsset: {
       count: jest.fn().mockResolvedValue(0),
@@ -12,6 +12,16 @@ function makeSvc() {
       // failTerminal's conditional claim: count 1 = this path won the → FAILED
       // transition (→ refund); count 0 = already terminalized (no double-refund).
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    socialCampaign: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue(links.campaign === undefined ? { id: 'c1' } : links.campaign),
+    },
+    socialCampaignItem: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue(links.item === undefined ? { id: 'ci-1' } : links.item),
     },
   };
   const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
@@ -89,5 +99,61 @@ describe('MediaGenService.requestGeneration', () => {
     expect(credits.reserve).toHaveBeenCalledWith(WS, 3);
     expect(credits.refund).toHaveBeenCalledWith(WS, 3);
     expect(provider.submit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The campaign linkage on a generation is not decoration: `socialCampaignId`
+ * exempts an asset from `sweepOrphanAssets`' 30-day delete, and
+ * `campaignItemId` puts it on the ENGINE path, where an armed autonomous budget
+ * pre-debits the growth wallet in REAL CASH before the provider is engaged.
+ *
+ * Both were previously accepted on trust, which was fine while every caller was
+ * server-side code passing ids it had just read. `jeeta.generate_video` now
+ * accepts them from a model, so they are checked HERE — at the write — rather
+ * than in the one tool, so no future caller reopens the hole.
+ */
+describe('MediaGenService.requestGeneration — the campaign linkage is proven, not trusted', () => {
+  const linked = { type: 'IMAGE' as const, prompt: 'x', createdById: 'u1', socialCampaignId: 'c1', campaignItemId: 'ci-1' };
+
+  it('checks the campaign belongs to THIS workspace', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.requestGeneration(WS, linked);
+    expect(prisma.socialCampaign.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'c1', workspaceId: WS } }),
+    );
+  });
+
+  it('checks the campaign ITEM belongs to this workspace too', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.requestGeneration(WS, linked);
+    expect(prisma.socialCampaignItem.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'ci-1', workspaceId: WS } }),
+    );
+  });
+
+  it('refuses a neighbour campaign id BEFORE reserving anything', async () => {
+    const { svc, credits, provider } = makeSvc({ campaign: null });
+    await expect(svc.requestGeneration(WS, linked)).rejects.toBeInstanceOf(BadRequestException);
+    // Nothing spent, nothing submitted: an unowned id is a rejected request,
+    // not a refunded one.
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a neighbour campaign ITEM id BEFORE reserving anything', async () => {
+    const { svc, credits, provider } = makeSvc({ item: null });
+    await expect(svc.requestGeneration(WS, linked)).rejects.toBeInstanceOf(BadRequestException);
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  it('does not read a campaign when none was named', async () => {
+    // The common case is an unlinked one-off generation. Two extra round trips
+    // on every image would be a real cost for a check with nothing to check.
+    const { svc, prisma } = makeSvc();
+    await svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' });
+    expect(prisma.socialCampaign.findFirst).not.toHaveBeenCalled();
+    expect(prisma.socialCampaignItem.findFirst).not.toHaveBeenCalled();
   });
 });

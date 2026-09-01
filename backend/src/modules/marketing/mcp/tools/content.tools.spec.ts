@@ -168,3 +168,36 @@ describe('Faz 5 D2 — AI media generation', () => {
     });
   });
 });
+
+/**
+ * The linkage arguments (design brief, stage 2). `RequestGenerationDto` has
+ * always accepted `socialCampaignId`/`campaignItemId`, but the tool's schema
+ * exposed neither, so EVERY MCP-generated asset landed with
+ * `socialCampaignId = null` — which put it on `sweepOrphanAssets`' 30-day
+ * delete list and off the armed-budget path.
+ */
+describe('jeeta.generate_video — the campaign an MCP generation belongs to', () => {
+  it('forwards both linkage ids so the asset is not orphan-reaped', async () => {
+    const { registry, media } = build();
+    await registry.get('jeeta.generate_video')!.handler(ctx(), {
+      prompt: 'a walking sculpture',
+      durationSec: 4,
+      socialCampaignId: 'camp-1',
+      campaignItemId: 'item-1',
+    });
+    expect(media.requestGeneration).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({ socialCampaignId: 'camp-1', campaignItemId: 'item-1' }),
+    );
+  });
+
+  it('omits them entirely when the caller named neither', async () => {
+    // Not `undefined` — omitted. The service distinguishes "no campaign" from
+    // "a campaign I could not resolve", and only the second is an error.
+    const { registry, media } = build();
+    await registry.get('jeeta.generate_video')!.handler(ctx(), { prompt: 'x' });
+    const dto = media.requestGeneration.mock.calls[0][1];
+    expect('socialCampaignId' in dto).toBe(false);
+    expect('campaignItemId' in dto).toBe(false);
+  });
+});

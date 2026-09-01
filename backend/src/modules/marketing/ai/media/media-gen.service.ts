@@ -124,6 +124,41 @@ export class MediaGenService implements OnModuleInit {
       throw new BadRequestException({ code: 'MEDIA_GEN_UNKNOWN_MODEL', message: `Unknown media model: ${dto.model}` });
     }
 
+    // The campaign linkage is PROVEN, not trusted, and it is checked before the
+    // reservation so an unowned id is a rejected request rather than a refunded
+    // one. Both ids are consequential: `socialCampaignId` exempts the asset from
+    // `sweepOrphanAssets`' 30-day delete AND is a real FK, so an unchecked value
+    // would let one workspace hang a row off another's campaign; `campaignItemId`
+    // puts the generation on the ENGINE path, where an armed autonomous budget
+    // pre-debits the growth wallet in real cash. Both were safe on trust while
+    // every caller was server-side code passing ids it had just read; they stop
+    // being safe the moment a model can supply them (`jeeta.generate_video`),
+    // and the check belongs here — at the write — so no future caller reopens it.
+    if (dto.socialCampaignId) {
+      const owned = await this.prisma.socialCampaign.findFirst({
+        where: { id: dto.socialCampaignId, workspaceId },
+        select: { id: true },
+      });
+      if (!owned) {
+        throw new BadRequestException({
+          code: 'MEDIA_GEN_UNKNOWN_CAMPAIGN',
+          message: `Social campaign ${dto.socialCampaignId} does not exist in this workspace`,
+        });
+      }
+    }
+    if (dto.campaignItemId) {
+      const owned = await this.prisma.socialCampaignItem.findFirst({
+        where: { id: dto.campaignItemId, workspaceId },
+        select: { id: true },
+      });
+      if (!owned) {
+        throw new BadRequestException({
+          code: 'MEDIA_GEN_UNKNOWN_CAMPAIGN_ITEM',
+          message: `Social campaign item ${dto.campaignItemId} does not exist in this workspace`,
+        });
+      }
+    }
+
     const inflight = await this.prisma.generatedAsset.count({
       where: { workspaceId, status: { in: ['QUEUED', 'GENERATING'] } },
     });
