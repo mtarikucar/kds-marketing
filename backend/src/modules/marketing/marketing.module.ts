@@ -263,6 +263,7 @@ import { BrandApplyService } from './brand-brain/brand-apply.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
+import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
 import { McpPrincipalService } from './mcp/mcp-principal.service';
@@ -996,6 +997,11 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TrendRemixService,
     VideoPipelineService,
     ContentConceptsService,
+    // İçerik üretim hattı, aşama 2: the approved concept -> campaign item ->
+    // clips step, and the scheduled-job handler that produces them. Server-side
+    // rather than through jeeta.generate_video — see its class docblock for the
+    // three measured reasons the MCP route cannot carry this.
+    ConceptPromotionService,
     McpToolRegistry,
     McpBrokerService,
     // MCP Faz 5 D1 — resolves the REAL actor a tool WRITE is attributed to
