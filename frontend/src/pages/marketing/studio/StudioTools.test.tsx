@@ -524,19 +524,23 @@ describe('StudioToolsDrawer', () => {
    * your face is not reachability, so they are filtered out; everything a REP CAN
    * reach is still listed, which is the half this test exists to protect.
    */
-  it('does not offer a REP the four rows the router would bounce them from', async () => {
+  it('does not offer a REP the rows whose pages are manager-only', async () => {
     const user = setupUser();
     setRole('REP');
     renderDrawer('autopilot');
 
     await user.click(await screen.findByRole('button', { name: /Diğer araçlar/ }));
 
-    for (const gone of ['E-posta şablonları', 'Yorumlar', 'Ortaklar', 'Bağlantılar']) {
+    for (const gone of ['E-posta şablonları', 'Yorumlar', 'Ortaklar', 'Bağlantılar', 'Sosyal planlayıcı']) {
       expect(screen.queryByRole('menuitem', { name: gone })).not.toBeInTheDocument();
     }
     // Still reachable, and still listed: /reports, /studio/strategy and the
     // ?view=tools surfaces are all in App.tsx's auth-only group.
-    for (const kept of ['Raporlar', 'Strateji', 'Trendler', 'Sosyal planlayıcı']) {
+    // `Sosyal planlayıcı` is deliberately NOT in this list any more. Its page's
+    // whole controller is MANAGER-only, so listing it for a rep was pinning the
+    // very defect this suite exists to close — the tab now refuses from inside
+    // (see the ManagerTab tests), and the menu row went with the promise.
+    for (const kept of ['Raporlar', 'Strateji', 'Trendler']) {
       expect(await screen.findByRole('menuitem', { name: kept })).toBeInTheDocument();
     }
   });

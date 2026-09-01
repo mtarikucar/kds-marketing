@@ -131,11 +131,16 @@ export function StudioToolsMenu({ className }: { className?: string }) {
           and listing them all here would rebuild, in a dropdown, exactly the
           inventory this screen exists to replace.
 
-          Not role-filtered, and correctly so: `/studio?view=tools` is itself
-          auth-only, and each tab inside it is a separate destination that gates
-          (or does not gate) on its own. Hiding the door to seven surfaces
-          because two of them are manager-shaped would cost a REP the trends
-          browser and the social planner for nothing.
+          Not role-filtered, because the SURFACE is not the destination: it is a
+          tab strip, and the five tabs whose pages are manager-only now refuse
+          from inside (`ManagerTab` in GrowthStudioPage). A rep opening this door
+          still gets the content calendar and the trends browser, and meets a
+          plain refusal on the rest instead of a page whose every request 403s.
+
+          The earlier version of this note claimed each tab "gates on its own",
+          which was simply untrue — none of them did, and the sentence was what
+          licensed the hole. Left here as a warning: if you add a tab whose page
+          is manager-only, wrap it, or this comment becomes a lie again.
         */}
         <DropdownMenuItem asChild>
           <Link to="/studio?view=tools">{t('studio.toolsMenu.all', 'Tüm araçlar')}</Link>

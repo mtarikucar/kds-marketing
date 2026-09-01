@@ -487,7 +487,11 @@ function SettledFeatureGate({ feature, children }: { feature: FeatureKey; childr
 const DEEP_LINKS: Array<{ to: string; key: string; label: string; role?: MarketingRole }> = [
   { to: '/studio?view=tools&tab=campaigns&sub=standard', key: 'studio.tools.link.campaigns', label: 'Kampanyalar' },
   { to: '/studio?view=tools&tab=campaigns&sub=social', key: 'studio.tools.link.socialCampaigns', label: 'Sosyal kampanyalar' },
-  { to: '/studio?view=tools&tab=campaigns&sub=planner', key: 'studio.tools.link.planner', label: 'Sosyal planlayıcı' },
+  // MANAGER, like the four /-routes below: `SocialPlannerController` is
+  // `@MarketingRoles('MANAGER')` at class level, so a rep who followed this row
+  // reached a table whose every request 403s. The tab itself also refuses now
+  // (ManagerTab) — this is the half that stops offering the door.
+  { to: '/studio?view=tools&tab=campaigns&sub=planner', key: 'studio.tools.link.planner', label: 'Sosyal planlayıcı', role: MarketingRole.MANAGER },
   { to: '/studio?view=tools&tab=trends', key: 'studio.tools.link.trends', label: 'Trendler' },
   { to: '/studio?view=tools&tab=create&sub=personas', key: 'studio.tools.link.personas', label: 'UGC personaları' },
   // The four routes App.tsx puts behind `requiredRole={MarketingRole.MANAGER}`.

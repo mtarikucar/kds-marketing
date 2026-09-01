@@ -3193,6 +3193,10 @@
         "reports": "Reports",
         "strategy": "Strategy",
         "connections": "Connections"
+      },
+      "managerOnly": {
+        "title": "This tool needs manager access",
+        "desc": "The page itself is open to manager accounts. Ask an owner for access, or head back to the day-to-day work on the screen."
       }
     },
     "toolsMenu": {

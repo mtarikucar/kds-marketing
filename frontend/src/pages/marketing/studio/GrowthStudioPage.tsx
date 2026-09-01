@@ -5,7 +5,10 @@ import { ArrowLeft } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
-import { FeatureGate } from '@/components/ui/access-gates';
+import { FeatureGate, RoleGate } from '@/components/ui/access-gates';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Lock } from 'lucide-react';
+import { MarketingRole } from '../../../features/marketing/types';
 import { RouteFallback } from '../../../components/RouteFallback';
 import { UpgradeCallout } from './UpgradeCallout';
 
@@ -45,6 +48,44 @@ const MORE_SUBS = ['email', 'reviews', 'affiliates'] as const;
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
+
+/**
+ * A tab whose PAGE is manager-only, refused rather than mounted.
+ *
+ * `/studio` sits in App.tsx's plain auth-only route group, but five of the
+ * surfaces reachable from `?view=tools` are not: AiStudioPage, the Social
+ * Planner, Email Templates, Reviews and Affiliates each hang off a controller
+ * that is `@MarketingRoles('MANAGER')` at class level, and three of them are
+ * `managerOnly` in the nav that now also lists them. So a rep who followed a
+ * bookmark into this surface got the page mounted, its every request 403'd, and
+ * a stack of error toasts explaining nothing.
+ *
+ * Refusing here rather than at the tab strip is deliberate: hiding a trigger
+ * hides nothing, because the tab is a URL. The strip still shows the tab — the
+ * rep is not left wondering whether they misremembered — and the panel says
+ * plainly that it is not theirs to open.
+ */
+function ManagerTab({ children }: { children: ReactNode }) {
+  const { t } = useTranslation('marketing');
+  return (
+    <RoleGate
+      role={MarketingRole.MANAGER}
+      fallback={
+        <EmptyState
+          data-testid="studio-tab-denied"
+          icon={<Lock className="h-5 w-5" />}
+          title={t('studio.tools.managerOnly.title', 'Bu araç yönetici yetkisi istiyor')}
+          description={t(
+            'studio.tools.managerOnly.desc',
+            'Sayfanın kendisi yönetici hesaplarına açık. Yöneticinden yetki isteyebilir ya da ekrandaki günlük işine dönebilirsin.',
+          )}
+        />
+      }
+    >
+      {children}
+    </RoleGate>
+  );
 }
 
 /**
@@ -169,9 +210,11 @@ function CreateTab() {
         <TabsTrigger value="personas">{t('studio.create.personas', 'UGC Personaları')}</TabsTrigger>
       </TabsList>
       <TabsContent value="studio" className="pt-4">
-        <FeatureGate feature="mediaGen" fallback={<UpgradeCallout />}>
-          <Lazy><AiStudioPage embedded /></Lazy>
-        </FeatureGate>
+        <ManagerTab>
+          <FeatureGate feature="mediaGen" fallback={<UpgradeCallout />}>
+            <Lazy><AiStudioPage embedded /></Lazy>
+          </FeatureGate>
+        </ManagerTab>
       </TabsContent>
       <TabsContent value="personas" className="pt-4"><Lazy><PersonasPage embedded /></Lazy></TabsContent>
     </Tabs>
@@ -199,7 +242,9 @@ function CampaignsTab() {
           <Lazy><SocialCampaignsPage /></Lazy>
         </FeatureGate>
       </TabsContent>
-      <TabsContent value="planner" className="pt-4"><Lazy><SocialPlannerPage /></Lazy></TabsContent>
+      <TabsContent value="planner" className="pt-4">
+        <ManagerTab><Lazy><SocialPlannerPage /></Lazy></ManagerTab>
+      </TabsContent>
     </Tabs>
   );
 }
@@ -222,12 +267,18 @@ function MoreTab() {
         <TabsTrigger value="affiliates">{t('studio.more.affiliates', 'Ortaklar')}</TabsTrigger>
       </TabsList>
       <TabsContent value="email" className="pt-4">
-        <FeatureGate feature="campaigns" fallback={<UpgradeCallout />}>
-          <Lazy><EmailTemplatesPage /></Lazy>
-        </FeatureGate>
+        <ManagerTab>
+          <FeatureGate feature="campaigns" fallback={<UpgradeCallout />}>
+            <Lazy><EmailTemplatesPage /></Lazy>
+          </FeatureGate>
+        </ManagerTab>
       </TabsContent>
-      <TabsContent value="reviews" className="pt-4"><Lazy><ReviewsPage /></Lazy></TabsContent>
-      <TabsContent value="affiliates" className="pt-4"><Lazy><AffiliatesPage /></Lazy></TabsContent>
+      <TabsContent value="reviews" className="pt-4">
+        <ManagerTab><Lazy><ReviewsPage /></Lazy></ManagerTab>
+      </TabsContent>
+      <TabsContent value="affiliates" className="pt-4">
+        <ManagerTab><Lazy><AffiliatesPage /></Lazy></ManagerTab>
+      </TabsContent>
     </Tabs>
   );
 }

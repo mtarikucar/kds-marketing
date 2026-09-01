@@ -11,6 +11,12 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, o?: st
 vi.mock('@/features/marketing/hooks/useEntitlements', () => ({
   useEntitlements: () => ({ has: () => true }),
 }));
+// The tools surface refuses the tabs whose PAGES are manager-only; the role has
+// to be steerable to prove both halves of that.
+const mockRole = vi.fn(() => 'OWNER' as string | undefined);
+vi.mock('@/store/marketingAuthStore', () => ({
+  useMarketingAuthStore: (sel: (s: unknown) => unknown) => sel({ user: { role: mockRole() } }),
+}));
 // Stub the heavy surfaces so the shell renders in isolation. The one-screen is
 // the default body; the rest are the ?view=tools surface.
 vi.mock('./StudioOneScreen', () => ({ default: () => <div>one-screen</div> }));
@@ -88,6 +94,49 @@ describe('GrowthStudioPage', () => {
     for (const label of ['E-posta Şablonları', 'Yorumlar', 'Ortaklar']) {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     }
+  });
+
+  /**
+   * `/studio` is auth-only in App.tsx, but five of the surfaces `?view=tools`
+   * reaches are not: AI Studio, the Social Planner, Email Templates, Reviews and
+   * Affiliates each hang off a controller that is MANAGER-only at class level.
+   * A rep who followed a bookmark used to get the page mounted and every one of
+   * its requests refused.
+   */
+  it('refuses a REP the manager-only tabs, and still gives them the rest', () => {
+    mockRole.mockReturnValue('REP');
+    renderAt('/studio?view=tools&tab=campaigns&sub=planner');
+    expect(screen.getByTestId('studio-tab-denied')).toBeInTheDocument();
+    // The strip stays whole — the rep is not left wondering whether they
+    // misremembered the tab — and the tabs that ARE theirs still open.
+    // Two tabs are named "Kampanyalar" — the outer tool tab and the inner
+    // sub-tab — so assert the strip is whole by count rather than by name.
+    expect(screen.getAllByRole('tab', { name: 'Kampanyalar' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('tab', { name: 'Trendler' })).toBeInTheDocument();
+    mockRole.mockReturnValue('OWNER');
+  });
+
+  it('mounts the same tab for a manager', () => {
+    mockRole.mockReturnValue('MANAGER');
+    renderAt('/studio?view=tools&tab=campaigns&sub=planner');
+    expect(screen.queryByTestId('studio-tab-denied')).not.toBeInTheDocument();
+    mockRole.mockReturnValue('OWNER');
+  });
+
+  it('refuses a REP every one of the five manager-only tabs', () => {
+    mockRole.mockReturnValue('REP');
+    for (const path of [
+      '/studio?view=tools&tab=create&sub=studio',
+      '/studio?view=tools&tab=campaigns&sub=planner',
+      '/studio?view=tools&tab=more&sub=email',
+      '/studio?view=tools&tab=more&sub=reviews',
+      '/studio?view=tools&tab=more&sub=affiliates',
+    ]) {
+      const { unmount } = renderAt(path);
+      expect(screen.getByTestId('studio-tab-denied')).toBeInTheDocument();
+      unmount();
+    }
+    mockRole.mockReturnValue('OWNER');
   });
 
   it('returns from the tools surface to the one screen', async () => {

@@ -4060,6 +4060,10 @@
         "reports": "Raporlar",
         "strategy": "Strateji",
         "connections": "Bağlantılar"
+      },
+      "managerOnly": {
+        "title": "Bu araç yönetici yetkisi istiyor",
+        "desc": "Sayfanın kendisi yönetici hesaplarına açık. Yöneticinden yetki isteyebilir ya da ekrandaki günlük işine dönebilirsin."
       }
     },
     "toolsMenu": {
