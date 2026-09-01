@@ -16,6 +16,8 @@ import {
 } from '../api/onboarding.service';
 import { useTourStore } from '../../../store/tourStore';
 import { useTwoFactorStatus } from '../hooks/useTwoFactorStatus';
+import { useEntitlements } from '../hooks/useEntitlements';
+import { notificationRoute } from '../notifications/notificationRoute';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
@@ -50,8 +52,12 @@ interface Notification {
   id: string;
   title: string;
   message: string;
-  read: boolean;
+  /** The API column is `isRead` and nothing maps it — see marketing-notifications.controller. */
+  isRead: boolean;
   createdAt: string;
+  /** Free-form on the backend; with `metadata` it is the whole routable payload. */
+  type?: string | null;
+  metadata?: unknown;
 }
 
 function formatTimeAgo(dateStr: string): string {
@@ -159,6 +165,13 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
     },
     onError: (err: any) => toast.error(err.response?.data?.message || 'Could not mark all as read'),
   });
+
+  // Reuses the billing-summary query the sidebar already holds (same key), so
+  // this costs no extra request. Only the commission rule reads it: /commissions
+  // is @RequiresFeature('commissions') on the backend.
+  const { has } = useEntitlements();
+  const hasCommissions = has('commissions');
+  const routeFor = (n: Notification) => notificationRoute(n, { hasCommissions });
 
   const markOneReadMutation = useMutation({
     mutationFn: (id: string) => marketingApi.patch(`/notifications/${id}/read`),
@@ -318,9 +331,15 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
   };
 
   const handleNotificationClick = (notification: Notification) => {
-    if (!notification.read) {
+    if (!notification.isRead) {
       markOneReadMutation.mutate(notification.id);
     }
+    const to = routeFor(notification);
+    // A kind with no destination still marks read — never navigate somewhere
+    // invented just to make the click feel like it did something.
+    if (!to) return;
+    setShowNotifications(false);
+    navigate(to);
   };
 
   const userInitials = user
@@ -453,14 +472,19 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                       onClick={() => handleNotificationClick(n)}
                       className={cn(
                         'w-full text-left px-4 py-3 border-b border-border transition-colors hover:bg-surface-muted',
-                        !n.read && 'bg-primary/5',
+                        !n.isRead && 'bg-primary/5',
+                        // A kind with nowhere to go must not promise navigation.
+                        !routeFor(n) && 'cursor-default',
                       )}
                     >
                       <div className="flex items-start gap-2">
-                        {!n.read && (
-                          <span className="mt-1.5 h-2 w-2 rounded-full bg-primary flex-shrink-0" />
+                        {!n.isRead && (
+                          <span
+                            data-testid="notification-unread-dot"
+                            className="mt-1.5 h-2 w-2 rounded-full bg-primary flex-shrink-0"
+                          />
                         )}
-                        <div className={cn('flex-1 min-w-0', n.read && 'ms-4')}>
+                        <div className={cn('flex-1 min-w-0', n.isRead && 'ms-4')}>
                           <p className="text-sm font-medium text-foreground truncate">
                             {n.title}
                           </p>

@@ -80,12 +80,12 @@ function Lazy({ children }: { children: ReactNode }) {
  * B's id. Keying is the whole mechanism — there is no second reset-on-change
  * effect, because two mechanisms means one of them can rot unnoticed.
  *
- * ## The left column arranges the same people four ways
+ * ## The left column arranges the same people five ways
  *
- * `?left=list|board|calendar|tasks` — Liste · Hat · Takvim · Görevler
- * (2026-09-01 design, "Karar 1"). The switch belongs to the LEFT column only:
- * the middle column and the record card are identical in all four, and the
- * SELECTION survives the switch. That pair of facts is the design — clicking a
+ * `?left=list|board|calendar|tasks|calls` — Liste · Hat · Takvim · Görevler ·
+ * Aramalar (2026-09-01 design, "Karar 1"). The switch belongs to the LEFT
+ * column only: the middle column and the record card are identical in all five,
+ * and the SELECTION survives the switch. That pair of facts is the design — clicking a
  * deal on the pipeline and reading that person's conversation without leaving
  * the screen is what is being bought, and a switcher that dropped the selection
  * would be navigation with extra steps.
@@ -97,7 +97,10 @@ function Lazy({ children }: { children: ReactNode }) {
  * `left=board` two very different kinds of thing under one name.
  *
  * See `PeopleColumn` for why each view is the PAGE embedded rather than a
- * rebuild, and for why none of the four needs a gate.
+ * rebuild, and for why four of the five need no gate. Aramalar is the fifth and
+ * the one exception: `/calls` carries `feature: 'telephony'`, so the tab is
+ * withheld from an unentitled workspace and a stale `?left=calls` falls back to
+ * Liste rather than blanking the column.
  *
  * ## Two URL parameters survive from the surface this replaces
  *
@@ -134,10 +137,23 @@ function Lazy({ children }: { children: ReactNode }) {
  * | `left` | InboxPage (`setLeftView`) | InboxPage | InboxPage only |
  * | `view=table` | InboxPage (`setView`) | InboxPage | InboxPage only |
  * | `tab` | InboxPage (`setTab`), TasksPage (seed only) | both, disjoint values | InboxPage's "Back to inbox" |
+ * | `tab` (again) | NOBODY — the embedded CallsPage writes none | CallsPage reads its own LOCAL state | n/a |
  * | `group=company` | PeopleList (`toggleGroup`) | PeopleList | PeopleList only |
  * | `assignmentStatus`, `waiting` | PeopleList (`selectQueue`) | PeopleList, LeadsPage | PeopleList's chips |
  * | `deal` | SalesTab (link in) | OpportunitiesPage | OpportunitiesPage, once it has opened the dialog |
  * | `pipelineId`, `leadId` | SalesTab (link in) | OpportunitiesPage | nobody — read once at mount |
+ *
+ * The CallsPage row is the odd one, and it is the reason it is written down.
+ * That page reads `?tab=` on its own route (`calls|dialer|voice`), which would
+ * make THREE owners of one name on this URL — the surface's config tabs, the
+ * embedded TasksPage's filters, and the call log's tabs. The two existing
+ * vocabularies not colliding is already a coincidence rather than a design
+ * (`tabParam.contract.test.ts` exists to hold it); a third writer would end the
+ * coincidence, because a left column writing `?tab=dialer` hands both other
+ * readers a value each of them falls back on. So the embedded CallsPage keeps
+ * its tab in local state and writes nothing. If someone "fixes" that back to
+ * `useSearchParams` for deep-linkability, this is the sentence that says what
+ * they broke.
  * | `create=1` | quickActions (link in) | the three pages' `useCreateParam`, DISABLED while embedded | `useCreateParam` |
  *
  * Two facts this table exists to make visible:

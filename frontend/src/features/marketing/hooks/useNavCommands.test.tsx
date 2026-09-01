@@ -98,6 +98,18 @@ describe('useNavCommands', () => {
     expect(paths).not.toContain('/custom-objects');
   });
 
+  it('offers a rep the Growth Studio itself', () => {
+    // Asserted here as well as on the rail because both read the same
+    // `visibleNav`: while /studio was managerOnly the palette's only Studio
+    // answer was /reports, so a rep who typed the surface's own name was sent
+    // to a different page — the same lie the rail was telling, through a second
+    // door. If the sidebar is ever refactored off visibleNav this is what still
+    // catches the regression.
+    loginAs(REP);
+    const { container } = renderProbe();
+    expect(pathsOf(container)).toContain('/studio');
+  });
+
   it('includes /agency/* destinations for an agency OWNER (palette mirrors the sidebar)', () => {
     loginAs(OWNER);
     const { container } = renderProbeInAgency();

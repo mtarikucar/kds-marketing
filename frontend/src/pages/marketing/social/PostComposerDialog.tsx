@@ -16,6 +16,7 @@ import type { SocialAccount, SocialPost, TikTokPostOptions } from './types';
 import { NETWORK_META } from './networks';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { getTiktokCreatorInfo, type TiktokCreatorInfo } from '../../../features/marketing/api/social-planner.service';
+import { useOutOfCredits } from '../../../features/marketing/hooks/useOutOfCredits';
 
 import {
   Dialog,
@@ -769,6 +770,7 @@ interface AiGeneratePanelProps {
  */
 function AiGeneratePanel({ open, onOpenChange, onAdd }: AiGeneratePanelProps) {
   const { t } = useTranslation('marketing');
+  const { notify: notifyOutOfCredits } = useOutOfCredits();
   const [type, setType] = useState<GeneratedAssetType>('IMAGE');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
@@ -816,9 +818,12 @@ function AiGeneratePanel({ open, onOpenChange, onAdd }: AiGeneratePanelProps) {
       }
       if (cancelledRef.current) return;
       toast.error(t('social.composer.aiTimeout', { defaultValue: 'Still generating — check the Studio' }));
-    } catch {
+    } catch (e) {
       if (cancelledRef.current) return;
-      toast.error(t('social.composer.aiFailed', { defaultValue: 'Generation failed' }));
+      // The bare `catch {}` swallowed the 403 whole, so an exhausted workspace
+      // was indistinguishable from a model error and nothing hinted that money
+      // was involved.
+      notifyOutOfCredits(e, t('social.composer.aiFailed', { defaultValue: 'Generation failed' }));
     } finally {
       if (mountedRef.current) setBusy(false);
     }

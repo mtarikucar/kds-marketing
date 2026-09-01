@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import BudgetAutopilotPage from './BudgetAutopilotPage';
 import * as svc from '../../../features/marketing/api/growthBudget.service';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
@@ -104,9 +105,24 @@ const reallocationApproval: svc.ApprovalRequest = {
 // instead of dropping it from the PENDING-only queue.
 const mcpApprovalApprovedUnapplied: svc.ApprovalRequest = { ...mcpApproval, id: 'ap-mcp-2', status: 'APPROVED' };
 
+/**
+ * The store is module-global and survives between tests, so the role has to be
+ * set rather than assumed. It matters here because ApprovalQueue now withholds
+ * Approve/Reject/Apply below MANAGER: every decision route is
+ * `@MarketingRoles('MANAGER')`, so an ungated button could only ever 403.
+ * MANAGER is the honest default for this page — it is a manager surface in the
+ * nav — and the owner-only top-up block below overrides it deliberately.
+ */
+function setRole(role: 'OWNER' | 'MANAGER' | 'REP') {
+  useMarketingAuthStore.setState({
+    user: { id: 'u1', workspaceId: 'ws1', email: 'a@b.c', firstName: 'A', lastName: 'B', role },
+  });
+}
+
 describe('BudgetAutopilotPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setRole('MANAGER');
     (svc.getWalletState as any).mockResolvedValue(wallet);
     (svc.listBudgetActivity as any).mockResolvedValue(activity);
     (svc.listPendingApprovals as any).mockResolvedValue([]);
@@ -388,6 +404,8 @@ describe('BudgetAutopilotPage', () => {
  * real approvals with no screen to decide them, expiring unseen after the TTL.
  */
 describe('BudgetAutopilotPage — approvals must never be unreachable', () => {
+  beforeEach(() => setRole('MANAGER'));
+
   const mcpApproval = {
     id: 'ap-1',
     kind: 'AI_SPEND',
@@ -442,5 +460,44 @@ describe('BudgetAutopilotPage — approvals must never be unreachable', () => {
 
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
     expect(screen.queryByTestId('standalone-approvals')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * POST /billing/wallet-topup is @MarketingRoles('OWNER'). The Top-up button
+ * carried no owner gate, so for a MANAGER it was a visible, enabled money
+ * button whose every click was a guaranteed 403 rendered as "Could not start
+ * the top-up".
+ */
+describe('BudgetAutopilotPage — the wallet top-up is owner-only', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (svc.getWalletState as any).mockResolvedValue(wallet);
+    (svc.listBudgetActivity as any).mockResolvedValue(activity);
+    (svc.listPendingApprovals as any).mockResolvedValue([]);
+    (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+    (svc.getGrowthBudget as any).mockResolvedValue(budget);
+    (svc.walletTopup as any).mockResolvedValue({ handle: { url: 'https://pay' } });
+  });
+
+  it('does not let a MANAGER fire a top-up that can only 403', async () => {
+    setRole('MANAGER');
+    renderPage();
+
+    const button = await screen.findByRole('button', { name: /owner only/i });
+    expect(button).toBeDisabled();
+    await userEvent.click(button);
+    expect(svc.walletTopup).not.toHaveBeenCalled();
+    expect(screen.getByText(/only the workspace owner can top up/i)).toBeInTheDocument();
+  });
+
+  it('still lets an OWNER top up', async () => {
+    setRole('OWNER');
+    renderPage();
+
+    const button = await screen.findByRole('button', { name: /top up/i });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    await waitFor(() => expect(svc.walletTopup).toHaveBeenCalled());
   });
 });

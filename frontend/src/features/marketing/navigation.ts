@@ -379,7 +379,33 @@ export const NAV_HUBS: NavHub[] = [
     // old `reports` and `growth` hubs.
     id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles, tier: 'core',
     children: [
-      { path: '/studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles, managerOnly: true },
+      /**
+       * UNGATED, and it has to be.
+       *
+       * It carried `managerOnly` until 2026-09-01, which bought nothing and
+       * cost the rail its honesty. `/studio` is in App.tsx's plain auth-only
+       * group, and three redirects SEND reps here: `/budget`, `/trends` and
+       * `/content-calendar` all land on `/studio`, so a rep with any of those
+       * bookmarks arrived on a page the menu said was not theirs — with no
+       * rail highlight and no sub-nav, because both are built from the
+       * FILTERED hub.
+       *
+       * Nothing on the surface was relying on the gate. Every panel already
+       * has an explicit REP branch, each of them tested: AccountStatsPanel's
+       * `isManager`, TodayQueuePanel's `canAct`, IdeasPanel's `canDecide`,
+       * AutopilotStatusBar's `canManage`, GrowthStudioPage's `ManagerTab` and
+       * StudioToolsDrawer's `TOOL_MIN_ROLE` — which refuses `?tool=` at the
+       * MOUNT, so the URL is closed too, not just the menu row. And every
+       * write behind them is `@MarketingRoles('MANAGER')` server-side. What
+       * the gate actually did was leave the rail item labelled "Growth Studio"
+       * pointing at Reports.
+       *
+       * It is also FIRST in this list, which is what `hubTarget` reads (the
+       * hub has no `path` of its own), so it must stay ungated for the same
+       * reason `/leads` does above. `navigation.test.ts` pins that invariant
+       * for every pathless hub now, rather than leaving it to these comments.
+       */
+      { path: '/studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles },
       // Single page: Ads / Performance / Analytics are tabs inside /reports.
       { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
       { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },

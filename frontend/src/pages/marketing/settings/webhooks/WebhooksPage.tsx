@@ -40,7 +40,7 @@ interface CreatedWebhook {
   secret: string;
 }
 
-export default function WebhooksPage() {
+export default function WebhooksPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
@@ -170,19 +170,21 @@ export default function WebhooksPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('webhooks.title', { defaultValue: 'Webhooks' })}
-        description={t('webhooks.subtitle', {
-          defaultValue:
-            'Stream workspace events to your own URLs. Each delivery is signed with the endpoint secret so you can verify it came from us.',
-        })}
-        actions={
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t('webhooks.createButton', { defaultValue: 'Add endpoint' })}
-          </Button>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('webhooks.title', { defaultValue: 'Webhooks' })}
+          description={t('webhooks.subtitle', {
+            defaultValue:
+              'Stream workspace events to your own URLs. Each delivery is signed with the endpoint secret so you can verify it came from us.',
+          })}
+          actions={
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('webhooks.createButton', { defaultValue: 'Add endpoint' })}
+            </Button>
+          }
+        />
+      )}
 
       {/* List */}
       {isLoading ? (

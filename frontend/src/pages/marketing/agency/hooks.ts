@@ -42,9 +42,20 @@ function asArray<T>(data: unknown): T[] {
 export const locationsKey = ['marketing', 'agency', 'locations'] as const;
 export const dashboardKey = ['marketing', 'agency', 'dashboard'] as const;
 
-export function useLocations(): UseQueryResult<Location[]> {
+/**
+ * `enabled` is optional and defaults to true, for the callers that only mount
+ * inside the agency console (which `AgencyGuard` has already vetted).
+ *
+ * The header's WorkspaceSwitcher is the caller that needs it: it is mounted on
+ * EVERY screen, for every user, and `/agency/locations` is AGENCY-OWNER gated —
+ * so an unconditional read would fire a 403 per session for everyone in the
+ * product. Passing the caller's own agency-owner test keeps the request to the
+ * people it will answer.
+ */
+export function useLocations(enabled = true): UseQueryResult<Location[]> {
   return useQuery({
     queryKey: locationsKey,
+    enabled,
     queryFn: () =>
       marketingApi.get('/agency/locations').then((r) => asArray<Location>(r.data)),
   });

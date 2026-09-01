@@ -19,9 +19,11 @@ function makeQC() {
   });
 }
 
-function renderSidebar() {
+const REP: MarketingUser = { ...MANAGER, id: 'u2', email: 'r@x.io', role: 'REP' };
+
+function renderSidebar(user: MarketingUser = MANAGER) {
   useMarketingAuthStore.setState({
-    user: MANAGER, accessToken: 't', refreshToken: 'r', isAuthenticated: true,
+    user, accessToken: 't', refreshToken: 'r', isAuthenticated: true,
   });
   return render(
     <MemoryRouter initialEntries={['/dashboard']}>
@@ -74,6 +76,15 @@ describe('MarketingSidebar — three surfaces, nothing hidden', () => {
     // link of its own anywhere in the chrome.
     expect(document.querySelectorAll('a[href="/inbox"]')).toHaveLength(0);
     expect(screen.getByRole('link', { name: /^Inbox$/i })).toHaveAttribute('href', '/leads');
+  });
+
+  it("aims a rep's Growth Studio rail item at Growth Studio", () => {
+    // The user-visible symptom of the gate this change removed. `hubTarget`
+    // reads the first SURVIVING child of a pathless hub, so while /studio was
+    // managerOnly the rail rendered an item labelled "Growth Studio" whose href
+    // was /reports — the label and the destination naming two different pages.
+    renderSidebar(REP);
+    expect(screen.getByRole('link', { name: /^Growth Studio$/i })).toHaveAttribute('href', '/studio');
   });
 
   it('surfaces a "Pinned" section for favorited hubs', () => {

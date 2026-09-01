@@ -35,6 +35,7 @@ import {
   type GenerateMediaPayload,
 } from '../../../features/marketing/api/media.service';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { useOutOfCredits } from '../../../features/marketing/hooks/useOutOfCredits';
 import { UpgradeCallout } from '../studio/UpgradeCallout';
 import type { MediaItemValue } from './socialSchemas';
 
@@ -55,6 +56,7 @@ const STATUS_TONE: Record<GeneratedAsset['status'], 'neutral' | 'success' | 'dan
 
 export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
+  const { isCreditsExhausted, notify: notifyOutOfCredits } = useOutOfCredits();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   // Media generation (POST /ai/media/generate) and its library are gated by
@@ -102,12 +104,15 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
       const ids = settled
         .filter((r): r is PromiseFulfilledResult<{ assetId: string }> => r.status === 'fulfilled')
         .map((r) => r.value.assetId);
-      const failed = settled.length - ids.length;
+      const rejections = settled
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => r.reason);
+      const failed = rejections.length;
       // Only a wholesale failure is a hard error; otherwise keep the winners.
-      if (ids.length === 0) throw settled.find((r) => r.status === 'rejected')?.reason;
-      return { ids, failed };
+      if (ids.length === 0) throw rejections[0];
+      return { ids, failed, rejections };
     },
-    onSuccess: ({ ids, failed }) => {
+    onSuccess: ({ ids, failed, rejections }) => {
       setPendingIds((prev) => [...ids, ...prev]);
       if (failed > 0) {
         toast.error(
@@ -116,12 +121,19 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
             failed,
           }),
         );
+        // A count is not a reason. When the ones that died died on credits, say
+        // so — otherwise "3 started, 1 failed" hides the fact that the wall is
+        // money and the next click will fail the same way.
+        const creditsFailure = rejections.find(isCreditsExhausted);
+        if (creditsFailure) notifyOutOfCredits(creditsFailure, '');
       } else {
         toast.success(t('aiStudio.toast.started', 'Generation started'));
       }
     },
-    onError: (e: any) =>
-      toast.error(e?.response?.data?.message ?? t('aiStudio.toast.failed', 'Generation failed')),
+    // Echoing `e.response.data.message` printed the backend's English sentence
+    // ("Monthly AI credit limit reached (100)…") into a Turkish UI, and said
+    // nothing about who could fix it.
+    onError: (e: unknown) => notifyOutOfCredits(e, t('aiStudio.toast.failed', 'Generation failed')),
   });
 
   const regenerate = useMutation({
@@ -130,7 +142,7 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
       setPendingIds((prev) => [assetId, ...prev]);
       toast.success(t('aiStudio.toast.started', 'Generation started'));
     },
-    onError: () => toast.error(t('aiStudio.toast.failed', 'Generation failed')),
+    onError: (e: unknown) => notifyOutOfCredits(e, t('aiStudio.toast.failed', 'Generation failed')),
   });
 
   const remove = useMutation({

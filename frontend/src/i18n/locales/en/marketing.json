@@ -57,6 +57,9 @@
       "ads": "Ads",
       "performance": "Performance",
       "analytics": "Analytics"
+    },
+    "targets": {
+      "title": "Monthly targets"
     }
   },
   "performance": {
@@ -1468,7 +1471,14 @@
     "oneOff": "one-off, never expires",
     "thisPeriod": "for the current period",
     "smsOtpWord": "SMS OTP verification",
-    "voiceCampaignsWord": "Voice campaigns"
+    "voiceCampaignsWord": "Voice campaigns",
+    "addonsOwnerOnly": "Only the workspace owner can pay. You can see which pack you need here and pass it on to them.",
+    "aiCreditsHintMember": "Resets monthly. The workspace owner can buy a pack below to raise the cap.",
+    "aiCreditsLowMember": "Running low on AI credits — ask the workspace owner to buy one of the packs below before they run out.",
+    "aiCreditsOutMember": "Out of AI credits — only the workspace owner can buy a pack.",
+    "faxNote": "Send and receive faxes from a lead or conversation. Needs a NetGSM fax package on your NetGSM account too.",
+    "voiceCampaignsNote": "Voice blasts (TTS or recorded audio) and the Power Dialer’s parallel mode. Needs the NetGSM “Otomatik Arama” package on your NetGSM account too.",
+    "faxWord": "Fax"
   },
   "commission": {
     "detailTitle": "Commission detail",
@@ -2899,7 +2909,8 @@
       "title": "Auto-publish content",
       "onDesc": "The engine posts to your accounts with no review — pure hands-off.",
       "offDesc": "Each post is shown in Approvals first and auto-publishes unless you reject it — posting can’t be undone."
-    }
+    },
+    "topupOwnerOnly": "Only the workspace owner can top up the balance."
   },
   "strategy": {
     "onboarding": {
@@ -3243,6 +3254,34 @@
       "managerOnly": {
         "title": "This tool needs manager access",
         "desc": "The page itself is open to manager accounts. Ask an owner for access, or head back to the day-to-day work on the screen."
+      },
+      "audience": {
+        "desc": "Where your list comes from and how it is split: AI suggestions, imports, segments.",
+        "title": "Audience"
+      },
+      "money": {
+        "desc": "Who owes you, what you subscribe to, what is in the wallet — without a trip to Settings.",
+        "title": "Money"
+      },
+      "ops": {
+        "desc": "Whether your automations ran, whether deliveries failed, whether a data request is waiting.",
+        "title": "Operations"
+      },
+      "section": {
+        "billing": "Credits and plan",
+        "coupons": "Coupons",
+        "dataRequests": "Data requests (GDPR/KVKK)",
+        "import": "Import",
+        "invoices": "Invoices",
+        "mcpSessions": "Claude sessions",
+        "rebilling": "Rebilling",
+        "researchProfiles": "Research profiles",
+        "researchQueue": "AI prospect suggestions",
+        "segments": "Segments",
+        "subscriptions": "Subscriptions",
+        "triggerLinks": "Trigger links",
+        "webhooks": "Webhook deliveries",
+        "workflows": "Workflows"
       }
     },
     "toolsMenu": {
@@ -3251,7 +3290,13 @@
       "create": "AI studio",
       "connections": "Connected accounts",
       "all": "All tools",
-      "autopilot": "Autopilot console"
+      "autopilot": "Autopilot console",
+      "audience": "Audience",
+      "group": {
+        "recurring": "What you come back to every week"
+      },
+      "money": "Money",
+      "ops": "Operations"
     }
   },
   "documentsHub": {
@@ -3327,7 +3372,8 @@
   "calls": {
     "tab": {
       "calls": "Calls",
-      "dialer": "Power Dialer"
+      "dialer": "Power Dialer",
+      "voice": "AI calls"
     },
     "dial": {
       "call": "Call",
@@ -3526,6 +3572,11 @@
       "title": "Requires an active subscription",
       "body": "Your subscription does not cover this right now. Activate the plan to unlock it.",
       "cta": "View the plan"
+    },
+    "addOn": {
+      "body": "This is not part of the plan. Buy it once under Boosts on the billing page, then it switches on for everyone in the workspace.",
+      "cta": "See the add-ons",
+      "title": "paid add-on"
     }
   },
   "command": {
@@ -3596,6 +3647,9 @@
       "SEND": "Send message",
       "STRATEGY_ACTION": "Strategy action",
       "TARGET_CHANGE": "Targeting change"
+    },
+    "approvals": {
+      "readOnly": "Approving needs manager access — here you can only see what is waiting."
     }
   },
   "surface": {
@@ -3687,7 +3741,51 @@
       "tasks": "Tasks",
       "label": "View",
       "failed": "This view could not be opened.",
-      "fullPage": "Open full page"
+      "fullPage": "Open full page",
+      "calls": "Calls"
+    },
+    "consents": {
+      "title": "Consents and data requests"
+    },
+    "courses": {
+      "active": "In progress",
+      "completed": "Completed",
+      "empty": "This person is not enrolled in any course.",
+      "title": "Courses",
+      "unknown": "Course"
+    }
+  },
+  "agency": {
+    "switcher": {
+      "subAccounts": "Sub-accounts"
+    }
+  },
+  "compliance": {
+    "actionsHint": "Export downloads the data bundle now. Erasure is recorded as pending for review — it never auto-deletes.",
+    "erasureDesc": "This records a PENDING erasure request for review. No data is deleted automatically.",
+    "erasureDone": "Erasure request recorded (pending review)",
+    "erasureError": "Failed to request erasure",
+    "erasureTitle": "Request data erasure",
+    "exportDone": "Data export downloaded",
+    "exportError": "Failed to export data",
+    "granted": "Granted",
+    "noConsent": "No consent records for this lead.",
+    "requestErasure": "Request erasure",
+    "requestExport": "Export data",
+    "withdrawn": "Withdrawn"
+  },
+  "credits": {
+    "exhausted": {
+      "manager": {
+        "cta": "Open Billing"
+      },
+      "member": {
+        "body": "This workspace is out of AI credits. Only the workspace owner can buy a pack — ask them to add credits in Billing."
+      },
+      "owner": {
+        "cta": "Add credits"
+      },
+      "short": "Out of AI credits"
     }
   }
 }

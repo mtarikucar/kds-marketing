@@ -10,6 +10,7 @@ import {
   PageHeader, Card, CardContent, Button, Input, Field, Badge, Progress, EmptyState, Callout, Switch,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui';
+import { UpgradeCallout } from './studio/UpgradeCallout';
 
 interface CurrentLead { itemId: string; callId: string | null; lead: { id: string; businessName: string | null; contactPerson: string | null; phone: string | null; status: string; city: string | null } }
 interface DialSession { id: string; status: string; currentIndex: number; total: number; done: number; current: CurrentLead | null }
@@ -44,7 +45,10 @@ function apiErr(e: any, fallback: string): string {
 function ParallelModeSection({ status, search }: { status: string; search: string }) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
-  const { has } = useEntitlements();
+  // useEntitlements fails CLOSED while GET /billing/summary is in flight, so an
+  // entitled workspace would flash the add-on lock on every cold load without
+  // the loading flag.
+  const { has, isLoading: entLoading } = useEntitlements();
   const entitled = has('voiceCampaigns'); // paid add-on / SCALE+ — the backend route is @RequiresFeature('voiceCampaigns')
   const [queueName, setQueueName] = useState('');
   const [iysType, setIysType] = useState<'TICARI' | 'BILGILENDIRME'>('TICARI');
@@ -85,24 +89,53 @@ function ParallelModeSection({ status, search }: { status: string; search: strin
   const session = active.data ?? null;
   const busy = start.isPending || stop.isPending;
 
-  // Hide the whole parallel-mode card unless the feature is granted (the backend
-  // route is @RequiresFeature('voiceCampaigns')). Placed after all hooks so the
-  // hook order stays stable across renders.
-  if (!entitled) return null;
+  // Declared before the early return so the locked card reuses the EXACT same
+  // heading — the point of the lock is to say WHAT is missing, which needs the
+  // real title and subtitle, not a second copy of them that can drift.
+  const heading = (
+    <div className="flex min-w-0 items-center gap-2">
+      <Users className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-foreground">{t('dialer.parallel.title', { defaultValue: 'Parallel mode' })}</p>
+        <p className="text-xs text-muted-foreground">
+          {t('dialer.parallel.subtitle', { defaultValue: 'Dial many leads at once into a live agent queue.' })}
+        </p>
+      </div>
+    </div>
+  );
+
+  // Show the card LOCKED rather than hiding it (the backend route is
+  // @RequiresFeature('voiceCampaigns')). Returning null made the one thing that
+  // makes this a *power* dialer vanish without a trace, so a customer sold
+  // "Power Dialer" got the one-lead-at-a-time preview queue and no way to learn
+  // parallel mode is a purchasable add-on. Placed after all hooks so the hook
+  // order stays stable across renders; the `active` query stays
+  // `enabled: entitled`, so nothing 403s behind the lock.
+  if (!entitled) {
+    if (entLoading) return null;
+    return (
+      <Card className="w-full max-w-lg">
+        <CardContent className="space-y-4 p-5">
+          {heading}
+          <UpgradeCallout addOn={t('dialer.parallel.addOnName', { defaultValue: 'Voice campaigns' })} />
+          {/* Muted text, not a second Callout — one callout per card, and this
+              is a prerequisite note rather than a second alarm. */}
+          <p className="text-xs text-muted-foreground">
+            {t('dialer.parallel.prereqNote', {
+              defaultValue:
+                'Requires the paid NetGSM "Otomatik Arama" add-on and a Netsantral queue with logged-in agents — set both up in the NetGSM panel first.',
+            })}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
-    <Card className="max-w-lg">
+    <Card className="w-full max-w-lg">
       <CardContent className="space-y-4 p-5">
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-muted-foreground" />
-            <div>
-              <p className="text-sm font-medium text-foreground">{t('dialer.parallel.title', { defaultValue: 'Parallel mode' })}</p>
-              <p className="text-xs text-muted-foreground">
-                {t('dialer.parallel.subtitle', { defaultValue: 'Dial many leads at once into a live agent queue.' })}
-              </p>
-            </div>
-          </div>
+          {heading}
           <Switch
             aria-label={t('dialer.parallel.toggleLabel', { defaultValue: 'Parallel mode' })}
             checked={!!session}

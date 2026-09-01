@@ -48,8 +48,9 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
     // ONE entry since 2026-09-01 (stage 4). The other six are routes and
     // palette destinations, not menu items — see the collapse suite below.
     expect(childPaths(hubs, 'inbox')).toEqual(['/leads']);
-    // Growth Studio itself is managerOnly, so a rep's Studio surface is Reports.
-    expect(childPaths(hubs, 'studio')).toEqual(['/reports']);
+    // Growth Studio itself is ungated since 2026-09-01: a rep gets the surface,
+    // read-only, so the rail item can never carry a label it will not open.
+    expect(childPaths(hubs, 'studio')).toEqual(['/studio', '/reports']);
     expect(childPaths(hubs, 'settings')).toEqual(['/settings/two-factor']);
   });
 
@@ -530,6 +531,38 @@ describe('shouldAutoOpenAdvanced — persisted "More" collapse survives reload',
   });
 });
 
+/**
+ * The precondition MarketingSidebar.tsx:92 depends on and nothing enforced.
+ *
+ * `hubTarget = h.path ?? h.children?.[0]?.path` runs over the ALREADY-FILTERED
+ * hubs, so for a pathless hub the rail item IS its first VISIBLE child. Gate
+ * that child for some role and the item silently re-aims: the label stays
+ * "Growth Studio" and the link becomes /reports. That is what happened to the
+ * studio hub between the surface merge and 2026-09-01, and the only thing that
+ * would have caught it was a reader noticing two prose comments.
+ *
+ * Two exemptions, both because the item cannot mis-label anything. A hub with
+ * its own `path` never consults its children. And a `settings`-area hub is the
+ * gear at the foot of the rail, whose label is a CATEGORY ("Settings") rather
+ * than the name of one page — re-aiming it at whichever page a reader may open
+ * is the behaviour that hub wants, not a broken promise. `home`, `inbox` and
+ * `studio` all name a specific surface, and all three are covered here.
+ */
+describe('hubTarget — a pathless hub is its first child, for everyone', () => {
+  it('keeps every pathless hub aimed at the SAME first child for the least-privileged reader', () => {
+    // The floor: not a manager, not an owner, entitled to nothing. Anyone who
+    // can see the hub at all sees at least this much of it.
+    const floor = visibleNav(NAV_HUBS, { isManager: false, has: entitle() });
+
+    for (const raw of NAV_HUBS) {
+      if (raw.path || raw.area === 'settings' || !raw.children?.length) continue;
+      const visible = floor.find((h) => h.id === raw.id);
+      if (!visible) continue; // A hub nobody at the floor can see aims at nothing.
+      expect([raw.id, visible.children?.[0]?.path]).toEqual([raw.id, raw.children[0].path]);
+    }
+  });
+});
+
 describe('splitByTier — progressive disclosure', () => {
   it('puts all three surfaces in core, leaving nothing behind "More"', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
@@ -553,12 +586,16 @@ describe('splitByTier — progressive disclosure', () => {
     expect(advanced.map((h) => h.id)).toEqual(['b']);
   });
 
-  it('keeps Growth Studio a manager-only surface', () => {
+  it('gives a REP the Growth Studio surface itself, not a rail item pointing elsewhere', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
     expect(splitByTier(hubs).core.map((h) => h.id)).toContain('studio');
-    // A rep still sees the surface (Reports lives there) but never the Studio page.
+    // Inverted 2026-09-01. `managerOnly` on this child bought no protection —
+    // every write on the page is withheld component-side AND MANAGER-gated
+    // server-side, and `/studio` is an auth-only route three redirects send
+    // reps to anyway. All it bought was a rail item labelled "Growth Studio"
+    // that opened Reports, because `hubTarget` reads the FIRST SURVIVING child.
     const repHubs = visibleNav(NAV_HUBS, { isManager: false, has: entitle() });
-    expect(childPaths(repHubs, 'studio')).not.toContain('/studio');
+    expect(childPaths(repHubs, 'studio')[0]).toBe('/studio');
   });
 
   it('excludes the settings-area hub from both tiers', () => {

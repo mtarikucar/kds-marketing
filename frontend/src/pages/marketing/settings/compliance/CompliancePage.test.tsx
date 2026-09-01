@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import CompliancePage from './CompliancePage';
+import CompliancePage, { ComplianceRequestsSection } from './CompliancePage';
 
 const LEADS = [
   { id: 'lead-1', businessName: 'Acme Co', contactPerson: 'Jane', email: 'jane@acme.test' },
@@ -12,7 +12,19 @@ const LEADS = [
 vi.mock('@/features/marketing/api/marketingApi', () => ({
   default: {
     get: vi.fn((url: string) => {
-      if (url === '/compliance/requests') return Promise.resolve({ data: [] });
+      if (url === '/compliance/requests')
+        return Promise.resolve({
+          data: [
+            {
+              id: 'req-1',
+              kind: 'ERASURE',
+              status: 'PENDING',
+              leadId: 'lead-1',
+              requestedAt: '2026-08-01T00:00:00.000Z',
+              completedAt: null,
+            },
+          ],
+        });
       if (url === '/leads') return Promise.resolve({ data: { data: LEADS } });
       if (url.includes('/consent')) return Promise.resolve({ data: [] });
       return Promise.resolve({ data: [] });
@@ -57,5 +69,40 @@ describe('CompliancePage', () => {
     await userEvent.click(leadRow);
     // Selecting reveals the export action.
     expect(await screen.findByRole('button', { name: /export data/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The request-history half, extracted so the Studio's `?tool=ops` drawer can
+ * mount it beside the webhook deliveries and the connector audit — "is a data
+ * request waiting on me" is a weekly question that used to cost a trip through
+ * the gear.
+ *
+ * Both directions are pinned: the section stands alone, AND the page still
+ * renders it in its own tab. An extraction that quietly dropped the page's tab
+ * would move the surface rather than add a door to it.
+ */
+describe('ComplianceRequestsSection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reads and renders the request history on its own', async () => {
+    render(<ComplianceRequestsSection />, { wrapper });
+    expect(await screen.findByText('Erasure')).toBeInTheDocument();
+  });
+
+  it('is still what the page shows in its Request history tab', async () => {
+    render(<CompliancePage />, { wrapper });
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Request history' }));
+    expect(await screen.findByText('Erasure')).toBeInTheDocument();
+  });
+
+  it('the page drops its own header when embedded, and keeps it otherwise', async () => {
+    const { unmount } = render(<CompliancePage embedded />, { wrapper });
+    expect(screen.queryByRole('heading', { name: 'Compliance' })).not.toBeInTheDocument();
+    unmount();
+
+    render(<CompliancePage />, { wrapper });
+    expect(await screen.findByRole('heading', { name: 'Compliance' })).toBeInTheDocument();
   });
 });

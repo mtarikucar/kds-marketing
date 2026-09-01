@@ -1,8 +1,9 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { CalendarDays, ClipboardList, ExternalLink, List, Trello } from 'lucide-react';
+import { CalendarDays, ClipboardList, ExternalLink, List, Phone, Trello } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { useEntitlements } from '@/features/marketing/hooks/useEntitlements';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { RouteFallback } from '../../../components/RouteFallback';
 import { PeopleList } from './PeopleList';
@@ -18,9 +19,17 @@ import type { SurfacePerson } from './surfacePerson';
 const OpportunitiesPage = lazy(() => import('../opportunities/OpportunitiesPage'));
 const CalendarPage = lazy(() => import('../calendar/CalendarPage'));
 const TasksPage = lazy(() => import('../tasks/TasksPage'));
+const CallsPage = lazy(() => import('../CallsPage'));
 
-/** The four arrangements of one set of people. `list` is the default. */
-export const LEFT_VIEWS = ['list', 'board', 'calendar', 'tasks'] as const;
+/**
+ * The five arrangements of one set of people. `list` is the default.
+ *
+ * `calls` keeps its place in this list even for a workspace that is not
+ * telephony-entitled, and that is deliberate: the TAB is gated (below), the
+ * VALUE is not, so a stale `?left=calls` still resolves to a known view rather
+ * than leaving `isLeftView` false and the column rendering nothing.
+ */
+export const LEFT_VIEWS = ['list', 'board', 'calendar', 'tasks', 'calls'] as const;
 
 /**
  * The route each arrangement is an embedded copy of, and the door back to it.
@@ -41,6 +50,7 @@ const FULL_PAGE: Partial<Record<(typeof LEFT_VIEWS)[number], string>> = {
   board: '/opportunities',
   calendar: '/calendar',
   tasks: '/tasks',
+  calls: '/calls',
 };
 export type LeftView = (typeof LEFT_VIEWS)[number];
 export const isLeftView = (v: string | null): v is LeftView =>
@@ -65,8 +75,9 @@ export interface PeopleColumnProps {
 }
 
 /**
- * The left column, and the switch between the four ways it arranges the same
- * people: **Liste · Hat · Takvim · Görevler** (2026-09-01 design, "Karar 1").
+ * The left column, and the switch between the five ways it arranges the same
+ * people: **Liste · Hat · Takvim · Görevler · Aramalar** (2026-09-01 design,
+ * "Karar 1", plus the calls arrangement).
  *
  * The middle column (the person's stream) and the right column (their record
  * card) are untouched by the switch, and the SELECTION survives it — that pair
@@ -85,15 +96,22 @@ export interface PeopleColumnProps {
  * a checklist, and the eight frozen routes keep resolving to the very same
  * components.
  *
- * ## Gates: none of the four needs one, and that was checked rather than assumed
+ * ## Gates: four of the five need none, and that was checked rather than assumed
  *
  * `GET /leads` (Liste), `/opportunities/*` (Hat), `/tasks/calendar` (Takvim) and
  * `/tasks` (Görevler) carry no `@RequiresFeature` and no `@MarketingRoles` on
- * their reads; the services scope a REP to their own rows instead. So every tab
- * is offered to everyone who can reach the surface, and no tab is a plan line
+ * their reads; the services scope a REP to their own rows instead. So those four
+ * are offered to everyone who can reach the surface, and none is a plan line
  * that has to be NAMED. The one place that rule bites is Takvim, where
  * `/appointments` would have been the other candidate and is `managerOnly` +
  * `funnels` — see CalendarPage's docstring for why that ruled it out.
+ *
+ * Aramalar IS gated, and it is the exception that proves the rule was checked
+ * rather than assumed: `/calls` carries `feature: 'telephony'` in navigation.ts
+ * and the wallboard inside it 503s without an active Netsantral config. The
+ * tab is withheld from an unentitled workspace and a stale `?left=calls` falls
+ * back to Liste — `LEFT_VIEWS` keeps the value either way, so the parameter
+ * still RESOLVES instead of blanking the column.
  *
  * ## Each view fails in its own column
  *
@@ -112,18 +130,37 @@ export function PeopleColumn({
   className,
 }: PeopleColumnProps) {
   const { t } = useTranslation('marketing');
+  /**
+   * The one arrangement that carries a gate. `/calls` is `feature: 'telephony'`
+   * in navigation.ts and the queue wallboard behind it 503s without an active
+   * Netsantral config, so an unentitled workspace is offered a tab that cannot
+   * work. `has()` fails CLOSED while the billing summary is in flight, which is
+   * the right way round: a tab that appears a beat late is better than one that
+   * appears and then vanishes.
+   */
+  const { has: hasFeature } = useEntitlements();
+  const tabs = LEFT_VIEWS.filter((v) => v !== 'calls' || hasFeature('telephony'));
+  /**
+   * A `?left=` value the workspace is no longer entitled to falls back to
+   * Liste, the same rule InboxPage applies to an unknown `?tab=`. Hiding only
+   * the TAB would leave a bookmarked `?left=calls` rendering a column whose
+   * every request 503s, with no lit tab and no way to see what happened.
+   */
+  const active: LeftView = (tabs as readonly LeftView[]).includes(view) ? view : 'list';
 
   const label: Record<LeftView, string> = {
     list: t('surface.view.list', 'Liste'),
     board: t('surface.view.board', 'Hat'),
     calendar: t('surface.view.calendar', 'Takvim'),
     tasks: t('surface.view.tasks', 'Görevler'),
+    calls: t('surface.view.calls', 'Aramalar'),
   };
   const icon: Record<LeftView, ReactNode> = {
     list: <List className="h-3.5 w-3.5" aria-hidden="true" />,
     board: <Trello className="h-3.5 w-3.5" aria-hidden="true" />,
     calendar: <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />,
     tasks: <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />,
+    calls: <Phone className="h-3.5 w-3.5" aria-hidden="true" />,
   };
 
   /**
@@ -173,7 +210,7 @@ export function PeopleColumn({
     <ErrorBoundary
       // Keyed on the view: switching away clears a failure rather than
       // stranding the column on it.
-      key={view}
+      key={active}
       fallback={(retry) => (
         <div
           data-testid="view-failed"
@@ -183,7 +220,7 @@ export function PeopleColumn({
           {/* By NAME. "A view broke" and "the Hat view broke" are different
               sentences to somebody who has three others to fall back to. */}
           <p className="text-sm text-danger">
-            {label[view]} — {t('surface.view.failed', 'Bu görünüm açılamadı.')}
+            {label[active]} — {t('surface.view.failed', 'Bu görünüm açılamadı.')}
           </p>
           <Button variant="outline" size="sm" onClick={retry}>
             {t('common.retry', 'Tekrar dene')}
@@ -193,14 +230,16 @@ export function PeopleColumn({
     >
       {/* The list is a direct import, so it needs no Suspense of its own —
           only the three borrowed pages are lazy chunks. */}
-      {view === 'list' ? (
+      {active === 'list' ? (
         <PeopleList selectedId={selectedId} onSelect={onSelect} className="w-full" />
       ) : (
         <Suspense fallback={<RouteFallback />}>
-          {view === 'board' ? (
+          {active === 'board' ? (
             <OpportunitiesPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
-          ) : view === 'calendar' ? (
+          ) : active === 'calendar' ? (
             <CalendarPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
+          ) : active === 'calls' ? (
+            <CallsPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
           ) : (
             <TasksPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
           )}
@@ -209,7 +248,7 @@ export function PeopleColumn({
     </ErrorBoundary>
   );
 
-  const fullPage = FULL_PAGE[view];
+  const fullPage = FULL_PAGE[active];
 
   return (
     <div className={`flex min-h-0 flex-col gap-2 ${className ?? ''}`}>
@@ -219,16 +258,16 @@ export function PeopleColumn({
         aria-label={t('surface.view.label', 'Görünüm')}
         className="flex min-w-0 flex-1 items-center gap-1 rounded-lg border border-border p-1"
       >
-        {LEFT_VIEWS.map((v) => (
+        {tabs.map((v) => (
           <button
             key={v}
             type="button"
             role="tab"
-            aria-selected={view === v}
+            aria-selected={active === v}
             data-testid={`view-tab-${v}`}
             onClick={() => onView(v)}
             className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-              view === v
+              active === v
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground'
             }`}
@@ -246,7 +285,7 @@ export function PeopleColumn({
       {fullPage && (
         <Link
           to={fullPage}
-          aria-label={`${label[view]} — ${t('surface.view.fullPage', 'Tam sayfa aç')}`}
+          aria-label={`${label[active]} — ${t('surface.view.fullPage', 'Tam sayfa aç')}`}
           title={t('surface.view.fullPage', 'Tam sayfa aç')}
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
@@ -258,7 +297,7 @@ export function PeopleColumn({
       {/* The list owns its own scrolling (it has a sticky filter row and a
           pager); the three embedded pages are ordinary documents, so the column
           scrolls them. */}
-      <div className={`min-h-0 flex-1 ${view === 'list' ? 'flex' : 'overflow-auto'}`}>{body}</div>
+      <div className={`min-h-0 flex-1 ${active === 'list' ? 'flex' : 'overflow-auto'}`}>{body}</div>
     </div>
   );
 }

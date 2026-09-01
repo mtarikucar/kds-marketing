@@ -35,7 +35,7 @@ const PRIORITY_TONE: Record<string, 'neutral' | 'info' | 'warning' | 'danger'> =
   LOW: 'neutral', MEDIUM: 'info', HIGH: 'warning', URGENT: 'danger',
 };
 
-export default function ResearchSuggestionsPage() {
+export default function ResearchSuggestionsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -76,15 +76,17 @@ export default function ResearchSuggestionsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('research.suggestions', 'AI suggestions')}
-        description={t('research.suggestionsSubtitle', 'Review what the research agent found. Accept to add to your pipeline, dismiss the rest — nothing reaches your sales floor unvetted.')}
-        actions={
-          <Button asChild variant="outline" size="md">
-            <Link to="/research"><ArrowLeft className="h-4 w-4" />{t('research.backToProfiles', 'Research profiles')}</Link>
-          </Button>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('research.suggestions', 'AI suggestions')}
+          description={t('research.suggestionsSubtitle', 'Review what the research agent found. Accept to add to your pipeline, dismiss the rest — nothing reaches your sales floor unvetted.')}
+          actions={
+            <Button asChild variant="outline" size="md">
+              <Link to="/research"><ArrowLeft className="h-4 w-4" />{t('research.backToProfiles', 'Research profiles')}</Link>
+            </Button>
+          }
+        />
+      )}
 
       <QueryStateBoundary
         isLoading={q.isLoading}

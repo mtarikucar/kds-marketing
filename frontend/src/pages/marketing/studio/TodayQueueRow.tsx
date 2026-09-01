@@ -269,6 +269,21 @@ export interface TodayQueueRowProps {
   onDelete: (post: SocialPost) => void;
 }
 
+/**
+ * Per-target failure text for the chip tooltip. Credit exhaustion arrives as
+ * `AI_CREDITS_EXHAUSTED: Monthly AI credit limit reached (100)…` — a raw error
+ * code in English — so it is the one case translated rather than echoed.
+ */
+function useTargetErrorLabel() {
+  const { t } = useTranslation('marketing');
+  return (network: string, error?: string | null): string | undefined => {
+    if (!error) return undefined;
+    return error.includes('AI_CREDITS_EXHAUSTED')
+      ? `${network}: ${t('credits.exhausted.short', 'Out of AI credits')}`
+      : `${network}: ${error}`;
+  };
+}
+
 export function TodayQueueRow({
   row,
   zone,
@@ -284,6 +299,7 @@ export function TodayQueueRow({
   onDelete,
 }: TodayQueueRowProps) {
   const { t } = useTranslation('marketing');
+  const targetErrorLabel = useTargetErrorLabel();
   const [thumbBroken, setThumbBroken] = useState(false);
   const [whenOpen, setWhenOpen] = useState(false);
   const [when, setWhen] = useState('');
@@ -415,7 +431,10 @@ export function TodayQueueRow({
                 data-status={tg.status}
                 // The failure reason is the whole point of the chip being
                 // separate; it goes in the title so the row stays one line.
-                title={tg.error ? `${meta.label}: ${tg.error}` : meta.label}
+                // The one reason we can name properly is named properly: a
+                // credits failure arrives as the raw backend code, which is
+                // neither Turkish nor actionable.
+                title={targetErrorLabel(meta.label, tg.error) ?? meta.label}
               >
                 <meta.icon className="h-3 w-3" aria-hidden="true" />
                 <span className="max-w-[9rem] truncate">{name ?? meta.label}</span>

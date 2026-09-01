@@ -1233,7 +1233,18 @@
       "tasks": "Vazifalar",
       "label": "Koʻrinish",
       "failed": "Bu koʻrinish ochilmadi.",
-      "fullPage": "Toʻliq sahifani ochish"
+      "fullPage": "Toʻliq sahifani ochish",
+      "calls": "Qo'ng'iroqlar"
+    },
+    "consents": {
+      "title": "Roziliklar va ma'lumot so'rovlari"
+    },
+    "courses": {
+      "title": "Kurslar",
+      "active": "Davom etmoqda",
+      "completed": "Yakunlangan",
+      "empty": "Bu shaxs hech qanday kursga yozilmagan.",
+      "unknown": "Kurs"
     }
   },
   "callRecording": {

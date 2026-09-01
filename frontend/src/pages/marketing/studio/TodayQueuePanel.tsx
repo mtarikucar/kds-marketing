@@ -29,6 +29,7 @@ import {
 import { listPendingApprovals } from '../../../features/marketing/api/growthBudget.service';
 import { ApprovalQueue } from '../../../features/marketing/components/ApprovalQueue';
 import { useWorkspaceProfile } from '../../../features/marketing/hooks/useWorkspaceProfile';
+import { useOutOfCredits } from '../../../features/marketing/hooks/useOutOfCredits';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { hasMarketingRole, MarketingRole } from '../../../features/marketing/types';
 import { PostComposerDialog, type PostComposerSubmit } from '../social/PostComposerDialog';
@@ -100,6 +101,7 @@ class EditPostError extends Error {
  */
 export default function TodayQueuePanel() {
   const { t } = useTranslation('marketing');
+  const { notify: notifyOutOfCredits, notifyExhausted } = useOutOfCredits();
   const qc = useQueryClient();
   const user = useMarketingAuthStore((s) => s.user);
   const { workspace } = useWorkspaceProfile();
@@ -448,6 +450,12 @@ export default function TodayQueuePanel() {
     mutationFn: (postId: string) => publishSocialPostNow(postId),
     onSuccess: (published) => {
       invalidate();
+      // A publish that died on credits RESOLVES — the failure rides on the
+      // targets as a string — so without this the only trace of the billing
+      // wall is a `title=` tooltip on one chip.
+      if (published?.targets?.some((tg) => tg.error?.includes('AI_CREDITS_EXHAUSTED'))) {
+        notifyExhausted();
+      }
       if (published?.status === 'FAILED') {
         toast.error(
           t(
@@ -468,7 +476,8 @@ export default function TodayQueuePanel() {
       }
       toast.success(t('studio.today.toast.published', 'Gönderi yayınlandı'));
     },
-    onError: () => toast.error(t('studio.today.toast.publishFailed', 'Gönderi yayınlanamadı')),
+    onError: (e: unknown) =>
+      notifyOutOfCredits(e, t('studio.today.toast.publishFailed', 'Gönderi yayınlanamadı')),
   });
 
   const reschedule = useMutation({

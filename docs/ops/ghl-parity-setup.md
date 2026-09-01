@@ -210,6 +210,33 @@ populated in GitHub Actions secrets:
 | `STRIPE_SECRET_KEY` | Stripe billing + Connect settlement |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook validation |
 
+### Epic-13 platform features — Secrets / Variables
+
+These three features ship complete but **globally off**: `/billing/summary`
+publishes each as an entitlement flag (`prospecting`, `sendingDomains`,
+`customDomains`) that the SPA nav gates its menu item on, so while the key is
+unset the feature has no entry point at all. All five keys are rendered by
+`deploy.yml` (env block + heredoc) and none is in its `required=` list — unset
+renders `KEY=` and is byte-equivalent to the feature never having existed.
+
+| Key | Kind | Reveals | External prerequisite |
+|---|---|---|---|
+| `PAGESPEED_API_KEY` | Secret | Prospecting (`/prospecting`) | A free Google PageSpeed Insights API key |
+| `SENDING_DOMAIN_ESP` | Variable | Sending domains (`/settings/sending-domains`) | A transactional ESP account (Postmark / SendGrid / Mailgun / SES) — the shared SMTP is not one |
+| `SENDING_DOMAIN_SPF_INCLUDE` | Variable | — (companion) | The platform host tenants add to their SPF record; empty keeps the `spf.platform.example` placeholder |
+| `CUSTOM_DOMAINS_ENABLED` | Variable | Custom domains (`/settings/custom-domains`) | Wildcard ingress + on-demand ACME TLS, which the app cannot provision |
+| `CUSTOM_DOMAIN_CNAME_TARGET` | Variable | — (companion) | The ingress host tenants CNAME to; empty keeps the `ingress.platform.example` placeholder |
+
+`CUSTOM_DOMAINS_ENABLED` accepts `1` / `true` / `on` as ON; anything else
+(including `0` and `false`) is OFF. Set each companion **together with** its
+feature key — otherwise the UI hands tenants DNS instructions pointing at a
+placeholder host that does not exist.
+
+Nothing here is covered by the deploy's health gate (it probes
+`/api/marketing/billing/packages`, which reads none of these), so verify a flip
+by hand: `GET /api/marketing/billing/summary` and check
+`entitlements.features`.
+
 ### Single-replica OAuth caveat
 
 Both SSO and Google Calendar use an **in-memory** state map for the OAuth

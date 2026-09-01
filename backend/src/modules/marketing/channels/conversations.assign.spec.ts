@@ -29,7 +29,11 @@ describe('ConversationsService.assign — assignee membership guard', () => {
       { push: jest.fn() } as any,
       notifications as any,
     );
-    prisma.conversation.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS } as any);
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'c1',
+      workspaceId: WS,
+      leadId: 'lead-1',
+    } as any);
     prisma.conversation.update.mockResolvedValue({ id: 'c1' } as any);
   });
 
@@ -64,7 +68,7 @@ describe('ConversationsService.assign — assignee membership guard', () => {
    * silent, so a handed-off thread sat unseen until someone opened the inbox
    * and filtered by themselves.
    */
-  it('tells the new owner a customer is waiting', async () => {
+  it('tells the new owner a customer is waiting, and carries the lead so the click lands', async () => {
     prisma.workspaceMembership.findFirst.mockResolvedValue({ status: 'ACTIVE' } as any);
     await svc.assign(WS, 'c1', 'u1');
     expect(notifications.create).toHaveBeenCalledWith(
@@ -72,7 +76,9 @@ describe('ConversationsService.assign — assignee membership guard', () => {
         workspaceId: WS,
         userId: 'u1',
         type: 'CONVERSATION_ASSIGNED',
-        metadata: { conversationId: 'c1', source: 'inbox' },
+        // conversationId alone has no URL — the inbox picks a person in React
+        // state. leadId is what the notification bell can actually route on.
+        metadata: expect.objectContaining({ conversationId: 'c1', leadId: 'lead-1' }),
       }),
     );
   });

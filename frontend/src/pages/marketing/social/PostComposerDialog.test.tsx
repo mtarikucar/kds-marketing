@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { toast } from 'sonner';
 import { PostComposerDialog } from './PostComposerDialog';
 import * as mediaService from '../../../features/marketing/api/media.service';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: { post: vi.fn(), get: vi.fn() },
@@ -28,9 +30,15 @@ const ACCOUNT = {
   accessToken: '••••', tokenExpiresAt: null, enabled: true, createdAt: '',
 };
 
+// MemoryRouter: the AI panel's failure path routes through useOutOfCredits,
+// whose toast action navigates to /billing.
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  return (
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    </MemoryRouter>
+  );
 }
 
 describe('PostComposerDialog AI generate', () => {
@@ -72,6 +80,49 @@ describe('PostComposerDialog AI generate', () => {
     expect(mediaService.generateMedia).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'IMAGE', prompt: 'a sunset' }),
     );
+  });
+
+  /**
+   * The generate path was wrapped in a bare `catch {}`, so an exhausted
+   * workspace was indistinguishable from a model error: "Generation failed",
+   * with no hint that money was involved or who could spend it.
+   */
+  it('says the AI ran out of credits instead of a generic "Generation failed"', async () => {
+    useMarketingAuthStore.setState({
+      user: { id: 'u1', workspaceId: 'w1', email: 'a@b.c', firstName: 'A', lastName: 'B', role: 'OWNER' },
+    });
+    vi.mocked(mediaService.generateMedia).mockRejectedValue({
+      response: { status: 403, data: { code: 'AI_CREDITS_EXHAUSTED' } },
+    } as never);
+
+    render(
+      <PostComposerDialog open onOpenChange={() => {}} accounts={[ACCOUNT as never]} onSubmit={() => {}} isPending={false} />,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /generate with ai/i }));
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a sunset');
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const [message, opts] = vi.mocked(toast.error).mock.calls[0];
+    expect(message).toMatch(/out of AI credits/i);
+    expect((opts as { action?: { label: string } })?.action?.label).toBe('Add credits');
+  });
+
+  it('still says "Generation failed" for an ordinary generation error', async () => {
+    vi.mocked(mediaService.generateMedia).mockRejectedValue(new Error('boom') as never);
+
+    render(
+      <PostComposerDialog open onOpenChange={() => {}} accounts={[ACCOUNT as never]} onSubmit={() => {}} isPending={false} />,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /generate with ai/i }));
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a sunset');
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Generation failed'));
   });
 
   it('cancels the poll loop when the dialog closes mid-generation', async () => {

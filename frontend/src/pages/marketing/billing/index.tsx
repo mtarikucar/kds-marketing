@@ -22,7 +22,7 @@
  *   - PackageMatrix (cycle toggle + package cards + buy buttons)
  *   - Callout for error + bank transfer instructions
  *   - Card for PayTR iframe
- *   - Card for add-on boosts (owner-only)
+ *   - Card for add-on boosts (visible to every member; buying stays owner-only)
  *   - Card + Table for order history (owner-only)
  *   - Tokens everywhere; dark-mode-safe; lucide icons
  */
@@ -59,7 +59,11 @@ function orderStatusTone(status: string): 'success' | 'warning' | 'danger' | 'ne
   return 'neutral';
 }
 
-export default function BillingPage() {
+/**
+ * `embedded` — mounted inside another surface (a drawer/column) that already
+ * carries its own title, so the page drops its PageHeader and nothing else.
+ */
+export default function BillingPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const queryClient = useQueryClient();
@@ -154,13 +158,15 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('billing.title', 'Billing & Packages')}
-        description={t(
-          'billing.subtitle',
-          'Your plan decides how many leads the research agent delivers every day.',
-        )}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('billing.title', 'Billing & Packages')}
+          description={t(
+            'billing.subtitle',
+            'Your plan decides how many leads the research agent delivers every day.',
+          )}
+        />
+      )}
 
       {/* Summary fetch error */}
       <QueryStateBoundary
@@ -177,6 +183,7 @@ export default function BillingPage() {
         usage={usage}
         aiUsage={aiUsage}
         summaryLoading={summaryLoading}
+        isOwner={isOwner}
       />
 
       {/* PayTR iframe */}
@@ -253,13 +260,25 @@ export default function BillingPage() {
         onBuy={buy}
       />
 
-      {/* Add-on boosts (owner-only, after subscribing) */}
-      {isOwner && sub?.packageCode && (
+      {/* Add-on boosts (every member sees them; only an OWNER can buy).
+          This card used to be `isOwner &&`, which made the AI-credits summary
+          card above lie: it told a MANAGER to "add more below" while the card
+          holding those buys did not render at all. A manager who runs the
+          day-to-day AI has to be able to see WHICH pack to ask for. */}
+      {sub?.packageCode && (
         <Card>
           <CardHeader>
             <CardTitle>{t('billing.addons', 'Boosts')}</CardTitle>
           </CardHeader>
           <CardContent>
+            {!isOwner && (
+              <Callout tone="info" className="mb-3">
+                {t(
+                  'billing.addonsOwnerOnly',
+                  'Only the workspace owner can pay. You can see which pack you need here and pass it on to them.',
+                )}
+              </Callout>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {[
                 // Prepaid AI credits. These NEVER expire — they are a balance,
@@ -303,6 +322,10 @@ export default function BillingPage() {
                   // (2FA-SMS factor + lead phone verification).
                   code: 'sms_otp_package',
                   label: t('billing.smsOtpWord', 'SMS OTP verification'),
+                  note: t(
+                    'billing.smsOtpNote',
+                    "Text a 6-digit code to verify a lead's phone number. Needs a paid NetGSM OTP package on your NetGSM account too.",
+                  ),
                   priceTRY: '₺490',
                   priceUSD: '$15',
                 },
@@ -311,6 +334,12 @@ export default function BillingPage() {
                   // feature (TTS/audio voice blasts) for plans below SCALE.
                   code: 'voice_campaigns_package',
                   label: t('billing.voiceCampaignsWord', 'Voice campaigns'),
+                  // The string that closes the loop back from the locked
+                  // parallel-mode card on the Power Dialer to this buy button.
+                  note: t(
+                    'billing.voiceCampaignsNote',
+                    'Voice blasts (TTS or recorded audio) and the Power Dialer’s parallel mode. Needs the NetGSM “Otomatik Arama” package on your NetGSM account too.',
+                  ),
                   priceTRY: '₺1.490',
                   priceUSD: '$45',
                 },
@@ -319,6 +348,10 @@ export default function BillingPage() {
                   // (send/receive) for every non-OPERATOR plan.
                   code: 'fax_package',
                   label: t('billing.faxWord', 'Fax'),
+                  note: t(
+                    'billing.faxNote',
+                    'Send and receive faxes from a lead or conversation. Needs a NetGSM fax package on your NetGSM account too.',
+                  ),
                   priceTRY: '₺990',
                   priceUSD: '$29',
                 },
@@ -328,6 +361,7 @@ export default function BillingPage() {
                 priceTRY: string;
                 priceUSD: string;
                 oneOff?: boolean;
+                note?: string;
               }) => (
                 <div
                   key={addon.code}
@@ -335,6 +369,13 @@ export default function BillingPage() {
                 >
                   <div>
                     <p className="text-sm font-medium text-foreground">{addon.label}</p>
+                    {/* The three NetGSM add-ons sold as bare labels ("Fax")
+                        said nothing about what they unlock, so nobody could
+                        tell what they were buying. Credit/message packs are
+                        self-explanatory and carry no note. */}
+                    {addon.note && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">{addon.note}</p>
+                    )}
                     <p className="text-xs text-muted-foreground">
                       {currency === 'TRY' ? addon.priceTRY : addon.priceUSD}
                       {/*
@@ -353,7 +394,7 @@ export default function BillingPage() {
                   <Button
                     size="sm"
                     variant="secondary"
-                    disabled={checkout.isPending}
+                    disabled={!isOwner || checkout.isPending}
                     onClick={() =>
                       checkout.mutate({
                         addOnCode: addon.code,
@@ -361,7 +402,7 @@ export default function BillingPage() {
                       })
                     }
                   >
-                    {t('billing.buy', 'Buy')}
+                    {isOwner ? t('billing.buy', 'Buy') : t('billing.ownerOnly', 'Owner only')}
                   </Button>
                 </div>
               ))}

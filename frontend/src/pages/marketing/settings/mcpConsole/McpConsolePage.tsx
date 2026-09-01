@@ -9,6 +9,11 @@
  *   2. Write mode — the APPROVAL ⇄ AUTONOMOUS switch (OWNER-only).
  *   3. Connections— OAuth clients (revocable) + the MCP API keys (read-only).
  *   4. Sessions   — a paginated audit list; a row opens its tool-call detail.
+ *                   EXPORTED, because the Studio's `?tool=ops` drawer mounts
+ *                   this section on its own: "did the connector do anything I
+ *                   should know about" is a weekly question, while sections 1-3
+ *                   (endpoint, keys, write-mode switch) are one-time setup and
+ *                   stay page-only.
  *
  * Two deliberate honesty rules run through the whole page:
  *
@@ -918,7 +923,7 @@ function ConnectionsSection() {
 
 // ── 4. Sessions & audit ──────────────────────────────────────────────────────
 
-function SessionsSection() {
+export function SessionsSection() {
   const { t } = useTranslation('marketing');
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<string | null>(null);

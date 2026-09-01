@@ -148,6 +148,31 @@ export function useEnrollments(courseId?: string): UseQueryResult<Enrollment[]> 
   });
 }
 
+/**
+ * The same `/enrollments` route, filtered by PERSON rather than by course —
+ * `GET /enrollments?leadId=` has always accepted it (EnrollmentController.list),
+ * so the Inbox record card's Eğitimler section needs no backend work.
+ *
+ * A key SHAPE of its own, deliberately. `enrollmentsKey` is
+ * `{ courseId: courseId ?? null }`, and widening it to hold both filters would
+ * put two different result sets under one entry: the course editor's Enrollees
+ * panel asks for `{courseId: 'c1'}` and this asks for `{leadId: 'p1'}`, and a
+ * shared shape would let either answer be served for the other's question.
+ */
+export const leadEnrollmentsKey = (leadId: string | null) =>
+  ['marketing', 'enrollments', { leadId: leadId ?? null }] as const;
+
+export function useLeadEnrollments(leadId: string | null): UseQueryResult<Enrollment[]> {
+  return useQuery({
+    queryKey: leadEnrollmentsKey(leadId),
+    enabled: !!leadId,
+    queryFn: () =>
+      marketingApi
+        .get('/enrollments', { params: { leadId } })
+        .then((r) => asArray<Enrollment>(r.data)),
+  });
+}
+
 export function useEnrollmentProgress(id: string | undefined): UseQueryResult<EnrollmentWithProgress> {
   return useQuery({
     queryKey: enrollmentKey(id ?? 'none'),

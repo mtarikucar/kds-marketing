@@ -699,7 +699,7 @@ function PastImportsList() {
 
 // ── Main wizard page ──────────────────────────────────────────────────────────
 
-export default function ImportWizardPage() {
+export default function ImportWizardPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
 
   const [step, setStep] = useState<WizardStep>('upload');
@@ -746,12 +746,14 @@ export default function ImportWizardPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('import.title', { defaultValue: 'Import leads' })}
-        description={t('import.subtitle', {
-          defaultValue: 'Upload a CSV file to bulk-import leads into your workspace.',
-        })}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('import.title', { defaultValue: 'Import leads' })}
+          description={t('import.subtitle', {
+            defaultValue: 'Upload a CSV file to bulk-import leads into your workspace.',
+          })}
+        />
+      )}
 
       {/* Wizard card */}
       <Card>

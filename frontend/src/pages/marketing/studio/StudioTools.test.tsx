@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { onlineManager, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryCache, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import BudgetAutopilotPage from '../budget/BudgetAutopilotPage';
@@ -84,6 +84,51 @@ vi.mock('../social/AiStudioPage', () => ({ default: () => <div>create-tool</div>
 // which is the calendar-sync surface. The drawer mounted the wrong one until
 // 2026-09-01; pinning the module path here is what stops that regressing.
 vi.mock('../accounts/AccountCenterPage', () => ({ default: () => <div>connections-tool</div> }));
+
+/**
+ * The fourteen pages behind the three recurring tools, each a stub that REGISTERS
+ * A QUERY under a key naming itself.
+ *
+ * The query is the point, not decoration. What the disclosure stack promises is
+ * that a five-page tool costs ONE request — a closed section is an unrendered
+ * element, so the child function never runs and its `useQuery` never registers.
+ * A stub that only rendered text could not tell "not on screen" from "on screen
+ * and fetching", which is the whole claim. So the assertions read the
+ * QueryClient's cache, and the stub is what puts an entry in it.
+ */
+function stub(name: string) {
+  return function Stub() {
+    useQuery({ queryKey: ['stub', name], queryFn: () => Promise.resolve(name) });
+    return <div>{name}</div>;
+  };
+}
+vi.mock('../invoices', () => ({ default: stub('invoices-page') }));
+vi.mock('../subscriptions/SubscriptionsPage', () => ({ default: stub('subscriptions-page') }));
+vi.mock('../billing', () => ({ default: stub('billing-page') }));
+vi.mock('../settings/coupons', () => ({ default: stub('coupons-page') }));
+vi.mock('../agency/RebillingPage', () => ({ default: stub('rebilling-page') }));
+vi.mock('../automations/AutomationsListPage', () => ({ default: stub('automations-page') }));
+vi.mock('../triggerLinks', () => ({ default: stub('trigger-links-page') }));
+vi.mock('../settings/webhooks/WebhooksPage', () => ({ default: stub('webhooks-page') }));
+vi.mock('../settings/mcpConsole/McpConsolePage', () => ({
+  default: stub('mcp-console-page'),
+  SessionsSection: stub('mcp-sessions-section'),
+}));
+vi.mock('../settings/compliance/CompliancePage', () => ({
+  default: stub('compliance-page'),
+  ComplianceRequestsSection: stub('compliance-requests-section'),
+}));
+vi.mock('../research/ResearchSuggestionsPage', () => ({ default: stub('research-queue-page') }));
+vi.mock('../research/ResearchSettingsPage', () => ({ default: stub('research-profiles-page') }));
+vi.mock('../imports', () => ({ default: stub('import-page') }));
+vi.mock('../crm/segments', () => ({ default: stub('segments-page') }));
+
+// The Para stack's last section is ownerOnly + agencyOnly. Mutable so the two
+// halves of that pair can be tested apart.
+const workspace = vi.hoisted(() => ({ isAgency: false }));
+vi.mock('@/features/marketing/hooks/useWorkspaceProfile', () => ({
+  useWorkspaceProfile: () => ({ isAgency: workspace.isAgency, kind: workspace.isAgency ? 'AGENCY' : 'STANDALONE' }),
+}));
 
 const budget: svc.GrowthBudget = {
   id: 'b1',
@@ -172,6 +217,7 @@ const setupUser = () => userEvent.setup({ pointerEventsCheck: 0 });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workspace.isAgency = false;
   setRole('MANAGER');
   (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
   (svc.getGrowthBudget as any).mockResolvedValue(budget);
@@ -685,9 +731,24 @@ describe('StudioToolsMenu', () => {
     setRole('MANAGER');
     await openMenu();
 
-    for (const label of ['İçerik takvimi', 'AI stüdyo', 'Bağlı hesaplar', 'Tüm araçlar']) {
-      expect(await screen.findByRole('menuitem', { name: label })).toBeInTheDocument();
+    // Every row, with its exact href — the same reachability pin the deep-links
+    // test makes. Three of these are the ONLY entry to a surface that used to
+    // be reached through the gear, so a dropped row is an unreachable page.
+    const expected: Array<[string, string]> = [
+      ['Otomatik pilot konsolu', '/studio?tool=autopilot'],
+      ['İçerik takvimi', '/studio?tool=calendar'],
+      ['AI stüdyo', '/studio?tool=create'],
+      ['Bağlı hesaplar', '/studio?tool=connections'],
+      ['Para', '/studio?tool=money'],
+      ['İşleyiş', '/studio?tool=ops'],
+      ['Kitle', '/studio?tool=audience'],
+      ['Tüm araçlar', '/studio?view=tools'],
+    ];
+    for (const [label, href] of expected) {
+      expect(await screen.findByRole('menuitem', { name: label })).toHaveAttribute('href', href);
     }
+    // Nothing silently added or dropped alongside them.
+    expect(screen.getAllByRole('menuitem')).toHaveLength(expected.length);
   });
 
   /**
@@ -731,8 +792,143 @@ describe('StudioToolsMenu', () => {
 
     expect(screen.queryByRole('menuitem', { name: 'Bağlı hesaplar' })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'AI stüdyo' })).not.toBeInTheDocument();
+    // The three recurring stacks: every page behind each of them is managerOnly
+    // in navigation.ts and MANAGER server-side.
+    for (const gone of ['Para', 'İşleyiş', 'Kitle']) {
+      expect(screen.queryByRole('menuitem', { name: gone })).not.toBeInTheDocument();
+    }
+  });
+
+  it('does not head an empty group: a REP gets no "recurring" label either', async () => {
+    setRole('REP');
+    await openMenu();
+    expect(screen.queryByText('Her hafta dönüp bakılan işler')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The recurring tools, and the gate that is not defence in depth.
+ *
+ * `/studio` is in App.tsx's plain auth-only group. Every page behind money, ops
+ * and audience is `managerOnly` in navigation.ts and MANAGER-gated server-side.
+ * So TOOL_MIN_ROLE is not a second layer here, it IS the layer: without those
+ * three rows a rep who types `/studio?tool=money` reaches Invoices,
+ * Subscriptions, Billing, Coupons and Rebilling, and the menu filter above
+ * catches none of it, because the row is not the door — the URL is.
+ */
+describe('StudioToolsDrawer — the recurring tools', () => {
+  const renderDrawer = (tool: StudioTool | null, qc?: QueryClient) =>
+    wrapOn(qc ?? testClient(), <StudioToolsDrawer open tool={tool} onOpenChange={vi.fn()} />);
+
+  const RECURRING: Array<[StudioTool, string, string[]]> = [
+    ['money', 'Para', ['invoices-page', 'subscriptions-page', 'billing-page', 'coupons-page']],
+    [
+      'ops',
+      'İşleyiş',
+      [
+        'automations-page',
+        'trigger-links-page',
+        'webhooks-page',
+        'mcp-sessions-section',
+        'compliance-requests-section',
+      ],
+    ],
+    [
+      'audience',
+      'Kitle',
+      ['research-queue-page', 'research-profiles-page', 'import-page', 'segments-page'],
+    ],
+  ];
+
+  for (const [tool, title, pages] of RECURRING) {
+    it('refuses a REP ?tool=' + tool + ', and mounts none of its pages', async () => {
+      setRole('REP');
+      const qc = testClient();
+      renderDrawer(tool, qc);
+
+      expect(await screen.findByTestId('studio-tool-denied')).toBeInTheDocument();
+      for (const page of pages) {
+        expect(screen.queryByText(page)).not.toBeInTheDocument();
+      }
+      // Nothing was even asked for: the refusal happens before the mount, so no
+      // stub ever registered its query.
+      expect(qc.getQueryCache().findAll({ queryKey: ['stub'] })).toHaveLength(0);
+      // …and the drawer still says which tool it is refusing.
+      expect(screen.getByTestId('studio-tools-drawer')).toHaveTextContent(title);
+    });
+
+    it('gives a manager ?tool=' + tool + ', opened on its first section', async () => {
+      setRole('MANAGER');
+      renderDrawer(tool);
+
+      expect(await screen.findByText(pages[0])).toBeInTheDocument();
+      expect(screen.queryByTestId('studio-tool-denied')).not.toBeInTheDocument();
+    });
+  }
+
+  /**
+   * The whole economic argument for a disclosure stack over a tab strip: a
+   * five-page tool costs ONE request, because a closed section is an unrendered
+   * element and its child's `useQuery` never registers.
+   */
+  it('a closed section fetches nothing until it is opened', async () => {
+    const user = setupUser();
+    const qc = testClient();
+    setRole('MANAGER');
+    renderDrawer('money', qc);
+
+    // The defaultOpen section, and only it.
+    await screen.findByText('invoices-page');
+    const keys = () =>
+      qc.getQueryCache().findAll({ queryKey: ['stub'] }).map((q) => q.queryKey[1]);
+    expect(keys()).toEqual(['invoices-page']);
+    expect(screen.queryByText('subscriptions-page')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Abonelikler/ }));
+
+    expect(await screen.findByText('subscriptions-page')).toBeInTheDocument();
+    expect(keys()).toEqual(['invoices-page', 'subscriptions-page']);
+    // Still nothing from the sections nobody touched.
+    expect(screen.queryByText('coupons-page')).not.toBeInTheDocument();
+  });
+
+  /**
+   * `Yeniden faturalama` is ownerOnly AND agencyOnly in navigation.ts, and the
+   * tool-level MANAGER check substitutes for neither. Both halves, apart.
+   */
+  it('withholds the agency section from a non-agency workspace', async () => {
+    setRole('OWNER');
+    workspace.isAgency = false;
+    renderDrawer('money');
+
+    await screen.findByText('invoices-page');
+    expect(screen.queryByText('Yeniden faturalama')).not.toBeInTheDocument();
+  });
+
+  it('withholds it from an agency MANAGER, who is not the owner', async () => {
+    setRole('MANAGER');
+    workspace.isAgency = true;
+    renderDrawer('money');
+
+    await screen.findByText('invoices-page');
+    expect(screen.queryByText('Yeniden faturalama')).not.toBeInTheDocument();
+  });
+
+  it('offers it to the agency OWNER, and still costs nothing until opened', async () => {
+    const user = setupUser();
+    const qc = testClient();
+    setRole('OWNER');
+    workspace.isAgency = true;
+    renderDrawer('money', qc);
+
+    await screen.findByText('invoices-page');
+    expect(qc.getQueryCache().findAll({ queryKey: ['stub', 'rebilling-page'] })).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: /Yeniden faturalama/ }));
+    expect(await screen.findByText('rebilling-page')).toBeInTheDocument();
+  });
+});
+
 
 /**
  * The other half: the drawer is driven by `?tool=`, which is a URL, so hiding a

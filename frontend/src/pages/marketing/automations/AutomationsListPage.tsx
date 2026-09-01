@@ -34,9 +34,25 @@ function workflowStatusTone(status: string) {
   return 'neutral' as const;
 }
 
-export default function AutomationsListPage() {
+export default function AutomationsListPage({
+  embedded,
+  onNavigate,
+}: { embedded?: boolean; onNavigate?: () => void } = {}) {
   const { t } = useTranslation('marketing');
-  const navigate = useNavigate();
+  /**
+   * Every route change out of this page goes through here, so a HOST that
+   * mounted it embedded can react before the screen is replaced.
+   *
+   * The builder is a `fullBleed` route of its own — creating or editing an
+   * automation always leaves this list. The Studio's `?tool=ops` drawer needs
+   * that moment to drop its own URL parameter, or the operator comes back from
+   * the builder to a drawer they did not ask to reopen.
+   */
+  const rawNavigate = useNavigate();
+  const navigate = (to: string) => {
+    onNavigate?.();
+    rawNavigate(to);
+  };
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -85,34 +101,36 @@ export default function AutomationsListPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('automations.title', 'Automations')}
-        description={t('automations.subtitle', 'When something happens, do this. Triggers fire steps — send, wait, branch, create tasks, update leads.')}
-        actions={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="md">
-                <Plus className="h-4 w-4" />
-                {t('automations.new', 'New automation')}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => navigate('/automations/new')}>
-                <Zap className="mr-2 h-4 w-4" />
-                {t('automations.newBlank', 'Blank automation')}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setTemplatesOpen(true)}>
-                <LayoutTemplate className="mr-2 h-4 w-4" />
-                {t('automations.newFromTemplate', 'From a template')}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { setAiPrompt(''); setAiOpen(true); }}>
-                <Sparkles className="mr-2 h-4 w-4" />
-                {t('automations.newWithAi', 'Describe with AI')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('automations.title', 'Automations')}
+          description={t('automations.subtitle', 'When something happens, do this. Triggers fire steps — send, wait, branch, create tasks, update leads.')}
+          actions={
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="md">
+                  <Plus className="h-4 w-4" />
+                  {t('automations.new', 'New automation')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => navigate('/automations/new')}>
+                  <Zap className="mr-2 h-4 w-4" />
+                  {t('automations.newBlank', 'Blank automation')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTemplatesOpen(true)}>
+                  <LayoutTemplate className="mr-2 h-4 w-4" />
+                  {t('automations.newFromTemplate', 'From a template')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setAiPrompt(''); setAiOpen(true); }}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {t('automations.newWithAi', 'Describe with AI')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          }
+        />
+      )}
 
       {/* ── Search + status filter ─────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3">

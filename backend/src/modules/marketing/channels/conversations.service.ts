@@ -74,6 +74,7 @@ export class ConversationsService {
     workspaceId: string,
     conversationId: string,
     userId: string,
+    leadId: string,
   ): Promise<void> {
     await this.notifications
       .create({
@@ -82,7 +83,10 @@ export class ConversationsService {
         type: 'CONVERSATION_ASSIGNED',
         title: 'A conversation was assigned to you',
         message: 'A customer conversation is now waiting for your reply.',
-        metadata: { conversationId, source: 'inbox' },
+        // The inbox selects a person in React state, so a conversationId has no
+        // URL to open. leadId (non-nullable on Conversation) does, and it is
+        // what the bell routes on.
+        metadata: { conversationId, leadId, source: 'inbox' },
       })
       .catch((e) =>
         this.logger.warn(
@@ -199,10 +203,10 @@ export class ConversationsService {
   async assign(workspaceId: string, conversationId: string, assignedToId: string | null) {
     const target = assignedToId && assignedToId.length > 0 ? assignedToId : null;
     if (target) await this.assertActiveMember(workspaceId, target);
-    await this.scopedUpdate(workspaceId, conversationId, { assignedToId: target });
+    const updated = await this.scopedUpdate(workspaceId, conversationId, { assignedToId: target });
     // After the write: an assignment that threw must not have announced itself.
     // Unassigning (target null) notifies nobody — there is no new owner.
-    if (target) await this.notifyAssignee(workspaceId, conversationId, target);
+    if (target) await this.notifyAssignee(workspaceId, conversationId, target, updated.leadId);
     return this.touch(workspaceId, conversationId);
   }
 
@@ -303,9 +307,9 @@ export class ConversationsService {
     if (assignTarget && res.count > 0) {
       const owned = await this.prisma.conversation.findMany({
         where: { id: { in: ids }, workspaceId },
-        select: { id: true },
+        select: { id: true, leadId: true },
       });
-      for (const c of owned) await this.notifyAssignee(workspaceId, c.id, assignTarget);
+      for (const c of owned) await this.notifyAssignee(workspaceId, c.id, assignTarget, c.leadId);
     }
     return { updated: res.count };
   }
@@ -326,10 +330,13 @@ export class ConversationsService {
   private async scopedUpdate(workspaceId: string, conversationId: string, data: any) {
     const convo = await this.prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId },
-      select: { id: true },
+      // leadId rides along for callers that announce the write (assign notifies
+      // the new owner and needs somewhere for the click to land).
+      select: { id: true, leadId: true },
     });
     if (!convo) throw new NotFoundException('Conversation not found');
     await this.prisma.conversation.update({ where: { id: convo.id }, data });
+    return convo;
   }
 
   private async touch(workspaceId: string, conversationId: string) {

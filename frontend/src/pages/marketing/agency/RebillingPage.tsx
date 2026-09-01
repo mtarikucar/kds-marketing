@@ -43,7 +43,7 @@ interface LocRow extends Location {
   plan?: RebillingPlan;
 }
 
-function RebillingPageInner() {
+function RebillingPageInner({ embedded }: { embedded?: boolean }) {
   const { t } = useTranslation('marketing');
   const { data: locations, isLoading: locLoading } = useLocations();
   const { data: plans } = useRebillingPlans();
@@ -194,12 +194,14 @@ function RebillingPageInner() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('agency.rebilling.title', { defaultValue: 'Rebilling' })}
-        description={t('agency.rebilling.subtitle', {
-          defaultValue: 'Define a per-location SaaS plan and settle monthly charges against real usage.',
-        })}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('agency.rebilling.title', { defaultValue: 'Rebilling' })}
+          description={t('agency.rebilling.subtitle', {
+            defaultValue: 'Define a per-location SaaS plan and settle monthly charges against real usage.',
+          })}
+        />
+      )}
 
       <Tabs defaultValue="plans">
         <TabsList>
@@ -266,10 +268,10 @@ function RebillingPageInner() {
   );
 }
 
-export default function RebillingPage() {
+export default function RebillingPage({ embedded }: { embedded?: boolean } = {}) {
   return (
     <AgencyGuard>
-      <RebillingPageInner />
+      <RebillingPageInner embedded={embedded} />
     </AgencyGuard>
   );
 }

@@ -32,6 +32,17 @@ import {
 const AdReportingPage = lazy(() => import('./ads/AdReportingPage'));
 const PerformancePage = lazy(() => import('./PerformancePage'));
 const AnalyticsPage = lazy(() => import('./analytics/AnalyticsPage'));
+/**
+ * The GOAL, mounted above the RESULT.
+ *
+ * Targets and Performance are the two halves of one question about the same
+ * three metrics (WON_LEADS / COMMISSION_AMOUNT / CONNECTED_CALLS): what we said
+ * we would do, and what we did. They were two pages in two different chrome
+ * AREAS — `/targets` is a child of the settings hub, so reading it meant
+ * leaving the report to go through the gear and then coming back. Mounted, not
+ * linked: a link to /targets IS that trip.
+ */
+const TargetsPage = lazy(() => import('./targets'));
 
 const TABS = ['overview', 'ads', 'performance', 'analytics'] as const;
 type ReportsTab = (typeof TABS)[number];
@@ -119,7 +130,15 @@ export default function ReportsPage() {
             <AdReportingPage embedded />
           </Lazy>
         </TabsContent>
-        <TabsContent value="performance" className="pt-2">
+        <TabsContent value="performance" className="pt-2 space-y-6">
+          <section>
+            <h2 className="mb-2 text-sm font-semibold text-foreground">
+              {t('reports.targets.title', 'Aylık hedefler')}
+            </h2>
+            <Lazy>
+              <TargetsPage embedded />
+            </Lazy>
+          </section>
           <Lazy>
             <PerformancePage embedded />
           </Lazy>

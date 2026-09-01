@@ -439,6 +439,10 @@ export class WorkflowActionHandler {
       type: 'WORKFLOW',
       title: 'Automation',
       message: this.interpolate(step.message, ctx).slice(0, 500),
+      // The recipient IS the lead's owner (the early return above), so the lead
+      // is in hand: stamp it, or the bell has nothing to open — the title is
+      // always the literal "Automation".
+      metadata: { leadId: ctx.lead.id },
     });
     return 'notified';
   }

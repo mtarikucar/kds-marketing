@@ -38,7 +38,7 @@ vi.mock('../../../../lib/clipboard', () => ({ copyToClipboard: vi.fn(async () =>
 
 import * as svc from '../../../../features/marketing/api/mcpConsole.service';
 import * as clipboard from '../../../../lib/clipboard';
-import McpConsolePage from './McpConsolePage';
+import McpConsolePage, { SessionsSection } from './McpConsolePage';
 
 const api = svc as unknown as {
   getMcpConsoleOverview: ReturnType<typeof vi.fn>;
@@ -589,5 +589,27 @@ describe('McpConsolePage — the scheduled-task prompt', () => {
 
     await waitFor(() => expect(clipboard.copyToClipboard).toHaveBeenCalled());
     expect(vi.mocked(clipboard.copyToClipboard).mock.calls[0][0]).toContain('claim_research_job');
+  });
+});
+
+/**
+ * Section 4, on its own.
+ *
+ * The Studio's `?tool=ops` drawer mounts the audit list beside the webhook
+ * deliveries — "did the connector do anything I should know about" is a weekly
+ * question, while sections 1-3 (endpoint, keys, write-mode switch) are one-time
+ * setup and stay page-only. This pins that the export is a real, standalone
+ * component rather than something that only works inside the page's tree.
+ */
+describe('McpConsolePage — SessionsSection, mounted alone', () => {
+  it('reads and renders the audit list without the rest of the console', async () => {
+    render(<SessionsSection />, { wrapper });
+
+    expect(await screen.findByText('leads.search')).toBeInTheDocument();
+    expect(api.listMcpSessions).toHaveBeenCalledWith(1, 25);
+    // Section 2's switch is NOT dragged along with it.
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    // …and neither is the overview's request for it.
+    expect(api.getMcpConsoleOverview).not.toHaveBeenCalled();
   });
 });

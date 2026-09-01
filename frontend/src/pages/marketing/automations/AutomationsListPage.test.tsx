@@ -70,3 +70,45 @@ describe('AutomationsListPage', () => {
     expect(navigateMock).toHaveBeenCalledWith('/automations/1/edit');
   });
 });
+
+/**
+ * `embedded` + `onNavigate`, for the Studio's `?tool=ops` drawer.
+ *
+ * The builder is a `fullBleed` route of its own, so every create/edit here
+ * leaves the screen the drawer is open on. The host needs that moment to drop
+ * its `?tool=ops` (its close is a `replace`), or the operator returns from the
+ * builder to a drawer they did not ask to reopen.
+ */
+describe('AutomationsListPage — hosted inside another screen', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('drops its own PageHeader when embedded', async () => {
+    render(<AutomationsListPage embedded />, { wrapper });
+
+    // Positive anchor: the list itself is fully there.
+    expect(await screen.findByText('Welcome flow')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Automations' })).not.toBeInTheDocument();
+  });
+
+  it('tells its host BEFORE it navigates to the builder', async () => {
+    const onNavigate = vi.fn();
+    render(<AutomationsListPage embedded onNavigate={onNavigate} />, { wrapper });
+
+    await userEvent.click((await screen.findAllByRole("button", { name: /Edit/i }))[0]);
+
+    expect(onNavigate).toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith('/automations/1/edit');
+    // Order matters: the host's parameter must be gone from the URL before the
+    // push, or the entry the back button returns to still carries it.
+    expect(onNavigate.mock.invocationCallOrder[0]).toBeLessThan(
+      navigateMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('navigates perfectly well with no host listening', async () => {
+    render(<AutomationsListPage />, { wrapper });
+
+    await userEvent.click((await screen.findAllByRole("button", { name: /Edit/i }))[0]);
+    expect(navigateMock).toHaveBeenCalledWith('/automations/1/edit');
+  });
+});

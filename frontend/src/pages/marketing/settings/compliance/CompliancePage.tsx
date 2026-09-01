@@ -59,7 +59,107 @@ function downloadJson(filename: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
-export default function CompliancePage() {
+/**
+ * The request-history table's columns, as a factory rather than a constant:
+ * every header is a `t(...)` call, so they have to be built inside a component
+ * that has the translator. Shared by the page's own tab and by the exported
+ * section the Studio drawer mounts, so the two can never drift into showing
+ * different columns for the same rows.
+ */
+const REQUEST_COLUMNS = (
+  t: ReturnType<typeof useTranslation>['t'],
+): ColumnDef<DataRequest, unknown>[] => [
+  {
+    accessorKey: 'kind',
+    header: t('compliance.req.kind', { defaultValue: 'Type' }),
+    cell: ({ getValue }) => {
+      const k = getValue<string>();
+      return (
+        <Badge tone={k === 'EXPORT' ? 'info' : 'warning'} size="sm">
+          {k === 'EXPORT'
+            ? t('compliance.req.export', { defaultValue: 'Export' })
+            : t('compliance.req.erasure', { defaultValue: 'Erasure' })}
+        </Badge>
+      );
+    },
+  },
+  {
+    accessorKey: 'status',
+    header: t('compliance.req.status', { defaultValue: 'Status' }),
+    cell: ({ getValue }) => {
+      const s = getValue<string>();
+      const tone = s === 'COMPLETED' ? 'success' : s === 'REJECTED' ? 'danger' : 'neutral';
+      return (
+        <Badge tone={tone} size="sm">
+          {t(`compliance.status.${s}`, { defaultValue: s })}
+        </Badge>
+      );
+    },
+  },
+  {
+    accessorKey: 'leadId',
+    header: t('compliance.req.lead', { defaultValue: 'Lead' }),
+    cell: ({ getValue }) => (
+      <code className="text-xs text-muted-foreground">{getValue<string>() ?? '—'}</code>
+    ),
+  },
+  {
+    accessorKey: 'requestedAt',
+    header: t('compliance.req.requestedAt', { defaultValue: 'Requested' }),
+    cell: ({ getValue }) => (
+      <span className="text-sm text-muted-foreground">{fmtDateTime(getValue<string>())}</span>
+    ),
+  },
+  {
+    accessorKey: 'completedAt',
+    header: t('compliance.req.completedAt', { defaultValue: 'Completed' }),
+    cell: ({ getValue }) => {
+      const v = getValue<string | null>();
+      return <span className="text-sm text-muted-foreground">{v ? fmtDateTime(v) : '—'}</span>;
+    },
+  },
+];
+
+/**
+ * The REQUEST HISTORY half of this page, on its own.
+ *
+ * Exported because the Studio's `?tool=ops` drawer mounts it beside the webhook
+ * deliveries and the connector audit — "is a data request waiting on me" is a
+ * weekly operational question, and answering it used to mean a trip through the
+ * gear. The page below still renders it as its second tab, unchanged; this is an
+ * additional door, not a move.
+ *
+ * The per-person half (consent records, export, erasure) is deliberately NOT
+ * here. It opens by SEARCHING for a person, and the one surface that needs it
+ * most has already selected one — so that half lives on the Inbox record card
+ * as `PersonConsents`, where the search step simply does not exist.
+ */
+export function ComplianceRequestsSection() {
+  const { t } = useTranslation('marketing');
+  const { data: requests, isLoading: requestsLoading } = useDataRequests();
+
+  const requestColumns: ColumnDef<DataRequest, unknown>[] = REQUEST_COLUMNS(t);
+
+  return (
+    <DataTable
+      columns={requestColumns}
+      data={requests ?? []}
+      isLoading={requestsLoading}
+      loadingRowCount={5}
+      emptyState={
+        <EmptyState
+          icon={<ScrollText className="h-10 w-10" />}
+          title={t('compliance.noRequests', { defaultValue: 'No data requests yet' })}
+          description={t('compliance.noRequestsHint', {
+            defaultValue: 'Export and erasure requests you run will appear here.',
+          })}
+        />
+      }
+    />
+  );
+}
+
+export default function CompliancePage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
 
   const [search, setSearch] = useState('');
@@ -68,7 +168,6 @@ export default function CompliancePage() {
 
   const { data: searchResults, isFetching: searching } = useLeadSearch(search);
   const { data: consents, isLoading: consentsLoading } = useLeadConsents(selectedLead?.id ?? null);
-  const { data: requests, isLoading: requestsLoading } = useDataRequests();
   const { exportData, erasure } = useComplianceMutations();
 
   const handleExport = () => {
@@ -96,67 +195,16 @@ export default function CompliancePage() {
   const leadLabel = (l: ComplianceLead) =>
     l.businessName || l.contactPerson || l.email || l.id;
 
-  // ── Requests history columns ───────────────────────────────────────────────
-  const requestColumns: ColumnDef<DataRequest, unknown>[] = [
-    {
-      accessorKey: 'kind',
-      header: t('compliance.req.kind', { defaultValue: 'Type' }),
-      cell: ({ getValue }) => {
-        const k = getValue<string>();
-        return (
-          <Badge tone={k === 'EXPORT' ? 'info' : 'warning'} size="sm">
-            {k === 'EXPORT'
-              ? t('compliance.req.export', { defaultValue: 'Export' })
-              : t('compliance.req.erasure', { defaultValue: 'Erasure' })}
-          </Badge>
-        );
-      },
-    },
-    {
-      accessorKey: 'status',
-      header: t('compliance.req.status', { defaultValue: 'Status' }),
-      cell: ({ getValue }) => {
-        const s = getValue<string>();
-        const tone = s === 'COMPLETED' ? 'success' : s === 'REJECTED' ? 'danger' : 'neutral';
-        return (
-          <Badge tone={tone} size="sm">
-            {t(`compliance.status.${s}`, { defaultValue: s })}
-          </Badge>
-        );
-      },
-    },
-    {
-      accessorKey: 'leadId',
-      header: t('compliance.req.lead', { defaultValue: 'Lead' }),
-      cell: ({ getValue }) => (
-        <code className="text-xs text-muted-foreground">{getValue<string>() ?? '—'}</code>
-      ),
-    },
-    {
-      accessorKey: 'requestedAt',
-      header: t('compliance.req.requestedAt', { defaultValue: 'Requested' }),
-      cell: ({ getValue }) => (
-        <span className="text-sm text-muted-foreground">{fmtDateTime(getValue<string>())}</span>
-      ),
-    },
-    {
-      accessorKey: 'completedAt',
-      header: t('compliance.req.completedAt', { defaultValue: 'Completed' }),
-      cell: ({ getValue }) => {
-        const v = getValue<string | null>();
-        return <span className="text-sm text-muted-foreground">{v ? fmtDateTime(v) : '—'}</span>;
-      },
-    },
-  ];
-
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('compliance.title', { defaultValue: 'Compliance' })}
-        description={t('compliance.subtitle', {
-          defaultValue: 'Consent records and GDPR/KVKK data-subject requests (export and erasure).',
-        })}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('compliance.title', { defaultValue: 'Compliance' })}
+          description={t('compliance.subtitle', {
+            defaultValue: 'Consent records and GDPR/KVKK data-subject requests (export and erasure).',
+          })}
+        />
+      )}
 
       <Tabs defaultValue="subject">
         <TabsList>
@@ -334,21 +382,7 @@ export default function CompliancePage() {
 
         {/* ── Requests history tab ── */}
         <TabsContent value="requests" className="space-y-4">
-          <DataTable
-            columns={requestColumns}
-            data={requests ?? []}
-            isLoading={requestsLoading}
-            loadingRowCount={5}
-            emptyState={
-              <EmptyState
-                icon={<ScrollText className="h-10 w-10" />}
-                title={t('compliance.noRequests', { defaultValue: 'No data requests yet' })}
-                description={t('compliance.noRequestsHint', {
-                  defaultValue: 'Export and erasure requests you run will appear here.',
-                })}
-              />
-            }
-          />
+          <ComplianceRequestsSection />
         </TabsContent>
       </Tabs>
 

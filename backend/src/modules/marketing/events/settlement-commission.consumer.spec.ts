@@ -190,7 +190,14 @@ describe('SettlementCommissionConsumer', () => {
       );
       expect(prisma.marketingNotification.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ workspaceId: 'ws-core', userId: 'rep-9' }),
+          data: expect.objectContaining({
+            workspaceId: 'ws-core',
+            userId: 'rep-9',
+            // Not FOLLOW_UP_REMINDER: this is a credited commission, and that
+            // label also collided with the follow-up cron's dedup probe.
+            type: 'COMMISSION_EARNED',
+            metadata: expect.objectContaining({ leadId: 'lead-new' }),
+          }),
         }),
       );
     });

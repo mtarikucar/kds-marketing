@@ -65,7 +65,7 @@ function invoiceStatusTone(
   return 'warning';
 }
 
-export default function InvoicesPage() {
+export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
@@ -183,21 +183,23 @@ export default function InvoicesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('invoices.title', 'Invoices')}
-        description={t(
-          'invoices.subtitle',
-          'Bill your customers and collect via your own Stripe or bank transfer.',
-        )}
-        actions={
-          !showForm && (
-            <Button onClick={() => setShowForm(true)}>
-              <Plus className="h-4 w-4" aria-hidden />
-              {t('invoices.new', 'New invoice')}
-            </Button>
-          )
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('invoices.title', 'Invoices')}
+          description={t(
+            'invoices.subtitle',
+            'Bill your customers and collect via your own Stripe or bank transfer.',
+          )}
+          actions={
+            !showForm && (
+              <Button onClick={() => setShowForm(true)}>
+                <Plus className="h-4 w-4" aria-hidden />
+                {t('invoices.new', 'New invoice')}
+              </Button>
+            )
+          }
+        />
+      )}
 
       {/* PSP settings */}
       <Card>

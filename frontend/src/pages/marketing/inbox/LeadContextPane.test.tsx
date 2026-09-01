@@ -154,6 +154,26 @@ const BOOKINGS = [
   },
 ];
 
+const CONSENTS = [
+  { type: 'MARKETING_EMAIL', granted: true, at: '2026-07-01T00:00:00.000Z' },
+  { type: 'MARKETING_SMS', granted: false, at: '2026-07-02T00:00:00.000Z' },
+];
+
+const COURSES = [{ id: 'crs1', title: 'Satış Temelleri' }];
+
+const ENROLLMENTS = [
+  {
+    id: 'en1',
+    workspaceId: 'ws1',
+    courseId: 'crs1',
+    leadId: 'p1',
+    status: 'ACTIVE',
+    progressPct: 40,
+    enrolledAt: '2026-08-01T00:00:00.000Z',
+    completedAt: null,
+  },
+];
+
 /**
  * RANDEVULAR is the one section whose read is not open to everyone: the whole
  * of `marketing/calendars` is MANAGER+ behind `funnels`, so the card gates that
@@ -197,8 +217,11 @@ beforeEach(() => {
   post.mockReset();
   post.mockResolvedValue({ data: {} });
   setRole('MANAGER');
-  features = { funnels: true };
+  features = { funnels: true, memberships: true };
   routes = {
+    '/compliance/leads/:id/consent': () => Promise.resolve({ data: CONSENTS }),
+    '/enrollments': () => Promise.resolve({ data: ENROLLMENTS }),
+    '/courses': () => Promise.resolve({ data: COURSES }),
     '/pipelines': () => Promise.resolve({ data: PIPELINES }),
     '/opportunities': () =>
       Promise.resolve({
@@ -211,7 +234,12 @@ beforeEach(() => {
     '/billing/summary': () => Promise.resolve({ data: { entitlements: { features } } }),
   };
   get.mockImplementation((url: string) => {
-    const read = routes[url.startsWith('/leads/') ? '/leads/:id' : url];
+    const key = url.startsWith('/leads/')
+      ? '/leads/:id'
+      : url.startsWith('/compliance/leads/')
+        ? '/compliance/leads/:id/consent'
+        : url;
+    const read = routes[key];
     return read ? read() : Promise.resolve({ data: {} });
   });
 });
@@ -478,6 +506,108 @@ describe('LeadContextPane — the person’s remaining objects', () => {
     const links = within(screen.getByTestId('record-card')).getAllByRole('link');
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute('href', '/leads/p1');
+  });
+
+  /**
+   * The same count with EVERY disclosure open — the assertion above only sees
+   * closed sections, and a closed section renders nothing at all.
+   *
+   * Both new sections have an obvious link they must resist: PersonConsents
+   * wants one to the compliance console, PersonCourses wants one to the course
+   * editor. Either would quietly end "selecting is not navigating" on the one
+   * card a rep reads before deciding whether to touch somebody.
+   */
+  it('adds no second way off the surface with all four disclosures open', async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    for (const name of [/Tahmini fiyat/, /Randevular/, /Onaylar ve veri talepleri/, /Eğitimler/]) {
+      await user.click(await screen.findByRole('button', { name }));
+    }
+
+    // Positive anchors: all four really rendered their bodies.
+    expect(await screen.findByText('EST-A1B2')).toBeInTheDocument();
+    expect(await screen.findByText('Demo görüşmesi')).toBeInTheDocument();
+    expect(await screen.findByTestId('person-consents')).toBeInTheDocument();
+    expect(await screen.findByText('Satış Temelleri')).toBeInTheDocument();
+
+    const links = within(screen.getByTestId('record-card')).getAllByRole('link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/leads/p1');
+  });
+
+  it('asks for nothing on behalf of the consents and courses sections either', async () => {
+    renderCard();
+
+    // Positive anchor: the eager reads have RESOLVED, so "no request" is a
+    // settled fact and not a race with the first paint.
+    expect(await screen.findByText('Ara onu')).toBeInTheDocument();
+
+    expect(get).not.toHaveBeenCalledWith(
+      expect.stringContaining('/compliance/leads/'),
+      expect.anything(),
+    );
+    expect(get).not.toHaveBeenCalledWith('/enrollments', expect.anything());
+  });
+});
+
+/**
+ * The two sections added on 2026-09-01, and the gates they travel with.
+ *
+ * Both are surfaces that used to live in the Settings area — the compliance
+ * console (whose first step there is a lead search this card has already done)
+ * and the person's course enrolments. Mounting them here without their gates
+ * would re-host them under a weaker guard than the routes they came from.
+ */
+describe('LeadContextPane — the consents and courses sections', () => {
+  it('reads THIS person’s consent record, and only once opened', async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Onaylar ve veri talepleri/ }));
+
+    expect(await screen.findByTestId('person-consents')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith('/compliance/leads/p1/consent');
+  });
+
+  /**
+   * `ComplianceController` is class-level `@MarketingRoles('MANAGER')`. Ungated,
+   * a REP opening this would collect a 403 and a permanent failure notice where
+   * a permission answer belongs.
+   */
+  it('is not offered to a REP at all', async () => {
+    setRole('REP');
+    renderCard();
+
+    // Positive anchor: the card IS up, so the absence is a decision.
+    await screen.findByText('Ara onu');
+    expect(screen.queryByTestId('record-consents')).not.toBeInTheDocument();
+  });
+
+  it('reads THIS person’s enrolments, and only once opened', async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(await screen.findByRole('button', { name: /Eğitimler/ }));
+
+    expect(await screen.findByText('Satış Temelleri')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith('/enrollments', { params: { leadId: 'p1' } });
+  });
+
+  /**
+   * Hidden rather than NAMED, unlike the appointments section's plan notice:
+   * without `memberships` there is no course to be enrolled in at all, so there
+   * is nothing behind the notice a plan line would promise.
+   */
+  it('is absent without the memberships entitlement', async () => {
+    features = { funnels: true, memberships: false };
+    renderCard();
+
+    await screen.findByText('Ara onu');
+    // Positive anchor: the other gated section is still here, so this is about
+    // `memberships` and not about a card that failed to render.
+    expect(await screen.findByTestId('record-appointments')).toBeInTheDocument();
+    expect(screen.queryByTestId('record-courses')).not.toBeInTheDocument();
   });
 });
 

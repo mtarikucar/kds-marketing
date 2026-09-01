@@ -36,6 +36,28 @@ describe('VoicePage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
+  /**
+   * `embedded` is what lets this page be a TAB of the calls hub — which is
+   * itself sometimes a ~34%-wide column of the person surface — rather than a
+   * link out to a settings-area route.
+   */
+  it('drops its own header when embedded, and the viewport calc with it', () => {
+    const { container } = render(<VoicePage embedded />, { wrapper });
+
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+    // A `100vh` calc inside a host that is not the viewport letterboxes the two
+    // panels — the fullBleed trap NavChild's docstring records.
+    expect(container.innerHTML).not.toContain('h-[calc(100vh-12rem)]');
+    expect(container.innerHTML).toContain('h-full min-h-0');
+  });
+
+  it('keeps both on the standalone route', () => {
+    const { container } = render(<VoicePage />, { wrapper });
+
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(container.innerHTML).toContain('h-[calc(100vh-12rem)]');
+  });
+
   it('renders the select-a-call prompt when no call is selected', () => {
     render(<VoicePage />, { wrapper });
     expect(screen.getByText(/select a call|voice\.selectPrompt/i)).toBeInTheDocument();
