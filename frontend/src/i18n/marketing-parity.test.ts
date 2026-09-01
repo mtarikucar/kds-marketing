@@ -290,6 +290,58 @@ describe('marketing i18n — the person surface and its work queue', () => {
         'surface.people.search',
         'surface.pane.reply',
         'surface.card.open',
+        // The record card is FIVE sections since 2026-09-01. Each one's title
+        // is how a rep knows which of them went missing, and each one's
+        // `failed` is the sentence that keeps a broken section from reading as
+        // an empty one — the card's central rule. Anchored by name so a
+        // deletion is loud rather than a silently shorter list.
+        'surface.sales.title',
+        'surface.tasks.title',
+        'surface.tasks.failed',
+        'surface.offers.title',
+        'surface.offers.failed',
+        'surface.estimates.title',
+        'surface.estimates.failed',
+        'surface.appointments.title',
+        'surface.appointments.failed',
+        // Randevular is the one section behind a plan line (`funnels`), and
+        // this is the sentence that keeps that from reading as a breakage.
+        // Degraded to English it becomes the one thing LeadStream refuses to
+        // let it be: a workspace told its calendar "could not be loaded" when
+        // it simply never bought one.
+        'surface.appointments.gated',
+        // The two disclosures are unopenable without these two words.
+        'surface.section.show',
+        'surface.section.hide',
+        // The left column's four arrangements (2026-09-01, stage 2). These
+        // four words ARE the switcher: degraded to English they leave a
+        // ru/ar/uz operator picking between labels in a language they did not
+        // choose, on the only control that changes what the column IS.
+        'surface.view.list',
+        'surface.view.board',
+        'surface.view.calendar',
+        'surface.view.tasks',
+        // The tablist's accessible name, and the sentence a view that could not
+        // be opened says. The second one is the switcher's own error≠empty
+        // line: without it a broken arrangement is an empty box.
+        'surface.view.label',
+        'surface.view.failed',
+        // The door back to the full page of the three views that are embedded
+        // PAGES. Stage 4 took those pages out of the menu, so this link is the
+        // in-context way back to what `embedded` drops — the month grid above
+        // all. Untranslated it is the one control on the switcher offering a
+        // capability in a language the operator did not pick.
+        'surface.view.fullPage',
+        // The list's grouping (2026-09-01, stage 3). `Şirketler` left the menu
+        // to become this control, so these three words are now the only way a
+        // ru/ar/uz operator meets companies on the daily surface at all: the
+        // toggle's accessible name, its one-word label, and — the load-bearing
+        // one — the header over the people who belong to NO company. Degraded
+        // to English that last block reads as a stray English word over the
+        // majority of most workspaces' contacts.
+        'surface.people.group.byCompany',
+        'surface.people.group.short',
+        'surface.people.group.none',
         'leads.queue.waiting',
         'leads.queue.unassigned',
         'leads.queue.all',
@@ -302,6 +354,32 @@ describe('marketing i18n — the person surface and its work queue', () => {
       const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
       const have = new Set(flat(cat));
       expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+    }
+  });
+
+  /**
+   * The two views the left column borrows from other pages bring their own
+   * failure sentences, and those live OUTSIDE the `surface.*` namespace this
+   * block otherwise sweeps — `tasks.*` and `calendar.*`, because the pages own
+   * them and the surface only embeds them.
+   *
+   * They are pinned here anyway, and for the same reason as everything else in
+   * this file: both were added to stop a failed read from rendering as an empty
+   * queue and an empty month, and a locale that silently falls back to English
+   * for them re-creates half of that bug — an operator reading a translated
+   * empty state beside an untranslated failure has no way to tell they are
+   * different states.
+   */
+  it('every offered locale can say a view could not be read, not merely that it is empty', async () => {
+    const want = ['tasks.loadFailed', 'tasks.empty', 'calendar.loadFailed'];
+    for (const locale of ['en', 'tr', 'ar', 'ru', 'uz']) {
+      const cat = (await import(`./locales/${locale}/marketing.json`)).default as Json;
+      const have = new Set(flat(cat));
+      expect({ locale, missing: want.filter((k) => !have.has(k)) }).toEqual({ locale, missing: [] });
+      // …and they must not be the SAME sentence, which is the collapse the
+      // pair exists to prevent.
+      const t = cat.tasks as Record<string, string>;
+      expect({ locale, collides: t.loadFailed === t.empty }).toEqual({ locale, collides: false });
     }
   });
 

@@ -102,6 +102,19 @@ export interface Lead {
   id: string;
   businessName: string;
   companyId?: string | null;
+  /**
+   * The B2B account behind `companyId`, resolved by the server on every list
+   * read. NULL — not undefined — when the person is unlinked OR when the id
+   * names nothing this workspace can see: `Company` has no foreign key back to
+   * `Lead`, so the name is a lookup, and a lookup that misses must not be
+   * papered over with a raw uuid. Absent (undefined) only on payloads that
+   * predate the field.
+   *
+   * It is what the person surface's "Grupla: Şirkete göre" heads each block
+   * with. The ORDER those blocks arrive in is the server's (`sortBy=company`);
+   * this field only names them.
+   */
+  company?: { id: string; name: string } | null;
   contactPerson: string;
   phone?: string;
   /** NetGSM SMS v2 Task 12 — stamped when a rep confirms a live SMS OTP sent
@@ -129,8 +142,16 @@ export interface Lead {
   notes?: string;
   nextFollowUp?: string;
   priority: string;
-  assignedToId?: string;
-  assignedTo?: MarketingUserInfo;
+  assignedToId?: string | null;
+  /**
+   * Who owns this lead. NULL — not undefined — when nobody does: every producer
+   * of a Lead includes the relation, and Prisma returns a missing relation as
+   * null. The distinction is load-bearing on the person surface's record card,
+   * where "Atanmamış" is an ANSWER (it is what the Atanmamış queue is about)
+   * and must not be printed for a person whose record simply has not been read
+   * yet. See `RecordCardLead`.
+   */
+  assignedTo?: MarketingUserInfo | null;
   convertedTenantId?: string;
   convertedAt?: string;
   createdAt: string;

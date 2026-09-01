@@ -160,3 +160,146 @@ describe('TasksPage', () => {
     expect(screen.queryByText('tasks.empty')).not.toBeInTheDocument();
   });
 });
+
+
+/**
+ * The task list as the person surface's **Görevler** view (2026-09-01 design,
+ * stage 2). Same prop, same meaning, same one implementation as every other
+ * embedded page on this surface: the chrome is swapped for the host's and
+ * nothing else moves. The tabs, the status filter, the server sort, complete /
+ * edit / delete and the create dialog all come along.
+ */
+describe('TasksPage — embedded as the surface Görevler view', () => {
+  const WITH_LEAD = {
+    ...TASK,
+    lead: { id: 'lead-1', businessName: 'Acme Kafe' },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    patchMock.mockResolvedValue({ data: {} });
+    getMock.mockImplementation((url: string) => {
+      if (url === '/tasks')
+        return Promise.resolve({ data: { data: [WITH_LEAD], meta: { total: 1 } } });
+      if (url === '/users')
+        return Promise.resolve({
+          data: [{ id: 'u-1', firstName: 'Tarik', lastName: 'U', role: 'MANAGER' }],
+        });
+      return Promise.resolve({ data: {} });
+    });
+  });
+
+  it('drops its own page chrome and keeps the list', async () => {
+    render(<TasksPage embedded />, { wrapper });
+
+    expect(await screen.findByText('Call the lead')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
+  it('keeps creating a task — that is a capability, not chrome', async () => {
+    render(<TasksPage embedded />, { wrapper });
+    await screen.findByText('Call the lead');
+
+    await userEvent.click(screen.getByRole('button', { name: 'tasks.createButton' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('keeps the three tabs and the status filter', async () => {
+    render(<TasksPage embedded />, { wrapper });
+    await screen.findByText('Call the lead');
+
+    await userEvent.click(screen.getByRole('button', { name: 'tasks.tabs.overdue' }));
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith('/tasks/overdue'));
+  });
+
+  /**
+   * The whole point of the view: a task names a person, and clicking that name
+   * opens their conversation in the middle column. On `/tasks` the same name is
+   * a LINK into their record, because there is no surface there to report to —
+   * and that difference is the one thing this view changes.
+   */
+  it('reports the task\'s person up instead of navigating', async () => {
+    const onSelectPerson = vi.fn();
+    render(<TasksPage embedded onSelectPerson={onSelectPerson} />, { wrapper });
+
+    await userEvent.click(await screen.findByTestId('task-lead-t1'));
+
+    expect(onSelectPerson).toHaveBeenCalledWith(expect.objectContaining({ id: 'lead-1' }));
+  });
+
+  it('marks the person the surface has open', async () => {
+    render(
+      <TasksPage embedded onSelectPerson={vi.fn()} selectedLeadId="lead-1" />,
+      { wrapper },
+    );
+
+    expect(await screen.findByTestId('task-lead-t1')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('leaves /tasks navigating into the record, as it always has', async () => {
+    render(<TasksPage />, { wrapper });
+
+    const link = await screen.findByRole('link', { name: 'Acme Kafe' });
+    expect(link).toHaveAttribute('href', '/leads/lead-1');
+  });
+
+  /**
+   * The repo's central rule, and this list did not follow it: the query read
+   * only `isLoading`, so a failed `/tasks` fell through to the DataTable's
+   * EMPTY state — "No tasks here." — with a "New task" button under it. As a
+   * column of the person surface that reads as "this queue is clear", which is
+   * the most expensive thing a work list can lie about.
+   */
+  it('says the list could not be read rather than showing it empty', async () => {
+    getMock.mockImplementation((url: string) => {
+      if (url === '/tasks') return Promise.reject(new Error('boom'));
+      if (url === '/users') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    render(<TasksPage embedded />, { wrapper });
+
+    // Positive anchor first: the absence below would pass instantly against a
+    // list that is merely still loading.
+    expect(await screen.findByText('Could not load tasks.')).toBeInTheDocument();
+    expect(screen.queryByText('tasks.empty')).not.toBeInTheDocument();
+  });
+
+  it('says it is empty only once it has actually been read', async () => {
+    getMock.mockImplementation((url: string) => {
+      if (url === '/tasks') return Promise.resolve({ data: { data: [], meta: { total: 0 } } });
+      if (url === '/users') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    render(<TasksPage embedded />, { wrapper });
+
+    expect(await screen.findByText('tasks.empty')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load tasks.')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The other half of the invalidation contract. `useLeadRecordActions` now
+   * names ['marketing','tasks'] so a write on the record CARD refreshes this
+   * list; this is the same round trip in the other direction — a task completed
+   * HERE has to refresh the person's record beside it, or the card's GÖREVLER
+   * section keeps showing a task the rep just ticked off two columns away.
+   */
+  it('refreshes the open person\'s record when a task is completed here', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <TasksPage embedded />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Call the lead');
+
+    await userEvent.click(screen.getByRole('button', { name: 'tasks.completeSuccess' }));
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead'] }),
+    );
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'tasks'] });
+  });
+});

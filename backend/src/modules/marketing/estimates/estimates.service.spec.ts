@@ -17,6 +17,28 @@ describe('EstimatesService', () => {
     svc = new EstimatesService(prisma as any, invoices as any, taxRates as any);
   });
 
+  describe('list', () => {
+    it('is workspace-scoped and unfiltered by default', async () => {
+      prisma.estimate.findMany.mockResolvedValue([]);
+      await svc.list(WS);
+      const where = prisma.estimate.findMany.mock.calls[0][0].where;
+      expect(where.workspaceId).toBe(WS);
+      expect(where.leadId).toBeUndefined();
+    });
+
+    // The record card asks for ONE person's quotes. Without a server-side
+    // predicate the card would have to pull every estimate in the workspace
+    // and sift them in the browser — an unbounded read for a section that
+    // usually shows nothing.
+    it('narrows to one person when a leadId is given, still workspace-scoped', async () => {
+      prisma.estimate.findMany.mockResolvedValue([]);
+      await svc.list(WS, 'lead-1');
+      const where = prisma.estimate.findMany.mock.calls[0][0].where;
+      expect(where.workspaceId).toBe(WS);
+      expect(where.leadId).toBe('lead-1');
+    });
+  });
+
   describe('create', () => {
     it('computes the minor-unit total and mints number + public token (scoped)', async () => {
       prisma.estimate.create.mockResolvedValue({ id: 'e1' } as any);

@@ -297,6 +297,7 @@
     "calls": "Calls",
     "performance": "Performance",
     "targets": "Targets",
+    "pipelines": "Pipelines",
     "customFields": "Custom Fields",
     "tags": "Tags",
     "segments": "Segments",
@@ -1046,6 +1047,7 @@
       "assignedTo": "Owner"
     },
     "empty": "No tasks here.",
+    "loadFailed": "Could not load tasks.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
@@ -1064,6 +1066,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "Today",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",
@@ -1074,7 +1079,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "Could not load the calendar."
   },
   "commissions": {
     "title": "Commissions",
@@ -3278,6 +3284,35 @@
     }
   },
   "surface": {
+    "tasks": {
+      "title": "Tasks",
+      "add": "Task",
+      "none": "No tasks for this person.",
+      "failed": "Could not load tasks."
+    },
+    "offers": {
+      "title": "Offers",
+      "add": "Offer",
+      "none": "No offers for this person.",
+      "failed": "Could not load offers."
+    },
+    "estimates": {
+      "title": "Estimates",
+      "none": "No estimates for this person.",
+      "noExpiry": "No expiry date",
+      "failed": "Could not load estimates."
+    },
+    "appointments": {
+      "title": "Appointments",
+      "none": "No appointments for this person.",
+      "failed": "Could not load appointments.",
+      "gated": "Appointments are not in your plan",
+      "gatedHint": "the calendar is not part of your subscription; once it is added, this person’s appointments appear here"
+    },
+    "section": {
+      "show": "Show",
+      "hide": "Hide"
+    },
     "sales": {
       "title": "Sales",
       "none": "Not in the pipeline.",
@@ -3296,6 +3331,11 @@
       "empty": {
         "title": "Nobody in this queue",
         "desc": "Pick another queue or clear the search."
+      },
+      "group": {
+        "byCompany": "Group by company",
+        "short": "Company",
+        "none": "No company"
       }
     },
     "pane": {
@@ -3326,7 +3366,13 @@
     "subtitle": "Everyone in one list — the ones talking and the quiet ones.",
     "view": {
       "list": "List",
-      "table": "Table"
+      "table": "Table",
+      "board": "Pipeline",
+      "calendar": "Calendar",
+      "tasks": "Tasks",
+      "label": "View",
+      "failed": "This view could not be opened.",
+      "fullPage": "Open full page"
     }
   }
 }

@@ -202,6 +202,30 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.credits.reserve).not.toHaveBeenCalled();
   });
 
+  // Every frame this engine pushes lands on the whole-workspace stream that the
+  // person surface reads. Unnamed, each one costs that surface a refetch of
+  // whoever happens to be open — the AI typing on somebody else's thread is the
+  // single chattiest source of those.
+  it('names the person on the typing frames it brackets a reply with', async () => {
+    const h = build();
+    await run(h);
+    const typing = h.stream.push.mock.calls.filter((c: any[]) => c[1].kind === 'ai_typing');
+    expect(typing).toHaveLength(2);
+    expect(typing.map((c: any[]) => c[1].leadId)).toEqual(['lead-1', 'lead-1']);
+  });
+
+  it('names the person on the handoff frame', async () => {
+    const h = build({
+      agent: { handoffRules: { keywords: ['human'] } },
+      history: [{ direction: 'INBOUND', body: 'I want a human please' }],
+    });
+    await run(h);
+    expect(h.stream.push).toHaveBeenCalledWith(
+      WS,
+      expect.objectContaining({ kind: 'conversation', conversationId: CONVO, leadId: 'lead-1' }),
+    );
+  });
+
   it('gate: AI disabled (no key) → no reply, no credit', async () => {
     const h = build({ enabled: false });
     await run(h);

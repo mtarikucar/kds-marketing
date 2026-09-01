@@ -547,6 +547,37 @@ describe('BookingService', () => {
       const where = prisma.booking.findMany.mock.calls.at(-1)[0].where;
       expect(where.status).toEqual({ not: 'EXTERNAL_BUSY' });
     });
+
+    // The record card asks "what appointments does THIS person have" — the
+    // whole of them, not the ones inside the list screen's rolling window.
+    it('narrows to one person when a leadId is given, still workspace-scoped', async () => {
+      prisma.booking.findMany.mockResolvedValue([{ id: 'b1', leadId: 'lead-1' }]);
+      await svc.listBookings(WS, { leadId: 'lead-1' });
+      const where = prisma.booking.findMany.mock.calls.at(-1)[0].where;
+      expect(where.workspaceId).toBe(WS);
+      expect(where.leadId).toBe('lead-1');
+    });
+
+    // The 24h lower bound exists so the 500-row asc cap covers TODAY on the
+    // appointments screen. A person has a handful of appointments and their
+    // PAST ones are the point of a record card, so the window must not apply
+    // when the query is already narrowed to one person — otherwise the card
+    // says "no appointments" about someone who was seen last week.
+    it('drops the rolling 24h window for a single person', async () => {
+      prisma.booking.findMany.mockResolvedValue([]);
+      await svc.listBookings(WS, { leadId: 'lead-1' });
+      const where = prisma.booking.findMany.mock.calls.at(-1)[0].where;
+      expect(where.startAt).toBeUndefined();
+    });
+
+    // ...but an explicit range still wins, so a caller asking for a person's
+    // NEXT week gets a person's next week.
+    it('still honours an explicit range for a single person', async () => {
+      prisma.booking.findMany.mockResolvedValue([]);
+      await svc.listBookings(WS, { leadId: 'lead-1', from: '2027-06-01T00:00:00.000Z' });
+      const where = prisma.booking.findMany.mock.calls.at(-1)[0].where;
+      expect(where.startAt.gte).toEqual(new Date('2027-06-01T00:00:00.000Z'));
+    });
   });
 
   describe('reminders', () => {

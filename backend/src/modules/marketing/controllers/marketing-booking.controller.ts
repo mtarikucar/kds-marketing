@@ -43,7 +43,9 @@ export class MarketingBookingController {
     return this.booking.listBlackouts(a.workspaceId, calendarId);
   }
 
-  /** Real appointments for the in-app list (excludes external busy blocks). */
+  /** Real appointments for the in-app list (excludes external busy blocks).
+   *  `?leadId=` narrows to ONE contact — the person record card's read — and
+   *  that query is not subject to the list screen's rolling 24h window. */
   @Get('bookings')
   listBookings(
     @CurrentMarketingUser() a: MarketingUserPayload,

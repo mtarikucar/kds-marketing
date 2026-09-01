@@ -72,7 +72,11 @@ describe('EstimatesPage', () => {
   it('lists estimates with number and formatted total', async () => {
     render(<EstimatesPage />, { wrapper });
     expect(await screen.findByText('EST-ABCD')).toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith('/estimates');
+    // The unfiltered workspace list: an EMPTY filter object, not a missing
+    // one. `listEstimates` takes a filter since the record card asks for one
+    // person's quotes, and this page is the caller that must keep asking for
+    // all of them.
+    expect(get).toHaveBeenCalledWith('/estimates', { params: {} });
   });
 
   // Regression: the list omits items, so opening edit must fetch the full

@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Search } from 'lucide-react';
+import { Building2, Search } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -71,6 +71,31 @@ export interface PeopleListProps {
  * reasons the leads table does it: `/leads?assignmentStatus=unassigned` is a
  * live deep link from the dashboard (NeedsAttention, DashboardHero), and a
  * filtered queue is worth pasting to a colleague.
+ *
+ * ## Grouping by company (`?group=company`)
+ *
+ * `Şirketler` is not a field of a person — `Company` has no `leadId` — so it
+ * could not become a section of the record card the way Görevler and Teklifler
+ * did. Per the owner's decision it is a GROUPING of this list instead, and
+ * `/companies` keeps its route and every capability it has.
+ *
+ * **The grouping is an ORDER, not a bucketing of this page.** The toggle asks
+ * the server for `sortBy=company`, which ranks the whole filtered set so a
+ * company's people are contiguous, and the page is a window onto that ranking.
+ * Bucketing the 25 rows already in hand would have needed no backend at all —
+ * and it would have lied: this list is paginated, so a company's people are
+ * scattered, and a header reading "Acme · 3" over a company with forty
+ * contacts is worse than no grouping, on the very surface that is replacing
+ * `/companies`'s menu entry. That is also why a header carries a NAME and no
+ * count: the page cannot know the company's total, and `/companies` can.
+ *
+ * A person with no company gets a NAMED trailing block ("Şirketsiz"), never a
+ * silent omission — dropping the unlinked is the exact failure this surface
+ * exists to prevent, and they are the majority in most workspaces. The server
+ * ranks them last for the same reason; see `MarketingLeadsService.findAll`.
+ *
+ * A grouping is not a filter: the chips, the search and the pager all keep
+ * working while it is on, and turning it off restores the activity sort.
  */
 export function PeopleList({ selectedId, onSelect, className }: PeopleListProps) {
   const { t } = useTranslation('marketing');
@@ -78,6 +103,9 @@ export function PeopleList({ selectedId, onSelect, className }: PeopleListProps)
 
   const assignmentStatus = params.get('assignmentStatus') ?? '';
   const waiting = params.get('waiting') === '1';
+  // Two states, so one toggle. Any other value is "not grouped" rather than a
+  // blank column — the same rule `?left=` and `?tab=` follow on this surface.
+  const groupByCompany = params.get('group') === 'company';
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
 
@@ -106,8 +134,22 @@ export function PeopleList({ selectedId, onSelect, className }: PeopleListProps)
     );
   };
 
+  const toggleGroup = () => {
+    setPage(1);
+    setParams(
+      (p) => {
+        if (groupByCompany) p.delete('group');
+        else p.set('group', 'company');
+        return p;
+      },
+      { replace: true },
+    );
+  };
+
   // A new filter is a new first page; without this a search from page 4 asks
-  // for page 4 of a set that may have three.
+  // for page 4 of a set that may have three. Regrouping is the same kind of
+  // event: page 4 of the activity order and page 4 of the company order are
+  // different people.
   useEffect(() => setPage(1), [search]);
 
   const queueParams = LEAD_QUEUE_PARAMS[activeQueue ?? 'all'];
@@ -118,8 +160,16 @@ export function PeopleList({ selectedId, onSelect, className }: PeopleListProps)
     ...(activeQueue ? queueParams : { assignmentStatus }),
     // The owner's sort. Spelled at the call site rather than defaulted server
     // side, so reading this file tells you what order the column is in.
-    sortBy: 'lastActivityAt',
-    sortOrder: 'desc' as const,
+    //
+    // `company` REPLACES it rather than stacking with it, because it is the
+    // same axis: the server ranks by company name and then, inside a company,
+    // by that very activity — so the owner's order survives within each block.
+    // `sortOrder` is omitted while grouping on purpose: the server does not
+    // consult it there (groups are always A-Z, the ungrouped always last), and
+    // sending a parameter that decides nothing invites the next reader to
+    // believe it does.
+    sortBy: groupByCompany ? ('company' as const) : ('lastActivityAt' as const),
+    ...(groupByCompany ? {} : { sortOrder: 'desc' as const }),
     page,
     limit: LIMIT,
   };
@@ -142,18 +192,40 @@ export function PeopleList({ selectedId, onSelect, className }: PeopleListProps)
           activeTotal={q.data?.meta.total}
           onSelect={selectQueue}
         />
-        <div className="relative">
-          <Search
-            className="pointer-events-none absolute start-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label={t('surface.people.search', 'Kişi ara')}
-            placeholder={t('surface.people.search', 'Kişi ara')}
-            className="h-9 w-full rounded-lg border border-border-strong bg-surface ps-8 pe-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              className="pointer-events-none absolute start-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label={t('surface.people.search', 'Kişi ara')}
+              placeholder={t('surface.people.search', 'Kişi ara')}
+              className="h-9 w-full rounded-lg border border-border-strong bg-surface ps-8 pe-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+          {/* `aria-pressed` and not `aria-current`: this IS a two-state toggle
+              (grouped / not), unlike a row, which is "which of these is
+              showing". The accessible name is the whole sentence; the visible
+              label is one word, because the column is ~384px wide. */}
+          <button
+            type="button"
+            data-testid="group-toggle"
+            aria-pressed={groupByCompany}
+            aria-label={t('surface.people.group.byCompany', 'Şirkete göre grupla')}
+            title={t('surface.people.group.byCompany', 'Şirkete göre grupla')}
+            onClick={toggleGroup}
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
+              groupByCompany
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border-strong text-muted-foreground hover:bg-surface-muted hover:text-foreground'
+            }`}
+          >
+            <Building2 className="h-4 w-4" aria-hidden="true" />
+            {t('surface.people.group.short', 'Şirket')}
+          </button>
         </div>
       </div>
 
@@ -188,16 +260,55 @@ export function PeopleList({ selectedId, onSelect, className }: PeopleListProps)
             </div>
           ) : (
             <ul className="divide-y divide-border">
-              {people.map((p) => (
-                <li key={p.id}>
-                  <PersonRow
-                    person={p}
-                    selected={p.id === selectedId}
-                    onSelect={onSelect}
-                    silentLabel={t('surface.people.silent', 'Henüz konuşulmadı')}
-                  />
-                </li>
-              ))}
+              {people.map((p, i) => {
+                // The server already returned the page in group order, so a
+                // header is simply "the company changed since the row above".
+                // The client never RE-sorts: it could only sort the 25 rows it
+                // holds, which would fight the ranking the page was cut from.
+                //
+                // "Changed" is measured on the NAME, because the name is what
+                // the server grouped on (`sortBy=company` compares the resolved
+                // company name, and treats an unnameable id as no group at
+                // all). Keyed on the ID instead, two DIFFERENT companies that
+                // share a name — a chain's two branch records, or a duplicate
+                // two reps created on the same day — arrive as one contiguous
+                // run from the server and got two consecutive, identical
+                // headers here: a boundary the client invented, reading as two
+                // blocks of the same company.
+                const groupName = p.company?.name ?? null;
+                const opensGroup =
+                  groupByCompany &&
+                  (i === 0 || (people[i - 1].company?.name ?? null) !== groupName);
+                // The test id still names the company this block OPENED with —
+                // an id is stable and safe in a selector where a name is
+                // neither. It identifies the block, not its membership.
+                const groupId = p.company?.id ?? null;
+                return (
+                  <Fragment key={p.id}>
+                    {opensGroup && (
+                      <li
+                        data-testid={`people-group-${groupId ?? 'none'}`}
+                        className="sticky top-0 z-[1] bg-surface-muted px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        {/* A NAME and no count. This page cannot know how many
+                            contacts the company has — only how many landed on
+                            this page — and a number that means the second while
+                            reading as the first is the failure this grouping
+                            was built to avoid. `/companies` has the count. */}
+                        {p.company?.name ?? t('surface.people.group.none', 'Şirketsiz')}
+                      </li>
+                    )}
+                    <li>
+                      <PersonRow
+                        person={p}
+                        selected={p.id === selectedId}
+                        onSelect={onSelect}
+                        silentLabel={t('surface.people.silent', 'Henüz konuşulmadı')}
+                      />
+                    </li>
+                  </Fragment>
+                );
+              })}
             </ul>
           )}
         </QueryStateBoundary>

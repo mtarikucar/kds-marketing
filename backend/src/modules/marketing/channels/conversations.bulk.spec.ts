@@ -40,11 +40,23 @@ describe('ConversationsService — notes + bulk', () => {
     });
 
     it('writes to conversation_notes (NOT messages) and streams it', async () => {
-      prisma.conversation.findFirst.mockResolvedValue({ id: 'c1' });
+      prisma.conversation.findFirst.mockResolvedValue({ id: 'c1', leadId: 'lead-3' });
       await svc.addNote(WS, 'c1', 'me', 'internal only');
       const arg = prisma.conversationNote.create.mock.calls[0][0];
       expect(arg.data).toMatchObject({ workspaceId: WS, conversationId: 'c1', authorId: 'me', body: 'internal only' });
       expect(stream.push).toHaveBeenCalledWith(WS, expect.objectContaining({ kind: 'note', conversationId: 'c1' }));
+    });
+
+    // A handover note is exactly the frame the person surface must not miss and
+    // must not over-read: it names its lead so the open person refreshes and
+    // everybody else's record does not.
+    it('names the person an internal note is about', async () => {
+      prisma.conversation.findFirst.mockResolvedValue({ id: 'c1', leadId: 'lead-3' });
+      await svc.addNote(WS, 'c1', 'me', 'internal only');
+      expect(stream.push).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({ kind: 'note', conversationId: 'c1', leadId: 'lead-3' }),
+      );
     });
   });
 

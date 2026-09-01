@@ -370,7 +370,13 @@ export class BookingService implements OnModuleInit {
    *  first, optionally filtered by calendar / status / time range. */
   listBookings(
     workspaceId: string,
-    filters: { calendarId?: string; status?: string; from?: string; to?: string } = {},
+    filters: {
+      calendarId?: string;
+      status?: string;
+      from?: string;
+      to?: string;
+      leadId?: string;
+    } = {},
   ) {
     // Default the lower bound to the last ~24h when the caller gives no range, so
     // the asc-ordered, 500-capped window covers CURRENT/upcoming appointments. An
@@ -378,16 +384,26 @@ export class BookingService implements OnModuleInit {
     // the cap, truncating out every future appointment (staff can't see today's).
     // The 24h buffer keeps recent past + handles workspace-timezone edges; an
     // explicit `from`/`to` still queries any range (e.g. a history view).
+    //
+    // A `leadId` query is ALREADY narrow — one person has a handful of
+    // appointments, nowhere near the 500 cap — and the record card's whole job
+    // is to show that person's history, including the meeting that already
+    // happened. So the rolling window does not apply to it; an explicit
+    // `from`/`to` still does, because that caller asked for a range on purpose.
+    const rolling = !filters.leadId && !filters.from && !filters.to;
     const gte = filters.from
       ? new Date(filters.from)
-      : filters.to
-        ? undefined
-        : new Date(Date.now() - 24 * 60 * 60 * 1000);
+      : rolling
+        ? new Date(Date.now() - 24 * 60 * 60 * 1000)
+        : undefined;
     return this.prisma.booking.findMany({
       where: {
         workspaceId,
         status: filters.status ? filters.status : { not: 'EXTERNAL_BUSY' },
         ...(filters.calendarId ? { calendarId: filters.calendarId } : {}),
+        // Narrows the workspace scope, never replaces it: a leadId belonging to
+        // another tenant still matches nothing.
+        ...(filters.leadId ? { leadId: filters.leadId } : {}),
         ...(gte || filters.to
           ? {
               startAt: {

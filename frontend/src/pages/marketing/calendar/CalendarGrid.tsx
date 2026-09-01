@@ -28,7 +28,10 @@ export function CalendarGrid({
   onDayClick,
 }: CalendarGridProps) {
   return (
-    <div className="hidden md:block rounded-xl border border-border bg-surface overflow-hidden">
+    <div
+      data-testid="calendar-grid"
+      className="hidden md:block rounded-xl border border-border bg-surface overflow-hidden"
+    >
       {/* Day headers */}
       <div className="grid grid-cols-7 border-b border-border">
         {weekdayShort.map((day) => (

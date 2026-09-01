@@ -14,12 +14,13 @@ import {
 } from '@/components/ui';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
 import { API_URL } from '../../../lib/env';
 import { RouteFallback } from '../../../components/RouteFallback';
-import type { Lead } from '../../../features/marketing/types';
-import { PeopleList } from './PeopleList';
+import { PeopleColumn, isLeftView, type LeftView } from './PeopleColumn';
 import { PersonPane } from './PersonPane';
 import { LeadContextPane } from './LeadContextPane';
+import type { SurfacePerson } from './surfacePerson';
 
 // Lazy so a config surface's code only loads when opened — the daily surface
 // must never pay for the config pages' bundles, and the leads TABLE is a
@@ -30,8 +31,17 @@ const AgentStudioPage = lazy(() => import('../AgentStudioPage'));
 const KnowledgeBasePage = lazy(() => import('../KnowledgeBasePage'));
 const LeadsPage = lazy(() => import('../leads/LeadsPage'));
 
-/** The conversation-domain config surfaces, reachable at `?tab=`. */
-const CONFIG_TABS = ['channels', 'snippets', 'agents', 'knowledge'] as const;
+/**
+ * The conversation-domain config surfaces, reachable at `?tab=`.
+ *
+ * EXPORTED for one reason: `tab` is the only search-param name two pages read
+ * (see the table on this component), and the two vocabularies not colliding is
+ * a coincidence rather than a design. `tabParam.contract.test.ts` imports this
+ * list and TasksPage's, and fails the moment they overlap — so the next value
+ * added to either side is caught here instead of on a surface where a deep
+ * link silently opens the wrong thing.
+ */
+export const CONFIG_TABS = ['channels', 'snippets', 'agents', 'knowledge'] as const;
 type ConfigTab = (typeof CONFIG_TABS)[number];
 const isConfigTab = (v: string | null): v is ConfigTab =>
   (CONFIG_TABS as readonly string[]).includes(v ?? '');
@@ -70,6 +80,25 @@ function Lazy({ children }: { children: ReactNode }) {
  * B's id. Keying is the whole mechanism — there is no second reset-on-change
  * effect, because two mechanisms means one of them can rot unnoticed.
  *
+ * ## The left column arranges the same people four ways
+ *
+ * `?left=list|board|calendar|tasks` — Liste · Hat · Takvim · Görevler
+ * (2026-09-01 design, "Karar 1"). The switch belongs to the LEFT column only:
+ * the middle column and the record card are identical in all four, and the
+ * SELECTION survives the switch. That pair of facts is the design — clicking a
+ * deal on the pipeline and reading that person's conversation without leaving
+ * the screen is what is being bought, and a switcher that dropped the selection
+ * would be navigation with extra steps.
+ *
+ * It is a separate parameter from `?view=table` on purpose, even though both
+ * words mean "view". `?view=table` replaces the WHOLE surface with the leads
+ * table — three columns become one — and `?left=` rearranges one column of
+ * three. Folding them into one parameter would make `left=table` and
+ * `left=board` two very different kinds of thing under one name.
+ *
+ * See `PeopleColumn` for why each view is the PAGE embedded rather than a
+ * rebuild, and for why none of the four needs a gate.
+ *
  * ## Two URL parameters survive from the surface this replaces
  *
  * `?tab=channels|snippets|agents|knowledge` still opens the four conversation-
@@ -90,6 +119,44 @@ function Lazy({ children }: { children: ReactNode }) {
  * owner objected to under another name. Its whole justification is manager
  * tooling (`LeadsPage` gates the checkbox column and the bulk toolbar on
  * `isManager`), so it belongs where the other manager-only surfaces already are.
+ *
+ * ## Who owns which query parameter on this surface
+ *
+ * Asked for by stage 2's review, before a seventh parameter was added to a
+ * namespace six things were already writing into. This surface is unusual:
+ * three whole PAGES render inside its left column, each keeps its own
+ * `useSearchParams`, and they all share ONE URL. So "who owns it" and "who may
+ * strip it" are not the same question, and neither is obvious from any single
+ * file.
+ *
+ * | Param | Written by | Read by | Who may strip it |
+ * |---|---|---|---|
+ * | `left` | InboxPage (`setLeftView`) | InboxPage | InboxPage only |
+ * | `view=table` | InboxPage (`setView`) | InboxPage | InboxPage only |
+ * | `tab` | InboxPage (`setTab`), TasksPage (seed only) | both, disjoint values | InboxPage's "Back to inbox" |
+ * | `group=company` | PeopleList (`toggleGroup`) | PeopleList | PeopleList only |
+ * | `assignmentStatus`, `waiting` | PeopleList (`selectQueue`) | PeopleList, LeadsPage | PeopleList's chips |
+ * | `deal` | SalesTab (link in) | OpportunitiesPage | OpportunitiesPage, once it has opened the dialog |
+ * | `pipelineId`, `leadId` | SalesTab (link in) | OpportunitiesPage | nobody — read once at mount |
+ * | `create=1` | quickActions (link in) | the three pages' `useCreateParam`, DISABLED while embedded | `useCreateParam` |
+ *
+ * Two facts this table exists to make visible:
+ *
+ * **`tab` is the one genuinely shared name.** InboxPage reads it as a config
+ * surface (`channels|snippets|agents|knowledge`) and the embedded TasksPage
+ * reads it as a task filter (`today|overdue`). They do not collide today
+ * because the value sets are disjoint AND the config branch replaces the whole
+ * surface, so the two are never mounted together — but that is a coincidence
+ * of two vocabularies, not a design, and the next value added to either side
+ * is where it stops being true — so `tabParam.contract.test.ts` imports both
+ * lists and fails on the overlap, which turns that sentence from a warning into
+ * a check. `isConfigTab` is the guard at runtime: an unrecognised `tab` falls
+ * back to the surface rather than blanking it.
+ *
+ * **Nobody strips anybody else's.** Every setter here uses the callback form of
+ * `setParams` and touches exactly its own key, which is why switching the left
+ * view keeps your queue, your grouping and your deep-linked deal. A setter that
+ * built a fresh `URLSearchParams` would silently drop the other six.
  *
  * The two parameters are guarded DIFFERENTLY, on purpose. `?tab=` opens pages
  * that CONFIGURE the workspace, so a rep's deep link is bounced to the surface.
@@ -128,11 +195,28 @@ export default function InboxPage() {
   const configTab: ConfigTab | null =
     isConfigTab(requestedTab) && offersConfig ? requestedTab : null;
   const tableView = params.get('view') === 'table';
+  // Unknown values fall back to the list rather than blanking the column —
+  // same rule as `?tab=`, and the same reason: a stale or mistyped deep link
+  // should land somewhere usable.
+  const leftView: LeftView = isLeftView(params.get('left')) ? (params.get('left') as LeftView) : 'list';
 
   const setTab = (v: string) =>
     setParams(
       (p) => {
         p.set('tab', v);
+        return p;
+      },
+      { replace: true },
+    );
+
+  // In the URL rather than in state, for PeopleList's own two reasons: a
+  // colleague can be sent one, and a browser reload should not silently move
+  // somebody back to a different arrangement of their queue.
+  const setLeftView = (v: LeftView) =>
+    setParams(
+      (p) => {
+        if (v === 'list') p.delete('left');
+        else p.set('left', v);
         return p;
       },
       { replace: true },
@@ -148,19 +232,49 @@ export default function InboxPage() {
       { replace: true },
     );
 
-  // The whole row, not just the id: the middle and right columns read this
-  // person's fields, and re-fetching a record the list already returned would
-  // be a third source of truth about who this is.
-  const [selected, setSelected] = useState<Lead | null>(null);
+  // The whole row a view had in hand, not just the id: the middle and right
+  // columns read this person's fields, and re-fetching a record the list
+  // already returned would be a third source of truth about who this is.
+  //
+  // How MUCH of the row depends on which arrangement handed them over.
+  // `PeopleList` has the whole person; a board card has a name and a phone; a
+  // task row has a business name. `handed` is therefore whatever was known at
+  // the moment of the click, and `person` below is that filled in.
+  const [handed, setHanded] = useState<SurfacePerson | null>(null);
   // The SAME answer, in a form the live-stream effect can read without being
   // torn down and rebuilt for it. See the effect below: `selected` in its
   // dependency array reconnected the SSE socket on every click.
-  const selectedRef = useRef<Lead | null>(null);
+  const selectedRef = useRef<SurfacePerson | null>(null);
   /** The one place selection changes, so the ref cannot drift from the state. */
-  const select = (person: Lead | null) => {
+  const select = (person: SurfacePerson | null) => {
     selectedRef.current = person;
-    setSelected(person);
+    setHanded(person);
   };
+
+  /**
+   * The rest of whoever is selected.
+   *
+   * `['marketing','lead', id]` is the key the record card is ALREADY reading
+   * for its Görevler and Teklifler sections, so this is a third observer on one
+   * cache entry rather than a second request — and it is emphatically not a
+   * third source of truth: it is the person's own record, which is the first
+   * one.
+   *
+   * It matters because two of the fields the other columns need are ones the
+   * three new views do not carry. `LeadHeaderActions` renders "Ara" and "Mesaj"
+   * ABSENT — not disabled — when a lead has no phone, so a person picked off
+   * the board would quietly lose both buttons; and the record card must not
+   * call somebody unowned merely because a task row never mentioned an owner.
+   *
+   * The spread order is deliberate: the record WINS where it has an opinion,
+   * and the handed row survives where it does not (the list's
+   * `lastMessagePreview` and `unreadCount` are stitched on by `GET /leads` and
+   * are not on the detail payload).
+   */
+  const record = useLeadRecord(handed?.id ?? null);
+  const selected: SurfacePerson | null = handed
+    ? { ...handed, ...(record.data ?? {}) }
+    : null;
   // Below lg the record card cannot sit beside the other two, so it arrives as
   // a sheet on request.
   const [cardOpen, setCardOpen] = useState(false);
@@ -183,11 +297,21 @@ export default function InboxPage() {
   //   2. the people LIST, so the row's preview, unread and position update
   //   3. the selected person's STREAM, so the message itself appears
   //
-  // (3) fires for every workspace event rather than only this person's, because
-  // ConversationStreamEvent carries `conversationId` and no `leadId` — the
-  // client cannot tell whose it is. One extra timeline fetch per event is the
-  // honest price; the cheaper fix is a `leadId` on the event, which is a backend
-  // contract change and is deliberately not smuggled into this commit.
+  // (3) fires only for the frames that are ABOUT the open person. The event
+  // carries `leadId` since 2026-09-01 (`ConversationStreamEvent`), which is what
+  // makes that possible: before it a frame said only which CONVERSATION it
+  // happened on, so this surface refreshed the open person on every event in
+  // the workspace — and that key now carries the record card's five sections
+  // behind it, so every unrelated SMS bought a fat refetch of a screen that had
+  // not changed.
+  //
+  // A frame with NO `leadId` still refreshes the open person, and that fallback
+  // is load-bearing rather than defensive: the delivery-receipt publisher omits
+  // it when its lookup throws, and an un-upgraded server omits it always.
+  // Unknown must degrade to "refresh everything", never to "refresh nothing" —
+  // a dropped inbound is a rep replying to a customer whose last line they
+  // cannot see. So the test is `frameLead && frameLead !== open.id`, not
+  // `frameLead === open.id`.
   //
   // The chip COUNTS are excluded by predicate. They sit under the same
   // ['marketing','leads'] prefix, and the three of them are the only queries
@@ -232,7 +356,10 @@ export default function InboxPage() {
             q.queryKey[2] !== 'queue-count',
         });
         const open = selectedRef.current;
-        if (open) queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', open.id] });
+        const frameLead = typeof data?.leadId === 'string' ? data.leadId : null;
+        if (open && !(frameLead && frameLead !== open.id)) {
+          queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', open.id] });
+        }
       } catch {
         /* ignore malformed frame */
       }
@@ -287,7 +414,7 @@ export default function InboxPage() {
     };
   }, [accessToken, canConverse, queryClient]);
 
-  const onSelect = (person: Lead) => {
+  const onSelect = (person: SurfacePerson) => {
     select(person);
     setCardOpen(false);
   };
@@ -387,15 +514,44 @@ export default function InboxPage() {
         </div>
       ) : (
         <div data-testid="person-surface" className="flex min-h-0 flex-1 gap-0 md:gap-4">
-          {/* Left — people. Full width until someone is picked on a phone;
-              the existing inbox's own answer to the same problem. */}
+          {/* Left — people, arranged one of four ways. Full width until
+              someone is picked on a phone; the existing inbox's own answer to
+              the same problem.
+
+              ONE width for all four arrangements. The three new views briefly
+              had a wider one (46% / 42% at lg) on the argument that a kanban
+              whose columns are 288px cannot be dragged between columns when
+              only one fits. Measured in Chromium at 900px tall against the real
+              stack, that trade did not pay:
+
+                                left    stream   board cols visible (of 7)
+                1280  Hat  wide    409.9   280.3    1.37
+                1280  Hat  this    331.8   358.4    1.33
+                1440  Hat  wide    477.1   331.5    1.60
+                1440  Hat  this    384.0   424.6    1.53
+                1680  Hat  wide    577.9   446.1    1.94
+                1680  Hat  this    384.0   640.0    1.53
+
+              The wide column cost the stream 78px at 1280 and 93px at 1440 to
+              buy a THIRD of a column, and never the two the argument needed —
+              280.3px is a threaded conversation and its composer in less width
+              than an iPhone SE. The board gives up the pixels instead:
+              embedded, its own columns are 240px rather than 288 (see
+              OpportunitiesPage's `columnWidth`), which shows 1.53 of them at
+              1440 against the wide column's 1.60 — 0.07 of a column traded
+              for 93px of conversation, and 0.04 for 78px at 1280.
+
+              Dragging between columns survives because `board-columns` is
+              `overflow-x-auto`: a stage that is off screen is one scroll away
+              rather than unreachable. Measured embedded at 1440: clientWidth
+              384, scrollWidth 1752, and it scrolls. */}
           <div
             data-testid="surface-list"
-            className={`${
-              selected ? 'hidden md:flex' : 'flex w-full'
-            } min-h-0 md:w-[34%] md:max-w-sm md:shrink-0`}
+            className={`${selected ? 'hidden md:flex' : 'flex w-full'} min-h-0 md:w-[34%] md:max-w-sm md:shrink-0`}
           >
-            <PeopleList
+            <PeopleColumn
+              view={leftView}
+              onView={setLeftView}
               selectedId={selected?.id ?? null}
               onSelect={onSelect}
               className="w-full"

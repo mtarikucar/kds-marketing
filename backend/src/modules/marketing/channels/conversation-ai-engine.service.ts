@@ -226,7 +226,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     if (Array.isArray(handoff.keywords) && handoff.keywords.length) {
       const hay = burstText.toLowerCase();
       if (handoff.keywords.some((k) => k && hay.includes(String(k).toLowerCase()))) {
-        await this.escalate(workspaceId, conversationId, 'matched a handoff keyword');
+        await this.escalate(workspaceId, conversationId, convo.leadId, 'matched a handoff keyword');
         return;
       }
     }
@@ -243,7 +243,12 @@ export class ConversationAiEngineService implements OnModuleInit {
     let slotClaimed = false;
     let creditReserved = false;
 
-    this.stream.push(workspaceId, { kind: 'ai_typing', conversationId, payload: { typing: true } });
+    this.stream.push(workspaceId, {
+      kind: 'ai_typing',
+      conversationId,
+      leadId: convo.leadId,
+      payload: { typing: true },
+    });
 
     try {
       // Per-conversation daily reply cap (resets at UTC midnight). Claim a slot
@@ -281,7 +286,12 @@ export class ConversationAiEngineService implements OnModuleInit {
 
       const outcome = await this.runToolLoop(workspaceId, conversationId, system, messages, agent);
       if (outcome.handoff) {
-        await this.escalate(workspaceId, conversationId, outcome.handoffReason ?? 'agent requested handoff');
+        await this.escalate(
+          workspaceId,
+          conversationId,
+          convo.leadId,
+          outcome.handoffReason ?? 'agent requested handoff',
+        );
       } else if (outcome.text.trim()) {
         // MessageSenderService does NOT throw when the provider rejects the
         // message: it refunds the channel quota, logs, persists the row as
@@ -331,7 +341,12 @@ export class ConversationAiEngineService implements OnModuleInit {
           );
         }
       }
-      this.stream.push(workspaceId, { kind: 'ai_typing', conversationId, payload: { typing: false } });
+      this.stream.push(workspaceId, {
+        kind: 'ai_typing',
+        conversationId,
+        leadId: convo.leadId,
+        payload: { typing: false },
+      });
     }
   }
 
@@ -472,7 +487,14 @@ export class ConversationAiEngineService implements OnModuleInit {
     await this.prisma.lead.updateMany({ where: { id: convo.leadId, workspaceId }, data });
   }
 
-  private async escalate(workspaceId: string, conversationId: string, reason: string): Promise<void> {
+  /** `leadId` is passed in rather than re-read: both call sites already hold the
+   *  conversation, and every frame on the agent stream has to say whose it is. */
+  private async escalate(
+    workspaceId: string,
+    conversationId: string,
+    leadId: string,
+    reason: string,
+  ): Promise<void> {
     await this.prisma.conversation.update({
       where: { id: conversationId },
       data: { aiPaused: true },
@@ -480,6 +502,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     this.stream.push(workspaceId, {
       kind: 'conversation',
       conversationId,
+      leadId,
       payload: { handoff: true, reason },
     });
     this.logger.log(`convo=${conversationId} escalated to human: ${reason}`);

@@ -620,3 +620,272 @@ describe('OpportunitiesPage — the board is a view of person-cards', () => {
     expect(post).not.toHaveBeenCalled();
   });
 });
+
+
+/**
+ * The board as the person surface's **Hat** view.
+ *
+ * Stage 2 of the one-screen brief: the left column of `/inbox` switches between
+ * four arrangements of the same people, and this is one of them. The rule the
+ * brief is hardest about is "hiçbir özelliği kaybetmeden" — the kanban arrives
+ * whole, with drag-between-stages and the "Hatta değil" column, or it does not
+ * arrive. So these tests assert the CAPABILITIES survive the chrome swap, not
+ * that a smaller board renders.
+ *
+ * `embedded` is the same prop LeadsPage, ChannelsSettingsPage, SnippetsPage,
+ * OffersTab and TasksTab already take, and it means the same thing here: the
+ * page chrome (its own <h1>, its header actions) is replaced by the host's, and
+ * NOTHING else changes. The list, the dialogs and the mutations are one copy.
+ */
+describe('OpportunitiesPage — embedded as the surface Hat view', () => {
+  const stage = (over: Record<string, unknown>) => ({
+    pipelineId: 'p1',
+    probability: 10,
+    isWon: false,
+    isLost: false,
+    opportunities: [],
+    totalValue: 0,
+    count: 0,
+    ...over,
+  });
+
+  const AYSE = personCard({ id: 'lead-1', name: 'Ayşe Yılmaz' });
+
+  const BOARD_WITH_LEAD = {
+    pipeline: { id: 'p1', name: 'Sales Pipeline', isDefault: true },
+    stages: [
+      stage({
+        id: 's-new',
+        name: 'New',
+        position: 0,
+        opportunities: [
+          {
+            id: 'o1',
+            pipelineId: 'p1',
+            stageId: 's-new',
+            leadId: 'lead-1',
+            name: 'Happy Day Organizasyon',
+            value: 45000,
+            currency: 'TRY',
+            status: 'OPEN',
+            lead: AYSE,
+          },
+        ],
+        totalValue: 45000,
+        count: 1,
+      }),
+      stage({ id: 's-offer', name: 'Offer sent', position: 1, probability: 40 }),
+    ],
+  };
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: {} });
+    toastError.mockReset();
+    get.mockImplementation((url: string) => {
+      if (url === '/pipelines') return Promise.resolve({ data: PIPELINES });
+      if (url === '/opportunities/board') return Promise.resolve({ data: BOARD_WITH_LEAD });
+      if (url === '/opportunities/not-in-pipeline')
+        return Promise.resolve({
+          data: column([personCard({ id: 'lead-9', name: 'Sessiz Kişi' })], { total: 1 }),
+        });
+      return Promise.resolve({ data: {} });
+    });
+  });
+
+  const renderEmbedded = (props: Record<string, unknown> = {}) =>
+    render(<OpportunitiesPage embedded {...props} />, { wrapper });
+
+  it('drops its own page chrome and keeps the board', async () => {
+    renderEmbedded();
+
+    // Positive anchor first: the board is up. The absence below would pass just
+    // as well against a component that rendered nothing at all.
+    expect(await screen.findByTestId('board-columns')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
+  it('still carries the "Hatta değil" column — the biggest one on the board', async () => {
+    renderEmbedded();
+
+    const outside = await screen.findByTestId('column-not-in-pipeline');
+    expect(within(outside).getByTestId('not-in-pipeline-count')).toHaveTextContent('1');
+    expect(within(outside).getByTestId('person-card-lead-9')).toBeInTheDocument();
+  });
+
+  it('still moves a deal between stages by drag', async () => {
+    renderEmbedded();
+
+    const card = await screen.findByTestId('deal-card-o1');
+    fireEvent.dragStart(card);
+    const target = screen.getByTestId('column-s-offer');
+    fireEvent.dragOver(target);
+    fireEvent.drop(target);
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/opportunities/o1/move', {
+        stageId: 's-offer',
+        position: undefined,
+      }),
+    );
+  });
+
+  it('still opens a deal for a person dragged out of "Hatta değil"', async () => {
+    renderEmbedded();
+
+    const person = await screen.findByTestId('person-card-lead-9');
+    fireEvent.dragStart(person);
+    const target = screen.getByTestId('column-s-offer');
+    fireEvent.dragOver(target);
+    fireEvent.drop(target);
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/opportunities', {
+        leadId: 'lead-9',
+        pipelineId: 'p1',
+        stageId: 's-offer',
+      }),
+    );
+  });
+
+  /**
+   * The point of the view, in the owner's own words: "hattan birine tıklayıp
+   * aynı ekranda yazışmasını okursun". A click on this board REPORTS a person
+   * to the host, which opens their stream and record card beside it. It does
+   * not navigate — the surface's one rule.
+   */
+  it('reports the person behind a deal card up to the surface', async () => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    await user.click(await screen.findByTestId('deal-card-o1'));
+
+    expect(onSelectPerson).toHaveBeenCalledWith(expect.objectContaining({ id: 'lead-1' }));
+  });
+
+  it('reports a person in "Hatta değil" up too — they are the ones with no deal to click', async () => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    await user.click(await screen.findByTestId('person-card-lead-9'));
+
+    expect(onSelectPerson).toHaveBeenCalledWith(expect.objectContaining({ id: 'lead-9' }));
+  });
+
+  /**
+   * Selecting takes the CARD's click, so the edit dialog needs its own door or
+   * it is a feature this view lost: Kazanıldı / Kaybedildi / Sil / value /
+   * notes / close date live nowhere else. The record card's SATIŞ section moves
+   * a stage and adds a deal; it cannot close or delete one.
+   */
+  it('keeps the deal dialog reachable, on its own control', async () => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    await user.click(await screen.findByTestId('deal-edit-o1'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByDisplayValue('Happy Day Organizasyon')).toBeInTheDocument();
+    // Editing a deal is not selecting a person; the card's click must not also
+    // have fired.
+    expect(onSelectPerson).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A keyboard reaches the same people a mouse does — from EVERY column.
+   *
+   * The "Hatta değil" cards took `role="button"`, a tab stop and Enter/Space
+   * when the surface started listening; the deal cards took `onClick` and
+   * `aria-current` and nothing else. So a keyboard user could select a person
+   * out of the one column that is only a SOURCE — nothing is ever dropped back
+   * into "Hatta değil" — and out of none of the seven stages beside it. The
+   * board was mouse-only for the half of it that carries the deals.
+   *
+   * Enter AND Space, because a `role="button"` promises both, and `preventDefault`
+   * on Space or the page scrolls under the user instead.
+   */
+  it.each([
+    ['{Enter}', 'Enter'],
+    [' ', 'Space'],
+  ])('selects the person behind a deal card from the keyboard (%s)', async (key) => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    expect(card).toHaveAttribute('role', 'button');
+    expect(card).toHaveAttribute('tabindex', '0');
+
+    card.focus();
+    expect(card).toHaveFocus();
+    await user.keyboard(key);
+
+    expect(onSelectPerson).toHaveBeenCalledWith(expect.objectContaining({ id: 'lead-1' }));
+  });
+
+  /**
+   * The edit control is a real `<button>`, so it must not be INSIDE the card's
+   * `role="button"` — a nested interactive is flattened by screen readers and
+   * the pencil stops being announced as its own thing. It sits over the card
+   * as a sibling instead, which is also why it no longer needs to stop the
+   * card's click from propagating: a sibling's click was never the card's.
+   */
+  it('keeps the edit control out of the card, so neither swallows the other', async () => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    renderEmbedded({ onSelectPerson });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    const edit = screen.getByTestId('deal-edit-o1');
+    expect(card.contains(edit)).toBe(false);
+
+    await user.click(edit);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(onSelectPerson).not.toHaveBeenCalled();
+  });
+
+  it('marks the person the surface has open, so a view switch is visible', async () => {
+    renderEmbedded({ onSelectPerson: vi.fn(), selectedLeadId: 'lead-1' });
+
+    const card = await screen.findByTestId('deal-card-o1');
+    expect(card).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('person-card-lead-9')).toHaveAttribute('aria-current', 'false');
+  });
+
+  /**
+   * The control. `/opportunities` is untouched by all of the above: a click on
+   * a deal card there opens the dialog, exactly as it always has, because that
+   * page has no person surface to report to.
+   */
+  it('leaves the standalone board alone — a card click still opens the dialog', async () => {
+    const user = userEvent.setup();
+    render(<OpportunitiesPage />, { wrapper });
+
+    await user.click(await screen.findByTestId('deal-card-o1'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByDisplayValue('Happy Day Organizasyon')).toBeInTheDocument();
+  });
+
+  /**
+   * `?create=1` belongs to whichever page OWNS the URL. Embedded, this board is
+   * a column on somebody else's page, and two embeddable views cannot both
+   * claim one parameter. It is honoured on `/opportunities` and ignored here.
+   */
+  it('does not claim the host page\'s ?create=1', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/inbox?left=board&create=1']}>
+          <OpportunitiesPage embedded />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByTestId('board-columns');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});

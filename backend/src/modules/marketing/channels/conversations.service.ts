@@ -242,13 +242,19 @@ export class ConversationsService {
   /** Add an INTERNAL note. Written to conversation_notes (NOT messages), so it
    *  can never reach a channel adapter's send egress. Streamed for live inboxes. */
   async addNote(workspaceId: string, conversationId: string, authorId: string, body: string) {
-    await this.assertConvo(workspaceId, conversationId);
+    const convo = await this.assertConvo(workspaceId, conversationId);
     const note = await this.prisma.conversationNote.create({
       data: { workspaceId, conversationId, authorId, body },
     });
     // 'note' is hard-excluded from the public widget stream by the stream
-    // service's contact-safe allowlist — it reaches the agent Inbox only.
-    this.stream.push(workspaceId, { kind: 'note', conversationId, payload: note });
+    // service's contact-safe allowlist — it reaches the agent Inbox only, which
+    // is also the only stream `leadId` is allowed on.
+    this.stream.push(workspaceId, {
+      kind: 'note',
+      conversationId,
+      leadId: convo.leadId,
+      payload: note,
+    });
     return note;
   }
 
@@ -304,12 +310,17 @@ export class ConversationsService {
     return { updated: res.count };
   }
 
+  /** The workspace-scoping check, and the two ids a caller needs afterwards.
+   *  `leadId` rides along because every frame pushed from here has to say whose
+   *  it is, and re-reading the same row to learn that would be a second query
+   *  for a column the first one could have selected. */
   private async assertConvo(workspaceId: string, conversationId: string) {
     const convo = await this.prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId },
-      select: { id: true },
+      select: { id: true, leadId: true },
     });
     if (!convo) throw new NotFoundException('Conversation not found');
+    return convo;
   }
 
   private async scopedUpdate(workspaceId: string, conversationId: string, data: any) {
@@ -326,7 +337,12 @@ export class ConversationsService {
       where: { id: conversationId, workspaceId },
     });
     if (convo) {
-      this.stream.push(workspaceId, { kind: 'conversation', conversationId, payload: convo });
+      this.stream.push(workspaceId, {
+        kind: 'conversation',
+        conversationId,
+        leadId: convo.leadId,
+        payload: convo,
+      });
     }
     return convo;
   }

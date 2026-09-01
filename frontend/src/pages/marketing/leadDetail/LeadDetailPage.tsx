@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { ArrowLeft, Pencil, Trash2, CheckCircle2, Printer, RotateCcw } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcrumbLabel';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import {
+  useLeadOfferActions,
+  useLeadRecordInvalidate,
+  useLeadTaskActions,
+} from '../../../features/marketing/hooks/useLeadRecordActions';
+import { useLeadRecord } from '../../../features/marketing/hooks/useLeadRecord';
 import { sendFax } from '../../../features/marketing/api/fax.service';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
@@ -35,16 +41,9 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   LOST: [],
 };
 import {
-  getLead,
   updateLeadStatus,
   reopenLead,
   createLeadActivity,
-  createOffer,
-  sendOffer,
-  deleteOffer,
-  createTask,
-  completeTask,
-  deleteTask,
   convertLead,
   deleteLead,
 } from '../../../features/marketing/api/leads.service';
@@ -67,7 +66,6 @@ import LeadHeaderActions from './LeadHeaderActions';
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { t, i18n } = useTranslation('marketing');
   // Locale-aware date formatting: `toLocaleDateString()` with no arg
   // uses the runtime locale, which on a Turkish admin's browser is
@@ -97,28 +95,17 @@ export default function LeadDetailPage() {
   // there is no state to fall back from.
   const [tab, setTab] = useState('stream');
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
-    // Also refresh the leads LIST + dashboard — the singular detail key does not
-    // prefix-match ['marketing','leads',{filters}], so a convert/status change on
-    // this page otherwise left the row stale in the list until the 30s poll.
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
-  };
+  // The SAME invalidation set the offer/task writes use, from the same place —
+  // status, reopen, activity and convert make the row and the dashboard wrong
+  // in exactly the way a new task does. This page used to restate the three
+  // keys inline, which meant the set that "is the whole point" of
+  // useLeadRecordActions existed twice; a fourth key added to one copy and not
+  // the other is invisible in review and obvious to a rep whose row went stale.
+  const invalidate = useLeadRecordInvalidate(id!);
 
-  const {
-    data: lead,
-    isLoading,
-    isError,
-    error,
-    refetch,
-  } = useQuery({
-    queryKey: ['marketing', 'lead', id],
-    queryFn: () => getLead(id!),
-    // A genuine 404 (deleted lead) is the answer, not a transient failure —
-    // don't burn retries on it; let the not-found branch render.
-    retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
-  });
+  // The SAME read the person surface's record card makes, through the same
+  // hook — one query key with one policy. See useLeadRecord.ts.
+  const { data: lead, isLoading, isError, error, refetch } = useLeadRecord(id!);
 
   // Show the lead's name in the header breadcrumb ("Contacts › Leads › <name>").
   useBreadcrumbLabel(lead?.businessName);
@@ -153,59 +140,12 @@ export default function LeadDetailPage() {
     onError: () => toast.error('Failed to add activity'),
   });
 
-  const createOfferMutation = useMutation({
-    mutationFn: (data: any) => createOffer(data),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Offer created');
-    },
-    onError: () => toast.error('Failed to create offer'),
-  });
-
-  const sendOfferMutation = useMutation({
-    mutationFn: (offerId: string) => sendOffer(offerId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Offer sent');
-    },
-    onError: () => toast.error('Failed to send offer'),
-  });
-
-  const deleteOfferMutation = useMutation({
-    mutationFn: (offerId: string) => deleteOffer(offerId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Offer deleted');
-    },
-    onError: () => toast.error('Failed to delete offer'),
-  });
-
-  const createTaskMutation = useMutation({
-    mutationFn: (data: any) => createTask(data),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Task created');
-    },
-    onError: () => toast.error('Failed to create task'),
-  });
-
-  const completeTaskMutation = useMutation({
-    mutationFn: (taskId: string) => completeTask(taskId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Task completed');
-    },
-    onError: () => toast.error('Failed to complete task'),
-  });
-
-  const deleteTaskMutation = useMutation({
-    mutationFn: (taskId: string) => deleteTask(taskId),
-    onSuccess: () => {
-      invalidate();
-      toast.success('Task deleted');
-    },
-    onError: () => toast.error('Failed to delete task'),
-  });
+  // The offer/task writes are SHARED with the person surface's record card,
+  // which renders the same two tabs. They moved to a hook rather than being
+  // copied: two implementations would drift on the invalidation set, which is
+  // the part nobody re-reads. See useLeadRecordActions.ts.
+  const offerActions = useLeadOfferActions(id!);
+  const taskActions = useLeadTaskActions(id!);
 
   const convertMutation = useMutation({
     mutationFn: (data: any) => convertLead(id!, data),
@@ -474,10 +414,10 @@ export default function LeadDetailPage() {
                 offers={lead.offers || []}
                 converted={!!lead.convertedTenantId}
                 fmtDate={fmtDate}
-                onCreate={(data) => createOfferMutation.mutate(data)}
-                createPending={createOfferMutation.isPending}
-                onSend={(offerId) => sendOfferMutation.mutate(offerId)}
-                onDelete={(offerId) => deleteOfferMutation.mutate(offerId)}
+                onCreate={(data) => offerActions.create.mutate(data)}
+                createPending={offerActions.create.isPending}
+                onSend={(offerId) => offerActions.send.mutate(offerId)}
+                onDelete={(offerId) => offerActions.remove.mutate(offerId)}
               />
             </TabsContent>
 
@@ -486,10 +426,10 @@ export default function LeadDetailPage() {
                 leadId={lead.id}
                 tasks={lead.tasks || []}
                 fmtDate={fmtDate}
-                onCreate={(data) => createTaskMutation.mutate(data)}
-                createPending={createTaskMutation.isPending}
-                onComplete={(taskId) => completeTaskMutation.mutate(taskId)}
-                onDelete={(taskId) => deleteTaskMutation.mutate(taskId)}
+                onCreate={(data) => taskActions.create.mutate(data)}
+                createPending={taskActions.create.isPending}
+                onComplete={(taskId) => taskActions.complete.mutate(taskId)}
+                onDelete={(taskId) => taskActions.remove.mutate(taskId)}
               />
             </TabsContent>
           </Tabs>

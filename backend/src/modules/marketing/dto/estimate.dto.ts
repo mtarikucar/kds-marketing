@@ -48,3 +48,8 @@ export class UpdateEstimateDto {
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
   @IsOptional() @IsDateString() validUntil?: string;
 }
+
+/** `GET /estimates` filters. `leadId` narrows to one contact (record card). */
+export class ListEstimatesQueryDto {
+  @IsOptional() @IsString() @MaxLength(64) leadId?: string;
+}

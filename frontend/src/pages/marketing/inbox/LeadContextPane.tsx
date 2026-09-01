@@ -5,9 +5,15 @@ import { ArrowRight, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { IconButton } from '@/components/ui/IconButton';
+import { FeatureGate, RoleGate } from '@/components/ui/access-gates';
 import { fmtDate } from '../../../features/marketing/utils/format';
-import type { Lead } from '../../../features/marketing/types';
+import { MarketingRole, type Lead } from '../../../features/marketing/types';
+import { PersonAppointments } from './PersonAppointments';
 import { PersonDeals } from './PersonDeals';
+import { PersonEstimates } from './PersonEstimates';
+import { PersonOffers } from './PersonOffers';
+import { PersonTasks } from './PersonTasks';
+import { RecordDisclosure } from './RecordDisclosure';
 
 /**
  * The fields this card reads. A structural subset of `Lead` rather than `Lead`
@@ -28,9 +34,25 @@ export type RecordCardLead = Pick<Lead, 'id'> &
       | 'source'
       | 'businessType'
       | 'createdAt'
-      | 'assignedTo'
     >
-  >;
+  > & {
+    /**
+     * Three states, not two, and the card is held to all three by a test.
+     *
+     * A user → they own this person. `null` → nobody does, which is what
+     * `GET /leads` sends for an unowned lead (Prisma returns the missing
+     * relation as null) and is a real ANSWER on this surface: it is exactly
+     * what the Atanmamış queue one column over is about. `undefined` → nobody
+     * has SAID, which is what a person handed over by the Hat / Takvim /
+     * Görevler views looks like before their record resolves, and what a person
+     * whose record could not be read looks like forever.
+     *
+     * `Lead` itself carries the null since this landed, so this is `Lead`'s own
+     * type — pulled out of the `Pick` above only so the rule has somewhere to
+     * be written down, on the component that depends on it.
+     */
+    assignedTo?: Lead['assignedTo'];
+  };
 
 export interface LeadContextPaneProps {
   /** Null before anyone is selected — the card says so rather than rendering
@@ -81,13 +103,20 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
       </div>
 
       <dl className="space-y-1 text-xs">
-        <Row label={t('surface.card.owner', 'Sahibi')}>
-          <span data-testid="record-owner">
-            {lead.assignedTo
-              ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}`.trim()
-              : t('leads.assignmentStatus.unassigned', 'Atanmamış')}
-          </span>
-        </Row>
+        {/* Only when the record has actually answered. See `RecordCardLead`:
+            "Atanmamış" is a claim about this person, and printing it because a
+            board card simply does not carry the field would put an unowned
+            label on somebody's own lead — on the one card a rep reads before
+            deciding whether to touch them. */}
+        {lead.assignedTo !== undefined && (
+          <Row label={t('surface.card.owner', 'Sahibi')}>
+            <span data-testid="record-owner">
+              {lead.assignedTo
+                ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}`.trim()
+                : t('leads.assignmentStatus.unassigned', 'Atanmamış')}
+            </span>
+          </Row>
+        )}
         {lead.phone && <Row label={t('surface.card.phone', 'Telefon')}>{lead.phone}</Row>}
         {lead.email && <Row label={t('surface.card.email', 'E-posta')}>{lead.email}</Row>}
         {lead.city && <Row label={t('surface.card.city', 'Şehir')}>{lead.city}</Row>}
@@ -103,6 +132,84 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
           otherwise still be on screen under B. Same mechanism, and the same
           reason, as the middle column's `key` in InboxPage. */}
       <PersonDeals key={lead.id} leadId={lead.id} />
+
+      {/* GÖREVLER and TEKLİFLER — the person's other two fields that the
+          person's OWN record already carries. One `GET /leads/:id` serves both
+          sections (React Query dedupes the shared key), so they cost one
+          request between them and warm the cache for the link below. Both
+          render the lead detail's own tabs in `embedded` chrome; see
+          useLeadRecord.ts for the eager-vs-lazy rule and for the cost of the
+          shared key, which is a shared FATE when it fails. */}
+      <PersonTasks key={`tasks-${lead.id}`} leadId={lead.id} />
+      <PersonOffers key={`offers-${lead.id}`} leadId={lead.id} />
+
+      {/* TAHMİNİ FİYAT and RANDEVULAR each need their own endpoint, for objects
+          most contacts do not have — so they wait until someone opens them
+          rather than costing two requests per row a rep clicks. The `key` is
+          the ONE reset for "is this section open", which is per-person state on
+          a card that is handed a new person rather than remounted: the same
+          mechanism, and the same reason, as PersonDeals above. */}
+      <RecordDisclosure
+        key={`estimates-${lead.id}`}
+        data-testid="record-estimates"
+        title={t('surface.estimates.title', 'Tahmini fiyat')}
+      >
+        <PersonEstimates leadId={lead.id} />
+      </RecordDisclosure>
+      {/* RANDEVULAR is the one section whose read is not open to everyone.
+          `MarketingBookingController` is `@MarketingRoles('MANAGER')` +
+          `@RequiresFeature('funnels')`, so the section carries the SAME two
+          gates — a control appears with its gate, or it does not appear.
+          Ungated, a REP opening this on `/leads` got two 403s, a global error
+          toast and a permanent "Randevular yüklenemedi." whose Retry could
+          never succeed: a permission answer rendered as a failure.
+
+          The two gates get different answers on purpose, because the reader
+          can act on one and not the other. Role → HIDDEN: a REP cannot buy
+          their way out of their own role, and navigation.ts already hides
+          /appointments from them (`managerOnly`), so naming it here would make
+          this card the only place a rep is told about a surface they can never
+          reach. Plan → NAMED: that is PersonPane's `conversationAi` line one
+          column over, and the rule LeadStream states outright — COULD NOT READ
+          IT and YOUR PLAN DOES NOT INCLUDE IT stay two sentences, because a
+          plan limit told as a failure sends a billing question to support.
+
+          Both gates fail CLOSED while `/billing/summary` is in flight, exactly
+          as the menu and `FeatureGate` do; the summary is already in cache from
+          the shell by the time a card renders, so this costs no request. */}
+      <RoleGate role={MarketingRole.MANAGER}>
+        <FeatureGate
+          feature="funnels"
+          fallback={
+            <section
+              data-testid="record-appointments-gated"
+              className="space-y-2 border-t border-border pt-3"
+            >
+              {/* Deliberately NOT a disclosure: there is nothing behind the
+                  toggle, and an affordance that opens onto a plan notice is
+                  the same empty promise as one that opens onto a 403. */}
+              <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {t('surface.appointments.title', 'Randevular')}
+              </h4>
+              <p className="text-[11px] text-info">
+                {t('surface.appointments.gated', 'Randevular paketinde yok')} —{' '}
+                {t(
+                  'surface.appointments.gatedHint',
+                  'takvim aboneliğinde yok; eklendiğinde bu kişinin randevuları burada görünür',
+                )}
+              </p>
+            </section>
+          }
+        >
+          <RecordDisclosure
+            key={`appointments-${lead.id}`}
+            data-testid="record-appointments"
+            title={t('surface.appointments.title', 'Randevular')}
+          >
+            <PersonAppointments leadId={lead.id} />
+          </RecordDisclosure>
+        </FeatureGate>
+      </RoleGate>
 
       {/* The one door off this surface. */}
       <Link

@@ -31,9 +31,18 @@ export class EstimatesService {
     private readonly taxRates: TaxRatesService,
   ) {}
 
-  async list(workspaceId: string) {
+  /**
+   * The workspace's estimates, newest first — optionally narrowed to ONE
+   * person. The `leadId` predicate exists for the record card, which shows a
+   * single contact's quotes: without it the card would fetch every estimate in
+   * the workspace and sift them in the browser, an unbounded read that grows
+   * with the workspace and returns nothing for most people. It NARROWS the
+   * workspace scope, never replaces it — both predicates are in the same
+   * `where`, so a leadId from another tenant still matches nothing.
+   */
+  async list(workspaceId: string, leadId?: string) {
     return this.prisma.estimate.findMany({
-      where: { workspaceId },
+      where: { workspaceId, ...(leadId ? { leadId } : {}) },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,

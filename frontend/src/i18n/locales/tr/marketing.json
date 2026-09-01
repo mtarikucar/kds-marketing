@@ -547,6 +547,7 @@
     "calls": "Aramalar",
     "performance": "Performans",
     "targets": "Hedefler",
+    "pipelines": "Pipeline'lar",
     "users": "Ekip",
     "managementGroup": "Yönetim",
     "logout": "Çıkış",
@@ -1316,6 +1317,7 @@
       "assignedTo": "Sahibi"
     },
     "empty": "Burada görev yok.",
+    "loadFailed": "Görevler yüklenemedi.",
     "completeSuccess": "Görev tamamlandı",
     "createSuccess": "Görev oluşturuldu",
     "deleteSuccess": "Görev silindi",
@@ -1334,6 +1336,9 @@
   "calendar": {
     "title": "Takvim",
     "subtitle": "Haftanı planla",
+    "today": "Bugün",
+    "prevMonth": "Önceki ay",
+    "nextMonth": "Sonraki ay",
     "addTask": "Bu güne görev ekle",
     "weekdayShort": [
       "Paz",
@@ -1344,7 +1349,8 @@
       "Cum",
       "Cmt"
     ],
-    "noTasksThisDay": "Bu gün için planlanmış görev yok."
+    "noTasksThisDay": "Bu gün için planlanmış görev yok.",
+    "loadFailed": "Takvim yüklenemedi."
   },
   "commissions": {
     "title": "Komisyonlar",
@@ -4129,6 +4135,35 @@
     "researchTakenOverAsk": "zamanlanmış görevin çalışıyor mu?"
   },
   "surface": {
+    "tasks": {
+      "title": "Görevler",
+      "add": "Görev",
+      "none": "Bu kişide görev yok.",
+      "failed": "Görevler yüklenemedi."
+    },
+    "offers": {
+      "title": "Teklifler",
+      "add": "Teklif",
+      "none": "Bu kişiye teklif yok.",
+      "failed": "Teklifler yüklenemedi."
+    },
+    "estimates": {
+      "title": "Tahmini fiyat",
+      "none": "Bu kişiye tahmini fiyat verilmemiş.",
+      "noExpiry": "Geçerlilik tarihi yok",
+      "failed": "Tahmini fiyatlar yüklenemedi."
+    },
+    "appointments": {
+      "title": "Randevular",
+      "none": "Bu kişinin randevusu yok.",
+      "failed": "Randevular yüklenemedi.",
+      "gated": "Randevular paketinde yok",
+      "gatedHint": "takvim aboneliğinde yok; eklendiğinde bu kişinin randevuları burada görünür"
+    },
+    "section": {
+      "show": "Göster",
+      "hide": "Gizle"
+    },
     "sales": {
       "title": "Satış",
       "none": "Bu kişi hatta değil.",
@@ -4147,6 +4182,11 @@
       "empty": {
         "title": "Bu kuyrukta kimse yok",
         "desc": "Başka bir kuyruk seç ya da aramayı temizle."
+      },
+      "group": {
+        "byCompany": "Şirkete göre grupla",
+        "short": "Şirket",
+        "none": "Şirketsiz"
       }
     },
     "pane": {
@@ -4177,7 +4217,13 @@
     "subtitle": "Herkes tek listede — konuşanı da, sessizi de.",
     "view": {
       "list": "Liste",
-      "table": "Tablo"
+      "table": "Tablo",
+      "board": "Hat",
+      "calendar": "Takvim",
+      "tasks": "Görevler",
+      "label": "Görünüm",
+      "failed": "Bu görünüm açılamadı.",
+      "fullPage": "Tam sayfa aç"
     }
   }
 }

@@ -471,6 +471,7 @@
       "assignedTo": "Owner"
     },
     "empty": "No tasks here.",
+    "loadFailed": "Vazifalar yuklanmadi.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
@@ -479,6 +480,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "Bugun",
+    "prevMonth": "Oldingi oy",
+    "nextMonth": "Keyingi oy",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",
@@ -489,7 +493,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "Kalendar yuklanmadi."
   },
   "commissions": {
     "title": "Commissions",
@@ -1140,6 +1145,35 @@
     }
   },
   "surface": {
+    "tasks": {
+      "title": "Vazifalar",
+      "add": "Vazifa",
+      "none": "Bu shaxsda vazifa yo‘q.",
+      "failed": "Vazifalar yuklanmadi."
+    },
+    "offers": {
+      "title": "Takliflar",
+      "add": "Taklif",
+      "none": "Bu shaxsga taklif yo‘q.",
+      "failed": "Takliflar yuklanmadi."
+    },
+    "estimates": {
+      "title": "Taxminiy narxlar",
+      "none": "Bu shaxsga taxminiy narx berilmagan.",
+      "noExpiry": "Amal qilish muddati yo‘q",
+      "failed": "Taxminiy narxlar yuklanmadi."
+    },
+    "appointments": {
+      "title": "Uchrashuvlar",
+      "none": "Bu shaxsda uchrashuv yo‘q.",
+      "failed": "Uchrashuvlar yuklanmadi.",
+      "gated": "Uchrashuvlar tarifingizga kirmaydi",
+      "gatedHint": "kalendar obunangizga kirmaydi; qoʻshilgach bu shaxsning uchrashuvlari shu yerda koʻrinadi"
+    },
+    "section": {
+      "show": "Ko‘rsatish",
+      "hide": "Yashirish"
+    },
     "sales": {
       "title": "Sotuv",
       "none": "Quvurda emas.",
@@ -1158,6 +1192,11 @@
       "empty": {
         "title": "Bu navbatda hech kim yoʻq",
         "desc": "Boshqa navbatni tanlang yoki qidiruvni tozalang."
+      },
+      "group": {
+        "byCompany": "Kompaniya boʻyicha guruhlash",
+        "short": "Kompaniya",
+        "none": "Kompaniyasiz"
       }
     },
     "pane": {
@@ -1188,7 +1227,13 @@
     "subtitle": "Hamma bitta roʻyxatda — yozayotgani ham, jim turgani ham.",
     "view": {
       "list": "Roʻyxat",
-      "table": "Jadval"
+      "table": "Jadval",
+      "board": "Quvur",
+      "calendar": "Kalendar",
+      "tasks": "Vazifalar",
+      "label": "Koʻrinish",
+      "failed": "Bu koʻrinish ochilmadi.",
+      "fullPage": "Toʻliq sahifani ochish"
     }
   },
   "callRecording": {

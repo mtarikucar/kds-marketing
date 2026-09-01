@@ -40,6 +40,10 @@ export interface BookingCalendar {
 export interface Booking {
   id: string;
   calendarId: string;
+  /** The contact this appointment belongs to — set by the reserve path, which
+   *  upserts a Lead from the attendee's email/phone. Null for walk-in rows
+   *  created before that link existed. */
+  leadId: string | null;
   name: string;
   email: string | null;
   phone: string | null;
@@ -68,6 +72,9 @@ export interface BookingsFilter {
   status?: string;
   from?: string;
   to?: string;
+  /** ONE contact's appointments. Server-side; a leadId query is also exempt
+   *  from the list screen's rolling 24h window, so it carries past meetings. */
+  leadId?: string;
 }
 
 // ── Calendars ───────────────────────────────────────────────────────────────

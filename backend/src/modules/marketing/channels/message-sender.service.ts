@@ -159,8 +159,26 @@ export class MessageSenderService {
       throw e;
     }
 
-    // Best-effort live fan-out, only after the tx has committed.
-    this.stream.push(workspaceId, { kind: 'message', conversationId, payload: message });
+    // Best-effort live fan-out, only after the tx has committed. `leadId` says
+    // WHOSE frame this is, so the agent surface refreshes the person it names
+    // rather than whoever happens to be open. The conversation is already in
+    // hand here, so saying it costs nothing.
+    //
+    // `payload` is the whole `Message` row on PURPOSE, and only because the
+    // subscriber decides what it may keep: this is the workspace stream, read
+    // by agents, and `ConversationStreamService.forConversation` rebuilds a
+    // visitor's frame from five named fields before it reaches the public
+    // web-chat EventSource. It did not always: until that projection existed
+    // this line put `authorId`, `error`, `meta`, `status` and the per-message
+    // `costAmount` in front of the customer. Widening a push site is safe now;
+    // widening what a VISITOR sees means editing `ContactSafeEvent`, which is
+    // the point of it being one named place.
+    this.stream.push(workspaceId, {
+      kind: 'message',
+      conversationId,
+      leadId: convo.leadId,
+      payload: message,
+    });
 
     // Price + debit the per-segment SMS cost against the growth budget. Best-
     // effort and fire-and-forget: ConversationSpendService.settleSms never

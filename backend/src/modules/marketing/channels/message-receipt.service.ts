@@ -58,10 +58,33 @@ export class MessageReceiptService {
       await this.prisma.message.update({ where: { id: msg.id }, data: { status: u.status } });
     }
 
+    // WHOSE receipt this is. A Message row carries no leadId and the schema
+    // defines no `conversation` relation to include, so this costs one extra
+    // primary-key lookup per receipt. It is worth it against the alternative:
+    // every connected agent client refetching the open person's whole record
+    // (activities, offers, tasks) once per delivery receipt in the workspace.
+    //
+    // Its own try/catch, and not the caller's: `apply` swallows a throw by
+    // SKIPPING the rest of applyOne, so letting this bubble would trade a
+    // missing name for a missing TICK — a delivery failure the rep never sees.
+    // Unnamed, the client falls back to its broad refresh, which is correct if
+    // wasteful. That is the direction this field is allowed to fail in.
+    let leadId: string | undefined;
+    try {
+      const convo = await this.prisma.conversation.findFirst({
+        where: { id: msg.conversationId, workspaceId },
+        select: { leadId: true },
+      });
+      leadId = convo?.leadId;
+    } catch {
+      /* the tick matters more than the name */
+    }
+
     // Live inbox tick. 'status' is NOT contact-safe, so the public widget skips it.
     this.stream.push(workspaceId, {
       kind: 'status',
       conversationId: msg.conversationId,
+      ...(leadId ? { leadId } : {}),
       payload: { messageId: msg.id, status: u.status, reason: u.reason ?? null },
     });
   }

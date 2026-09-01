@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useEntitlements } from './useEntitlements';
 import { useWorkspaceProfile } from './useWorkspaceProfile';
-import { NAV_HUBS, UNLISTED_DESTINATIONS, visibleNav } from '../navigation';
+import { NAV_HUBS, visibleNav, visibleUnlisted } from '../navigation';
 
 /** A single navigable destination the command palette can jump to. */
 export interface NavCommand {
@@ -64,7 +64,14 @@ export function useNavCommands(): NavCommand[] {
     }
     // Pages that are routable but hold no sidebar slot. Appended last so a
     // real hub always wins the dedupe if one ever adopts the same path.
-    for (const d of UNLISTED_DESTINATIONS) {
+    //
+    // GATED, since 2026-09-01. This loop used to read the raw list, which was
+    // safe only while that list held two pages every member may open. Stage 4
+    // moved six more into it, one of them (`/appointments`) manager-only and
+    // `funnels`-gated — and this hook is the whole door those six have left, so
+    // an ungated read here would have handed a rep a jump into a page whose
+    // every backend route answers 403.
+    for (const d of visibleUnlisted({ isManager, isOwner, has, isAgency })) {
       push({ id: d.path, label: t(d.labelKey, d.label), hubLabel: null, path: d.path, icon: d.icon });
     }
     return commands;

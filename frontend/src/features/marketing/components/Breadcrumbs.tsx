@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
-import { NAV_HUBS } from '../navigation';
+import { NAV_HUBS, UNLISTED_DESTINATIONS } from '../navigation';
 import { useBreadcrumbStore } from '../hooks/useBreadcrumbLabel';
 
 /**
@@ -38,6 +38,32 @@ const ITEMS = NAV_HUBS.flatMap((h) => {
   }
   return items;
 });
+
+/**
+ * The UNLISTED destinations, which have no hub and therefore no group segment
+ * (`groupLabelKey === labelKey` suppresses it, the same way a single-page hub
+ * avoids "Dashboard › Dashboard").
+ *
+ * They joined the trail on 2026-09-01, when six pages left the Inbox menu and
+ * stayed routes. Built from hubs alone this component renders NOTHING on a
+ * page it cannot place — the one state it reserves for "I do not know where
+ * you are" — so a page that was deliberately unlisted would silently have
+ * become a page unable to say its own name. That is a worse loss than the menu
+ * entry it gave up, and it applies just as well to /dashboard and /help, which
+ * had gone without a trail since they were unlisted.
+ *
+ * Appended, so a real hub always wins the longest-prefix match if one ever
+ * adopts the same path — the same precedence useNavCommands uses.
+ */
+ITEMS.push(
+  ...UNLISTED_DESTINATIONS.map((d) => ({
+    path: d.path,
+    label: d.label,
+    labelKey: d.labelKey,
+    groupLabel: d.label,
+    groupLabelKey: d.labelKey,
+  })),
+);
 
 export default function Breadcrumbs() {
   const { t } = useTranslation('marketing');

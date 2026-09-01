@@ -26,6 +26,10 @@ const person = (id: string, name: string): Lead =>
     id,
     businessName: `Firma ${name}`,
     contactPerson: name,
+    // `GET /leads` includes the relation, so an unowned lead arrives as an
+    // explicit NULL. The distinction is load-bearing on the record card: null
+    // means nobody owns them, undefined means nobody has said.
+    assignedTo: null,
     businessType: 'OTHER',
     source: 'OTHER',
     status: 'NEW',
@@ -40,7 +44,9 @@ const BORA = person('p2', 'Bora');
 // The list has its own file and its own thirteen tests. Here it is reduced to
 // the one thing the SURFACE is answerable for: it hands a person up.
 vi.mock('./PeopleList', () => ({
-  PeopleList: ({ selectedId, onSelect }: any) => (
+  PeopleList: ({ selectedId, onSelect }: any) => {
+    if (LIST_BROKEN.value) throw new Error('list failed');
+    return (
     <div>
       <span data-testid="list-selected">selected:{selectedId ?? 'none'}</span>
       {[ALICE, BORA].map((p) => (
@@ -49,7 +55,8 @@ vi.mock('./PeopleList', () => ({
         </button>
       ))}
     </div>
-  ),
+    );
+  },
 }));
 
 // PersonPane is REAL below — the composer it owns is what proves per-person
@@ -72,6 +79,35 @@ vi.mock('../leads/LeadsPage', () => ({
     <div data-testid="leads-table">leads-embedded:{String(!!embedded)}</div>
   ),
 }));
+
+/**
+ * The three pages the left column can arrange the same people with. Each has
+ * its own file and its own tests for what it DOES; here they are reduced to the
+ * two things the SURFACE is answerable for — that they arrive `embedded`, and
+ * that they can hand a person up.
+ *
+ * `BOARD_BROKEN` lets one test make a view throw on render, which is what a
+ * failed chunk load looks like to React.
+ */
+const BOARD_BROKEN = vi.hoisted(() => ({ value: false }));
+/** The same switch for the LIST, which was the view outside the boundary. */
+const LIST_BROKEN = vi.hoisted(() => ({ value: false }));
+const viewDouble = (testid: string) =>
+  function View({ embedded, onSelectPerson, selectedLeadId }: any) {
+    if (testid === 'view-board' && BOARD_BROKEN.value) throw new Error('chunk failed');
+    return (
+      <div data-testid={testid}>
+        embedded:{String(!!embedded)} open:{selectedLeadId ?? 'none'}
+        <button onClick={() => onSelectPerson?.({ id: 'p2', contactPerson: 'Bora' })}>
+          {testid}-pick-Bora
+        </button>
+      </div>
+    );
+  };
+
+vi.mock('../opportunities/OpportunitiesPage', () => ({ default: viewDouble('view-board') }));
+vi.mock('../calendar/CalendarPage', () => ({ default: viewDouble('view-calendar') }));
+vi.mock('../tasks/TasksPage', () => ({ default: viewDouble('view-tasks') }));
 
 const auth = vi.hoisted(() => ({ role: 'MANAGER' }));
 vi.mock('../../../store/marketingAuthStore', () => ({
@@ -122,6 +158,8 @@ function renderAt(path = '/leads', qc = new QueryClient({ defaultOptions: { quer
 
 beforeEach(() => {
   vi.clearAllMocks();
+  BOARD_BROKEN.value = false;
+  LIST_BROKEN.value = false;
   auth.role = 'MANAGER';
   FEATURES = new Set(['conversationAi']);
   seenPath = '';
@@ -335,6 +373,86 @@ describe('The person surface — a live message reaches the open person', () => 
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] });
   });
 
+  /**
+   * `leadId` on the frame — the whole reason it was added to
+   * `ConversationStreamEvent`.
+   *
+   * Before it, a frame said only which CONVERSATION it happened on, so this
+   * surface could not tell an event about the open person from an event about
+   * anyone else and refreshed the open person on every one. That key now
+   * carries the record card's five sections behind it (activities, offers,
+   * tasks), and stage 2 hangs more observers off it, so every unrelated SMS in
+   * the workspace was buying a fat refetch for a screen that had not changed.
+   */
+  it('leaves the open person alone when the frame names somebody else', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    invalidate.mockClear();
+
+    await push({ kind: 'message', conversationId: 'c9', leadId: 'p2' });
+
+    // Positive anchor first: the frame WAS handled. Asserting only the absence
+    // would pass just as well against a frame that never arrived.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'conversations'] }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] });
+  });
+
+  it('refreshes the open person when the frame names them', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'message', conversationId: 'c9', leadId: 'p1' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] }),
+    );
+  });
+
+  /**
+   * The fallback, and it is the direction this field is allowed to fail in. A
+   * publisher that could not cheaply resolve the lead (the delivery-receipt
+   * path, when its lookup throws) sends the frame without one, and an
+   * un-upgraded server sends every frame without one. Both must degrade to
+   * "refresh everything", never to "refresh nothing": a dropped inbound is a
+   * rep replying to a customer whose last line they cannot see.
+   */
+  it('falls back to refreshing the open person when the frame names nobody', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'status', conversationId: 'c9' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] }),
+    );
+  });
+
   it('ignores a heartbeat — it is a keep-alive, not news', async () => {
     const { fetchMock, push } = openStream();
     vi.stubGlobal('fetch', fetchMock);
@@ -511,5 +629,268 @@ describe('The person surface — the table is behind the gear, not beside the ti
     await user.click(await screen.findByRole('menuitem', { name: /Tablo/ }));
 
     expect(await screen.findByTestId('leads-table')).toBeInTheDocument();
+  });
+});
+
+
+/**
+ * Stage 2 of the one-screen brief (2026-09-01 design, §"Karar 1"): the LEFT
+ * column switches between four arrangements of the same people — Liste · Hat ·
+ * Takvim · Görevler — while the middle column (their stream) and the right
+ * column (their record card) stay exactly as they are.
+ *
+ * The owner's sentence for why: "hattan birine tıklayıp aynı ekranda
+ * yazışmasını okursun; seçili kişi görünüm değişince korunur." Both halves are
+ * asserted below, and the second one is the whole reason the view lives beside
+ * the selection rather than inside it.
+ */
+describe('The person surface — the left column switches views', () => {
+  const tab = (name: RegExp) => screen.getByRole('tab', { name });
+
+  it('offers all four arrangements and starts on the list', async () => {
+    renderAt('/leads');
+
+    await screen.findByTestId('surface-list');
+    expect(screen.getAllByRole('tab')).toHaveLength(4);
+    expect(tab(/^Liste$/)).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('list-selected')).toBeInTheDocument();
+  });
+
+  it('opens the pipeline in the left column, embedded, without touching the other two', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+    await screen.findByTestId('surface-list');
+
+    await user.click(tab(/^Hat$/));
+
+    expect(await screen.findByTestId('view-board')).toHaveTextContent('embedded:true');
+    // The other two columns are untouched — that is the point of the surface.
+    expect(screen.getByTestId('surface-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-card')).toBeInTheDocument();
+    // …and the list it replaced is gone, not merely hidden behind it.
+    expect(screen.queryByTestId('list-selected')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['board', 'view-board'],
+    ['calendar', 'view-calendar'],
+    ['tasks', 'view-tasks'],
+  ])('honours ?left=%s as a deep link', async (param, testid) => {
+    renderAt(`/leads?left=${param}`);
+    expect(await screen.findByTestId(testid)).toBeInTheDocument();
+  });
+
+  it('falls back to the list on an unknown ?left= value', async () => {
+    renderAt('/leads?left=not-a-view');
+    expect(await screen.findByTestId('list-selected')).toBeInTheDocument();
+  });
+
+  it('puts the view in the URL, so a colleague can be sent one', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+    await screen.findByTestId('surface-list');
+
+    await user.click(tab(/^Görevler$/));
+
+    await screen.findByTestId('view-tasks');
+    expect(seenPath).toContain('left=tasks');
+  });
+
+  /**
+   * The constraint the design states outright. A rep triaging a person switches
+   * to the pipeline to see where their deal stands and expects to still be
+   * looking at that person — losing the selection would make the switcher a
+   * navigation, which is the thing this whole surface stopped doing.
+   */
+  it('keeps the selected person across a view switch', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    expect(await screen.findByTestId('stream')).toHaveTextContent('stream:p1');
+
+    await user.click(tab(/^Hat$/));
+
+    // The board is up AND it knows who is open…
+    expect(await screen.findByTestId('view-board')).toHaveTextContent('open:p1');
+    // …and the other two columns never let go.
+    expect(screen.getByTestId('stream')).toHaveTextContent('stream:p1');
+    expect(within(screen.getByTestId('surface-card')).getByTestId('record-card')).toBeInTheDocument();
+  });
+
+  it('keeps them across a switch back, too', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await user.click(tab(/^Takvim$/));
+    await screen.findByTestId('view-calendar');
+    await user.click(tab(/^Liste$/));
+
+    expect(await screen.findByTestId('list-selected')).toHaveTextContent('selected:p1');
+    expect(screen.getByTestId('stream')).toHaveTextContent('stream:p1');
+  });
+
+  /**
+   * "Hattan birine tıklayıp aynı ekranda yazışmasını okursun." A click in any of
+   * the three new views SELECTS — the same contract the list row has had since
+   * the surface replaced its two tabs — and it does not navigate.
+   */
+  it('opens a person picked from the board in the other two columns, without navigating', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads?left=board');
+    await screen.findByTestId('view-board');
+    const before = seenPath;
+
+    await user.click(screen.getByRole('button', { name: 'view-board-pick-Bora' }));
+
+    expect(await screen.findByTestId('stream')).toHaveTextContent('stream:p2');
+    expect(within(screen.getByTestId('surface-card')).getByTestId('record-card')).toBeInTheDocument();
+    expect(seenPath).toBe(before);
+  });
+
+  /**
+   * A view that cannot be RENDERED — the shape a failed lazy chunk takes — must
+   * say so, by name, in its own column. The layout's ErrorBoundary is keyed on
+   * the route, so without a boundary here one broken view would take the stream
+   * and the record card down with it and leave the whole surface reading
+   * "Something went wrong".
+   */
+  it('names a view that could not be opened, and keeps the other two columns', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+    await screen.findByTestId('surface-list');
+    BOARD_BROKEN.value = true;
+
+    await user.click(tab(/^Hat$/));
+
+    expect(await screen.findByTestId('view-failed')).toHaveTextContent('Hat');
+    expect(screen.getByTestId('surface-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-card')).toBeInTheDocument();
+  });
+
+  /**
+   * …and the LIST is one of the views that can do that, which it was not.
+   *
+   * The boundary arrived with the three borrowed pages, so Liste — the
+   * original column, the one a session opens on, the one a user cannot switch
+   * away from before it has rendered — was the only arrangement whose failure
+   * escaped to the ROUTE boundary and took the stream, the composer and the
+   * record card down with it. Backwards: the three views that CAN be switched
+   * away from degraded in place, and the one that cannot did not.
+   *
+   * Stage 3 adds group-by-company inside this exact branch, so the boundary
+   * has to be here before the grouping is.
+   */
+  it('names the LIST when it is the view that could not be opened', async () => {
+    LIST_BROKEN.value = true;
+
+    renderAt('/leads');
+
+    // Failure, by name — not the surface's own empty state and not a blank
+    // column. `label.list` is "Liste".
+    expect(await screen.findByTestId('view-failed')).toHaveTextContent('Liste');
+    // The rest of the surface is untouched, which is the whole point of a
+    // boundary this deep: the other two columns are still standing.
+    expect(screen.getByTestId('surface-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-card')).toBeInTheDocument();
+    // And the switcher still works, so the failure is escapable.
+    expect(tab(/^Hat$/)).toBeInTheDocument();
+  });
+
+  /**
+   * The three new views know a person's id and their name and very little else
+   * — a board card carries no `smsOptOut`, a task row carries only a business
+   * name. The surface therefore resolves the person against
+   * `['marketing','lead', id]`, the SAME key the record card is already reading
+   * for its Görevler and Teklifler sections, so this costs no extra request and
+   * adds no second answer to "who is this".
+   *
+   * Without it the middle column silently loses "Ara" and "Mesaj" for anyone
+   * picked outside the list: `LeadHeaderActions` renders nothing when the lead
+   * has no phone, and a missing button is the quietest possible regression.
+   */
+  it('fills in the person a view could only half-describe', async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((url: string) => {
+      if (url === '/leads/p2')
+        return Promise.resolve({
+          data: { id: 'p2', contactPerson: 'Bora', businessName: 'Bora AŞ', city: 'İzmir' },
+        });
+      return Promise.resolve({ data: [] });
+    });
+    renderAt('/leads?left=board');
+    await screen.findByTestId('view-board');
+
+    await user.click(screen.getByRole('button', { name: 'view-board-pick-Bora' }));
+
+    // The card shows a field the board never had.
+    expect(await screen.findByText('İzmir')).toBeInTheDocument();
+  });
+
+  /**
+   * "Sahibi: Atanmamış" is an ANSWER — it is what the Atanmamış queue one
+   * column over is about — so it may only be given when the record actually
+   * says so. A person handed over by a view that does not carry the field, or
+   * one whose record could not be read, must leave the row out rather than
+   * report them as nobody's.
+   */
+  it('does not call a person unowned merely because it has not read their record', async () => {
+    const user = userEvent.setup();
+    // 404 rather than a 500: `useLeadRecord` refuses to retry a 404, so the
+    // assertion below settles instead of racing three backoff attempts.
+    get.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error('gone'), { response: { status: 404 } })),
+    );
+    renderAt('/leads?left=board');
+    await screen.findByTestId('view-board');
+
+    await user.click(screen.getByRole('button', { name: 'view-board-pick-Bora' }));
+
+    // Positive anchor: the card IS up for this person.
+    expect(await screen.findByTestId('record-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('record-owner')).not.toBeInTheDocument();
+  });
+
+  it('still says Atanmamış when the record actually says nobody owns them', async () => {
+    const user = userEvent.setup();
+    renderAt('/leads');
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+
+    expect(await screen.findByTestId('record-owner')).toHaveTextContent('Atanmamış');
+  });
+});
+
+/**
+ * Stage 4 takes /opportunities, /calendar and /tasks out of the menu. Three of
+ * the four arrangements ARE those pages, embedded, so almost nothing is lost —
+ * but `embedded` drops each page's own chrome, and in the calendar's case it
+ * drops the seven-column month GRID, which exists nowhere else. This is the
+ * door back, offered from the very view that is showing the reduced version.
+ *
+ * Deliberately NOT offered on Liste: that view is this page. A link labelled
+ * "open the full page" pointing at the page you are on is the kind of dead
+ * control that teaches people to stop reading the chrome.
+ */
+describe('The person surface — the embedded views keep a door to their own page', () => {
+  const fullPage = () => screen.queryByRole('link', { name: /Tam sayfa/ });
+
+  it('offers no full-page link on the list, which IS this page', async () => {
+    renderAt('/leads');
+    // Anchored on a positive find so "no link" cannot pass on an empty render.
+    await screen.findByTestId('surface-list');
+    expect(fullPage()).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['board', 'view-board', '/opportunities'],
+    ['calendar', 'view-calendar', '/calendar'],
+    ['tasks', 'view-tasks', '/tasks'],
+  ])('offers the %s view a link to its own route', async (left, testid, href) => {
+    renderAt(`/leads?left=${left}`);
+
+    await screen.findByTestId(testid);
+    expect(fullPage()).toHaveAttribute('href', href);
   });
 });

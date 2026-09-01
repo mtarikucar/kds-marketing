@@ -2476,6 +2476,12 @@ model Booking {
   @@index([workspaceId])
   @@index([workspaceId, googleEventId])
   @@index([workspaceId, outlookEventId])
+  // The person record card asks for ONE contact’s appointments:
+  // WHERE workspaceId = ? AND leadId = ?, deliberately NOT bounded by the list
+  // screen’s rolling 24h window — so neither startAt index helps it, and
+  // without leadId Postgres narrows on the workspace and filters the heap.
+  // Same shape as Estimate’s.
+  @@index([workspaceId, leadId])
   @@map("bookings")
 }
 
@@ -4046,6 +4052,11 @@ model Estimate {
   updatedAt DateTime @updatedAt
 
   @@index([workspaceId, status])
+  // The person record card asks for ONE contact’s quotes:
+  // WHERE workspaceId = ? AND leadId = ?. Without leadId in an index Postgres
+  // narrows on the workspace and filters the heap — a whole-workspace scan per
+  // disclosure open.
+  @@index([workspaceId, leadId])
   @@map("estimates")
 }
 

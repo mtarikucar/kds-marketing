@@ -471,6 +471,7 @@
       "assignedTo": "Owner"
     },
     "empty": "No tasks here.",
+    "loadFailed": "تعذّر تحميل المهام.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
@@ -479,6 +480,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "اليوم",
+    "prevMonth": "الشهر السابق",
+    "nextMonth": "الشهر التالي",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",
@@ -489,7 +493,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "تعذّر تحميل التقويم."
   },
   "commissions": {
     "title": "Commissions",
@@ -1140,6 +1145,35 @@
     }
   },
   "surface": {
+    "tasks": {
+      "title": "المهام",
+      "add": "مهمة",
+      "none": "لا توجد مهام لهذا الشخص.",
+      "failed": "تعذّر تحميل المهام."
+    },
+    "offers": {
+      "title": "العروض",
+      "add": "عرض",
+      "none": "لا توجد عروض لهذا الشخص.",
+      "failed": "تعذّر تحميل العروض."
+    },
+    "estimates": {
+      "title": "التقديرات",
+      "none": "لا توجد تقديرات لهذا الشخص.",
+      "noExpiry": "لا يوجد تاريخ انتهاء",
+      "failed": "تعذّر تحميل التقديرات."
+    },
+    "appointments": {
+      "title": "المواعيد",
+      "none": "لا توجد مواعيد لهذا الشخص.",
+      "failed": "تعذّر تحميل المواعيد.",
+      "gated": "المواعيد غير مشمولة في باقتك",
+      "gatedHint": "التقويم غير مشمول في اشتراكك؛ وبمجرد إضافته تظهر مواعيد هذا الشخص هنا"
+    },
+    "section": {
+      "show": "إظهار",
+      "hide": "إخفاء"
+    },
     "sales": {
       "title": "المبيعات",
       "none": "ليس ضمن المسار.",
@@ -1158,6 +1192,11 @@
       "empty": {
         "title": "لا أحد في هذا الطابور",
         "desc": "اختر طابورًا آخر أو امسح البحث."
+      },
+      "group": {
+        "byCompany": "التجميع حسب الشركة",
+        "short": "الشركة",
+        "none": "بدون شركة"
       }
     },
     "pane": {
@@ -1188,7 +1227,13 @@
     "subtitle": "الجميع في قائمة واحدة — من يتحدث ومن يصمت.",
     "view": {
       "list": "قائمة",
-      "table": "جدول"
+      "table": "جدول",
+      "board": "المسار",
+      "calendar": "التقويم",
+      "tasks": "المهام",
+      "label": "العرض",
+      "failed": "تعذّر فتح هذا العرض.",
+      "fullPage": "فتح الصفحة كاملة"
     }
   },
   "callRecording": {

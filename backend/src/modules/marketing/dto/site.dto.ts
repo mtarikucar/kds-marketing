@@ -88,6 +88,8 @@ export class ListBookingsQueryDto {
   @IsOptional() @IsString() @MaxLength(24) status?: string;
   @IsOptional() @IsString() @MaxLength(40) from?: string;
   @IsOptional() @IsString() @MaxLength(40) to?: string;
+  /** One contact's appointments — the person record card's read. */
+  @IsOptional() @IsString() @MaxLength(64) leadId?: string;
 }
 
 /** Move a booking to a new start time (ISO datetime). */

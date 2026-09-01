@@ -471,6 +471,7 @@
       "assignedTo": "Owner"
     },
     "empty": "No tasks here.",
+    "loadFailed": "Не удалось загрузить задачи.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
@@ -479,6 +480,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "Сегодня",
+    "prevMonth": "Предыдущий месяц",
+    "nextMonth": "Следующий месяц",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",
@@ -489,7 +493,8 @@
       "Fri",
       "Sat"
     ],
-    "noTasksThisDay": "No tasks scheduled for this day."
+    "noTasksThisDay": "No tasks scheduled for this day.",
+    "loadFailed": "Не удалось загрузить календарь."
   },
   "commissions": {
     "title": "Commissions",
@@ -1140,6 +1145,35 @@
     }
   },
   "surface": {
+    "tasks": {
+      "title": "Задачи",
+      "add": "Задача",
+      "none": "У этого контакта нет задач.",
+      "failed": "Не удалось загрузить задачи."
+    },
+    "offers": {
+      "title": "Предложения",
+      "add": "Предложение",
+      "none": "У этого контакта нет предложений.",
+      "failed": "Не удалось загрузить предложения."
+    },
+    "estimates": {
+      "title": "Сметы",
+      "none": "У этого контакта нет смет.",
+      "noExpiry": "Без срока действия",
+      "failed": "Не удалось загрузить сметы."
+    },
+    "appointments": {
+      "title": "Встречи",
+      "none": "У этого контакта нет встреч.",
+      "failed": "Не удалось загрузить встречи.",
+      "gated": "Встречи не входят в ваш тариф",
+      "gatedHint": "календарь не подключён к вашей подписке; после подключения встречи этого контакта появятся здесь"
+    },
+    "section": {
+      "show": "Показать",
+      "hide": "Скрыть"
+    },
     "sales": {
       "title": "Продажи",
       "none": "Не в воронке.",
@@ -1158,6 +1192,11 @@
       "empty": {
         "title": "В этой очереди никого нет",
         "desc": "Выберите другую очередь или очистите поиск."
+      },
+      "group": {
+        "byCompany": "Группировать по компании",
+        "short": "Компания",
+        "none": "Без компании"
       }
     },
     "pane": {
@@ -1188,7 +1227,13 @@
     "subtitle": "Все в одном списке — и те, кто пишет, и молчуны.",
     "view": {
       "list": "Список",
-      "table": "Таблица"
+      "table": "Таблица",
+      "board": "Воронка",
+      "calendar": "Календарь",
+      "tasks": "Задачи",
+      "label": "Вид",
+      "failed": "Не удалось открыть этот вид.",
+      "fullPage": "Открыть полную страницу"
     }
   },
   "callRecording": {

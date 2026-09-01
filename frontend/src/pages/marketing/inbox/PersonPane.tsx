@@ -24,8 +24,8 @@ import {
   listConversations,
   type ConversationSummary,
 } from '../../../features/marketing/api/conversations.service';
-import type { Lead } from '../../../features/marketing/types';
 import LeadHeaderActions from '../leadDetail/LeadHeaderActions';
+import type { SurfacePerson } from './surfacePerson';
 
 interface NoteRow {
   id: string;
@@ -34,9 +34,20 @@ interface NoteRow {
 }
 
 export interface PersonPaneProps {
-  /** Who is selected. Null before anyone is — the column says so and fetches
-   *  nothing rather than rendering an empty conversation. */
-  person: Lead | null;
+  /**
+   * Who is selected. Null before anyone is — the column says so and fetches
+   * nothing rather than rendering an empty conversation.
+   *
+   * `SurfacePerson` rather than `Lead` since the left column switches views: a
+   * board card or a task row knows an id and a name and little else, and the
+   * surface fills the rest in from the person's own record. What this column
+   * reads is `contactPerson`/`businessName` for the header and `phone` /
+   * `smsOptOut` for `LeadHeaderActions` — and that last pair is why the fill-in
+   * matters here rather than being cosmetic: "Ara" is ABSENT, not disabled,
+   * when a lead has no number, so a half-described person would silently lose
+   * two buttons.
+   */
+  person: SurfacePerson | null;
   className?: string;
 }
 
