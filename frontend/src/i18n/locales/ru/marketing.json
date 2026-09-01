@@ -480,6 +480,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "Сегодня",
+    "prevMonth": "Предыдущий месяц",
+    "nextMonth": "Следующий месяц",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",

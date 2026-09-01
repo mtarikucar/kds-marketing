@@ -480,6 +480,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "Bugun",
+    "prevMonth": "Oldingi oy",
+    "nextMonth": "Keyingi oy",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",

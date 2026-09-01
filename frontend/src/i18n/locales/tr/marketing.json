@@ -1335,6 +1335,9 @@
   "calendar": {
     "title": "Takvim",
     "subtitle": "Haftanı planla",
+    "today": "Bugün",
+    "prevMonth": "Önceki ay",
+    "nextMonth": "Sonraki ay",
     "addTask": "Bu güne görev ekle",
     "weekdayShort": [
       "Paz",

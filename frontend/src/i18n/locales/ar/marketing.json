@@ -480,6 +480,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "اليوم",
+    "prevMonth": "الشهر السابق",
+    "nextMonth": "الشهر التالي",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",

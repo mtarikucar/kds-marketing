@@ -1065,6 +1065,9 @@
   "calendar": {
     "title": "Calendar",
     "subtitle": "Plan your week",
+    "today": "Today",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month",
     "addTask": "Add task on this day",
     "weekdayShort": [
       "Sun",
