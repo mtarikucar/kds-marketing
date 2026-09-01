@@ -306,6 +306,129 @@ describe('AccountStatsPanel', () => {
     expect(screen.queryByText(/₺1.000|\$1,000/)).not.toBeInTheDocument();
   });
 
+  /**
+   * A failed read is not an empty account.
+   *
+   * Both queries zero-fill their window up front, so a failure hands every
+   * chart a flat run of zeros — which each chart correctly refuses to plot and
+   * then labels "Organik veri yok" / "Reklam verisi yok". Those are flat
+   * assertions about the business, made on the strength of a request that never
+   * came back, and both queries are `meta: { silent: true }`, so nothing else
+   * on the screen mentioned the failure either. The panel whose whole thesis is
+   * refusing to state what it does not know was, in its commonest failure mode,
+   * stating exactly that four times over.
+   */
+  it('says the statistics could not be read, rather than that there are none', async () => {
+    getSocialInsights.mockRejectedValue(new Error('500'));
+    renderPanel();
+
+    // Three organic charts, one sentence — reach, engagement and followers all
+    // depend on the read that failed.
+    expect((await screen.findAllByText('Hesap istatistikleri okunamadı')).length).toBeGreaterThan(1);
+    expect(screen.queryByText('Organik veri yok')).not.toBeInTheDocument();
+    expect(screen.queryByText('Takipçi verisi yok')).not.toBeInTheDocument();
+    // The ad half read fine and keeps its own, different, honest empty state:
+    // the two failures are separate and are never merged into one apology.
+    expect(screen.getByText('Reklam verisi yok')).toBeInTheDocument();
+    // …and no caption underneath contradicting the chart it belongs to.
+    expect(screen.queryByText(/Hiçbir ağ takipçi sayısı bildirmedi/)).not.toBeInTheDocument();
+  });
+
+  it('says the same for the ad half, on its own', async () => {
+    getAdMetrics.mockRejectedValue(new Error('500'));
+    renderPanel();
+
+    expect(await screen.findByText('Reklam verileri okunamadı')).toBeInTheDocument();
+    expect(screen.queryByText('Reklam verisi yok')).not.toBeInTheDocument();
+    // …and the organic half, which succeeded, still says what IT knows.
+    expect(screen.getAllByText('Organik veri yok').length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The other way the currency can be missing, and the one nothing covered.
+   *
+   * `money()` drops to an unadorned grouped number whenever it has no code, and
+   * the only sentence that ever explained that was gated on there being MORE
+   * THAN ONE ad account. So a workspace whose `listAdAccounts` read failed — or
+   * whose single account carries no currency string at all — got its entire ad
+   * spend rendered as a naked "1.000" under "Reklam harcaması", with nothing on
+   * the panel saying which money that is. Unknown is not the same admission as
+   * mixed, and the wrong one of the two was silence.
+   */
+  it('says the currency is unknown when the ad-account read failed', async () => {
+    listAdAccounts.mockRejectedValue(new Error('403'));
+    getAdMetrics.mockResolvedValue(
+      adMetrics({ totals: { spend: 1000, impressions: 0, clicks: 0, leads: 0, revenue: 0, roas: 0 } }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText(/Para birimi okunamadı/)).toBeInTheDocument();
+    // Not the mixed-currency sentence: nobody disagreed, we simply could not ask.
+    expect(screen.queryByText(/farklı para birimlerinde/)).not.toBeInTheDocument();
+  });
+
+  it('says the same when the one connected ad account carries no currency', async () => {
+    listAdAccounts.mockResolvedValue([account({ currency: '' })]);
+    getAdMetrics.mockResolvedValue(
+      adMetrics({ totals: { spend: 1000, impressions: 0, clicks: 0, leads: 0, revenue: 0, roas: 0 } }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText(/Para birimi okunamadı/)).toBeInTheDocument();
+  });
+
+  it('does not caption a spend of zero, which claims no money at all', async () => {
+    // The caveat qualifies a FIGURE. A permanent footnote under an empty chart
+    // is noise, and noise is how people learn to stop reading footnotes.
+    listAdAccounts.mockRejectedValue(new Error('403'));
+    renderPanel();
+
+    await screen.findByText('Bağlı hesaplar');
+    await waitFor(() => expect(listAdAccounts).toHaveBeenCalled());
+    expect(screen.queryByText(/Para birimi okunamadı/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The follower headline is a SUM over the accounts that answered. When only
+   * some of them did, that sum is the audience of a subset wearing the label of
+   * the whole workspace — and the coverage note below the charts does not cover
+   * it, because it speaks about insights (impressions, reach, engagement), and
+   * an account can report all three while its follower field stays at the
+   * backend's "never read" zero.
+   */
+  it('says how many accounts the follower total actually covers', async () => {
+    getSocialInsights.mockResolvedValue(
+      insights({
+        byAccount: [
+          accountRow({ socialAccountId: 'a1', followers: 1200 }),
+          accountRow({ socialAccountId: 'a2', displayName: '@other', followers: 0 }),
+          accountRow({ socialAccountId: 'a3', displayName: '@third', followers: 0 }),
+        ],
+      }),
+    );
+    renderPanel();
+
+    expect(
+      await screen.findByText(/3 hesabın 1 tanesi takipçi sayısı bildirdi/),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing extra when every account reported one', async () => {
+    getSocialInsights.mockResolvedValue(
+      insights({
+        byAccount: [
+          accountRow({ socialAccountId: 'a1', followers: 1200 }),
+          accountRow({ socialAccountId: 'a2', displayName: '@other', followers: 800 }),
+        ],
+      }),
+    );
+    renderPanel();
+
+    await screen.findByText('Bağlı hesaplar');
+    await waitFor(() => expect(getSocialInsights).toHaveBeenCalled());
+    expect(screen.queryByText(/takipçi sayısı bildirdi/)).not.toBeInTheDocument();
+  });
+
   it('shows the currency when every ad account agrees', async () => {
     listAdAccounts.mockResolvedValue([account(), account({ id: 'ad-2', currency: 'TRY' })]);
     getAdMetrics.mockResolvedValue(

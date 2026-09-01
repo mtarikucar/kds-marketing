@@ -205,6 +205,104 @@ function metaMetric(rows: unknown, name: string): unknown {
   return values[values.length - 1]?.value;
 }
 
+/**
+ * "That metric does not exist any more."
+ *
+ * Meta retires Page and post insights metrics on a schedule — two waves landed
+ * on 2025-11-15 and 2026-06-15 — and the API's response to a retired name is
+ * `(#100) The value must be a valid insights metric`, which fails the WHOLE
+ * comma-separated request. One dead name therefore costs every number in the
+ * call, and the message does not say which name it objected to.
+ *
+ * Code 100 alone is too broad to key on (it is Graph's generic invalid-parameter
+ * code, raised for a malformed id as readily as for a metric), so the message is
+ * part of the test. That is deliberately narrow: a false positive here would
+ * silently downgrade a real error into a retry with fewer metrics.
+ */
+function isMetaInvalidMetricError(err: { code?: number | null; message?: string }): boolean {
+  if (err?.code !== 100) return false;
+  return /valid insights metric/i.test(err.message ?? '');
+}
+
+/**
+ * Ask for the richest metric set the API will still accept.
+ *
+ * `sets` is ordered widest-first. Each entry is tried in turn, and the NEXT one
+ * is reached only when the failure was specifically an invalid-metric error —
+ * a permission denial, a dead token or a throttle stops immediately, because
+ * narrowing the metric list cannot fix any of those and retrying would spend a
+ * second call to learn the same thing.
+ *
+ * This shape exists because the alternative does not survive contact with Meta.
+ * Hard-coding today's metric names buys perhaps six months: the names in this
+ * file at v19 were already dead by v25, and the whole account read failed on
+ * them rather than returning the numbers that still worked. Degrading means a
+ * retirement costs the columns it actually killed and nothing else — and the
+ * name of the set that answered is returned so the caller can log which one is
+ * carrying production, rather than leaving the next reader to reverse-engineer
+ * it from an empty chart.
+ */
+/**
+ * One flat shape rather than a discriminated union: this project compiles with
+ * `strictNullChecks: false`, under which TypeScript does not narrow a union by
+ * a literal boolean, so `if (!r.ok)` would leave `r.error` unreachable. It is
+ * the same shape `MetaGraphResult` uses for the same reason — `error` is
+ * populated only when `ok` is false.
+ */
+interface NarrowingResult {
+  ok: boolean;
+  /** The accepted payload, when ok. */
+  data: any;
+  /** Which metric set answered — the label from `sets`. Only when ok. */
+  used: string | null;
+  /** Populated only when `ok` is false. */
+  error: any;
+  /** True when at least one wider set was rejected for naming a dead metric. */
+  narrowed: boolean;
+}
+
+async function metaInsightsNarrowing(
+  path: string,
+  token: string,
+  sets: readonly { readonly label: string; readonly metric: string }[],
+  extraQuery: Record<string, string> = {},
+): Promise<NarrowingResult> {
+  let narrowed = false;
+  let last: any = null;
+  for (const set of sets) {
+    const r = await metaGraphFetch(path, {
+      accessToken: token,
+      query: { metric: set.metric, ...extraQuery },
+      timeoutMs: 15_000,
+    });
+    if (r.ok) return { ok: true, data: r.data, used: set.label, error: null, narrowed };
+    last = r.error;
+    if (!isMetaInvalidMetricError(r.error)) {
+      return { ok: false, data: null, used: null, error: r.error, narrowed };
+    }
+    narrowed = true;
+  }
+  return { ok: false, data: null, used: null, error: last, narrowed };
+}
+
+/**
+ * A number the provider actually stated, or `undefined`.
+ *
+ * `num()` turns an absent field into 0, which is right for a metric row (a day
+ * with no impressions really had none) and wrong for a follower COUNT: a Page
+ * that did not return the field has a follower count we do not know, and 0 is a
+ * claim about the business. The two cases need different coercions, so they get
+ * different functions rather than one with a flag.
+ */
+function statedNumber(...candidates: unknown[]): number | undefined {
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const n = Number(c);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  return undefined;
+}
+
 // ──────────────────────────────── is a Meta READ failure actually a dead token?
 
 /**
@@ -322,6 +420,37 @@ export function networkSupportsInsights(network: string): boolean {
 // ───────────────────────────────────────────────────────────────── Facebook
 
 /**
+ * The Facebook metric sets, widest first.
+ *
+ * Meta retires insights metrics on a published schedule and a retired name
+ * fails the WHOLE call, so these are ordered from "everything we would like" to
+ * "the part that has never been deprecated". The narrowing walk in
+ * metaInsightsNarrowing stops at the first set the API accepts.
+ *
+ * Why the widest set is still tried at all, given it is currently the one that
+ * fails: because the replacement names are new and Meta has moved them before.
+ * A list that only asks for today's survivors quietly stops collecting the
+ * richer numbers the moment they come back or are renamed again, and nobody
+ * notices. Asking wide and narrowing on rejection costs one extra call per
+ * account per sweep in the degraded case and self-heals in the other direction.
+ *
+ * `post_clicks` and `post_reactions_by_type_total` are the tail of both lists:
+ * neither appears in any of Meta's deprecation notices, so they are the closest
+ * thing to a floor this API has.
+ */
+const FB_POST_METRIC_SETS = [
+  { label: 'views+reach+clicks+reactions', metric: 'post_media_view,post_total_media_view_unique,post_clicks,post_reactions_by_type_total' },
+  { label: 'views+clicks+reactions', metric: 'post_media_view,post_clicks,post_reactions_by_type_total' },
+  { label: 'clicks+reactions', metric: 'post_clicks,post_reactions_by_type_total' },
+] as const satisfies readonly { label: string; metric: string }[];
+
+const FB_PAGE_METRIC_SETS = [
+  { label: 'views+pageviews', metric: 'page_media_view,page_views_total' },
+  { label: 'views', metric: 'page_media_view' },
+  { label: 'pageviews', metric: 'page_views_total' },
+] as const satisfies readonly { label: string; metric: string }[];
+
+/**
  * Facebook Page post insights.
  *
  * SCOPE: read_insights (plus the already-granted pages_read_engagement), and
@@ -329,11 +458,16 @@ export function networkSupportsInsights(network: string): boolean {
  * rather than an error, which is why an empty payload is reported as an error
  * here instead of being stored as a row of zeros.
  *
- * Metric choice matches what the Page API actually exposes per post:
- *   post_impressions              — total renders
- *   post_impressions_unique       — reach (people, not renders)
+ * Metric names are ORDERED, WIDEST FIRST, and narrowed on rejection — see
+ * metaInsightsNarrowing. Meta retired the impressions family in 2025-11/2026-06
+ * and replaced it with a views family:
+ *   post_media_view               — total views (replaces post_impressions)
+ *   post_total_media_view_unique  — reach (replaces post_impressions_unique)
  *   post_clicks                   — all consumptions (link, photo, other)
  *   post_reactions_by_type_total  — {like, love, wow, ...}; summed into `likes`
+ * The legacy names are still READ out of the response, because a Page that has
+ * not been migrated may answer with them; asking for them is what stopped
+ * working, not receiving them.
  *
  * `engagements` is DERIVED (reactions + clicks) rather than read, because the
  * one metric that would give it directly (post_engaged_users) is a separate
@@ -350,18 +484,17 @@ async function facebookPostInsights(
   const token = revealToken(account);
   if (!token) return failResult('accessToken could not be decrypted');
   try {
-    const r = await metaGraphFetch(`/${externalPostId}/insights`, {
-      accessToken: token,
-      query: {
-        metric: 'post_impressions,post_impressions_unique,post_clicks,post_reactions_by_type_total',
-      },
-      timeoutMs: 15_000,
-    });
+    const r = await metaInsightsNarrowing(`/${externalPostId}/insights`, token, FB_POST_METRIC_SETS);
     if (!r.ok) {
       return failResult(
         `FB post insights: ${r.error.message}`,
         isMetaReauthError(r.error),
         isMetaPermissionError(r.error),
+      );
+    }
+    if (r.used !== FB_POST_METRIC_SETS[0].label) {
+      logger.warn(
+        `FB post insights narrowed to "${r.used}" (${account.externalId}) — Meta retired a metric in the wider set`,
       );
     }
     const rows = r.data?.data;
@@ -371,12 +504,15 @@ async function facebookPostInsights(
     const likes = sumBreakdown(metaMetric(rows, 'post_reactions_by_type_total'));
     const clicks = num(metaMetric(rows, 'post_clicks'));
     return okResult({
-      impressions: num(metaMetric(rows, 'post_impressions')),
-      reach: num(metaMetric(rows, 'post_impressions_unique')),
+      // New name first, legacy second: whichever this Page answers with.
+      impressions: num(metaMetric(rows, 'post_media_view') ?? metaMetric(rows, 'post_impressions')),
+      reach: num(
+        metaMetric(rows, 'post_total_media_view_unique') ?? metaMetric(rows, 'post_impressions_unique'),
+      ),
       clicks,
       likes,
       engagements: likes + clicks,
-      raw: r.data,
+      raw: { ...r.data, metricSet: r.used },
     });
   } catch (e: any) {
     const msg = e?.message ?? String(e);
@@ -430,14 +566,18 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
       );
     }
     // followers_count is the modern field; fan_count is the legacy "likes" and
-    // is the only one some older Pages return. Either answers the question.
-    const followers = num(prof.data?.followers_count ?? prof.data?.fan_count);
+    // is the only one some older Pages return. Either answers the question —
+    // and when NEITHER is present the answer is `undefined`, not 0. A Page that
+    // did not tell us its follower count has one we do not know, and writing 0
+    // would put a number on the chart that the provider never stated.
+    const followers = statedNumber(prof.data?.followers_count, prof.data?.fan_count);
 
-    const ins = await metaGraphFetch(`/${account.externalId}/insights`, {
-      accessToken: token,
-      query: { metric: 'page_impressions,page_views_total', period: 'day' },
-      timeoutMs: 15_000,
-    });
+    const ins = await metaInsightsNarrowing(
+      `/${account.externalId}/insights`,
+      token,
+      FB_PAGE_METRIC_SETS,
+      { period: 'day' },
+    );
     if (!ins.ok) {
       logger.warn(`FB page insights degraded (${account.externalId}): ${ins.error.message}`);
       const data = { followers, raw: { profile: prof.data, insightsError: ins.error.message } };
@@ -445,12 +585,17 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
         ? degradedResult(data, `FB page insights: ${ins.error.message}`)
         : okResult(data);
     }
+    if (ins.used !== FB_PAGE_METRIC_SETS[0].label) {
+      logger.warn(
+        `FB page insights narrowed to "${ins.used}" (${account.externalId}) — Meta retired a metric in the wider set`,
+      );
+    }
     const rows = ins.data?.data;
     return okResult({
       followers,
-      impressions: num(metaMetric(rows, 'page_impressions')),
+      impressions: num(metaMetric(rows, 'page_media_view') ?? metaMetric(rows, 'page_impressions')),
       profileViews: num(metaMetric(rows, 'page_views_total')),
-      raw: { profile: prof.data, insights: ins.data },
+      raw: { profile: prof.data, insights: ins.data, metricSet: ins.used },
     });
   } catch (e: any) {
     const msg = e?.message ?? String(e);

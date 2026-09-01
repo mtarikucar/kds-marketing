@@ -379,8 +379,10 @@
     "compliance": "Uyumluluk",
     "other": "Diğer",
     "connections": "Bağlantılar ve alan adları",
-    "telephony": "Telefon"
+    "telephony": "Telefon",
+    "marketing": "Pazarlama varlıkları"
   },
+  "settings.backToApp": "Uygulamaya dön",
   "leadStatus": {
     "NEW": "Yeni",
     "CONTACTED": "İletişime geçildi",
@@ -3873,7 +3875,8 @@
         "leadHunt": "Bir araştırma profili oluşturur ve araştırmayı HEMEN çalıştırır: günlük aday kotandan düşer, araştırma kredisi ve tarama parası harcar.",
         "unknown": "Bu fikir tipini bu sürüm tanımıyor; ne yapacağını söyleyemeyiz."
       },
-      "whatLabel": "Bu ne yapacak?"
+      "whatLabel": "Bu ne yapacak?",
+      "refreshDoneNoCount": "Yeni plan hazır"
     }
   },
   "studio": {
@@ -3959,7 +3962,11 @@
       "spendAria": "Günlük reklam harcaması",
       "title": "Bağlı hesaplar",
       "unreadable": "Okunamayan ağlar",
-      "unreadableHint": "buraya yayın yapabiliyoruz ama istatistiklerini okuyamıyoruz, yukarıdaki sayılara dahil değiller"
+      "unreadableHint": "buraya yayın yapabiliyoruz ama istatistiklerini okuyamıyoruz, yukarıdaki sayılara dahil değiller",
+      "unknownCurrency": "Para birimi okunamadı — tutar birimsiz gösteriliyor",
+      "followersPartial": "{{n}} hesabın {{k}} tanesi takipçi sayısı bildirdi — toplam yalnızca onları kapsıyor",
+      "organicUnread": "Hesap istatistikleri okunamadı",
+      "adsUnread": "Reklam verileri okunamadı"
     },
     "today": {
       "brokenCount": "{{count}} gönderide sorun var",

@@ -121,7 +121,20 @@ export interface OrganicCoverage {
    * must not be drawn as the same claim.
    */
   accountsWithErrors?: number;
-  /** ISO instant of the most recent successful pull, or null if never pulled. */
+  /**
+   * ISO instant of the most recent pull ATTEMPT, or null if the sweep has never
+   * reached any account in this workspace.
+   *
+   * An attempt, NOT a success, and this line used to say the opposite. The
+   * backend stamps `insightsPulledAt` on every failure path as well, on purpose:
+   * an account that only ever fails and never got stamped would sit at the
+   * nulls-first head of the oldest-first due queue forever and starve every
+   * healthy account behind it. So a fresh timestamp here means "we tried
+   * recently" and says nothing whatever about whether the numbers below are
+   * complete — that question is `accountsWithErrors` and
+   * `byAccount[].insightsError`. A staleness alarm built on this field alone
+   * would sit silent through a workspace whose every account is refused.
+   */
   lastPulledAt: string | null;
   unsupportedNetworks: string[];
 }
@@ -198,18 +211,48 @@ export const pullSocialInsights = () =>
  * about the business. The headline renders an em dash for null.
  */
 export const totalFollowers = (rows: OrganicAccountRow[]): number | null => {
-  const known = rows.filter((r) => (r.followers ?? 0) > 0);
+  const known = followersReported(rows);
   return known.length ? known.reduce((n, r) => n + r.followers, 0) : null;
 };
+
+/**
+ * The accounts whose follower count we actually read, which is what
+ * `totalFollowers` sums over.
+ *
+ * Exported because the sum on its own is only half a fact. Two of five accounts
+ * reporting produces a perfectly confident-looking headline that is the audience
+ * of two accounts labelled as the audience of the workspace, and nothing else on
+ * the panel says so — the coverage note below the charts speaks about INSIGHTS
+ * coverage, which is a different read with a different failure mode. A caller
+ * that renders the total is expected to compare these two lengths and caption
+ * the gap.
+ *
+ * `Number.isFinite` rather than a truthiness check: a follower count that
+ * arrived as null, undefined or NaN is not a small audience, it is no reading,
+ * and adding it to a sum poisons the whole total into NaN.
+ */
+export const followersReported = (rows: OrganicAccountRow[]): OrganicAccountRow[] =>
+  rows.filter((r) => Number.isFinite(r.followers) && r.followers > 0);
 
 /**
  * Engagements ÷ impressions, as a percentage, or null when there is nothing to
  * divide by. Returning null rather than 0 is the point: "no impressions yet" and
  * "impressions but nobody engaged" are different facts and a 0% badge conflates
  * them.
+ *
+ * BOTH sides are checked for finiteness, not just the divisor. The types say
+ * every bucket field is a number, but this whole file is written on the premise
+ * that a client can be served by an older backend mid-deploy — that is why
+ * `insightsError` and `accountsWithErrors` are optional — and a totals blob
+ * missing `engagements` divides to NaN, which the caller then renders as
+ * "NaN%". A percentage sign after a non-number is the loudest possible way to
+ * state something we do not know, so it is refused here rather than formatted
+ * downstream: `compactNumber` and `fullNumber` already draw this same line.
  */
 export const engagementRate = (b: Pick<OrganicBucket, 'engagements' | 'impressions'>): number | null =>
-  b.impressions > 0 ? (b.engagements / b.impressions) * 100 : null;
+  Number.isFinite(b.engagements) && Number.isFinite(b.impressions) && b.impressions > 0
+    ? (b.engagements / b.impressions) * 100
+    : null;
 
 /** True when the response carries no measurable organic activity at all. */
 export const isOrganicEmpty = (r: SocialInsightsResponse | undefined): boolean =>

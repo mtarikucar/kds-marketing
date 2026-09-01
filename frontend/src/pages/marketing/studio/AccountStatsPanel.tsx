@@ -16,6 +16,7 @@ import {
   pullSocialInsights,
   socialInsightsKey,
   engagementRate,
+  followersReported,
   totalFollowers,
   type SocialInsightsResponse,
 } from '../../../features/marketing/api/socialInsights.service';
@@ -146,7 +147,8 @@ export default function AccountStatsPanel() {
   );
 
   /**
-   * The currency, only when there is exactly one.
+   * The currency, only when there is exactly one — and WHY there is not, when
+   * there is not.
    *
    * `getMetrics` sums `AdMetric.spend` across every connected ad account and
    * returns one number with no currency attached — so a dollar Meta account and
@@ -154,17 +156,28 @@ export default function AccountStatsPanel() {
    * currency at all. When the accounts disagree the number is still the best
    * summary available, but it must not be dressed in a symbol that claims a
    * conversion nobody performed.
+   *
+   * The reason is carried alongside the code because a bare `null` collapsed two
+   * different situations into one silent outcome. `money()` falls back to an
+   * unadorned grouped number whenever the code is null, and the only caption
+   * that ever explained that fallback was gated on there being MORE THAN ONE ad
+   * account — so a workspace whose `listAdAccounts` read failed, or whose single
+   * account carries no currency string, saw its whole ad spend rendered as a
+   * naked "12.480" under the heading "Reklam harcaması", with nothing anywhere
+   * saying which money that is. Unknown and mixed are different admissions and
+   * they get different sentences.
    */
   const currency = useMemo(() => {
     const set = new Set((adAccounts.data ?? []).map((a) => a.currency).filter(Boolean) as string[]);
-    return set.size === 1 ? [...set][0] : null;
+    if (set.size === 1) return { code: [...set][0], reason: 'one' as const };
+    return { code: null, reason: set.size > 1 ? ('mixed' as const) : ('unknown' as const) };
   }, [adAccounts.data]);
 
   const money = (n: number) =>
-    currency
+    currency.code
       ? new Intl.NumberFormat(i18n.language, {
           style: 'currency',
-          currency,
+          currency: currency.code,
           maximumFractionDigits: 0,
         }).format(n)
       : fullNumber(n, i18n.language);
@@ -254,7 +267,41 @@ export default function AccountStatsPanel() {
 
   const totals = data?.totals;
   const erate = totals ? engagementRate(totals) : null;
-  const followers = totalFollowers(data?.byAccount ?? []);
+  const accountRows = data?.byAccount ?? [];
+  const followers = totalFollowers(accountRows);
+  /**
+   * How many accounts actually reported a follower count, out of how many we
+   * asked about.
+   *
+   * The headline is a SUM over the accounts that answered, and when only some
+   * did, that sum is the audience of a subset presented as the audience of the
+   * workspace. Nothing else on the panel covers it: the coverage note below
+   * speaks about insights — impressions, reach, engagement — and an account can
+   * perfectly well report those while its follower field stays at the backend's
+   * "never read" zero. So the gap is named next to the number it qualifies.
+   */
+  const reported = followersReported(accountRows).length;
+  const followersPartial = followers !== null && reported < accountRows.length;
+
+  /**
+   * The one sentence that keeps the spend headline honest, or nothing.
+   *
+   * Attached to a FIGURE, so it only appears when there is one: an unqualified
+   * "0" claims no money and needs no disclaimer, and a permanent footnote under
+   * an empty chart is noise that teaches people to stop reading footnotes.
+   */
+  const spendCaveat =
+    (ads.data?.totals.spend ?? 0) > 0 && currency.reason !== 'one'
+      ? currency.reason === 'mixed'
+        ? t(
+            'studio.stats.mixedCurrency',
+            'Reklam hesapları farklı para birimlerinde — toplam dönüştürülmedi',
+          )
+        : t(
+            'studio.stats.unknownCurrency',
+            'Para birimi okunamadı — tutar birimsiz gösteriliyor',
+          )
+      : undefined;
 
   const identities = useMemo(
     () =>
@@ -265,6 +312,30 @@ export default function AccountStatsPanel() {
   );
 
   const loading = insights.isLoading || ads.isLoading;
+
+  /**
+   * "We could not read this", which is NOT "there is nothing here".
+   *
+   * Both reads zero-fill their window before they resolve, so a failed one
+   * hands every chart a flat run of zeros — which each chart correctly refuses
+   * to plot, and then labels with its empty state. The empty states say
+   * "Organik veri yok" and "Reklam verisi yok": flat assertions about the
+   * business, made on the strength of a request that never came back. Both
+   * queries are `meta: { silent: true }`, so nothing else on the screen
+   * mentions the failure either — a panel whose entire purpose is refusing to
+   * state what it does not know was, in its most common failure mode, stating
+   * exactly that four times over.
+   *
+   * `data === undefined` and not the bare error flag, the same rule the
+   * Autopilot strip and the wallet tile use: React Query keeps the last good
+   * response and only flips status when a BACKGROUND refetch fails, and numbers
+   * we still hold are worth more than an apology.
+   */
+  const organicUnread = insights.isError && insights.data === undefined;
+  const adsUnread = ads.isError && ads.data === undefined;
+  const organicEmptyText = organicUnread
+    ? t('studio.stats.organicUnread', 'Hesap istatistikleri okunamadı')
+    : undefined;
 
   /**
    * Nothing is connected at all — no social account, no ad account.
@@ -338,7 +409,7 @@ export default function AccountStatsPanel() {
             title={t('studio.stats.reach', 'Erişim')}
             value={totals ? short(totals.reach) : '—'}
             isLoading={loading}
-            emptyText={t('studio.stats.noOrganic', 'Organik veri yok')}
+            emptyText={organicEmptyText ?? t('studio.stats.noOrganic', 'Organik veri yok')}
             height={118}
             ariaLabel={t('studio.stats.reachAria', 'Günlük organik erişim')}
             formatLabel={dayLabel}
@@ -367,7 +438,7 @@ export default function AccountStatsPanel() {
                 : undefined
             }
             isLoading={loading}
-            emptyText={t('studio.stats.noOrganic', 'Organik veri yok')}
+            emptyText={organicEmptyText ?? t('studio.stats.noOrganic', 'Organik veri yok')}
             height={118}
             ariaLabel={t('studio.stats.engAria', 'Günlük organik etkileşim')}
             formatLabel={dayLabel}
@@ -379,12 +450,24 @@ export default function AccountStatsPanel() {
             title={t('studio.stats.followers', 'Takipçi')}
             value={followers !== null ? short(followers) : '—'}
             caption={
-              followers === null
+              // Silent when the read failed: "no network reported a follower
+              // count" is the same false assertion the empty state above it has
+              // just been corrected out of making, and a caption contradicting
+              // its own chart is worse than either version alone.
+              organicUnread
+                ? undefined
+                : followers === null
                 ? t('studio.stats.noFollowers', 'Hiçbir ağ takipçi sayısı bildirmedi')
-                : undefined
+                : followersPartial
+                  ? t(
+                      'studio.stats.followersPartial',
+                      '{{n}} hesabın {{k}} tanesi takipçi sayısı bildirdi — toplam yalnızca onları kapsıyor',
+                      { n: accountRows.length, k: reported },
+                    )
+                  : undefined
             }
             isLoading={loading}
-            emptyText={t('studio.stats.noFollowerData', 'Takipçi verisi yok')}
+            emptyText={organicEmptyText ?? t('studio.stats.noFollowerData', 'Takipçi verisi yok')}
             height={118}
             ariaLabel={t('studio.stats.followersAria', 'Hesap başına günlük takipçi sayısı')}
             formatLabel={dayLabel}
@@ -401,16 +484,13 @@ export default function AccountStatsPanel() {
             ]}
             title={t('studio.stats.spend', 'Reklam harcaması')}
             value={ads.data ? money(ads.data.totals.spend) : '—'}
-            caption={
-              !currency && (adAccounts.data?.length ?? 0) > 1
-                ? t(
-                    'studio.stats.mixedCurrency',
-                    'Reklam hesapları farklı para birimlerinde — toplam dönüştürülmedi',
-                  )
-                : undefined
-            }
+            caption={spendCaveat}
             isLoading={ads.isLoading}
-            emptyText={t('studio.stats.noAds', 'Reklam verisi yok')}
+            emptyText={
+              adsUnread
+                ? t('studio.stats.adsUnread', 'Reklam verileri okunamadı')
+                : t('studio.stats.noAds', 'Reklam verisi yok')
+            }
             height={118}
             ariaLabel={t('studio.stats.spendAria', 'Günlük reklam harcaması')}
             formatLabel={dayLabel}
@@ -428,7 +508,7 @@ export default function AccountStatsPanel() {
             'Kaç içerik çıktı — kaç kişiye ulaştığı değil.',
           )}
           isLoading={loading}
-          emptyText={t('studio.stats.noPublished', 'Bu aralıkta yayınlanan içerik yok')}
+          emptyText={organicEmptyText ?? t('studio.stats.noPublished', 'Bu aralıkta yayınlanan içerik yok')}
           height={88}
           ariaLabel={t('studio.stats.publishedAria', 'Gün başına yayınlanan içerik sayısı')}
           formatLabel={dayLabel}

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import BudgetAutopilotPage from '../budget/BudgetAutopilotPage';
@@ -192,6 +192,39 @@ describe('AutopilotStatusBar', () => {
     expect(within(await screen.findByTestId('autopilot-balance')).getByText(/10[.,]000/)).toBeInTheDocument();
     expect(within(screen.getByTestId('autopilot-budget')).getByText(/30[.,]000/)).toBeInTheDocument();
     expect(screen.getByText('2026-08')).toBeInTheDocument();
+  });
+
+  /**
+   * A balance we do not have is not a balance of zero.
+   *
+   * The branch order used to be error → `isLoading` → print, and `isLoading` is
+   * `isPending && isFetching`. A query that is pending but NOT fetching answers
+   * false to both — which is exactly what React Query does to an `online` query
+   * while the browser is offline: it parks it at `fetchStatus: 'paused'`. The
+   * strip then fell through to the last branch and `money(undefined)` coerced
+   * the missing balance into a confident "₺0" over an engine that may have
+   * thousands of lira of credit.
+   *
+   * Reachable because these two queries are independent and share their keys
+   * with the console: `['growth-budgets']` can be warm in the cache — seeded
+   * here the way an earlier visit or an open console would seed it — while
+   * `['growth-wallet']` is cold. The one number on this strip that must never be
+   * invented is the one that says whether the autopilot can still spend.
+   */
+  it('shows no balance at all rather than a fabricated zero while the wallet is unreadable', async () => {
+    const qc = testClient();
+    qc.setQueryData(['growth-budgets'], [budget]);
+    onlineManager.setOnline(false);
+    try {
+      wrapOn(qc, <AutopilotStatusBar onOpenConsole={vi.fn()} />);
+
+      // The strip IS rendered — this is not the no-budget branch — so the
+      // balance's silence is about the balance and nothing else.
+      expect(within(await screen.findByTestId('autopilot-budget')).getByText(/30[.,]000/)).toBeInTheDocument();
+      expect(screen.getByTestId('autopilot-balance').textContent).not.toMatch(/\d/);
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('reports a paused engine as paused, not as armed', async () => {

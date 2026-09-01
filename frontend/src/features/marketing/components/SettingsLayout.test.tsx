@@ -61,6 +61,37 @@ describe('SettingsLayout — sub-grouping', () => {
   });
 
   /**
+   * The same sidebar, in the product's first language.
+   *
+   * Every group heading here resolves through `t('settingsGroup.<key>', label)`
+   * with an ENGLISH inline default, which is fine for the nine groups that have
+   * a catalogue entry and invisible for the one that did not: "Marketing
+   * assets" — the group Growth Studio's three homeless pages moved into — was
+   * in neither `tr` nor `en`, so a Turkish operator read one English heading in
+   * an otherwise Turkish list. The English test above could never catch it,
+   * because the missing key falls back to exactly the string it asserts.
+   *
+   * The Back-to-app link is in the same assertion for the same reason: it was
+   * `t('settings.backToApp', { defaultValue: 'Back to app' })` against no
+   * catalogue entry at all, i.e. the top line of this sidebar was English in
+   * every language the product ships.
+   */
+  it('renders the group headings in Turkish, including the newest one', async () => {
+    await i18n.changeLanguage('tr');
+    try {
+      renderSettings();
+      expect(screen.getByText('Pazarlama varlıkları')).toBeInTheDocument();
+      expect(screen.getByText('Uygulamaya dön')).toBeInTheDocument();
+      // Its neighbours, to prove the assertion is about a Turkish list rather
+      // than about one string that happens to be translated.
+      expect(screen.getByText('Çalışma Alanı')).toBeInTheDocument();
+      expect(screen.getByText('Telefon')).toBeInTheDocument();
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  /**
    * The call log moved here from the Inbox surface (see navigation.test.ts for
    * why). An item in no group falls into the "Other" bucket — which the
    * assertion above holds empty — so arriving in this area is only half the
