@@ -329,7 +329,16 @@ export class StrategySynthesisService {
    *  feedback cron decides whether anything is worth re-synthesizing by asking
    *  "has a StrategyAction moved since the strategy was written?" — and writing
    *  the strategy first made every freshly-seeded action newer than it, so the
-   *  answer was always yes and the gate never skipped a single workspace. */
+   *  answer was always yes and the gate never skipped a single workspace.
+   *
+   *  That ordering only survives if ONE synthesis runs at a time per workspace,
+   *  which this method does not and cannot arrange for itself: the callers hold
+   *  the lock. POST /strategy/refresh takes a per-workspace
+   *  `pg_try_advisory_xact_lock` around the whole run; the weekly cron is
+   *  already serialized by `withAdvisoryLock`. Two concurrent runs would
+   *  interleave into one strategy holding both plans, and could land the
+   *  closing strategy write before the other run's actions — re-opening exactly
+   *  the gate the paragraph above is about. */
   private async persist(
     workspaceId: string,
     archetype: BusinessArchetype,
@@ -342,21 +351,40 @@ export class StrategySynthesisService {
       update: { status: 'ACTIVE', archetype, brief: brief as any, version: { increment: 1 } },
     });
 
-    await this.prisma.strategyAction.deleteMany({ where: { workspaceId, strategyId: strategy.id } });
-    if (actions.length) {
-      await this.prisma.strategyAction.createMany({
-        data: actions.map((a) => ({
-          workspaceId,
-          strategyId: strategy.id,
-          kind: a.kind,
-          title: a.title,
-          rationale: a.rationale,
-          payload: a.payload as any,
-          priority: a.priority,
-          status: 'PROPOSED',
-        })),
-      });
-    }
+    // The drop and the re-seed are ONE transaction, because between them the
+    // workspace has no plan at all. This is not a hypothetical window: the
+    // console polls the plan, the orchestrator reads it to decide what to run,
+    // and the weekly cron counts action rows — every one of them can land in
+    // the gap and see a strategy with zero actions, which reads as "the AI
+    // produced nothing" rather than "ask again in a second". Worse, a failure
+    // in createMany (a bad payload, a lost connection) used to LEAVE it that
+    // way: the old plan already deleted, the new one never inserted, and the
+    // only record of what the workspace had been doing gone with it — including
+    // the DONE rows' resultRefs, which are the sole link from an action to the
+    // research run or staged post it produced. Wrapped, a half-replaced plan is
+    // never observable and a failed replace is a no-op.
+    //
+    // The strategy row is deliberately NOT inside this transaction. It is
+    // upserted before and touched after, so that its `updatedAt` brackets the
+    // actions rather than sharing their commit — see the comment below for why
+    // that ordering is load-bearing.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.strategyAction.deleteMany({ where: { workspaceId, strategyId: strategy.id } });
+      if (actions.length) {
+        await tx.strategyAction.createMany({
+          data: actions.map((a) => ({
+            workspaceId,
+            strategyId: strategy.id,
+            kind: a.kind,
+            title: a.title,
+            rationale: a.rationale,
+            payload: a.payload as any,
+            priority: a.priority,
+            status: 'PROPOSED',
+          })),
+        });
+      }
+    });
 
     // Touch the strategy LAST, so it is strictly newer than the actions it just
     // seeded. The weekly feedback cron asks "has any StrategyAction moved since

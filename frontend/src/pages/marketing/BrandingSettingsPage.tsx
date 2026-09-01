@@ -23,6 +23,7 @@ import {
 } from '@/components/ui';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { RouteFallback } from '../../components/RouteFallback';
+import { WorkspaceTimezoneCard } from './WorkspaceTimezoneCard';
 
 // Lazy so a tab's code only loads when opened (each was its own route before).
 const BrandKitPage = lazy(() => import('./BrandKitPage'));
@@ -300,6 +301,17 @@ function BusinessTab() {
           </CardFooter>
         </Card>
       </form>
+
+      {/*
+        The workspace's own clock. It sits with brand name and logo because this
+        is the "facts about this business" tab, and because `/branding` is
+        already MANAGER-gated — the same floor `PATCH /workspaces/timezone`
+        enforces. Before this card those two routes had no caller anywhere in
+        the client, so an existing workspace stuck on the schema's 'UTC' default
+        had no way to say otherwise and every "today" it was shown was computed
+        in the wrong day.
+      */}
+      <WorkspaceTimezoneCard />
 
       {/* Live preview */}
       <Card className="overflow-hidden">

@@ -44,7 +44,11 @@ const STRATEGY = {
   brief: {
     identity: { product: 'CRM for clinics', voice: 'Confident', positioning: 'The fastest clinic CRM', usp: 'Setup in a day' },
     audience: 'Dental clinic owners',
-    channels: [{ key: 'INSTAGRAM', fitScore: 82, rationale: 'Visual before/after content performs.' }],
+    // A FRACTION, like the backend emits. The fixture used to say 82 and so
+    // cemented the misreading the page had: it rendered the raw value into a
+    // percentage bar, and the test agreed with it because the fixture was wrong
+    // in the same direction.
+    channels: [{ key: 'INSTAGRAM', fitScore: 0.82, rationale: 'Visual before/after content performs.' }],
     contentPillars: [{ title: 'Patient stories', angle: 'Social proof', formats: ['Reel'], tone: 'Warm' }],
     goals: { objective: 'Book 50 demos/mo', kpis: ['CAC', 'MQLs'] },
     budget: '$3,000/mo',

@@ -244,7 +244,15 @@ export default function App() {
               wizard. Both live under the standard marketing auth guard. */}
           <Route path="/studio/strategy"   element={<S><StrategyConsolePage /></S>} />
           <Route path="/onboarding/strategy" element={<S><StrategyOnboarding /></S>} />
-          <Route path="/budget"         element={<Navigate to="/studio" replace />} />
+          {/*
+            `/budget` is the one saved address that ever named the Growth
+            Autopilot console, and until 2026-09-01 landing on /studio WAS
+            landing on the console. It is a panel behind a drawer now, so the
+            redirect has to name it — otherwise the bookmark quietly becomes
+            "somewhere near it", and the console holds the kill switch for an
+            engine that spends money.
+          */}
+          <Route path="/budget"         element={<Navigate to="/studio?tool=autopilot" replace />} />
           <Route path="/trends"         element={<Navigate to="/studio?view=tools&tab=trends" replace />} />
           <Route path="/content-calendar" element={<Navigate to="/studio?view=tools&tab=calendar" replace />} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
@@ -317,8 +325,12 @@ export default function App() {
             {/* Telephony + Voice-AI setup now lives in the Account Center. */}
             <Route path="/settings/telephony"   element={<Navigate to="/accounts" replace />} />
             <Route path="/settings/voice-ai"    element={<Navigate to="/accounts" replace />} />
-            <Route path="/social"      element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
-            <Route path="/social-campaigns"      element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
+            {/* Each redirect names the SUB-tab it means. Without one they both
+                landed on blast Campaigns — a page neither URL is about — while
+                GrowthStudioPage's own comment claimed all six carried an exact
+                tab/sub pair. */}
+            <Route path="/social"      element={<Navigate to="/studio?view=tools&tab=campaigns&sub=planner" replace />} />
+            <Route path="/social-campaigns"      element={<Navigate to="/studio?view=tools&tab=campaigns&sub=social" replace />} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />

@@ -1,0 +1,151 @@
+import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import { ChevronDown, Wrench } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/DropdownMenu';
+import { hasMarketingRole, MarketingRole } from '@/features/marketing/types';
+import { useMarketingAuthStore } from '@/store/marketingAuthStore';
+
+/**
+ * The way out of the one screen — and the reason it is allowed to be one screen.
+ *
+ * Collapsing Growth Studio meant taking away a "Manual tools" button that opened
+ * a five-tab surface. Several of those tabs host genuine full pages (blast
+ * campaigns, the social planner's table, the trends browser) that do not fit in
+ * a panel or a drawer, and none of them has a menu entry of its own. So the
+ * screen owes them a door, and that door has to be PERMANENT: an affordance that
+ * appears only when some other panel's query happens to have resolved is not a
+ * door, it is a coincidence.
+ *
+ * That is why this is its own component mounted directly by the screen rather
+ * than a menu inside the tools drawer. It renders from the router and from the
+ * signed-in ROLE — no query, no entitlement — so a failed poll, a loading
+ * skeleton or a workspace that never set up a budget cannot make seven
+ * destinations vanish.
+ *
+ * The role is the one exception, and it is not a hedge: it is the correction for
+ * the bug this menu shipped with. `/studio` is auth-only, `/accounts` is
+ * `requiredRole=MANAGER` in App.tsx, and `?tool=connections` mounts the very
+ * page behind `/accounts` inside a drawer ON `/studio`. Offering that entry to
+ * everyone therefore handed a REP a one-click path around the router's own gate.
+ * So the honest statement of this component's contract is: STATE-INDEPENDENT,
+ * EXCEPT where the destination carries a role of its own — a menu entry may
+ * never be easier to reach than the page it opens.
+ *
+ * The first three entries open the drawer through the URL (`?tool=`), which is
+ * also what gives those drawer branches an entry point at all; the last is the
+ * legacy full-page surface, whose own tabs carry the rest.
+ */
+
+/**
+ * Drawer tools, opened by writing `?tool=` — see StudioOneScreen.
+ *
+ * `role` mirrors what the destination actually enforces, and it is only half of
+ * the gate: hiding a menu row hides nothing from someone who types the URL, so
+ * StudioToolsDrawer refuses the same two tools on the rendering side. Both ends,
+ * always — this end is for the honest menu, that end is for the actual refusal.
+ *
+ * Where each role comes from:
+ *  - `calendar`  → ContentCalendarPage. `GET marketing/content-calendar` is
+ *    `reports.read` with NO role, so every authenticated user may read the
+ *    month. Left ungated on purpose. (The tab's "generate weekly plan" CTA does
+ *    need MANAGER — it POSTs a SocialCampaign — and StudioCalendarTab gates that
+ *    button itself.)
+ *  - `create`    → AiStudioPage. The whole `marketing/ai/media/*` controller is
+ *    class-level `@MarketingRoles('MANAGER')` on top of `@RequiresFeature('mediaGen')`,
+ *    so a REP's library query 403s on mount and the generate button 403s on click.
+ *  - `connections` → AccountCenterPage, i.e. `/accounts`, which App.tsx puts
+ *    behind `requiredRole={MarketingRole.MANAGER}`; `GET marketing/connections`
+ *    is `@MarketingRoles('MANAGER')` too.
+ */
+interface ToolLink {
+  to: string;
+  key: string;
+  label: string;
+  /** Minimum role the DESTINATION enforces. Omitted = open to every signed-in user. */
+  role?: MarketingRole;
+}
+
+const TOOL_LINKS: readonly ToolLink[] = [
+  /**
+   * First, and deliberately roleless.
+   *
+   * The Autopilot console holds the caps, the pause and the KILL SWITCH for an
+   * engine that spends the workspace's money. Until this entry existed its only
+   * affordance was the status bar's button — and that bar renders an error strip
+   * with nothing but a Retry when the budget read fails with no cached data. So
+   * on a cold load where `GET /budget` was down, an operator could not reach the
+   * stop button for a running autopilot by any route at all.
+   *
+   * A door to a kill switch may not depend on the health of the query that
+   * describes what it would stop. This one renders from the router alone, and
+   * carries no role because the console's reads are `reports.read` with no
+   * `@MarketingRoles` — every write inside it is gated on its own.
+   */
+  { to: '/studio?tool=autopilot', key: 'studio.toolsMenu.autopilot', label: 'Otomatik pilot konsolu' },
+  { to: '/studio?tool=calendar', key: 'studio.toolsMenu.calendar', label: 'İçerik takvimi' },
+  {
+    to: '/studio?tool=create',
+    key: 'studio.toolsMenu.create',
+    label: 'AI stüdyo',
+    role: MarketingRole.MANAGER,
+  },
+  {
+    to: '/studio?tool=connections',
+    key: 'studio.toolsMenu.connections',
+    label: 'Bağlı hesaplar',
+    role: MarketingRole.MANAGER,
+  },
+];
+
+export function StudioToolsMenu({ className }: { className?: string }) {
+  const { t } = useTranslation('marketing');
+  const role = useMarketingAuthStore((s) => s.user?.role);
+  const links = TOOL_LINKS.filter((l) => !l.role || hasMarketingRole(role, l.role));
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="secondary" size="sm" className={className}>
+          <Wrench className="h-4 w-4" aria-hidden="true" />
+          {t('studio.toolsMenu.trigger', 'Araçlar')}
+          <ChevronDown className="h-3.5 w-3.5 opacity-60" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {links.map((l) => (
+          <DropdownMenuItem key={l.to} asChild>
+            <Link to={l.to}>{t(l.key, l.label)}</Link>
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        {/*
+          The full-page surface. Kept as ONE entry rather than exploded into its
+          seven tabs: those are destinations you go to deliberately and rarely,
+          and listing them all here would rebuild, in a dropdown, exactly the
+          inventory this screen exists to replace.
+
+          Not role-filtered, because the SURFACE is not the destination: it is a
+          tab strip, and the five tabs whose pages are manager-only now refuse
+          from inside (`ManagerTab` in GrowthStudioPage). A rep opening this door
+          still gets the content calendar and the trends browser, and meets a
+          plain refusal on the rest instead of a page whose every request 403s.
+
+          The earlier version of this note claimed each tab "gates on its own",
+          which was simply untrue — none of them did, and the sentence was what
+          licensed the hole. Left here as a warning: if you add a tab whose page
+          is manager-only, wrap it, or this comment becomes a lie again.
+        */}
+        <DropdownMenuItem asChild>
+          <Link to="/studio?view=tools">{t('studio.toolsMenu.all', 'Tüm araçlar')}</Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

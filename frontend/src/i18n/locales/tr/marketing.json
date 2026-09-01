@@ -705,7 +705,16 @@
     "namePlaceholder": "örn. İkinci Mağazam",
     "createButton": "Oluştur",
     "createSuccess": "\"{{name}}\" workspace'i oluşturuldu — artık içindesiniz",
-    "createError": "Workspace oluşturulamadı"
+    "createError": "Workspace oluşturulamadı",
+    "tz": {
+      "title": "Saat dilimi",
+      "desc": "Raporlardaki ve listelerdeki \"bugün\" bu saat diliminde başlar. İşletmenin saatini seç — tarayıcının değil.",
+      "label": "Çalışma alanı saat dilimi",
+      "browserHint": "Bu tarayıcı {{zone}} diliminde — kayıtlı değer {{stored}}.",
+      "useBrowser": "Tarayıcınınkini kullan",
+      "saved": "Çalışma alanı saat dilimi güncellendi",
+      "saveFailed": "Saat dilimi kaydedilemedi"
+    }
   },
   "dashboard": {
     "title": "Gösterge Paneli",
@@ -3794,16 +3803,276 @@
       "emptyTitle": "Henüz strateji yok",
       "emptyDesc": "Yapay zeka stratejisti markanı analiz edip eylem planıyla birlikte tam bir pazarlama stratejisi hazırlasın.",
       "startOnboarding": "Stratejimi oluştur"
+    },
+    "ideas": {
+      "actionsFailed": "Fikirler yüklenemedi.",
+      "approve": "Onayla",
+      "approveFailed": "Fikir onaylanamadı",
+      "buildStrategy": "Stratejimi kur",
+      "cancel": "Vazgeç",
+      "confirm": {
+        "community": "Bağlı bir Discord/Reddit kanalın varsa bu metin oraya CANLI gönderilir — ikinci bir onay sorulmaz ve geri alınamaz. Bağlı kanal yoksa taslak olarak bekletilir. Onayladıktan sonra çalışması bir dakikayı bulabilir.",
+        "leadHunt": "Bu araştırma şimdi çalışır ve para harcar: günlük aday kotandan düşer, araştırma kredisi ve tarama (scraping) ücreti yazılır. Kotan dolmuşsa profil oluşur ama arama çalışmaz. Çalışması bir dakikayı bulabilir.",
+        "unknown": "Bu fikrin ne yapacağını bu sürüm bilmiyor; yayın yapabilir ya da para harcayabilir. Emin değilsen önce strateji konsolundan incele. Çalışması bir dakikayı bulabilir."
+      },
+      "confirmApproveTitle": "«{{title}}» onaylansın mı?",
+      "dismiss": "Yoksay",
+      "dismissFailed": "Fikir yoksayılamadı",
+      "emptyDesc": "Plandaki fikirlerin hepsini karara bağladın. Yeni bir dalga için “Fikirleri yenile” diyebilirsin.",
+      "emptyTitle": "Bekleyen fikir yok",
+      "failureTitle": "«{{title}}» çalıştırılamadı",
+      "failureUnknown": "sebep kaydedilmemiş",
+      "kind": {
+        "adCampaign": "Reklam",
+        "channelSetup": "Kanal kurulumu",
+        "community": "Topluluk",
+        "content": "İçerik",
+        "leadHunt": "Müşteri avı",
+        "unknown": "Diğer"
+      },
+      "loadFailed": "Fikirler yüklenemedi.",
+      "manual": {
+        "cta": "Kanalları bağla",
+        "hint": "Kanal bağlamak senin hesabınla yapılan bir izin akışı — Jeeta senin yerine yapamaz. Hesaplar sayfasından bağladığında bu fikir kendiliğinden anlam kazanır."
+      },
+      "noStrategyDesc": "Markanı bir kez anlat; stratejist senin için bir pazarlama stratejisi ve ona bağlı kampanya fikirleri çıkarsın.",
+      "noStrategyTitle": "Henüz bir stratejin yok",
+      "openConsole": "Strateji konsolunu aç",
+      "priority": {
+        "high": "Yüksek",
+        "low": "Düşük",
+        "medium": "Orta"
+      },
+      "readOnly": "Fikirleri yalnızca yöneticiler onaylayabilir; sen görebilirsin.",
+      "refresh": "Fikirleri yenile",
+      "refreshConfirmBody": "Bu işlem mevcut TÜM fikirleri siler — tamamlanmış olanları ve onların ürettiği taslak, araştırma ve kampanya bağlantılarını da. Yerine yepyeni bir plan yazılır. Ayrıca çok adımlı bir AI sentezi çalıştırır: AI kredisi harcar ve yarıda kalsa bile iade edilmez. Bir dakikayı bulabilir.",
+      "refreshConfirmCta": "Sil ve yeniden üret",
+      "refreshConfirmTitle": "Fikirleri yenile",
+      "refreshDone": "Yeni plan hazır: {{count}} fikir",
+      "refreshFailed": "Fikirler yenilenemedi",
+      "refreshSkipped": "Yeniden üretilecek bir şey bulunamadı — önce strateji kurulumunu tamamla.",
+      "result": {
+        "campaign": "kampanya kabuğu",
+        "community": "topluluk taslağı",
+        "discord": "Discord gönderisi",
+        "post": "taslak gönderi",
+        "reddit": "Reddit gönderisi",
+        "research": "araştırma çalışması",
+        "unknown": "sonuç"
+      },
+      "slowNote": "Onayladığın fikir hemen çalıştırılır — bir dakikayı bulabilir.",
+      "title": "Kampanya fikirleri",
+      "toastApproved": "«{{title}}» onaylandı ve çalıştırıldı",
+      "toastApprovedUnverified": "«{{title}}» onaylandı — sonucunu doğrulayamadık, strateji konsolundan bakabilirsin",
+      "toastFailed": "«{{title}}» çalıştırılamadı",
+      "what": {
+        "adCampaign": "Meta’da DURAKLATILMIŞ boş bir kampanya açar. Reklam seti, reklam ve bütçe yok — plandaki günlük bütçe uygulanmaz, tek başına para harcayamaz. Bağlı Meta reklam hesabın yoksa hiçbir şey oluşturmaz.",
+        "channelSetup": "Bunu çalıştıracak bir işleyici yok: onaylarsan satır sonsuza kadar “onaylandı” olarak kalır ve hiçbir şey olmaz. Kanal bağlantısı elle yapılır.",
+        "community": "Topluluğa uygun metni yazar ve bağlı bir Discord/Reddit kanalın varsa oraya CANLI gönderir. Bağlı kanal yoksa ya da gönderim başarısız olursa taslak olarak bekletir.",
+        "content": "Metni yazar ve Sosyal Planlayıcı’ya TASLAK bir gönderi bırakır. Hiçbir yere yayınlanmaz — hesabı ve saati seçip ayrıca onaylaman gerekir.",
+        "leadHunt": "Bir araştırma profili oluşturur ve araştırmayı HEMEN çalıştırır: günlük aday kotandan düşer, araştırma kredisi ve tarama parası harcar.",
+        "unknown": "Bu fikir tipini bu sürüm tanımıyor; ne yapacağını söyleyemeyiz."
+      },
+      "whatLabel": "Bu ne yapacak?"
     }
   },
   "studio": {
     "tab": {
       "autopilot": "Otopilot",
-      "create": "Üret"
+      "create": "Üret",
+      "calendar": "İçerik Takvimi",
+      "campaigns": "Kampanyalar",
+      "more": "Diğer",
+      "trends": "Trendler"
     },
     "create": {
       "studio": "AI Stüdyo",
       "personas": "UGC Personalar"
+    },
+    "autopilotBar": {
+      "balance": "Bakiye",
+      "balanceUnread": "okunamadı",
+      "budget": "Bu ayın bütçesi",
+      "error": "Otomatik pilot durumu okunamadı.",
+      "multiple": "Büyüme katsayısı",
+      "openConsole": "Otomatik pilot konsolu",
+      "setupCta": "Otomatik pilotu kur",
+      "setupManagerOnly": "Kurulumu bir yönetici yapabilir.",
+      "stale": "durum güncellenemedi",
+      "state": {
+        "armed": "Otomatik pilot açık",
+        "assisted": "Onaylı mod",
+        "killed": "Acil durdurma açık",
+        "none": "Kurulmadı",
+        "paused": "Duraklatıldı",
+        "shadow": "Yalnızca gözlem"
+      },
+      "title": "Otomatik pilot"
+    },
+    "camp": {
+      "planner": "Sosyal Planlayıcı",
+      "social": "Sosyal Kampanyalar",
+      "standard": "Kampanyalar"
+    },
+    "more": {
+      "affiliates": "Ortaklar",
+      "email": "E-posta Şablonları",
+      "reviews": "Yorumlar"
+    },
+    "stats": {
+      "connect": "Hesap bağla",
+      "disabled": "Kapalı",
+      "engAria": "Günlük organik etkileşim",
+      "engagements": "Etkileşim",
+      "erateCaption": "etkileşim / gösterim",
+      "followers": "Takipçi",
+      "followersAria": "Hesap başına günlük takipçi sayısı",
+      "lastPulled": "Son güncelleme: {{when}}",
+      "managerOnly": "Hesap istatistiklerini yalnızca yöneticiler görebilir. Reklam grafikleri herkese açık.",
+      "mixedCurrency": "Reklam hesapları farklı para birimlerinde — toplam dönüştürülmedi",
+      "neverPulled": "İstatistikler henüz bir kez bile çekilmedi",
+      "noAccounts": "Henüz bağlı hesap yok",
+      "noAccountsDesc": "Bir sosyal hesap bağla; yayın da, istatistik de buradan akmaya başlasın.",
+      "noAds": "Reklam verisi yok",
+      "noFollowerData": "Takipçi verisi yok",
+      "noFollowers": "Hiçbir ağ takipçi sayısı bildirmedi",
+      "noOrganic": "Organik veri yok",
+      "noPublished": "Bu aralıkta yayınlanan içerik yok",
+      "partial": "{{n}} hesabın {{k}} tanesinden veri geldi",
+      "published": "Yayınlanan",
+      "publishedAria": "Gün başına yayınlanan içerik sayısı",
+      "publishedCaption": "Kaç içerik çıktı — kaç kişiye ulaştığı değil.",
+      "publishedTitle": "Yayınlanan içerik",
+      "pullBusy": "İstatistikler zaten güncelleniyor — birazdan hazır",
+      "pullFailed": "İstatistikler güncellenemedi",
+      "pulled": "Hesap istatistikleri güncellendi",
+      "pulledWithErrors": "{{ok}} hesap güncellendi, {{bad}} tanesi okunamadı",
+      "range": "{{d}} gün",
+      "rangeLabel": "Zaman aralığı",
+      "reach": "Erişim",
+      "reachAria": "Günlük organik erişim",
+      "readFailed": "Okunamayan hesaplar",
+      "readFailedMore": "ve {{n}} hesap daha",
+      "reauth": "Yeniden bağla",
+      "refresh": "İstatistikleri yenile",
+      "spend": "Reklam harcaması",
+      "spendAria": "Günlük reklam harcaması",
+      "title": "Bağlı hesaplar",
+      "unreadable": "Okunamayan ağlar",
+      "unreadableHint": "buraya yayın yapabiliyoruz ama istatistiklerini okuyamıyoruz, yukarıdaki sayılara dahil değiller"
+    },
+    "today": {
+      "brokenCount": "{{count}} gönderide sorun var",
+      "calendarUnread": "Takvim okunamadı — henüz gönderisi oluşturulmamış kampanya içerikleri bu listede görünmüyor.",
+      "changeTime": "Zamanı değiştir",
+      "delete": "Sil",
+      "deleteDesc": "Bu gönderi kalıcı olarak silinir. Geri alınamaz.",
+      "deleteTitle": "Gönderi silinsin mi?",
+      "edit": "Düzenle",
+      "empty": {
+        "desc": "Bir gönderi planladığında ya da kampanya bir slot açtığında burada görürsün.",
+        "title": "Bugün planlanmış bir paylaşım yok"
+      },
+      "failed": "Bugünün listesi yüklenemedi.",
+      "failedHint": "Yeniden denemek için taslağa al — bu gönderiyi tekrar göndermez, taslaklara geri koyar.",
+      "new": "Yeni gönderi",
+      "newTime": "Yeni zaman",
+      "newTimeHint": "Bu alan cihazının saatini kullanır; kaydedince listede işletmenin saatiyle görünür.",
+      "openCampaign": "Kampanyayı aç",
+      "postsUnread": "Gönderi listesi okunamadı — aşağıdakiler takvimden geliyor, hesap durumları ve işlemler eksik.",
+      "publishNow": "Şimdi yayınla",
+      "publishSlow": "Yayınlanıyor — bu bir dakika sürebilir, sayfayı kapatma.",
+      "readOnly": "Bu liste salt okunur — yayınlama, düzenleme ve silme için yönetici yetkisi gerekiyor.",
+      "resetStuck": "Sıkışan gönderiyi sıfırla",
+      "rowActions": "Satır işlemleri",
+      "saveTime": "Zamanı kaydet",
+      "sig": {
+        "draft": "Taslak",
+        "failed": "Başarısız",
+        "partial": "Bazı hesaplarda başarısız",
+        "planned": "{{time}} için planlandı",
+        "published": "Yayınlandı",
+        "publishedUnverified": "Yayınlandı (hesap durumu okunamadı)",
+        "publishing": "Yayınlanıyor",
+        "slot": "Kampanya içeriği — gönderi henüz oluşturulmadı",
+        "unknown": "Durum bilinmiyor"
+      },
+      "title": "Bugün",
+      "toDraft": "Taslağa al",
+      "toast": {
+        "createFailed": "Gönderi kaydedilemedi",
+        "created": "Gönderi oluşturuldu",
+        "deleteFailed": "Gönderi silinemedi",
+        "deleted": "Gönderi silindi",
+        "draftFailed": "Gönderi taslağa alınamadı",
+        "drafted": "Gönderi taslaklara alındı",
+        "publishAllFailed": "Gönderi hiçbir hesapta yayınlanamadı — satırdaki hesap rozetleri nedenini gösteriyor.",
+        "publishFailed": "Gönderi yayınlanamadı",
+        "publishPartial": "Gönderi bazı hesaplarda yayınlanamadı — satırdaki hesap rozetleri hangisinin düştüğünü gösteriyor.",
+        "published": "Gönderi yayınlandı",
+        "rescheduleFailed": "Zaman güncellenemedi",
+        "rescheduled": "Zaman güncellendi",
+        "updateFailed": "Gönderi güncellenemedi — planlanan zamanı korundu",
+        "updateLeftDraft": "Gönderi taslağa düştü ve planı silindi — bu haliyle yayınlanmayacak. Zamanı yeniden ver.",
+        "updateNotApplied": "Yeni zaman ve hesaplar uygulanamadı — gönderi eski planına geri alındı.",
+        "updated": "Gönderi güncellendi"
+      },
+      "untitled": "Başlıksız gönderi",
+      "waitingOnYou": "Onayını bekliyor"
+    },
+    "tools": {
+      "approvalsHint": "Onay listesi bu panelin arkasında — kapatıp dön.",
+      "approvalsWaiting": "onay bekliyor",
+      "autopilot": {
+        "desc": "Krediyi yükle, sınırı bir kez belirle ve motoru çalıştır — yaptığı her şey burada kayıtlı.",
+        "title": "Otomatik pilot konsolu"
+      },
+      "back": "Growth Studio’ya dön",
+      "calendar": {
+        "desc": "Planlanmış gönderileri gör ve tek tıkla haftalık planı ürettir.",
+        "title": "İçerik takvimi"
+      },
+      "connections": {
+        "desc": "Reklam, sosyal ve mesajlaşma hesaplarını bağla veya yenile.",
+        "title": "Bağlantılar"
+      },
+      "create": {
+        "desc": "Gönderilerin için görsel ve video üret.",
+        "title": "AI stüdyo"
+      },
+      "createBudget": "Bütçe oluştur",
+      "denied": "Bu araç yöneticilere açık",
+      "deniedDesc": "Bu araç yönetici yetkisi gerektiriyor. Erişim için çalışma alanı yöneticinle konuş.",
+      "editBudget": "Bütçeyi düzenle",
+      "enableAutopilot": "Otomatik pilotu etkinleştir",
+      "more": "Diğer araçlar",
+      "subtitle": "Growth Studio ekranına sığmayan tam sayfa araçlar. Günlük işin ekranda; buradakiler tek seferlik kurulum ve derin çalışma için.",
+      "title": "Tüm araçlar",
+      "link": {
+        "campaigns": "Kampanyalar",
+        "socialCampaigns": "Sosyal kampanyalar",
+        "planner": "Sosyal planlayıcı",
+        "trends": "Trendler",
+        "personas": "UGC personaları",
+        "emailTemplates": "E-posta şablonları",
+        "reviews": "Yorumlar",
+        "affiliates": "Ortaklar",
+        "reports": "Raporlar",
+        "strategy": "Strateji",
+        "connections": "Bağlantılar"
+      },
+      "managerOnly": {
+        "title": "Bu araç yönetici yetkisi istiyor",
+        "desc": "Sayfanın kendisi yönetici hesaplarına açık. Yöneticinden yetki isteyebilir ya da ekrandaki günlük işine dönebilirsin."
+      }
+    },
+    "toolsMenu": {
+      "trigger": "Araçlar",
+      "calendar": "İçerik takvimi",
+      "create": "AI stüdyo",
+      "connections": "Bağlı hesaplar",
+      "all": "Tüm araçlar",
+      "autopilot": "Otomatik pilot konsolu"
     }
   },
   "documentsHub": {

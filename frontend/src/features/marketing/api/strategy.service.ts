@@ -10,7 +10,34 @@ import marketingApi from './marketingApi';
 
 export type AutonomyLevel = 'SHADOW' | 'ASSISTED' | 'AUTONOMOUS';
 export type StrategyStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
-export type ActionStatus = 'PROPOSED' | 'APPROVED' | 'DISMISSED' | 'DONE';
+/**
+ * Every status the backend actually writes.
+ *
+ * `RUNNING` and `FAILED` were missing here while the orchestrator has always
+ * written both — it flips an approved action to RUNNING before dispatching and
+ * to FAILED when the executor throws. A union that cannot express failure makes
+ * a status badge or filter built from it structurally incapable of showing the
+ * one state a user needs to act on, and TypeScript cannot warn about a case that
+ * is not in the type.
+ */
+export type ActionStatus =
+  | 'PROPOSED'
+  | 'APPROVED'
+  | 'RUNNING'
+  | 'DONE'
+  | 'FAILED'
+  | 'DISMISSED';
+
+/** Stored as a string on `StrategyAction.priority`, not a number. */
+export type ActionPriority = 'LOW' | 'MEDIUM' | 'HIGH';
+
+/** The executors the orchestrator can dispatch an action to. */
+export type ActionKind =
+  | 'LEAD_HUNT'
+  | 'CONTENT'
+  | 'CHANNEL_SETUP'
+  | 'AD_CAMPAIGN'
+  | 'COMMUNITY_ENGAGE';
 
 // ── Brief shape (mirrors backend strategy.types.ts MarketingStrategyBrief) ──────
 export interface BriefIdentity {
@@ -22,7 +49,16 @@ export interface BriefIdentity {
 
 export interface BriefChannel {
   key: string;
-  /** 0–100 fit score for this channel. */
+  /**
+   * Fit for this channel as a FRACTION, 0–1.
+   *
+   * The backend's zod schema is `z.number().min(0).max(1)` and the archetype
+   * channel priors it is seeded from are fractions too. This comment said 0–100
+   * for a long time and the console believed it, feeding the raw value straight
+   * into a `<Progress>` that clamps to 0–100 — so a channel the strategist rated
+   * 0.9 painted a one-percent sliver labelled "0.9". Multiply by 100 at the
+   * render site; do not "fix" it by widening the range here.
+   */
   fitScore: number;
   rationale: string;
 }
@@ -61,12 +97,22 @@ export interface MarketingStrategy {
 
 export interface StrategyAction {
   id: string;
-  kind: string;
+  kind: ActionKind | string;
   title: string;
   rationale: string;
   payload: Record<string, unknown>;
-  priority: number;
+  /** `'LOW' | 'MEDIUM' | 'HIGH'` — was typed `number` here, which it never was. */
+  priority: ActionPriority | string;
   status: ActionStatus;
+  /**
+   * Where the executor put what it made: `post:<id>`, `research:<id>`,
+   * `campaign:<id>`, `discord:<id>`, `reddit:<id>` — or, because there is no
+   * error column on the row, `error:<message>` when it failed. Anything
+   * rendering this as a link must check the `error:` prefix first.
+   */
+  resultRef?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // ── Intake (adaptive Q&A) ───────────────────────────────────────────────────────
@@ -133,6 +179,19 @@ export const dismissAction = (id: string) =>
 
 export const setStrategyAutonomy = (level: AutonomyLevel) =>
   marketingApi.post<MarketingStrategy>('/strategy/autonomy', { level }).then((r) => r.data);
+
+/**
+ * Re-synthesize the strategy and its action plan.
+ *
+ * DESTRUCTIVE AND EXPENSIVE — never wire this to a bare button. The synthesis
+ * deletes EVERY existing action for the workspace before re-inserting, whatever
+ * its status, so DONE and FAILED rows and the `resultRef`s pointing at what they
+ * produced are gone. It also runs a multi-turn model loop that spends real AI
+ * credits per turn and is not refunded if it fails partway. It belongs behind a
+ * confirm that names both facts.
+ */
+export const refreshStrategy = () =>
+  marketingApi.post<{ actionCount?: number }>('/strategy/refresh').then((r) => r.data);
 
 // ── Community channels (Discord webhook + Reddit OAuth) ──────────────────────────
 export type CommunityProvider = 'DISCORD' | 'REDDIT';

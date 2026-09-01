@@ -11,6 +11,7 @@ import { RolesService } from '../roles/roles.service';
 import { MarketingAuthService } from '../services/marketing-auth.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MARKETING_ROLES_KEY } from '../decorators/marketing-roles.decorator';
+import { REQUIRE_PERMISSION_KEY } from '../roles/require-permission.decorator';
 import { AUDIT_METADATA } from '../../audit/audit.decorator';
 
 /**
@@ -347,6 +348,94 @@ describe('MarketingWorkspacesController — research-execution', () => {
     it('audits both the read and the write with unambiguous actions', () => {
       expect(auditAction('getResearchExecution')).toBe('workspace.research_execution.read');
       expect(auditAction('setResearchExecution')).toBe('workspace.research_execution.update');
+    });
+  });
+});
+
+/**
+ * The workspace's IANA zone — what "today" means for this business.
+ *
+ * `Workspace.timezone` shipped with the first migration, defaulted to 'UTC',
+ * and had exactly ONE writer in the entire codebase: agency.service's
+ * createLocation, a path no self-serve customer ever walks. Meanwhile five
+ * consumers read it as though it were an answer — the dashboard aggregates, the
+ * tasks list, sales targets, the daily-digest cron, and the Growth Studio rail
+ * on the client — so every Turkish workspace has been running its day from
+ * 03:00 to 03:00. Signup now captures the browser's zone, which repairs new
+ * workspaces; these two routes are the only way an EXISTING one is correctable
+ * at all.
+ */
+describe('MarketingWorkspacesController — timezone', () => {
+  describe('delegation', () => {
+    it("setWorkspaceTimezone writes to the CALLER'S OWN workspace (never the body/path)", async () => {
+      const authService = {
+        setWorkspaceTimezone: jest.fn().mockResolvedValue({ timezone: 'Europe/Istanbul' }),
+      } as any;
+      const ctrl = new MarketingWorkspacesController(authService);
+
+      const res = await ctrl.setWorkspaceTimezone(
+        { workspaceId: 'ws-1' } as any,
+        { timezone: 'Europe/Istanbul' } as any,
+      );
+
+      expect(authService.setWorkspaceTimezone).toHaveBeenCalledWith('ws-1', 'Europe/Istanbul');
+      expect(res).toEqual({ timezone: 'Europe/Istanbul' });
+    });
+
+    it("getWorkspaceTimezone reads the CALLER'S OWN workspace", async () => {
+      const authService = {
+        getWorkspaceTimezone: jest.fn().mockResolvedValue({ timezone: 'UTC' }),
+      } as any;
+      const ctrl = new MarketingWorkspacesController(authService);
+
+      const res = await ctrl.getWorkspaceTimezone({ workspaceId: 'ws-1' } as any);
+
+      expect(authService.getWorkspaceTimezone).toHaveBeenCalledWith('ws-1');
+      expect(res).toEqual({ timezone: 'UTC' });
+    });
+  });
+
+  describe('guard stack', () => {
+    it('sits on MANAGER + settings.manage — operational config, not security posture', () => {
+      // Deliberately NOT the OWNER floor the two routes above carry. Those
+      // decide whether an unattended agent may act without a human and whose
+      // Anthropic key pays; this decides how dates are bucketed on reports,
+      // which is ordinary operational configuration of the same weight as the
+      // rest of what a MANAGER already owns.
+      expect(requiredRoles('setWorkspaceTimezone')).toEqual(['MANAGER']);
+      expect(requiredRoles('getWorkspaceTimezone')).toEqual(['MANAGER']);
+      expect(
+        Reflect.getMetadata(
+          REQUIRE_PERMISSION_KEY,
+          (MarketingWorkspacesController.prototype as Record<string, unknown>)
+            .setWorkspaceTimezone as object,
+        ),
+      ).toBe('settings.manage');
+    });
+
+    it('the real MarketingRolesGuard admits MANAGER and OWNER, refuses REP and SYSTEM', () => {
+      const guard = new MarketingRolesGuard(new Reflector());
+      const proto = MarketingWorkspacesController.prototype as Record<
+        string,
+        (...args: unknown[]) => unknown
+      >;
+
+      for (const method of ['getWorkspaceTimezone', 'setWorkspaceTimezone']) {
+        for (const role of ['REP', 'SYSTEM']) {
+          expect(() => guard.canActivate(ctxFor(proto[method], role))).toThrow(ForbiddenException);
+        }
+        // The guard is hierarchical: listing MANAGER alone admits OWNER too.
+        expect(guard.canActivate(ctxFor(proto[method], 'MANAGER'))).toBe(true);
+        expect(guard.canActivate(ctxFor(proto[method], 'OWNER'))).toBe(true);
+      }
+    });
+
+    it('audits the write AND the read', () => {
+      // A changed zone silently moves every historical day boundary the panel
+      // draws. "Why did last Tuesday's numbers move?" is answerable only if the
+      // change left a row.
+      expect(auditAction('setWorkspaceTimezone')).toBe('workspace.timezone.update');
+      expect(auditAction('getWorkspaceTimezone')).toBe('workspace.timezone.read');
     });
   });
 });

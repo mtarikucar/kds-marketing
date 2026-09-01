@@ -248,16 +248,27 @@ export default function StrategyConsolePage() {
             <CardDescription>{t('strategy.console.channelsDesc', 'Where to focus, ranked by fit.')}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {brief.channels.map((c) => (
-              <div key={c.key} className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-foreground">{c.key}</span>
-                  <span className="text-caption text-muted-foreground">{c.fitScore}</span>
+            {/*
+              `fitScore` is a FRACTION (the backend's zod is min(0) max(1)), and
+              `Progress` takes a percentage it clamps to 0–100. Feeding the raw
+              value in painted every channel as an empty bar labelled "0.9" — the
+              strongest recommendation the strategist can make, rendered as
+              almost no bar at all. Convert once, here, and label the same number
+              that is drawn.
+            */}
+            {brief.channels.map((c) => {
+              const fitPct = Math.round(Math.min(Math.max(c.fitScore ?? 0, 0), 1) * 100);
+              return (
+                <div key={c.key} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-foreground">{c.key}</span>
+                    <span className="text-caption text-muted-foreground">{fitPct}%</span>
+                  </div>
+                  <Progress value={fitPct} />
+                  {c.rationale && <p className="text-caption text-muted-foreground">{c.rationale}</p>}
                 </div>
-                <Progress value={c.fitScore} />
-                {c.rationale && <p className="text-caption text-muted-foreground">{c.rationale}</p>}
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
       )}

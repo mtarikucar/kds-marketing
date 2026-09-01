@@ -449,7 +449,16 @@
     "namePlaceholder": "e.g. My Second Shop",
     "createButton": "Create",
     "createSuccess": "Workspace \"{{name}}\" created — you're now in it",
-    "createError": "Failed to create workspace"
+    "createError": "Failed to create workspace",
+    "tz": {
+      "title": "Time zone",
+      "desc": "\"Today\" in reports and lists starts in this zone. Pick the business's clock, not the browser's.",
+      "label": "Workspace time zone",
+      "browserHint": "This browser is in {{zone}} — the saved value is {{stored}}.",
+      "useBrowser": "Use this browser's",
+      "saved": "Workspace time zone updated",
+      "saveFailed": "Could not save the time zone"
+    }
   },
   "dashboard": {
     "title": "Dashboard",
@@ -2927,16 +2936,276 @@
       "emptyTitle": "No strategy yet",
       "emptyDesc": "Let the AI strategist analyze your brand and draft a full marketing strategy with an action plan.",
       "startOnboarding": "Build my strategy"
+    },
+    "ideas": {
+      "actionsFailed": "Couldn't load ideas.",
+      "approve": "Approve",
+      "approveFailed": "Couldn't approve the idea",
+      "buildStrategy": "Build my strategy",
+      "cancel": "Cancel",
+      "confirm": {
+        "community": "If you have a Discord/Reddit channel connected, this copy goes out there LIVE — you won't be asked a second time and it can't be undone. With no channel connected it is held as a draft. Once approved, it can take up to a minute to run.",
+        "leadHunt": "This research runs now and spends money: it draws down your daily lead quota and bills research credit plus scraping costs. If your quota is used up, the profile is created but no search runs. It can take up to a minute.",
+        "unknown": "This build doesn't know what this idea does; it may publish, or it may spend money. If you aren't sure, review it in the strategy console first. It can take up to a minute to run."
+      },
+      "confirmApproveTitle": "Approve “{{title}}”?",
+      "dismiss": "Dismiss",
+      "dismissFailed": "Couldn't dismiss the idea",
+      "emptyDesc": "You've decided on every idea in the plan. Hit “Refresh ideas” for a new wave.",
+      "emptyTitle": "No ideas waiting",
+      "failureTitle": "“{{title}}” couldn't run",
+      "failureUnknown": "no reason recorded",
+      "kind": {
+        "adCampaign": "Ad",
+        "channelSetup": "Channel setup",
+        "community": "Community",
+        "content": "Content",
+        "leadHunt": "Lead hunt",
+        "unknown": "Other"
+      },
+      "loadFailed": "Couldn't load ideas.",
+      "manual": {
+        "cta": "Connect channels",
+        "hint": "Connecting a channel is a permission flow that runs under your own account — Jeeta can't do it for you. Once you connect one from the Accounts page, this idea makes sense on its own."
+      },
+      "noStrategyDesc": "Tell us about your brand once, and the strategist will draw up a marketing strategy for you, along with the campaign ideas that follow from it.",
+      "noStrategyTitle": "You don't have a strategy yet",
+      "openConsole": "Open the strategy console",
+      "priority": {
+        "high": "High",
+        "low": "Low",
+        "medium": "Medium"
+      },
+      "readOnly": "Only managers can approve ideas; you can view them.",
+      "refresh": "Refresh ideas",
+      "refreshConfirmBody": "This deletes ALL current ideas — including the completed ones and the drafts, research and campaign links they produced. A brand-new plan is written in their place. It also runs a multi-step AI synthesis: it spends AI credit, and that isn't refunded even if it stops halfway. It can take up to a minute.",
+      "refreshConfirmCta": "Delete and regenerate",
+      "refreshConfirmTitle": "Refresh ideas",
+      "refreshDone": "New plan ready: {{count}} ideas",
+      "refreshFailed": "Couldn't refresh ideas",
+      "refreshSkipped": "Nothing found to regenerate — finish the strategy setup first.",
+      "result": {
+        "campaign": "campaign shell",
+        "community": "community draft",
+        "discord": "Discord post",
+        "post": "draft post",
+        "reddit": "Reddit post",
+        "research": "research run",
+        "unknown": "result"
+      },
+      "slowNote": "An idea you approve runs straight away — it can take up to a minute.",
+      "title": "Campaign ideas",
+      "toastApproved": "“{{title}}” approved and executed",
+      "toastApprovedUnverified": "“{{title}}” approved — we couldn't verify the outcome, you can check it in the strategy console",
+      "toastFailed": "“{{title}}” couldn't run",
+      "what": {
+        "adCampaign": "Opens an empty PAUSED campaign on Meta. No ad set, no ad and no budget — the plan's daily budget isn't applied, so it can't spend anything on its own. If you have no Meta ad account connected, it creates nothing at all.",
+        "channelSetup": "There is no handler to run this: if you approve it, the row stays “approved” forever and nothing happens. Connecting a channel is done by hand.",
+        "community": "Writes community-native copy and, if you have a Discord/Reddit channel connected, posts it there LIVE. With no channel connected — or if the post fails — it is held as a draft.",
+        "content": "Writes the copy and leaves a DRAFT post in the Social Planner. Nothing is published anywhere — you still have to pick the account and time and approve it separately.",
+        "leadHunt": "Creates a research profile and runs the research IMMEDIATELY: it draws down your daily lead quota and spends research credit and scraping money.",
+        "unknown": "This build doesn't recognise this idea type; we can't tell you what it will do."
+      },
+      "whatLabel": "What will this do?"
     }
   },
   "studio": {
     "tab": {
       "autopilot": "Autopilot",
-      "create": "Create"
+      "create": "Create",
+      "calendar": "Content Calendar",
+      "campaigns": "Campaigns",
+      "more": "More",
+      "trends": "Trends"
     },
     "create": {
       "studio": "AI Studio",
       "personas": "UGC Personas"
+    },
+    "autopilotBar": {
+      "balance": "Balance",
+      "balanceUnread": "couldn't be read",
+      "budget": "This month's budget",
+      "error": "Couldn't read the autopilot status.",
+      "multiple": "Growth multiple",
+      "openConsole": "Autopilot console",
+      "setupCta": "Set up autopilot",
+      "setupManagerOnly": "Only a manager can run the setup.",
+      "stale": "status couldn't be refreshed",
+      "state": {
+        "armed": "Autopilot on",
+        "assisted": "Approval mode",
+        "killed": "Emergency stop engaged",
+        "none": "Not set up",
+        "paused": "Paused",
+        "shadow": "Observation only"
+      },
+      "title": "Autopilot"
+    },
+    "camp": {
+      "planner": "Social Planner",
+      "social": "Social Campaigns",
+      "standard": "Campaigns"
+    },
+    "more": {
+      "affiliates": "Affiliates",
+      "email": "Email Templates",
+      "reviews": "Reviews"
+    },
+    "stats": {
+      "connect": "Connect an account",
+      "disabled": "Disabled",
+      "engAria": "Daily organic engagement",
+      "engagements": "Engagement",
+      "erateCaption": "engagement / impressions",
+      "followers": "Followers",
+      "followersAria": "Daily follower count per account",
+      "lastPulled": "Last updated: {{when}}",
+      "managerOnly": "Only managers can see account stats. The ad charts are visible to everyone.",
+      "mixedCurrency": "The ad accounts use different currencies — the total is not converted",
+      "neverPulled": "Stats have never been pulled",
+      "noAccounts": "No accounts connected yet",
+      "noAccountsDesc": "Connect a social account, and both publishing and stats will start flowing through here.",
+      "noAds": "No ad data",
+      "noFollowerData": "No follower data",
+      "noFollowers": "No network reported a follower count",
+      "noOrganic": "No organic data",
+      "noPublished": "Nothing published in this range",
+      "partial": "Data came back from {{k}} of {{n}} accounts",
+      "published": "Published",
+      "publishedAria": "Posts published per day",
+      "publishedCaption": "How much went out — not how many people it reached.",
+      "publishedTitle": "Published content",
+      "pullBusy": "The stats are already being refreshed — ready in a moment",
+      "pullFailed": "Couldn't refresh the stats",
+      "pulled": "Account stats refreshed",
+      "pulledWithErrors": "{{ok}} accounts refreshed, {{bad}} couldn't be read",
+      "range": "{{d}} days",
+      "rangeLabel": "Time range",
+      "reach": "Reach",
+      "reachAria": "Daily organic reach",
+      "readFailed": "Accounts we couldn't read",
+      "readFailedMore": "and {{n}} more account(s)",
+      "reauth": "Reconnect",
+      "refresh": "Refresh stats",
+      "spend": "Ad spend",
+      "spendAria": "Daily ad spend",
+      "title": "Connected accounts",
+      "unreadable": "Networks we can't read",
+      "unreadableHint": "we can publish here but can't read their stats, so they aren't included in the numbers above"
+    },
+    "today": {
+      "brokenCount": "{{count}} posts have a problem",
+      "calendarUnread": "Couldn't read the calendar — campaign content that has no post created yet isn't shown in this list.",
+      "changeTime": "Change the time",
+      "delete": "Delete",
+      "deleteDesc": "This post is deleted permanently. It can't be undone.",
+      "deleteTitle": "Delete this post?",
+      "edit": "Edit",
+      "empty": {
+        "desc": "When you schedule a post, or a campaign opens a slot, you'll see it here.",
+        "title": "Nothing scheduled for today"
+      },
+      "failed": "Couldn't load today's list.",
+      "failedHint": "To try again, move it back to drafts — this doesn't resend the post, it puts it back in your drafts.",
+      "new": "New post",
+      "newTime": "New time",
+      "newTimeHint": "This field uses your device's clock; once saved, it appears in the list in the business's time zone.",
+      "openCampaign": "Open the campaign",
+      "postsUnread": "Couldn't read the post list — the rows below come from the calendar, so account statuses and actions are missing.",
+      "publishNow": "Publish now",
+      "publishSlow": "Publishing — this can take a minute, don't close the page.",
+      "readOnly": "This list is read-only — publishing, editing and deleting need manager permissions.",
+      "resetStuck": "Reset the stuck post",
+      "rowActions": "Row actions",
+      "saveTime": "Save the time",
+      "sig": {
+        "draft": "Draft",
+        "failed": "Failed",
+        "partial": "Failed on some accounts",
+        "planned": "Scheduled for {{time}}",
+        "published": "Published",
+        "publishedUnverified": "Published (account status couldn't be read)",
+        "publishing": "Publishing",
+        "slot": "Campaign content — the post hasn't been created yet",
+        "unknown": "Status unknown"
+      },
+      "title": "Today",
+      "toDraft": "Move to drafts",
+      "toast": {
+        "createFailed": "Couldn't save the post",
+        "created": "Post created",
+        "deleteFailed": "Couldn't delete the post",
+        "deleted": "Post deleted",
+        "draftFailed": "Couldn't move the post to drafts",
+        "drafted": "Post moved to drafts",
+        "publishAllFailed": "The post published to none of its accounts — the account badges on the row show why.",
+        "publishFailed": "Couldn't publish the post",
+        "publishPartial": "The post failed on some accounts — the account badges on the row show which one dropped out.",
+        "published": "Post published",
+        "rescheduleFailed": "Couldn't update the time",
+        "rescheduled": "Time updated",
+        "updateFailed": "Couldn't update the post — its scheduled time was kept",
+        "updateLeftDraft": "The post fell back to a draft and lost its schedule — as it stands it will not publish. Give it a time again.",
+        "updateNotApplied": "The new time and accounts couldn't be applied — the post was put back on its old plan.",
+        "updated": "Post updated"
+      },
+      "untitled": "Untitled post",
+      "waitingOnYou": "Waiting on your approval"
+    },
+    "tools": {
+      "approvalsHint": "The approvals list is behind this panel — close it to go back.",
+      "approvalsWaiting": "awaiting approval",
+      "autopilot": {
+        "desc": "Top up credit, set the limit once and start the engine — everything it does is logged here.",
+        "title": "Autopilot console"
+      },
+      "back": "Back to Growth Studio",
+      "calendar": {
+        "desc": "See scheduled posts and generate a week's plan in one click.",
+        "title": "Content calendar"
+      },
+      "connections": {
+        "desc": "Connect or refresh your ad, social and messaging accounts.",
+        "title": "Connections"
+      },
+      "create": {
+        "desc": "Generate images and video for your posts.",
+        "title": "AI studio"
+      },
+      "createBudget": "Create a budget",
+      "denied": "This tool is for managers",
+      "deniedDesc": "This tool needs manager access. Ask a workspace admin if you need it.",
+      "editBudget": "Edit the budget",
+      "enableAutopilot": "Enable autopilot",
+      "more": "More tools",
+      "subtitle": "Full-page tools that don't fit on the Growth Studio screen. Your day-to-day work lives on the screen; these are for one-time setup and deep work.",
+      "title": "All tools",
+      "link": {
+        "campaigns": "Campaigns",
+        "socialCampaigns": "Social campaigns",
+        "planner": "Social planner",
+        "trends": "Trends",
+        "personas": "UGC personas",
+        "emailTemplates": "Email templates",
+        "reviews": "Reviews",
+        "affiliates": "Affiliates",
+        "reports": "Reports",
+        "strategy": "Strategy",
+        "connections": "Connections"
+      },
+      "managerOnly": {
+        "title": "This tool needs manager access",
+        "desc": "The page itself is open to manager accounts. Ask an owner for access, or head back to the day-to-day work on the screen."
+      }
+    },
+    "toolsMenu": {
+      "trigger": "Tools",
+      "calendar": "Content calendar",
+      "create": "AI studio",
+      "connections": "Connected accounts",
+      "all": "All tools",
+      "autopilot": "Autopilot console"
     }
   },
   "documentsHub": {

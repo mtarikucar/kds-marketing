@@ -106,6 +106,64 @@ describe('RegisterWorkspacePage', () => {
     });
   });
 
+  /**
+   * The signup POST is the ONLY moment the platform ever learns what zone a
+   * self-serve workspace operates in.
+   *
+   * `Workspace.timezone` shipped with a 'UTC' default and no writer a customer
+   * could reach, so every workspace held 'UTC' while five consumers read the
+   * column as an answer — a Turkish workspace's "today" ran 03:00→03:00 and
+   * dropped its own early-morning rows out of every list. Drop this field from
+   * the payload and the platform goes back to guessing, silently, for every new
+   * customer; nothing else on this page or after it asks the question.
+   */
+  it('sends the browser timezone so a new workspace is not born on UTC by default', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const resolved = vi
+      .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+      .mockReturnValue({ timeZone: 'Europe/Istanbul' } as Intl.ResolvedDateTimeFormatOptions);
+    try {
+      const user = userEvent.setup();
+      renderPage();
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /register.submit/i }));
+
+      await waitFor(() => {
+        expect(marketingApi.post).toHaveBeenCalledWith(
+          '/auth/register-workspace',
+          expect.objectContaining({ timezone: 'Europe/Istanbul' }),
+        );
+      });
+    } finally {
+      resolved.mockRestore();
+    }
+  });
+
+  it('still signs up when the browser will not name a zone', async () => {
+    // A hint, not a form field: an Intl that throws (or reports nothing) must
+    // cost the signup nothing — the backend falls back to the schema default,
+    // leaving the workspace exactly where every pre-existing one already is.
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const resolved = vi
+      .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+      .mockImplementation(() => {
+        throw new Error('no ICU data');
+      });
+    try {
+      const user = userEvent.setup();
+      renderPage();
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /register.submit/i }));
+
+      await waitFor(() => expect(marketingApi.post).toHaveBeenCalled());
+      expect(
+        (marketingApi.post as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1],
+      ).toMatchObject({ timezone: undefined });
+    } finally {
+      resolved.mockRestore();
+    }
+  });
+
   async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
     await user.type(screen.getByLabelText(/register.workspaceName/i), 'Acme Inc.');
     await user.type(screen.getByLabelText(/register.productName/i), 'Acme POS');

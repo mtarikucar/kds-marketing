@@ -70,7 +70,7 @@ describe('social MCP tools', () => {
     expect(registry.list(['campaigns.read']).map((t) => t.name)).not.toContain('jeeta.publish_social_post');
   });
 
-  it('jeeta.list_scheduled_posts defaults to SCHEDULED and filters client-side', async () => {
+  it('jeeta.list_scheduled_posts defaults to SCHEDULED and pushes the filter down', async () => {
     const registry = new McpToolRegistry();
     const listPosts = jest.fn().mockResolvedValue([
       { id: 'p1', status: 'SCHEDULED' },
@@ -80,7 +80,15 @@ describe('social MCP tools', () => {
     const out = await registry
       .get('jeeta.list_scheduled_posts')!
       .handler({ workspaceId: 'ws1', grantedScopes: ['campaigns.read'] }, {});
-    expect(listPosts).toHaveBeenCalledWith('ws1');
+    // The status and the cap go to the SERVICE, not just to a client-side
+    // filter. This used to call `listPosts('ws1')` bare and sift the result
+    // here, which was merely wasteful until the service grew an unconditional
+    // page cap ordered by CREATION time — after which a window filtered on
+    // SCHEDULED time was being evaluated over a set already truncated by the
+    // wrong column, and a busy workspace's next week could come back empty.
+    expect(listPosts).toHaveBeenCalledWith('ws1', { status: 'SCHEDULED', limit: 100 });
+    // The client-side sift stays as a backstop, so a service that ignored the
+    // filter still cannot leak a DRAFT into a "scheduled posts" answer.
     expect(out).toEqual([{ id: 'p1', status: 'SCHEDULED' }]);
   });
 

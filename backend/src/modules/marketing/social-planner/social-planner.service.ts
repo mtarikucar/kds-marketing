@@ -38,6 +38,79 @@ export const SOCIAL_MEDIA_CLEANUP_KIND = 'social.media.cleanup';
 const MEDIA_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const POST_FORMATS: PostFormat[] = ['FEED', 'REEL', 'STORY'];
 
+/**
+ * The ceiling on one `listPosts` page — and it is BOTH the default and the
+ * maximum, deliberately.
+ *
+ * `listPosts` used to be a bare `findMany` with no `take` at all, so every
+ * caller downloaded every post the workspace had ever written, each one with
+ * its `targets` relation attached. That was survivable while the only reader
+ * was the planner screen of a workspace three weeks old; it stops being
+ * survivable the moment a customer has been posting daily for a year, and the
+ * MCP tool already worked around it by slicing the result client-side (see the
+ * `MAX_POSTS` cap in `mcp/tools/social.tools.ts`) — which still paid for the
+ * whole transfer, it just threw most of it away after the fact.
+ *
+ * A caller that supplies no `limit` is not asking for "every row ever", it is
+ * asking for "the list", so the absent case gets the cap rather than
+ * unbounded reads. 500 is chosen to sit far above any real screenful while
+ * still bounding the worst case; anything genuinely paginated should ask for a
+ * window (`from`/`to`) instead of a bigger page.
+ */
+export const SOCIAL_POSTS_MAX_PAGE = 500;
+
+/**
+ * How long a post must sit in PUBLISHING before a human is allowed to reset it.
+ *
+ * PUBLISHING means "a publish run holds this row right now", and resetting it
+ * under a live run is how a post gets sent twice. But a run that DIED mid-fan-
+ * out (container restart, OOM, a network call that never returned) leaves the
+ * same status behind with nobody holding it, and the post is then permanently
+ * unreachable: not editable (DRAFT only), not schedulable, not publishable.
+ *
+ * On the QUEUE path the number means something precise. `ScheduledJobRunner
+ * Service` reaps RUNNING rows whose lock is older than 15 minutes back to
+ * PENDING and re-dispatches them, so 30 minutes is deliberately DOUBLE the
+ * reaper window: by the time a human is offered the reset, the automatic
+ * recovery has had a full cycle to finish the publish properly.
+ *
+ * That argument does NOT extend to `publishNow`, and this comment used to claim
+ * it did. "Publish now" is a synchronous HTTP handler — it flips the row to
+ * PUBLISHING and fans out inline, with no ScheduledJob row anywhere. Nothing
+ * reaps it, and `scheduledJobs.cancel` in `unschedulePost` is a permanent no-op
+ * for it, so a request that dies mid-fan-out leaves a row that only a human
+ * ever unsticks, and the reset races the ORIGINAL REQUEST rather than a runner
+ * that has already given up on it.
+ *
+ * On that path 30 minutes is therefore a heuristic idle bound, not a proof: it
+ * is far longer than any synchronous fan-out (a handful of HTTP calls, each
+ * with its own timeout, inside a request its own gateway would have killed long
+ * before). What actually makes a mistaken reset survivable is per-TARGET state
+ * rather than this number — a target that already went out stays PUBLISHED,
+ * `unschedulePost` never revives it, and `attachTargets` refuses to re-attach
+ * its account — so the worst case is a post re-sent to the networks it had not
+ * reached yet, not a duplicate on a feed that already has it.
+ */
+export const PUBLISHING_STUCK_MS = 30 * 60 * 1000;
+
+/**
+ * Optional server-side narrowing for `listPosts`. Every field is optional and
+ * omitting all of them reproduces the historical behaviour exactly (newest
+ * first by creation time), because existing callers — the planner screen, the
+ * MCP `list_scheduled_posts` tool, social campaigns — must not shift under a
+ * feature added for a different screen.
+ */
+export interface ListPostsFilter {
+  /** Inclusive lower bound on `scheduledAt`. */
+  from?: Date;
+  /** Inclusive upper bound on `scheduledAt`. */
+  to?: Date;
+  /** DRAFT | SCHEDULED | PUBLISHING | PUBLISHED | FAILED. */
+  status?: string;
+  /** Page size; silently clamped to `SOCIAL_POSTS_MAX_PAGE`. */
+  limit?: number;
+}
+
 interface MediaDescriptor {
   url: string;
   /** R2 object key — present only for uploaded (not pasted) media. */
@@ -335,11 +408,94 @@ export class SocialPlannerService implements OnModuleInit {
     return this.getPost(workspaceId, post.id);
   }
 
-  async listPosts(workspaceId: string) {
+  /**
+   * List the workspace's posts, optionally narrowed to a scheduling window, a
+   * status, and a page size.
+   *
+   * The filter exists because "what is going out today?" is the question the
+   * planner and the Growth Studio one-screen actually ask, and the only way to
+   * answer it before was to fetch the entire history and filter it in the
+   * browser. Everything here is optional and additive: with no arguments the
+   * query is the one this method has always issued, minus the missing `take`
+   * (see SOCIAL_POSTS_MAX_PAGE for why the unbounded read was the bug).
+   *
+   * Two details that are easy to get wrong:
+   *
+   * 1. The ORDER flips with the window. A time window is a calendar read, and a
+   *    calendar reads forwards — "the next thing to go out" must be the first
+   *    row, not the last. Without a window there is no scheduled time to sort
+   *    by at all (drafts carry `scheduledAt: null`), so it falls back to the
+   *    historical newest-first-by-creation ordering rather than sorting a
+   *    column that is mostly NULL.
+   *
+   * 2. Both orderings carry an `id` tiebreak, because neither sort column is
+   *    unique — a bulk campaign schedules a dozen posts at the same instant,
+   *    and `createdAt` collides just as easily on a seeded or imported batch.
+   *    Postgres is free to return equal rows in any order it likes, so at the
+   *    `take` boundary two identical requests could disagree about which of the
+   *    tied rows made the page: a post appearing twice across two reads, or
+   *    vanishing from both.
+   *
+   * 3. A window EXCLUDES posts with no `scheduledAt`. Prisma compiles
+   *    `scheduledAt: { gte }` to a SQL comparison, and a comparison against
+   *    NULL is never true, so unscheduled drafts drop out — which is the
+   *    correct semantic and matches what the MCP tool already documents: a
+   *    draft with no send time is not "scheduled for today", it is not
+   *    scheduled at all. Ask for `status: 'DRAFT'` without a window to see it.
+   *
+   * The bounds are validated here rather than only in the controller DTO
+   * because this method is also reachable from MCP and from other services,
+   * and an inverted range that silently returns nothing reads to a model as
+   * "there are no posts" — a wrong answer is worse than a refusal.
+   */
+  async listPosts(workspaceId: string, filter: ListPostsFilter = {}) {
+    const { from, to, status, limit } = filter;
+
+    if (from && Number.isNaN(from.getTime())) {
+      throw new BadRequestException('`from` is not a valid date');
+    }
+    if (to && Number.isNaN(to.getTime())) {
+      throw new BadRequestException('`to` is not a valid date');
+    }
+    if (from && to && to.getTime() < from.getTime()) {
+      throw new BadRequestException('`to` must not be earlier than `from`');
+    }
+
+    const windowed = Boolean(from || to);
+    const scheduledAt: Prisma.DateTimeNullableFilter | undefined = windowed
+      ? { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) }
+      : undefined;
+
+    // Clamp rather than reject an over-large `limit`: the controller DTO already
+    // refuses anything outside 1..200, so a bigger number can only arrive from
+    // an internal caller, and quietly serving it a bounded page is friendlier
+    // than a 400 nobody sees. `Math.floor` guards the internal caller that
+    // passes a computed float.
+    const take =
+      limit !== undefined && Number.isFinite(limit) && limit > 0
+        ? Math.min(Math.floor(limit), SOCIAL_POSTS_MAX_PAGE)
+        : SOCIAL_POSTS_MAX_PAGE;
+
     return this.prisma.socialPost.findMany({
-      where: { workspaceId },
+      // The `where` is built INLINE, not assembled into a variable first, so the
+      // workspace-scoping architecture fitness test can see the tenant filter at
+      // this call site — it reads the argument object literally, and a hoisted
+      // `where` object reads to it (correctly) as an unscoped multi-row query.
+      // The optional predicates are spread rather than assigned as `undefined`,
+      // which keeps the query free of keys nobody asked to filter on.
+      where: {
+        workspaceId,
+        ...(status ? { status } : {}),
+        ...(scheduledAt ? { scheduledAt } : {}),
+      },
       include: { targets: true },
-      orderBy: { createdAt: 'desc' },
+      // The `id` tiebreak makes the page boundary deterministic (see 2. above);
+      // it follows the primary column's direction so the two never disagree
+      // about which end of a tie is "first".
+      orderBy: windowed
+        ? [{ scheduledAt: 'asc' }, { id: 'asc' }]
+        : [{ createdAt: 'desc' }, { id: 'desc' }],
+      take,
     });
   }
 
@@ -464,31 +620,83 @@ export class SocialPlannerService implements OnModuleInit {
   }
 
   /**
-   * Pull a SCHEDULED post back to DRAFT so it can be corrected.
+   * Pull a post out of the publish queue and back to DRAFT so it can be
+   * corrected — and, for a post that already tried and failed, sent again.
    *
-   * Editing refuses anything but a DRAFT, which is right — a post already in
-   * the publish queue must not change under the job that is about to send it.
-   * But it left no way to fix a scheduled post at all: the only escape was
-   * `deletePost`, which is DESTRUCTIVE, approval-gated, and throws away the
-   * copy, the media and the target accounts to fix a typo in a URL. That is
-   * the same "no way back" shape the lead pipeline had.
+   * Editing refuses anything but a DRAFT, which is right: a post sitting in the
+   * publish queue must not change under the job that is about to send it. But
+   * that left no way back at all — the only escape was `deletePost`, which is
+   * DESTRUCTIVE, approval-gated, and throws away the copy, the media and the
+   * target accounts to fix a typo in a URL. This is the reversible alternative
+   * and it moves in the SAFE direction: the post leaves the publish queue
+   * rather than entering it, so it is ungated on purpose — the risky verb is
+   * scheduling, not unscheduling.
    *
-   * This is the reversible alternative and it moves in the SAFE direction —
-   * it takes a post OUT of the publish queue, so it is ungated on purpose:
-   * the risky verb is scheduling, not unscheduling. The job is cancelled by
-   * the same dedupKey `schedulePost` created it with, so nothing is left
-   * behind to fire at the old time.
+   * ## Why FAILED is accepted here
+   *
+   * A FAILED post used to be TERMINAL. `publishNow` and `schedulePost` both
+   * refuse anything outside DRAFT/SCHEDULED, `updatePost` is DRAFT-only, and
+   * this method was SCHEDULED-only — so a post that failed for an entirely
+   * transient reason (an expired page token, a 500 from the network, a blip)
+   * could never be retried. The operator's only move was to delete it and
+   * retype the caption, re-upload the media and re-pick the accounts, which is
+   * both hostile and lossy. Nothing about the FAILURE justified destroying the
+   * CONTENT, so FAILED now resets to DRAFT like any other correctable state.
+   *
+   * ## Why only SOME targets are reset
+   *
+   * This is the part that would double-post if it were done carelessly. A post
+   * whose status is FAILED can still have targets that PUBLISHED — the status
+   * is per-post, the outcome is per-network, and a fan-out that reached
+   * Instagram but not Facebook is entirely normal (the post lands PUBLISHED in
+   * that specific case, but a crash-and-retry sequence can produce a FAILED
+   * post with a live target too). `publishDuePost` republishes every PENDING
+   * target it finds, so resetting ALL targets to PENDING would re-send content
+   * that is already live on that network — a duplicate post on the customer's
+   * own feed, which is the single worst thing this feature could do.
+   *
+   * So the reset is filtered to `PENDING | FAILED`: the networks that never
+   * received the post. PUBLISHED targets keep their status and their
+   * `externalPostId`, so the next publish skips them and the metrics puller
+   * keeps reporting on the post that actually went out. `error` is cleared on
+   * the revived ones because a stale error string next to a PENDING target
+   * describes an attempt that is no longer the current one.
+   *
+   * ## Why a long-stuck PUBLISHING post is also accepted
+   *
+   * PUBLISHING means "a run holds this row right now", and resetting it under a
+   * live run is exactly how a post gets sent twice — so a fresh PUBLISHING post
+   * is refused. A run that DIED mid-fan-out leaves the identical status behind
+   * with nobody holding it, and the post is then unreachable by every route.
+   * `PUBLISHING_STUCK_MS` is the line between the two, and its doc block is
+   * honest about what that threshold does and does not prove — it is a reaper-
+   * derived guarantee for a queued publish and a heuristic for `publishNow`.
+   * An unreadable `updatedAt` fails CLOSED (NaN comparisons are false → not
+   * stuck), because the failure mode of guessing wrong here is a duplicate
+   * publish.
+   *
+   * Because it IS partly a heuristic, the status flip below is a compare-and-
+   * set rather than a blind write, and the two writes share a transaction: a
+   * "stuck" run that turns out to be alive can finish in the gap between the
+   * read and the write, and clobbering its genuinely PUBLISHED post back to
+   * DRAFT would show the operator a draft for content that is already live.
    */
   async unschedulePost(workspaceId: string, postId: string) {
     const post = await this.prisma.socialPost.findFirst({
       where: { id: postId, workspaceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, updatedAt: true },
     });
     if (!post) throw new NotFoundException('Social post not found');
     if (post.status === 'DRAFT') return this.getPost(workspaceId, postId);
-    if (post.status !== 'SCHEDULED') {
+
+    const idleMs = Date.now() - new Date(post.updatedAt as Date).getTime();
+    const stuckPublishing = post.status === 'PUBLISHING' && idleMs >= PUBLISHING_STUCK_MS;
+
+    if (!['SCHEDULED', 'FAILED'].includes(post.status) && !stuckPublishing) {
       throw new BadRequestException(
-        `Only a SCHEDULED post can be pulled back to draft (this one is ${post.status})`,
+        post.status === 'PUBLISHING'
+          ? 'This post is publishing right now — wait for the run to finish. If it is still stuck in 30 minutes you can reset it here.'
+          : `Only a SCHEDULED or FAILED post can be pulled back to draft (this one is ${post.status})`,
       );
     }
 
@@ -498,14 +706,57 @@ export class SocialPlannerService implements OnModuleInit {
     // whose job is still queued, which is harmless BECAUSE publishDuePost now
     // refuses to publish a DRAFT. It did not before this change; without that
     // guard neither ordering was actually safe.
+    //
+    // `cancel` only touches PENDING rows. For a post stuck by a QUEUED publish
+    // that means it is a no-op unless the reaper has already revived the job —
+    // by 30 minutes it has, so the cancel can actually catch the re-queued work
+    // rather than racing a RUNNING row it cannot stop. For a post stuck by
+    // `publishNow` there is no ScheduledJob row at all and this call can never
+    // do anything; that path's only protection is the compare-and-set below and
+    // the per-target PUBLISHED state.
     await this.scheduledJobs.cancel(SOCIAL_PUBLISH_KIND, `social-post-${postId}`);
 
-    await this.prisma.socialPost.update({
-      where: { id: postId },
-      data: { status: 'DRAFT', scheduledAt: null },
+    // One transaction, and the status flip goes first inside it.
+    //
+    // This used to be a read at the top of the method and a bare `update` by id
+    // here, with no predicate and nothing serializing the two — so a run that
+    // looked stuck but was alive could complete in between and have its
+    // genuinely PUBLISHED post dragged back to DRAFT. The operator then sees a
+    // draft for a post that is live on the customer's feed, and the obvious
+    // next move is to publish it again.
+    //
+    // `publishNow` already carries the right shape for this: an updateMany
+    // whose WHERE repeats the status that was read, plus a `count === 0` check
+    // that turns a lost race into a refusal rather than a silent overwrite.
+    // Same here. The flip runs before the target revive so that losing costs
+    // nothing, and the throw rolls back the whole transaction — the pair can
+    // never be observed (or crash) half-applied, which matters more now that
+    // `attachTargets` will not re-create a target row the post still has.
+    let revived = 0;
+    await this.prisma.$transaction(async (tx) => {
+      const flipped = await tx.socialPost.updateMany({
+        where: { id: postId, workspaceId, status: post.status },
+        data: { status: 'DRAFT', scheduledAt: null },
+      });
+      if (flipped.count === 0) {
+        throw new BadRequestException(
+          'This post changed while you were looking at it — reload and try again',
+        );
+      }
+
+      // Never the PUBLISHED ones (see the doc block): those networks already
+      // have the post, and `publishDuePost` re-sends every PENDING target it
+      // finds.
+      const reset = await tx.socialPostTarget.updateMany({
+        where: { workspaceId, postId, status: { in: ['PENDING', 'FAILED'] } },
+        data: { status: 'PENDING', error: null },
+      });
+      revived = reset?.count ?? 0;
     });
 
-    this.logger.log(`Unscheduled post ${postId} — back to DRAFT`);
+    this.logger.log(
+      `Unscheduled post ${postId} (was ${post.status}) — back to DRAFT, ${revived} target(s) reset to PENDING`,
+    );
     return this.getPost(workspaceId, postId);
   }
 
@@ -743,8 +994,43 @@ export class SocialPlannerService implements OnModuleInit {
       );
     }
 
+    // Never re-attach an account this post ALREADY holds a target row for.
+    //
+    // Both callers (updatePost, schedulePost) delete the post's PENDING targets
+    // and then hand this method the editor's full account list. That was safe
+    // only while a post holding a PUBLISHED target could not be edited at all:
+    // such a post was itself PUBLISHED or PUBLISHING, and both are refused.
+    // `unschedulePost` ended that. A run that dies after publishing to
+    // Instagram but before finishing Facebook strands the post in PUBLISHING
+    // with one live target; thirty minutes later the operator resets it and the
+    // result is a DRAFT that still carries a PUBLISHED target. The composer
+    // prefills its account picker from EVERY target of the post, so the next
+    // save sends that account straight back here — the deleteMany removes only
+    // PENDING rows, the PUBLISHED one survives it, and a second PENDING row for
+    // the same account lands beside it. `publishDuePost` fans out over every
+    // PENDING target, so the customer's own feed gets the post twice.
+    //
+    // `skipDuplicates` below looks like it already covered this and did not: it
+    // skips rows that would violate a UNIQUE constraint, and this table had
+    // none — only two plain indexes. There is one now
+    // (@@unique([postId, socialAccountId])) and it is the real backstop, but
+    // the filter stays in front of it. A deliberate exclusion and a silently
+    // skipped insert read very differently to whoever edits this next, and only
+    // one of them still holds against a database whose migration has not run.
+    const attached = await this.prisma.socialPostTarget.findMany({
+      where: { workspaceId, postId },
+      select: { socialAccountId: true },
+    });
+    const already = new Set(attached.map((t) => t.socialAccountId));
+    const fresh = accounts.filter((a) => !already.has(a.id));
+
+    // Everything the caller asked for is already a target — the re-selected
+    // published account above is exactly this case. Nothing to create, and NOT
+    // an error: the post's target set is what was requested.
+    if (fresh.length === 0) return;
+
     await this.prisma.socialPostTarget.createMany({
-      data: accounts.map((a) => ({
+      data: fresh.map((a) => ({
         workspaceId,
         postId,
         socialAccountId: a.id,

@@ -131,6 +131,33 @@ describe('BudgetAutopilotPage', () => {
     expect(screen.getByText('Credit balance')).toBeInTheDocument();
   });
 
+  it('says the wallet could not be read instead of printing a fabricated zero', async () => {
+    /**
+     * The wallet read has no error boundary — its only consumers are the two
+     * hero tiles — so a failure used to render as `money(0)`: a real currency
+     * amount asserting the workspace is out of credit, when the truth is that
+     * we could not ask. Silencing the query (so the global toaster stops
+     * shouting over the two inline error states this page already has) made
+     * that worse, not better: no report anywhere, and a number confident
+     * enough to act on.
+     */
+    (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+    (svc.getGrowthBudget as any).mockResolvedValue(budget);
+    (svc.getWalletState as any).mockRejectedValue(new Error('wallet unavailable'));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Credit balance')).toBeInTheDocument());
+    // This file's i18n mock returns the INLINE default, which is the Turkish
+    // 'okunamadı' — the same key and default the Studio's status bar uses, so
+    // the two surfaces cannot drift into saying different things about the
+    // same failure. The English catalogue carries "couldn't be read".
+    expect(screen.getAllByText('okunamadı').length).toBe(2);
+    // The two wallet-derived tiles must not print a currency figure at all.
+    // "Credit spent" comes from the allocations and is unaffected, so this
+    // asserts on the absence of a ZERO rather than of all money.
+    expect(screen.queryByText(/(^|\s)(₺|\$)\s?0([.,]00)?$/)).not.toBeInTheDocument();
+  });
+
   it('formats money in the budget currency + i18n locale (no hard tr-TR)', async () => {
     const usd = { ...budget, currency: 'USD' };
     (svc.listGrowthBudgets as any).mockResolvedValue([usd]);

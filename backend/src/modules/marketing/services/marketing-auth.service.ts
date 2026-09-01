@@ -17,6 +17,7 @@ import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
 import { ResearchExecutionMode } from '../dto/set-research-execution.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
+import { isIanaTimeZone } from '../common/iana-timezone';
 import { hashBackupCode, openTotpSecret, verifyTotpStep } from '../util/totp';
 import { SmsOtpService } from './sms-otp.service';
 import { MembershipService } from './membership.service';
@@ -607,6 +608,7 @@ export class MarketingAuthService {
       productDescription?: string;
       language?: string;
       currency?: string;
+      timezone?: string;
     },
   ) {
     const base = slugify(dto.workspaceName);
@@ -634,6 +636,23 @@ export class MarketingAuthService {
         // Default to TRY: PayTR (the only PSP live in prod) is TRY-only, so a
         // USD-defaulted workspace can neither top-up its wallet nor subscribe.
         defaultCurrency: dto.currency ?? 'TRY',
+        // The zone the business keeps its books in. Until this line, NOTHING on
+        // the self-serve path wrote `Workspace.timezone` — the only writer
+        // anywhere was agency.service's createLocation — so every self-signed-up
+        // workspace held the schema default 'UTC' and every day-boundary
+        // aggregate that reads the column (dashboard, tasks, sales targets, the
+        // daily digest, and now the client's Growth Studio rail) ran a Turkish
+        // business's "today" from 03:00 to 03:00.
+        //
+        // Re-validated here rather than trusted from the DTO. The decorator is
+        // the gate for HTTP callers, but this method is a plain function that a
+        // future path could reach without a ValidationPipe in front of it, and
+        // a junk zone written here does not fail loudly — it silently breaks
+        // every zoned read for that workspace forever. `undefined` falls through
+        // to the schema default, which is exactly where an omitting client
+        // (an older frontend, a non-browser signup) should land: no worse off
+        // than every workspace created before this field was captured.
+        timezone: isIanaTimeZone(dto.timezone) ? dto.timezone.trim() : undefined,
         settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
         // Leaner first-run: memberships + research start OFF (switch on in
         // Modules). Everything else active.
@@ -865,6 +884,21 @@ export class MarketingAuthService {
           productDescription: true,
           defaultLanguage: true,
           defaultCurrency: true,
+          // The IANA zone the BUSINESS operates in (`Workspace.timezone`).
+          // Without it on the profile the frontend has exactly one source for
+          // "what day is it?" — the browser — and the browser is the operator's
+          // laptop, not the workspace. A Turkey workspace opened from a laptop
+          // still on UTC draws its "today" three hours late at both ends, so
+          // the early-morning rows silently fall off the top of every
+          // today/this-week list and tomorrow's leak in at the bottom. That is
+          // the same server-local-vs-workspace-tz class of bug the dashboard
+          // aggregates already had to be rewritten to avoid (periodBounds +
+          // zoned helpers); shipping the zone to the client is what stops the
+          // UI layer from re-introducing it one date-boundary widget at a time.
+          // Non-secret, additive, read-only: every workspace has the column
+          // (default 'UTC'), and no existing caller can be broken by an extra
+          // key appearing on `workspace`.
+          timezone: true,
           settings: true,
         },
       }),
@@ -988,6 +1022,57 @@ export class MarketingAuthService {
       select: { researchExecution: true },
     });
     return { researchExecution: workspace.researchExecution };
+  }
+
+  /**
+   * The zone the workspace's day boundaries are computed in — the sole write
+   * path to `Workspace.timezone` from the panel, mirroring setMcpWriteMode and
+   * setResearchExecution above.
+   *
+   * WHY THIS HAD TO EXIST AT ALL. The column shipped with the first migration
+   * and a `'UTC'` default, and for its whole life the only code anywhere that
+   * ever assigned it was `agency.service.createLocation` — a path a self-serve
+   * customer never touches. So every workspace on the platform held 'UTC' while
+   * five separate consumers read it as though it meant something: the dashboard
+   * aggregates, the tasks list, sales targets, the daily digest cron, and (as of
+   * the Growth Studio rail) the client. A Turkey workspace's "today" therefore
+   * ran 03:00→03:00 Istanbul, quietly dropping the early-morning rows out of
+   * every today/this-week list and borrowing tomorrow's.
+   *
+   * Registration now captures the browser's zone, which fixes every NEW
+   * workspace. This is the other half: the workspaces that already exist, whose
+   * stored 'UTC' is indistinguishable from a deliberate choice and can only be
+   * corrected by someone saying so. Until this method there was no such
+   * someone — not a settings screen, not a platform-admin path, nothing.
+   *
+   * Validated again here, not just at the DTO: an invalid zone in this column
+   * fails NOWHERE loudly. Every reader wraps `Intl` in a try/catch and falls
+   * back, so a junk value shows up only as dates that are subtly wrong for one
+   * workspace, forever, with nothing in the logs.
+   */
+  async setWorkspaceTimezone(workspaceId: string, timezone: string) {
+    if (!isIanaTimeZone(timezone)) {
+      throw new BadRequestException('timezone must be an IANA time zone name (e.g. Europe/Istanbul)');
+    }
+    const workspace = await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { timezone: timezone.trim() },
+      select: { timezone: true },
+    });
+    return { timezone: workspace.timezone };
+  }
+
+  /** Read-back so an operator can see what the day boundaries are actually
+   *  being computed in, rather than inferring it from a wrong-looking list. */
+  async getWorkspaceTimezone(workspaceId: string) {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { timezone: true },
+    });
+    if (!workspace) {
+      throw new BadRequestException('Workspace not found');
+    }
+    return { timezone: workspace.timezone };
   }
 
   /** Read-back so an owner can confirm which side is draining, not guess. */
