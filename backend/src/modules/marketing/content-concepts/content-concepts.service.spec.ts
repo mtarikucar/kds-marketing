@@ -1,5 +1,10 @@
 import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { ContentConceptsService, MAX_CONCEPT_COUNT } from './content-concepts.service';
+import {
+  ContentConceptsService,
+  MAX_CONCEPT_COUNT,
+  MAX_SHOT_SEC,
+  MIN_SHOT_SEC,
+} from './content-concepts.service';
 import { VideoPipelineService } from '../video/video-pipeline.service';
 
 const IDEA =
@@ -169,6 +174,78 @@ describe('ContentConceptsService.planConcepts', () => {
     const { svc } = deps();
     await expect(plan(svc, { count: MAX_CONCEPT_COUNT + 1 })).rejects.toThrow(BadRequestException);
     await expect(plan(svc, { count: 1 })).rejects.toThrow(BadRequestException);
+  });
+
+  // ──────────────────────────────────── beats a generator can actually produce
+  //
+  // `jeeta.generate_video` accepts `.int().min(1).max(10)` and
+  // `MediaGenService.requestGeneration` clamps to `MEDIA_GEN_MAX_VIDEO_SEC`
+  // (10). A concept is APPROVED once and cannot be re-decided, so anything
+  // outside that window would be approved and then die at generation with no
+  // way back. The model's number is therefore bounded on the way in.
+
+  /** A batch whose FIRST concept carries the given beat lengths verbatim. */
+  const withDurations = (...durations: unknown[]) => [
+    {
+      ...GOOD[0],
+      shots: durations.map((d, i) => ({
+        ...GOOD[0].shots[i % GOOD[0].shots.length],
+        scene: `${i}s`,
+        durationSec: d,
+      })),
+    },
+    GOOD[1],
+    GOOD[2],
+  ];
+
+  const firstPlan = (res: Awaited<ReturnType<ContentConceptsService['planConcepts']>>) =>
+    res.concepts[0].shotPlan;
+
+  it('clamps a beat no generator could accept down to the ceiling', async () => {
+    // Measured before this guard existed: a 1800s beat persisted whole and the
+    // concept reported `durationSec: 1800`.
+    const { svc } = deps({ completion: submit(withDurations(1800, 4)) });
+    const plan1 = firstPlan(await plan(svc));
+    expect(plan1.shots.map((s) => s.durationSec)).toEqual([MAX_SHOT_SEC, 4]);
+    // The plan's total is the beats' own sum, so it is bounded by them.
+    expect(plan1.durationSec).toBe(MAX_SHOT_SEC + 4);
+  });
+
+  it('lifts a beat that rounds to zero up to the shortest producible one', async () => {
+    // `Math.round(0.4)` is 0 and `custom?.durationSec ?? per` treats 0 as
+    // supplied, so a zero-length beat used to survive all the way to the row.
+    const { svc } = deps({ completion: submit(withDurations(0.4, 3)) });
+    expect(firstPlan(await plan(svc)).shots.map((s) => s.durationSec)).toEqual([MIN_SHOT_SEC, 3]);
+  });
+
+  it('bounds a negative beat instead of subtracting it from the concept', async () => {
+    const { svc } = deps({ completion: submit(withDurations(-5, 3)) });
+    const plan1 = firstPlan(await plan(svc));
+    expect(plan1.shots.map((s) => s.durationSec)).toEqual([MIN_SHOT_SEC, 3]);
+    expect(plan1.durationSec).toBe(MIN_SHOT_SEC + 3);
+  });
+
+  it('falls back to the even split when the length is not a usable number', async () => {
+    // NaN/Infinity/a string are not a length the model supplied — they are the
+    // absence of one, and the planner's even split is the honest answer.
+    const { svc } = deps({ completion: submit(withDurations(Number.NaN, Number.POSITIVE_INFINITY, 'iki saniye')) });
+    const lengths = firstPlan(await plan(svc)).shots.map((s) => s.durationSec);
+    expect(lengths).toEqual([5, 5, 5]); // 15s target over 3 beats
+  });
+
+  it('PERSISTS nothing outside the window a generator accepts', async () => {
+    const { svc, prisma } = deps({ completion: submit(withDurations(1800, 0.4)) });
+    await plan(svc);
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data;
+    const beats = rows.flatMap((r: any) => r.shotPlan.shots.map((s: any) => s.durationSec));
+    // Anchored on a positive count first: an empty list would satisfy `every`.
+    expect(beats.length).toBeGreaterThan(0);
+    expect(beats.every((d: number) => Number.isInteger(d) && d >= MIN_SHOT_SEC && d <= MAX_SHOT_SEC)).toBe(
+      true,
+    );
+    expect(
+      rows.every((r: any) => r.shotPlan.durationSec <= r.shotPlan.shots.length * MAX_SHOT_SEC),
+    ).toBe(true);
   });
 
   // ───────────────────────────────────────────────── error is not emptiness

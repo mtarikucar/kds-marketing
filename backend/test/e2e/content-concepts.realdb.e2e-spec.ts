@@ -4,7 +4,11 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { AiCreditsService } from '../../src/modules/marketing/ai/ai-credits.service';
 import { VideoPipelineService } from '../../src/modules/marketing/video/video-pipeline.service';
-import { ContentConceptsService } from '../../src/modules/marketing/content-concepts/content-concepts.service';
+import {
+  ContentConceptsService,
+  MAX_SHOT_SEC,
+  MIN_SHOT_SEC,
+} from '../../src/modules/marketing/content-concepts/content-concepts.service';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
 /**
@@ -272,6 +276,41 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
     // And the silent concept stayed silent through the round trip.
     const silent = rows[2].shotPlan as unknown as { shots: Array<{ voiceover: string }> };
     expect(silent.shots.every((s) => s.voiceover === '')).toBe(true);
+  });
+
+  it('bounds an unshootable beat BEFORE it reaches the JSONB column', async () => {
+    // 1800s and 0.4s both came back from a real, well-formed batch. Neither can
+    // be generated (`jeeta.generate_video` is int 1-10, MediaGenService clamps
+    // to MEDIA_GEN_MAX_VIDEO_SEC), and a concept is decided once — so an
+    // APPROVED row carrying one has no path back. Asserted against what
+    // Postgres actually stored, not against the in-memory return value.
+    const junk = [
+      {
+        ...GOOD_CONCEPTS[0],
+        shots: [
+          { ...GOOD_CONCEPTS[0].shots[0], durationSec: 1800 },
+          { ...GOOD_CONCEPTS[0].shots[1], durationSec: 0.4 },
+        ],
+      },
+      GOOD_CONCEPTS[1],
+      GOOD_CONCEPTS[2],
+    ];
+    const { svc } = svcWith(submission(junk));
+    const res = await svc.planConcepts(workspaceId, {
+      idea: SHARED_IDEA,
+      count: 3,
+      createdById: ownerId,
+    });
+
+    const stored = await prisma.contentConcept.findFirst({
+      where: { workspaceId, batchId: res.batchId, ordinal: 0 },
+    });
+    const plan = stored!.shotPlan as unknown as {
+      shots: Array<{ durationSec: number }>;
+      durationSec: number;
+    };
+    expect(plan.shots.map((s) => s.durationSec)).toEqual([MAX_SHOT_SEC, MIN_SHOT_SEC]);
+    expect(plan.durationSec).toBe(MAX_SHOT_SEC + MIN_SHOT_SEC);
   });
 
   it('charges the workspace for the call it actually made', async () => {

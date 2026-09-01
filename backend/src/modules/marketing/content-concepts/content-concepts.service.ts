@@ -33,6 +33,51 @@ export const MIN_CONCEPT_COUNT = 2;
  */
 export const MAX_CONCEPT_COUNT = 8;
 
+/**
+ * The window a single beat's length must fall in, because it is the window the
+ * thing that will SHOOT it accepts: `jeeta.generate_video` declares
+ * `.int().min(1).max(10)` and `MediaGenService.requestGeneration` clamps to
+ * `MEDIA_GEN_MAX_VIDEO_SEC` (10). Restated here as literals rather than
+ * imported — the same choice `content.tools.ts` already makes — so the planner
+ * does not depend on the generation module or on an env var whose value at
+ * PLANNING time need not be its value at generation time.
+ *
+ * Measured before this existed: a well-formed batch produced beats of 1800s and
+ * 0s, and both persisted as approvable rows. Neither can ever be generated.
+ */
+export const MIN_SHOT_SEC = 1;
+export const MAX_SHOT_SEC = 10;
+
+/**
+ * Clamp, not reject, and the difference is the whole reason this is a function
+ * with a comment on it.
+ *
+ * A batch that fails `concept-distinctness` is refused outright, because there
+ * the defect IS the content and no substituted value could repair it. A beat
+ * length is the opposite: the creative decision (what is in frame, what is read,
+ * what is heard) is intact and only one number is unshootable, and there is an
+ * obviously correct replacement — the nearest length the generator accepts.
+ *
+ * Three things settle it in favour of clamping:
+ *  - The Anthropic call has already RETURNED, so the 16 credits stay charged
+ *    (see the money note above). Refusing the batch would make the owner pay
+ *    again for a field we can fix exactly.
+ *  - `Math.round(0.4)` is `0`. Rejecting a whole batch over a rounding artifact
+ *    of a legitimately short beat would be absurd.
+ *  - A concept is decided ONCE (`review` refuses a second decision), so an
+ *    APPROVED concept carrying an ungenerable beat has no path back. Whatever
+ *    reaches the row must already be producible; clamping guarantees that at
+ *    the only boundary where the model's output enters the system.
+ *
+ * The trade is that a 1800s beat becomes a 10s one silently as far as the model
+ * is concerned. It is not silent to us — the caller logs how many beats it had
+ * to move — and the reviewer still sees the model's own intent in the shot's
+ * `scene` label and description, which are never rewritten.
+ */
+function clampShotSeconds(raw: number): number {
+  return Math.min(MAX_SHOT_SEC, Math.max(MIN_SHOT_SEC, Math.round(raw)));
+}
+
 const MAX_IDEA_CHARS = 4000;
 const MAX_OUTPUT_TOKENS = 6000;
 
@@ -204,22 +249,38 @@ export class ContentConceptsService {
       );
     }
 
+    let clamped = 0;
     const parsed = raw.slice(0, count).map((c) => ({
       angle: String(c?.angle ?? '').trim(),
       hook: String(c?.hook ?? '').trim(),
       title: String(c?.title ?? '').trim(),
       rationale: c?.rationale == null ? null : String(c.rationale).trim(),
-      shots: (Array.isArray(c?.shots) ? (c.shots as SubmittedShot[]) : []).map((s) => ({
-        scene: String(s?.scene ?? '').trim(),
-        cameraNote: String(s?.cameraNote ?? '').trim(),
-        onScreenText: s?.onScreenText == null ? '' : String(s.onScreenText),
-        voiceover: s?.voiceover == null ? '' : String(s.voiceover),
-        description: String(s?.description ?? '').trim(),
-        ...(typeof s?.durationSec === 'number' && s.durationSec > 0
-          ? { durationSec: Math.round(s.durationSec) }
-          : {}),
-      })),
+      shots: (Array.isArray(c?.shots) ? (c.shots as SubmittedShot[]) : []).map((s) => {
+        // A length is only a length if it is a finite number. NaN, Infinity and
+        // "iki saniye" are the ABSENCE of one, and the planner's even split is
+        // the honest answer for an absent value — `Math.round(Infinity)` is
+        // `Infinity`, which used to sail through the old `> 0` guard.
+        const supplied =
+          typeof s?.durationSec === 'number' && Number.isFinite(s.durationSec)
+            ? s.durationSec
+            : undefined;
+        const durationSec = supplied === undefined ? undefined : clampShotSeconds(supplied);
+        if (durationSec !== undefined && durationSec !== Math.round(supplied as number)) clamped += 1;
+        return {
+          scene: String(s?.scene ?? '').trim(),
+          cameraNote: String(s?.cameraNote ?? '').trim(),
+          onScreenText: s?.onScreenText == null ? '' : String(s.onScreenText),
+          voiceover: s?.voiceover == null ? '' : String(s.voiceover),
+          description: String(s?.description ?? '').trim(),
+          ...(durationSec === undefined ? {} : { durationSec }),
+        };
+      }),
     }));
+    if (clamped) {
+      this.logger.warn(
+        `content concepts for ws ${workspaceId}: ${clamped} beat(s) outside ${MIN_SHOT_SEC}-${MAX_SHOT_SEC}s were clamped to what a generator accepts`,
+      );
+    }
 
     const violations = conceptContractViolations(parsed);
     if (violations.length) {
