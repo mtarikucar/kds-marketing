@@ -549,9 +549,12 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 120 total, 45 advertised: everything a wave adds beyond the ceiling is
-    // deferred — which is exactly why the advertised count above stayed fixed
-    // while the catalogue grew past a hundred.
+    // 123 total, 45 advertised (+2 discovery) and 76 deferred: everything a
+    // wave adds beyond the ceiling is deferred — which is exactly why the
+    // advertised count above stayed fixed while the catalogue grew past a
+    // hundred. The number in this comment said 120 while the assertion below
+    // said 123; a comment that disagrees with its own assertion is how a
+    // measured figure quietly becomes a remembered one.
     expect(registry.list(ALL_SCOPES)).toHaveLength(123);
   });
 });

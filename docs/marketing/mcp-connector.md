@@ -8,9 +8,9 @@ invoices, reviews, …) and, with a human in the loop by default, take actions
 (reply to a customer, launch a campaign, publish a social post, move ad budget,
 text an invoice, book an appointment).
 
-**The catalogue is 114 tools across 21 domains, of which 45 are advertised up
-front.** The other 67 are reachable through `jeeta.find_tools` and
-`jeeta.call_tool` — see
+**The catalogue is 123 tools across 21 domains, of which 45 are advertised up
+front** (plus `jeeta.find_tools` and `jeeta.call_tool`, which are always
+advertised). **The other 76 are reachable** through those two — see
 [Tool catalogue](#tool-catalogue).
 
 This guide is for the person setting the connector up for a workspace, not
@@ -31,7 +31,7 @@ for the engineer who built it.
   `mcp-tool-registry`. What has **not** been exercised is a live provider
   send: the test workspace used a WEBCHAT channel, so no message left the
   system to a real phone or inbox. The catalogue has since grown from 18 tools
-  to 114 across five waves (Faz 5 D1–D5) and the work after them; the waves are covered by unit and
+  to 123 across five waves (Faz 5 D1–D5) and the work after them; the waves are covered by unit and
   isolation specs, not by a repeat of that live run.
 - **Which clients can connect.** Two auth paths now exist, and the endpoint
   takes either on the same route:
@@ -112,7 +112,7 @@ After adding, check two things:
 1. **The tool list appears.** Ask Claude what Jeeta tools it has, or run
    whatever your client uses to list a server's tools. You will see the
    **advertised** subset of the [catalogue](#tool-catalogue) whose scopes the
-   key covers — at most 45 of the 114, and fewer for a narrow key.
+   key covers — at most 45 of the 123, and fewer for a narrow key.
    `McpServerFactoryService.build` filters the registry by the key's granted
    scopes per request, so a narrower key legitimately shows fewer tools, not an
    error. A tool you do not see is not necessarily unavailable: ask the model to
@@ -209,7 +209,8 @@ scopes** checklist or by passing the string in the API's `scopes` array (e.g.
 
 ## Tool catalogue
 
-**114 tools in 21 domains, 45 of them advertised and 67 deferred.** They are registered in
+**123 tools in 21 domains: 45 advertised, 2 discovery tools also advertised,
+76 deferred.** They are registered in
 `backend/src/modules/marketing/mcp/tools/*.tools.ts`, wired in
 `marketing.module.ts`, and asserted by name and count in
 `backend/src/modules/marketing/mcp/tools/tool-catalogue.spec.ts` — a dropped
@@ -251,7 +252,7 @@ schema**, so a model can call a tool it has just discovered on the very next
 turn. It requires no scopes (it can only reveal what the caller could already
 call) and is never itself deferred.
 
-`limit` is capped at 60 while the catalogue is 114, so a broad listing is
+`limit` is capped at 60 while the catalogue is 123, so a broad listing is
 paged: the response carries `offset`, and `nextOffset` when there is more.
 Pass it back to walk the rest. `nextOffset` is **absent** on the last page
 rather than null, so its presence is itself the "there is more" signal.
@@ -432,13 +433,13 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.create_social_campaign` | Create a social campaign | `campaigns.write` | WRITE | — | no |
 | `jeeta.get_content_calendar` | Everything scheduled in a date range across channels | `reports.read` | READ | — | yes |
 | `jeeta.generate_image` | AI image generation — **spends real money (fal.ai)** | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | yes |
-| `jeeta.generate_video` | AI video generation — **spends real money (fal.ai)** | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | no |
+| `jeeta.generate_video` | AI video generation — **spends real money (fal.ai)**; takes an optional `socialCampaignId` / `campaignItemId` so the asset belongs to something | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | no |
 | `jeeta.list_generated_media` | Previously generated assets | `campaigns.read` | READ | — | no |
 | `jeeta.pause_social_campaign` | Pause a RUNNING AI social campaign and cancel its scheduled plan job | `campaigns.write` | WRITE | CAMPAIGN_PAUSE | no |
 | `jeeta.unschedule_social_post` | Pull a SCHEDULED post back to DRAFT so its copy, media or targets can be corrected, then schedule it again | `campaigns.send` | WRITE | — | no |
 | `jeeta.plan_content_concepts` | Open ONE idea into several genuinely different video concepts, each planned shot by shot — **spends AI credits (one Opus call)** | `campaigns.write` | WRITE | — | no |
 | `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans — newest 40 (five batches); `batchId` returns a batch whole | `campaigns.read` | READ | — | no |
-| `jeeta.review_content_concept` | Approve or discard one concept — **requires a signed-in human** | `campaigns.write` | WRITE | — | no |
+| `jeeta.review_content_concept` | Approve or discard one concept. **Approving starts production and spends credits** — the concept becomes a campaign item and one clip is generated per beat. **Requires a signed-in human** | `campaigns.write` | WRITE | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 
@@ -462,6 +463,26 @@ to the workspace's SYSTEM principal when no person is behind the call: an
 unattended API-key session approving its own concepts would be the review
 deleted rather than performed, and there is no honest value to record as the
 reviewer. It refuses with a 403.
+
+**Approving is the expensive half.** It is not a bookkeeping flag: the concept
+becomes a `SocialCampaignItem` and one video clip is generated per beat of its
+shot plan, so a three-beat concept is three fal.ai generations. That single
+decision is the WHOLE human gate — there is deliberately no second approval per
+clip. Three measured reasons the clips do not go through `jeeta.generate_video`
+instead: it is `requiresApproval: true`, so in APPROVAL mode each clip would
+raise its own card; the approval executor returns the result to the *approver's*
+HTTP response rather than the agent's turn, so the `assetId` would never reach
+anything that could record it; and `MEDIA_GEN_MAX_INFLIGHT` is 4, so a five-beat
+concept cannot be submitted in one turn at all. Production therefore runs
+server-side, on the scheduled-job backbone, and is idempotent — the concept-to-item
+link is a UNIQUE index, so a repeat (or a race) yields one item, never two sets
+of clips.
+
+Approval needs somewhere to produce INTO. Pass `socialCampaignId` when the idea
+was not already scoped to a campaign: the campaign carries the calendar slot,
+the target accounts and the video model. Without one the approval is refused and
+the concept stays PROPOSED, retryable — a concept can only be decided once, so
+recording the verdict first and failing afterwards would strand it.
 
 #### Ads
 
@@ -1056,7 +1077,8 @@ answer the thread.
   result so the model can read the reason and adjust, rather than the whole
   MCP request failing.
 - **A tool you expect isn't in the list** — two possible reasons. It may be
-  **deferred**: only 45 of the 114 tools are advertised, and the other 67 are
+  **deferred**: only 45 of the 123 tools are advertised (plus the two
+  discovery tools), and the other 76 are
   reached by asking the model to call `jeeta.find_tools` and then
   `jeeta.call_tool` (see
   [Progressive disclosure](#progressive-disclosure)). Or the key's scopes may
