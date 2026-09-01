@@ -430,3 +430,104 @@ test('each embedded view offers a link to its own full page, and the calendar gr
     await expect(app.getByRole('heading', { level: 1 })).toBeVisible(LAZY);
   }
 });
+
+/**
+ * The record card, in a browser — the right column, at desktop width.
+ *
+ * Until now this was the one stage-1 surface with NO browser assertion at all.
+ * That is exactly the gap this branch has already fallen into once: stage 2
+ * shipped a Takvim view that rendered nothing while 126 jsdom tests stayed
+ * green, because jsdom applies no stylesheet and `getByTestId` resolves a
+ * `display:none` node like any other. The card is five sections stacked in a
+ * `lg:max-w-xs` column — 320px — which is precisely the kind of layout where
+ * "mounted" and "legible" come apart.
+ *
+ * So every assertion here anchors on content INSIDE a section, never on the
+ * heading above it. A heading is chrome that survives its own body collapsing;
+ * that is how the Takvim bug hid ("Bugün" lived in the nav Card above the
+ * agenda and stayed visible while the agenda was 0px tall). `offers-empty` /
+ * `tasks-empty` / `estimates-empty` / `appointments-empty` are each the
+ * SETTLED, successful answer of their own section, so seeing one means the
+ * section's read resolved AND its body painted.
+ *
+ * The two disclosures are opened, which nothing had ever done in a browser:
+ * they are `open && children`, so a closed one has no body at all, and the
+ * assertion pair (absent → click → visible) is what tells "the toggle works"
+ * apart from "the body was always there".
+ */
+test('the record card renders its sections inside the 320px column, and both disclosures open', async ({
+  app,
+  api,
+  workspace,
+}) => {
+  await app.setViewportSize({ width: 1440, height: 900 });
+
+  const suffix = stamp();
+  const contactPerson = `Kayıt Kişisi ${suffix}`;
+  const created = await api.post(apiUrl('/marketing/leads'), {
+    headers: { Authorization: `Bearer ${workspace.session.accessToken}` },
+    data: {
+      businessName: `Kayıt Firma ${suffix}`,
+      contactPerson,
+      businessType: 'OTHER',
+      source: 'WEBSITE',
+    },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+
+  await app.goto('/inbox');
+  await app.getByRole('button', { name: new RegExp(contactPerson) }).click();
+
+  const card = app.getByTestId('record-card');
+  await expect(card).toBeVisible(LAZY);
+
+  // The column really is the narrow one the design asks for. If this ever
+  // widens, the legibility assertions below stop meaning what they say.
+  const cardBox = (await card.boundingBox())!;
+  expect(cardBox.width).toBeLessThanOrEqual(320);
+
+  /** A section is legible when its own body has a box, inside the card's. */
+  const bodyFitsTheColumn = async (sectionId: string, bodyId: string) => {
+    const section = card.getByTestId(sectionId);
+    await expect(section, `${sectionId} must be on screen`).toBeVisible(LAZY);
+    const body = section.getByTestId(bodyId);
+    await expect(body, `${bodyId} must be visible inside ${sectionId}`).toBeVisible(LAZY);
+
+    const box = (await body.boundingBox())!;
+    expect(box.width, `${bodyId} must have a width`).toBeGreaterThan(0);
+    expect(box.height, `${bodyId} must have a height`).toBeGreaterThan(0);
+    // …and inside the column rather than spilling out of it, which is the
+    // failure a 320px column produces and a full-width jsdom never can.
+    expect(box.x).toBeGreaterThanOrEqual(cardBox.x - 1);
+    expect(box.x + box.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+  };
+
+  // The two EAGER sections, both riding on one `GET /leads/:id`. A fresh
+  // person has neither an offer nor a task, so each renders its own empty
+  // sentence — a settled answer, not a failure and not a blank.
+  await expect(card.getByRole('heading', { name: 'Teklifler' })).toBeVisible(LAZY);
+  await expect(card.getByRole('heading', { name: 'Görevler' })).toBeVisible();
+  await bodyFitsTheColumn('record-offers', 'offers-empty');
+  await bodyFitsTheColumn('record-tasks', 'tasks-empty');
+
+  // TAHMİNİ FİYAT — a disclosure, so there is nothing behind it until it is
+  // opened. Both halves asserted: the body is absent first.
+  const estimates = card.getByTestId('record-estimates');
+  await expect(estimates).toBeVisible();
+  await expect(estimates.getByTestId('estimates-empty')).toHaveCount(0);
+  await estimates.getByRole('button').click();
+  await bodyFitsTheColumn('record-estimates', 'estimates-empty');
+
+  // RANDEVULAR — the same, one gate further in. The e2e owner is a MANAGER on
+  // a plan that includes `funnels`, so this is the ungated branch: the
+  // disclosure itself, not the plan notice that stands in for it.
+  const appointments = card.getByTestId('record-appointments');
+  await expect(appointments).toBeVisible();
+  await expect(appointments.getByTestId('appointments-empty')).toHaveCount(0);
+  await appointments.getByRole('button').click();
+  await bodyFitsTheColumn('record-appointments', 'appointments-empty');
+
+  // Still exactly one door off the surface, with all five sections open.
+  await expect(card.getByRole('link')).toHaveCount(1);
+  await expect(card.getByRole('link', { name: /Kaydı aç/ })).toBeVisible();
+});
