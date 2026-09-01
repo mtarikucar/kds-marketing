@@ -183,11 +183,21 @@ export default function InboxPage() {
   //   2. the people LIST, so the row's preview, unread and position update
   //   3. the selected person's STREAM, so the message itself appears
   //
-  // (3) fires for every workspace event rather than only this person's, because
-  // ConversationStreamEvent carries `conversationId` and no `leadId` — the
-  // client cannot tell whose it is. One extra timeline fetch per event is the
-  // honest price; the cheaper fix is a `leadId` on the event, which is a backend
-  // contract change and is deliberately not smuggled into this commit.
+  // (3) fires only for the frames that are ABOUT the open person. The event
+  // carries `leadId` since 2026-09-01 (`ConversationStreamEvent`), which is what
+  // makes that possible: before it a frame said only which CONVERSATION it
+  // happened on, so this surface refreshed the open person on every event in
+  // the workspace — and that key now carries the record card's five sections
+  // behind it, so every unrelated SMS bought a fat refetch of a screen that had
+  // not changed.
+  //
+  // A frame with NO `leadId` still refreshes the open person, and that fallback
+  // is load-bearing rather than defensive: the delivery-receipt publisher omits
+  // it when its lookup throws, and an un-upgraded server omits it always.
+  // Unknown must degrade to "refresh everything", never to "refresh nothing" —
+  // a dropped inbound is a rep replying to a customer whose last line they
+  // cannot see. So the test is `frameLead && frameLead !== open.id`, not
+  // `frameLead === open.id`.
   //
   // The chip COUNTS are excluded by predicate. They sit under the same
   // ['marketing','leads'] prefix, and the three of them are the only queries
@@ -232,7 +242,10 @@ export default function InboxPage() {
             q.queryKey[2] !== 'queue-count',
         });
         const open = selectedRef.current;
-        if (open) queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', open.id] });
+        const frameLead = typeof data?.leadId === 'string' ? data.leadId : null;
+        if (open && !(frameLead && frameLead !== open.id)) {
+          queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', open.id] });
+        }
       } catch {
         /* ignore malformed frame */
       }

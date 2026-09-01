@@ -335,6 +335,86 @@ describe('The person surface — a live message reaches the open person', () => 
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] });
   });
 
+  /**
+   * `leadId` on the frame — the whole reason it was added to
+   * `ConversationStreamEvent`.
+   *
+   * Before it, a frame said only which CONVERSATION it happened on, so this
+   * surface could not tell an event about the open person from an event about
+   * anyone else and refreshed the open person on every one. That key now
+   * carries the record card's five sections behind it (activities, offers,
+   * tasks), and stage 2 hangs more observers off it, so every unrelated SMS in
+   * the workspace was buying a fat refetch for a screen that had not changed.
+   */
+  it('leaves the open person alone when the frame names somebody else', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    invalidate.mockClear();
+
+    await push({ kind: 'message', conversationId: 'c9', leadId: 'p2' });
+
+    // Positive anchor first: the frame WAS handled. Asserting only the absence
+    // would pass just as well against a frame that never arrived.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'conversations'] }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] });
+  });
+
+  it('refreshes the open person when the frame names them', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'message', conversationId: 'c9', leadId: 'p1' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] }),
+    );
+  });
+
+  /**
+   * The fallback, and it is the direction this field is allowed to fail in. A
+   * publisher that could not cheaply resolve the lead (the delivery-receipt
+   * path, when its lookup throws) sends the frame without one, and an
+   * un-upgraded server sends every frame without one. Both must degrade to
+   * "refresh everything", never to "refresh nothing": a dropped inbound is a
+   * rep replying to a customer whose last line they cannot see.
+   */
+  it('falls back to refreshing the open person when the frame names nobody', async () => {
+    const user = userEvent.setup();
+    const { fetchMock, push } = openStream();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    renderAt('/leads', qc);
+
+    await user.click(await screen.findByRole('button', { name: 'Ayşe' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await push({ kind: 'status', conversationId: 'c9' });
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketing', 'lead', 'p1'] }),
+    );
+  });
+
   it('ignores a heartbeat — it is a keep-alive, not news', async () => {
     const { fetchMock, push } = openStream();
     vi.stubGlobal('fetch', fetchMock);
