@@ -272,20 +272,36 @@ at the ceiling.
 
 ### Risk and approval classes
 
-Every tool declares a `risk` and whether it `requiresApproval`. The vocabulary
-(`mcp-tool-registry.ts`) is four values, and what they MEAN is enforced in one
-place — `ALWAYS_APPROVED_RISKS` in `mcp-broker.service.ts`:
+Every tool declares a `risk` and whether it `requiresApproval`. **The gate is
+`requiresApproval`.** One line in `McpBrokerService.invoke` decides whether a
+call runs or is queued:
+
+```ts
+if (tool.requiresApproval && !autonomyMayBypass && !ctx.approvedBy) { …queue… }
+```
+
+`risk` is a four-value vocabulary (`mcp-tool-registry.ts`) that reaches
+behaviour through exactly one door — `autonomyMayBypass`, i.e.
+`ALWAYS_APPROVED_RISKS` in `mcp-broker.service.ts`, which holds
+**`DESTRUCTIVE` and nothing else** since 2026-08-12. Everywhere else it is a
+label: `jeeta.find_tools` prints it so a model can warn its user before calling.
 
 | Risk | Meaning | In `APPROVAL` mode | In `AUTONOMOUS` mode |
 |---|---|---|---|
 | `READ` | reads workspace data | runs inline | runs inline |
-| `WRITE` | changes workspace data | runs inline unless `requiresApproval` | runs inline |
-| `SPEND` | **real money leaves the workspace** (ad budget, fal.ai generation, AI credits + live scraping) | **queued** | **queued — autonomy cannot bypass it** |
+| `WRITE` | changes workspace data | queued **iff** `requiresApproval` | runs inline |
+| `SPEND` | **real money leaves the workspace** (ad budget, fal.ai generation, AI credits + live scraping) | queued **iff** `requiresApproval` — all 10 set it | **runs inline** |
 | `DESTRUCTIVE` | **a row is permanently removed**; there is no undo table | **queued** | **queued — autonomy cannot bypass it** |
 
-`SPEND` and `DESTRUCTIVE` are gated in **every** write mode. This is a
-risk-CLASS rule, not a per-tool flag, so a tool author cannot forget it, and
-`mcp-broker.destructive.spec.ts` pins both directions.
+So `SPEND` does not gate anything by itself: all 10 `SPEND` tools are queued in
+`APPROVAL` mode because each one also sets `requiresApproval: true`. Only
+`DESTRUCTIVE` is a risk-CLASS rule a tool author cannot forget, and
+`mcp-broker.destructive.spec.ts` pins it from both sides. `SPEND` used to sit in
+that set and was deliberately removed: spend settles against the workspace's own
+metered credits and wallet, so an autonomous workspace's blast radius is capped
+by balances the owner already controls, whereas a deleted row has no balance to
+bound it. Setting `risk` alone on a new tool therefore gates nothing — set
+`requiresApproval` too.
 
 The design spec's `SEND` and `PUBLISH` rows are not separate risk values: they
 behave exactly like `WRITE` at the gate (risky, but runnable unattended in
@@ -294,20 +310,24 @@ tool's `approvalKind`. The kinds in use are `SEND`, `PUBLISH`,
 `BUDGET_REALLOCATION`, `MEDIA_SPEND`, `AI_SPEND`, `TARGET_CHANGE`,
 `CHANNEL_LAUNCH`, `STRATEGY_ACTION` and `DESTRUCTIVE`.
 
-**Read this before turning on `AUTONOMOUS`:** 19 tools are approval-gated, but
-only the 8 that are `SPEND`/`DESTRUCTIVE` stay gated in autonomous mode. The
-other 11 — including `jeeta.send_message`, `jeeta.send_email`,
-`jeeta.click_to_dial`, `jeeta.publish_social_post`, `jeeta.schedule_social_post`,
+**Read this before turning on `AUTONOMOUS`:** 29 tools are approval-gated, and
+only the 3 `DESTRUCTIVE` ones stay gated in autonomous mode. The other 26 run
+immediately — including all 10 `SPEND` tools (`jeeta.generate_image`,
+`jeeta.generate_video`, `jeeta.reallocate_budget`, `jeeta.synthesize_strategy`,
+`jeeta.run_research`, `jeeta.trigger_workflow`, `jeeta.approve_strategy_action`
+and the three `research_*` scrapers), which spend real money, and
+`jeeta.send_message`, `jeeta.send_email`, `jeeta.click_to_dial`,
+`jeeta.publish_social_post`, `jeeta.schedule_social_post`,
 `jeeta.set_campaign_status`, `jeeta.send_invoice`, `jeeta.create_booking` and
-`jeeta.reply_to_review` — run immediately, reaching real customers and real
-audiences with nobody in the loop. See
-[Write mode](#write-mode-approval-vs-autonomous).
+`jeeta.reply_to_review`, which reach real customers and real audiences with
+nobody in the loop. See [Write mode](#write-mode-approval-vs-autonomous).
 
 ### The catalogue
 
 "Listed" = advertised in `tools/list`; the rest need `jeeta.find_tools`.
 "Gated" names the `approvalKind` when the tool is approval-gated; **bold** means
-`SPEND`/`DESTRUCTIVE`, i.e. gated in every mode including autonomous.
+the tool's `risk` is `SPEND`/`DESTRUCTIVE` — of which only `DESTRUCTIVE` stays
+gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-classes)).
 
 #### Analytics · Brand · Workspace
 
@@ -422,16 +442,20 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 
-`jeeta.plan_content_concepts` costs money but is **not** classified `SPEND`, and
-that is deliberate. `SPEND` is reserved for money leaving the workspace to a
-media vendor; it is in `ALWAYS_APPROVED_RISKS`, so such a tool never runs inline
-and returns `PENDING_APPROVAL` — and the approval executor hands the result to
-the *approver's* HTTP response, not to the agent turn that asked. A tool whose
-value IS its return value therefore becomes unusable inside an agent turn once
-gated. No LLM-credit action in this product is `SPEND` (`ask_ai`, the command
-bar's turns, `strategy.turn`, `funnel.draft` are all likewise not), and the
-concepts this one writes are inert rows a human discards for free. The credit
-cost is stated in the tool's own description instead.
+`jeeta.plan_content_concepts` costs money (16 AI credits, one Opus call) and is
+still **ungated**, which is a decision about `requiresApproval` — the field the
+broker actually branches on — not about its `WRITE` label. Relabelling it
+`SPEND` would not queue it: `ALWAYS_APPROVED_RISKS` holds `DESTRUCTIVE` alone,
+and the `SPEND` tools that do queue (`jeeta.synthesize_strategy`,
+`jeeta.run_research`, both `approvalKind: 'AI_SPEND'`) queue because they set
+`requiresApproval: true`. It is left ungated because credit-metered Anthropic
+spend is bounded by the workspace's own balance — the owner's stated policy, the
+same one that took `SPEND` out of the always-gated set. Gating it would also
+break it: a gated call returns `PENDING_APPROVAL` and the approval executor
+hands the result to the *approver's* HTTP response, not to the agent turn that
+asked, so a tool whose value IS its return value becomes unusable in the one
+surface (the chat) it exists for. The concepts it writes are inert rows a human
+discards for free, and the credit cost is stated in the tool's own description.
 
 `jeeta.review_content_concept` is the one write tool that does **not** fall back
 to the workspace's SYSTEM principal when no person is behind the call: an
@@ -655,7 +679,8 @@ Design spec §7, enforced by absence and re-asserted per wave:
 - **Deciding an approval.** No tool approves, rejects or applies an
   `ApprovalRequest`. That is the human gate the whole queue exists for.
   (`jeeta.approve_strategy_action` approves a *strategy proposal*, not an
-  approval request — and it is itself gated in every mode.)
+  approval request — and it is itself `requiresApproval: true`, so in `APPROVAL`
+  mode a human decides it.)
 - **User and role management.** `users.manage` is not in `MCP_ALL_SCOPES`; no
   tool can create users, change roles or grant permissions.
 - **Workspace creation and package assignment.** The tenant/billing boundary;
@@ -675,7 +700,7 @@ Design spec §7, enforced by absence and re-asserted per wave:
 
 ## Approval-gated tools
 
-**30 of the 114 tools are registered `requiresApproval: true`** — the ones that
+**29 tools are registered `requiresApproval: true`** — the ones that
 reach a customer, speak to an audience, spend money or delete something. See
 the Gated column in [the catalogue](#the-catalogue) for the full list; the
 short version is:
@@ -685,10 +710,10 @@ short version is:
 - **reaches an audience:** `jeeta.set_campaign_status`,
   `jeeta.publish_social_post`, `jeeta.schedule_social_post`,
   `jeeta.reply_to_review`
-- **spends real money (gated in EVERY mode):** `jeeta.reallocate_budget`,
-  `jeeta.generate_image`, `jeeta.generate_video`,
-  `jeeta.approve_strategy_action`, `jeeta.synthesize_strategy`,
-  `jeeta.run_research`, `jeeta.trigger_workflow`
+- **spends real money (gated in `APPROVAL` mode only — `AUTONOMOUS` runs these
+  inline):** `jeeta.reallocate_budget`, `jeeta.generate_image`,
+  `jeeta.generate_video`, `jeeta.approve_strategy_action`,
+  `jeeta.synthesize_strategy`, `jeeta.run_research`, `jeeta.trigger_workflow`
 - **destroys a row (gated in EVERY mode):** `jeeta.delete_social_post`
 - **hands over authority:** `jeeta.set_workflow_enabled` (arms an automation),
   `jeeta.set_strategy_autonomy`
@@ -830,17 +855,21 @@ appointment and emails the attendee right away, `jeeta.reply_to_review` writes
 in the business's name right away. Nothing is queued and there is nothing to
 approve or apply — the model's tool call *is* the action.
 
-**What does NOT change, in any mode:** a tool whose risk is `SPEND` or
-`DESTRUCTIVE` is **always** queued for a human. `ALWAYS_APPROVED_RISKS` in
-`mcp-broker.service.ts` is unconditional on write mode, so autonomy cannot move
-an ad budget, run an AI generation, execute a strategy action, launch a research
-run, fire a workflow over real leads, or delete a post. `AUTONOMOUS` is a
-statement about SPEED ("stop making me approve every send"), not a power of
-attorney: money spent and rows deleted are the two things noticing an hour later
-does not undo. `mcp-broker.destructive.spec.ts` pins both directions.
+**Money is NOT excluded.** `AUTONOMOUS` frees the `SPEND` tools too:
+`jeeta.generate_image` / `jeeta.generate_video` bill fal.ai, `jeeta.run_research`
+and the `research_*` scrapers bill Apify/Firecrawl, `jeeta.reallocate_budget`
+moves a live ad budget, `jeeta.trigger_workflow` fires over real leads — all
+inline, with nobody in the loop. `ALWAYS_APPROVED_RISKS` was narrowed to
+`DESTRUCTIVE` alone on 2026-08-12 precisely so that flipping the mode means what
+the owner thinks it means; what bounds an autonomous spend is the workspace's own
+metered credits and wallet, not a human.
+
+**What does NOT change, in any mode:** a tool whose risk is `DESTRUCTIVE` is
+**always** queued for a human — a permanently removed row has no undo table and
+no balance to cap it. `mcp-broker.destructive.spec.ts` pins both directions.
 
 Read [Approval-gated tools](#approval-gated-tools) and the Gated column in
-[the catalogue](#the-catalogue) so you know exactly which 11 tools this frees
+[the catalogue](#the-catalogue) so you know exactly which 26 tools this frees
 before turning it on for a workspace.
 
 **What does not change:** every call — gated or not, in either mode, whether
@@ -884,8 +913,8 @@ who checked or changed this setting and when.
 There is still no UI toggle for this switch — only the two REST routes above.
 Because it is the single most safety-sensitive setting this connector has (it
 removes the human from every future send/publish/spend the AI decides to
-make), treat it accordingly: confirm you understand what the 11
-non-`SPEND`/`DESTRUCTIVE` gated tools can do
+make), treat it accordingly: confirm you understand what the 26
+non-`DESTRUCTIVE` gated tools can do
 (see [Approval-gated tools](#approval-gated-tools)) before setting a production
 workspace to `AUTONOMOUS`.
 

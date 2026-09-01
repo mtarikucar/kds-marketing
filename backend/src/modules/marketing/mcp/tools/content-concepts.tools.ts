@@ -30,28 +30,40 @@ const DECISIONS = ['APPROVED', 'DISCARDED'] as const;
  * ships as tools rather than as a new screen: pasting an idea into the chat and
  * asking for content has to REACH something, and this is it.
  *
- * ## Why `plan_content_concepts` is WRITE and not SPEND
+ * ## Why `plan_content_concepts` runs without an approval
  *
- * It costs money — 16 AI credits, one Opus call — so the instinct is SPEND. That
- * would be wrong here, in a way worth writing down because the cost of getting
- * it wrong is the feature not working at all.
+ * It costs money — 16 AI credits, one Opus call — so the instinct is to reach
+ * for an approval gate. Not gating it is deliberate, and the mechanism is worth
+ * stating exactly, because an earlier version of this comment stated it wrongly
+ * and a wrong story here is how the next tool gets classified badly.
  *
- * `SPEND` is in the broker's `ALWAYS_APPROVED_RISKS`: it never executes inline,
- * in ANY write mode, and comes back `PENDING_APPROVAL`. v2.286.0 measured what
- * that does to a tool whose value is its RETURN value — the approval executor
- * hands the result to the APPROVER's HTTP response, not to the agent turn that
- * asked, so the agent is left holding "queued" and can never see the concepts.
- * The one surface this feature exists for would be the one surface it cannot be
- * used from.
+ * **The gate is `requiresApproval`, not `risk`.** One line in
+ * `McpBrokerService.invoke` decides:
+ * `if (tool.requiresApproval && !autonomyMayBypass && !ctx.approvedBy)`. `risk`
+ * reaches behaviour only through `ALWAYS_APPROVED_RISKS`, which holds
+ * `DESTRUCTIVE` and nothing else, and otherwise only prints as a label in
+ * `jeeta.find_tools`. So `risk: 'WRITE'` is not what keeps this tool inline —
+ * `requiresApproval: false` is — and relabelling it `SPEND` would not gate it.
+ * The two are genuinely independent: `jeeta.synthesize_strategy` and
+ * `jeeta.run_research` are `SPEND` with `approvalKind: 'AI_SPEND'`, and what
+ * queues them is their own `requiresApproval: true`.
  *
- * The classification is also consistent rather than special-pleaded: NO
- * LLM-credit action in this product is SPEND — not `ask_ai`, not the command
- * bar's own turns, not `strategy.turn`, not `funnel.draft`. SPEND is reserved
- * for money leaving the workspace to a media vendor (`generate_image` /
- * `generate_video`, where an unrecoverable dollar is spent per call). What this
- * tool produces is inert, reviewable rows the owner discards for free. The
- * description says plainly that credits are spent, so the model is told even
- * though the gate does not stop it.
+ * **Why ungated is the right call.** Credit-metered Anthropic spend is bounded
+ * by the workspace's own balance, which is the owner's stated policy — the same
+ * reasoning that took `SPEND` out of `ALWAYS_APPROVED_RISKS` (see that set's
+ * docblock: *"panelden izin alacaksak ne anlamı kaldı MCP'nin"*). A wrong turn
+ * here costs credits the owner already caps; it cannot overdraw anything.
+ *
+ * **What gating it would cost.** v2.286.0 measured the other side: a gated call
+ * comes back `PENDING_APPROVAL`, and the approval executor hands the result to
+ * the APPROVER's HTTP response, not to the agent turn that asked. For a tool
+ * whose entire value IS its return value, the one surface this feature exists
+ * for would be the one surface it cannot be used from.
+ *
+ * `risk: 'WRITE'` is then simply the truthful label for what it does to
+ * workspace data: it writes inert, reviewable rows a human discards for free.
+ * The description says plainly that credits are spent, so the model is told even
+ * though nothing stops it.
  *
  * ## Why the review tool refuses a session with no human
  *

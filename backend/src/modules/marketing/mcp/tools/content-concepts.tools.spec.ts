@@ -31,18 +31,19 @@ const ctx = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe('jeeta.plan_content_concepts', () => {
-  it('is a WRITE, not a SPEND — it buys one Anthropic turn, never vendor media', () => {
+  it('declares the fields the broker reads: ungated, campaigns.write, content', () => {
     const tool = build().registry.get('jeeta.plan_content_concepts')!;
-    // This classification is load-bearing. SPEND is in ALWAYS_APPROVED_RISKS, so
-    // it would never execute inline in ANY write mode — and the whole surface for
-    // this feature is the chat, where an approval-gated tool cannot return its
-    // result to the agent's turn at all (measured in v2.286.0). Classifying an
-    // AI-credit action as SPEND would make the feature unreachable from the one
-    // place it is meant to be used. Every other LLM action in this product
-    // (ask_ai, command.turn, strategy.turn, funnel.draft) is likewise not SPEND;
-    // SPEND is reserved for money leaving the workspace to a media vendor.
-    expect(tool.risk).toBe('WRITE');
+    // `requiresApproval: false` is the load-bearing one — it is the field
+    // McpBrokerService.invoke actually branches on. `risk` is inert except as
+    // an input to ALWAYS_APPROVED_RISKS (which holds DESTRUCTIVE and nothing
+    // else) and as a label find_tools prints, so WRITE here is a description,
+    // not a gate: relabelling this tool SPEND would not queue it, and
+    // jeeta.synthesize_strategy / jeeta.run_research are SPEND tools queued by
+    // their own requiresApproval flag. What the flag being false buys is
+    // measured behaviourally below ('the broker runs it inline in APPROVAL
+    // mode'); the assertions here only pin the declaration.
     expect(tool.requiresApproval).toBe(false);
+    expect(tool.risk).toBe('WRITE');
     expect(tool.scopes).toEqual(['campaigns.write']);
     expect(tool.domain).toBe('content');
   });

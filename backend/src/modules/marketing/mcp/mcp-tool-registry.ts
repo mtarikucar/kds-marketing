@@ -5,9 +5,18 @@ import { ZodObject, type ZodTypeAny } from 'zod';
  * The risk vocabulary from the Faz 5 design spec (§4). `READ`/`WRITE`/`SPEND`
  * are the original three; `DESTRUCTIVE` arrived with D2's first delete tool.
  *
- * Only the classification is declared here — what it MEANS is enforced in one
- * place, `McpBrokerService`'s `ALWAYS_APPROVED_RISKS`: `SPEND` and
- * `DESTRUCTIVE` never execute inline, whatever the workspace's write mode.
+ * Only the classification is declared here, and it is worth being blunt about
+ * how little `risk` decides on its own. What gates a tool is its own
+ * `requiresApproval` flag, tested in one line of `McpBrokerService.invoke`.
+ * `risk` reaches behaviour through exactly one door — that same line's
+ * `autonomyMayBypass`, i.e. `McpBrokerService`'s `ALWAYS_APPROVED_RISKS`, which
+ * since 2026-08-12 holds `DESTRUCTIVE` alone. `SPEND` was deliberately taken
+ * out of it (see that set's docblock), so a `SPEND` tool is queued only if it
+ * also sets `requiresApproval: true` — every one of them does today, and in
+ * `AUTONOMOUS` mode they run inline anyway, which is the whole point of the
+ * removal. Everywhere else `risk` is a LABEL: `jeeta.find_tools` prints it so a
+ * model can warn its user before calling.
+ *
  * The spec's `SEND`/`PUBLISH` rows are not separate members: they behave
  * exactly like `WRITE` at the gate (risky, but runnable unattended) and are
  * already distinguished for the human in the approval queue by `approvalKind`,
