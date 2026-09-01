@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { toast } from 'sonner';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import IdeasPanel from './IdeasPanel';
 import { resultRefLabel } from './actionKinds';
@@ -312,6 +313,64 @@ describe('IdeasPanel', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /Sil ve yeniden üret/ }));
     await waitFor(() => expect(refreshStrategy).toHaveBeenCalledTimes(1));
+  });
+
+  /**
+   * A brief is an LLM-written JSON blob stored in a JSON column, so a field's
+   * presence is a hope rather than a guarantee — a brief written by an older
+   * synthesis, or by the onboarding MCP tools, can carry a channel with no
+   * `fitScore` at all.
+   *
+   * `?? 0` turned that into "reddit · 0%", and 0% is not an absent rating: it is
+   * the strategist saying the channel is worthless. That is a recommendation the
+   * data never made, printed in the one place on this screen where a person
+   * decides where to spend their week.
+   */
+  it('omits the fit percentage rather than rating an unscored channel at zero', async () => {
+    getStrategy.mockResolvedValue({
+      ...STRATEGY,
+      brief: {
+        ...STRATEGY.brief!,
+        channels: [{ key: 'reddit', rationale: 'niş orada' } as never],
+      },
+    });
+    renderPanel();
+
+    const fit = await screen.findByTestId('ideas-channel-fit');
+    expect(fit).toHaveTextContent('reddit');
+    expect(fit).not.toHaveTextContent('%');
+  });
+
+  /**
+   * `refreshStrategy`'s client type declares `actionCount` OPTIONAL, and `?? 0`
+   * read "the server did not say" as the flat claim that the most expensive,
+   * most destructive thing this product does produced nothing — announced over
+   * a list that is refetching at that very moment and about to fill with ideas.
+   */
+  it('does not report a plan of zero ideas when the server sent no count', async () => {
+    const user = userEvent.setup();
+    refreshStrategy.mockResolvedValue({} as never);
+    renderPanel();
+    await screen.findByText('Atölye reels serisi');
+
+    await user.click(screen.getByRole('button', { name: /Fikirleri yenile/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Sil ve yeniden üret/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Yeni plan hazır'));
+  });
+
+  it('still reports the count when the server does send one', async () => {
+    const user = userEvent.setup();
+    refreshStrategy.mockResolvedValue({ actionCount: 6 });
+    renderPanel();
+    await screen.findByText('Atölye reels serisi');
+
+    await user.click(screen.getByRole('button', { name: /Fikirleri yenile/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Sil ve yeniden üret/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Yeni plan hazır: 6 fikir'));
   });
 
   it('dismisses a single idea without any confirm', async () => {

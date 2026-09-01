@@ -114,6 +114,20 @@ export interface PullResult {
   posts: number;
   accounts: number;
   errors: number;
+  /**
+   * Due accounts this call actually READ, which is not the same number as any of
+   * the others and is the only one that can describe a tick honestly.
+   *
+   * `accounts` counts the snapshots that got written, so an unsupported network
+   * or a denied scope lands here and not there. And neither of them is the size
+   * of the allowlist the caller handed in: pullWorkspace caps its read at
+   * ACCOUNT_LIMIT, so a workspace supplying more than that gets the surplus shed
+   * silently — correctly, because the tick has to stay bounded, but silently.
+   * The cron used to report the size of the batch it CHOSE as though it were the
+   * work it DID; this is the number that lets it say what really happened, and
+   * how much rolled forward.
+   */
+  processed: number;
 }
 
 /** A pull that may not have run, because somebody else was already pulling. */
@@ -241,7 +255,7 @@ export class SocialInsightsService {
     },
   ): Promise<ExclusivePullResult> {
     const { lockTimeoutMs, ...pullOpts } = opts;
-    let result: PullResult = { posts: 0, accounts: 0, errors: 0 };
+    let result: PullResult = { posts: 0, accounts: 0, errors: 0, processed: 0 };
     let ran = false;
     try {
       await this.prisma.$transaction(
@@ -332,7 +346,7 @@ export class SocialInsightsService {
     workspaceId: string,
     opts: { force?: boolean; accountIds?: string[]; targetLimit?: number } = {},
   ): Promise<PullResult> {
-    const result = { posts: 0, accounts: 0, errors: 0 };
+    const result = { posts: 0, accounts: 0, errors: 0, processed: 0 };
     const now = new Date();
     const today = SocialPostMetricService.utcDay(now);
     const dueBefore = new Date(now.getTime() - SocialInsightsService.PULL_INTERVAL_MS);
@@ -359,6 +373,15 @@ export class SocialInsightsService {
       accounts = await this.prisma.socialAccount.findMany({
         where: { workspaceId, enabled: true, ...stale, ...allow },
         orderBy: { insightsPulledAt: { sort: 'asc', nulls: 'first' } },
+        // The cap bites when ONE workspace supplies more than ACCOUNT_LIMIT of
+        // the cron's batch, and it is meant to: a tick that is bounded by the
+        // batch size everywhere else must not become unbounded here. What was
+        // wrong was not the shedding but the silence about it — the surplus was
+        // dropped from the read and nothing downstream could tell, so the sweep
+        // logged the whole batch as if it had swept it. Nothing is lost either
+        // way, because a shed account is never stamped and therefore stays at
+        // the head of the oldest-first due queue; `result.processed` below is
+        // what lets the caller say that out loud instead of overstating.
         take: Math.min(
           SocialInsightsService.ACCOUNT_LIMIT,
           opts.accountIds?.length ?? SocialInsightsService.ACCOUNT_LIMIT,
@@ -405,6 +428,10 @@ export class SocialInsightsService {
     }
 
     for (const account of accounts) {
+      // Counted here rather than as `accounts.length` up front: `processed`
+      // means "the loop reached this row", and the loop is the only thing that
+      // can honestly say so.
+      result.processed++;
       // One account can never abort the sweep: everything below is inside this
       // try, including the bookkeeping write, and the catch still stamps the
       // account so it rotates out of the front of the due queue.

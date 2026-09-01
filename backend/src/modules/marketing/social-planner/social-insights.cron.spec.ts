@@ -14,7 +14,7 @@ function makePrisma(due: Array<{ id: string; workspaceId: string }>) {
 }
 
 function makeInsights() {
-  const pull = jest.fn().mockResolvedValue({ posts: 2, accounts: 1, errors: 0, skipped: false });
+  const pull = jest.fn().mockResolvedValue({ posts: 2, accounts: 1, errors: 0, processed: 1, skipped: false });
   return { svc: { pullWorkspaceExclusive: pull } as any, pull };
 }
 
@@ -154,8 +154,8 @@ describe('SocialInsightsCron', () => {
     const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w2')]);
     const { svc, pull } = makeInsights();
     pull
-      .mockResolvedValueOnce({ posts: 0, accounts: 0, errors: 0, skipped: true })
-      .mockResolvedValueOnce({ posts: 3, accounts: 1, errors: 0, skipped: false });
+      .mockResolvedValueOnce({ posts: 0, accounts: 0, errors: 0, processed: 0, skipped: true })
+      .mockResolvedValueOnce({ posts: 3, accounts: 1, errors: 0, processed: 1, skipped: false });
 
     await new SocialInsightsCron(prisma, svc).pullDueWorkspaces();
 
@@ -176,10 +176,50 @@ describe('SocialInsightsCron', () => {
     const { svc, pull } = makeInsights();
     pull
       .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce({ posts: 1, accounts: 1, errors: 0, skipped: false });
+      .mockResolvedValueOnce({ posts: 1, accounts: 1, errors: 0, processed: 1, skipped: false });
 
     await expect(new SocialInsightsCron(prisma, svc).pullDueWorkspaces()).resolves.toBeUndefined();
     expect(pull).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs the accounts it PROCESSED and the remainder, not the size of the batch it chose', async () => {
+    // The overstatement this pins. The line printed `due.length` — the batch the
+    // query selected — beside the counts of work completed, so a tick that read
+    // one account of the three it picked still announced "3 due account(s)".
+    // Three separate things can leave a due row untouched (a busy workspace, the
+    // wall-clock budget, and the puller's own per-workspace ACCOUNT_LIMIT
+    // shedding a workspace's surplus), and the last of them was invisible from
+    // here entirely. Summing what each workspace reports back covers all three.
+    const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w1'), dueRow('a3', 'w1')]);
+    const { svc, pull } = makeInsights();
+    // One workspace handed three ids and reporting one read — the shape a cap
+    // (or any partial sweep) produces.
+    pull.mockResolvedValue({ posts: 0, accounts: 1, errors: 0, processed: 1, skipped: false });
+
+    const cron = new SocialInsightsCron(prisma, svc);
+    const log = jest.spyOn((cron as any).logger, 'log').mockImplementation(() => undefined);
+    await cron.pullDueWorkspaces();
+
+    const line = String(log.mock.calls[0][0]);
+    expect(line).toContain('1 of 3 due account(s) processed');
+    // Named as a remainder rather than left to be inferred from a short count:
+    // the two it missed were never stamped, so they are still due and lead the
+    // next tick.
+    expect(line).toContain('2 account(s) roll to the next tick');
+  });
+
+  it('says nothing about a remainder when the tick reached every due account', async () => {
+    const { prisma } = makePrisma([dueRow('a1', 'w1'), dueRow('a2', 'w2')]);
+    const { svc, pull } = makeInsights();
+    pull.mockResolvedValue({ posts: 0, accounts: 1, errors: 0, processed: 1, skipped: false });
+
+    const cron = new SocialInsightsCron(prisma, svc);
+    const log = jest.spyOn((cron as any).logger, 'log').mockImplementation(() => undefined);
+    await cron.pullDueWorkspaces();
+
+    const line = String(log.mock.calls[0][0]);
+    expect(line).toContain('2 of 2 due account(s) processed');
+    expect(line).not.toContain('roll to the next tick');
   });
 
   it('stops at the wall-clock budget instead of overrunning into the next tick', async () => {
@@ -199,7 +239,7 @@ describe('SocialInsightsCron', () => {
     const now = jest.spyOn(Date, 'now').mockImplementation(() => start + elapsed);
     pull.mockImplementation(async () => {
       elapsed += 30 * 60_000;
-      return { posts: 0, accounts: 0, errors: 0, skipped: false };
+      return { posts: 0, accounts: 0, errors: 0, processed: 1, skipped: false };
     });
 
     try {

@@ -125,6 +125,96 @@ beforeEach(() => {
   safeFetch.mockReset();
 });
 
+/**
+ * Meta retires insights metrics on a schedule and a retired name fails the
+ * WHOLE comma-separated call with `(#100) The value must be a valid insights
+ * metric`, naming nothing. The names this file shipped with were already dead
+ * by Graph v25 — production proved it on the first sweep — so the reader now
+ * narrows rather than carrying a list that goes stale.
+ *
+ * These tests are about that behaviour, not about today's metric names: they
+ * assert the WALK (retry only on an invalid-metric error, stop on anything
+ * else, prefer the widest set that answers), which is what has to survive the
+ * next deprecation.
+ */
+describe('Meta insights — narrowing when a metric has been retired', () => {
+  const INVALID_METRIC = metaError('(#100) The value must be a valid insights metric', 100);
+
+  beforeEach(() => {
+    process.env.META_APP_ID = 'app';
+    process.env.META_APP_SECRET = 'secret';
+  });
+
+  it('drops to the next set when the widest one names a dead metric', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphFail(INVALID_METRIC))
+      .mockResolvedValueOnce(
+        graphOk({ data: [metric('post_media_view', 120), metric('post_clicks', 7)] }),
+      );
+
+    const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'post_1');
+
+    expect(r.ok).toBe(true);
+    expect(r.data?.impressions).toBe(120);
+    expect(metaFetch).toHaveBeenCalledTimes(2);
+    // The second call asked for strictly fewer metrics than the first.
+    const first = metaFetch.mock.calls[0][1].query.metric.split(',');
+    const second = metaFetch.mock.calls[1][1].query.metric.split(',');
+    expect(second.length).toBeLessThan(first.length);
+  });
+
+  it('gives up after the last set and reports the provider verbatim', async () => {
+    metaFetch.mockResolvedValue(graphFail(INVALID_METRIC));
+
+    const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'post_1');
+
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('valid insights metric');
+    // Every set was tried, and no more than that.
+    expect(metaFetch).toHaveBeenCalledTimes(3);
+    // A dead metric is not a dead token and not a missing grant.
+    expect(r.isAuthError).toBeFalsy();
+    expect(r.permissionDenied).toBeFalsy();
+  });
+
+  it('does NOT narrow on a permission error — fewer metrics cannot grant a scope', async () => {
+    metaFetch.mockResolvedValueOnce(
+      graphFail(metaError('(#10) Application does not have permission for this action', 10)),
+    );
+
+    const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'post_1');
+
+    expect(r.ok).toBe(false);
+    expect(r.permissionDenied).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the legacy metric name when a Page still answers with it', async () => {
+    // Asking for the old names is what stopped working; receiving them did not.
+    metaFetch.mockResolvedValueOnce(
+      graphOk({ data: [metric('post_impressions', 55), metric('post_clicks', 2)] }),
+    );
+
+    const r = await fetchPostInsights(account({ network: 'FACEBOOK' }), 'post_1');
+
+    expect(r.ok).toBe(true);
+    expect(r.data?.impressions).toBe(55);
+  });
+
+  it('does not invent a follower count the Page never stated', async () => {
+    // `num(undefined)` is 0, and 0 followers is a claim about the business.
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ id: 'page_1' }))
+      .mockResolvedValueOnce(graphOk({ data: [metric('page_media_view', 9)] }));
+
+    const r = await fetchAccountInsights(account({ network: 'FACEBOOK' }));
+
+    expect(r.ok).toBe(true);
+    expect(r.data?.followers).toBeUndefined();
+    expect(r.data?.impressions).toBe(9);
+  });
+});
+
 describe('networkSupportsInsights', () => {
   it('is true only for the networks with a readable API', () => {
     for (const n of ['FACEBOOK', 'INSTAGRAM', 'INSTAGRAM_LOGIN', 'LINKEDIN', 'TIKTOK', 'TWITTER']) {
@@ -257,13 +347,29 @@ describe('Instagram insights (Page-linked)', () => {
     expect(r.data).toMatchObject({ impressions: 900, reach: 700, saves: 11, likes: 60, engagements: 78 });
   });
 
+  it('post: asks for the CURRENT metric names first, not the retired ones', async () => {
+    // Meta retired `impressions` and `plays` for media insights in the 2025-04
+    // wave. Both sets this file used to send were made of retired names, so a
+    // correctly-scoped token could only ever get an error back.
+    metaFetch.mockResolvedValueOnce(
+      graphOk({ data: [metric('views', 900), metric('reach', 700), metric('saved', 11)] }),
+    );
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'IGMEDIA1');
+    expect(metaFetch).toHaveBeenCalledTimes(1);
+    const asked = metaFetch.mock.calls[0][1].query.metric;
+    expect(asked).toContain('views');
+    expect(asked).not.toContain('impressions');
+    // A feed view IS the impression count under the new name.
+    expect(r.data).toMatchObject({ impressions: 900, reach: 700, saves: 11 });
+  });
+
   it('post: a Reel 400 on the feed metric set is retried with the reels set', async () => {
     metaFetch
       .mockResolvedValueOnce(graphFail(metaError('(#100) metric[0] must be a valid insights metric', 100)))
       .mockResolvedValueOnce(
         graphOk({
           data: [
-            metric('plays', 5000),
+            metric('views', 5000),
             metric('reach', 4200),
             metric('likes', 300),
             metric('comments', 20),
@@ -275,9 +381,42 @@ describe('Instagram insights (Page-linked)', () => {
     const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'REEL1');
     expect(r.ok).toBe(true);
     expect(metaFetch).toHaveBeenCalledTimes(2);
-    expect(metaFetch.mock.calls[1][1].query.metric).toContain('plays');
-    // plays is a VIDEO VIEW, never folded into impressions.
+    // The Reels set is the one without `saved` — that is what distinguishes it
+    // now that both kinds report the same view metric.
+    const asked = metaFetch.mock.calls[1][1].query.metric;
+    expect(asked).toContain('total_interactions');
+    expect(asked).not.toContain('saved');
+    // A REEL's view is a video play, never folded into impressions — across a
+    // mixed feed that would count the same eyeball twice.
     expect(r.data).toMatchObject({ videoViews: 5000, impressions: 0, reach: 4200, engagements: 400 });
+  });
+
+  it('post: falls back to the retired names for an app still on an older Graph version', async () => {
+    // Both modern sets rejected, then the legacy feed set answers. This is the
+    // only reason the legacy sets are still sent at all.
+    const mismatch = graphFail(metaError('(#100) metric[0] must be a valid insights metric', 100));
+    metaFetch
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(graphOk({ data: [metric('impressions', 120), metric('reach', 90)] }));
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'OLDMEDIA');
+    expect(r.ok).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(3);
+    expect(metaFetch.mock.calls[2][1].query.metric).toContain('impressions');
+    expect(r.data).toMatchObject({ impressions: 120, reach: 90 });
+  });
+
+  it('post: a legacy Reel keeps plays out of impressions', async () => {
+    const mismatch = graphFail(metaError('(#100) metric[0] must be a valid insights metric', 100));
+    metaFetch
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(graphOk({ data: [metric('plays', 777), metric('reach', 600)] }));
+    const r = await fetchPostInsights(account({ network: 'INSTAGRAM' }), 'OLDREEL');
+    expect(r.ok).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(4);
+    expect(r.data).toMatchObject({ videoViews: 777, impressions: 0, reach: 600 });
   });
 
   it('post: a non-metric error is NOT retried', async () => {
@@ -318,6 +457,47 @@ describe('Instagram insights (Page-linked)', () => {
       );
     const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
     expect(r.data).toMatchObject({ followers: 5000, impressions: 30, reach: 25, profileViews: 7 });
+  });
+
+  it('account: asks for `views`, not the retired account-level `impressions`', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 5000, media_count: 40 }))
+      .mockResolvedValueOnce(
+        graphOk({ data: [metric('views', 30), metric('reach', 25), metric('profile_views', 7)] }),
+      );
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    // Call 0 is the node read; call 1 is the insights edge.
+    const asked = metaFetch.mock.calls[1][1].query.metric;
+    expect(asked).toContain('views');
+    expect(asked).not.toContain('impressions');
+    expect(r.data).toMatchObject({ impressions: 30, reach: 25, profileViews: 7 });
+  });
+
+  it('account: narrows on a metric complaint the Instagram edge words its own way', async () => {
+    // The account edge has not been consistent about the error CODE across
+    // versions, so the Instagram predicate matches on the wording alone —
+    // otherwise a retired metric would surface as a hard failure and take the
+    // followers count down with it.
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 5000 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#12) metric[0] does not support this period', 12)))
+      .mockResolvedValueOnce(
+        graphOk({ data: [metric('impressions', 9), metric('reach', 8), metric('profile_views', 2)] }),
+      );
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    expect(r.ok).toBe(true);
+    expect(metaFetch).toHaveBeenCalledTimes(3);
+    expect(r.data).toMatchObject({ followers: 5000, impressions: 9, reach: 8, profileViews: 2 });
+  });
+
+  it('account: a permission error is NOT narrowed — it degrades on the first try', async () => {
+    metaFetch
+      .mockResolvedValueOnce(graphOk({ followers_count: 5000 }))
+      .mockResolvedValueOnce(graphFail(metaError('(#10) requires instagram_manage_insights', 10)));
+    const r = await fetchAccountInsights(account({ network: 'INSTAGRAM' }));
+    expect(metaFetch).toHaveBeenCalledTimes(2);
+    expect(r.data).toMatchObject({ followers: 5000 });
+    expect(r.permissionDenied).toBe(true);
   });
 });
 
@@ -728,22 +908,78 @@ describe('permissionDenied', () => {
     expect(dead.permissionDenied).toBe(false);
   });
 
-  it('LinkedIn account: a denied PAGE-STATS call does NOT flag the scope', async () => {
-    // The deliberate exception to the Meta rule, and the reason the flag is set
-    // per call rather than per network. LinkedIn's split is two calls behind TWO
-    // grants: organizationPageStatistics wants the organization-admin product,
-    // while the post reads want r_organization_social. Denying page views says
-    // nothing about share statistics, and stopping the post loop on it would
-    // throw away numbers we can actually read.
+  /**
+   * The three LinkedIn cases below are one behaviour told in three parts, and
+   * they are split this way because the first of them cannot stand alone.
+   *
+   * `permissionDenied` is set per CALL, not per network, and LinkedIn is the
+   * reason: its account read is two calls behind TWO grants —
+   * organizationPageStatistics wants the organization-admin product, while the
+   * post reads want r_organization_social — so a refusal of the second predicts
+   * nothing about the post loop, and stopping on it would throw away numbers we
+   * can actually read. Meta's split is two calls behind ONE grant, which is why
+   * its second call DOES set the flag.
+   *
+   * The first test used to be named for a decision the code does not make. The
+   * page-stats branch returns `okResult(...)` and never reaches
+   * isLinkedinPermissionError at all, so an assertion that the flag is falsy is
+   * satisfied by the SHAPE of that branch — which means it stayed green with the
+   * predicate neutered to `false` or widened to every status, and said so under a
+   * name that implied it had checked. It is worth keeping, because it is the
+   * thing that fails the day somebody "fixes the inconsistency" by wiring the
+   * predicate into the degrade path; it is now named for that and nothing more.
+   * The two tests after it are what actually exercise the predicate, on the
+   * PRIMARY call, where its verdict is used.
+   */
+  it('LinkedIn account: the page-stats branch degrades and never consults the predicate', async () => {
     liRest
       .mockResolvedValueOnce(liOk({ firstDegreeSize: 8400 }))
       .mockResolvedValueOnce(liFail('Not enough permissions', 403));
     const r = await fetchAccountInsights(
       account({ network: 'LINKEDIN', accountType: 'LI_ORG', externalId: '5' }),
     );
+    // The whole call is a SUCCESS carrying the follower number, with the second
+    // call's refusal recorded as data rather than promoted to a verdict — that
+    // is the degrade path, and it is what makes the flag falsy here.
     expect(r.ok).toBe(true);
     expect(r.data.followers).toBe(8400);
+    expect((r.data.raw as any).pageStatsError).toContain('Not enough permissions');
+    expect(r.error).toBeFalsy();
     expect(r.permissionDenied).toBeFalsy();
+  });
+
+  it('LinkedIn account: a 403 on the PRIMARY networkSizes call DOES flag the scope', async () => {
+    // networkSizes IS r_organization_social — the same grant the post loop needs
+    // — so this refusal is the whole answer for the account and the sweep must
+    // stop rather than spend five hundred calls learning it again. Unlike the
+    // page-stats case above, this one goes through isLinkedinPermissionError, so
+    // neutering that predicate fails here.
+    liRest.mockResolvedValueOnce(liFail('Not enough permissions to access: GET networkSizes', 403));
+    const r = await fetchAccountInsights(
+      account({ network: 'LINKEDIN', accountType: 'LI_ORG', externalId: '5' }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.permissionDenied).toBe(true);
+    // And still not a reauth: the token is fine, the product grant is not.
+    // lastError must stay clean or the owner is sent round an OAuth loop that
+    // cannot fix a missing LinkedIn product.
+    expect(r.isAuthError).toBe(false);
+    // The second call is never made once the primary one fails.
+    expect(liRest).toHaveBeenCalledTimes(1);
+  });
+
+  it('LinkedIn account: a 500 on the primary call is a transport failure, not a scope denial', async () => {
+    // The other half of the predicate, and the reason it is a status test rather
+    // than a catch-all: a scope denial is permanent and stops the sweep for this
+    // account, so widening it to any failure would abandon a workspace's numbers
+    // for the rest of an outage that the next tick would have ridden out.
+    liRest.mockResolvedValueOnce(liFail('Internal Server Error', 500));
+    const r = await fetchAccountInsights(
+      account({ network: 'LINKEDIN', accountType: 'LI_ORG', externalId: '5' }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.permissionDenied).toBeFalsy();
+    expect(r.isAuthError).toBe(false);
   });
 
   it('TikTok: scope_not_authorized is a scope denial, an invalid token is not', async () => {

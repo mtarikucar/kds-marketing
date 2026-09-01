@@ -205,6 +205,119 @@ function metaMetric(rows: unknown, name: string): unknown {
   return values[values.length - 1]?.value;
 }
 
+/**
+ * "That metric does not exist any more."
+ *
+ * Meta retires Page and post insights metrics on a schedule — two waves landed
+ * on 2025-11-15 and 2026-06-15 — and the API's response to a retired name is
+ * `(#100) The value must be a valid insights metric`, which fails the WHOLE
+ * comma-separated request. One dead name therefore costs every number in the
+ * call, and the message does not say which name it objected to.
+ *
+ * Code 100 alone is too broad to key on (it is Graph's generic invalid-parameter
+ * code, raised for a malformed id as readily as for a metric), so the message is
+ * part of the test. That is deliberately narrow: a false positive here would
+ * silently downgrade a real error into a retry with fewer metrics.
+ */
+function isMetaInvalidMetricError(err: { code?: number | null; message?: string }): boolean {
+  if (err?.code !== 100) return false;
+  return /valid insights metric/i.test(err.message ?? '');
+}
+
+/**
+ * Ask for the richest metric set the API will still accept.
+ *
+ * `sets` is ordered widest-first. Each entry is tried in turn, and the NEXT one
+ * is reached only when the failure was specifically an invalid-metric error —
+ * a permission denial, a dead token or a throttle stops immediately, because
+ * narrowing the metric list cannot fix any of those and retrying would spend a
+ * second call to learn the same thing.
+ *
+ * This shape exists because the alternative does not survive contact with Meta.
+ * Hard-coding today's metric names buys perhaps six months: the names in this
+ * file at v19 were already dead by v25, and the whole account read failed on
+ * them rather than returning the numbers that still worked. Degrading means a
+ * retirement costs the columns it actually killed and nothing else — and the
+ * name of the set that answered is returned so the caller can log which one is
+ * carrying production, rather than leaving the next reader to reverse-engineer
+ * it from an empty chart.
+ */
+/**
+ * One flat shape rather than a discriminated union: this project compiles with
+ * `strictNullChecks: false`, under which TypeScript does not narrow a union by
+ * a literal boolean, so `if (!r.ok)` would leave `r.error` unreachable. It is
+ * the same shape `MetaGraphResult` uses for the same reason — `error` is
+ * populated only when `ok` is false.
+ */
+interface NarrowingResult {
+  ok: boolean;
+  /** The accepted payload, when ok. */
+  data: any;
+  /** Which metric set answered — the label from `sets`. Only when ok. */
+  used: string | null;
+  /** Populated only when `ok` is false. */
+  error: any;
+  /** True when at least one wider set was rejected for naming a dead metric. */
+  narrowed: boolean;
+}
+
+async function metaInsightsNarrowing(
+  path: string,
+  token: string,
+  sets: readonly { readonly label: string; readonly metric: string }[],
+  extraQuery: Record<string, string> = {},
+  // The Page graph and the Instagram edges word "no such metric" differently,
+  // and only a metric complaint may cost a retry — a permission or rate-limit
+  // error must surface as itself on the first try. Callers on an Instagram
+  // edge pass the wider predicate rather than loosening the Page one.
+  isRetryable: (err: { code?: number | null; message?: string }) => boolean = isMetaInvalidMetricError,
+): Promise<NarrowingResult> {
+  let narrowed = false;
+  let last: any = null;
+  for (const set of sets) {
+    const r = await metaGraphFetch(path, {
+      accessToken: token,
+      query: { metric: set.metric, ...extraQuery },
+      timeoutMs: 15_000,
+    });
+    if (r.ok) return { ok: true, data: r.data, used: set.label, error: null, narrowed };
+    last = r.error;
+    if (!isRetryable(r.error)) {
+      return { ok: false, data: null, used: null, error: r.error, narrowed };
+    }
+    narrowed = true;
+  }
+  return { ok: false, data: null, used: null, error: last, narrowed };
+}
+
+/**
+ * The Instagram edges' flavour of "that metric is not available here": the
+ * Page-graph wording OR the media-insights wording, and — unlike the Page
+ * predicate — not conditioned on code 100, because the account `/insights`
+ * edge has not been consistent about the code across versions.
+ */
+function isIgInvalidMetricError(err: { code?: number | null; message?: string }): boolean {
+  return isMetaInvalidMetricError(err) || isIgMetricMismatch(err?.message ?? '');
+}
+
+/**
+ * A number the provider actually stated, or `undefined`.
+ *
+ * `num()` turns an absent field into 0, which is right for a metric row (a day
+ * with no impressions really had none) and wrong for a follower COUNT: a Page
+ * that did not return the field has a follower count we do not know, and 0 is a
+ * claim about the business. The two cases need different coercions, so they get
+ * different functions rather than one with a flag.
+ */
+function statedNumber(...candidates: unknown[]): number | undefined {
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const n = Number(c);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  return undefined;
+}
+
 // ──────────────────────────────── is a Meta READ failure actually a dead token?
 
 /**
@@ -322,6 +435,37 @@ export function networkSupportsInsights(network: string): boolean {
 // ───────────────────────────────────────────────────────────────── Facebook
 
 /**
+ * The Facebook metric sets, widest first.
+ *
+ * Meta retires insights metrics on a published schedule and a retired name
+ * fails the WHOLE call, so these are ordered from "everything we would like" to
+ * "the part that has never been deprecated". The narrowing walk in
+ * metaInsightsNarrowing stops at the first set the API accepts.
+ *
+ * Why the widest set is still tried at all, given it is currently the one that
+ * fails: because the replacement names are new and Meta has moved them before.
+ * A list that only asks for today's survivors quietly stops collecting the
+ * richer numbers the moment they come back or are renamed again, and nobody
+ * notices. Asking wide and narrowing on rejection costs one extra call per
+ * account per sweep in the degraded case and self-heals in the other direction.
+ *
+ * `post_clicks` and `post_reactions_by_type_total` are the tail of both lists:
+ * neither appears in any of Meta's deprecation notices, so they are the closest
+ * thing to a floor this API has.
+ */
+const FB_POST_METRIC_SETS = [
+  { label: 'views+reach+clicks+reactions', metric: 'post_media_view,post_total_media_view_unique,post_clicks,post_reactions_by_type_total' },
+  { label: 'views+clicks+reactions', metric: 'post_media_view,post_clicks,post_reactions_by_type_total' },
+  { label: 'clicks+reactions', metric: 'post_clicks,post_reactions_by_type_total' },
+] as const satisfies readonly { label: string; metric: string }[];
+
+const FB_PAGE_METRIC_SETS = [
+  { label: 'views+pageviews', metric: 'page_media_view,page_views_total' },
+  { label: 'views', metric: 'page_media_view' },
+  { label: 'pageviews', metric: 'page_views_total' },
+] as const satisfies readonly { label: string; metric: string }[];
+
+/**
  * Facebook Page post insights.
  *
  * SCOPE: read_insights (plus the already-granted pages_read_engagement), and
@@ -329,11 +473,16 @@ export function networkSupportsInsights(network: string): boolean {
  * rather than an error, which is why an empty payload is reported as an error
  * here instead of being stored as a row of zeros.
  *
- * Metric choice matches what the Page API actually exposes per post:
- *   post_impressions              — total renders
- *   post_impressions_unique       — reach (people, not renders)
+ * Metric names are ORDERED, WIDEST FIRST, and narrowed on rejection — see
+ * metaInsightsNarrowing. Meta retired the impressions family in 2025-11/2026-06
+ * and replaced it with a views family:
+ *   post_media_view               — total views (replaces post_impressions)
+ *   post_total_media_view_unique  — reach (replaces post_impressions_unique)
  *   post_clicks                   — all consumptions (link, photo, other)
  *   post_reactions_by_type_total  — {like, love, wow, ...}; summed into `likes`
+ * The legacy names are still READ out of the response, because a Page that has
+ * not been migrated may answer with them; asking for them is what stopped
+ * working, not receiving them.
  *
  * `engagements` is DERIVED (reactions + clicks) rather than read, because the
  * one metric that would give it directly (post_engaged_users) is a separate
@@ -350,18 +499,17 @@ async function facebookPostInsights(
   const token = revealToken(account);
   if (!token) return failResult('accessToken could not be decrypted');
   try {
-    const r = await metaGraphFetch(`/${externalPostId}/insights`, {
-      accessToken: token,
-      query: {
-        metric: 'post_impressions,post_impressions_unique,post_clicks,post_reactions_by_type_total',
-      },
-      timeoutMs: 15_000,
-    });
+    const r = await metaInsightsNarrowing(`/${externalPostId}/insights`, token, FB_POST_METRIC_SETS);
     if (!r.ok) {
       return failResult(
         `FB post insights: ${r.error.message}`,
         isMetaReauthError(r.error),
         isMetaPermissionError(r.error),
+      );
+    }
+    if (r.used !== FB_POST_METRIC_SETS[0].label) {
+      logger.warn(
+        `FB post insights narrowed to "${r.used}" (${account.externalId}) — Meta retired a metric in the wider set`,
       );
     }
     const rows = r.data?.data;
@@ -371,12 +519,15 @@ async function facebookPostInsights(
     const likes = sumBreakdown(metaMetric(rows, 'post_reactions_by_type_total'));
     const clicks = num(metaMetric(rows, 'post_clicks'));
     return okResult({
-      impressions: num(metaMetric(rows, 'post_impressions')),
-      reach: num(metaMetric(rows, 'post_impressions_unique')),
+      // New name first, legacy second: whichever this Page answers with.
+      impressions: num(metaMetric(rows, 'post_media_view') ?? metaMetric(rows, 'post_impressions')),
+      reach: num(
+        metaMetric(rows, 'post_total_media_view_unique') ?? metaMetric(rows, 'post_impressions_unique'),
+      ),
       clicks,
       likes,
       engagements: likes + clicks,
-      raw: r.data,
+      raw: { ...r.data, metricSet: r.used },
     });
   } catch (e: any) {
     const msg = e?.message ?? String(e);
@@ -430,14 +581,18 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
       );
     }
     // followers_count is the modern field; fan_count is the legacy "likes" and
-    // is the only one some older Pages return. Either answers the question.
-    const followers = num(prof.data?.followers_count ?? prof.data?.fan_count);
+    // is the only one some older Pages return. Either answers the question —
+    // and when NEITHER is present the answer is `undefined`, not 0. A Page that
+    // did not tell us its follower count has one we do not know, and writing 0
+    // would put a number on the chart that the provider never stated.
+    const followers = statedNumber(prof.data?.followers_count, prof.data?.fan_count);
 
-    const ins = await metaGraphFetch(`/${account.externalId}/insights`, {
-      accessToken: token,
-      query: { metric: 'page_impressions,page_views_total', period: 'day' },
-      timeoutMs: 15_000,
-    });
+    const ins = await metaInsightsNarrowing(
+      `/${account.externalId}/insights`,
+      token,
+      FB_PAGE_METRIC_SETS,
+      { period: 'day' },
+    );
     if (!ins.ok) {
       logger.warn(`FB page insights degraded (${account.externalId}): ${ins.error.message}`);
       const data = { followers, raw: { profile: prof.data, insightsError: ins.error.message } };
@@ -445,12 +600,17 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
         ? degradedResult(data, `FB page insights: ${ins.error.message}`)
         : okResult(data);
     }
+    if (ins.used !== FB_PAGE_METRIC_SETS[0].label) {
+      logger.warn(
+        `FB page insights narrowed to "${ins.used}" (${account.externalId}) — Meta retired a metric in the wider set`,
+      );
+    }
     const rows = ins.data?.data;
     return okResult({
       followers,
-      impressions: num(metaMetric(rows, 'page_impressions')),
+      impressions: num(metaMetric(rows, 'page_media_view') ?? metaMetric(rows, 'page_impressions')),
       profileViews: num(metaMetric(rows, 'page_views_total')),
-      raw: { profile: prof.data, insights: ins.data },
+      raw: { profile: prof.data, insights: ins.data, metricSet: ins.used },
     });
   } catch (e: any) {
     const msg = e?.message ?? String(e);
@@ -461,15 +621,84 @@ async function facebookAccountInsights(account: AccountRow): Promise<InsightsRes
 
 // ────────────────────────────────────────────── Instagram (Page-linked, Meta)
 
-/** Feed/carousel media metric set. */
-const IG_FEED_METRICS = 'impressions,reach,saved,likes,comments,shares';
 /**
- * Reels metric set. Reels do NOT support `impressions` or `saved` and the API
- * rejects the whole request with a 400 when an unsupported metric is present —
- * it does not skip the bad one. Since the media type is not stored on
- * SocialPostTarget, the only way to find out is to ask and be told.
+ * Instagram media metric sets, tried in this order.
+ *
+ * TWO problems are being solved at once here, and they interact.
+ *
+ * The first is the media TYPE. Reels do not support `saved` (nor `impressions`
+ * back when it existed) and the API rejects the whole request with a 400 when
+ * an unsupported metric is present — it does not skip the bad one. Nothing in
+ * our schema records whether a media id is a Reel: the publisher knew (it
+ * chose REELS) but SocialPostTarget does not persist it. So we ask and are
+ * told.
+ *
+ * The second is that Meta RETIRED `impressions` and `plays` for media insights
+ * in the 2025-04 wave and replaced both with one metric, `views`. Both sets
+ * this file used to send were made entirely of retired names, so on a
+ * correctly-scoped token IG media insights could only ever return an error —
+ * the same wave that took out the Facebook page metrics. It hid here longer
+ * because this arm already had a metric-error retry, so a failure looked like
+ * the ordinary feed→Reel fallback doing its job.
+ *
+ * The legacy sets stay last so an app still pinned to an older Graph version
+ * keeps working; a modern one never reaches them.
+ *
+ * `views` is reported for BOTH media kinds, so the metric NAME no longer says
+ * whether a number is an impression or a video play. Which SET answered does —
+ * hence `kind`, which mapIgMediaMetrics uses to avoid filing a Reel's plays as
+ * impressions (and double-counting the same eyeball across a mixed feed).
  */
-const IG_REEL_METRICS = 'plays,reach,likes,comments,shares,total_interactions';
+const IG_MEDIA_METRIC_SETS = [
+  { label: 'feed', kind: 'FEED', metric: 'views,reach,saved,likes,comments,shares' },
+  { label: 'reel', kind: 'REEL', metric: 'views,reach,likes,comments,shares,total_interactions' },
+  { label: 'feed-legacy', kind: 'FEED', metric: 'impressions,reach,saved,likes,comments,shares' },
+  { label: 'reel-legacy', kind: 'REEL', metric: 'plays,reach,likes,comments,shares,total_interactions' },
+] as const satisfies readonly { label: string; kind: string; metric: string }[];
+
+/**
+ * Account-level sets. Same retirement, one metric narrower each step: `views`
+ * replaced `impressions`, and `reach`/`profile_views` were untouched.
+ */
+const IG_ACCOUNT_METRIC_SETS = [
+  { label: 'views+reach+profileviews', metric: 'views,reach,profile_views' },
+  // Legacy BEFORE the bare set: an app on an older Graph version rejects
+  // `views` and would otherwise settle for the bare set and silently drop the
+  // impressions column it could still have had.
+  { label: 'impressions+reach+profileviews', metric: 'impressions,reach,profile_views' },
+  { label: 'reach+profileviews', metric: 'reach,profile_views' },
+] as const satisfies readonly { label: string; metric: string }[];
+
+/** Flat by design — see NarrowingResult; strictNullChecks is off in this build. */
+interface IgMediaResult {
+  ok: boolean;
+  data: any;
+  kind: string | null;
+  used: string | null;
+  message: string;
+}
+
+/**
+ * Walk IG_MEDIA_METRIC_SETS until one answers, retrying ONLY on a
+ * metric-availability complaint. Parameterised by the fetch because the
+ * Page-linked arm goes through metaGraphFetch and the Instagram-Login arm
+ * through a bearer-token call to a different host — same dialect, different
+ * transport, one policy.
+ */
+async function igMediaNarrowing(
+  get: (metric: string) => Promise<{ ok: boolean; body: any; message: string }>,
+): Promise<IgMediaResult> {
+  let last = '';
+  for (const set of IG_MEDIA_METRIC_SETS) {
+    const r = await get(set.metric);
+    if (r.ok) return { ok: true, data: r.body, kind: set.kind, used: set.label, message: '' };
+    last = r.message;
+    if (!isIgMetricMismatch(r.message)) {
+      return { ok: false, data: null, kind: null, used: null, message: r.message };
+    }
+  }
+  return { ok: false, data: null, kind: null, used: null, message: last };
+}
 
 /**
  * True when a Graph error is the "you asked for a metric this media type does
@@ -508,28 +737,29 @@ async function instagramPostInsights(
   const token = revealToken(account);
   if (!token) return failResult('accessToken could not be decrypted');
   try {
-    let r = await metaGraphFetch(`/${externalPostId}/insights`, {
-      accessToken: token,
-      query: { metric: IG_FEED_METRICS },
-      timeoutMs: 15_000,
-    });
-    if (!r.ok && isIgMetricMismatch(r.error.message)) {
-      r = await metaGraphFetch(`/${externalPostId}/insights`, {
+    // The last error is kept so a non-metric failure (permission, dead token)
+    // can still be classified by the predicates that need the error OBJECT,
+    // which the transport-agnostic narrowing helper does not carry.
+    let lastError: any = null;
+    const r = await igMediaNarrowing(async (metric) => {
+      const g = await metaGraphFetch(`/${externalPostId}/insights`, {
         accessToken: token,
-        query: { metric: IG_REEL_METRICS },
+        query: { metric },
         timeoutMs: 15_000,
       });
-    }
+      if (!g.ok) lastError = g.error;
+      return { ok: g.ok, body: g.data, message: g.ok ? '' : g.error.message };
+    });
     if (!r.ok) {
       return failResult(
-        `IG media insights: ${r.error.message}`,
-        isMetaReauthError(r.error),
-        isMetaPermissionError(r.error),
+        `IG media insights: ${r.message}`,
+        isMetaReauthError(lastError),
+        isMetaPermissionError(lastError),
       );
     }
     const rows = r.data?.data;
     if (!Array.isArray(rows) || rows.length === 0) return failResult('IG media insights: empty payload');
-    return okResult(mapIgMediaMetrics(rows, r.data));
+    return okResult(mapIgMediaMetrics(rows, r.data, r.kind, r.used));
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Instagram media insights error (${account.externalId}): ${msg}`);
@@ -538,28 +768,38 @@ async function instagramPostInsights(
 }
 
 /**
- * Fold either metric set into one PostInsights. `plays` (Reels) is a video
- * view, not an impression, so it maps to videoViews and NOT to impressions —
- * summing the two across a mixed feed would double-count the same eyeball.
- * `total_interactions` is Instagram's own engagement roll-up when present;
- * otherwise engagements is derived from the four interaction counts.
+ * Fold whichever metric set answered into one PostInsights.
+ *
+ * A Reel's view is a video play, not an impression, so it must NOT land in
+ * `impressions` — across a mixed feed that would count the same eyeball twice.
+ * The old code could tell them apart by NAME (`plays` vs `impressions`); with
+ * both folded into `views` it cannot, so the set that answered decides. Legacy
+ * names are still read second, which is what makes the legacy sets useful
+ * rather than merely accepted.
  */
-function mapIgMediaMetrics(rows: unknown, raw: unknown): PostInsights {
+function mapIgMediaMetrics(
+  rows: unknown,
+  raw: unknown,
+  kind: string | null,
+  metricSet: string | null,
+): PostInsights {
   const likes = num(metaMetric(rows, 'likes'));
   const comments = num(metaMetric(rows, 'comments'));
   const shares = num(metaMetric(rows, 'shares'));
   const saves = num(metaMetric(rows, 'saved'));
   const total = metaMetric(rows, 'total_interactions');
+  const views = metaMetric(rows, 'views');
+  const isReel = kind === 'REEL';
   return {
-    impressions: num(metaMetric(rows, 'impressions')),
+    impressions: num(isReel ? metaMetric(rows, 'impressions') : views ?? metaMetric(rows, 'impressions')),
     reach: num(metaMetric(rows, 'reach')),
-    videoViews: num(metaMetric(rows, 'plays')),
+    videoViews: num(isReel ? views ?? metaMetric(rows, 'plays') : metaMetric(rows, 'plays')),
     likes,
     comments,
     shares,
     saves,
     engagements: total !== undefined ? num(total) : likes + comments + shares + saves,
-    raw,
+    raw: metricSet ? { payload: raw, metricSet } : raw,
   };
 }
 
@@ -595,25 +835,30 @@ async function instagramAccountInsights(account: AccountRow): Promise<InsightsRe
     }
     const followers = num(prof.data?.followers_count);
 
-    const ins = await metaGraphFetch(`/${account.externalId}/insights`, {
-      accessToken: token,
-      query: { metric: 'impressions,reach,profile_views', period: 'day' },
-      timeoutMs: 15_000,
-    });
+    // Account-level `impressions` went in the same 2025-04 wave as the media
+    // one, replaced by `views`. `reach` and `profile_views` survived it, so
+    // narrowing only ever has to give up the one retired name.
+    const ins = await metaInsightsNarrowing(
+      `/${account.externalId}/insights`,
+      token,
+      IG_ACCOUNT_METRIC_SETS,
+      { period: 'day' },
+      isIgInvalidMetricError,
+    );
     if (!ins.ok) {
-      logger.warn(`IG account insights degraded (${account.externalId}): ${ins.error.message}`);
-      const data = { followers, raw: { profile: prof.data, insightsError: ins.error.message } };
+      logger.warn(`IG account insights degraded (${account.externalId}): ${ins.error?.message}`);
+      const data = { followers, raw: { profile: prof.data, insightsError: ins.error?.message } };
       return isMetaPermissionError(ins.error)
-        ? degradedResult(data, `IG account insights: ${ins.error.message}`)
+        ? degradedResult(data, `IG account insights: ${ins.error?.message}`)
         : okResult(data);
     }
     const rows = ins.data?.data;
     return okResult({
       followers,
-      impressions: num(metaMetric(rows, 'impressions')),
+      impressions: num(metaMetric(rows, 'views') ?? metaMetric(rows, 'impressions')),
       reach: num(metaMetric(rows, 'reach')),
       profileViews: num(metaMetric(rows, 'profile_views')),
-      raw: { profile: prof.data, insights: ins.data },
+      raw: { profile: prof.data, insights: ins.data, metricSet: ins.used },
     });
   } catch (e: any) {
     const msg = e?.message ?? String(e);
@@ -686,22 +931,30 @@ async function instagramDirectPostInsights(
   const token = revealToken(account);
   if (!token) return failResult('accessToken could not be decrypted');
   try {
-    let r = await igDirectGet(token, `/${externalPostId}/insights`, { metric: IG_FEED_METRICS });
-    const firstMessage = String(r.json?.error?.message ?? '');
-    if (!r.ok && isIgMetricMismatch(firstMessage)) {
-      r = await igDirectGet(token, `/${externalPostId}/insights`, { metric: IG_REEL_METRICS });
-    }
+    // Same shape as the Page-linked arm; the last raw response is kept because
+    // this host's auth/permission predicates read the BODY and the status.
+    let lastStatus = 0;
+    let lastJson: any = null;
+    const r = await igMediaNarrowing(async (metric) => {
+      const g = await igDirectGet(token, `/${externalPostId}/insights`, { metric });
+      lastStatus = g.status;
+      lastJson = g.json;
+      return {
+        ok: g.ok,
+        body: g.json,
+        message: g.ok ? '' : String(g.json?.error?.message ?? `HTTP ${g.status}`),
+      };
+    });
     if (!r.ok) {
-      const msg = String(r.json?.error?.message ?? `HTTP ${r.status}`);
       return failResult(
-        `IG media insights: ${msg}`,
-        isIgDirectAuthError(r.status, r.json),
-        isIgDirectPermissionError(r.json),
+        `IG media insights: ${r.message}`,
+        isIgDirectAuthError(lastStatus, lastJson),
+        isIgDirectPermissionError(lastJson),
       );
     }
-    const rows = r.json?.data;
+    const rows = r.data?.data;
     if (!Array.isArray(rows) || rows.length === 0) return failResult('IG media insights: empty payload');
-    return okResult(mapIgMediaMetrics(rows, r.json));
+    return okResult(mapIgMediaMetrics(rows, r.data, r.kind, r.used));
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Instagram (Login) media insights error (${account.externalId}): ${msg}`);

@@ -163,18 +163,76 @@ export function usesPkce(n: Network): boolean {
 const LINKEDIN_ORG_SCOPES = ['w_organization_social', 'r_organization_social'];
 
 /**
+ * The READ half of each grant — what `network-insights.ts` needs to see how a
+ * published post actually did.
+ *
+ * Every one of these providers grants publishing and reading separately, and
+ * the connect flows have only ever asked for publishing. So the organic
+ * insights pipeline is, on a fresh install, permanently refused: a healthy,
+ * actively-publishing account returns a permission error from every read, and
+ * the panel says so rather than drawing a flat zero line. That is correct
+ * behaviour for a grant nobody asked for — but it is not a state to stay in.
+ *
+ * They are listed here rather than in the definitions above, and gated, for the
+ * same reason LinkedIn's org scopes are: asking for a permission the app has
+ * not been approved for is not free. Meta shows the user a consent screen that
+ * names it and then simply does not grant it (harmless, but it makes the dialog
+ * ask for more than it can deliver); LinkedIn rejects the whole authorize
+ * request; TikTok refuses an unregistered scope outright. Until each app's
+ * review clears, the safe state is to keep asking for exactly what we can use.
+ *
+ * TO TURN ON, per provider, once its review has cleared:
+ *   META_INSIGHTS_SCOPES=1     FACEBOOK read_insights · INSTAGRAM instagram_manage_insights
+ *   IG_LOGIN_INSIGHTS_SCOPES=1 INSTAGRAM_LOGIN instagram_business_manage_insights
+ *   LINKEDIN_ORG_SCOPES=1      r_organization_social (already gated below; org pages only)
+ *   TIKTOK_INSIGHTS_SCOPES=1   video.list + user.info.stats
+ * X already asks for what it needs (`tweet.read` + `users.read`).
+ *
+ * Existing connections are NOT upgraded by flipping a flag — a token carries
+ * the scopes it was minted with, so an account connected before the flag has to
+ * be reconnected before its insights become readable. The Account Center's
+ * reconnect path is the same one it already offers.
+ */
+const INSIGHTS_SCOPES: Partial<Record<Network, { env: string; scopes: string[] }>> = {
+  FACEBOOK: { env: 'META_INSIGHTS_SCOPES', scopes: ['read_insights'] },
+  INSTAGRAM: { env: 'META_INSIGHTS_SCOPES', scopes: ['instagram_manage_insights'] },
+  INSTAGRAM_LOGIN: {
+    env: 'IG_LOGIN_INSIGHTS_SCOPES',
+    scopes: ['instagram_business_manage_insights'],
+  },
+  TIKTOK: { env: 'TIKTOK_INSIGHTS_SCOPES', scopes: ['video.list', 'user.info.stats'] },
+};
+
+/**
  * Effective scopes for a network at request time. LinkedIn's org scopes belong
  * to the Community Management API, which LinkedIn only grants to a separate
  * single-product app after partner review — requesting them from the self-serve
  * app makes LinkedIn reject the ENTIRE authorize request. They stay off until
  * LINKEDIN_ORG_SCOPES is set (i.e. the configured app has CMA access).
+ *
+ * The insights scopes ride the same rule, one env flag per provider — see
+ * INSIGHTS_SCOPES. Both filters are subtractive: the base list is what the app
+ * can actually use today, and a flag only ever ADDS.
  */
 export function scopesFor(n: Network): string[] {
-  const scopes = NETWORK_OAUTH[n].scopes;
+  let scopes = NETWORK_OAUTH[n].scopes;
   if (n === 'LINKEDIN' && !process.env.LINKEDIN_ORG_SCOPES) {
-    return scopes.filter((s) => !LINKEDIN_ORG_SCOPES.includes(s));
+    scopes = scopes.filter((s) => !LINKEDIN_ORG_SCOPES.includes(s));
+  }
+  const insights = INSIGHTS_SCOPES[n];
+  if (insights && process.env[insights.env]) {
+    // De-duplicated: a provider that later folds one of these into its base
+    // grant must not make us send it twice.
+    scopes = [...new Set([...scopes, ...insights.scopes])];
   }
   return scopes;
+}
+
+/** The insights scopes a network would gain, for the connect UI to explain. */
+export function insightsScopesFor(n: Network): { scopes: string[]; enabled: boolean } {
+  const cfg = INSIGHTS_SCOPES[n];
+  if (!cfg) return { scopes: [], enabled: n === 'TWITTER' };
+  return { scopes: cfg.scopes, enabled: !!process.env[cfg.env] };
 }
 
 /**

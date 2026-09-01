@@ -155,6 +155,20 @@ jobs:
           META_WEBHOOK_VERIFY_TOKEN: ${{ secrets.META_WEBHOOK_VERIFY_TOKEN }}
           # Graph API version for ALL Meta calls (optional; empty = code default v19.0).
           GRAPH_API_VERSION: ${{ vars.GRAPH_API_VERSION }}
+          # The READ half of each social grant, one switch per provider's app
+          # review. Unset = the connect flows ask for exactly what they ask for
+          # today and the organic-insights sweep is refused by every network,
+          # which it reports honestly. Set one to `1` AFTER that provider's
+          # review clears; accounts connected before the flip keep the token
+          # they were minted with and have to be reconnected.
+          # See scopesFor()/INSIGHTS_SCOPES in social-oauth.config.ts.
+          META_INSIGHTS_SCOPES: ${{ vars.META_INSIGHTS_SCOPES }}
+          IG_LOGIN_INSIGHTS_SCOPES: ${{ vars.IG_LOGIN_INSIGHTS_SCOPES }}
+          TIKTOK_INSIGHTS_SCOPES: ${{ vars.TIKTOK_INSIGHTS_SCOPES }}
+          # LinkedIn's Community Management API — org posting AND org insights.
+          # Was read from the server's own .env only; wiring it here means the
+          # deploy stops silently reverting whatever ops set by hand.
+          LINKEDIN_ORG_SCOPES: ${{ vars.LINKEDIN_ORG_SCOPES }}
           # WhatsApp Embedded Signup configuration id (Facebook Login for Business
           # config) — enables the tenant one-click "Connect WhatsApp" button.
           META_WHATSAPP_CONFIG_ID: ${{ vars.META_WHATSAPP_CONFIG_ID }}
@@ -268,6 +282,10 @@ jobs:
           META_LOGIN_CONFIG_ID=${META_LOGIN_CONFIG_ID}
           META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
           GRAPH_API_VERSION=${GRAPH_API_VERSION}
+          META_INSIGHTS_SCOPES=${META_INSIGHTS_SCOPES}
+          IG_LOGIN_INSIGHTS_SCOPES=${IG_LOGIN_INSIGHTS_SCOPES}
+          TIKTOK_INSIGHTS_SCOPES=${TIKTOK_INSIGHTS_SCOPES}
+          LINKEDIN_ORG_SCOPES=${LINKEDIN_ORG_SCOPES}
           META_WHATSAPP_CONFIG_ID=${META_WHATSAPP_CONFIG_ID}
           R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
           R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
@@ -368,6 +386,31 @@ jobs:
             mv docker-compose.prod.yml.new docker-compose.prod.yml
           "
 
+      # Remember what is CURRENTLY serving, before anything is swapped.
+      #
+      # `up -d` destroys the running container, so by the time the health gate
+      # below fails there is nothing left to fall back to and no record of what
+      # was there — which is how a failed boot became a manual outage rather
+      # than a failed-safe deploy. The tag is read off the live container rather
+      # than from .env.production because the env file is rewritten by the step
+      # above: on a re-run or a partial failure it may already name the version
+      # we are trying to escape from.
+      - name: Remember the currently-serving tag
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=15 root@${{ env.SERVER_HOST }} "
+            set -euo pipefail
+            cd ${{ env.DEPLOY_DIR }}
+            prev=\$(docker inspect --format '{{.Config.Image}}' kds_marketing_api 2>/dev/null | sed 's/.*://' || true)
+            if [ -n \"\$prev\" ] && [ \"\$prev\" != 'current' ]; then
+              echo \"\$prev\" > .last-good-tag
+              echo \"previous good tag: \$prev\"
+            else
+              rm -f .last-good-tag
+              echo 'no previous tag recorded (first deploy or unpinned image) — rollback will be skipped'
+            fi
+          "
+
       - name: Pull + swap + health-gate
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -393,6 +436,54 @@ jobs:
             done
             echo '::error::API did not become healthy — recent backend logs:'
             docker logs --tail 80 kds_marketing_api || true
+            exit 1
+          "
+
+      # The failed-safe half. Without it, a health-gate failure leaves production
+      # down until a human notices — the old container is already gone.
+      #
+      # 🔴 THIS RESTORES THE APPLICATION, NOT THE DATABASE. Migrations run at
+      # container boot (`prisma migrate deploy` in the compose command) and
+      # Prisma has no down migrations, so anything the new release's SQL already
+      # applied stays applied. Rolling back to an older image means running that
+      # image against a NEWER schema. Additive migrations (a new table, a new
+      # nullable column, an index) are safe that way and are the shape this repo
+      # ships; a destructive one is not, and the release notes have to say so.
+      #
+      # It also cannot help when the failure IS the migration: a migration that
+      # aborts leaves a failed row in `_prisma_migrations`, and every later boot
+      # — including this rollback's — stops with P3009 until someone runs
+      # `prisma migrate resolve`. The step says so out loud rather than looping.
+      - name: Roll back to the previous tag
+        if: failure()
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=15 root@${{ env.SERVER_HOST }} "
+            set -euo pipefail
+            cd ${{ env.DEPLOY_DIR }}
+            if [ ! -f .last-good-tag ]; then
+              echo '::error::no previous tag recorded — cannot roll back automatically'
+              exit 1
+            fi
+            prev=\$(cat .last-good-tag)
+            echo \"rolling back to \$prev\"
+            if docker logs --tail 200 kds_marketing_api 2>&1 | grep -q 'P3009'; then
+              echo '::error::a migration failed and is recorded as failed (P3009). Rolling the image back will NOT clear it — the next boot aborts too. Run: docker compose run --rm --no-deps backend npx prisma migrate resolve --rolled-back <name>'
+            fi
+            sed -i \"s/^IMAGE_TAG=.*/IMAGE_TAG=\$prev/\" .env.production
+            cp .env.production .env
+            docker compose -f docker-compose.prod.yml up -d
+            echo 'waiting for the restored API ...'
+            for i in \$(seq 1 24); do
+              code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5                 http://localhost:3211/api/marketing/billing/packages || true)
+              if [ \"\$code\" = '200' ]; then
+                echo \"::warning::deploy failed; rolled back to \$prev and it is serving (attempt \$i)\"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo '::error::rollback did NOT come up either — production is down, manual intervention required:'
+            docker logs --tail 120 kds_marketing_api || true
             exit 1
           "
 

@@ -255,10 +255,18 @@ export default function IdeasPanel() {
         );
         return;
       }
+      // `actionCount` is OPTIONAL on the client type, and `?? 0` turned that
+      // "the server did not say" into the flat claim that the expensive,
+      // destructive re-synthesis produced NOTHING — over a list that is at the
+      // same moment refetching and about to fill with ideas. A count we were
+      // not given is not a count of zero; say the plan is ready and let the
+      // panel below it do the counting.
       toast.success(
-        t('strategy.ideas.refreshDone', 'Yeni plan hazır: {{count}} fikir', {
-          count: r.actionCount ?? 0,
-        }),
+        Number.isFinite(r.actionCount)
+          ? t('strategy.ideas.refreshDone', 'Yeni plan hazır: {{count}} fikir', {
+              count: r.actionCount,
+            })
+          : t('strategy.ideas.refreshDoneNoCount', 'Yeni plan hazır'),
       );
     },
     onError: (e: any) =>
@@ -378,11 +386,24 @@ export default function IdeasPanel() {
                       /* `fitScore` is a FRACTION (the backend's zod is
                          min(0).max(1)) — the console once fed the raw value to a
                          percentage bar and painted its strongest recommendation,
-                         0.9, as a one-percent sliver. Clamp, then convert. */
-                      const pct = Math.round(Math.min(Math.max(c.fitScore ?? 0, 0), 1) * 100);
+                         0.9, as a one-percent sliver. Clamp, then convert.
+
+                         `null` when there is no score to convert, and the badge
+                         then carries the channel name alone. The old `?? 0`
+                         printed "reddit · 0%" for a brief whose channel simply
+                         has no fitScore — an LLM-written JSON blob, so the
+                         field's presence is a hope rather than a guarantee — and
+                         0% is not an absent rating, it is the strategist saying
+                         this channel is worthless. That is a recommendation the
+                         data never made, in the one place on the screen where a
+                         person decides where to spend their week. */
+                      const raw = c.fitScore;
+                      const pct = Number.isFinite(raw)
+                        ? Math.round(Math.min(Math.max(raw, 0), 1) * 100)
+                        : null;
                       return (
                         <Badge key={c.key} tone="info" size="sm">
-                          {c.key} · {pct}%
+                          {pct === null ? c.key : `${c.key} · ${pct}%`}
                         </Badge>
                       );
                     })}
@@ -467,7 +488,9 @@ export default function IdeasPanel() {
                                 {t(meta.labelKey, meta.label)}
                               </Badge>
                               <Badge tone={prio.tone} size="sm">
-                                {t(prio.labelKey, prio.label)}
+                                {/* No key means the label is the backend's own
+                                    raw priority string — see priorityMeta. */}
+                                {prio.labelKey ? t(prio.labelKey, prio.label) : prio.label}
                               </Badge>
                             </div>
 

@@ -78,6 +78,33 @@ describe('GrowthStudioPage', () => {
     expect(screen.getByRole('tab', { name: 'AI Stüdyo' })).toHaveAttribute('data-state', 'active');
   });
 
+  /**
+   * UGC Personas' SECOND named door, pinned.
+   *
+   * The 2026-09 audit read the drawer's `DEEP_LINKS` row as this page's only
+   * entry and called it buried. The decision — recorded in prose on that row in
+   * StudioToolsDrawer — is that it stays a deep link, and the argument rests on
+   * this: `?view=tools&tab=create` is a two-tab strip whose second tab names the
+   * page in full, so it is also one click inside a surface the permanent tools
+   * menu links to by name. That argument is only worth anything while the tab
+   * exists, and nothing was holding it there. Now something is.
+   *
+   * A guard, not a bug fix: it passes today. It fails the day somebody removes
+   * the sub-tab, which is the day the decision above stops being true.
+   */
+  it('names UGC Personaları as a tab of its own, not only as a deep link', () => {
+    renderAt('/studio?view=tools&tab=create');
+    expect(screen.getByRole('tab', { name: 'UGC Personaları' })).toBeInTheDocument();
+  });
+
+  it('opens straight onto it from the deep link the drawer offers', () => {
+    renderAt('/studio?view=tools&tab=create&sub=personas');
+    expect(screen.getByRole('tab', { name: 'UGC Personaları' })).toHaveAttribute(
+      'data-state',
+      'active',
+    );
+  });
+
   it('keeps all five tool tabs, and no Autopilot tab among them', () => {
     renderAt('/studio?view=tools');
     for (const label of ['İçerik Takvimi', 'Üret', 'Kampanyalar', 'Trendler', 'Diğer']) {

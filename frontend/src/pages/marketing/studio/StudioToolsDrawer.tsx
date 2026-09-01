@@ -493,6 +493,30 @@ const DEEP_LINKS: Array<{ to: string; key: string; label: string; role?: Marketi
   // (ManagerTab) — this is the half that stops offering the door.
   { to: '/studio?view=tools&tab=campaigns&sub=planner', key: 'studio.tools.link.planner', label: 'Sosyal planlayıcı', role: MarketingRole.MANAGER },
   { to: '/studio?view=tools&tab=trends', key: 'studio.tools.link.trends', label: 'Trendler' },
+  /**
+   * UGC Personas stays a deep link, and this is the note that says so on
+   * purpose rather than by omission.
+   *
+   * The 2026-09 audit read this row as the page's only door and called it
+   * buried — a dropdown, inside a drawer, that you can only open by first
+   * opening the drawer on some unrelated tool. Half of that is true. The other
+   * half is that this is not the only door: `?view=tools&tab=create` renders a
+   * two-tab strip whose second tab is named "UGC Personaları" in full, so the
+   * page is also one click inside a surface the permanent tools menu links to
+   * by name. Two named paths, and `GrowthStudioPage.test.tsx` now pins the
+   * second one so it cannot quietly become one.
+   *
+   * Promoting it to a `?tool=` of its own — the obvious fix — was rejected on
+   * proportion. Every other row in this list is in exactly the same position:
+   * Kampanyalar, Trendler, Raporlar and Strateji are all tabs of that same
+   * surface plus a row here, and all four are used far more often than a
+   * persona library a workspace configures once and then draws on from inside
+   * the AI Studio. Giving personas a front-door menu entry would make it the
+   * single most prominent thing on this screen that has no entry in the
+   * product's navigation at all, ahead of four destinations that do. If this
+   * list's depth is the problem, it is the LIST's problem and the fix is the
+   * whole list, not the one row an audit happened to open.
+   */
   { to: '/studio?view=tools&tab=create&sub=personas', key: 'studio.tools.link.personas', label: 'UGC personaları' },
   // The four routes App.tsx puts behind `requiredRole={MarketingRole.MANAGER}`.
   // Unlike the drawer's own tools these are real navigations, so the router does

@@ -152,6 +152,46 @@ describe('LineTrend', () => {
     expect(screen.getByRole('img', { name: 'a' })).toBeInTheDocument();
   });
 
+  /**
+   * The accessible twin may not assert what the picture refuses to draw.
+   *
+   * These two states are the ones the Growth Studio spends every render in
+   * before its queries land and whenever one of them fails: `AccountStatsPanel`
+   * zero-fills its window up front, so `points` is thirty real zeros long
+   * before there is any data at all. A sighted reader saw a skeleton, then
+   * "Organik veri yok"; a screen-reader user was read thirty confident daily
+   * zeros — the same conflation of "nothing happened" with "we could not ask"
+   * that the empty state exists to prevent, delivered only to the people who
+   * cannot see the empty state.
+   */
+  it('publishes no data table while the chart is still loading', () => {
+    render(
+      <LineTrend
+        labels={DAYS}
+        series={[{ key: 'a', label: 'Erişim', points: [0, 0, 0, 0] }]}
+        title="t"
+        ariaLabel="a"
+        isLoading
+      />,
+    );
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('publishes no data table when it is showing an empty state', () => {
+    render(
+      <LineTrend
+        labels={DAYS}
+        series={[{ key: 'a', label: 'Erişim', points: [0, 0, 0, 0] }]}
+        title="t"
+        ariaLabel="a"
+        emptyText="Organik veri yok"
+      />,
+    );
+    // One statement, to everybody: the sentence, and no table of zeros under it.
+    expect(screen.getByText('Organik veri yok')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
   it('formats values through the caller, so units are not invented here', () => {
     render(
       <LineTrend
@@ -195,6 +235,8 @@ describe('StackedBars', () => {
       />,
     );
     expect(screen.getByText('Bu aralıkta yayın yok')).toBeInTheDocument();
+    // …and no sr-only table of zeros contradicting it — same rule as LineTrend.
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('keeps a category on its own colour whatever the day', () => {

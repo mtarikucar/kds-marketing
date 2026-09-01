@@ -48,4 +48,28 @@ describe('social_post_targets de-dup migration — keep-rule drift tripwire', ()
     // to go out, and attachTargets will not let the composer re-attach it.
     expect(sql).not.toContain(`("status" <> 'PENDING')`);
   });
+
+  /**
+   * The migration's RAISE NOTICE does not reach the boot log, and for a while
+   * the comment above it promised that it did.
+   *
+   * `prisma migrate deploy` is what runs the file at boot and it surfaces no
+   * server messages — verified directly against Postgres 16 with a probe
+   * migration raising a NOTICE and a WARNING: the migration applied, the DO
+   * block ran, and the deploy printed only "The following migration(s) have been
+   * applied". So the single signal an operator was promised about an
+   * irreversible DELETE existed nowhere, and the comment was the reason nobody
+   * went looking for another one.
+   *
+   * A comment cannot be pinned by behaviour, so it is pinned by text. The two
+   * assertions below are the two halves of the correction, and each is a real
+   * failure mode rather than prose-policing: the first fails if someone restores
+   * the promise, the second fails if the replacement stops naming the thing an
+   * operator can actually query. The archive table is that thing — it survives
+   * the boot, which is exactly what the NOTICE does not do.
+   */
+  it('does not promise the boot log, and names the query that replaces it', () => {
+    expect(sql).not.toContain('Say it out loud in the boot log');
+    expect(sql).toContain('SELECT count(*) FROM "social_post_targets_dedup_archive"');
+  });
 });

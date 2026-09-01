@@ -141,6 +141,14 @@ export class SocialInsightsCron {
         let errors = 0;
         let swept = 0;
         let busy = 0;
+        // Due accounts the sweep actually READ, summed off what each workspace
+        // reports back. Three different things can leave a row in `due`
+        // untouched — its workspace was busy, the tick ran out of budget before
+        // reaching it, or its workspace supplied more than the puller's
+        // per-workspace ACCOUNT_LIMIT and the surplus was shed — and only the
+        // first two were visible from here. Counting what came back covers all
+        // three without this file having to know about any of them.
+        let processed = 0;
         // Workspaces the loop actually reached, however they turned out —
         // swept, busy or thrown. The remainder reported below is derived from
         // this rather than from `swept`, so a workspace that failed is not also
@@ -165,6 +173,10 @@ export class SocialInsightsCron {
               accountIds,
               lockTimeoutMs: SocialInsightsCron.WORKSPACE_LOCK_TIMEOUT_MS,
             });
+            // Before the skip check, so the one number that describes the tick
+            // is accumulated on every path a workspace can take (it is zero for
+            // a skipped one, which is the point).
+            processed += r.processed;
             // Skipped means a manual refresh is pulling this workspace right
             // now. Nothing to do and nothing lost: its accounts stay unstamped,
             // so they are still due — and the manual pull is stamping them
@@ -185,16 +197,28 @@ export class SocialInsightsCron {
           }
         }
 
+        // WHAT THE TICK DID, not what it set out to do. This used to print
+        // `due.length` — the size of the batch the query CHOSE — beside the
+        // counts of work actually completed, so a tick that read a hundred
+        // accounts because one workspace's surplus was shed still announced two
+        // hundred "due account(s)". A log that overstates its own reach is worse
+        // than no log: it is the reason nobody goes looking. The remainder is
+        // named for the same reason, and it is genuinely a remainder rather than
+        // a loss — an account the sweep did not reach was never stamped, so it
+        // is still due and still at the head of the oldest-first queue.
+        const deferred = due.length - processed;
         this.logger.log(
           `social insights sweep: ${accounts} account snapshot(s), ${posts} post metric(s), ` +
-            `${errors} error(s) across ${swept} workspace(s) (${due.length} due account(s)` +
-            `${busy > 0 ? `, ${busy} workspace(s) busy` : ''})` +
+            `${errors} error(s) across ${swept} workspace(s) ` +
+            `(${processed} of ${due.length} due account(s) processed` +
+            `${busy > 0 ? `, ${busy} workspace(s) busy` : ''}` +
+            `${deferred > 0 ? `, ${deferred} account(s) roll to the next tick` : ''})` +
             // Said out loud rather than inferred from a short count: a sweep
             // that keeps running out of budget is a sweep that needs a smaller
             // BATCH or a faster provider, and that is only visible if it says so.
             (ranOut
-              ? ` — stopped at the ${SocialInsightsCron.BUDGET_MS / 60_000}min budget, ` +
-                `${byWorkspace.size - attempted} workspace(s) roll to the next tick`
+              ? ` — stopped at the ${SocialInsightsCron.BUDGET_MS / 60_000}min budget ` +
+                `with ${byWorkspace.size - attempted} workspace(s) unreached`
               : ''),
         );
       },

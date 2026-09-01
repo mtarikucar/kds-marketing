@@ -218,9 +218,31 @@ USING "social_post_target_dedup_plan" p
 WHERE t."id" = p."id"
   AND p."rn" > 1;
 
--- Say it out loud in the boot log. A container that comes up having quietly
--- deleted published targets looks exactly like one that had nothing to delete,
--- and those are very different mornings.
+-- Say it out loud — but to the right reader, because it is NOT the boot log.
+--
+-- A container that comes up having quietly deleted published targets looks
+-- exactly like one that had nothing to delete, and those are very different
+-- mornings. This block used to claim it closed that gap. It does not:
+-- `prisma migrate deploy` is what runs this file at boot, and it does not
+-- surface server messages at all. Verified directly against this Postgres with
+-- a probe migration raising both a NOTICE and a WARNING — the migration
+-- applied, the DO block ran, and `migrate deploy` printed nothing but "The
+-- following migration(s) have been applied". The one signal an operator had
+-- been promised about a destructive step did not exist.
+--
+-- The NOTICE is kept because it still reaches the OTHER reader of this file:
+-- the operator replaying it by hand through psql, which does print it — the
+-- restored-dump case the IF NOT EXISTS at the bottom is written for.
+--
+-- WHAT AN OPERATOR SHOULD ACTUALLY RUN after a deploy that applied this
+-- migration, since the archive table is the signal that survives a boot:
+--
+--   SELECT count(*) FROM "social_post_targets_dedup_archive";
+--   SELECT * FROM "social_post_targets_dedup_archive" WHERE "status" = 'PUBLISHED';
+--
+-- Zero is the ordinary morning. A non-zero PUBLISHED count is a post that
+-- reached a real feed twice, and the row carries the externalPostId needed to go
+-- and delete the copy.
 DO $$
 DECLARE
   archived bigint;

@@ -141,6 +141,15 @@ export function StudioToolsMenu({ className }: { className?: string }) {
           which was simply untrue — none of them did, and the sentence was what
           licensed the hole. Left here as a warning: if you add a tab whose page
           is manager-only, wrap it, or this comment becomes a lie again.
+
+          This is also where the temptation lands to promote ONE surface from
+          behind that door — UGC Personas was the 2026-09 candidate. The
+          decision, and the reasoning, are written on that surface's row in
+          StudioToolsDrawer's DEEP_LINKS: it stays behind this entry, because
+          the four rows above are drawer tools and the rule that keeps this menu
+          short is that a full-page destination is reached through "Tüm
+          araçlar", never listed beside them. Promote one and the next reviewer
+          has a precedent for the other ten.
         */}
         <DropdownMenuItem asChild>
           <Link to="/studio?view=tools">{t('studio.toolsMenu.all', 'Tüm araçlar')}</Link>

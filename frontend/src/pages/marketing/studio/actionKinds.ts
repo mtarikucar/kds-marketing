@@ -213,7 +213,12 @@ export interface PriorityMeta {
   /** Mirrors the backend's PRIORITY_RANK (strategy.service.ts). */
   rank: number;
   tone: BadgeTone;
-  labelKey: string;
+  /**
+   * The catalogue key, or `undefined` when the label is not translatable —
+   * see `priorityMeta`. A caller must render `label` directly in that case
+   * rather than passing an absent key to `t()`.
+   */
+  labelKey?: string;
   label: string;
 }
 
@@ -233,13 +238,24 @@ const PRIORITY_META: Record<ActionPriority, PriorityMeta> = {
   LOW: { rank: 2, tone: 'neutral', labelKey: 'strategy.ideas.priority.low', label: 'Düşük' },
 };
 
-/** Defensive lookup; an unrecognised priority renders neutrally and sorts last. */
+/**
+ * Defensive lookup; an unrecognised priority renders neutrally and sorts last.
+ *
+ * It deliberately carries NO `labelKey`. The label for a priority we do not
+ * recognise is the backend's own word for it, verbatim — that string is the
+ * only information the badge has, and it is what tells whoever reads a
+ * screenshot which new enum member the API started sending. It used to name
+ * `strategy.ideas.priority.unknown`, a key that exists in no catalogue and was
+ * only ever harmless because it never resolved: the day somebody "completed"
+ * the catalogues, every unrecognised priority would have collapsed into one
+ * generic word and taken the evidence with it. An i18n scan now reports such a
+ * key as missing, so the absence has to be stated rather than implied.
+ */
 export function priorityMeta(priority: string | undefined | null): PriorityMeta {
   return (
     PRIORITY_META[priority as ActionPriority] ?? {
       rank: 99,
       tone: 'neutral',
-      labelKey: 'strategy.ideas.priority.unknown',
       label: String(priority ?? '—'),
     }
   );

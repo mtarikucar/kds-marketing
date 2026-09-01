@@ -38,9 +38,15 @@ function makePrisma(seed: {
     'socialAccountMetric.findMany': [],
     'socialPostMetric.findMany': [],
   };
+  // `take` is honoured rather than ignored, because one of the behaviours under
+  // test here IS a `take`: pullWorkspace caps its due-account read at
+  // ACCOUNT_LIMIT, and a double that hands back every seeded row regardless
+  // would make the cap — and the under-reporting it used to cause — untestable.
   const record = (key: string, arg: any, value: any) => {
     calls[key].push(arg);
-    return Promise.resolve(value);
+    const capped =
+      Array.isArray(value) && typeof arg?.take === 'number' ? value.slice(0, arg.take) : value;
+    return Promise.resolve(capped);
   };
   const prisma = {
     // The per-workspace pull lock lives inside an interactive transaction (see
@@ -127,7 +133,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
     const svc = new SocialInsightsService(prisma, metrics);
     const r = await svc.pullWorkspace(WS);
 
-    expect(r).toEqual({ posts: 2, accounts: 1, errors: 0 });
+    expect(r).toEqual({ posts: 2, accounts: 1, errors: 0, processed: 1 });
 
     const up = calls['socialAccountMetric.upsert'][0];
     expect(up.where.socialAccountId_date.socialAccountId).toBe('a1');
@@ -219,11 +225,36 @@ describe('SocialInsightsService.pullWorkspace', () => {
     expect(calls['socialAccount.updateMany'][0].data.insightsError).toContain('socket hang up');
   });
 
+  it('reports what it PROCESSED, not what it was handed, when the cap sheds the surplus', async () => {
+    // The cron's batch is 200 accounts and this cap is 100, so one workspace
+    // holding more than half a batch is not a hypothetical — it is any customer
+    // with a lot of connected profiles on a quiet night. The shedding itself is
+    // correct: the tick has to stay bounded, and a shed account is never stamped
+    // so it stays at the head of the oldest-first due queue and leads the next
+    // tick. What was wrong was that it left no trace in the result, so the sweep
+    // could only report the size of the batch it CHOSE and called that the work
+    // it DID.
+    const many = Array.from({ length: 150 }, (_, i) => account({ id: `a${i}` }));
+    const { prisma, calls } = makePrisma({ accounts: many });
+    fetchAccount.mockResolvedValue({ ok: true, data: { followers: 1 } });
+
+    const svc = new SocialInsightsService(prisma, makeMetrics().svc);
+    const r = await svc.pullWorkspace(WS, { accountIds: many.map((a) => a.id) });
+
+    expect(calls['socialAccount.findMany'][0].take).toBe(100);
+    expect(r.processed).toBe(100);
+    // The other two counters cannot stand in for it: `accounts` counts snapshots
+    // written, which is a different question and coincides here only by luck.
+    expect(r.processed).toBe(calls['socialAccount.updateMany'].length);
+    // And the fifty it did not reach were never stamped — still due, not lost.
+    expect(calls['socialAccount.updateMany']).toHaveLength(100);
+  });
+
   it('never throws when the due-account read itself fails', async () => {
     const { prisma } = makePrisma();
     prisma.socialAccount.findMany.mockRejectedValue(new Error('db down'));
     const svc = new SocialInsightsService(prisma, makeMetrics().svc);
-    await expect(svc.pullWorkspace(WS)).resolves.toEqual({ posts: 0, accounts: 0, errors: 0 });
+    await expect(svc.pullWorkspace(WS)).resolves.toEqual({ posts: 0, accounts: 0, errors: 0, processed: 0 });
   });
 
   it('never throws when the due-TARGET read fails, and still stamps every account', async () => {
@@ -239,7 +270,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
     // where it starves the healthy accounts behind it on every later tick.
     const r = await svc.pullWorkspace(WS);
 
-    expect(r).toEqual({ posts: 0, accounts: 2, errors: 1 });
+    expect(r).toEqual({ posts: 0, accounts: 2, errors: 1, processed: 2 });
     expect(calls['socialAccount.updateMany'].map((c) => c.where.id)).toEqual(['a1', 'a2']);
     for (const stamp of calls['socialAccount.updateMany']) {
       expect(stamp.data.insightsPulledAt).toBeInstanceOf(Date);
@@ -300,7 +331,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
     // the same way; the only thing walking the loop buys is three more calls
     // against the provider's rate limit.
     expect(fetchPost).not.toHaveBeenCalled();
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1 });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1, processed: 1 });
     // The account is still stamped — one error, one reauth flag, not four.
     expect(calls['socialAccount.updateMany'][0].data.lastError).toBe('reauth_required');
   });
@@ -326,7 +357,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
     const r = await new SocialInsightsService(prisma, metrics).pullWorkspace(WS);
 
     expect(fetchAccount).not.toHaveBeenCalled();
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0 });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0, processed: 1 });
     expect(calls['socialAccount.updateMany'][0].data.insightsPulledAt).toBeInstanceOf(Date);
   });
 
@@ -339,7 +370,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
     fetchPost.mockResolvedValue({ ok: true, data: { impressions: 1 } });
 
     const r = await new SocialInsightsService(prisma, metrics).pullWorkspace(WS);
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 2 });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 2, processed: 1 });
   });
 
   it('touches ONLY the allowlisted accounts when the sweep names them', async () => {
@@ -376,7 +407,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
       accountIds: [],
     });
     expect(prisma.socialAccount.findMany).not.toHaveBeenCalled();
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0 });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0, processed: 0 });
   });
 
   it('caps the target read at the caller’s limit, newest posts first', async () => {
@@ -417,7 +448,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
     const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspace(WS);
 
     expect(fetchPost).not.toHaveBeenCalled();
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1 });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1, processed: 1 });
     // …and it is still NOT a reconnect. The account publishes perfectly well;
     // the app was simply never granted the read scope, and no OAuth loop the
     // owner can walk will grant a scope nobody asked for.
@@ -446,7 +477,7 @@ describe('SocialInsightsService.pullWorkspace', () => {
 
     expect(calls['socialAccountMetric.upsert'][0].create).toMatchObject({ followers: 4200 });
     expect(fetchPost).not.toHaveBeenCalled();
-    expect(r).toEqual({ posts: 0, accounts: 1, errors: 0 });
+    expect(r).toEqual({ posts: 0, accounts: 1, errors: 0, processed: 1 });
     // A successful read is not an error, but the missing half still needs a
     // reason on the row or the coverage note has nothing to say.
     const data = calls['socialAccount.updateMany'][0].data;
@@ -538,7 +569,7 @@ describe('SocialInsightsService — exclusive pulls', () => {
     // the provider's rate limit; the second is pure waste.
     expect(prisma.socialAccount.findMany).not.toHaveBeenCalled();
     expect(fetchAccount).not.toHaveBeenCalled();
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0, skipped: true });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 0, processed: 0, skipped: true });
   });
 
   it('pullNow answers 409 rather than a cheerful zero when a pull is already running', async () => {
@@ -561,7 +592,7 @@ describe('SocialInsightsService — exclusive pulls', () => {
     // 500-target cap is an eight-minute HTTP request.
     expect(calls['socialPostTarget.findMany'][0].take).toBe(50);
     // The response shape the client knows — no internal `skipped` leaking out.
-    expect(r).toEqual({ posts: 0, accounts: 1, errors: 0 });
+    expect(r).toEqual({ posts: 0, accounts: 1, errors: 0, processed: 1 });
   });
 
   it('never throws when the lock transaction itself fails — it counts and moves on', async () => {
@@ -573,7 +604,7 @@ describe('SocialInsightsService — exclusive pulls', () => {
     const r = await new SocialInsightsService(prisma, makeMetrics().svc).pullWorkspaceExclusive(WS, {
       lockTimeoutMs: 60_000,
     });
-    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1, skipped: false });
+    expect(r).toEqual({ posts: 0, accounts: 0, errors: 1, processed: 0, skipped: false });
   });
 });
 
@@ -765,6 +796,35 @@ describe('SocialInsightsService.summary', () => {
     // a problem that can.
     expect(s.coverage.unsupportedNetworks).toEqual(['PINTEREST']);
     expect(s.coverage.accountsWithErrors).toBe(1);
+  });
+
+  it('lastPulledAt is the newest ATTEMPT, including one that failed', async () => {
+    // The contract the frontend type documents, pinned on the side that decides
+    // it. `stamp()` writes insightsPulledAt on every failure path — deliberately,
+    // because an account that only ever fails and never got stamped would hold
+    // the nulls-first head of the oldest-first due queue forever and starve the
+    // healthy accounts behind it — so this field can only ever mean "we tried".
+    // Narrowing it to successful pulls would look like an improvement and would
+    // quietly report a workspace as never-pulled while the sweep hammered it
+    // every hour.
+    const { prisma } = makePrisma({
+      accounts: [
+        { id: 'a1', network: 'INSTAGRAM', displayName: 'IG', accountType: null, enabled: true, insightsPulledAt: new Date('2026-06-30T05:00:00.000Z'), insightsError: null },
+        { id: 'a2', network: 'FACEBOOK', displayName: 'FB', accountType: null, enabled: true, insightsPulledAt: new Date('2026-06-30T07:30:00.000Z'), insightsError: '(#200) Requires read_insights permission' },
+      ],
+      targets: [],
+      accountMetrics: [],
+    });
+
+    const s = await new SocialInsightsService(prisma, makeMetrics().svc).summary(WS, from, to);
+
+    // The newest stamp belongs to the account that FAILED, and it is the one
+    // reported.
+    expect(s.coverage.lastPulledAt).toBe('2026-06-30T07:30:00.000Z');
+    // Which is why the freshness figure alone is never the coverage story: the
+    // count of refusals is reported beside it, and the reason lands on the row.
+    expect(s.coverage.accountsWithErrors).toBe(1);
+    expect(s.byAccount.find((a) => a.socialAccountId === 'a2')?.insightsError).toContain('read_insights');
   });
 
   it('a LinkedIn company page keeps LINKEDIN off the unreadable list', async () => {

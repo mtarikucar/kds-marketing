@@ -260,19 +260,33 @@ export function AutopilotStatusBar({ onOpenConsole, className }: AutopilotStatus
         label={t('studio.autopilotBar.balance', 'Bakiye')}
         testId="autopilot-balance"
         value={
-          // `data === undefined` too, not the bare error flag: React Query keeps
-          // the last good balance and merely flips status on a failed BACKGROUND
-          // refetch, and replacing a number we still hold with "okunamadı" tells
-          // the operator we lost something we did not. Same rule the budget query
-          // above uses, and the same one BudgetAutopilotPage's wallet tiles use.
-          walletQ.isError && walletQ.data === undefined ? (
+          // Ordered on HAVING A BALANCE, not on the query's flags, and that
+          // order is the correctness argument.
+          //
+          // A number we hold wins outright: React Query keeps the last good
+          // balance and merely flips status on a failed BACKGROUND refetch, so
+          // replacing it with "okunamadı" would tell the operator we lost
+          // something we did not. Same rule the budget query above uses, and
+          // the same one BudgetAutopilotPage's wallet tiles use.
+          //
+          // Everything else falls through to the skeleton, which is the half
+          // that was wrong. `isLoading` is `isPending && isFetching`, so a query
+          // that is pending but NOT fetching — the paused state React Query puts
+          // an `online` query into when the browser is offline, reachable here
+          // because the budget list can be warm in the cache while the wallet is
+          // cold — reported neither loading nor error, fell to the last branch,
+          // and `money(undefined)` coerced the missing balance to a confident
+          // "₺0" over an engine that may have thousands of lira of credit. The
+          // one number on this strip that must never be invented is the one that
+          // says whether the autopilot can still spend.
+          walletQ.data ? (
+            money(walletQ.data.balance, walletQ.data.currency ?? current.currency)
+          ) : walletQ.isError ? (
             <span className="text-xs font-normal text-warning">
               {t('studio.autopilotBar.balanceUnread', 'okunamadı')}
             </span>
-          ) : walletQ.isLoading ? (
-            <Skeleton className="h-4 w-16" />
           ) : (
-            money(walletQ.data?.balance, walletQ.data?.currency ?? current.currency)
+            <Skeleton className="h-4 w-16" />
           )
         }
       />

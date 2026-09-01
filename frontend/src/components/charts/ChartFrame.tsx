@@ -79,7 +79,21 @@ export function ChartFrame({
       )}
 
       {caption && <p className="text-micro text-muted-foreground">{caption}</p>}
-      {table && <div className="sr-only">{table}</div>}
+      {/*
+        The table is the plot's twin, so it appears exactly when the plot does —
+        and NOT while the chart is loading or standing empty.
+
+        It used to render in all three branches, which quietly made the two
+        halves of every chart on this screen say different things. A caller
+        zero-fills its window before its query resolves, so during load the
+        marks were a skeleton while the table underneath asserted thirty days of
+        `0`; on a failed read the marks were "Organik veri yok" while the table
+        still published the same thirty zeros. `LineTrend` already writes an em
+        dash rather than a zero for a point it will not draw, for exactly this
+        reason — the frame was undoing that one level up, and only for the
+        readers who cannot see the empty state saying otherwise.
+      */}
+      {!isLoading && !empty && table && <div className="sr-only">{table}</div>}
     </figure>
   );
 }
