@@ -9,6 +9,7 @@ import {
   MAX_SHOT_SEC,
   MIN_SHOT_SEC,
 } from '../../src/modules/marketing/content-concepts/content-concepts.service';
+import { ConceptPromotionService } from '../../src/modules/marketing/content-concepts/concept-promotion.service';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
 /**
@@ -110,9 +111,25 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
 
   /** Cross-stamped: OUR batch id, OUR status, OUR idea — in THEIR workspace. */
   const SHARED_BATCH = randomUUID();
+  /** Approving now starts production, which needs a campaign to produce INTO. */
+  const campaignId = randomUUID();
   const SHARED_IDEA = 'Theo Jansen Strandbeest — rüzgarla yürüyen, motoru olmayan kinetik heykel.';
   const ourSeededConcept = randomUUID();
   const neighbourProbe = randomUUID();
+
+  /**
+   * Promotion, with the two external vendors cut out. Approving a concept is
+   * now the moment production starts, so `review` needs one of these; fal.ai
+   * does not get called for it and no job row is written (the booted app runs a
+   * real once-a-minute runner that would otherwise claim it mid-suite).
+   */
+  const promotion = (client: PrismaService = prisma) =>
+    new ConceptPromotionService(
+      client,
+      { requestGeneration: jest.fn().mockResolvedValue({ assetId: randomUUID() }) } as never,
+      { schedule: jest.fn().mockResolvedValue('job-1') } as never,
+      { registerHandler: () => undefined } as never,
+    );
 
   /** A service wired to a scripted model instead of a live one. */
   const svcWith = (
@@ -125,10 +142,26 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
         : jest.fn().mockResolvedValue(completion);
     const anthropic = { isEnabled: () => true, complete };
     return {
-      svc: new ContentConceptsService(client, anthropic as never, credits, pipeline),
+      svc: new ContentConceptsService(
+        client,
+        anthropic as never,
+        credits,
+        pipeline,
+        promotion(client),
+      ),
       complete,
     };
   };
+
+  /** A read/review-only service — no model behind it, real everything else. */
+  const reader = () =>
+    new ContentConceptsService(
+      prisma,
+      { isEnabled: () => true, complete: jest.fn() } as never,
+      credits,
+      pipeline,
+      promotion(),
+    );
 
   beforeAll(async () => {
     if (!realDbEnabled()) return;
@@ -186,6 +219,25 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
       },
     });
 
+    // Approving is now the moment production starts, and production needs a
+    // campaign: the calendar slot, the target accounts and the model live on it.
+    await prisma.socialCampaign.create({
+      data: {
+        id: campaignId,
+        workspaceId,
+        name: 'Concepts',
+        brief: {},
+        status: 'ACTIVE',
+        automationMode: 'APPROVAL',
+        planningMode: 'AI_PROPOSE',
+        cadence: { daysOfWeek: [1, 2, 3, 4, 5], timeOfDay: '09:00' },
+        startDate: new Date(Date.now() - 86_400_000),
+        targetAccountIds: [],
+        mediaKinds: ['VIDEO'],
+        createdById: ownerId,
+      },
+    });
+
     // THE PROBE PAIR. Same batch, same status, same source idea, same angle and
     // hook text — everything a query could match on EXCEPT the workspace. If a
     // `workspaceId` predicate is dropped anywhere below, this row surfaces.
@@ -201,6 +253,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
           title: 'Ours',
           ordinal: 0,
           shotPlan: { model: 'seedance', durationSec: 4, shots: [], captionSuggestion: '', qcChecklist: [] },
+          socialCampaignId: campaignId,
           createdById: ownerId,
         },
         {
@@ -222,6 +275,15 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   afterAll(async () => {
     if (!realDbEnabled()) return;
     // Baseline restore, most-dependent first.
+    await prisma.socialPost.deleteMany({
+      where: { workspaceId: { in: [workspaceId, otherWorkspaceId] } },
+    });
+    await prisma.socialCampaignItem.deleteMany({
+      where: { workspaceId: { in: [workspaceId, otherWorkspaceId] } },
+    });
+    await prisma.socialCampaign.deleteMany({
+      where: { workspaceId: { in: [workspaceId, otherWorkspaceId] } },
+    });
     await prisma.contentConcept.deleteMany({
       where: { workspaceId: { in: [workspaceId, otherWorkspaceId] } },
     });
@@ -332,12 +394,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   // status, idea, angle and hook, so ONLY the workspace clause can exclude it.
 
   it('list: the workspace clause is the only thing hiding the neighbour batch', async () => {
-    const ours = await new ContentConceptsService(
-      prisma,
-      { isEnabled: () => true, complete: jest.fn() } as never,
-      credits,
-      pipeline,
-    ).list(workspaceId, { batchId: SHARED_BATCH });
+    const ours = await reader().list(workspaceId, { batchId: SHARED_BATCH });
 
     // Both workspaces own a row in this batch. Ours is the only one returned.
     expect(ours.map((c) => c.id)).toEqual([ourSeededConcept]);
@@ -351,12 +408,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   });
 
   it('list by status: the workspace clause survives being narrowed further', async () => {
-    const svc = new ContentConceptsService(
-      prisma,
-      { isEnabled: () => true, complete: jest.fn() } as never,
-      credits,
-      pipeline,
-    );
+    const svc = reader();
     const ours = await svc.list(workspaceId, { status: 'PROPOSED' });
     expect(ours.length).toBeGreaterThan(0);
     expect(ours.every((c) => c.workspaceId === workspaceId)).toBe(true);
@@ -364,12 +416,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   });
 
   it('review: refuses the neighbour concept BY ID and leaves it untouched', async () => {
-    const svc = new ContentConceptsService(
-      prisma,
-      { isEnabled: () => true, complete: jest.fn() } as never,
-      credits,
-      pipeline,
-    );
+    const svc = reader();
     // The row matches on id, so `workspaceId` is the only clause that can
     // refuse it — its own assertion, separate from the list ones above.
     await expect(
@@ -386,12 +433,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   });
 
   it('review: decides OUR concept, stamps the person, and refuses a second decision', async () => {
-    const svc = new ContentConceptsService(
-      prisma,
-      { isEnabled: () => true, complete: jest.fn() } as never,
-      credits,
-      pipeline,
-    );
+    const svc = reader();
     const decided = await svc.review(workspaceId, ourSeededConcept, {
       decision: 'APPROVED',
       reviewerId: ownerId,
@@ -401,6 +443,10 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
     expect(decided.reviewedById).toBe(ownerId);
     expect(decided.reviewedAt).toBeInstanceOf(Date);
     expect(decided.reviewNote).toBe('bu güzelmiş');
+    // Stage 2: the verdict and the campaign item are one decision. The item
+    // chain has its own suite (concept-promotion.realdb); what is asserted here
+    // is only that approving still means what it meant AND now produces.
+    expect((decided as { campaignItem?: { id: string } }).campaignItem?.id).toBeTruthy();
 
     // The neighbour's same-batch row is still where it was.
     const probe = await prisma.contentConcept.findUnique({ where: { id: neighbourProbe } });
@@ -428,16 +474,12 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
         title: 'Race',
         ordinal: 0,
         shotPlan: { model: 'seedance', durationSec: 4, shots: [], captionSuggestion: '', qcChecklist: [] },
+        socialCampaignId: campaignId,
         createdById: ownerId,
       },
     });
 
-    const svc = new ContentConceptsService(
-      prisma,
-      { isEnabled: () => true, complete: jest.fn() } as never,
-      credits,
-      pipeline,
-    );
+    const svc = reader();
     const [a, b] = await Promise.allSettled([
       svc.review(workspaceId, racedId, { decision: 'APPROVED', reviewerId: ownerId, note: 'kabul' }),
       svc.review(workspaceId, racedId, { decision: 'DISCARDED', reviewerId: ownerId, note: 'ret' }),
