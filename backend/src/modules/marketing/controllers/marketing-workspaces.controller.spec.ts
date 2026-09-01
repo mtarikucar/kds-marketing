@@ -3,6 +3,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, INestApplication } f
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { MediaModelDefaultsService } from '../ai/media/media-model-defaults.service';
 import { MarketingWorkspacesController } from './marketing-workspaces.controller';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
@@ -178,12 +179,21 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
     async function buildApp(
       role: string,
       authService: Record<string, jest.Mock>,
-      opts: { customRoleId?: string | null; prisma?: Record<string, unknown> } = {},
+      opts: {
+        customRoleId?: string | null;
+        prisma?: Record<string, unknown>;
+        mediaModels?: Record<string, unknown>;
+      } = {},
     ): Promise<INestApplication> {
       const moduleRef = await Test.createTestingModule({
         controllers: [MarketingWorkspacesController],
         providers: [
           { provide: MarketingAuthService, useValue: authService },
+          // The media-model routes' service. Inert here: this block is about
+          // the GUARD STACK, and a handler that is never reached because a
+          // guard threw needs nothing behind it — but Nest still has to be able
+          // to construct the controller.
+          { provide: MediaModelDefaultsService, useValue: opts.mediaModels ?? {} },
           // The REAL guards — this is the whole point of this test.
           MarketingRolesGuard,
           PermissionsGuard,
@@ -223,6 +233,79 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
 
         expect(res.status).toBe(403);
         expect(authService.setMcpWriteMode).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    /**
+     * The media-model routes sit a rung LOWER than the two above, on purpose:
+     * MANAGER, not OWNER. This is the assertion that says the difference is
+     * real rather than a copy-paste that happened to land — the same request
+     * that is 403'd on mcp-write-mode is admitted here.
+     */
+    it('PATCH /marketing/workspaces/media-models as MANAGER is ADMITTED (a lower floor than mcp-write-mode, deliberately)', async () => {
+      const mediaModels = { set: jest.fn().mockResolvedValue({ defaultVideoModel: 'fal-ai/veo3/fast' }) };
+      const app = await buildApp('MANAGER', {}, { mediaModels });
+      try {
+        const res = await request(app.getHttpServer())
+          .patch('/marketing/workspaces/media-models')
+          .send({ defaultVideoModel: 'fal-ai/veo3/fast' });
+
+        expect(res.status).toBe(200);
+        // Always the CALLER'S workspace, never a body or path param.
+        expect(mediaModels.set).toHaveBeenCalledWith('ws-1', { defaultVideoModel: 'fal-ai/veo3/fast' });
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('PATCH /marketing/workspaces/media-models as REP is refused with 403 by the REAL guard stack', async () => {
+      const mediaModels = { set: jest.fn() };
+      const app = await buildApp('REP', {}, { mediaModels });
+      try {
+        const res = await request(app.getHttpServer())
+          .patch('/marketing/workspaces/media-models')
+          .send({ defaultVideoModel: 'fal-ai/veo3/fast' });
+
+        expect(res.status).toBe(403);
+        expect(mediaModels.set).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    /**
+     * A MANAGER-rank user whose custom role has had `settings.manage` stripped
+     * may still READ the card (no @RequirePermission on the GET) but may not
+     * SAVE. Same seam as the OWNER case above: rank alone admits them, and
+     * PermissionsGuard is the only thing left.
+     */
+    it('media-models: a custom role without settings.manage may read but not write', async () => {
+      const mediaModels = {
+        get: jest.fn().mockResolvedValue({ defaultVideoModel: null, models: [] }),
+        set: jest.fn(),
+      };
+      const prisma = {
+        customRole: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'cr-reader',
+            workspaceId: 'ws-1',
+            permissions: ['leads.read'],
+          }),
+        },
+      };
+      const app = await buildApp('MANAGER', {}, { customRoleId: 'cr-reader', prisma, mediaModels });
+      try {
+        const read = await request(app.getHttpServer()).get('/marketing/workspaces/media-models');
+        expect(read.status).toBe(200);
+        expect(mediaModels.get).toHaveBeenCalledWith('ws-1');
+
+        const write = await request(app.getHttpServer())
+          .patch('/marketing/workspaces/media-models')
+          .send({ defaultVideoModel: 'fal-ai/veo3/fast' });
+        expect(write.status).toBe(403);
+        expect(mediaModels.set).not.toHaveBeenCalled();
       } finally {
         await app.close();
       }

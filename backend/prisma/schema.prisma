@@ -102,6 +102,24 @@ model Workspace {
   /// `research/research-execution.ts`.
   researchExecution String @default("AUTO")
 
+  /// WHICH fal.ai model this workspace's generations run on, by kind — the
+  /// middle term of `campaign override ?? workspace default ?? code constant`.
+  ///
+  /// Video is the most expensive action in the product and the catalogue spans
+  /// a 10x price range (3 credits/sec to 25 credits/sec), so this is a spending
+  /// decision, not a preference. NULL means "no choice made" and falls through
+  /// to DEFAULT_IMAGE_MODEL / DEFAULT_VIDEO_MODEL in
+  /// `ai/media/media-models.config.ts` — it is NOT the same as a stored copy of
+  /// the constant, because a stored copy would pin a workspace to a model the
+  /// platform later moves off.
+  ///
+  /// Only a CATALOGUED id of the MATCHING kind may be written here (the write
+  /// path validates, `MediaGenService` validates again on read): an id with no
+  /// catalogue entry has no price, and an image id on the video field would bill
+  /// a per-second clip at the flat per-image rate.
+  defaultImageModel String?
+  defaultVideoModel String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3927,6 +3945,25 @@ model SocialCampaignItem {
   scheduledFor      DateTime
   status            SocialCampaignItemStatus @default(PLANNED)
   topic             String?
+  /// Set when this item was PROMOTED from an approved `ContentConcept` instead
+  /// of being planned by the campaign's own cadence tick. Soft reference (no
+  /// FK), matching `ContentConcept.socialCampaignId`'s style: a concept is a
+  /// workspace-owned row with no foreign key of its own, and the item must not
+  /// be pinned alive by the idea it came from.
+  ///
+  /// **UNIQUE, and that index IS the idempotency guarantee of promotion.** Two
+  /// concurrent promotions of one concept both reach `create` — a
+  /// `findFirst`-then-`create` guard passes in both, because neither
+  /// transaction can see the other's uncommitted row. Postgres rejects the
+  /// second insert on this index instead, and the loser reads the winner's item
+  /// back. Everything else in the promotion path (the `promotedItemId`
+  /// short-circuit, the P2002 recovery) is an optimisation on top of this one
+  /// constraint.
+  ///
+  /// It is also how the shot plan reaches production: the producer loads the
+  /// concept through this id rather than a copy of the plan being frozen onto
+  /// the item. See `ConceptPromotionService`.
+  contentConceptId  String?                  @unique
   socialPostId      String?
   generatedAssetIds String[]
   error             String?
@@ -3936,6 +3973,207 @@ model SocialCampaignItem {
   @@index([socialCampaignId, status])
   @@index([workspaceId, status])
   @@map("social_campaign_items")
+}
+
+enum ContentConceptStatus {
+  PROPOSED
+  APPROVED
+  DISCARDED
+}
+
+/// One video CONCEPT distilled from a single idea — an angle on that idea,
+/// planned shot by shot.
+///
+/// WHY THIS IS NOT A `SocialCampaignItem`. An item is a SLOT in a campaign's
+/// calendar: `socialCampaignId` is a required FK and `scheduledFor` is a
+/// required timestamp, and the moment a row exists the campaign's scheduled-job
+/// handlers own it (plan tick -> generate -> confirm) and it counts toward the
+/// campaign's `stats`. A concept has none of that: it arrives before any
+/// campaign is chosen, before any date is chosen, and most of a batch is meant
+/// to be thrown away. Forcing one into an item would mean inventing a campaign
+/// and a date for an idea that may never be shot, and a DISCARDED idea would
+/// still sit in the calendar counted as planned content.
+///
+/// It is nonetheless shaped so that promoting one is a short step: `hook`
+/// becomes the item's `topic`, `shotPlan` travels across whole, and
+/// `socialCampaignId` is already recorded when the idea arrived scoped to a
+/// campaign.
+model ContentConcept {
+  id          String @id @default(uuid())
+  workspaceId String
+  /// Groups the N concepts distilled from ONE idea in ONE call, so a reviewer
+  /// sees "these five came from that idea" rather than a flat list.
+  batchId     String
+  /// The idea exactly as it was supplied (pasted text or a link). Kept verbatim
+  /// so a reviewer can judge the concept against what was actually asked.
+  sourceIdea  String
+  /// The lens this concept uses — curiosity / engineering / concept / story /
+  /// sensory, and whatever else fits. A free string, not an enum: the taxonomy
+  /// is a prompt, not a contract, and freezing five names here would stop the
+  /// sixth good angle from existing. Uniqueness WITHIN a batch is enforced in
+  /// `concept-distinctness.ts`.
+  angle       String
+  /// The opening line — the thing a viewer reads or hears first. The primary
+  /// distinctness axis.
+  hook        String
+  title       String
+  /// Why this angle is worth shooting. Written for the human deciding.
+  rationale   String?
+  /// Position within the batch, so a list renders in the order proposed.
+  ordinal     Int
+  /// A real `ShotPlan` from `video/video-pipeline.service.ts`: model,
+  /// durationSec, shots[] (ord, scene, onScreenText, voiceover, prompt,
+  /// durationSec, cameraNote, reference), captionSuggestion, qcChecklist.
+  shotPlan    Json
+
+  status       ContentConceptStatus @default(PROPOSED)
+  /// Stamped when a HUMAN decides. Null on a PROPOSED row, and the pair of
+  /// (status, reviewedById) is what distinguishes "nobody has looked yet" from
+  /// "looked at and kept".
+  reviewedAt   DateTime?
+  reviewedById String?
+  reviewNote   String?
+
+  /// Set when the idea arrived already scoped to a campaign. Soft reference,
+  /// matching `linkedCampaignId`'s style on SocialCampaign — a concept must
+  /// outlive a campaign being deleted, since the idea is still good.
+  socialCampaignId String?
+  /// The `SocialCampaignItem` this concept BECAME when a human approved it.
+  ///
+  /// This is the answer to "approved, or approved and already in production?",
+  /// which `status` alone cannot give: `ContentConceptStatus` records the
+  /// HUMAN'S VERDICT, and production progress is a different axis with a much
+  /// richer home already — the item's own
+  /// PLANNED -> GENERATING -> NEEDS_APPROVAL -> APPROVED -> SCHEDULED ->
+  /// PUBLISHED lifecycle. A `PROMOTED` status value would be a two-value shadow
+  /// of that lifecycle stored in a second place, guaranteed to disagree with it
+  /// the first time an item FAILS; and it would break `review()`'s "decided
+  /// once" guard, which is written against the verdict, not against progress.
+  ///
+  /// Written in the SAME transaction as the item, so the two links cannot
+  /// disagree. Null on PROPOSED/DISCARDED rows, and on an APPROVED row it means
+  /// promotion has not happened yet — the state a pre-promotion concept (or a
+  /// crash between the verdict and the item) leaves behind, and the one
+  /// `ConceptPromotionService.promote` exists to close.
+  ///
+  /// NOT the uniqueness constraint: `SocialCampaignItem.contentConceptId` is.
+  /// A unique index here would only forbid two concepts naming one item, which
+  /// is not the race that exists.
+  promotedItemId   String?
+  createdById      String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, batchId])
+  @@map("content_concepts")
+}
+
+/// The state of ONE prepared outreach message.
+///
+/// DRAFT is where every row starts and where every row stays until a PERSON
+/// says otherwise — the whole stage is built so that no code path can move a
+/// row out of DRAFT except `DistributionSendService.send`, which requires a
+/// verified human of the workspace. See that service for how the boundary is
+/// enforced and `distribution-send.boundary.spec.ts` for what fails if it moves.
+enum DistributionDraftStatus {
+  DRAFT
+  SENT
+  DISMISSED
+  FAILED
+}
+
+/// The distribution plan for one published/approved campaign item: who to
+/// contact, what to tag, and when to cross-post — produced by the system,
+/// executed by a human.
+///
+/// One plan per item (`campaignItemId` is UNIQUE). Re-planning REPLACES the
+/// plan's content and keeps its identity, so the drafts a human has already
+/// sent keep pointing at a row that still exists.
+model ContentDistributionPlan {
+  id             String @id @default(uuid())
+  workspaceId    String
+  /// The item this distributes. UNIQUE: a second plan for one item would mean
+  /// two competing answers to "who has been contacted about this video", and
+  /// the drafts hang off the plan.
+  campaignItemId String @unique
+  /// Denormalised from the item so a plan read needs no join, and so the plan
+  /// survives as a record of what was distributed even if the calendar moves.
+  socialCampaignId String
+  contentConceptId String?
+
+  /// The plan itself:
+  /// { publishedNetworks: string[], tags: { accounts: [...], hashtags: string[] },
+  ///   crossPosts: [{ network, socialAccountId, accountName, runAt, note }],
+  ///   outreachCount: number,
+  ///   gaps: [{ area, reason }] }
+  ///
+  /// `gaps` is why this is Json rather than four columns. A part of the plan
+  /// that could NOT be produced has to travel WITH the plan and say why — an
+  /// empty `crossPosts` array that reads as "no cross-posting needed" is the
+  /// exact failure this feature is forbidden to have.
+  plan Json
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("content_distribution_plans")
+}
+
+/// One prepared, UNSENT message to one lead about one published video.
+///
+/// The row exists so that a human can read what would be said before anything
+/// is said. It carries the resolved channel and address rather than only a
+/// leadId, because the point of preparing it is that the decision — which
+/// channel, which address, what words — is visible BEFORE the send, not
+/// computed at the moment of it.
+model DistributionDraft {
+  id             String @id @default(uuid())
+  workspaceId    String
+  planId         String
+  campaignItemId String
+  leadId         String
+
+  /// SMS | WHATSAPP | EMAIL — only the three a conversation can be STARTED on
+  /// (channels/outbound-conversation.service.ts's INITIABLE map, which is the
+  /// platforms' limit, not ours). A draft proposing an Instagram DM would be
+  /// proposing something no send path in this product can execute.
+  channelType String
+  channelId   String
+  toAddress   String
+  body        String @db.Text
+
+  status         DistributionDraftStatus @default(DRAFT)
+  /// Stamped ONLY by a human send. The pair is the audit trail: a SENT row with
+  /// a null sentById would mean something sent without a person, which is the
+  /// one outcome this stage exists to make impossible.
+  ///
+  /// ENFORCED IN POSTGRES, not merely intended: migration
+  /// 20260902100000_distribution_draft_sent_by_required adds
+  /// `CHECK (status <> 'SENT' OR "sentById" IS NOT NULL)` under the name
+  /// `distribution_drafts_sent_by_present`. Prisma's datamodel cannot express a
+  /// CHECK, so this comment is where a Prisma-only reader learns it exists.
+  /// The reason it exists: the source scan in distribution-send.boundary.spec.ts
+  /// looks for two service NAMES, which a caller reaching MessageSenderService
+  /// directly simply does not use. `sentById` stays nullable because DRAFT,
+  /// DISMISSED and FAILED rows all legitimately have nobody attached to them.
+  sentAt         DateTime?
+  sentById       String?
+  conversationId String?
+  error          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One draft per lead per channel per plan. Re-planning is then idempotent:
+  /// it cannot stack a second copy of the same message beside one a human has
+  /// already read, edited or sent.
+  @@unique([planId, leadId, channelType])
+  @@index([workspaceId, status])
+  @@index([planId, status])
+  @@map("distribution_drafts")
 }
 
 /// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).

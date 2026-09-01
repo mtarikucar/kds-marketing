@@ -19,9 +19,8 @@ import { normalizeEmail, phoneIdentityVariants, toE164 } from '../utils/lead-nor
  * where we hold an address the lead gave us and the platform allows the first
  * move.
  */
-const INITIABLE: Record<
-  string,
-  { kind: ContactKind; label: string; supportsTemplate: boolean }
+export const INITIABLE: Readonly<
+  Record<string, { kind: ContactKind; label: string; supportsTemplate: boolean }>
 > = {
   SMS: { kind: 'PHONE', label: 'phone number', supportsTemplate: false },
   WHATSAPP: { kind: 'WA', label: 'WhatsApp number', supportsTemplate: true },
@@ -29,7 +28,7 @@ const INITIABLE: Record<
 };
 
 /** Why each excluded channel is excluded, so the refusal can say something useful. */
-const NOT_INITIABLE: Record<string, string> = {
+export const NOT_INITIABLE: Readonly<Record<string, string>> = {
   INSTAGRAM:
     'Instagram only allows replying to someone who messaged you first — there is no API to DM an arbitrary user.',
   MESSENGER:
@@ -39,6 +38,23 @@ const NOT_INITIABLE: Record<string, string> = {
   WEBCHAT: 'A webchat identity only exists once the visitor opens the widget on your site.',
   VOICE: 'The voice channel answers inbound calls; use a call task to reach out by phone.',
 };
+
+/**
+ * The channel types a conversation can be STARTED on, exported so no second
+ * copy of this list exists.
+ *
+ * The content-distribution planner needs exactly this answer — a draft
+ * proposing an Instagram DM would be proposing something no send path in this
+ * product can execute, and the reason is the platforms' rule, not a missing
+ * adapter. Two hand-maintained copies of "which channels can we open a thread
+ * on" is how one of them silently becomes wrong; the client already keeps a
+ * deliberate SUBSET (LeadHeaderActions.tsx), and that file says so.
+ */
+export const INITIABLE_CHANNEL_TYPES: readonly string[] = Object.freeze(Object.keys(INITIABLE));
+
+export function canStartConversationOn(type: string): boolean {
+  return Boolean(INITIABLE[type]);
+}
 
 export interface StartConversationInput {
   leadId: string;

@@ -12,6 +12,8 @@ import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
 import { SetMcpWriteModeDto } from '../dto/set-mcp-write-mode.dto';
 import { SetResearchExecutionDto } from '../dto/set-research-execution.dto';
 import { SetWorkspaceTimezoneDto } from '../dto/set-workspace-timezone.dto';
+import { SetMediaModelDefaultsDto } from '../dto/set-media-model-defaults.dto';
+import { MediaModelDefaultsService } from '../ai/media/media-model-defaults.service';
 import { MarketingUserPayload } from '../types';
 
 /**
@@ -34,7 +36,10 @@ import { MarketingUserPayload } from '../types';
 @Controller('marketing/workspaces')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingWorkspacesController {
-  constructor(private readonly authService: MarketingAuthService) {}
+  constructor(
+    private readonly authService: MarketingAuthService,
+    private readonly mediaModels: MediaModelDefaultsService,
+  ) {}
 
   @Post()
   @Audit({ action: 'workspace.create', resourceType: 'workspace' })
@@ -183,5 +188,52 @@ export class MarketingWorkspacesController {
     @Body() dto: SetWorkspaceTimezoneDto,
   ) {
     return this.authService.setWorkspaceTimezone(user.workspaceId, dto.timezone);
+  }
+
+  /**
+   * Which fal.ai model this workspace's image and video generations run on —
+   * `campaign override ?? THIS ?? code constant`.
+   *
+   * MANAGER + `settings.manage`, the same floor as the timezone routes above
+   * rather than the OWNER floor of the two security-posture ones, and the
+   * difference is deliberate in the same way. This does not decide whether an
+   * unattended agent may act or whose Anthropic key pays; it decides which of
+   * five priced fal.ai models a generation runs on. That is operational
+   * configuration of a piece with everything else a MANAGER already owns.
+   * (`MarketingRolesGuard` is hierarchical, so MANAGER alone admits OWNER too —
+   * see getMcpWriteMode above for why co-listing them would read as something
+   * it does not mean.)
+   *
+   * It IS money, though — the video catalogue spans 3 to 25 credits per second,
+   * so a save here can multiply the cost of every clip the content pipeline buys
+   * by eight without anything else changing. That is why both sides are
+   * `@Audit`-logged, exactly as the timezone read is: "why did last month's
+   * generation bill triple?" is answerable only if the change left a row.
+   *
+   * The read is NOT gated on the `mediaGen` entitlement, unlike
+   * `MarketingMediaController`'s routes. A settings card that 403s rather than
+   * saying what the plan includes is the worse failure, and this endpoint
+   * spends nothing — it reads a column and returns a price list.
+   */
+  @Get('media-models')
+  @MarketingRoles('MANAGER')
+  @Audit({ action: 'workspace.media_models.read', resourceType: 'workspace' })
+  getMediaModelDefaults(@CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.mediaModels.get(user.workspaceId);
+  }
+
+  @Patch('media-models')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({
+    action: 'workspace.media_models.update',
+    resourceType: 'workspace',
+    captureBody: ['defaultImageModel', 'defaultVideoModel'],
+  })
+  setMediaModelDefaults(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Body() dto: SetMediaModelDefaultsDto,
+  ) {
+    return this.mediaModels.set(user.workspaceId, dto);
   }
 }

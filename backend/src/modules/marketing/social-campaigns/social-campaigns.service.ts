@@ -13,7 +13,12 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { assertCataloguedModel } from '../ai/media/media-models.config';
 import { Cadence, nextCadenceSlot } from './cadence.util';
+import {
+  CONCEPT_PRODUCE_KIND,
+  produceDedup,
+} from '../content-concepts/concept-promotion.service';
 
 export const SOCIAL_CAMPAIGN_PLAN_KIND = 'social.campaign.plan';
 export const SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND = 'social.campaign.item.generate';
@@ -53,6 +58,9 @@ export interface CreateSocialCampaignInput {
   createdById: string;
 }
 
+/** How many calendar slots ride along with each campaign in `list`. */
+export const CAMPAIGN_ITEM_PREVIEW = 20;
+
 @Injectable()
 export class SocialCampaignsService implements OnModuleInit {
   private readonly logger = new Logger(SocialCampaignsService.name);
@@ -79,7 +87,37 @@ export class SocialCampaignsService implements OnModuleInit {
 
   // ───────────────────────────────────────────────────────────── CRUD
 
+  /**
+   * The campaign's model override, checked WHERE IT IS CHOSEN.
+   *
+   * `defaultImageModel` / `defaultVideoModel` are the FIRST term of
+   * `campaign override ?? workspace default ?? code constant`, and until this
+   * check the columns took any string. Two failures came out of that, and
+   * neither of them looked like a bad model id:
+   *
+   *  - an id catalogued as the WRONG KIND (`fal-ai/qwen-image` as the video
+   *    model — one row away in a picker that lists both) passed here and was
+   *    then refused by `MediaGenService` with `MEDIA_GEN_UNKNOWN_MODEL` at
+   *    generation time, which is hours later, on the scheduled-job path, once
+   *    per item, with the reason on an item row instead of on the screen where
+   *    the choice was made;
+   *  - a typo'd id did the same, and `ConceptPromotionService.produce` turns
+   *    that into "clip 1/5 could not be generated" on a FAILED item, for a
+   *    campaign that will fail every item it ever plans.
+   *
+   * Same function and same sentence the workspace-level card uses, so the two
+   * doors onto one decision cannot drift.
+   */
+  private assertModels(input: {
+    defaultImageModel?: string | null;
+    defaultVideoModel?: string | null;
+  }): void {
+    if (input.defaultImageModel) assertCataloguedModel(input.defaultImageModel, 'IMAGE');
+    if (input.defaultVideoModel) assertCataloguedModel(input.defaultVideoModel, 'VIDEO');
+  }
+
   async create(workspaceId: string, input: CreateSocialCampaignInput) {
+    this.assertModels(input);
     return this.prisma.socialCampaign.create({
       data: {
         workspaceId,
@@ -105,9 +143,41 @@ export class SocialCampaignsService implements OnModuleInit {
     });
   }
 
+  /**
+   * The campaigns, each carrying its most recent calendar slots.
+   *
+   * The items came with it on 2026-09-01 and the reason is a discoverability
+   * one, not a convenience one: `jeeta.plan_content_distribution` REQUIRES a
+   * `campaignItemId`, and until this include there was no tool anywhere in the
+   * catalogue that returned one. `jeeta.list_content_concepts` supplies
+   * `promotedItemId` for items that came from a concept, but a cadence-planned
+   * item had no source at all — which is the exact shape of the three bugs
+   * `tool-catalogue.spec.ts`'s undiscoverable-prerequisite tripwire was written
+   * to catch (an operation that is not awkward but impossible).
+   *
+   * Bounded by {@link CAMPAIGN_ITEM_PREVIEW} rather than unbounded: a
+   * long-running campaign accumulates hundreds of slots, and putting all of
+   * them in a list response would put them in every MCP session's context too.
+   */
   list(workspaceId: string) {
     return this.prisma.socialCampaign.findMany({
-      where: { workspaceId }, orderBy: { createdAt: 'desc' },
+      where: { workspaceId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        items: {
+          orderBy: { scheduledFor: 'desc' },
+          take: CAMPAIGN_ITEM_PREVIEW,
+          select: {
+            id: true,
+            status: true,
+            scheduledFor: true,
+            sequenceIndex: true,
+            topic: true,
+            contentConceptId: true,
+            socialPostId: true,
+          },
+        },
+      },
     });
   }
 
@@ -116,6 +186,7 @@ export class SocialCampaignsService implements OnModuleInit {
   }
 
   async update(workspaceId: string, id: string, patch: Partial<CreateSocialCampaignInput>) {
+    this.assertModels(patch);
     const c = await this.getOwned(workspaceId, id);
 
     // A "mode-only" patch touches ONLY automationMode and/or planningMode. Those
@@ -308,6 +379,47 @@ export class SocialCampaignsService implements OnModuleInit {
     if (!REGENERATABLE_STATES.includes(item.status)) {
       throw new BadRequestException(`Cannot regenerate an item in status ${item.status}`);
     }
+    // A PROMOTED item (one that came from an approved ContentConcept) has to go
+    // back through the CONCEPT producer, not this one. The generic path composes
+    // fresh copy and a stock image, which for this item would overwrite the shot
+    // plan a human approved — and the shot plan IS the content here, not an
+    // illustration of it. Resetting it to PLANNED would be worse still: a
+    // PLANNED item with a topic is exactly what confirmPlan sweeps into that
+    // same generic generator.
+    if (item.contentConceptId) {
+      // Whether the paid-for cursor (`generatedAssetIds`) survives is decided by
+      // the SOURCE STATE, because that is what distinguishes two different
+      // requests wearing one button.
+      //
+      // FAILED = production stopped part-way through a spend. The concept's shot
+      // plan is immutable (nothing in the product edits it), so beats already
+      // bought are byte-for-byte the beats a rebuild would buy again. Keeping the
+      // cursor is therefore never worse than clearing it — same output, and at
+      // worst the same cost, since an item that failed on beat 1 has an empty
+      // cursor and resume IS rebuild. Clearing it meant an item that died on
+      // beat 3 of 5 for a transient provider blip re-bought beats 1-2 for
+      // nothing, on the most expensive action in the product.
+      //
+      // Anything else (NEEDS_APPROVAL above all) = a human has SEEN the finished
+      // clips and is asking for DIFFERENT ones. There the cursor must go, or
+      // "regenerate" hands back the same video.
+      const resume = item.status === 'FAILED';
+      await this.prisma.socialCampaignItem.update({
+        where: { id: itemId },
+        data: {
+          status: 'GENERATING',
+          error: null,
+          socialPostId: null,
+          ...(resume ? {} : { generatedAssetIds: [] }),
+        },
+      });
+      await this.scheduledJobs.schedule({
+        workspaceId, kind: CONCEPT_PRODUCE_KIND, runAt: new Date(),
+        payload: { itemId, workspaceId, waits: 0 }, dedupKey: produceDedup(itemId),
+      });
+      return item;
+    }
+
     // Reset to PLANNED so generateItem's atomic PLANNED→GENERATING claim matches.
     await this.prisma.socialCampaignItem.update({
       where: { id: itemId }, data: { status: 'PLANNED', error: null },

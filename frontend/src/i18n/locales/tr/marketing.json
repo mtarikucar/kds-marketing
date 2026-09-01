@@ -622,7 +622,32 @@
     "personas": "UGC Personaları",
     "brandBrain": "Marka Beyni",
     "brand": "Marka",
-    "home": "Ana ekran"
+    "home": "Ana ekran",
+    "aiModels": "Yapay zeka modelleri"
+  },
+  "aiModels": {
+    "title": "Yapay zeka üretim modelleri",
+    "subtitle": "Bu çalışma alanının görsel ve videoları hangi modelle ürettiği ve her birinin maliyeti. Bir kampanya kendi modelini seçebilir; kampanyası olmayan her üretim burada seçtiğini kullanır.",
+    "loadFailed": "Model kataloğu yüklenemedi, bu yüzden hiçbir seçenek gösterilemiyor. Bu bir yükleme hatası — katalog boş değil.",
+    "noModels": "Sunucu bu türden hiç model döndürmedi. Bu bir katalog arızası, paket sınırı değil — düzeltilene kadar üretim yapılandırılamaz.",
+    "saved": "Model varsayılanları güncellendi.",
+    "saveFailed": "Model varsayılanları kaydedilemedi.",
+    "platformDefault": "Platform varsayılanı",
+    "platformDefaultIs": "Platform varsayılanı ({{label}})",
+    "platformDefaultHint": "Platform bunu değiştirirse takip etmeye devam eder.",
+    "inUse": "Kullanımda",
+    "retired": "Bu çalışma alanı \"{{retired}}\" olarak ayarlı; bu model artık katalogda yok, bu yüzden fiyatlandırılamaz ve çalıştırılamaz. Onun yerine {{label}} çalışıyor ({{price}}). Kayıtlı seçimi değiştirmek için aşağıdan bir model seçin.",
+    "priceVideo": "saniyede {{credits}} kredi ({{usd}}/sn)",
+    "priceImage": "görsel başına {{credits}} kredi ({{usd}})",
+    "overrideNote": "Kendi modelini belirleyen kampanya onu korur — bu, belirlemeyen her şeyin varsayılanıdır.",
+    "video": {
+      "title": "Video modeli",
+      "desc": "Video bu üründeki en pahalı eylem ve saniye başına ücretlendiriliyor; yani beş çekimlik bir konsept, burada seçtiğinin tüm süreyle çarpımı kadara mal olur."
+    },
+    "image": {
+      "title": "Görsel modeli",
+      "desc": "Görsel başına sabit ücretlendirilir — gönderi görselleri ve referans kareler için kullanılır."
+    }
   },
   "common": {
     "save": "Kaydet",
@@ -3011,7 +3036,48 @@
     "modesTitle": "Modlar",
     "modesHint": "Sonraki gönderilerin nasıl işleneceğini değiştir. Bir gönderi üretim aşamasındaysa kampanyayı duraklat.",
     "subtitleAuto": "Autopilot senin için yürüttüğü AI içerik kampanyaları",
-    "modesReadonlyHint": "Bu kampanyanın ne kadar otomatik olduğu — Growth Autopilot belirler."
+    "modesReadonlyHint": "Bu kampanyanın ne kadar otomatik olduğu — Growth Autopilot belirler.",
+    "regenerateCost": "Bu gönderiyi sıfırdan yeniden kurar ve medyasını yeniden üretir; bu kredi harcar. Video, görsele göre belirgin biçimde daha pahalıdır.",
+    "tabDistribution": "Dağıtım"
+  },
+  "contentDistribution": {
+    "title": "Dağıtım",
+    "notPlanned": "Bu gönderi için henüz bir dağıtım planı üretilmedi — kiminle iletişime geçilecek, ne etiketlenecek, nereye çapraz paylaşım yapılacak. Plan ürettiğinde hiçbir şey gönderilmez: mesajlar hazırlanır ve seni bekler.",
+    "produce": "Planı üret",
+    "replan": "Planı yenile",
+    "planned": "Dağıtım planı üretildi.",
+    "produceFailed": "Dağıtım planı üretilemedi. Bu bir üretim hatası — dağıtım gerekmediği anlamına gelmez.",
+    "loadFailed": "Dağıtım planı yüklenemedi. Bu bir yükleme hatası — dağıtılacak bir şey olmadığı anlamına gelmez.",
+    "itemNotApproved": "Bu kampanyada henüz hiçbir şey onaylanmadı, yani dağıtılacak yayımlanmış bir gönderi yok. Bu, hattın bir aşaması — videonun tanıtıma ihtiyacı olmadığı kararı değil.",
+    "noItems": "Bu kampanyanın henüz onaylanmış veya yayımlanmış bir gönderisi yok, dolayısıyla dağıtılacak bir şey de yok.",
+    "confirmSend": {
+      "title": "Bu mesaj şimdi gönderilsin mi?",
+      "body": "{{to}} adresine {{channel}} üzerinden, bu çalışma alanından gerçek bir mesaj olarak gider. Bir taslak yalnızca bir kez gönderilebilir, bu yüzden buradan geri alınamaz.",
+      "confirm": "Evet, gönder"
+    },
+    "send": "Gönder",
+    "sent": "Mesaj gönderildi.",
+    "sendFailed": "Mesaj gönderilemedi.",
+    "dismiss": "Vazgeç",
+    "dismissFailed": "Vazgeçilemedi.",
+    "messageTo": "{{to}} adresine gidecek mesaj",
+    "status": {
+      "sent": "Gönderildi",
+      "dismissed": "Vazgeçildi",
+      "failed": "Başarısız"
+    },
+    "crossPost": {
+      "title": "Çapraz paylaşım takvimi",
+      "desc": "Şu anda {{networks}} üzerinde yayında. Bunlar yönlendirme yapılacak diğer akışlar — hepsi aynı anda değil, aralıklı.",
+      "descUnpublished": "Bunun nereye paylaşılacağı — hepsi aynı anda değil, aralıklı."
+    },
+    "tags": {
+      "title": "Ne etiketlenecek"
+    },
+    "outreach": {
+      "title": "Haber verilecek kişiler",
+      "desc": "Hazırlandı, gönderilmedi. İstersen her mesajı düzenle, sonra tek tek gönder — bilerek toplu gönderim yok."
+    }
   },
   "landing": {
     "a11y": {

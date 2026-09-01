@@ -14,6 +14,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { SocialCampaignCalendar } from './SocialCampaignCalendar';
 import { ApprovalQueue } from './ApprovalQueue';
+import { DistributionPanel } from './DistributionPanel';
 import { CampaignStatusHero } from './CampaignStatusHero';
 import { PipelineStats } from './PipelineStats';
 import { deriveCampaignState } from './campaignState';
@@ -174,6 +175,16 @@ export default function SocialCampaignDetailPage() {
                 {t('socialCampaign.tabQueue', 'Approval queue')}
                 {state.needsApproval > 0 && <Badge tone="warning" size="sm">{state.needsApproval}</Badge>}
               </TabsTrigger>
+              {/*
+                Distribution lives HERE and not on a route of its own because the
+                whole feature is keyed by a campaign ITEM id, and this is the only
+                screen in the product that already holds those ids. A page at its
+                own URL would have had to re-fetch the campaign and its calendar
+                just to learn something the tab beside it already knows.
+              */}
+              <TabsTrigger value="distribution">
+                {t('socialCampaign.tabDistribution', 'Distribution')}
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="calendar">
               <SocialCampaignCalendar
@@ -189,6 +200,9 @@ export default function SocialCampaignDetailPage() {
                 pendingAction={review.isPending ? review.variables?.action : null}
                 onReview={(itemId, action) => review.mutate({ itemId, action })}
               />
+            </TabsContent>
+            <TabsContent value="distribution">
+              <DistributionPanel campaignId={id} items={items} />
             </TabsContent>
           </Tabs>
         </>

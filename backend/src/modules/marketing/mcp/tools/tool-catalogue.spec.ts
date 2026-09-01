@@ -19,6 +19,8 @@ import { registerSchedulingTools } from './scheduling.tools';
 import { registerWorkspaceTools } from './workspace.tools';
 import { registerContentTools } from './content.tools';
 import { registerSocialCampaignTools } from './social-campaigns.tools';
+import { registerContentConceptTools } from './content-concepts.tools';
+import { registerContentDistributionTools } from './content-distribution.tools';
 import { registerEmailTools } from './email.tools';
 import { registerVoiceTools } from './voice.tools';
 import { registerCampaignWriteTools } from './campaigns-write.tools';
@@ -139,6 +141,16 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerContentTools(registry, {
     calendar: { range: jest.fn() } as any,
     media: { requestGeneration: jest.fn(), listAssets: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerContentConceptTools(registry, {
+    concepts: { planConcepts: jest.fn(), list: jest.fn(), review: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerContentDistributionTools(registry, {
+    distribution: { plan: jest.fn(), listDrafts: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
@@ -440,6 +452,27 @@ describe('MCP tool catalogue', () => {
         'jeeta.enrol_lead',
         'jeeta.list_reviews',
         'jeeta.reply_to_review',
+        // İçerik üretim hattı, aşama 1. All three DEFERRED: the advertised
+        // surface is exactly at its ceiling and the rule is that a wave which
+        // wants room defers rather than raises the number. The chat reaches
+        // them through find_tools -> call_tool, which is what the ceiling funds.
+        'jeeta.plan_content_concepts',
+        'jeeta.list_content_concepts',
+        'jeeta.review_content_concept',
+        // Promotion's SECOND caller. Without it, any failure between the verdict
+        // write and the item left a concept APPROVED with promotedItemId null
+        // and review() answering "already approved" forever — a paid-for
+        // decision with no way to act on it.
+        'jeeta.produce_content_concept',
+        // İçerik üretim hattı, aşama 4. Two tools, both deferred, and note
+        // which verb is NOT among them: there is no send. Sending a prepared
+        // message is a REST route behind an authenticated human, because
+        // `requiresApproval` gates at the WORKSPACE level and one AUTONOMOUS
+        // toggle would turn an approval-gated send tool into an unattended one.
+        // The owner's decision was per-message. See
+        // distribution-send.boundary.spec.ts.
+        'jeeta.plan_content_distribution',
+        'jeeta.list_distribution_drafts',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -449,7 +482,20 @@ describe('MCP tool catalogue', () => {
     // 108 -> 109: jeeta.list_background_jobs, also deferred. Same shape of gap —
     // the retry queue behind every deferred action had no reader at all, so a
     // job's lastError was recorded and then unreachable from anywhere.
-    expect(names).toHaveLength(120);
+    // 120 -> 123: the three content-concept tools, every one of them deferred.
+    // 123 -> 124: jeeta.produce_content_concept, also deferred.
+    // 124 -> 126: the two distribution tools, also deferred. There is no third
+    // one that sends, on purpose — see the comment beside them above.
+    //
+    // MEASURED, not counted by grep. `grep -c 'registry.register('` over the
+    // non-spec tool files is a legitimate cross-check and currently agrees:
+    // 123 calls for 123 names before that tool, 124/124 after, 126/126 with
+    // stage 4's two distribution tools. An earlier note
+    // recorded "125 register calls but 123 registered names" and claimed grep
+    // over-counts; re-measured, grep did not — the counts have always matched,
+    // and the figure to trust is the one this assertion takes from a built
+    // registry.
+    expect(names).toHaveLength(126);
   });
 
   /**
@@ -535,10 +581,14 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 120 total, 45 advertised: everything a wave adds beyond the ceiling is
-    // deferred — which is exactly why the advertised count above stayed fixed
-    // while the catalogue grew past a hundred.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(120);
+    // 126 total, 45 advertised (+2 discovery) and 79 deferred: everything a
+    // wave adds beyond the ceiling is deferred — which is exactly why the
+    // advertised count above stayed fixed while the catalogue grew past a
+    // hundred. Stage 4's two distribution tools are the newest pair, and both
+    // are deferred for that reason. The number in this comment said 120 while
+    // the assertion below said 123; a comment that disagrees with its own
+    // assertion is how a measured figure quietly becomes a remembered one.
+    expect(registry.list(ALL_SCOPES)).toHaveLength(126);
   });
 });
 
@@ -588,6 +638,12 @@ const ID_SOURCES: Record<string, string> = {
   // campaigns / content / social
   campaignId: 'jeeta.list_campaigns',
   postId: 'jeeta.list_scheduled_posts',
+  // The calendar slot. It had NO source until 2026-09-01: list_social_campaigns
+  // returned campaigns and stopped there, so an agent could see that a campaign
+  // existed and never learn the id of a single thing in it. That tool now
+  // includes each campaign's recent items, which is what makes this line true
+  // rather than aspirational — the tripwire working exactly as intended.
+  campaignItemId: 'jeeta.list_social_campaigns',
   targetAccountIds: 'jeeta.list_social_accounts',
   assetId: 'jeeta.list_generated_media',
   emailTemplateId: 'jeeta.list_email_templates',
@@ -604,6 +660,7 @@ const ID_SOURCES: Record<string, string> = {
   reviewId: 'jeeta.list_reviews',
   courseId: 'jeeta.list_courses',
   budgetId: 'jeeta.get_budget',
+  conceptId: 'jeeta.list_content_concepts',
 };
 
 describe('MCP catalogue — every required id must be discoverable', () => {

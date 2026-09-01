@@ -127,6 +127,18 @@ export const AI_CREDIT_COSTS = {
   'research.native_scrape': { credits: 1, tier: 'light' as AiModelTier },
   'command.request': { credits: 1, tier: 'default' as AiModelTier },
   'command.turn': { credits: 5, tier: 'default' as AiModelTier },
+  // İçerik üretim hattı — one idea into N distinct video concepts, each planned
+  // shot by shot. A SINGLE forced-tool Opus call (no loop, so no `.turn` row),
+  // but a wide one: the answer is N whole shot plans, so maxTokens is 6000 and
+  // the output side dominates. 6000 out at $25/MTok is ~$0.15, plus a small
+  // input, so 16 credits at the $0.01 anchor — priced from the ceiling like
+  // funnel.draft and brand.analyze, and rounded up rather than down.
+  //
+  // `default` (Opus) is the point of the action rather than an oversight: the
+  // whole value is judgment about which angles on an idea are genuinely
+  // different, and a cheaper tier's failure mode here is precisely the five
+  // paraphrases the feature exists to prevent.
+  'content.concepts': { credits: 16, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

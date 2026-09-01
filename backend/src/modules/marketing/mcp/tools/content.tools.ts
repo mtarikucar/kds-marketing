@@ -136,6 +136,26 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
         .optional()
         .describe('Up to 5 public reference image URLs to condition on.'),
       seed: z.number().int().optional().describe('Deterministic seed.'),
+      // Both ids, for the same reasons the video tool carries them — an image
+      // is not exempt from either. Without socialCampaignId the asset is on
+      // `sweepOrphanAssets`' 30-day delete list; without campaignItemId it is
+      // off the armed-budget pre-debit path. Commit 88c95d77 said "every
+      // MCP-generated asset was an orphan" and then fixed only video, so every
+      // image an agent generated kept being deleted at 30 days.
+      socialCampaignId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'The social campaign this image belongs to (see jeeta.list_social_campaigns). Say it when there is one: an asset with no campaign is DELETED after 30 days by the orphan sweep.',
+        ),
+      campaignItemId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'The campaign item (calendar slot) this image is for (see jeeta.list_social_campaigns). Marks the generation as engine work, which an armed autonomous budget pays for out of the growth wallet.',
+        ),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'mediaGen');
@@ -150,6 +170,15 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
           ? { referenceImageUrls: args.referenceImageUrls.map(String) }
           : {}),
         ...(typeof args.seed === 'number' ? { seed: args.seed } : {}),
+        // Forwarded, not trusted: `MediaGenService` proves both against THIS
+        // workspace before anything is reserved — the same ownership check the
+        // video tool leans on, reused rather than repeated.
+        ...(args.socialCampaignId !== undefined
+          ? { socialCampaignId: String(args.socialCampaignId) }
+          : {}),
+        ...(args.campaignItemId !== undefined
+          ? { campaignItemId: String(args.campaignItemId) }
+          : {}),
         createdById: actor.id,
       });
     },
@@ -188,6 +217,20 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
         .optional()
         .describe('Up to 5 public reference image URLs to condition on.'),
       seed: z.number().int().optional().describe('Deterministic seed.'),
+      socialCampaignId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'The social campaign this clip belongs to (see jeeta.list_social_campaigns). Say it when there is one: an asset with no campaign is DELETED after 30 days by the orphan sweep.',
+        ),
+      campaignItemId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'The campaign item (calendar slot) this clip is for. Marks the generation as engine work, which an armed autonomous budget pays for out of the growth wallet.',
+        ),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'mediaGen');
@@ -203,6 +246,15 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
           ? { referenceImageUrls: args.referenceImageUrls.map(String) }
           : {}),
         ...(typeof args.seed === 'number' ? { seed: args.seed } : {}),
+        // Both forwarded, both PROVEN by MediaGenService against this workspace
+        // before anything is reserved — a model can name any id it likes, and
+        // socialCampaignId is a real FK.
+        ...(args.socialCampaignId !== undefined
+          ? { socialCampaignId: String(args.socialCampaignId) }
+          : {}),
+        ...(args.campaignItemId !== undefined
+          ? { campaignItemId: String(args.campaignItemId) }
+          : {}),
         createdById: actor.id,
       });
     },

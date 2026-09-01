@@ -88,6 +88,7 @@ const WebhooksPage             = lazy(() => import('./pages/marketing/settings/w
 const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
 // MCP connector console (Faz 4) — the operator mirror of the MCP surface:
 // endpoint address, write mode, connected clients, session audit.
+const AiModelsPage             = lazy(() => import('./pages/marketing/settings/aiModels'));
 const McpConsolePage           = lazy(() => import('./pages/marketing/settings/mcpConsole'));
 // Settings→Connections is the Integrations TAB of the Account Center now.
 const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
@@ -317,6 +318,10 @@ export default function App() {
             {/* MCP connector console (Faz 4) — MANAGER-readable; the write-mode
                 switch inside self-disables from overview.canToggle (OWNER-only). */}
             <Route path="/settings/mcp-console" element={<S><McpConsolePage /></S>} />
+            {/* Which fal.ai model this workspace generates on, with each one's
+                price. MANAGER-gated here, matching the PATCH's own
+                MANAGER + settings.manage floor. */}
+            <Route path="/settings/ai-models"   element={<S><AiModelsPage /></S>} />
             {/* Backend calendar-OAuth callbacks 302 to /settings/connections?gcal=… —
                 params must survive into the Account Center's Integrations tab. */}
             <Route path="/settings/connections" element={<RedirectMergingParams to="/accounts" set={{ tab: 'integrations' }} />} />

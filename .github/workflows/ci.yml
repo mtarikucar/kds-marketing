@@ -188,6 +188,11 @@ jobs:
       MARKETING_JWT_REFRESH_SECRET: ci-e2e-marketing-refresh-secret-111111111111
       PLATFORM_JWT_SECRET: ci-e2e-platform-secret-2222222222222222222222
       INTERNAL_SERVICE_TOKEN: ci-e2e-internal-token-3333333333333333333333
+      # AES-256-GCM master key that seals channel/PSP credentials. Must decode
+      # to EXACTLY 32 bytes (secret-box.helper.ts), not merely be 32 chars —
+      # this is base64 of 'ci-e2e-throwaway-secret-key-0000'. Without it,
+      # connecting a social account 400s, which the distribution spec needs.
+      MARKETING_SECRET_KEY: Y2ktZTJlLXRocm93YXdheS1zZWNyZXQta2V5LTAwMDA=
       CORE_SERVICE_URL: http://localhost:9/unused
       PUBLIC_BASE_URL: http://localhost:3101
       APP_URL: http://localhost:5173

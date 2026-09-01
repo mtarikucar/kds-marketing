@@ -367,7 +367,32 @@
     "help": "Help",
     "appointments": "Appointments",
     "brand": "Brand",
-    "home": "Home"
+    "home": "Home",
+    "aiModels": "AI models"
+  },
+  "aiModels": {
+    "title": "AI generation models",
+    "subtitle": "Which model this workspace generates images and videos with, and what each one costs. A campaign can still override it; anything with no campaign uses what you choose here.",
+    "loadFailed": "The model catalogue could not be loaded, so no choice can be shown. This is a load failure, not an empty catalogue.",
+    "noModels": "The server returned no models of this kind. That is a catalogue fault, not a plan limit — generation cannot be configured until it is fixed.",
+    "saved": "Model defaults updated.",
+    "saveFailed": "The model defaults could not be saved.",
+    "platformDefault": "Platform default",
+    "platformDefaultIs": "Platform default ({{label}})",
+    "platformDefaultHint": "Keeps following the platform if it changes this.",
+    "inUse": "In use",
+    "retired": "This workspace is set to \"{{retired}}\", which is no longer in the catalogue, so it cannot be priced or run. {{label}} runs instead ({{price}}). Pick a model below to replace the stored choice.",
+    "priceVideo": "{{credits}} credits/sec ({{usd}}/sec)",
+    "priceImage": "{{credits}} credits / image ({{usd}})",
+    "overrideNote": "A campaign that sets its own model keeps it — this is the default for everything that does not.",
+    "video": {
+      "title": "Video model",
+      "desc": "Video is the most expensive action in this product and is billed per second, so a five-beat concept costs whatever you pick here multiplied by its whole runtime."
+    },
+    "image": {
+      "title": "Image model",
+      "desc": "Billed flat, per image — used for post creatives and reference frames."
+    }
   },
   "common": {
     "save": "Save",
@@ -2542,7 +2567,48 @@
     "provisioned": "Social campaign created",
     "provisionFailed": "Could not create social content",
     "subtitleAuto": "AI content campaigns the Autopilot runs for you",
-    "modesReadonlyHint": "How automatic this campaign is — set by the Growth Autopilot."
+    "modesReadonlyHint": "How automatic this campaign is — set by the Growth Autopilot.",
+    "regenerateCost": "Builds this post again from scratch and generates its media again, which spends credits. Video costs substantially more than an image.",
+    "tabDistribution": "Distribution"
+  },
+  "contentDistribution": {
+    "title": "Distribution",
+    "notPlanned": "No distribution plan has been produced for this post yet — who to contact, what to tag, and where to cross-post. Nothing is sent when you produce one: the messages are prepared and wait for you.",
+    "produce": "Produce the plan",
+    "replan": "Refresh the plan",
+    "planned": "Distribution plan produced.",
+    "produceFailed": "The distribution plan could not be produced. This is a failure to produce it, not a finding that no distribution is needed.",
+    "loadFailed": "The distribution plan could not be loaded. This is a load failure — it does not mean there is nothing to distribute.",
+    "itemNotApproved": "Nothing in this campaign has been approved yet, so there is no published post to distribute. This is a stage of the pipeline, not a decision that the video needs no promotion.",
+    "noItems": "This campaign has no approved or published post yet, so there is nothing to distribute.",
+    "confirmSend": {
+      "title": "Send this message now?",
+      "body": "It goes to {{to}} on {{channel}} as a real message from this workspace. A draft can only be sent once, so this cannot be undone from here.",
+      "confirm": "Yes, send it"
+    },
+    "send": "Send",
+    "sent": "Message sent.",
+    "sendFailed": "The message was not sent.",
+    "dismiss": "Dismiss",
+    "dismissFailed": "Could not dismiss it.",
+    "messageTo": "Message to {{to}}",
+    "status": {
+      "sent": "Sent",
+      "dismissed": "Dismissed",
+      "failed": "Failed"
+    },
+    "crossPost": {
+      "title": "Cross-post schedule",
+      "desc": "Already live on {{networks}}. These are the other timelines to redirect from, spaced out rather than posted at once.",
+      "descUnpublished": "Where to post this, spaced out rather than all at once."
+    },
+    "tags": {
+      "title": "What to tag"
+    },
+    "outreach": {
+      "title": "People to tell",
+      "desc": "Prepared, not sent. Edit each message if you want to, then send them one at a time — there is no bulk send, on purpose."
+    }
   },
   "landing": {
     "a11y": {

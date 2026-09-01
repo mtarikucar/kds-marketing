@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SocialCampaignsService, SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, generateDedup } from './social-campaigns.service';
+import { CONCEPT_PRODUCE_KIND, produceDedup } from '../content-concepts/concept-promotion.service';
 
 const WS = 'ws-1';
 const SLOT = new Date('2026-07-08T09:00:00Z');
@@ -179,6 +180,76 @@ describe('item approve / reject / regenerate', () => {
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
       kind: SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, dedupKey: generateDedup('i-1'),
     }));
+  });
+
+  it('regenerateItem on a PROMOTED item re-runs the CONCEPT, not the generic planner', async () => {
+    // Regenerating through the generic path would compose fresh copy and a
+    // stock image over the shot plan a human approved — the shot plan is the
+    // whole content, and the generic generator has never heard of it. It would
+    // also leave the item PLANNED with a topic, which confirmPlan then sweeps
+    // into that same generator.
+    const { svc, prisma, scheduledJobs } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      makeItem({ status: 'FAILED', contentConceptId: 'concept-1', generatedAssetIds: ['a-1'] }),
+    );
+
+    await svc.regenerateItem(WS, 'i-1');
+
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
+      kind: CONCEPT_PRODUCE_KIND, dedupKey: produceDedup('i-1'),
+    }));
+    expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({
+      kind: SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND,
+    }));
+    // GENERATING, not PLANNED. And a FAILED promoted item RESUMES: the clips
+    // already bought are kept as the cursor (see the pair of tests below).
+    expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'GENERATING', error: null, socialPostId: null },
+    }));
+  });
+
+  /**
+   * Fix 7 — regenerating the most expensive object in the product.
+   *
+   * The split is on the SOURCE STATE, because that is what says which of two
+   * different requests this is.
+   *
+   * FAILED means production stopped part-way through a spend. The shot plan on
+   * the concept is immutable — nothing in the product can edit it — so beats
+   * already bought are byte-for-byte the beats that would be bought again.
+   * Resuming is therefore never worse than rebuilding: identical output, and at
+   * worst identical cost (when nothing had been bought yet, resume IS rebuild).
+   *
+   * NEEDS_APPROVAL means a human has SEEN the finished clips and is asking for
+   * different ones. There the cursor must go, or "regenerate" returns the same
+   * video and reads as a broken button.
+   */
+  it('regenerating a FAILED promoted item RESUMES — it does not re-buy beats it owns', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      makeItem({ status: 'FAILED', contentConceptId: 'concept-1', generatedAssetIds: ['a-1', 'a-2'] }),
+    );
+
+    await svc.regenerateItem(WS, 'i-1');
+
+    const { data } = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
+    expect(data.status).toBe('GENERATING');
+    // The key assertion: the cursor is not in the write at all, so the two
+    // clips this workspace already paid for survive and produce() starts at 3.
+    expect(data).not.toHaveProperty('generatedAssetIds');
+  });
+
+  it('regenerating a promoted item a human has SEEN clears the cursor and re-buys', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      makeItem({ status: 'NEEDS_APPROVAL', contentConceptId: 'concept-1', generatedAssetIds: ['a-1', 'a-2'] }),
+    );
+
+    await svc.regenerateItem(WS, 'i-1');
+
+    const { data } = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
+    expect(data.status).toBe('GENERATING');
+    expect(data.generatedAssetIds).toEqual([]);
   });
 
   it('regenerateItem rejects a PUBLISHED item (no re-charge / re-publish)', async () => {
