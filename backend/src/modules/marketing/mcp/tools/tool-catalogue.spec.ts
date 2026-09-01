@@ -19,6 +19,7 @@ import { registerSchedulingTools } from './scheduling.tools';
 import { registerWorkspaceTools } from './workspace.tools';
 import { registerContentTools } from './content.tools';
 import { registerSocialCampaignTools } from './social-campaigns.tools';
+import { registerContentConceptTools } from './content-concepts.tools';
 import { registerEmailTools } from './email.tools';
 import { registerVoiceTools } from './voice.tools';
 import { registerCampaignWriteTools } from './campaigns-write.tools';
@@ -139,6 +140,11 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerContentTools(registry, {
     calendar: { range: jest.fn() } as any,
     media: { requestGeneration: jest.fn(), listAssets: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerContentConceptTools(registry, {
+    concepts: { planConcepts: jest.fn(), list: jest.fn(), review: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
@@ -440,6 +446,13 @@ describe('MCP tool catalogue', () => {
         'jeeta.enrol_lead',
         'jeeta.list_reviews',
         'jeeta.reply_to_review',
+        // İçerik üretim hattı, aşama 1. All three DEFERRED: the advertised
+        // surface is exactly at its ceiling and the rule is that a wave which
+        // wants room defers rather than raises the number. The chat reaches
+        // them through find_tools -> call_tool, which is what the ceiling funds.
+        'jeeta.plan_content_concepts',
+        'jeeta.list_content_concepts',
+        'jeeta.review_content_concept',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -449,7 +462,8 @@ describe('MCP tool catalogue', () => {
     // 108 -> 109: jeeta.list_background_jobs, also deferred. Same shape of gap —
     // the retry queue behind every deferred action had no reader at all, so a
     // job's lastError was recorded and then unreachable from anywhere.
-    expect(names).toHaveLength(120);
+    // 120 -> 123: the three content-concept tools, every one of them deferred.
+    expect(names).toHaveLength(123);
   });
 
   /**
@@ -538,7 +552,7 @@ describe('MCP tool catalogue', () => {
     // 120 total, 45 advertised: everything a wave adds beyond the ceiling is
     // deferred — which is exactly why the advertised count above stayed fixed
     // while the catalogue grew past a hundred.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(120);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(123);
   });
 });
 
@@ -604,6 +618,7 @@ const ID_SOURCES: Record<string, string> = {
   reviewId: 'jeeta.list_reviews',
   courseId: 'jeeta.list_courses',
   budgetId: 'jeeta.get_budget',
+  conceptId: 'jeeta.list_content_concepts',
 };
 
 describe('MCP catalogue — every required id must be discoverable', () => {

@@ -416,8 +416,28 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.list_generated_media` | Previously generated assets | `campaigns.read` | READ | — | no |
 | `jeeta.pause_social_campaign` | Pause a RUNNING AI social campaign and cancel its scheduled plan job | `campaigns.write` | WRITE | CAMPAIGN_PAUSE | no |
 | `jeeta.unschedule_social_post` | Pull a SCHEDULED post back to DRAFT so its copy, media or targets can be corrected, then schedule it again | `campaigns.send` | WRITE | — | no |
+| `jeeta.plan_content_concepts` | Open ONE idea into several genuinely different video concepts, each planned shot by shot — **spends AI credits (one Opus call)** | `campaigns.write` | WRITE | — | no |
+| `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans | `campaigns.read` | READ | — | no |
+| `jeeta.review_content_concept` | Approve or discard one concept — **requires a signed-in human** | `campaigns.write` | WRITE | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
+
+`jeeta.plan_content_concepts` costs money but is **not** classified `SPEND`, and
+that is deliberate. `SPEND` is reserved for money leaving the workspace to a
+media vendor; it is in `ALWAYS_APPROVED_RISKS`, so such a tool never runs inline
+and returns `PENDING_APPROVAL` — and the approval executor hands the result to
+the *approver's* HTTP response, not to the agent turn that asked. A tool whose
+value IS its return value therefore becomes unusable inside an agent turn once
+gated. No LLM-credit action in this product is `SPEND` (`ask_ai`, the command
+bar's turns, `strategy.turn`, `funnel.draft` are all likewise not), and the
+concepts this one writes are inert rows a human discards for free. The credit
+cost is stated in the tool's own description instead.
+
+`jeeta.review_content_concept` is the one write tool that does **not** fall back
+to the workspace's SYSTEM principal when no person is behind the call: an
+unattended API-key session approving its own concepts would be the review
+deleted rather than performed, and there is no honest value to record as the
+reviewer. It refuses with a 403.
 
 #### Ads
 

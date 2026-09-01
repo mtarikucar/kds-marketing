@@ -262,6 +262,7 @@ import { BrandAnalysisRunnerService } from './brand-brain/brand-analysis.runner'
 import { BrandApplyService } from './brand-brain/brand-apply.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
+import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
 import { McpPrincipalService } from './mcp/mcp-principal.service';
@@ -290,6 +291,7 @@ import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
+import { registerContentConceptTools } from './mcp/tools/content-concepts.tools';
 import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
@@ -993,6 +995,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     BrandApplyService,
     TrendRemixService,
     VideoPipelineService,
+    ContentConceptsService,
     McpToolRegistry,
     McpBrokerService,
     // MCP Faz 5 D1 — resolves the REAL actor a tool WRITE is attributed to
@@ -1274,6 +1277,7 @@ export class MarketingModule {
     calendar: UnifiedCalendarService,
     mediaGen: MediaGenService,
     socialCampaigns: SocialCampaignsService,
+    contentConcepts: ContentConceptsService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
     salesCalls: SalesCallService,
@@ -1325,6 +1329,7 @@ export class MarketingModule {
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
+    registerContentConceptTools(registry, { concepts: contentConcepts, principals, entitlements });
     registerCampaignWriteTools(registry, { campaigns, entitlements });
     registerEmailTools(registry, { templates: emailTemplates, campaigns, entitlements });
     registerVoiceTools(registry, { calls: salesCalls, leads, campaigns, principals, entitlements });
