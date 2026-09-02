@@ -47,6 +47,26 @@ const privacyContent: LegalContent = {
         ],
       },
       {
+        id: 'platform-data',
+        heading: 'Bağlı Sosyal Medya Platformlarından Gelen Veriler (Platform Verisi)',
+        body: [
+          'Bir hesap sahibi kendi sosyal medya veya işletme hesabını Platform’a bağladığında, ilgili sağlayıcıdan yalnızca bağlanan hesabın kullandığı özellikler için gerekli olan verileri alırız. Bu verileri reklam ağlarına satmaz, kiralamaz veya devretmeyiz ve profil oluşturma amacıyla ilgisiz üçüncü taraflarla birleştirmeyiz.',
+          'Aşağıda her platform için ne aldığımızı ve niçin aldığımızı belirtiyoruz. Her kalem, o özelliği çalıştırmak için gereken en az veriyle sınırlıdır:',
+        ],
+        items: [
+          'Meta / Facebook: bağlanan Sayfa’nın kimliği, adı ve erişim jetonu; Sayfa’ya gelen Messenger mesajları ve gönderen kişinin sayfaya özgü kimliği (PSID); yayımlanan gönderiler ve bunların erişim/etkileşim istatistikleri; Lead Ads formu yanıtları. Amaç: mesajları yanıtlamak, gönderi yayımlamak ve performansı raporlamak.',
+          'Instagram: bağlanan işletme hesabının kimliği ve adı; gelen direkt mesajlar ve gönderenin Instagram’a özgü kimliği (IGSID); gönderiler ve bunların istatistikleri. Amaç: mesajlaşma, yayımlama ve raporlama.',
+          'WhatsApp Business: bağlanan telefon numarası kimliği; gelen ve giden mesajlar ile teslim/okundu bilgileri. Amaç: mesajlaşma ve teslim durumunu göstermek.',
+          'LinkedIn: bağlanan kişisel veya şirket profilinin kimliği ve adı; yayımlanan gönderiler ve bunların istatistikleri. Amaç: yayımlama ve raporlama.',
+          'TikTok: bağlanan hesabın kimliği ve kullanıcı adı; yayımlanan videolar ve bunların istatistikleri; varsa gelen direkt mesajlar ve gönderenin hesaba özgü kimliği. Amaç: yayımlama, mesajlaşma ve raporlama.',
+          'X (Twitter): bağlanan hesabın kimliği ve kullanıcı adı; yayımlanan gönderiler ve bunların istatistikleri. Amaç: yayımlama ve raporlama.',
+          'Pinterest: bağlanan hesabın ve panonun kimliği; yayımlanan pinler ve bunların istatistikleri. Amaç: yayımlama ve raporlama.',
+          'Google Business Profile: bağlanan işletme konumunun kimliği ve adı; müşteri değerlendirmeleri ve bunlara verilen yanıtlar. Amaç: değerlendirmeleri tek yerden görüntülemek ve yanıtlamak.',
+          'Saklama: erişim jetonları bağlantı kaldırılana kadar şifrelenmiş olarak saklanır ve bağlantı kaldırıldığında derhâl silinir. Mesaj içerikleri ve kişi kimlikleri, ilgili hesap sahibi silene veya bir silme talebi yerine getirilene kadar saklanır. İstatistikler kimliksizleştirilmiş sayısal veridir ve raporlama için saklanır.',
+          'Silme: bir hesap sahibi bağlantıyı kaldırdığında o platforma ait jeton ve hesap kaydı silinir. Bir kişi kendi verisinin silinmesini talep ettiğinde, o kişiye ait tüm mesajlar ve platform kimlikleri kalıcı olarak silinir; nasıl talep edileceği /data-deletion sayfasında açıklanmıştır. Facebook ve Instagram için ayrıca platformun kendi veri silme geri çağrısını (data deletion callback) uyguluyoruz.',
+        ],
+      },
+      {
         id: 'amaclar',
         heading: 'Kişisel Verilerin İşlenme Amaçları',
         items: [
@@ -173,6 +193,26 @@ const privacyContent: LegalContent = {
           'Payment data: billing details and transaction records processed via our payment provider (card details are not stored by us).',
           'Communication/channel data: messages and content you send through connected channels (WhatsApp, email, social media).',
           'Data collected via cookies and similar technologies.',
+        ],
+      },
+      {
+        id: 'platform-data',
+        heading: 'Data From Connected Social Platforms (Platform Data)',
+        body: [
+          'When an account holder connects their own social or business account, we receive from that provider only the data the connected features need. We do not sell, rent or transfer this data to ad networks, and we do not combine it with unrelated third-party data to build profiles.',
+          'What we receive from each platform, and why. Every item is limited to the minimum that feature needs to work:',
+        ],
+        items: [
+          'Meta / Facebook: the connected Page’s id, name and access token; Messenger messages sent to the Page and the sender’s page-scoped id (PSID); published posts and their reach/engagement metrics; Lead Ads form submissions. Purpose: replying to messages, publishing posts and reporting performance.',
+          'Instagram: the connected business account’s id and name; incoming direct messages and the sender’s Instagram-scoped id (IGSID); posts and their metrics. Purpose: messaging, publishing and reporting.',
+          'WhatsApp Business: the connected phone-number id; inbound and outbound messages with their delivery/read receipts. Purpose: messaging and showing delivery state.',
+          'LinkedIn: the connected personal or company profile’s id and name; published posts and their metrics. Purpose: publishing and reporting.',
+          'TikTok: the connected account’s id and username; published videos and their metrics; where enabled, incoming direct messages and the sender’s account-scoped id. Purpose: publishing, messaging and reporting.',
+          'X (Twitter): the connected account’s id and username; published posts and their metrics. Purpose: publishing and reporting.',
+          'Pinterest: the connected account and board id; published pins and their metrics. Purpose: publishing and reporting.',
+          'Google Business Profile: the connected location’s id and name; customer reviews and the replies to them. Purpose: reading and answering reviews in one place.',
+          'Retention: access tokens are stored encrypted until the connection is removed, and are deleted immediately when it is. Message content and contact identities are retained until the account holder deletes them or a deletion request is fulfilled. Metrics are aggregate numeric data kept for reporting.',
+          'Deletion: removing a connection deletes that platform’s token and account record. When a person asks for their data to be deleted, every message and platform identity belonging to them is permanently deleted — /data-deletion explains how to ask. For Facebook and Instagram we additionally implement the platform’s own data deletion callback.',
         ],
       },
       {

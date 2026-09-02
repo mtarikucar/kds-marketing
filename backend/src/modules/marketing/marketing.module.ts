@@ -447,6 +447,8 @@ import { MarketingHomeController } from './controllers/marketing-home.controller
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
+import { PlatformDataDeletionService } from './compliance/platform-data-deletion.service';
+import { PublicDataDeletionController } from './compliance/public-data-deletion.controller';
 // NetGSM Phase 2 Task 3 — İYS auto-push (consent writes -> İYS proof queue).
 import { IysSyncService } from './compliance/iys-sync.service';
 // NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (applies
@@ -747,6 +749,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     PageViewStatsController,
     MarketingHomeController,
     ComplianceController,
+    // PUBLIC (unauthenticated) Meta data-deletion callback + its status endpoint.
+    PublicDataDeletionController,
     TwoFactorController,
     SlackController,
     RolesController,
@@ -1116,6 +1120,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     LeadStreamService,
     // Epic F (compliance).
     ComplianceService,
+    // Platform (Meta) data-deletion callback — resolves the platform id and
+    // reuses ComplianceService's audited erasure; never deletes rows itself.
+    PlatformDataDeletionService,
     // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.
     IysSyncService,
     // NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (subscribes via

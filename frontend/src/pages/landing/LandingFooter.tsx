@@ -29,6 +29,10 @@ export default function LandingFooter() {
       links: [
         { label: t('landing.footer.linkPrivacy'), to: '/privacy' },
         { label: t('landing.footer.linkTerms'), to: '/terms' },
+        // Platform reviews (Meta/TikTok/Pinterest/LinkedIn) expect the data
+        // deletion instructions to be reachable from the site, not just linked
+        // from a form field in a developer console.
+        { label: t('landing.footer.linkDataDeletion', 'Data Deletion'), to: '/data-deletion' },
       ],
     },
   ];

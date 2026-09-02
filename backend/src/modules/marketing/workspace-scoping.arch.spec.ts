@@ -370,6 +370,20 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // metering/KB/agent reads are keyed off the resolved channel's OWN workspaceId.
   'voice-ai/voice-ai-bridge.controller.ts:channel.findFirst':
     'public partner-LLM bridge resolves the VOICE channel by id before any workspace context exists (bearer-secret authed)',
+  // Meta's data-deletion callback (App Review prerequisite): a PUBLIC endpoint
+  // Meta POSTs a signed_request to, authenticated ONLY by the HMAC over that
+  // payload. It carries a platform-scoped user id and NO tenant context at all,
+  // so "which tenants hold this id" is a question across workspaces by
+  // definition — scoping the probe would need a workspaceId nobody can supply.
+  // The probe projects only workspaceId + leadId, and every step after it is
+  // scoped to the workspaceId the MATCHED ROW ITSELF carries: the erasure runs
+  // through ComplianceService.requestErasure/fulfillErasure, both of which
+  // re-resolve the lead/request under that workspaceId before touching a row.
+  // Runtime proof that no match ever crosses tenants lives in
+  // platform-data-deletion.service.spec.ts ('erases each match under its OWN
+  // workspace'), which cross-stamps two tenants holding the same id.
+  'compliance/platform-data-deletion.service.ts:contactIdentity.findMany':
+    'Meta data-deletion callback resolves a platform-scoped id before any workspace context exists; each match is then erased under its own workspaceId',
   // Review-sync sweep (Epic 13, inert): the hourly cron reads ACTIVE review
   // sources with a token across ALL workspaces — a system job, same shape as the
   // ads/recording sweeps. Every write it triggers (review upsert / source update)

@@ -19,6 +19,10 @@ required for them to function.**
 | Funnel page render | `GET /api/public/p/:ws/:slug` | `/p/:ws/:slug` |
 | Form submit | `POST /api/public/f/:formId` | `/f/:formId` |
 | Booking page / slots / reserve | `GET/POST /api/public/book/:ws/:cal[...]` | `/book/:ws/:cal` |
+| Meta data deletion callback | `POST /api/public/compliance/meta/data-deletion` | — |
+| Deletion-request status (JSON) | `GET /api/public/compliance/data-deletion/status?code=` | — |
+| Deletion-request status (page) | `/data-deletion-status?code=` (SPA route) | same |
+| Data-deletion instructions (page) | `/data-deletion` (SPA route) | same |
 
 ## NetGSM SMS (two-way) — delivery is polled, inbound is pushed
 
@@ -152,3 +156,41 @@ regardless, so the rewrite must map `/p/...` → `/api/public/p/...`. The simple
 zero-rewrite option is to keep `PUBLIC_BASE_URL` pointing at the `/api/public`
 paths (the default the code emits today). Apply the vanity block only when you
 want the shorter URLs; it is **not** required for any feature to work.
+
+## Meta App Review: the data-deletion URLs to paste into the App Dashboard
+
+Meta will not accept an App Review submission without a data-deletion answer.
+Two fields in **App Dashboard → App Settings → Basic**, and these are the exact
+values (production host `jeetagrowth.com`):
+
+| App Dashboard field | Value |
+|---|---|
+| **Data Deletion Request URL** (callback) | `https://jeetagrowth.com/api/public/compliance/meta/data-deletion` |
+| **Data Deletion Instructions URL** (alternative) | `https://jeetagrowth.com/data-deletion` |
+| Privacy Policy URL | `https://jeetagrowth.com/privacy` |
+| Terms of Service URL | `https://jeetagrowth.com/terms` |
+
+Meta accepts **either** the callback or the instructions URL. Both are provided:
+TikTok, Pinterest and LinkedIn reviews all ask for an instructions page too, and
+it is the surface a human can actually use.
+
+**The callback needs `META_APP_SECRET` set.** The whole security of that
+endpoint is the `signed_request` HMAC computed with it; with the secret unset
+the endpoint answers `503` to everything rather than trusting an unverifiable
+request. Verify after deploy (a request Meta did not sign must be refused):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}
+'   -X POST https://jeetagrowth.com/api/public/compliance/meta/data-deletion   -d 'signed_request=bm90.YXNpZ25hdHVyZQ'
+# want: 403  (200 here would mean the endpoint is not verifying anything)
+```
+
+**What Meta sends, and what it can match.** The callback's `user_id` is
+*platform-scoped*: for the **Facebook Login** app it is an **app-scoped user id
+(ASID)**, which is a different namespace from the **page-scoped id (PSID)** the
+Messenger webhook gives us — converting between them needs Meta's ID Matching
+API and a *user* access token the callback does not carry. For the **Instagram
+API with Instagram Login** app the id IS the Instagram-scoped id we store as
+`IGSID`, and there it matches. So a callback that resolves to nothing is
+expected, and is recorded as an **UNMATCHED** request whose status page says
+exactly that — never "deleted" for data that was never found.
