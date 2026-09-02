@@ -281,6 +281,17 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
                       })
                     : t('accounts.notConnected', 'Not connected')}
                 </p>
+                {/* A disabled Connect button that does not say why reads as
+                    broken. The reason used to live only in a `title` tooltip —
+                    invisible on touch, to a keyboard user, and to anyone who
+                    does not hover a dead control. */}
+                {p.connectMethod === 'OAUTH' && network && !p.configured && (
+                  <p className="text-micro text-muted-foreground">
+                    {t('accounts.notConfigured', {
+                      defaultValue: 'An admin must add this provider’s app credentials first',
+                    })}
+                  </p>
+                )}
               </div>
             </div>
             {p.connectMethod === 'OAUTH' && network ? (

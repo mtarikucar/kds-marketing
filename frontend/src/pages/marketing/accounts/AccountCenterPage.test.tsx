@@ -84,6 +84,25 @@ describe('AccountCenterPage', () => {
     expect(connectButtons.some((b) => (b as HTMLButtonElement).disabled)).toBe(true);
   });
 
+  // A disabled control that does not say why is indistinguishable from a broken
+  // one. The reason lived only in a `title` tooltip: invisible on touch, to a
+  // keyboard user, and to anyone who does not think to hover a dead button.
+  it('says WHY an unconfigured provider cannot be connected, in visible text', async () => {
+    wrap();
+    await screen.findByText('Acme Clinic');
+    expect(screen.getByText(/app credentials/i)).toBeInTheDocument();
+  });
+
+  it('does not nag about credentials on a configured provider', async () => {
+    const api = (await import('../../../features/marketing/api/marketingApi')).default as any;
+    api.get.mockResolvedValue({
+      data: { ...PAYLOAD, providers: PAYLOAD.providers.filter((p) => p.provider !== 'LINKEDIN') },
+    });
+    wrap();
+    await screen.findByText('Acme Clinic');
+    expect(screen.queryByText(/app credentials/i)).toBeNull();
+  });
+
   it('renders the Accounts | Integrations tab bar with Accounts active by default', async () => {
     wrap();
     expect(screen.getByRole('tab', { name: 'Accounts' })).toHaveAttribute('data-state', 'active');

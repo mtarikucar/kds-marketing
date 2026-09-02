@@ -108,6 +108,7 @@
     "connectAnother": "Başka bir hesap bağla",
     "reconnect": "Yeniden bağlan",
     "notConnected": "Bağlı değil",
+    "notConfigured": "Bu sağlayıcıyı bağlamak için önce bir yönetici uygulama kimlik bilgilerini eklemeli",
     "identityNotifs": "Kimlik ve bildirimler (şirket)",
     "identityNotifsDesc": "Workspace tek oturum açma (SSO) ve Slack bildirimleri — tüm ekiple paylaşılır.",
     "myCalendar": "Takvim bağlantılarım",

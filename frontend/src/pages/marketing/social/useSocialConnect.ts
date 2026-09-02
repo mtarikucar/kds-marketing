@@ -19,26 +19,25 @@ export interface PendingConnection {
 /**
  * Drives the one-click OAuth connect flow: kick off `start` (full-page
  * redirect to the provider), read back the pending assets after the callback
- * returns to `/social?connect=<id>`, and confirm the user's selection.
+ * returns to `/accounts?connect=<id>`, and confirm the user's selection.
  */
 export function useSocialConnect() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
-  /** POST start → redirect the browser to the provider's consent screen. The
-   *  `origin` tells the callback which page to land back on ('channels' when the
-   *  connect was launched from the inbox/channels page). */
+  /** POST start → redirect the browser to the provider's consent screen.
+   *
+   *  `origin` is REQUIRED: it rides the signed state and tells the callback
+   *  which page launched the connect. It was optional, and the one caller that
+   *  omitted it was the one whose result the callback could not deliver — a
+   *  1-argument call is not a shape worth keeping available. */
   const startConnect = async (
     network: SocialNetwork,
-    opts?: { origin?: 'social' | 'channels' | 'account-center' },
+    opts: { origin: 'social' | 'channels' | 'account-center' },
   ) => {
     try {
       const url = `/social/oauth/${network.toLowerCase()}/start`;
-      // Only send a body when there's an origin, so existing (no-origin) callers
-      // keep their exact 1-arg POST signature.
-      const { data } = opts?.origin
-        ? await marketingApi.post(url, { origin: opts.origin })
-        : await marketingApi.post(url);
+      const { data } = await marketingApi.post(url, { origin: opts.origin });
       navigateExternal(data?.authorizeUrl as string | undefined);
     } catch {
       toast.error(
