@@ -4088,7 +4088,26 @@
         "unknown": "Bu fikir tipini bu sürüm tanımıyor; ne yapacağını söyleyemeyiz."
       },
       "whatLabel": "Bu ne yapacak?",
-      "refreshDoneNoCount": "Yeni plan hazır"
+      "refreshDoneNoCount": "Yeni plan hazır",
+      "detail": {
+        "back": "Fikirlere dön",
+        "loadFailed": "Fikir yüklenemedi.",
+        "notFoundTitle": "Bu fikir artık listede yok",
+        "notFoundDesc": "Bu fikir karara bağlanmış, yoksayılmış ya da plan yenilenirken silinmiş olabilir. Bekleyen fikirlere dönebilirsin.",
+        "resultLabel": "Sonuç",
+        "strategyLabel": "Bağlı olduğu strateji",
+        "whyLabel": "Neden bu fikir?"
+      },
+      "dismissFailure": "Bu uyarıyı kapat",
+      "failedBanner": "«{{title}}» çalıştırılamadı: {{reason}}",
+      "status": {
+        "proposed": "Öneri",
+        "approved": "Onaylandı",
+        "running": "Çalışıyor",
+        "done": "Tamamlandı",
+        "failed": "Başarısız",
+        "dismissed": "Yoksayıldı"
+      }
     }
   },
   "studio": {
@@ -4178,7 +4197,24 @@
       "unknownCurrency": "Para birimi okunamadı — tutar birimsiz gösteriliyor",
       "followersPartial": "{{n}} hesabın {{k}} tanesi takipçi sayısı bildirdi — toplam yalnızca onları kapsıyor",
       "organicUnread": "Hesap istatistikleri okunamadı",
-      "adsUnread": "Reklam verileri okunamadı"
+      "adsUnread": "Reklam verileri okunamadı",
+      "bandTitle": "Öne çıkan istatistikler",
+      "leads": "Reklamdan gelen kayıt",
+      "leadsAria": "Günlük reklam kaydı",
+      "followersTotalAria": "Günlük toplam takipçi sayısı",
+      "followersPartialShort": "{{n}} hesabın {{k}} tanesi bildirdi",
+      "missing": "Gösterilemeyen",
+      "reasonNoOrganic": "organik veri yok",
+      "reasonNoAds": "reklam verisi yok",
+      "reasonNoPublished": "bu aralıkta yayın yok",
+      "reasonNoFollowers": "takipçi sayısı bildirilmedi",
+      "noTrend": "günlük seyir yok",
+      "moveFlow": "önceki {{d}} güne göre",
+      "moveStock": "aralığın başına göre",
+      "nothingConnected": "Bağlı hesap yok — bir hesap bağlandığı anda buradaki sayılar dolmaya başlar.",
+      "noneAtAll": "Bu aralıkta gösterilebilecek bir istatistik yok.",
+      "blindSpots": "{{n}} kaynak okunamıyor — sayılar onları kapsamıyor",
+      "coverageDetail": "Kapsam"
     },
     "today": {
       "brokenCount": "{{count}} gönderide sorun var",
@@ -4326,6 +4362,32 @@
       },
       "money": "Para",
       "ops": "İşleyiş"
+    },
+    "accounts": {
+      "title": "Bağlı hesaplar",
+      "none": "Henüz bağlı hesap yok",
+      "connect": "Hesap bağla",
+      "healthy": "Çalışıyor",
+      "reauth": "Yeniden bağla",
+      "disabled": "Kapalı",
+      "reauthWhy": "Bu hesabın izni düştü — yeniden bağlanana kadar ne yayın çıkar ne istatistik gelir.",
+      "disabledWhy": "Bu hesap kapalı — yayın kuyruğuna alınmıyor.",
+      "reconnect": "Hesap merkezinde düzelt",
+      "manage": "Hesap merkezinde aç",
+      "followers": "Takipçi",
+      "followersAria": "{{name}} hesabının günlük takipçi sayısı",
+      "noFollowers": "Takipçi sayısı bildirilmedi",
+      "reach": "Erişim",
+      "engagements": "Etkileşim",
+      "posts": "Yayın",
+      "recent": "Son hareketler",
+      "noRecent": "Son {{n}} gönderi arasında bu hesaba çıkan yok",
+      "noText": "(metinsiz gönderi)",
+      "postPublished": "Yayınlandı",
+      "postPending": "Sırada",
+      "postFailed": "Başarısız",
+      "postsUnread": "Son hareketler okunamadı",
+      "noOrganicRow": "Bu bağlantı için organik istatistik okunmuyor."
     }
   },
   "documentsHub": {

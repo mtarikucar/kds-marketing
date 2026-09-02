@@ -3255,7 +3255,26 @@
         "unknown": "This build doesn't recognise this idea type; we can't tell you what it will do."
       },
       "whatLabel": "What will this do?",
-      "refreshDoneNoCount": "A new plan is ready"
+      "refreshDoneNoCount": "A new plan is ready",
+      "detail": {
+        "back": "Back to ideas",
+        "loadFailed": "The idea could not be loaded.",
+        "notFoundTitle": "This idea is no longer on the list",
+        "notFoundDesc": "It may have been decided, dismissed, or dropped when the plan was refreshed. You can go back to the pending ideas.",
+        "resultLabel": "Result",
+        "strategyLabel": "The strategy it belongs to",
+        "whyLabel": "Why this idea?"
+      },
+      "dismissFailure": "Dismiss this warning",
+      "failedBanner": "“{{title}}” could not be run: {{reason}}",
+      "status": {
+        "proposed": "Proposed",
+        "approved": "Approved",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "dismissed": "Dismissed"
+      }
     }
   },
   "studio": {
@@ -3345,7 +3364,24 @@
       "unknownCurrency": "Currency could not be read — the amount is shown with no unit",
       "followersPartial": "{{k}} of {{n}} accounts reported a follower count — the total covers only those",
       "organicUnread": "Account statistics could not be read",
-      "adsUnread": "Ad data could not be read"
+      "adsUnread": "Ad data could not be read",
+      "bandTitle": "Key statistics",
+      "leads": "Leads from ads",
+      "leadsAria": "Daily leads from ads",
+      "followersTotalAria": "Total followers per day",
+      "followersPartialShort": "{{k}} of {{n}} accounts reported",
+      "missing": "Not shown",
+      "reasonNoOrganic": "no organic data",
+      "reasonNoAds": "no ad data",
+      "reasonNoPublished": "nothing published in this range",
+      "reasonNoFollowers": "no follower count reported",
+      "noTrend": "no daily trend",
+      "moveFlow": "vs. the previous {{d}} days",
+      "moveStock": "vs. the start of the range",
+      "nothingConnected": "Nothing connected yet — these numbers start filling in the moment an account is connected.",
+      "noneAtAll": "There is no statistic to show for this range.",
+      "blindSpots": "{{n}} sources cannot be read — the numbers do not cover them",
+      "coverageDetail": "Coverage"
     },
     "today": {
       "brokenCount": "{{count}} posts have a problem",
@@ -3493,6 +3529,32 @@
       },
       "money": "Money",
       "ops": "Operations"
+    },
+    "accounts": {
+      "title": "Connected accounts",
+      "none": "No accounts connected yet",
+      "connect": "Connect an account",
+      "healthy": "Working",
+      "reauth": "Reconnect",
+      "disabled": "Disabled",
+      "reauthWhy": "This account lost its permission — until it is reconnected nothing publishes and no statistics arrive.",
+      "disabledWhy": "This account is off — nothing is queued to it.",
+      "reconnect": "Fix it in the Account Center",
+      "manage": "Open in the Account Center",
+      "followers": "Followers",
+      "followersAria": "{{name}}'s followers per day",
+      "noFollowers": "No follower count reported",
+      "reach": "Reach",
+      "engagements": "Engagement",
+      "posts": "Published",
+      "recent": "Recent activity",
+      "noRecent": "Nothing among the last {{n}} posts went to this account",
+      "noText": "(post with no text)",
+      "postPublished": "Published",
+      "postPending": "Queued",
+      "postFailed": "Failed",
+      "postsUnread": "Recent activity could not be read",
+      "noOrganicRow": "Organic statistics are not being read for this connection."
     }
   },
   "documentsHub": {

@@ -116,7 +116,7 @@ describe('Growth Studio i18n — every key the surface renders is in both catalo
     // turn every assertion below into a vacuous pass.
     expect(files.length).toBeGreaterThan(15);
     expect(KEYS.length).toBeGreaterThan(200);
-    expect(KEYS).toEqual(expect.arrayContaining(['settingsGroup.marketing', 'studio.stats.title']));
+    expect(KEYS).toEqual(expect.arrayContaining(['settingsGroup.marketing', 'studio.stats.refresh']));
   });
 
   it('tr defines every one of them', () => {

@@ -1,16 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Plug, RefreshCw, AlertTriangle } from 'lucide-react';
-import { Badge } from '@/components/ui/Badge';
+import { RefreshCw, AlertTriangle, Info } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/Popover';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { LineTrend, StackedBars, zeroFillNumeric, compactNumber, fullNumber } from '@/components/charts';
+import { LineTrend, zeroFillNumeric, compactNumber, fullNumber } from '@/components/charts';
 import {
   getSocialInsights,
   pullSocialInsights,
@@ -22,49 +20,86 @@ import {
 } from '../../../features/marketing/api/socialInsights.service';
 import { getAdMetrics, listAdAccounts } from '../../../features/marketing/api/ads.service';
 import { useConnections, connectionsKey } from '../accounts/hooks';
-import { ProviderLogo } from '../accounts/ProviderLogo';
 import { NETWORK_META } from '../social/networks';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { hasMarketingRole, MarketingRole } from '../../../features/marketing/types';
-import { trailingUtcDays } from './todayBounds';
 
 /** The ranges the panel offers. Presets before a custom picker — nobody fights a calendar for "last 30 days". */
-const RANGES = [7, 30, 90] as const;
-type Range = (typeof RANGES)[number];
+export const STUDIO_RANGES = [7, 30, 90] as const;
+export type StudioRange = (typeof STUDIO_RANGES)[number];
 
 /**
- * The Growth Studio's top-left panel: how the connected accounts are actually
- * doing.
+ * Three, and the owner said three: "3 tane istatistik alanı yeter şu an".
  *
- * Read this as SMALL MULTIPLES rather than as a dashboard of unrelated tiles.
- * Reach, engagement, followers and ad spend share one x-axis and each keeps its
- * own y-scale, which is the only honest way to show them together: they differ
- * by orders of magnitude, and putting two of them on one plot with two scales
- * would invent a correlation out of where the two axes happened to be pinned.
- * Four small charts answer "what is the shape of each" without ever implying a
- * relationship the data does not contain.
- *
- * The panel also refuses to draw a chart it cannot back. Organic insights depend
- * on per-network permissions this workspace may simply not hold, and a flat zero
- * line is indistinguishable from a real zero — so an unreadable network is named
- * in words instead of being averaged into silence, and so is each account whose
- * last pull was refused, with the provider's own reason next to it.
+ * It is also the number the band can hold at a size where each slot still
+ * carries a number, a movement and a shape. A fourth would either shrink the
+ * sparklines to decoration or push the band back into owning the screen, which
+ * is the thing this rework exists to undo.
  */
-export default function AccountStatsPanel() {
+const MAX_SLOTS = 3;
+
+export interface AccountStatsPanelProps {
+  /** The selected window, in days. Owned by the screen — see StudioOneScreen. */
+  range: StudioRange;
+  onRangeChange: (next: StudioRange) => void;
+  /** Window start, ISO instant. */
+  from: string;
+  /** Window end, ISO instant, INCLUSIVE. */
+  to: string;
+}
+
+/**
+ * The Growth Studio's statistics band: the three numbers that matter right now.
+ *
+ * WHAT THIS REPLACED, AND WHY. It used to be four line charts, a stacked bar and
+ * a coverage paragraph, holding the largest share of the screen — and standing
+ * mostly empty, because organic insights depend on per-network scopes this
+ * workspace does not hold until app review clears them. Area had been allocated
+ * by how much CONTENT existed rather than by how much it MATTERED, so the
+ * emptiest region was the biggest one. The band is now a defined height, and a
+ * metric earns its slot rather than being reserved one.
+ *
+ * HOW THE THREE ARE CHOSEN. `CANDIDATES` below is a fixed list in descending
+ * importance, written down once, in code. Selection is: walk it in order, keep
+ * the first three that HAVE data. Two properties follow, and both are the point:
+ *
+ *  - A metric with nothing behind it never takes a slot. A tile reading "no
+ *    organic data" is precisely the defect this rework answers; when fewer than
+ *    three qualify, fewer are drawn and the missing ones are NAMED with their
+ *    reason underneath, which is a fact rather than furniture.
+ *  - The order can never depend on the values, so a poll cannot reshuffle it. A
+ *    ranking by magnitude or by "biggest mover" would swap two tiles between two
+ *    refreshes and make the band unreadable; here a slot changes only when a
+ *    metric gains or loses its data entirely, which is a real event.
+ *
+ * The importance order itself answers one question: how close is this number to
+ * the decision this screen exists to support — what do we publish next?
+ *   1. Reach        — did what we published reach anyone at all.
+ *   2. Engagement   — of the people it reached, did it land.
+ *   3. Published    — did we actually put anything out. Counted from OUR OWN
+ *                     targets table, so it is the one organic number that
+ *                     survives a missing insights scope.
+ *   4. Followers    — the asset that compounds, but a stock that barely moves
+ *                     inside a 7-day window, so it loses to activity.
+ *   5. Ad leads     — the paid lane's outcome.
+ *   6. Ad spend     — the paid lane's cost, and the autopilot strip directly
+ *                     above already reports the balance and this period's cap,
+ *                     so it is the least likely of the six to be news.
+ */
+export default function AccountStatsPanel({
+  range,
+  onRangeChange,
+  from,
+  to,
+}: AccountStatsPanelProps) {
   const { t, i18n } = useTranslation('marketing');
   const qc = useQueryClient();
-  const [range, setRange] = useState<Range>(30);
 
   const role = useMarketingAuthStore((s) => s.user?.role);
   // The insights and connections endpoints are manager-only; ad metrics are not.
   // A rep who opens this page must get the half they are allowed to see and one
   // quiet sentence about the rest — not four failed requests and four toasts.
   const isManager = hasMarketingRole(role, MarketingRole.MANAGER);
-
-  // UTC days, not the workspace's — see trailingUtcDays. Metric rows are stored
-  // against a UTC `@db.Date`, so a zoned window over them straddles an extra
-  // bucket at each edge and "30 gün" draws 31 partial columns.
-  const { from, to } = useMemo(() => trailingUtcDays(range), [range]);
 
   const insights = useQuery({
     queryKey: socialInsightsKey({ from, to }),
@@ -192,7 +227,8 @@ export default function AccountStatsPanel() {
     });
 
   /**
-   * Followers, per account, CARRIED FORWARD across the days nobody measured.
+   * The workspace's follower level per day, CARRIED FORWARD across the days
+   * nobody measured.
    *
    * Every other series here is a flow — impressions that happened on a day, or
    * did not — so an unmeasured day is honestly zero and `zeroFillNumeric` is
@@ -200,70 +236,33 @@ export default function AccountStatsPanel() {
    * continuously, and the sweep merely samples it. Zero-filling a stock draws
    * the audience collapsing to nothing every time the pull was skipped or rate
    * limited, and then leaping back — a sawtooth that is entirely an artefact of
-   * our own sampling and reads as catastrophe.
+   * our own sampling and reads as catastrophe. So a gap holds the last observed
+   * level, and the line simply does not start until the first real reading.
    *
-   * So a gap holds the last observed level, and the line simply does not start
-   * until the first real reading. Only accounts that actually reported a count
-   * get a line at all: the backend uses 0 for "never read", which is
-   * indistinguishable from a real zero, and inventing a flat line along the axis
-   * for an account we cannot measure is exactly the fabrication the coverage
-   * note exists to prevent.
-   *
-   * Capped at the number of identity colours. A sixth account would either cycle
-   * a hue — making two accounts look like one — or fold into a muted "other"
-   * line, which is meaningless for a count that belongs to somebody.
+   * ONE LINE, not five. This used to be a line per account, which was the right
+   * picture at a quarter of the panel and is unreadable at a third of a band —
+   * five strokes and a legend inside 56 pixels. "Which account" is a question
+   * you ask about a specific account, so it moved to that account's popover in
+   * the top strip; what belongs here is the workspace's level and its direction.
    */
-  const followerSeries = useMemo(() => {
-    const accounts = (data?.byAccount ?? []).filter((a) => (a.followers ?? 0) > 0).slice(0, 5);
+  const followerPoints = useMemo(() => {
+    const ids = followersReported(data?.byAccount ?? []).map((a) => a.socialAccountId);
     const byDate = new Map(data?.followersByDay?.map((d) => [d.date, d.byAccount]) ?? []);
-    return accounts.map((a) => {
-      let last: number | null = null;
-      return {
-        key: a.socialAccountId,
-        label: a.displayName,
-        // `null` before the first reading, the carried level after it. Null is
-        // a GAP in the plot, not a zero — the days before we first sampled an
-        // account are days whose follower count we do not know, and drawing
-        // them on the axis would show an audience appearing out of nothing on
-        // the day our sweep happened to start.
-        points: labels.map((d) => {
-          const seen = byDate.get(d)?.[a.socialAccountId];
-          if (typeof seen === 'number') last = seen;
-          return last;
-        }),
-      };
+    const last = new Map<string, number>();
+    return labels.map((d) => {
+      const seen = byDate.get(d);
+      for (const id of ids) {
+        const v = seen?.[id];
+        if (typeof v === 'number' && v > 0) last.set(id, v);
+      }
+      // `null`, not 0, before the first reading: the days before we first
+      // sampled are days whose count we do not know, and drawing them on the
+      // axis shows an audience appearing out of nothing on the day our sweep
+      // happened to start.
+      if (!last.size) return null;
+      return [...last.values()].reduce((n, v) => n + v, 0);
     });
   }, [data?.byAccount, data?.followersByDay, labels]);
-
-  /**
-   * What we published each day, split by network.
-   *
-   * The read model reports a day's `posts` total and each network's `byNetwork`
-   * total, and — when the backend supplies it — the per-day network split. When
-   * it does not, the columns collapse to one undifferentiated "yayınlanan"
-   * series rather than apportioning the network totals across days by some
-   * plausible-looking rule: a stack invented that way would be a guess drawn at
-   * the same weight as measured data, which is the one thing a chart may not do.
-   */
-  const publishSeries = useMemo(() => {
-    const nets = Object.keys(data?.byNetwork ?? {});
-    const hasSplit = (data?.byDay ?? []).some((d) => d.byNetwork);
-    if (!nets.length || !hasSplit) {
-      return [
-        {
-          key: 'all',
-          label: t('studio.stats.published', 'Yayınlanan'),
-          values: days.map((d) => d.posts),
-        },
-      ];
-    }
-    const byDate = new Map((data?.byDay ?? []).map((d) => [d.date, d.byNetwork ?? {}]));
-    return nets.slice(0, 5).map((net) => ({
-      key: net,
-      label: NETWORK_META[net as keyof typeof NETWORK_META]?.label ?? net,
-      values: labels.map((d) => byDate.get(d)?.[net] ?? 0),
-    }));
-  }, [data?.byNetwork, data?.byDay, days, labels, t]);
 
   const totals = data?.totals;
   const erate = totals ? engagementRate(totals) : null;
@@ -271,14 +270,9 @@ export default function AccountStatsPanel() {
   const followers = totalFollowers(accountRows);
   /**
    * How many accounts actually reported a follower count, out of how many we
-   * asked about.
-   *
-   * The headline is a SUM over the accounts that answered, and when only some
-   * did, that sum is the audience of a subset presented as the audience of the
-   * workspace. Nothing else on the panel covers it: the coverage note below
-   * speaks about insights — impressions, reach, engagement — and an account can
-   * perfectly well report those while its follower field stays at the backend's
-   * "never read" zero. So the gap is named next to the number it qualifies.
+   * asked about. The headline is a SUM over the accounts that answered, and when
+   * only some did, that sum is the audience of a subset presented as the
+   * audience of the workspace.
    */
   const reported = followersReported(accountRows).length;
   const followersPartial = followers !== null && reported < accountRows.length;
@@ -316,62 +310,199 @@ export default function AccountStatsPanel() {
   /**
    * "We could not read this", which is NOT "there is nothing here".
    *
-   * Both reads zero-fill their window before they resolve, so a failed one
-   * hands every chart a flat run of zeros — which each chart correctly refuses
-   * to plot, and then labels with its empty state. The empty states say
-   * "Organik veri yok" and "Reklam verisi yok": flat assertions about the
-   * business, made on the strength of a request that never came back. Both
-   * queries are `meta: { silent: true }`, so nothing else on the screen
-   * mentions the failure either — a panel whose entire purpose is refusing to
-   * state what it does not know was, in its most common failure mode, stating
-   * exactly that four times over.
-   *
-   * `data === undefined` and not the bare error flag, the same rule the
-   * Autopilot strip and the wallet tile use: React Query keeps the last good
-   * response and only flips status when a BACKGROUND refetch fails, and numbers
-   * we still hold are worth more than an apology.
+   * Both reads zero-fill their window before they resolve, so a failed one hands
+   * every series a flat run of zeros — which would then be indistinguishable
+   * from a measured nothing, and would silently disqualify every metric behind
+   * that read from taking a slot for the RIGHT reason. `data === undefined` and
+   * not the bare error flag, the same rule the Autopilot strip and the wallet
+   * tile use: React Query keeps the last good response and only flips status
+   * when a BACKGROUND refetch fails, and numbers we still hold are worth more
+   * than an apology.
    */
   const organicUnread = insights.isError && insights.data === undefined;
   const adsUnread = ads.isError && ads.data === undefined;
-  const organicEmptyText = organicUnread
+
+  const noOrganic = organicUnread
     ? t('studio.stats.organicUnread', 'Hesap istatistikleri okunamadı')
-    : undefined;
+    : t('studio.stats.reasonNoOrganic', 'organik veri yok');
+  const noAds = adsUnread
+    ? t('studio.stats.adsUnread', 'Reklam verileri okunamadı')
+    : t('studio.stats.reasonNoAds', 'reklam verisi yok');
+
+  const sum = (ns: number[]) => ns.reduce((n, v) => n + v, 0);
+
+  /**
+   * Every metric this band knows how to draw, in descending importance. The
+   * order is the ranking — see the component's doc block for the argument
+   * behind it — and it is deliberately a constant shape rather than something
+   * derived from the numbers, so that a refresh can never reorder the tiles.
+   */
+  const candidates: Candidate[] = [
+    {
+      key: 'reach',
+      organic: true,
+      title: t('studio.stats.reach', 'Erişim'),
+      hasData: !organicUnread && sum(days.map((d) => d.reach)) > 0,
+      noDataReason: noOrganic,
+      value: totals ? short(totals.reach) : '—',
+      points: days.map((d) => d.reach),
+      kind: 'flow',
+      format: num,
+      ariaLabel: t('studio.stats.reachAria', 'Günlük organik erişim'),
+    },
+    {
+      key: 'engagements',
+      organic: true,
+      title: t('studio.stats.engagements', 'Etkileşim'),
+      hasData: !organicUnread && sum(days.map((d) => d.engagements)) > 0,
+      noDataReason: noOrganic,
+      // The RATE when there are impressions to divide by, the count otherwise.
+      // "0%" and "nobody has seen it yet" are different facts.
+      value: erate !== null ? `${erate.toFixed(1)}%` : totals ? short(totals.engagements) : '—',
+      caption: erate !== null ? t('studio.stats.erateCaption', 'etkileşim / gösterim') : undefined,
+      points: days.map((d) => d.engagements),
+      kind: 'flow',
+      format: num,
+      ariaLabel: t('studio.stats.engAria', 'Günlük organik etkileşim'),
+    },
+    {
+      key: 'published',
+      organic: true,
+      title: t('studio.stats.publishedTitle', 'Yayınlanan içerik'),
+      hasData: !organicUnread && (totals?.posts ?? 0) > 0,
+      noDataReason: organicUnread
+        ? noOrganic
+        : t('studio.stats.reasonNoPublished', 'bu aralıkta yayın yok'),
+      value: totals ? num(totals.posts) : '—',
+      caption: t('studio.stats.publishedCaption', 'Kaç içerik çıktı — kaç kişiye ulaştığı değil.'),
+      points: days.map((d) => d.posts),
+      kind: 'flow',
+      format: num,
+      ariaLabel: t('studio.stats.publishedAria', 'Gün başına yayınlanan içerik sayısı'),
+    },
+    {
+      key: 'followers',
+      organic: true,
+      title: t('studio.stats.followers', 'Takipçi'),
+      hasData: !organicUnread && followers !== null,
+      noDataReason: organicUnread
+        ? noOrganic
+        : t('studio.stats.reasonNoFollowers', 'takipçi sayısı bildirilmedi'),
+      value: followers !== null ? short(followers) : '—',
+      // A new key rather than the panel's old `followersPartial`: that one is a
+      // full sentence and this slot has a third of a band to say it in. Same
+      // fact, different room. The comment sits ABOVE the call and not inside
+      // it because `studioSurfaceKeys.test.ts` matches `t(` immediately
+      // followed by its key — a comment in between hides the key from the very
+      // guard that exists to stop an untranslated string shipping.
+      caption: followersPartial
+        ? t('studio.stats.followersPartialShort', '{{n}} hesabın {{k}} tanesi bildirdi', {
+            n: accountRows.length,
+            k: reported,
+          })
+        : undefined,
+      points: followerPoints,
+      kind: 'stock',
+      format: num,
+      // A new key, because the picture changed: the old `followersAria`
+      // described a line per account, and this slot draws the workspace's
+      // total. Reusing it would leave the catalogue narrating a chart that
+      // no longer exists, to exactly the readers who cannot see it.
+      ariaLabel: t('studio.stats.followersTotalAria', 'Günlük toplam takipçi sayısı'),
+    },
+    {
+      key: 'leads',
+      organic: false,
+      title: t('studio.stats.leads', 'Reklamdan gelen kayıt'),
+      hasData: !adsUnread && (ads.data?.totals.leads ?? 0) > 0,
+      noDataReason: noAds,
+      value: ads.data ? num(ads.data.totals.leads) : '—',
+      points: adDays.map((d) => d.leads),
+      kind: 'flow',
+      format: num,
+      ariaLabel: t('studio.stats.leadsAria', 'Günlük reklam kaydı'),
+    },
+    {
+      key: 'spend',
+      organic: false,
+      title: t('studio.stats.spend', 'Reklam harcaması'),
+      hasData: !adsUnread && (ads.data?.totals.spend ?? 0) > 0,
+      noDataReason: noAds,
+      value: ads.data ? money(ads.data.totals.spend) : '—',
+      caption: spendCaveat,
+      points: adDays.map((d) => d.spend),
+      kind: 'flow',
+      format: money,
+      ariaLabel: t('studio.stats.spendAria', 'Günlük reklam harcaması'),
+    },
+  ];
+
+  const shown = candidates.filter((c) => c.hasData).slice(0, MAX_SLOTS);
+
+  /**
+   * The metrics that WOULD have been on screen and are not.
+   *
+   * Cut at the rank of the last slot: a candidate that lost to three better ones
+   * lost on merit, and listing it would be noise. A candidate that outranks
+   * something on screen — or that would have filled an empty slot — lost because
+   * we cannot see it, and that is a fact the owner needs, because it is the
+   * difference between "we did badly there" and "we cannot see there".
+   */
+  const cutoff = shown.length === MAX_SLOTS ? candidates.indexOf(shown[MAX_SLOTS - 1]) : candidates.length;
+  const missing = candidates.filter((c, i) => !c.hasData && i < cutoff && (isManager || !c.organic));
+
+  /**
+   * The missing metrics, GROUPED BY REASON.
+   *
+   * One line has to hold up to five of them, and "Erişim (organik veri yok) ·
+   * Etkileşim (organik veri yok) · Takipçi (organik veri yok)" spends most of
+   * its width repeating one fact. Grouping keeps every metric NAMED — which is
+   * the whole value of the line — while making it short enough that nothing has
+   * to be capped away. Capping was the alternative and it was worse: it dropped
+   * whichever reasons sorted last, and the reason that sorts last is the ad
+   * half, so a failed ad read could vanish behind three absent organic ones.
+   */
+  const missingByReason = missing.reduce<{ reason: string; titles: string[] }[]>((groups, c) => {
+    const g = groups.find((x) => x.reason === c.noDataReason);
+    if (g) g.titles.push(c.title);
+    else groups.push({ reason: c.noDataReason, titles: [c.title] });
+    return groups;
+  }, []);
 
   /**
    * Nothing is connected at all — no social account, no ad account.
    *
-   * In that state the five charts below are not "empty", they are meaningless:
-   * five boxes of zeros and four headline dashes, which is a great deal of
-   * furniture arranged around the absence of a single decision. Worse, a wall of
-   * zeros reads as a RESULT — as though the accounts were connected and doing
-   * nothing — which is the one thing this panel is built not to say.
-   *
-   * So a workspace at zero gets one sentence and one button instead. The charts
-   * come back the moment there is anything at all to plot, and the ad half is
-   * included in the test because an ad account with no social account still has
-   * a real spend series worth drawing.
+   * Six metrics all correctly reporting "no data" is a true statement made six
+   * times, and the useful version of it is one sentence. The connect CTA is NOT
+   * repeated here: it lives in the connected-accounts list at the top of the
+   * screen, where it is one row from the thing it is about, and two buttons
+   * offering the same route is how a screen stops being read.
    */
   const nothingConnected =
+    // Manager-gated, because for a rep `identities.length === 0` is not a fact
+    // about the workspace: the connections query is `enabled: isManager`, so
+    // the length is zero by construction and the sentence would be invented.
+    isManager &&
     !connections.isLoading &&
     !adAccounts.isLoading &&
     identities.length === 0 &&
     (adAccounts.data?.length ?? 0) === 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-foreground">
-          {t('studio.stats.title', 'Bağlı hesaplar')}
+          {t('studio.stats.bandTitle', 'Öne çıkan istatistikler')}
         </h2>
-        {/* Filters in ONE row above everything they scope, never per-chart:
-            every number below re-renders against the same slice, so the charts
+        {/* Filters in ONE row above everything they scope, never per-slot:
+            every number below re-renders against the same slice, so two slots
             can never be read against different windows. */}
         <div className="flex items-center gap-1.5">
           <SegmentedControl
             aria-label={t('studio.stats.rangeLabel', 'Zaman aralığı')}
             value={String(range)}
-            onChange={(v) => setRange(Number(v) as Range)}
-            options={RANGES.map((d) => ({
+            onChange={(v) => onRangeChange(Number(v) as StudioRange)}
+            options={STUDIO_RANGES.map((d) => ({
               value: String(d),
               label: t('studio.stats.range', '{{d}} gün', { d }),
             }))}
@@ -390,249 +521,221 @@ export default function AccountStatsPanel() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-0.5">
-        <AccountStrip
-          identities={identities}
-          isLoading={connections.isLoading}
-          canSee={isManager}
-        />
-
-        {/* Small multiples. Each keeps its own scale; only the x-axis is shared. */}
-        {!nothingConnected && (
-          <>
-        <div className="grid grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
-          <LineTrend
-            labels={labels}
-            series={[
-              { key: 'reach', label: t('studio.stats.reach', 'Erişim'), points: days.map((d) => d.reach) },
-            ]}
-            title={t('studio.stats.reach', 'Erişim')}
-            value={totals ? short(totals.reach) : '—'}
-            isLoading={loading}
-            emptyText={organicEmptyText ?? t('studio.stats.noOrganic', 'Organik veri yok')}
-            height={118}
-            ariaLabel={t('studio.stats.reachAria', 'Günlük organik erişim')}
-            formatLabel={dayLabel}
-            formatValue={num}
-          />
-          <LineTrend
-            labels={labels}
-            series={[
-              {
-                key: 'eng',
-                label: t('studio.stats.engagements', 'Etkileşim'),
-                points: days.map((d) => d.engagements),
-              },
-            ]}
-            title={t('studio.stats.engagements', 'Etkileşim')}
-            value={
-              erate !== null
-                ? `${erate.toFixed(1)}%`
-                : totals
-                  ? short(totals.engagements)
-                  : '—'
-            }
-            caption={
-              erate !== null
-                ? t('studio.stats.erateCaption', 'etkileşim / gösterim')
-                : undefined
-            }
-            isLoading={loading}
-            emptyText={organicEmptyText ?? t('studio.stats.noOrganic', 'Organik veri yok')}
-            height={118}
-            ariaLabel={t('studio.stats.engAria', 'Günlük organik etkileşim')}
-            formatLabel={dayLabel}
-            formatValue={num}
-          />
-          <LineTrend
-            labels={labels}
-            series={followerSeries}
-            title={t('studio.stats.followers', 'Takipçi')}
-            value={followers !== null ? short(followers) : '—'}
-            caption={
-              // Silent when the read failed: "no network reported a follower
-              // count" is the same false assertion the empty state above it has
-              // just been corrected out of making, and a caption contradicting
-              // its own chart is worse than either version alone.
-              organicUnread
-                ? undefined
-                : followers === null
-                ? t('studio.stats.noFollowers', 'Hiçbir ağ takipçi sayısı bildirmedi')
-                : followersPartial
-                  ? t(
-                      'studio.stats.followersPartial',
-                      '{{n}} hesabın {{k}} tanesi takipçi sayısı bildirdi — toplam yalnızca onları kapsıyor',
-                      { n: accountRows.length, k: reported },
-                    )
-                  : undefined
-            }
-            isLoading={loading}
-            emptyText={organicEmptyText ?? t('studio.stats.noFollowerData', 'Takipçi verisi yok')}
-            height={118}
-            ariaLabel={t('studio.stats.followersAria', 'Hesap başına günlük takipçi sayısı')}
-            formatLabel={dayLabel}
-            formatValue={num}
-          />
-          <LineTrend
-            labels={labels}
-            series={[
-              {
-                key: 'spend',
-                label: t('studio.stats.spend', 'Reklam harcaması'),
-                points: adDays.map((d) => d.spend),
-              },
-            ]}
-            title={t('studio.stats.spend', 'Reklam harcaması')}
-            value={ads.data ? money(ads.data.totals.spend) : '—'}
-            caption={spendCaveat}
-            isLoading={ads.isLoading}
-            emptyText={
-              adsUnread
-                ? t('studio.stats.adsUnread', 'Reklam verileri okunamadı')
-                : t('studio.stats.noAds', 'Reklam verisi yok')
-            }
-            height={118}
-            ariaLabel={t('studio.stats.spendAria', 'Günlük reklam harcaması')}
-            formatLabel={dayLabel}
-            formatValue={money}
-          />
-        </div>
-
-        <StackedBars
-          labels={labels}
-          categories={publishSeries}
-          title={t('studio.stats.publishedTitle', 'Yayınlanan içerik')}
-          value={totals ? num(totals.posts) : '—'}
-          caption={t(
-            'studio.stats.publishedCaption',
-            'Kaç içerik çıktı — kaç kişiye ulaştığı değil.',
-          )}
-          isLoading={loading}
-          emptyText={organicEmptyText ?? t('studio.stats.noPublished', 'Bu aralıkta yayınlanan içerik yok')}
-          height={88}
-          ariaLabel={t('studio.stats.publishedAria', 'Gün başına yayınlanan içerik sayısı')}
-          formatLabel={dayLabel}
-          formatValue={num}
-        />
-          </>
-        )}
-
-        {/* `!isManager ||` — the one line a rep must always get.
-            `nothingConnected` folds in `identities.length === 0`, which for a
-            rep is not a fact about the workspace: the connections query is
-            `enabled: isManager`, so `data` is undefined and the length is zero
-            by construction. Short-circuiting on it took the manager-only
-            sentence away from exactly the reader it was written for — and with
-            AccountStrip already null (`canSee`) and the charts skipped, a rep
-            in a workspace with no ad account got a heading, a range control and
-            nothing else. The honest floor for a rep is the sentence saying what
-            they are not seeing; CoverageNote renders it first thing on
-            `!canSee`, before it looks at coverage at all. */}
-        {(!isManager || !nothingConnected) && (
-          <CoverageNote
-            coverage={data?.coverage}
-            accounts={data?.byAccount}
-            canSee={isManager}
-          />
+      {/* `overflow-y-auto` as the safety valve, not as the plan: the band is a
+          fixed height and the slots are sized to fit it, but a caption only
+          some states carry (a currency caveat, a partial-coverage note) can
+          add a line. Scrolling a slot is survivable; spilling it out of the
+          card over the ideas below is not. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
+            ))}
+          </div>
+        ) : nothingConnected ? (
+          <p className="text-caption text-muted-foreground">
+            {t(
+              'studio.stats.nothingConnected',
+              'Bağlı hesap yok — bir hesap bağlandığı anda buradaki sayılar dolmaya başlar.',
+            )}
+          </p>
+        ) : shown.length ? (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3" data-testid="stat-slots">
+            {shown.map((c) => (
+              <StatSlot key={c.key} candidate={c} labels={labels} formatLabel={dayLabel} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-caption text-muted-foreground">
+            {t(
+              'studio.stats.noneAtAll',
+              'Bu aralıkta gösterilebilecek bir istatistik yok.',
+            )}
+          </p>
         )}
       </div>
+
+      <footer className="shrink-0 space-y-0.5">
+        {!nothingConnected && missing.length > 0 && (
+          <p
+            role="status"
+            data-testid="stats-missing"
+            className="line-clamp-1 text-micro text-muted-foreground"
+          >
+            {t('studio.stats.missing', 'Gösterilemeyen')}:{' '}
+            {missingByReason.map((g) => `${g.titles.join(', ')} (${g.reason})`).join(' · ')}
+          </p>
+        )}
+        <CoverageNote
+          coverage={data?.coverage}
+          accounts={data?.byAccount}
+          canSee={isManager}
+        />
+      </footer>
+    </div>
+  );
+}
+
+/** One metric that earned a slot: what it is, the number, its movement, its shape. */
+interface Candidate {
+  key: string;
+  title: string;
+  hasData: boolean;
+  /**
+   * Does this metric come from the manager-only insights read? A rep never
+   * fires it, so naming it as "missing" would report a blind spot that is
+   * really a permission — the coverage line says that once, properly.
+   */
+  organic: boolean;
+  /** Why it has none, phrased to sit inside "Erişim (…)". */
+  noDataReason: string;
+  value: string;
+  caption?: ReactNode;
+  points: (number | null)[];
+  /**
+   * FLOW sums over days (reach, posts, spend); STOCK is a level sampled on them
+   * (followers). The distinction decides what "movement" even means, so it is
+   * declared rather than guessed from the numbers.
+   */
+  kind: 'flow' | 'stock';
+  format: (n: number) => string;
+  ariaLabel: string;
+}
+
+function StatSlot({
+  candidate,
+  labels,
+  formatLabel,
+}: {
+  candidate: Candidate;
+  labels: string[];
+  formatLabel: (d: string) => string;
+}) {
+  const { t } = useTranslation('marketing');
+  const move = movement(candidate);
+
+  return (
+    <div data-testid={`stat-slot-${candidate.key}`} className="min-w-0">
+      <LineTrend
+        labels={labels}
+        series={[{ key: candidate.key, label: candidate.title, points: candidate.points }]}
+        title={candidate.title}
+        value={candidate.value}
+        action={
+          move ? (
+            <span
+              data-testid={`stat-move-${candidate.key}`}
+              data-direction={move.direction}
+              title={
+                candidate.kind === 'stock'
+                  ? t('studio.stats.moveStock', 'aralığın başına göre')
+                  : t('studio.stats.moveFlow', 'önceki {{d}} güne göre', { d: move.span })
+              }
+              className={
+                move.direction === 'up'
+                  ? 'text-caption font-medium text-success'
+                  : move.direction === 'down'
+                    ? 'text-caption font-medium text-danger'
+                    : 'text-caption font-medium text-muted-foreground'
+              }
+            >
+              {move.direction === 'up' ? '↑' : move.direction === 'down' ? '↓' : '→'}{' '}
+              {move.pct !== null
+                ? `%${Math.abs(move.pct).toFixed(0)}`
+                : candidate.format(Math.abs(move.delta))}
+            </span>
+          ) : undefined
+        }
+        caption={candidate.caption}
+        height={56}
+        /* A slot is only here because its HEADLINE has data, which is not the
+           same as having a daily shape: an account can report a follower level
+           with no per-day rows behind it. So the empty state talks about the
+           missing TREND and never contradicts the number printed above it. */
+        emptyText={t('studio.stats.noTrend', 'günlük seyir yok')}
+        ariaLabel={candidate.ariaLabel}
+        formatLabel={formatLabel}
+        formatValue={(n) => candidate.format(n)}
+      />
     </div>
   );
 }
 
 /**
- * One chip per connected identity: the brand mark, the name, and — the only
- * reason this strip exists rather than a count — whether the connection is
- * actually working.
+ * How the metric moved across the window.
  *
- * A workspace whose Instagram token expired last Tuesday sees zeros on every
- * chart above and no explanation anywhere. The health badge is that explanation,
- * and it sits next to the charts precisely so the two are read together.
+ * A FLOW is compared half against half: the last `floor(n/2)` days against the
+ * first `floor(n/2)`, dropping the middle day on an odd window so that the two
+ * sides are the same length. Unequal halves would put a spurious ±1 day of
+ * volume into every comparison, and on a 7-day window that is a seventh of the
+ * answer. Nothing is compared against a PRECEDING window, which would need a
+ * second request and a second cache entry for a number the reader already has
+ * the shape of in front of them.
+ *
+ * A STOCK is simply last-measured minus first-measured; summing a level across
+ * days would be meaningless.
+ *
+ * `pct` is null when the base is zero. Growth from nothing is not a percentage
+ * — every such move is "+∞%" — so the absolute change is shown instead.
  */
-function AccountStrip({
-  identities,
-  isLoading,
-  canSee,
-}: {
-  identities: { identityKey: string; displayName: string; provider: string; health: string }[];
-  isLoading?: boolean;
-  canSee: boolean;
-}) {
-  const { t } = useTranslation('marketing');
-
-  if (!canSee) return null;
-  if (isLoading) {
-    return (
-      <div className="flex gap-2">
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-7 w-28 rounded-full" />
-        ))}
-      </div>
-    );
-  }
-  if (!identities.length) {
-    return (
-      <EmptyState
-        icon={<Plug className="h-5 w-5" />}
-        title={t('studio.stats.noAccounts', 'Henüz bağlı hesap yok')}
-        description={t(
-          'studio.stats.noAccountsDesc',
-          'Bir sosyal hesap bağla; yayın da, istatistik de buradan akmaya başlasın.',
-        )}
-        action={
-          <Button asChild size="sm">
-            <Link to="/accounts">{t('studio.stats.connect', 'Hesap bağla')}</Link>
-          </Button>
-        }
-      />
-    );
+function movement(c: Candidate): {
+  direction: 'up' | 'down' | 'flat';
+  delta: number;
+  pct: number | null;
+  span: number;
+} | null {
+  if (c.kind === 'stock') {
+    const measured = c.points.filter((p): p is number => typeof p === 'number');
+    if (measured.length < 2) return null;
+    const delta = measured[measured.length - 1] - measured[0];
+    const base = measured[0];
+    return {
+      direction: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat',
+      delta,
+      pct: base > 0 ? (delta / base) * 100 : null,
+      span: measured.length,
+    };
   }
 
-  return (
-    <ul className="flex flex-wrap gap-1.5">
-      {identities.map((c) => {
-        const broken = c.health === 'REAUTH_REQUIRED' || c.health === 'DISABLED';
-        return (
-          <li key={c.identityKey}>
-            <Link
-              to="/accounts"
-              className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-caption text-foreground transition-colors hover:bg-muted/40"
-            >
-              <ProviderLogo provider={c.provider as never} className="h-3.5 w-3.5" />
-              <span className="max-w-[10rem] truncate">{c.displayName}</span>
-              {broken && (
-                <Badge tone="danger">
-                  {c.health === 'REAUTH_REQUIRED'
-                    ? t('studio.stats.reauth', 'Yeniden bağla')
-                    : t('studio.stats.disabled', 'Kapalı')}
-                </Badge>
-              )}
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
+  const nums = c.points.map((p) => (typeof p === 'number' ? p : 0));
+  const half = Math.floor(nums.length / 2);
+  if (half < 1) return null;
+  const add = (ns: number[]) => ns.reduce((n, v) => n + v, 0);
+  const first = add(nums.slice(0, half));
+  const second = add(nums.slice(nums.length - half));
+  const delta = second - first;
+  return {
+    direction: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat',
+    delta,
+    pct: first > 0 ? (delta / first) * 100 : null,
+    span: half,
+  };
 }
 
 /**
- * What the numbers above do NOT cover.
+ * What the numbers above do NOT cover — one line, with the detail one click away.
  *
- * This is the line that keeps the panel honest. Organic insights need a
+ * This is the line that keeps the band honest. Organic insights need a
  * per-network permission the workspace may never have been granted, and when a
  * network cannot be read its posts contribute nothing — which looks exactly like
  * posting nothing. Naming the network is the difference between "we are doing
  * badly there" and "we cannot see there", and only one of those is a reason to
  * change what you publish.
  *
+ * It used to be a paragraph in the middle of the screen: a warning block per
+ * unreadable network, a bulleted list of failing accounts with the provider's
+ * verbatim error under each, a partial-coverage count and a freshness stamp —
+ * permanently, on a surface whose most valuable rows belong to the work. None of
+ * those facts is dropped. They moved behind a disclosure whose TRIGGER states
+ * the headline, so the existence of a blind spot is on the screen at all times
+ * and only its detail costs a click.
+ *
  * TWO KINDS OF BLIND SPOT, KEPT APART. `unsupportedNetworks` is permanent —
- * there is no API to call, however the grant is fixed — and reads as a fact
- * about the platform. A per-account `insightsError` is the opposite: we asked,
- * we were refused, and the refusal has a reason and often a fix (an app review
- * clears the scope; a rate limit clears itself). Folding them into one warning
- * would tell the owner nothing can be done about a problem that can, so they get
- * separate sentences and the failing accounts are named individually with the
- * provider's own words next to them.
+ * there is no API to call, however the grant is fixed. A per-account
+ * `insightsError` is the opposite: we asked, we were refused, and the refusal
+ * has a reason and often a fix. Folding them into one warning would tell the
+ * owner nothing can be done about a problem that can.
  */
 function CoverageNote({
   coverage,
@@ -660,10 +763,10 @@ function CoverageNote({
   const unread = coverage.unsupportedNetworks ?? [];
   // Named from byAccount rather than counted from coverage: a count tells the
   // owner that something is wrong somewhere, which is the least actionable
-  // possible version of the truth. Capped at three so one broken workspace does
-  // not push the charts off the panel; the rest are summarised as a remainder.
+  // possible version of the truth.
   const failing = (accounts ?? []).filter((a) => Boolean(a.insightsError));
   const shown = failing.slice(0, 3);
+  const partial = coverage.accountsWithData < coverage.accounts;
   const stale = coverage.lastPulledAt
     ? new Date(coverage.lastPulledAt).toLocaleString(i18n.language, {
         day: 'numeric',
@@ -673,64 +776,89 @@ function CoverageNote({
       })
     : null;
 
+  const blind = unread.length > 0 || failing.length > 0;
+  const headline = blind
+    ? t('studio.stats.blindSpots', '{{n}} kaynak okunamıyor — sayılar onları kapsamıyor', {
+        n: unread.length + failing.length,
+      })
+    : partial
+      ? t('studio.stats.partial', '{{n}} hesabın {{k}} tanesinden veri geldi', {
+          n: coverage.accounts,
+          k: coverage.accountsWithData,
+        })
+      : stale
+        ? t('studio.stats.lastPulled', 'Son güncelleme: {{when}}', { when: stale })
+        : t('studio.stats.neverPulled', 'İstatistikler henüz bir kez bile çekilmedi');
+
   return (
-    <div className="space-y-1">
-      {unread.length > 0 && (
-        <p role="status" className="flex items-start gap-1.5 text-micro text-warning">
-          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span>
-            {t('studio.stats.unreadable', 'Okunamayan ağlar')}:{' '}
-            {unread
-              .map((n) => NETWORK_META[n as keyof typeof NETWORK_META]?.label ?? n)
-              .join(', ')}{' '}
-            —{' '}
-            {t(
-              'studio.stats.unreadableHint',
-              'buraya yayın yapabiliyoruz ama istatistiklerini okuyamıyoruz, yukarıdaki sayılara dahil değiller',
-            )}
-          </span>
-        </p>
-      )}
-      {shown.length > 0 && (
-        <div role="status" className="flex items-start gap-1.5 text-micro text-warning">
-          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <div>
-            <span>{t('studio.stats.readFailed', 'Okunamayan hesaplar')}:</span>
-            <ul className="mt-0.5 space-y-0.5">
-              {shown.map((a) => (
-                <li key={a.socialAccountId}>
-                  <span className="font-medium">{a.displayName}</span>
-                  {' — '}
-                  {/* The provider's own message, verbatim. A paraphrase would
-                      lose the one string that tells a developer which scope to
-                      request, and the owner can paste it into a support note. */}
-                  <span className="text-muted-foreground">{a.insightsError}</span>
-                </li>
-              ))}
-            </ul>
-            {failing.length > shown.length && (
-              <span className="text-muted-foreground">
-                {t('studio.stats.readFailedMore', 've {{n}} hesap daha', {
-                  n: failing.length - shown.length,
-                })}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-      {coverage.accountsWithData < coverage.accounts && (
-        <p role="status" className="text-micro text-muted-foreground">
-          {t('studio.stats.partial', '{{n}} hesabın {{k}} tanesinden veri geldi', {
-            n: coverage.accounts,
-            k: coverage.accountsWithData,
-          })}
-        </p>
-      )}
-      <p className="text-micro text-muted-foreground">
-        {stale
-          ? t('studio.stats.lastPulled', 'Son güncelleme: {{when}}', { when: stale })
-          : t('studio.stats.neverPulled', 'İstatistikler henüz bir kez bile çekilmedi')}
+    <div className="flex items-center gap-1.5">
+      {blind && <AlertTriangle className="h-3 w-3 shrink-0 text-warning" aria-hidden="true" />}
+      <p
+        role="status"
+        className={`min-w-0 flex-1 truncate text-micro ${blind ? 'text-warning' : 'text-muted-foreground'}`}
+      >
+        {headline}
       </p>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-5 shrink-0 px-1.5 text-micro">
+            <Info className="me-1 h-3 w-3" aria-hidden="true" />
+            {t('studio.stats.coverageDetail', 'Kapsam')}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 space-y-2 p-3">
+          {unread.length > 0 && (
+            <p className="text-caption text-warning">
+              {t('studio.stats.unreadable', 'Okunamayan ağlar')}:{' '}
+              {unread
+                .map((n) => NETWORK_META[n as keyof typeof NETWORK_META]?.label ?? n)
+                .join(', ')}{' '}
+              —{' '}
+              {t(
+                'studio.stats.unreadableHint',
+                'buraya yayın yapabiliyoruz ama istatistiklerini okuyamıyoruz, yukarıdaki sayılara dahil değiller',
+              )}
+            </p>
+          )}
+          {shown.length > 0 && (
+            <div className="text-caption text-warning">
+              <span>{t('studio.stats.readFailed', 'Okunamayan hesaplar')}:</span>
+              <ul className="mt-0.5 space-y-0.5">
+                {shown.map((a) => (
+                  <li key={a.socialAccountId}>
+                    <span className="font-medium">{a.displayName}</span>
+                    {' — '}
+                    {/* The provider's own message, verbatim. A paraphrase would
+                        lose the one string that tells a developer which scope to
+                        request, and the owner can paste it into a support note. */}
+                    <span className="text-muted-foreground">{a.insightsError}</span>
+                  </li>
+                ))}
+              </ul>
+              {failing.length > shown.length && (
+                <span className="text-muted-foreground">
+                  {t('studio.stats.readFailedMore', 've {{n}} hesap daha', {
+                    n: failing.length - shown.length,
+                  })}
+                </span>
+              )}
+            </div>
+          )}
+          {partial && (
+            <p className="text-caption text-muted-foreground">
+              {t('studio.stats.partial', '{{n}} hesabın {{k}} tanesinden veri geldi', {
+                n: coverage.accounts,
+                k: coverage.accountsWithData,
+              })}
+            </p>
+          )}
+          <p className="text-caption text-muted-foreground">
+            {stale
+              ? t('studio.stats.lastPulled', 'Son güncelleme: {{when}}', { when: stale })
+              : t('studio.stats.neverPulled', 'İstatistikler henüz bir kez bile çekilmedi')}
+          </p>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

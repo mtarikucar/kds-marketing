@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { toast } from 'sonner';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import IdeasPanel from './IdeasPanel';
-import { resultRefLabel } from './actionKinds';
+import { IDEA_FAILURE_KEY } from './ideaFailure';
 import * as strategyService from '../../../features/marketing/api/strategy.service';
 import type {
   MarketingStrategy,
@@ -15,7 +15,7 @@ import type {
 
 vi.mock('../../../features/marketing/api/strategy.service');
 
-// The console renders Turkish inline defaults, so the mock returns the
+// The panel renders Turkish inline defaults, so the mock returns the
 // defaultValue and interpolates `{{name}}` the way i18next would — otherwise
 // every assertion here would be checking a key instead of the copy that ships.
 vi.mock('react-i18next', () => ({
@@ -42,8 +42,8 @@ vi.mock('sonner', () => ({
   },
 }));
 
-// Approve / dismiss / refresh are MANAGER-only on the backend; the default
-// fixture is an OWNER so the affordances are on screen. One test flips it.
+// Dismiss / refresh are MANAGER-only on the backend; the default fixture is an
+// OWNER so the affordances are on screen. One test flips it.
 let role = 'OWNER';
 vi.mock('../../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: (sel: any) => sel({ user: { firstName: 'Tarık', role } }),
@@ -51,7 +51,6 @@ vi.mock('../../../store/marketingAuthStore', () => ({
 
 const getStrategy = vi.mocked(strategyService.getStrategy);
 const listStrategyActions = vi.mocked(strategyService.listStrategyActions);
-const approveAction = vi.mocked(strategyService.approveAction);
 const dismissAction = vi.mocked(strategyService.dismissAction);
 const refreshStrategy = vi.mocked(strategyService.refreshStrategy);
 
@@ -64,7 +63,6 @@ const STRATEGY: MarketingStrategy = {
   brief: {
     identity: { product: 'Boyama seti', voice: 'samimi', positioning: 'DIY', usp: 'kutuda her şey' },
     audience: '18-34 hobi meraklıları',
-    // A FRACTION, not a percentage — the panel must render 90%, not 0.9%.
     channels: [{ key: 'instagram', fitScore: 0.9, rationale: 'görsel ürün' }],
     contentPillars: [{ title: 'Atölye anları', angle: 'süreç', formats: ['reels'], tone: 'sıcak' }],
     goals: { objective: 'Eylülde 200 yeni sipariş', kpis: ['siparis'] },
@@ -89,18 +87,24 @@ const action = (over: Partial<StrategyAction> & { id: string }): StrategyAction 
 // One of every kind, in the order the backend already sorted them (HIGH→LOW,
 // then oldest first). The panel must not re-sort, so the fixture is the order.
 const PROPOSED: StrategyAction[] = [
-  action({ id: 'c1', kind: 'CONTENT', title: 'Atölye reels serisi', priority: 'HIGH' }),
+  action({
+    id: 'c1',
+    kind: 'CONTENT',
+    title: 'Atölye reels serisi',
+    priority: 'HIGH',
+    rationale: 'Süreç videoları bu üründe en çok kaydedilen içerik.',
+  }),
   action({ id: 'q1', kind: 'COMMUNITY_ENGAGE', title: 'r/hobi paylaşımı', priority: 'HIGH' }),
   action({ id: 'l1', kind: 'LEAD_HUNT', title: 'Hediye dükkanları', priority: 'MEDIUM' }),
   action({ id: 'd1', kind: 'AD_CAMPAIGN', title: 'Trafik kampanyası', priority: 'MEDIUM' }),
   action({ id: 'k1', kind: 'CHANNEL_SETUP', title: 'TikTok hesabını bağla', priority: 'LOW' }),
 ];
 
-function renderPanel(children: ReactNode = <IdeasPanel />) {
+function renderPanel(children: ReactNode = <IdeasPanel />, at = '/studio') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>{children}</MemoryRouter>
+      <MemoryRouter initialEntries={[at]}>{children}</MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -117,159 +121,133 @@ beforeEach(() => {
 });
 
 describe('IdeasPanel', () => {
-  it('renders each proposed idea with its kind, priority and a TRUE "what this will do" line', async () => {
+  it('keeps a failed approval on screen after the detail that reported it is gone', async () => {
+    // The decision moved into IdeaDetail, a `?idea=` surface the operator
+    // closes as soon as they have read it. When the failure lived in that
+    // component's state, closing it erased the only durable account of what
+    // went wrong — and the link cannot be reopened, because the row has left
+    // PROPOSED. A toast is a fine confirmation and a terrible error report.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(IDEA_FAILURE_KEY, {
+      id: 'q1', title: 'r/hobi paylaşımı', resultRef: 'error: subreddit kilitli',
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/studio']}><IdeasPanel /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const banner = await screen.findByTestId('ideas-failure');
+    // The provider's own reason, not a generic sentence.
+    expect(banner).toHaveTextContent('subreddit kilitli');
+  });
+
+  it('lists every proposed idea as one titled row carrying its kind and priority', async () => {
     renderPanel();
 
     expect(await screen.findByText('Atölye reels serisi')).toBeInTheDocument();
 
-    // Kind + priority badges, read inside their own row so a badge belonging to
-    // a neighbouring card can never satisfy the assertion.
+    // Every idea in the plan is on screen — the backlog is the point of the
+    // list, and the card layout it replaced fit three.
+    expect(screen.getAllByTestId(/^idea-[a-z0-9]+$/)).toHaveLength(PROPOSED.length);
+
+    // Kind + priority, read inside their own row so a badge belonging to a
+    // neighbouring row can never satisfy the assertion.
     expect(within(row('c1')).getByText('İçerik')).toBeInTheDocument();
     expect(within(row('c1')).getByText('Yüksek')).toBeInTheDocument();
     expect(within(row('l1')).getByText('Müşteri avı')).toBeInTheDocument();
     expect(within(row('l1')).getByText('Orta')).toBeInTheDocument();
-
-    // The promises, one per executor. These strings are the consent the
-    // operator gives, so each is asserted against the behaviour that was read
-    // out of the executor itself.
-    expect(screen.getByTestId('idea-what-c1')).toHaveTextContent(/TASLAK/);
-    expect(screen.getByTestId('idea-what-c1')).toHaveTextContent(/yayınlanmaz/);
-    expect(screen.getByTestId('idea-what-q1')).toHaveTextContent(/CANLI/);
-    expect(screen.getByTestId('idea-what-l1')).toHaveTextContent(/HEMEN/);
-    expect(screen.getByTestId('idea-what-d1')).toHaveTextContent(/DURAKLATILMIŞ/);
-    // AD_CAMPAIGN provisions a shell with no budget — saying otherwise would
-    // make people think the panel can spend their ad money.
-    expect(screen.getByTestId('idea-what-d1')).toHaveTextContent(/bütçe yok/);
-    expect(screen.getByTestId('idea-what-k1')).toHaveTextContent(/işleyici yok/);
-
-    // The strategy header: archetype, objective, pillars, and channel fit as a
-    // PERCENTAGE (fitScore is a 0–1 fraction; 0.9 is a strong fit, not 1%).
-    expect(screen.getByText('CHALLENGER')).toBeInTheDocument();
-    expect(screen.getByText('Eylülde 200 yeni sipariş')).toBeInTheDocument();
-    expect(within(screen.getByTestId('ideas-pillars')).getByText('Atölye anları')).toBeInTheDocument();
-    expect(screen.getByTestId('ideas-channel-fit')).toHaveTextContent('instagram · 90%');
+    expect(within(row('k1')).getByText('Kanal kurulumu')).toBeInTheDocument();
 
     // Shared cache with the strategy console: the same PROPOSED status, asked
     // for by the same helper, so the two surfaces cannot disagree.
     expect(listStrategyActions).toHaveBeenCalledWith('PROPOSED');
   });
 
-  it('gives CHANNEL_SETUP no approve button and routes it to /accounts instead', async () => {
-    renderPanel();
-    await screen.findByText('TikTok hesabını bağla');
-
-    // There is no executor registered for CHANNEL_SETUP: approving would park
-    // the row at APPROVED forever while reading as a success.
-    expect(within(row('k1')).queryByRole('button', { name: /Onayla/ })).toBeNull();
-
-    const link = within(row('k1')).getByRole('link', { name: /Kanalları bağla/ });
-    expect(link).toHaveAttribute('href', '/accounts');
-
-    // Every other kind still has its approve button — the absence above is
-    // specific to this kind, not the whole panel failing to render buttons.
-    expect(within(row('c1')).getByRole('button', { name: /Onayla/ })).toBeInTheDocument();
-  });
-
-  it('approves exactly the clicked row, and leaves every other row actionable', async () => {
-    const user = userEvent.setup();
-    // Never resolves → the mutation stays pending, which is when the shared
-    // `isPending` would bleed onto every row if it were not gated by id.
-    approveAction.mockImplementation(() => new Promise<StrategyAction>(() => undefined));
+  /**
+   * The rework, stated as an assertion. The rationale and the "Bu ne yapacak?"
+   * promise are not deleted — they moved to IdeaDetail — and a row that starts
+   * carrying them again is the panel sliding back into the card list that made
+   * the whole backlog invisible.
+   */
+  it('keeps the rationale and the "what this will do" line OUT of the list', async () => {
     renderPanel();
     await screen.findByText('Atölye reels serisi');
 
-    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
+    expect(
+      screen.queryByText('Süreç videoları bu üründe en çok kaydedilen içerik.'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Bu ne yapacak\?/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('idea-what-c1')).not.toBeInTheDocument();
+  });
 
-    expect(approveAction).toHaveBeenCalledTimes(1);
-    expect(approveAction).toHaveBeenCalledWith('c1');
+  /**
+   * The row's title is a link into `?idea=<id>` on the SAME screen, which is
+   * what makes the detail bookmarkable and back-button-closable. `?tool=` also
+   * lives on this URL, so a link that rebuilt the query string from scratch
+   * would close whichever drawer was open on the way to an idea.
+   */
+  it('routes each row to ?idea=<id> without dropping the other search params', async () => {
+    renderPanel(<IdeasPanel />, '/studio?tool=calendar');
+    await screen.findByText('Atölye reels serisi');
+
+    const link = within(row('c1')).getByRole('link');
+    expect(link).toHaveAttribute('href', '/studio?tool=calendar&idea=c1');
+    expect(within(row('k1')).getByRole('link')).toHaveAttribute(
+      'href',
+      '/studio?tool=calendar&idea=k1',
+    );
+  });
+
+  /**
+   * The backend returns HIGH→MEDIUM→LOW and then oldest first, and this panel
+   * shares its cache with the strategy console. A second sort here with a
+   * different tiebreak is how two surfaces reading one list would name
+   * different ideas as "next".
+   */
+  it('renders the plan in the order the server sent it', async () => {
+    renderPanel();
+    await screen.findByText('Atölye reels serisi');
+
+    const ids = screen
+      .getAllByTestId(/^idea-[a-z0-9]+$/)
+      .map((li) => li.getAttribute('data-testid'));
+    expect(ids).toEqual(PROPOSED.map((a) => `idea-${a.id}`));
+  });
+
+  it('dismisses exactly the clicked row, and leaves every other row actionable', async () => {
+    const user = userEvent.setup();
+    // Never resolves → the mutation stays pending, which is when the shared
+    // `isPending` would bleed onto every row if it were not gated by id.
+    dismissAction.mockImplementation(() => new Promise<StrategyAction>(() => undefined));
+    renderPanel();
+    await screen.findByText('Atölye reels serisi');
+
+    await user.click(within(row('c1')).getByRole('button', { name: /Yoksay/ }));
+
+    expect(dismissAction).toHaveBeenCalledTimes(1);
+    expect(dismissAction).toHaveBeenCalledWith('c1');
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() =>
-      expect(within(row('c1')).getByRole('button', { name: /Onayla/ })).toHaveAttribute(
+      expect(within(row('c1')).getByRole('button', { name: /Yoksay/ })).toHaveAttribute(
         'aria-busy',
         'true',
       ),
     );
-    // The other plain-approve row: not spinning, not disabled.
-    const other = within(row('d1')).getByRole('button', { name: /Onayla/ });
+    const other = within(row('d1')).getByRole('button', { name: /Yoksay/ });
     expect(other).not.toHaveAttribute('aria-busy');
     expect(other).toBeEnabled();
-    expect(within(row('d1')).getByRole('button', { name: /Yoksay/ })).toBeEnabled();
   });
 
-  it('puts LEAD_HUNT approval behind a confirm that names the money it spends', async () => {
-    const user = userEvent.setup();
-    approveAction.mockResolvedValue(action({ id: 'l1', status: 'APPROVED' }));
-    renderPanel();
-    await screen.findByText('Hediye dükkanları');
-
-    await user.click(within(row('l1')).getByRole('button', { name: /Onayla/ }));
-
-    // Nothing may run until the operator has read the cost.
-    expect(approveAction).not.toHaveBeenCalled();
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent(/kotandan düşer/);
-    expect(dialog).toHaveTextContent(/tarama/);
-
-    await user.click(within(dialog).getByRole('button', { name: /Onayla/ }));
-    await waitFor(() => expect(approveAction).toHaveBeenCalledWith('l1'));
-  });
-
-  it('puts COMMUNITY_ENGAGE approval behind a confirm that says it publishes live', async () => {
-    const user = userEvent.setup();
-    approveAction.mockResolvedValue(action({ id: 'q1', status: 'APPROVED' }));
-    renderPanel();
-    await screen.findByText('r/hobi paylaşımı');
-
-    await user.click(within(row('q1')).getByRole('button', { name: /Onayla/ }));
-
-    expect(approveAction).not.toHaveBeenCalled();
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent(/CANLI/);
-    expect(dialog).toHaveTextContent(/geri alınamaz/);
-  });
-
-  it('approves CONTENT without a confirm — nothing is published and no money moves', async () => {
-    const user = userEvent.setup();
-    approveAction.mockResolvedValue(action({ id: 'c1', status: 'APPROVED' }));
+  /**
+   * Approving publishes under the workspace's name or spends its money, and the
+   * sentence that says which lives in IdeaDetail. A bare "Onayla" on a title row
+   * is that click without that sentence.
+   */
+  it('offers no approve button in the list — that decision belongs beside its promise', async () => {
     renderPanel();
     await screen.findByText('Atölye reels serisi');
-
-    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
-
-    await waitFor(() => expect(approveAction).toHaveBeenCalledWith('c1'));
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('never believes the approve response: a run that FAILED is reported as failed', async () => {
-    const user = userEvent.setup();
-    // The real endpoint returns a PRE-EXECUTION snapshot — always APPROVED with
-    // a null resultRef, even for an action that has already blown up.
-    approveAction.mockResolvedValue(action({ id: 'c1', status: 'APPROVED', resultRef: null }));
-    listStrategyActions.mockImplementation((status) => {
-      if (status === 'PROPOSED') return Promise.resolve(PROPOSED);
-      if (status === 'FAILED')
-        return Promise.resolve([
-          action({
-            id: 'c1',
-            title: 'Atölye reels serisi',
-            status: 'FAILED',
-            // No error column exists on the row; the reason rides in resultRef.
-            resultRef: 'error:AI provider is not configured',
-          }),
-        ]);
-      return Promise.resolve([]);
-    });
-    renderPanel();
-    await screen.findByText('Atölye reels serisi');
-
-    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
-
-    const failure = await screen.findByTestId('ideas-failure');
-    expect(failure).toHaveTextContent(/çalıştırılamadı/);
-    // The backend's own message, verbatim — and without the `error:` prefix,
-    // which is transport, not explanation.
-    expect(failure).toHaveTextContent('AI provider is not configured');
-    expect(failure).not.toHaveTextContent('error:');
+    expect(screen.queryByRole('button', { name: /Onayla/ })).toBeNull();
   });
 
   it('shows an onboarding CTA when the workspace has no strategy at all', async () => {
@@ -316,32 +294,6 @@ describe('IdeasPanel', () => {
   });
 
   /**
-   * A brief is an LLM-written JSON blob stored in a JSON column, so a field's
-   * presence is a hope rather than a guarantee — a brief written by an older
-   * synthesis, or by the onboarding MCP tools, can carry a channel with no
-   * `fitScore` at all.
-   *
-   * `?? 0` turned that into "reddit · 0%", and 0% is not an absent rating: it is
-   * the strategist saying the channel is worthless. That is a recommendation the
-   * data never made, printed in the one place on this screen where a person
-   * decides where to spend their week.
-   */
-  it('omits the fit percentage rather than rating an unscored channel at zero', async () => {
-    getStrategy.mockResolvedValue({
-      ...STRATEGY,
-      brief: {
-        ...STRATEGY.brief!,
-        channels: [{ key: 'reddit', rationale: 'niş orada' } as never],
-      },
-    });
-    renderPanel();
-
-    const fit = await screen.findByTestId('ideas-channel-fit');
-    expect(fit).toHaveTextContent('reddit');
-    expect(fit).not.toHaveTextContent('%');
-  });
-
-  /**
    * `refreshStrategy`'s client type declares `actionCount` OPTIONAL, and `?? 0`
    * read "the server did not say" as the flat claim that the most expensive,
    * most destructive thing this product does produced nothing — announced over
@@ -373,27 +325,16 @@ describe('IdeasPanel', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Yeni plan hazır: 6 fikir'));
   });
 
-  it('dismisses a single idea without any confirm', async () => {
-    const user = userEvent.setup();
-    dismissAction.mockResolvedValue(action({ id: 'c1', status: 'DISMISSED' }));
-    renderPanel();
-    await screen.findByText('Atölye reels serisi');
-
-    await user.click(within(row('c1')).getByRole('button', { name: /Yoksay/ }));
-
-    await waitFor(() => expect(dismissAction).toHaveBeenCalledWith('c1'));
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('lets a REP read the ideas but offers no decision buttons and no error wall', async () => {
+  it('lets a REP read the backlog but offers no decision buttons and no error wall', async () => {
     role = 'REP';
     renderPanel();
     await screen.findByText('Atölye reels serisi');
 
-    // The reads are reports.read, so the list is there.
+    // The reads are reports.read, so the list is there — with its links, so a
+    // rep can still open an idea and read what it would do.
     expect(screen.getAllByTestId(/^idea-[a-z0-9]+$/)).toHaveLength(PROPOSED.length);
+    expect(within(row('c1')).getByRole('link')).toBeInTheDocument();
     // The writes are MANAGER-only, so they are withheld rather than 403'd.
-    expect(screen.queryByRole('button', { name: /Onayla/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Yoksay/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Fikirleri yenile/ })).toBeNull();
     expect(screen.getByTestId('ideas-readonly')).toBeInTheDocument();
@@ -407,42 +348,15 @@ describe('IdeasPanel', () => {
       '/studio/strategy',
     );
   });
-});
 
-describe('resultRefLabel', () => {
-  // The single field carries both "here is what I made" and "here is why I
-  // died", so the prefix check is the difference between an outcome and a lie.
-  it('special-cases the error: prefix instead of reading it as a pointer', () => {
-    expect(resultRefLabel('error:Meta rejected the campaign')).toEqual({
-      failed: true,
-      message: 'Meta rejected the campaign',
-    });
-  });
-
-  it('names what a successful ref points at', () => {
-    expect(resultRefLabel('post:abc')).toMatchObject({ failed: false, id: 'abc' });
-    expect(resultRefLabel('research:r1')).toMatchObject({ failed: false, id: 'r1' });
-  });
-
-  it('treats an absent ref as "produced nothing", not as a failure', () => {
-    expect(resultRefLabel(null)).toBeNull();
-    expect(resultRefLabel('')).toBeNull();
-  });
-
-  it('keeps an unknown prefix visible rather than inventing a name for it', () => {
-    expect(resultRefLabel('newthing:9')).toMatchObject({ failed: false, id: 'newthing:9' });
-  });
-});
-
-/**
- * Approve / dismiss / refresh all run Opus turns, so all three can hit the AI
- * credit wall. All three used to toast `e.response.data.message` — the
- * backend's English sentence — into this Turkish panel.
- */
-describe('IdeasPanel — running out of AI credits', () => {
-  it('replaces the backend English with role-aware copy and a way to act', async () => {
+  /**
+   * Refresh runs Opus turns, so it can hit the AI credit wall, and it used to
+   * toast `e.response.data.message` — the backend's English sentence — into this
+   * Turkish panel.
+   */
+  it('replaces the backend English with role-aware copy when credits run out', async () => {
     const user = userEvent.setup();
-    approveAction.mockRejectedValue({
+    refreshStrategy.mockRejectedValue({
       response: {
         status: 403,
         data: {
@@ -454,7 +368,9 @@ describe('IdeasPanel — running out of AI credits', () => {
     renderPanel();
     await screen.findByText('Atölye reels serisi');
 
-    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
+    await user.click(screen.getByRole('button', { name: /Fikirleri yenile/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Sil ve yeniden üret/ }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     const [message, opts] = vi.mocked(toast.error).mock.calls[0];
@@ -463,14 +379,14 @@ describe('IdeasPanel — running out of AI credits', () => {
     expect((opts as { action?: { label: string } })?.action?.label).toBe('Add credits');
   });
 
-  it('keeps the panel’s own Turkish message for an ordinary failure', async () => {
+  it('keeps the panel’s own Turkish message for an ordinary dismiss failure', async () => {
     const user = userEvent.setup();
-    approveAction.mockRejectedValue({ response: { status: 500, data: { message: 'boom' } } });
+    dismissAction.mockRejectedValue({ response: { status: 500, data: { message: 'boom' } } });
     renderPanel();
     await screen.findByText('Atölye reels serisi');
 
-    await user.click(within(row('c1')).getByRole('button', { name: /Onayla/ }));
+    await user.click(within(row('c1')).getByRole('button', { name: /Yoksay/ }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Fikir onaylanamadı'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Fikir yoksayılamadı'));
   });
 });
