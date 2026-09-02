@@ -1,5 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  OAUTH_NETWORKS,
+  credentialEnvNames,
+} from './modules/marketing/social-planner/oauth/social-oauth.config';
 
 /**
  * Deploy/env parity guard for the entitlement feature gates.
@@ -106,5 +110,59 @@ describe('deploy.yml ↔ backend entitlement env parity', () => {
 
   it.each(keys)('%s never fails the deploy when unset', (key) => {
     expect(requiredArray).not.toContain(key);
+  });
+});
+
+/**
+ * Deploy/env parity for the social OAuth apps — the same "born dead" failure,
+ * one layer over.
+ *
+ * A network whose platform-app credentials never reach the server can never be
+ * connected by anyone: `isNetworkConfigured` is false, the Account Center
+ * renders a permanently disabled Connect button, and no repo Secret the owner
+ * sets will change it, because the workflow does not forward that secret. That
+ * is invisible to every test of the connect flow itself, which is exactly how
+ * Pinterest — fully implemented, listed in the provider catalogue — shipped
+ * unconnectable.
+ *
+ * Derived from the network table, so a network added there is covered here.
+ * A network may declare SEVERAL env names for one credential (Google's app
+ * answers to two); the requirement is that AT LEAST ONE of them is plumbed —
+ * the legacy spelling need not be.
+ *
+ * As above: this asserts PLUMBED, never SET. An unset Secret renders `KEY=`,
+ * which the resolver reads as unconfigured — the correct off state.
+ */
+describe('deploy.yml ↔ social OAuth app credentials', () => {
+  const cases = OAUTH_NETWORKS.flatMap((n) => {
+    const { id, secret } = credentialEnvNames(n);
+    return [
+      { network: n, kind: 'client id', names: id },
+      { network: n, kind: 'client secret', names: secret },
+    ];
+  });
+
+  // Not asserting secrets-vs-vars here: every one of these is credential-shaped
+  // regardless of suffix (a client id is half of an app credential and is kept
+  // in Secrets alongside its secret), which the generic _KEY/_SECRET/_TOKEN
+  // name rule cannot see.
+  it.each(cases)('$network $kind is passed into the render step env: block', ({ names }) => {
+    const plumbed = names.filter(
+      (k) =>
+        envBlock.includes(k + ': ${{ secrets.' + k + ' }}') ||
+        envBlock.includes(k + ': ${{ vars.' + k + ' }}'),
+    );
+    // Jest prints the received value, so a failure reads as "[] is empty" next
+    // to a title that names the network; `names` says which vars were looked for.
+    expect({ names, plumbed }).not.toEqual({ names, plumbed: [] });
+  });
+
+  it.each(cases)('$network $kind is echoed into the rendered .env.production', ({ names }) => {
+    const echoed = names.filter((k) => heredoc.includes(k + '=${' + k + '}'));
+    expect({ names, echoed }).not.toEqual({ names, echoed: [] });
+  });
+
+  it.each(cases)('$network $kind never fails the deploy when unset', ({ names }) => {
+    for (const k of names) expect(requiredArray).not.toContain(k);
   });
 });

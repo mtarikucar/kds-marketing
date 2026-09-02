@@ -2,7 +2,11 @@ import { Logger } from '@nestjs/common';
 import Jimp from 'jimp';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
-import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
+import {
+  isGoogleOAuthConfigured,
+  GOOGLE_CLIENT_ID_ENVS,
+  GOOGLE_CLIENT_SECRET_ENVS,
+} from '../../../common/util/google-oauth-env';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 import { linkedinRest, linkedinUpload, isLinkedinAuthError } from '../../../common/util/linkedin-api.util';
 import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
@@ -1063,7 +1067,16 @@ async function publishGmb(
   mediaUrls: string[],
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('GMB')) {
-    return { ok: false, error: 'Google Business Profile not configured: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET' };
+    // Name every spelling the gate accepts. Naming only the bare pair sent an
+    // operator who had already set the OAUTH-prefixed one (what deploy.yml
+    // ships) looking for a variable that was never the problem.
+    return {
+      ok: false,
+      error:
+        'Google Business Profile not configured: set ' +
+        `${GOOGLE_CLIENT_ID_ENVS[0]} and ${GOOGLE_CLIENT_SECRET_ENVS[0]}` +
+        ` (or the legacy ${GOOGLE_CLIENT_ID_ENVS[1]} / ${GOOGLE_CLIENT_SECRET_ENVS[1]})`,
+    };
   }
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
