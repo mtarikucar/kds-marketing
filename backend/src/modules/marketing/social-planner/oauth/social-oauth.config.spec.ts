@@ -1,5 +1,8 @@
 import {
   NETWORK_OAUTH,
+  OAUTH_NETWORKS,
+  clientId,
+  clientSecret,
   isOAuthConfigured,
   redirectUri,
   isOAuthNetwork,
@@ -198,5 +201,107 @@ describe('scopesFor — insights scopes are opt-in per provider', () => {
     expect(insightsScopesFor('FACEBOOK').enabled).toBe(true);
     // X is the one network that already asks for what it reads.
     expect(insightsScopesFor('TWITTER')).toEqual({ scopes: [], enabled: true });
+  });
+});
+
+/**
+ * Client credentials: the table must be the WHOLE truth.
+ *
+ * `deploy.yml` ships the Google app as GOOGLE_OAUTH_CLIENT_ID/_SECRET, while the
+ * GMB entry declared only the bare GOOGLE_CLIENT_ID/_SECRET and a hand-written
+ * `if (n === 'GMB')` in the resolver quietly read the other spelling. A reader of
+ * the table therefore got the wrong answer about which env var configures Google
+ * — and the next network that needs two names would need a second such branch.
+ *
+ * The contract these pin: whatever env names a network's entry declares are
+ * EXACTLY the names its credentials are read from, in the order declared.
+ */
+describe('client credentials resolve from the declared env names', () => {
+  const env = { ...process.env };
+  /** Every credential env name in the table — cleared so nothing leaks in. */
+  const ALL_NAMES = OAUTH_NETWORKS.flatMap((n) => [
+    ...[NETWORK_OAUTH[n].clientIdEnv].flat(),
+    ...[NETWORK_OAUTH[n].clientSecretEnv].flat(),
+    // Not declared today; listed so the "unconfigured" cases cannot pass by
+    // accident on a machine where the operator's real Google app is exported.
+    'GOOGLE_OAUTH_CLIENT_ID',
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+  ]);
+  const clearAll = () => {
+    for (const k of ALL_NAMES) delete process.env[k];
+  };
+  afterEach(() => {
+    process.env = { ...env };
+  });
+
+  it('declares BOTH Google spellings on GMB, highest precedence first', () => {
+    expect([NETWORK_OAUTH.GMB.clientIdEnv].flat()).toEqual([
+      'GOOGLE_OAUTH_CLIENT_ID',
+      'GOOGLE_CLIENT_ID',
+    ]);
+    expect([NETWORK_OAUTH.GMB.clientSecretEnv].flat()).toEqual([
+      'GOOGLE_OAUTH_CLIENT_SECRET',
+      'GOOGLE_CLIENT_SECRET',
+    ]);
+  });
+
+  it('reads every env name the table declares, for every network', () => {
+    for (const n of OAUTH_NETWORKS) {
+      for (const name of [NETWORK_OAUTH[n].clientIdEnv].flat()) {
+        clearAll();
+        process.env[name] = `id-via-${name}`;
+        expect(clientId(n)).toBe(`id-via-${name}`);
+      }
+      for (const name of [NETWORK_OAUTH[n].clientSecretEnv].flat()) {
+        clearAll();
+        process.env[name] = `secret-via-${name}`;
+        expect(clientSecret(n)).toBe(`secret-via-${name}`);
+      }
+    }
+  });
+
+  // The deployed reality: the workflow passes only the OAUTH-prefixed pair, so
+  // this is the case that decides whether the Account Center offers Google at all.
+  it('GMB is configured by the OAUTH-prefixed pair alone', () => {
+    clearAll();
+    process.env.GOOGLE_OAUTH_CLIENT_ID = 'gid';
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = 'gsec';
+    expect(clientId('GMB')).toBe('gid');
+    expect(clientSecret('GMB')).toBe('gsec');
+    expect(isOAuthConfigured('GMB')).toBe(true);
+  });
+
+  it('GMB is configured by the bare pair alone', () => {
+    clearAll();
+    process.env.GOOGLE_CLIENT_ID = 'gid2';
+    process.env.GOOGLE_CLIENT_SECRET = 'gsec2';
+    expect(isOAuthConfigured('GMB')).toBe(true);
+  });
+
+  it('prefers the OAUTH-prefixed name when both are set', () => {
+    clearAll();
+    process.env.GOOGLE_OAUTH_CLIENT_ID = 'preferred';
+    process.env.GOOGLE_CLIENT_ID = 'legacy';
+    expect(clientId('GMB')).toBe('preferred');
+  });
+
+  it('is unconfigured when neither spelling is set', () => {
+    clearAll();
+    expect(clientId('GMB')).toBeUndefined();
+    expect(isOAuthConfigured('GMB')).toBe(false);
+  });
+
+  // A blank/whitespace value is a MIS-configuration, not a configuration: it
+  // would otherwise pass the gate and fail at the provider with an opaque error.
+  it('treats a blank or whitespace value as unset, and falls through to the next name', () => {
+    clearAll();
+    process.env.META_APP_ID = '   ';
+    expect(clientId('FACEBOOK')).toBeUndefined();
+    expect(isOAuthConfigured('FACEBOOK')).toBe(false);
+    process.env.GOOGLE_OAUTH_CLIENT_ID = '  ';
+    process.env.GOOGLE_CLIENT_ID = 'legacy';
+    expect(clientId('GMB')).toBe('legacy');
   });
 });

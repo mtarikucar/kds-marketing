@@ -14,6 +14,12 @@ describe('network-adapters — Epic 12 inert networks', () => {
     PINTEREST_APP_SECRET: process.env.PINTEREST_APP_SECRET,
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    // The other spelling of the SAME Google app. Absent from this list, a
+    // machine (or CI job) that exports the deployed OAUTH-prefixed pair leaves
+    // GMB configured through every `clearAll()` and the gate assertions below
+    // pass for the wrong reason.
+    GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
+    GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
   };
   const clearAll = () => Object.keys(SAVED).forEach((k) => delete process.env[k]);
   afterEach(() => {
@@ -57,6 +63,29 @@ describe('network-adapters — Epic 12 inert networks', () => {
     const res = await publishToNetwork({ id: 'a', network: 'GMB', externalId: 'accounts/1/locations/2', accessToken: 'sealed' } as any, 'hi', []);
     expect(res.ok).toBe(false);
     expect(res.error).toContain('Google Business Profile not configured');
+  });
+
+  // Deploy ships GOOGLE_OAUTH_CLIENT_ID/_SECRET; the gate accepts either
+  // spelling, so the operator-facing message has to name the one they set.
+  it('GMB is equally configured by the OAUTH-prefixed spelling', () => {
+    clearAll();
+    process.env.GOOGLE_OAUTH_CLIENT_ID = 'i';
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = 's';
+    expect(isNetworkConfigured('GMB')).toBe(true);
+  });
+
+  it('the GMB not-configured error names every env spelling the gate accepts', async () => {
+    clearAll();
+    const res = await publishToNetwork({ id: 'a', network: 'GMB', externalId: 'accounts/1/locations/2', accessToken: 'sealed' } as any, 'hi', []);
+    expect(res.ok).toBe(false);
+    for (const name of [
+      'GOOGLE_OAUTH_CLIENT_ID',
+      'GOOGLE_OAUTH_CLIENT_SECRET',
+      'GOOGLE_CLIENT_ID',
+      'GOOGLE_CLIENT_SECRET',
+    ]) {
+      expect(res.error).toContain(name);
+    }
   });
 
   it('an unknown network is still rejected', async () => {
