@@ -191,6 +191,11 @@ jobs:
           TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
           X_CLIENT_ID: ${{ secrets.X_CLIENT_ID }}
           X_CLIENT_SECRET: ${{ secrets.X_CLIENT_SECRET }}
+          # Pinterest's publish adapter, OAuth flow and catalogue entry all
+          # shipped; the credentials never did, so its Connect button was
+          # permanently disabled no matter what the owner put in repo Secrets.
+          PINTEREST_APP_ID: ${{ secrets.PINTEREST_APP_ID }}
+          PINTEREST_APP_SECRET: ${{ secrets.PINTEREST_APP_SECRET }}
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           STRIPE_CONNECT_CLIENT_ID: ${{ secrets.STRIPE_CONNECT_CLIENT_ID }}
@@ -319,6 +324,8 @@ jobs:
           TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET}
           X_CLIENT_ID=${X_CLIENT_ID}
           X_CLIENT_SECRET=${X_CLIENT_SECRET}
+          PINTEREST_APP_ID=${PINTEREST_APP_ID}
+          PINTEREST_APP_SECRET=${PINTEREST_APP_SECRET}
           REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
           REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
           STRIPE_CONNECT_CLIENT_ID=${STRIPE_CONNECT_CLIENT_ID}
