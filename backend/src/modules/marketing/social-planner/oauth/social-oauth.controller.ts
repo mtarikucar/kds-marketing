@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   NotFoundException,
   Param,
   Post,
@@ -84,6 +85,8 @@ class ConfirmDto {
 @MarketingRoute()
 @Controller('marketing/social/oauth')
 export class SocialOAuthController {
+  private readonly logger = new Logger(SocialOAuthController.name);
+
   constructor(private readonly svc: SocialOAuthService) {}
 
   @Post(':network/start')
@@ -126,7 +129,17 @@ export class SocialOAuthController {
     try {
       const { pendingId } = await this.svc.handleCallback(network.toUpperCase(), code, state);
       return res.redirect(302, `${appUrl}/${path}?connect=${pendingId}`);
-    } catch {
+    } catch (e: any) {
+      // The user gets an opaque `connect_error` — this URL is visible to
+      // anyone over their shoulder, and the provider's message is unbounded
+      // text we did not write. But the reason has to survive SOMEWHERE: the
+      // two likeliest ways a consented connect dies (the app lacks an
+      // App-Review permission; the provider has not allowlisted the project)
+      // are invisible from the outside, and this catch used to swallow them
+      // whole. Message only, never the code or the state.
+      this.logger.warn(
+        `OAuth callback failed for ${network.toUpperCase()}: ${e?.message ?? e}`,
+      );
       return res.redirect(302, `${appUrl}/${path}?connect_error=1`);
     }
   }

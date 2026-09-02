@@ -67,6 +67,34 @@ describe('AccountSelectDialog', () => {
     );
   });
 
+  /**
+   * Error is not empty. A pending hand-off that cannot be LOADED — it expired
+   * (they are valid 15 minutes), or it belongs to another workspace — used to
+   * render the same panel as a successful load of zero assets: "No connectable
+   * accounts found — make sure you granted access to at least one page". That
+   * sends someone who consented correctly off to re-check permissions that were
+   * never the problem, and the one action that would work (start again) is the
+   * one it does not mention.
+   */
+  it('says the attempt could not be loaded — not that the user granted nothing', async () => {
+    getMock.mockRejectedValue(new Error('Request failed with status code 400'));
+    const onOpenChange = vi.fn();
+    wrap(<AccountSelectDialog pendingId="pend-expired" onOpenChange={onOpenChange} />);
+
+    expect(await screen.findByText(/no longer available/i)).toBeTruthy();
+    expect(screen.getByText(/start the connection again/i)).toBeTruthy();
+    expect(screen.queryByText(/granted access/i)).toBeNull();
+  });
+
+  it('still says "nothing to connect" when the hand-off loads with no assets', async () => {
+    getMock.mockResolvedValue({ data: { network: 'FACEBOOK', assets: [] } });
+    const onOpenChange = vi.fn();
+    wrap(<AccountSelectDialog pendingId="pend-empty" onOpenChange={onOpenChange} />);
+
+    expect(await screen.findByText(/granted access/i)).toBeTruthy();
+    expect(screen.queryByText(/no longer available/i)).toBeNull();
+  });
+
   it('includes provisionMessaging when the per-account messaging toggle is on', async () => {
     const onOpenChange = vi.fn();
     wrap(<AccountSelectDialog pendingId="pend-1" onOpenChange={onOpenChange} />);

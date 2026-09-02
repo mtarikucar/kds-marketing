@@ -2861,7 +2861,9 @@
       "disconnectBody": "Planlayıcı artık bu hesaba yayın yapamayacak."
     },
     "oauth": {
-      "callbackError": "Bağlantı başarısız oldu veya iptal edildi. Lütfen tekrar deneyin."
+      "callbackError": "Bağlantı başarısız oldu veya iptal edildi. Lütfen tekrar deneyin.",
+      "pendingUnavailable": "Bu bağlantı denemesi artık geçerli değil",
+      "pendingUnavailableHint": "Bağlantı denemeleri 15 dakika sonra sona erer. Bu pencereyi kapatıp bağlantıyı yeniden başlat."
     },
     "toast": {
       "connected": "Hesap bağlandı",
