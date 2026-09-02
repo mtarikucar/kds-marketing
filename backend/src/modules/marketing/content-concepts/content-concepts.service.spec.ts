@@ -6,7 +6,12 @@ import {
   MAX_SHOT_SEC,
   MIN_SHOT_SEC,
 } from './content-concepts.service';
-import { VideoPipelineService } from '../video/video-pipeline.service';
+import { ConceptPromotionService } from './concept-promotion.service';
+import { DEFAULT_SHOT_ASPECT, VideoPipelineService } from '../video/video-pipeline.service';
+import {
+  DEFAULT_VIDEO_MODEL,
+  DEFAULT_VIDEO_REFERENCE_MODEL,
+} from '../ai/media/media-models.config';
 
 const IDEA =
   'Theo Jansen Strandbeest — rüzgarla yürüyen, motoru olmayan kinetik heykel. 3D baskıyla çıkardık.';
@@ -66,7 +71,27 @@ const submit = (concepts: unknown[]) => ({
   usage: { input: 100, output: 900 },
 });
 
-function deps(over: { aiEnabled?: boolean; completion?: unknown; completeImpl?: jest.Mock } = {}) {
+/** A persona with real reference frames — the identity lock in its working shape. */
+const PERSONA = {
+  id: 'persona-1',
+  name: 'Deniz',
+  status: 'ACTIVE',
+  referenceImageUrls: ['https://cdn.example/deniz-1.jpg', 'https://cdn.example/deniz-2.jpg'],
+  lockedSeed: 4242,
+};
+
+function deps(
+  over: {
+    aiEnabled?: boolean;
+    completion?: unknown;
+    completeImpl?: jest.Mock;
+    personaRow?: unknown;
+    campaignRow?: unknown;
+    workspaceVideoModel?: string;
+    /** The target accounts of campaign `camp-1`, for the destination preview. */
+    destinations?: unknown[];
+  } = {},
+) {
   const complete = over.completeImpl ?? jest.fn().mockResolvedValue(over.completion ?? submit(GOOD));
   const anthropic = { isEnabled: () => over.aiEnabled ?? true, complete };
   const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
@@ -76,6 +101,9 @@ function deps(over: { aiEnabled?: boolean; completion?: unknown; completeImpl?: 
         .fn()
         .mockResolvedValue({ productName: 'Figurunica', productDescription: '3D baskı figür', defaultLanguage: 'tr' }),
     },
+    videoPersona: {
+      findFirst: jest.fn().mockResolvedValue(over.personaRow === undefined ? PERSONA : over.personaRow),
+    },
     contentConcept: {
       createMany: jest.fn().mockResolvedValue({ count: 3 }),
       findMany: jest.fn().mockResolvedValue([]),
@@ -84,9 +112,33 @@ function deps(over: { aiEnabled?: boolean; completion?: unknown; completeImpl?: 
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
+  // The model resolution is the REAL one, on a real catalogue: the quote a
+  // reviewer approves is the whole point of it, and a stub that answers
+  // "seedance lite" to every question would make every price assertion below a
+  // test of the stub. Only the campaign/promote surfaces stay fakes.
+  const mediaGen = {
+    workspaceDefaultModel: jest
+      .fn()
+      .mockResolvedValue(over.workspaceVideoModel ?? DEFAULT_VIDEO_MODEL),
+  };
+  const realPromotion = new ConceptPromotionService(
+    prisma as any,
+    mediaGen as any,
+    { schedule: jest.fn() } as any,
+    { registerHandler: jest.fn() } as any,
+    { arm: jest.fn() } as any,
+  );
   const promotion = {
-    requireCampaign: jest.fn().mockResolvedValue({ id: 'camp-1', workspaceId: 'ws1' }),
+    requireCampaign: jest
+      .fn()
+      .mockResolvedValue(over.campaignRow ?? { id: 'camp-1', workspaceId: 'ws1', defaultVideoModel: null }),
     promote: jest.fn().mockResolvedValue({ item: { id: 'item-1', status: 'GENERATING' }, created: true }),
+    resolveVideoModel: realPromotion.resolveVideoModel.bind(realPromotion),
+    // The destination preview's account read. Defaults to "no destinations
+    // known"; the tests that care supply real accounts.
+    destinationAccounts: jest
+      .fn()
+      .mockResolvedValue(new Map<string, unknown[]>(over.destinations ? [['camp-1', over.destinations]] : [])),
   };
   const svc = new ContentConceptsService(
     prisma as any,
@@ -95,7 +147,7 @@ function deps(over: { aiEnabled?: boolean; completion?: unknown; completeImpl?: 
     new VideoPipelineService(),
     promotion as any,
   );
-  return { svc, prisma, credits, complete, anthropic, promotion };
+  return { svc, prisma, credits, complete, anthropic, promotion, mediaGen };
 }
 
 const plan = (svc: ContentConceptsService, over: Record<string, unknown> = {}) =>
@@ -120,6 +172,8 @@ describe('ContentConceptsService.planConcepts', () => {
 
     await expect(plan(svc, { socialCampaignId: 'camp-draft' })).rejects.toThrow(/DRAFT/);
 
+    // The campaign's EXISTENCE and STATUS, and nothing about capacity: no extra
+    // argument rides along, because there is no capacity refusal left to feed.
     expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-draft');
     expect(credits.reserve).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
@@ -325,6 +379,69 @@ describe('ContentConceptsService.planConcepts', () => {
   });
 });
 
+/**
+ * Defect 7's replacement, at the surface a human actually reads.
+ *
+ * Nothing is refused over destination capacity any more, so the reviewer has to
+ * be TOLD what each destination will receive before they approve — approving is
+ * what starts the spend, and `jeeta.list_content_concepts` plus the freshly
+ * planned batch are the only two things they see first.
+ */
+describe('ContentConceptsService — the reviewer is told what each destination gets', () => {
+  const ACCOUNTS = [
+    { id: 'acc-ig', network: 'INSTAGRAM', displayName: '@figurunica', enabled: true },
+    { id: 'acc-tt', network: 'TIKTOK', displayName: '@figurunica', enabled: true },
+    { id: 'acc-x', network: 'TWITTER', displayName: '@figurunica', enabled: true },
+  ];
+
+  it('a freshly planned batch carries a destination line per target account', async () => {
+    const { svc, promotion } = deps({ destinations: ACCOUNTS });
+    const res = await plan(svc, { socialCampaignId: 'camp-1' });
+
+    expect(promotion.destinationAccounts).toHaveBeenCalledWith('ws1', ['camp-1']);
+    // Three beats in GOOD's first concept: Instagram takes all three, TikTok
+    // takes the hook, X takes nothing at all — one approval, three truths.
+    const first = res.concepts[0].destinations;
+    expect(first.map((d) => [d.network, d.willPublish, d.willDrop])).toEqual([
+      ['INSTAGRAM', 3, 0],
+      ['TIKTOK', 1, 2],
+      ['TWITTER', 0, 3],
+    ]);
+    expect(first[1].summary).toMatch(/beat 1 only/);
+    expect(first[2].summary).toMatch(/cannot carry video/);
+    // Every concept in the batch gets its own, computed from its own beats.
+    expect(res.concepts.every((c) => c.destinations.length === 3)).toBe(true);
+  });
+
+  it('an unscoped batch has no destinations, and asks for none', async () => {
+    const { svc, promotion } = deps({ destinations: ACCOUNTS });
+    const res = await plan(svc);
+    expect(res.concepts.every((c) => c.destinations.length === 0)).toBe(true);
+    expect(promotion.destinationAccounts).not.toHaveBeenCalled();
+  });
+
+  it('the review QUEUE carries them too — that is where an approval is decided from', async () => {
+    const { svc, prisma, promotion } = deps({ destinations: ACCOUNTS });
+    prisma.contentConcept.findMany.mockResolvedValue([
+      { id: 'c1', socialCampaignId: 'camp-1', shotPlan: { shots: [{}, {}, {}, {}, {}] } },
+      { id: 'c2', socialCampaignId: null, shotPlan: { shots: [{}, {}] } },
+    ]);
+
+    const rows = await svc.list('ws1', { status: 'PROPOSED' });
+
+    expect(promotion.destinationAccounts).toHaveBeenCalledWith('ws1', ['camp-1']);
+    // Five beats, so TikTok drops four — the count is the ROW's own, not the
+    // batch's.
+    expect(rows[0].destinations.map((d) => [d.network, d.willPublish, d.willDrop])).toEqual([
+      ['INSTAGRAM', 5, 0],
+      ['TIKTOK', 1, 4],
+      ['TWITTER', 0, 5],
+    ]);
+    // A concept with no campaign has no destination to describe.
+    expect(rows[1].destinations).toEqual([]);
+  });
+});
+
 describe('ContentConceptsService.list', () => {
   it('scopes every read to the workspace', async () => {
     const { svc, prisma } = deps();
@@ -353,17 +470,17 @@ describe('ContentConceptsService.list', () => {
     expect(MAX_CONCEPT_COUNT).toBeLessThanOrEqual(CONCEPT_LIST_LIMIT);
   });
 
-  it('refuses a status it does not recognise instead of handing it to Prisma', () => {
+  it('refuses a status it does not recognise instead of handing it to Prisma', async () => {
     // Safe from MCP (`z.enum`), unsafe from anywhere else: the value used to be
     // cast `as never` straight into a Prisma enum, where an unknown string is a
     // runtime error from the driver rather than a stated refusal.
     const { svc, prisma } = deps();
-    expect(() => svc.list('ws1', { status: 'ARCHIVED' })).toThrow(BadRequestException);
+    await expect(svc.list('ws1', { status: 'ARCHIVED' })).rejects.toThrow(BadRequestException);
     // Case matters — the column holds the enum's own spelling.
-    expect(() => svc.list('ws1', { status: 'proposed' })).toThrow(/PROPOSED/);
+    await expect(svc.list('ws1', { status: 'proposed' })).rejects.toThrow(/PROPOSED/);
     expect(prisma.contentConcept.findMany).not.toHaveBeenCalled();
     // Anchored on the positive: the recognised value still reaches Prisma.
-    svc.list('ws1', { status: 'DISCARDED' });
+    await svc.list('ws1', { status: 'DISCARDED' });
     expect(prisma.contentConcept.findMany.mock.calls[0][0].where.status).toBe('DISCARDED');
   });
 
@@ -380,7 +497,15 @@ describe('ContentConceptsService.list', () => {
 
 describe('ContentConceptsService.review', () => {
   /** The row as it looks after a successful decision. */
-  const decided = { id: 'c1', workspaceId: 'ws1', status: 'APPROVED', reviewedById: 'u9' };
+  const decided = {
+    id: 'c1',
+    workspaceId: 'ws1',
+    status: 'APPROVED',
+    reviewedById: 'u9',
+    // The plan the pre-flight now measures: three beats is three clips, which is
+    // the number the destination has to be able to carry.
+    shotPlan: { shots: [{ ord: 0 }, { ord: 1 }, { ord: 2 }] },
+  };
 
   it('records WHO decided and when, not just the new status', async () => {
     const { svc, prisma } = deps();
@@ -506,7 +631,12 @@ describe('ContentConceptsService.review', () => {
       socialCampaignId: 'camp-chosen',
     });
 
-    expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-chosen');
+    // The PLAN goes with it, because the pre-flight asks one question of it:
+    // is the quote the reviewer is approving the one this campaign would
+    // actually charge.
+    expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-chosen', {
+      plan: expect.objectContaining({ shots: expect.any(Array) }),
+    });
     expect(promotion.promote).toHaveBeenCalledWith('ws1', 'c1', { socialCampaignId: 'camp-chosen' });
   });
 
@@ -543,5 +673,171 @@ describe('ContentConceptsService.review', () => {
     await expect(svc.review('ws1', 'gone', { decision: 'APPROVED', reviewerId: 'u9' })).rejects.toThrow(
       NotFoundException,
     );
+  });
+});
+
+
+/**
+ * Defect 3, at the planner's end.
+ *
+ * `planShots(brief, videoModel, undefined, scenes)` — the third argument,
+ * `persona`, was the literal `undefined`, and `PlanConceptsInput` had no
+ * `personaId` field, so `VideoPersona.referenceImageUrls` (created, sliced to
+ * nine, stored) could not reach a shot plan from anywhere in the product. The
+ * machinery that keeps a face or a product IDENTICAL across shots was built and
+ * disconnected.
+ */
+describe('ContentConceptsService.planConcepts — the persona reaches the shot plan', () => {
+  it('threads the reference frames and locked seed onto EVERY shot of EVERY concept', async () => {
+    const { svc, prisma } = deps();
+
+    await plan(svc, { personaId: 'persona-1' });
+
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data as any[];
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.shotPlan.shots.length).toBeGreaterThan(0);
+      for (const shot of row.shotPlan.shots) {
+        expect(shot.reference).toEqual({
+          images: PERSONA.referenceImageUrls,
+          seed: PERSONA.lockedSeed,
+        });
+        // And the identity phrasing in the prompt the generator reads.
+        expect(shot.prompt).toContain('consistent identity');
+      }
+    }
+  });
+
+  it('names the persona in the QC checklist a human reviews', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc, { personaId: 'persona-1' });
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data as any[];
+    expect(rows[0].shotPlan.qcChecklist[0]).toMatch(/Deniz.*identity consistent/);
+  });
+
+  it('plans with NO persona exactly as before when none is named', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc);
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data as any[];
+    expect(rows[0].shotPlan.shots.every((sh: any) => sh.reference === undefined)).toBe(true);
+    expect(prisma.videoPersona.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('scopes the persona read by workspace — a persona id is not authority', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc, { personaId: 'persona-1' });
+    expect(prisma.videoPersona.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ workspaceId: 'ws1' }) }),
+    );
+  });
+
+  it('refuses an unknown persona BEFORE reserving credits or calling the model', async () => {
+    const { svc, credits, complete } = deps({ personaRow: null });
+    await expect(plan(svc, { personaId: 'nope' })).rejects.toThrow(NotFoundException);
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('refuses a persona with NO reference images, by name, before any spend', async () => {
+    // An identity lock with nothing to lock onto plans exactly like no persona
+    // at all — `planShots` writes no `reference` — and the difference would only
+    // surface weeks later as clips that do not look like each other.
+    const { svc, credits, complete } = deps({
+      personaRow: { ...PERSONA, referenceImageUrls: [] },
+    });
+    await expect(plan(svc, { personaId: 'persona-1' })).rejects.toThrow(/no reference images/i);
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('refuses a retired persona rather than quietly planning without it', async () => {
+    const { svc, credits } = deps({ personaRow: { ...PERSONA, status: 'ARCHIVED' } });
+    await expect(plan(svc, { personaId: 'persona-1' })).rejects.toThrow(/ARCHIVED/);
+    expect(credits.reserve).not.toHaveBeenCalled();
+  });
+});
+
+describe('ContentConceptsService.planConcepts — every plan carries its frame', () => {
+  it('records the aspect ratio on the stored plan, not only in the prompt prose', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc);
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data as any[];
+    expect(rows.every((r) => r.shotPlan.aspectRatio === DEFAULT_SHOT_ASPECT)).toBe(true);
+  });
+});
+
+/**
+ * THE COST IS SHOWN BEFORE THE COMMITMENT.
+ *
+ * A plan carrying persona reference frames can only run on the one contract
+ * that takes an array of them — `bytedance/seedance-2.5/reference-to-video`, at
+ * 48 credits per second against the platform default's 3, with a 4-second floor
+ * under beats a reviewer approved at 2 and 3. That substitution was made inside
+ * the producer, AFTER approval, as a log line: the concept a human approved said
+ * 'seedance' and 27 credits, and the file that arrived was bought elsewhere for
+ * 576 — real cash on the engine path. Nothing the payer could read said so.
+ *
+ * So the model, the seconds and the price are resolved where the plan is MADE
+ * and written onto the plan itself.
+ */
+describe('ContentConceptsService.planConcepts — the plan is quoted before it is approved', () => {
+  const firstPlan = (prisma: any) => prisma.contentConcept.createMany.mock.calls[0][0].data[0].shotPlan;
+
+  it('quotes the platform default when nothing else is chosen', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc);
+
+    const p = firstPlan(prisma);
+    expect(p.production.model).toBe(DEFAULT_VIDEO_MODEL);
+    expect(p.production.modelSource).toBe('platform');
+    // Seedance v1 lite: 3 credits/s, 1-10s, so the beats are untouched and the
+    // quote is 3x(2+3+4).
+    expect(p.production.billedSecPerBeat).toEqual([2, 3, 4]);
+    expect(p.production.credits).toBe(27);
+    expect(p.production.aspectRatio).toBe(DEFAULT_SHOT_ASPECT);
+  });
+
+  it('a persona plan is quoted on the model the persona FORCES, at its rate and its floor', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc, { personaId: 'persona-1' });
+
+    const p = firstPlan(prisma);
+    // The substitution is a FACT ON THE PLAN, naming what it replaced — not a
+    // logger.log written after the human decided.
+    expect(p.production.model).toBe(DEFAULT_VIDEO_REFERENCE_MODEL);
+    expect(p.production.modelSource).toBe('persona');
+    expect(p.production.replacedModel).toBe(DEFAULT_VIDEO_MODEL);
+    // Its contract floor is 4 seconds, so beats approved at 2 and 3 render — and
+    // bill — 4. The plan says 4, because that is what will be bought.
+    expect(p.production.billedSecPerBeat).toEqual([4, 4, 4]);
+    expect(p.shots.map((sh: any) => sh.durationSec)).toEqual([4, 4, 4]);
+    expect(p.durationSec).toBe(12);
+    // 48 credits/s x 4s x 3 beats. Twenty-one times the platform default's 27.
+    expect(p.production.credits).toBe(576);
+    expect(p.production.usd).toBeCloseTo(5.676, 3);
+  });
+
+  it('a campaign that chose its own model is quoted on THAT model', async () => {
+    const { svc, prisma } = deps({
+      campaignRow: { id: 'camp-1', workspaceId: 'ws1', defaultVideoModel: 'fal-ai/veo3.1/fast' },
+    });
+    await plan(svc, { socialCampaignId: 'camp-1' });
+
+    const p = firstPlan(prisma);
+    expect(p.production.model).toBe('fal-ai/veo3.1/fast');
+    expect(p.production.modelSource).toBe('campaign');
+    // Veo 3.1 takes 4, 6 or 8 seconds only, so 2 and 3 second beats are bought
+    // as 4-second ones at 15 credits/s.
+    expect(p.production.billedSecPerBeat).toEqual([4, 4, 4]);
+    expect(p.production.credits).toBe(180);
+  });
+
+  it('quotes the WORKSPACE default when that is what will run', async () => {
+    const { svc, prisma } = deps({ workspaceVideoModel: 'bytedance/seedance-2.5/text-to-video' });
+    await plan(svc);
+
+    const p = firstPlan(prisma);
+    expect(p.production.model).toBe('bytedance/seedance-2.5/text-to-video');
+    expect(p.production.modelSource).toBe('workspace');
   });
 });

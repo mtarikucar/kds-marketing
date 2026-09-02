@@ -29,6 +29,28 @@ export interface PublishResult {
   error?: string;
   /** True when the failure is a Meta token problem needing reconnect. */
   isAuthError?: boolean;
+  /**
+   * Media handed to this adapter that it did NOT send, and why.
+   *
+   * Every adapter here has a shape its platform accepts — one video, four
+   * images, a ten-slide carousel — and every one of them used to reach that
+   * shape by INDEXING (`videos[0]`, `mediaUrls[0]`, `.slice(0, 10)`) and saying
+   * nothing about the remainder. A five-beat concept generated five clips, was
+   * charged for five, published one, and no error, no warning and no row
+   * recorded the other four.
+   *
+   * A platform that accepts one video accepts one video — that is not a defect
+   * and this field does not try to publish more. What it fixes is the silence:
+   * a drop is now a fact the publish path returns, `publishDuePost` records on
+   * the target row, and a human can read afterwards.
+   *
+   * Most VIDEO overflow no longer reaches here at all: `selectMediaForTarget`
+   * trims each target to what its network carries before the adapter is called,
+   * and reports that drop itself. What still surfaces through this field is the
+   * shape only the adapter knows — images past a carousel's limit, a Facebook
+   * video that displaces the images beside it.
+   */
+  droppedMedia?: { count: number; reason: string };
 }
 
 export interface AccountRow {
@@ -88,6 +110,74 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  networks ignore it and always behave as FEED. */
 export type PostFormat = 'FEED' | 'REEL' | 'STORY';
 
+/**
+ * How many VIDEO files ONE post on this network+format can actually carry.
+ *
+ * This is not a wish list — each number is what the adapter below physically
+ * does, read off the code that does it, and the two must be changed together:
+ *
+ *  - **FACEBOOK** — 1, any format. `/{page}/videos` takes one `file_url`; there
+ *    is no video-carousel feed primitive on the Graph API.
+ *  - **INSTAGRAM** — FEED 10 (a carousel may hold ten VIDEO children), REEL and
+ *    STORY 1. Note that ten videos in a feed carousel is ten swipeable clips,
+ *    not one video; it does not throw anything away, which is a lower bar.
+ *  - **INSTAGRAM_LOGIN** — 1. The direct Login API publishes a single container.
+ *  - **LINKEDIN** — 1. `/rest/posts` content takes a single video `media.id`;
+ *    `multiImage` is images only.
+ *  - **TIKTOK** — 1. `video/init` takes one `video_url` (its PHOTO mode takes 35
+ *    images, which is a different media type).
+ *  - **TWITTER** — 0. `uploadXMedia` posts `media_category: tweet_image` with a
+ *    5 MB cap: images only, so a video target drops the file entirely.
+ *  - **PINTEREST** — 0. A pin's `media_source` is `image_url`.
+ *  - **GMB** — 0. A Local Post's media is `mediaFormat: PHOTO`.
+ *
+ * Exported because it is the SELECTOR, not a veto. `selectMediaForTarget` reads
+ * it once per target to decide how much of the post that destination is handed;
+ * the content line reads it before a human approves, to say what each
+ * destination will actually receive.
+ *
+ * It used to drive a blanket refusal (`assertDestinationsCanCarry`): a concept
+ * had to fit EVERY targeted account or nothing was produced at all. Measured
+ * against this very table that refused seven of the eight networks — every
+ * concept is at least two beats, and only Instagram's feed carries two — so a
+ * vertical-video feature worked on an all-Instagram campaign and nowhere else.
+ * The refusal is gone. The same approved concept is a carousel on Instagram and
+ * a single hero clip on TikTok, and both are legitimate publishes.
+ */
+export function maxPublishableVideos(network: string, format: PostFormat = 'FEED'): number {
+  switch (network) {
+    case 'FACEBOOK':
+      return 1;
+    case 'INSTAGRAM':
+      return format === 'FEED' ? 10 : 1;
+    case 'INSTAGRAM_LOGIN':
+    case 'LINKEDIN':
+    case 'TIKTOK':
+      return 1;
+    case 'TWITTER':
+    case 'PINTEREST':
+    case 'GMB':
+      return 0;
+    default:
+      // An unknown network publishes nothing at all (`publishToNetwork` returns
+      // "Unknown network"), so promising it any capacity would be a lie.
+      return 0;
+  }
+}
+
+/**
+ * Attach "and these N were not sent" to a SUCCESSFUL publish.
+ *
+ * Only to a successful one: a failed publish sent nothing at all, and its
+ * `error` already says so — annotating it with a partial-drop count would
+ * describe a post that does not exist. One helper so no adapter has to remember
+ * the shape, or — as before — remember to mention the drop at all.
+ */
+function withDrop(r: PublishResult, sent: number, given: number, reason: string): PublishResult {
+  if (!r.ok || given <= sent) return r;
+  return { ...r, droppedMedia: { count: given - sent, reason } };
+}
+
 export interface MediaItem {
   url: string;
   /** MIME type (from upload). Falls back to URL extension when absent. */
@@ -108,6 +198,19 @@ export interface PublishOptions {
   linkedin?: LinkedinPostOptions;
   /** TikTok-specific privacy/interaction/photo controls. */
   tiktok?: TikTokPostOptions;
+  /**
+   * THE MEDIA WAS GENERATED FOR THIS POST — it is a campaign item's renders,
+   * planned, paid for and approved as the post itself, not a picture somebody
+   * attached to words they wrote.
+   *
+   * Only one adapter reads it, and only where it decides whether a post may go
+   * out WITHOUT its media: see `publishTwitter`. Every other adapter fails the
+   * publish when an upload fails, so the question never arises there.
+   *
+   * `publishDuePost` sets it; direct callers leave it unset, which is the safe
+   * default (a post nobody generated media for is treated as hand-composed).
+   */
+  mediaGeneratedForPost?: boolean;
 }
 
 const VIDEO_EXT = /\.(mp4|mov|m4v|webm|qt)(?:[?#]|$)/i;
@@ -117,6 +220,98 @@ function isVideoItem(item: MediaItem): boolean {
 }
 function toMediaItems(mediaUrls: string[], opts: PublishOptions): MediaItem[] {
   return (mediaUrls || []).map((url, i) => ({ url, mime: opts.mediaMime?.[i] }));
+}
+
+/** One destination's share of a post's media. See {@link selectMediaForTarget}. */
+export interface TargetMediaSelection {
+  /** What this destination is handed, in the post's own (beat) order. */
+  media: MediaItem[];
+  /** What this destination cannot take, and the network limit that says so. */
+  dropped: { count: number; reason: string } | null;
+  /**
+   * The post CARRIES media and this destination can take none of it.
+   *
+   * A FACT, not a verdict. What it means depends on the post: media GENERATED
+   * for a post is the post, so a destination that can take none of it must not
+   * be published to at all; an image somebody attached to words they wrote is
+   * not, so the words still go out and the loss is recorded on the row. The
+   * caller decides which post this is — `SocialPlannerService.publishDuePost`.
+   */
+  carriesNothing: boolean;
+}
+
+/** Every format a target can be set to — the axis a capacity may vary along. */
+const ALL_FORMATS: PostFormat[] = ['FEED', 'REEL', 'STORY'];
+
+/**
+ * How this network's video limit reads in a sentence a human gets to see.
+ *
+ * NAMES THE FORMAT WHENEVER THE NUMBER DEPENDS ON IT. Instagram carries ten
+ * videos in a feed carousel and one as a Reel or Story, so "INSTAGRAM carries 1
+ * video per post" — printed at a target somebody set to REEL — is a true
+ * sentence about that target and a false sentence about Instagram, and it reads
+ * as the second. The operator who acts on it moves the campaign off Instagram
+ * when the fix was to publish the same three clips to the feed.
+ *
+ * Where the capacity is the same at every format (Facebook's one video, X's
+ * none) the format is left out: naming it would imply a choice that does not
+ * exist and invite the operator to go hunting for a setting that changes
+ * nothing.
+ */
+function videoCapacityPhrase(network: string, cap: number, format: PostFormat): string {
+  const variesByFormat = ALL_FORMATS.some((f) => maxPublishableVideos(network, f) !== cap);
+  const subject = variesByFormat ? `${network} ${format}` : network;
+  if (cap <= 0) return `${subject} cannot carry video at all`;
+  return `${subject} carries ${cap} video${cap === 1 ? '' : 's'} per post`;
+}
+
+/**
+ * WHAT THIS DESTINATION TAKES — decided per target, never all-or-nothing.
+ *
+ * A post carries the clips that were made. Each target then takes the first N
+ * its network+format can carry, IN THE POST'S OWN ORDER, and what it could not
+ * take is returned so the caller can record it on that target's row.
+ *
+ * Order is load-bearing and is never re-sorted here: `generatedAssetIds` is
+ * beat order (hook first, payoff last), the confirm gate sorts the asset rows
+ * back into it, and a selection that took "any N" would publish the call to
+ * action as the hook. First N, in the order given.
+ *
+ * Only VIDEO is metered. Images pass through untouched — the adapters each
+ * carry their own image shape (four on X, ten in a Facebook carousel, 35 in a
+ * TikTok photo post) and report their own overflow through `withDrop`. Two
+ * places counting the same limit is how the two answers drift apart; this one
+ * answers the question the concept line actually asks, which is about clips.
+ */
+export function selectMediaForTarget(
+  media: MediaItem[],
+  network: string,
+  format: PostFormat = 'FEED',
+): TargetMediaSelection {
+  const given = media ?? [];
+  const cap = maxPublishableVideos(network, format);
+  const kept: MediaItem[] = [];
+  let takenVideos = 0;
+  let droppedVideos = 0;
+  for (const item of given) {
+    if (!isVideoItem(item)) {
+      kept.push(item);
+      continue;
+    }
+    if (takenVideos < cap) {
+      kept.push(item);
+      takenVideos++;
+    } else {
+      droppedVideos++;
+    }
+  }
+  return {
+    media: kept,
+    dropped: droppedVideos
+      ? { count: droppedVideos, reason: videoCapacityPhrase(network, cap, format) }
+      : null,
+    carriesNothing: given.length > 0 && kept.length === 0,
+  };
 }
 
 // ───────────────────────────────────────────────────────── Instagram helpers
@@ -283,7 +478,12 @@ async function publishInstagram(
       // Poll to FINISHED for images too (not just video) — same race as FEED.
       const w = await igWaitContainerReady(c.id, token);
       if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
-      return igPublish(igId, token, c.id);
+      return withDrop(
+        await igPublish(igId, token, c.id),
+        1,
+        items.length,
+        'an Instagram story carries one media item',
+      );
     }
 
     if (format === 'REEL') {
@@ -298,7 +498,12 @@ async function publishInstagram(
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
       const w = await igWaitContainerReady(c.id, token);
       if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
-      return igPublish(igId, token, c.id);
+      return withDrop(
+        await igPublish(igId, token, c.id),
+        1,
+        items.length,
+        'an Instagram Reel is one video',
+      );
     }
 
     // FEED
@@ -350,7 +555,12 @@ async function publishInstagram(
     if (!parent.id) return { ok: false, error: parent.error, isAuthError: parent.isAuthError };
     const w = await igWaitContainerReady(parent.id, token);
     if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
-    return igPublish(igId, token, parent.id);
+    return withDrop(
+      await igPublish(igId, token, parent.id),
+      children.length,
+      items.length,
+      'an Instagram carousel holds ten items',
+    );
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Instagram publish error (${igId}): ${msg}`);
@@ -404,6 +614,9 @@ async function fbUploadByUrl(
  * Publish to a Facebook Page — FEED (text / single photo / single video /
  * multi-photo), REEL (resumable video upload), or STORY (photo or video).
  */
+/** Photos one Facebook multi-photo feed post attaches. */
+const FB_MAX_FEED_PHOTOS = 10;
+
 async function publishFacebook(
   account: AccountRow,
   content: string,
@@ -435,7 +648,12 @@ async function publishFacebook(
         timeoutMs: 30_000,
       });
       if (!fin.ok) return { ok: false, error: `FB reels finish: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
-      return { ok: true, externalPostId: start.videoId };
+      return withDrop(
+        { ok: true, externalPostId: start.videoId },
+        1,
+        items.length,
+        'a Facebook Reel is one video',
+      );
     }
 
     if (format === 'STORY') {
@@ -456,7 +674,12 @@ async function publishFacebook(
         });
         if (!fin.ok) return { ok: false, error: `FB story finish: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
         const pid = (fin.data as any)?.post_id;
-        return { ok: true, externalPostId: pid ? String(pid) : start.videoId };
+        return withDrop(
+          { ok: true, externalPostId: pid ? String(pid) : start.videoId },
+          1,
+          items.length,
+          'a Facebook story carries one media item',
+        );
       }
       // Photo story: upload unpublished photo, then attach it as a story.
       const photo = await metaGraphFetch(`/${pageId}/photos`, {
@@ -476,7 +699,12 @@ async function publishFacebook(
       });
       if (!st.ok) return { ok: false, error: `FB photo_stories: ${st.error.message}`.slice(0, 500), isAuthError: st.error.isAuthError };
       const pid = (st.data as any)?.post_id;
-      return { ok: true, externalPostId: pid ? String(pid) : String(photoId) };
+      return withDrop(
+        { ok: true, externalPostId: pid ? String(pid) : String(photoId) },
+        1,
+        items.length,
+        'a Facebook story carries one media item',
+      );
     }
 
     // FEED
@@ -497,6 +725,11 @@ async function publishFacebook(
 
     if (videos.length > 0) {
       // Single video feed post (FB has no video-carousel feed primitive).
+      //
+      // ONE of `items` goes out and every other item — the other videos AND any
+      // images alongside them — does not. That has always been true; what is new
+      // is that the caller is told, instead of four paid renders vanishing with
+      // no error, no warning and no record.
       const r = await metaGraphFetch(`/${pageId}/videos`, {
         accessToken: token,
         method: 'POST',
@@ -505,7 +738,14 @@ async function publishFacebook(
       });
       if (!r.ok) return { ok: false, error: `FB video: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
       const id = (r.data as any)?.id;
-      return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'FB video: no id returned' };
+      return id
+        ? withDrop(
+            { ok: true, externalPostId: String(id) },
+            1,
+            items.length,
+            'a Facebook feed post carries one video and no other media',
+          )
+        : { ok: false, error: 'FB video: no id returned' };
     }
 
     if (images.length === 1) {
@@ -517,12 +757,22 @@ async function publishFacebook(
       });
       if (!r.ok) return { ok: false, error: `FB photo: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
       const pid = (r.data as any)?.post_id ?? (r.data as any)?.id;
-      return pid ? { ok: true, externalPostId: String(pid) } : { ok: false, error: 'FB photo: no id returned' };
+      // NOTHING IS DROPPED HERE, so nothing claims to be. This branch is reached
+      // only when `videos.length === 0` and `images.length === 1`, i.e. the post
+      // held exactly one item and that one item was sent. The `withDrop` this
+      // replaced named a video that cannot be here at all — a video would have
+      // returned from the branch above — and `withDrop` would have suppressed
+      // the sentence anyway (given === sent), so the only thing it could ever
+      // have done was mislead a future reader of this file.
+      return pid
+        ? { ok: true, externalPostId: String(pid) }
+        : { ok: false, error: 'FB photo: no id returned' };
     }
 
     // Multi-photo feed post: upload each unpublished, then attach to one post.
+    const uploaded = images.slice(0, FB_MAX_FEED_PHOTOS);
     const mediaFbids: string[] = [];
-    for (const m of images.slice(0, 10)) {
+    for (const m of uploaded) {
       const up = await metaGraphFetch(`/${pageId}/photos`, {
         accessToken: token,
         method: 'POST',
@@ -542,7 +792,35 @@ async function publishFacebook(
     });
     if (!r.ok) return { ok: false, error: r.error.message.slice(0, 500), isAuthError: r.error.isAuthError };
     const id = (r.data as any)?.id;
-    return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'no post id returned' };
+    if (!id) return { ok: false, error: 'no post id returned' };
+    // WHICH loss this was. Two different things can leave a photo out of this
+    // post and they send the reader to two different screens:
+    //
+    //  - past the tenth photo, Facebook's own per-post shape — nothing to fix; and
+    //  - an upload Facebook answered 200 to WITHOUT a photo id, which the loop
+    //    above skips silently so the rest of the post still goes out. That one is
+    //    a file to go and look at.
+    //
+    // The sentence this replaced named a third cause that cannot happen here —
+    // "and no video" — because a post with any video returned from the branch
+    // above; and it printed the ten-photo limit over an id-less upload, so
+    // "1 of 4 … holds ten photos" was shown to an operator whose post was four
+    // photos long and had hit no limit at all.
+    const overflow = images.length - uploaded.length;
+    const idless = uploaded.length - mediaFbids.length;
+    const why: string[] = [];
+    if (idless > 0) {
+      why.push(
+        `Facebook accepted ${idless === 1 ? 'an upload' : `${idless} uploads`} without returning a photo id`,
+      );
+    }
+    if (overflow > 0) why.push(`a Facebook multi-photo feed post holds ${FB_MAX_FEED_PHOTOS} photos`);
+    return withDrop(
+      { ok: true, externalPostId: String(id) },
+      mediaFbids.length,
+      items.length,
+      why.join('; '),
+    );
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Facebook publish error (${pageId}): ${msg}`);
@@ -693,7 +971,24 @@ async function publishLinkedIn(
   }
   const id = result.restliId;
   if (!id) return { ok: false, error: 'LinkedIn /rest/posts returned no x-restli-id' };
-  return { ok: true, externalPostId: String(id) };
+  // `/rest/posts` content is EITHER one video urn OR a multiImage list, so a
+  // post that carried a video sent exactly that video and nothing else — and a
+  // post with no video sent every item it was given, `multiImage` holding all of
+  // them. That is the whole space: THE ONLY LOSS LINKEDIN CAN HAVE HERE is the
+  // items a video crowded out (an image whose upload fails returns ok:false
+  // above and sends nothing at all, which `withDrop` correctly leaves alone).
+  //
+  // The no-video sentence this replaced — "carries images or one video, not
+  // both" — could never be printed: with no video, `sent === given` and
+  // `withDrop` returns the result untouched. It described a mixed post that had
+  // already gone down the video branch.
+  const sent = videoItem ? 1 : imageItems.length;
+  return withDrop(
+    { ok: true, externalPostId: String(id) },
+    sent,
+    (items || []).length,
+    'a LinkedIn post carries one video and no other media',
+  );
   } catch (e: any) {
     // Media download/upload helpers call safeFetch, which THROWS on SSRF-block, DNS
     // failure, ECONNRESET or timeout. Match every sibling adapter: never let a throw
@@ -785,6 +1080,16 @@ async function publishTikTok(
       return { ok: false, error: err.slice(0, 500) };
     }
 
+    // What TikTok was actually handed. A PHOTO post pulls up to 35 images; a
+    // VIDEO post pulls exactly one `video_url` — so a five-clip concept sent
+    // here published one clip and threw four paid renders away without a word.
+    // It still publishes one (TikTok accepts one video); it no longer does so
+    // silently.
+    const sent = isPhoto ? Math.min(mediaUrls.length, 35) : 1;
+    const dropReason = isPhoto
+      ? 'a TikTok photo post carries 35 images'
+      : 'a TikTok video post carries one video';
+
     // Step 2 — bounded status poll (≤10s) to catch immediate rejections.
     for (let i = 0; i < 5; i++) {
       await sleep(2_000);
@@ -796,14 +1101,16 @@ async function publishTikTok(
       });
       const statusJson = (await statusRes.json()) as Record<string, any>;
       const status = statusJson?.data?.status;
-      if (status === 'PUBLISH_COMPLETE') return { ok: true, externalPostId: String(publishId) };
+      if (status === 'PUBLISH_COMPLETE') {
+        return withDrop({ ok: true, externalPostId: String(publishId) }, sent, mediaUrls.length, dropReason);
+      }
       if (status === 'FAILED') {
         const reason = String(statusJson?.data?.fail_reason ?? 'TikTok rejected the media');
         return { ok: false, error: reason.slice(0, 500) };
       }
     }
     // Still processing after the bounded wait — treat as accepted (queued).
-    return { ok: true, externalPostId: String(publishId) };
+    return withDrop({ ok: true, externalPostId: String(publishId) }, sent, mediaUrls.length, dropReason);
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`TikTok publish error (${account.externalId}): ${msg}`);
@@ -899,7 +1206,12 @@ async function publishInstagramDirect(
       logger.warn(`Instagram (Login) publish failed (${igId}): ${err}`);
       return { ok: false, error: `IG publish: ${err}`.slice(0, 500) };
     }
-    return { ok: true, externalPostId: String(postId) };
+    return withDrop(
+      { ok: true, externalPostId: String(postId) },
+      1,
+      items.length,
+      'the Instagram Login API publishes one media container per post',
+    );
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Instagram (Login) publish error (${igId}): ${msg}`);
@@ -943,8 +1255,9 @@ async function readCappedBytes(res: Response, maxBytes: number): Promise<Buffer 
 /**
  * Upload one image URL to X's v2 media endpoint (OAuth2 user context, scope
  * media.write) and return its media id. Fetches the bytes SSRF-guarded, caps
- * the size, and posts multipart/form-data. Returns null on any failure (the
- * caller degrades to a text-only tweet rather than failing the whole post).
+ * the size, and posts multipart/form-data. Returns null on any failure; what
+ * the caller does with a null depends on WHOSE post it is — see
+ * `publishTwitter`.
  */
 async function uploadXMedia(token: string, mediaUrl: string): Promise<string | null> {
   try {
@@ -980,11 +1293,33 @@ async function uploadXMedia(token: string, mediaUrl: string): Promise<string | n
   }
 }
 
-/** Publish to X/Twitter (API v2 POST /2/tweets), with image media. Inert without a paid X app. */
+/**
+ * Publish to X/Twitter (API v2 POST /2/tweets), with image media. Inert without
+ * a paid X app.
+ *
+ * WHAT HAPPENS WHEN X REFUSES EVERY UPLOAD DEPENDS ON WHOSE POST IT IS, and
+ * that is the whole of `mediaGeneratedForPost`:
+ *
+ *  - a HAND-COMPOSED post is words somebody wrote with an image attached. If the
+ *    image flakes, sending the words is the better failure — the tweet goes out
+ *    text-only and the row says an upload was refused. Unchanged, deliberately:
+ *    this is the older of the two rules and it is right about this post.
+ *  - a post whose media was GENERATED FOR IT is the media. Its caption alone is
+ *    not a smaller version of it, it is a different post the reviewer never
+ *    approved — published on their behalf while the renders they paid for sit
+ *    unused. That one FAILS here instead, and `unschedulePost` can put it back
+ *    once somebody has looked at the files.
+ *
+ * The same split, decided from the same flag, guards the pre-flight case in
+ * `SocialPlannerService.publishDuePost` (a post whose media this network cannot
+ * carry AT ALL). Between them the invariant is whole: a generated post never
+ * reaches a timeline as a bare caption, by either route.
+ */
 async function publishTwitter(
   account: AccountRow,
   content: string,
   mediaUrls: string[],
+  mediaGeneratedForPost = false,
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('TWITTER')) {
     return { ok: false, error: 'X/Twitter not configured: set X_CLIENT_ID and X_CLIENT_SECRET' };
@@ -992,12 +1327,27 @@ async function publishTwitter(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
   try {
-    // Upload up to 4 images first (best-effort); a media failure degrades to a
-    // text-only tweet rather than dropping the whole post.
+    // Upload up to 4 images first (best-effort). A media failure degrades to a
+    // text-only tweet rather than dropping the whole post — see the doc block
+    // for the one post that is not true of.
     const mediaIds: string[] = [];
     for (const url of mediaUrls.slice(0, X_MAX_MEDIA)) {
       const id = await uploadXMedia(token, url);
       if (id) mediaIds.push(id);
+    }
+    // A post MADE OF generated media that would go out carrying none of it is
+    // not this post. Refused before /2/tweets, so nothing is published and
+    // nothing has to be deleted afterwards. A PARTIAL upload still publishes:
+    // some of the approved media is on the timeline and `withDrop` below names
+    // what is missing.
+    if (mediaGeneratedForPost && mediaUrls.length > 0 && mediaIds.length === 0) {
+      return {
+        ok: false,
+        error:
+          `not published: X refused all ${mediaUrls.length} generated media file(s), and this post's ` +
+          `media was generated for it — publishing would have put the caption out alone, which is not ` +
+          `the post that was approved. Check the files, then reschedule.`,
+      };
     }
     const body: Record<string, unknown> = { text: content.slice(0, 280) };
     if (mediaIds.length > 0) body.media = { media_ids: mediaIds };
@@ -1010,7 +1360,35 @@ async function publishTwitter(
     });
     const json = (await res.json()) as Record<string, any>;
     const id = json?.data?.id;
-    if (res.ok && id) return { ok: true, externalPostId: String(id) };
+    if (res.ok && id) {
+      // WHICH loss this was. A drop here has TWO possible causes and they need
+      // different actions from whoever reads the row, so one fixed sentence
+      // cannot serve both:
+      //
+      //  - past the fourth file, X's own per-post shape — nothing to fix; and
+      //  - a file X (or its host) refused, which `uploadXMedia` swallows to a
+      //    null so the tweet still goes out. That one is a file to go and look
+      //    at, and the operator is only told to look if the row says so.
+      //
+      // The sentence this replaced named a third cause that CANNOT happen here:
+      // `selectMediaForTarget` gives X a video capacity of zero, so no video
+      // ever reaches this adapter, and "and no video" was printed over an image
+      // whose upload had simply failed.
+      const attempted = Math.min(mediaUrls.length, X_MAX_MEDIA);
+      const refused = attempted - mediaIds.length;
+      const overflow = mediaUrls.length - attempted;
+      const why: string[] = [];
+      if (refused > 0) {
+        why.push(`X refused ${refused === 1 ? 'the upload' : `${refused} of the uploads`}`);
+      }
+      if (overflow > 0) why.push('X carries four images per post');
+      return withDrop(
+        { ok: true, externalPostId: String(id) },
+        mediaIds.length,
+        mediaUrls.length,
+        why.join('; '),
+      );
+    }
     const err = String(json?.detail ?? json?.title ?? res.status);
     logger.warn(`Twitter publish failed (${account.externalId}): ${err}`);
     return { ok: false, error: err.slice(0, 500) };
@@ -1045,7 +1423,14 @@ async function publishPinterest(
       timeoutMs: 15_000,
     });
     const json = (await res.json()) as Record<string, any>;
-    if (res.ok && json?.id) return { ok: true, externalPostId: String(json.id) };
+    if (res.ok && json?.id) {
+      return withDrop(
+        { ok: true, externalPostId: String(json.id) },
+        1,
+        mediaUrls.length,
+        'a Pinterest pin is one image',
+      );
+    }
     const err = String(json?.message ?? res.status);
     logger.warn(`Pinterest publish failed (${account.externalId}): ${err}`);
     return { ok: false, error: err.slice(0, 500) };
@@ -1097,7 +1482,14 @@ async function publishGmb(
       },
     );
     const json = (await res.json()) as Record<string, any>;
-    if (res.ok && json?.name) return { ok: true, externalPostId: String(json.name) };
+    if (res.ok && json?.name) {
+      return withDrop(
+        { ok: true, externalPostId: String(json.name) },
+        1,
+        mediaUrls.length,
+        'a Google Business local post carries one photo',
+      );
+    }
     const err = String(json?.error?.message ?? res.status);
     logger.warn(`GMB publish failed (${account.externalId}): ${err}`);
     return { ok: false, error: err.slice(0, 500) };
@@ -1130,7 +1522,7 @@ export async function publishToNetwork(
     case 'TIKTOK':
       return publishTikTok(account, content, mediaUrls, opts.tiktok);
     case 'TWITTER':
-      return publishTwitter(account, content, mediaUrls);
+      return publishTwitter(account, content, mediaUrls, opts.mediaGeneratedForPost === true);
     case 'PINTEREST':
       return publishPinterest(account, content, mediaUrls);
     case 'GMB':

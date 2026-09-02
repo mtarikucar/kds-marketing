@@ -111,7 +111,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.plan_content_concepts',
     description:
-      `Turn ONE idea (pasted text, notes, a link) into several genuinely DIFFERENT video concepts — different angles, not rewordings — each planned shot by shot with its own on-screen text, voiceover, camera note and duration. Defaults to ${DEFAULT_CONCEPT_COUNT} concepts. This SPENDS AI credits (one Opus call). The concepts are saved as PROPOSED for a human to approve or discard with jeeta.review_content_concept; nothing is generated or published here. APPROVING one later REQUIRES a social campaign to produce it into, and that campaign must be ACTIVE or PAUSED — a DRAFT campaign is refused, because the publish gate would never release what approving it would pay to generate. Pass socialCampaignId now to have that checked BEFORE this call spends anything, or leave it off and let the reviewer name one. If the concepts come back as variations of one another the whole batch is refused and nothing is saved — that is a generation failure, not a verdict on the idea.`,
+      `Turn ONE idea (pasted text, notes, a link) into several genuinely DIFFERENT video concepts — different angles, not rewordings — each planned shot by shot with its own on-screen text, voiceover, camera note and duration. Defaults to ${DEFAULT_CONCEPT_COUNT} concepts. This SPENDS AI credits (one Opus call). The concepts are saved as PROPOSED for a human to approve or discard with jeeta.review_content_concept; nothing is generated or published here. APPROVING one later REQUIRES a social campaign to produce it into, and that campaign must be ACTIVE or PAUSED — a DRAFT campaign is refused, because the publish gate would never release what approving it would pay to generate. Pass socialCampaignId now to have that checked BEFORE this call spends anything, or leave it off and let the reviewer name one. If the concepts come back as variations of one another the whole batch is refused and nothing is saved — that is a generation failure, not a verdict on the idea. Each returned plan carries a "production" block: the model that will actually run it, the seconds each beat will be BILLED at (a model's own contract floor can raise a 3-second beat to 4), and what producing it costs in credits and dollars. That is the price approving it will charge — show it before approving, and note that a persona forces the reference-to-video model, which is many times dearer per second than the default. When socialCampaignId is given, each concept also carries "destinations": one line per target account saying what that network will ACTUALLY publish (all clips as a carousel, the first beat only, or nothing at all on a network that cannot carry video) — show those lines before approving, because nothing is refused over capacity.`,
     domain: 'content',
     // Deferred (spec §3): the advertised surface is at its 45-tool ceiling, and
     // a wave that wants room must defer rather than raise the number. Reachable
@@ -143,6 +143,11 @@ export function registerContentConceptTools(
         .max(64)
         .optional()
         .describe('Scope these concepts to an existing ACTIVE or PAUSED social campaign (see jeeta.list_social_campaigns). Validated before any credits are spent.'),
+      personaId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe('A VideoPersona whose reference images lock ONE face or product across every shot of every concept, so the clips read as one campaign rather than unrelated videos. The persona must have at least one reference image; validated before any credits are spent. It also CHANGES THE MODEL and the price: reference frames only work on the reference-to-video endpoint (48 credits/second against the default 3, with a 4-second minimum beat), and the returned plan quotes exactly that.'),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
@@ -156,6 +161,7 @@ export function registerContentConceptTools(
         ...(args.socialCampaignId !== undefined
           ? { socialCampaignId: String(args.socialCampaignId) }
           : {}),
+        ...(args.personaId !== undefined ? { personaId: String(args.personaId) } : {}),
         createdById,
       });
     },
@@ -164,7 +170,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.list_content_concepts',
     description:
-      `List the video concepts in this workspace with their angle, hook and full shot plan, newest batch first. Returns at most the ${CONCEPT_LIST_LIMIT} newest concepts (about five batches); older ones are reachable only by narrowing. Filter by status (PROPOSED = waiting on a human, APPROVED = kept, DISCARDED = rejected) or by batchId, which always returns that batch whole. Read-only.`,
+      `List the video concepts in this workspace with their angle, hook and full shot plan, newest batch first. Returns at most the ${CONCEPT_LIST_LIMIT} newest concepts (about five batches); older ones are reachable only by narrowing. Filter by status (PROPOSED = waiting on a human, APPROVED = kept, DISCARDED = rejected) or by batchId, which always returns that batch whole. Every concept scoped to a campaign carries "destinations": one line per target account saying what that network will ACTUALLY publish if it is approved — the whole set of clips as a carousel, the first beat only, nothing at all on a network that cannot carry video, or nothing because the account is disconnected. Show those lines to the human before they approve. Read-only.`,
     domain: 'content',
     // Deferred (spec §3): a review-queue browse, not a per-turn action.
     defer: true,
@@ -223,7 +229,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.review_content_concept',
     description:
-      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item and one video clip is generated per beat of its shot plan, which SPENDS the workspace credits (video is the most expensive action in the product) — this single decision is the whole human gate, there is no second approval per clip. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into — the one the idea was scoped to, or socialCampaignId — and that campaign must be ACTIVE or PAUSED; a DRAFT campaign is refused BEFORE the verdict is recorded, so the concept stays PROPOSED and can be approved again once someone activates the campaign in the panel. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
+      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item and one video clip is generated per beat of its shot plan, which SPENDS the workspace credits (video is the most expensive action in the product) — this single decision is the whole human gate, there is no second approval per clip. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into — the one the idea was scoped to, or socialCampaignId — and that campaign must be ACTIVE or PAUSED; a DRAFT campaign is refused BEFORE the verdict is recorded, so the concept stays PROPOSED and can be approved again once someone activates the campaign in the panel. Approval is NOT refused because a destination cannot carry every clip — each network takes what it can (the Instagram feed carousel holds ten, TikTok and Facebook take one, X and Pinterest take no video at all) and the rest is recorded; read the "destinations" lines from jeeta.list_content_concepts to the person first, so they approve knowing what each account will receive. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
     domain: 'content',
     // Deferred (spec §3): follows list_content_concepts, which is itself
     // deferred; a model that has found one has found both.

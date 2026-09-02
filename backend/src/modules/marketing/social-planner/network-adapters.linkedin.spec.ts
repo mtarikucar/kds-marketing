@@ -237,4 +237,61 @@ describe('publishLinkedIn — /rest/posts (text + image + multiImage)', () => {
     );
     expect(postBody.content).toEqual({ media: { id: 'urn:li:video:vid-1' } });
   });
+
+  /**
+   * LinkedIn's ONLY possible loss is the items a video crowded out: `/rest/posts`
+   * content is either one video urn or a multiImage list, and an image whose
+   * upload fails returns ok:false and sends nothing at all. The second sentence
+   * this pair replaces ("carries images or one video, not both") could never be
+   * printed — with no video, sent === given — so it could only ever have been
+   * read by somebody trying to work out what the code does.
+   */
+  it('a video ALONGSIDE images reports the images the video crowded out', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/rest/videos') && u.includes('finalizeUpload')) {
+        return Promise.resolve(res({ status: 200, json: {} }));
+      }
+      if (u.includes('/rest/videos')) {
+        return Promise.resolve(
+          res({
+            json: {
+              value: {
+                video: 'urn:li:video:vid-2',
+                uploadInstructions: [
+                  { uploadUrl: 'https://dms-uploads.example/part1', firstByte: 0, lastByte: 7 },
+                ],
+              },
+            },
+          }),
+        );
+      }
+      if (u.startsWith('https://dms-uploads')) return Promise.resolve(res({ status: 200, etag: 'e1' }));
+      if (u.includes('/rest/posts')) return Promise.resolve(res({ status: 201, restliId: 'urn:li:share:mix' }));
+      return Promise.resolve(res({ bytes: Buffer.from('BYTES') }));
+    });
+
+    const r = await publishToNetwork(
+      account('LI_ORG'),
+      'a video and two stills',
+      ['https://cdn.example/clip.mp4', 'https://cdn.example/a.jpg', 'https://cdn.example/b.jpg'],
+      { mediaMime: ['video/mp4', 'image/jpeg', 'image/jpeg'] },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(r.droppedMedia).toEqual({
+      count: 2,
+      reason: 'a LinkedIn post carries one video and no other media',
+    });
+  });
+
+  it('an all-image post drops nothing — multiImage holds every one of them', async () => {
+    routeImages('urn:li:image:img-9');
+    const urls = ['https://cdn.example/1.jpg', 'https://cdn.example/2.jpg', 'https://cdn.example/3.jpg'];
+    const r = await publishToNetwork(account('LI_ORG'), 'three stills', urls, {
+      mediaMime: urls.map(() => 'image/jpeg'),
+    });
+    expect(r.ok).toBe(true);
+    expect(r.droppedMedia).toBeUndefined();
+  });
 });

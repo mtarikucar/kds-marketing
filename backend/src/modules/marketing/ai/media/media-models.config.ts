@@ -1170,6 +1170,105 @@ export function getMediaModel(id: string): MediaModel | undefined {
 }
 
 /**
+ * Does this model publish `ratio` in its own aspect contract?
+ *
+ * Asked BEFORE a generation is submitted, by callers that hold an intent (a
+ * shot plan says 9:16) and a model id (a campaign override, or a workspace
+ * default) and must not send one to the other on hope. A ratio absent from
+ * `contract.aspect.values` is a ratio the endpoint does not offer, and a model
+ * with no `aspect` block at all takes no ratio parameter — both are `false`,
+ * because both mean "asking for this frame here does not work".
+ *
+ * The distinction that matters: a prompt can SAY "vertical 9:16" to any model
+ * alive, and every model will happily render whatever its own default is. Only
+ * the wire parameter decides, and only this says whether the wire parameter
+ * exists.
+ */
+export function mediaModelOffersAspect(id: string, ratio: string): boolean {
+  return Boolean(MEDIA_MODELS[id]?.contract.aspect?.values[ratio]);
+}
+
+/** Every ratio this model offers, for a refusal that names the alternatives
+ *  instead of only the problem. Empty when the model takes no ratio at all. */
+export function mediaModelAspectOptions(id: string): string[] {
+  return Object.keys(MEDIA_MODELS[id]?.contract.aspect?.values ?? {});
+}
+
+/**
+ * Refuse a model that cannot shoot in `ratio` — AT THE DOOR WHERE IT IS CHOSEN.
+ *
+ * The two doors are `SocialCampaignsService` (the campaign's `defaultVideoModel`
+ * override) and `MediaModelDefaultsService` (the workspace default), the same
+ * two `assertCataloguedModel` guards, for the same reason: the person choosing
+ * the model is on a screen, is choosing between a handful of options, and can
+ * act on the answer. Everywhere downstream of that choice, the answer arrives
+ * too late to be useful.
+ *
+ * IT WAS DOWNSTREAM, and downstream was worse than nothing. The check lived in
+ * `ConceptPromotionService.produce`, which runs AFTER a human has approved the
+ * concept and after the item exists — and `produce` has no way to hand the work
+ * back: `review()` refuses a second verdict on a decided concept and
+ * `regenerateItem` refuses a promoted item, so failing there stranded approved
+ * work permanently, with the reason on an item row and no button that could act
+ * on it.
+ *
+ * A MODEL WITH NO ASPECT CONTRACT PASSES, and that is the other half of the same
+ * bug. `veed/avatars/text-to-video` is a served VIDEO model that takes no
+ * `aspect_ratio` at all — its frame comes from the avatar id, and its vertical
+ * avatars are exactly what this line wants. Treating "offers no ratio" as
+ * "cannot do 9:16" refused a legitimate choice and stranded every concept
+ * produced under it. The producer sends no ratio to such a model and records
+ * that on the plan (`ShotProduction.frameNote`), which is the honest report:
+ * nobody asked for a frame, so the endpoint's own is what arrives.
+ */
+export function assertModelOffersAspect(id: string, ratio: string): void {
+  const offered = mediaModelAspectOptions(id);
+  // No aspect contract at all → nothing to disagree with. See above.
+  if (!offered.length || offered.includes(ratio)) return;
+  throw new BadRequestException(
+    `"${MEDIA_MODELS[id]?.label ?? id}" (${id}) publishes ${offered.join(', ')} and cannot shoot ${ratio}, `
+      + `which is the frame this content line plans every shot in. Choose a model that offers ${ratio}, `
+      + `or the platform default will be used instead.`,
+  );
+}
+
+/**
+ * Does this model accept a LIST of reference images — the identity-lock
+ * primitive?
+ *
+ * Deliberately narrower than "has an image source". Four spellings of "the
+ * source image" exist in this catalogue and only one of them is this one:
+ * `image-to-video` takes a SINGLE `image_url` (one still, animated), while
+ * `reference-to-video` takes an ARRAY under `image_urls` and addresses its
+ * members positionally from the prompt ([Image1], [Image2]). A persona's nine
+ * reference frames handed to the singular slot is eight frames on the floor —
+ * so the question a caller with a `PersonaLock` must ask is the array one.
+ */
+export function mediaModelAcceptsReferenceImages(id: string): boolean {
+  return Boolean(
+    MEDIA_MODELS[id]?.contract.sources?.some((s) => s.slot === 'images' && s.arity === 'array'),
+  );
+}
+
+/** Does the endpoint take a seed as INPUT? Seedance 2.5's text-to-video RETURNS
+ *  one and accepts none, so a locked seed is not a lever there — sending it is
+ *  an unsupported param, not a stronger identity lock. */
+export function mediaModelTakesSeed(id: string): boolean {
+  return Boolean(MEDIA_MODELS[id]?.contract.seedInput);
+}
+
+/**
+ * The VIDEO model to use when a shot carries reference images.
+ *
+ * `VIDEO_REFERENCE` is the technique whose entire purpose is holding one
+ * face/product identical across shots, and this is the only served endpoint
+ * that implements it. Named as a constant rather than searched for by technique
+ * so the choice is greppable and a second reference model arriving later is a
+ * deliberate decision rather than an ordering accident.
+ */
+export const DEFAULT_VIDEO_REFERENCE_MODEL = 'bytedance/seedance-2.5/reference-to-video';
+
+/**
  * Is `id` in the catalogue AS a model of this kind?
  *
  * Stricter than `getMediaModel(id) !== undefined`, and the extra strictness is

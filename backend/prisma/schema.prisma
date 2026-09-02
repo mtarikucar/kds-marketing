@@ -3966,6 +3966,19 @@ model SocialCampaignItem {
   contentConceptId  String?                  @unique
   socialPostId      String?
   generatedAssetIds String[]
+  /// When the publish gate was ARMED for this item — the moment a confirm job
+  /// was scheduled for it, by autonomy (`CampaignItemArmingService.arm`) or by a
+  /// human clicking Approve (`armApproved`). Null while nothing is armed.
+  ///
+  /// It exists because the media-ready wait is a WINDOW and a window needs a
+  /// start. That window used to be measured from `scheduledFor`, which is a
+  /// CALENDAR SLOT, not the moment anyone started waiting: a FULL_AUTO item
+  /// whose clips were still queueing when its slot passed got armed an hour
+  /// late, the gate fired immediately, `now - scheduledFor` was already past
+  /// `SOCIAL_CAMPAIGN_MEDIA_WAIT_MS`, and the post published with an EMPTY
+  /// mediaUrls — a caption where a video should be. The gate now waits from
+  /// `max(scheduledFor, armedAt)`, which is when it genuinely began waiting.
+  armedAt           DateTime?
   error             String?
   createdAt         DateTime                 @default(now())
   updatedAt         DateTime                 @updatedAt

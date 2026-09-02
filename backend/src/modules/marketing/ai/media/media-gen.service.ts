@@ -249,7 +249,13 @@ export class MediaGenService implements OnModuleInit {
    * being silent — a workspace billed at a rate its settings screen does not
    * show is the failure this comment exists to make findable.
    */
-  private async workspaceDefaultModel(
+  // PUBLIC, because one caller needs the ANSWER before it submits, not merely
+  // the effect of it: `ConceptPromotionService.produce` must know which endpoint
+  // will run in order to ask whether that endpoint offers the plan's aspect
+  // ratio and whether it accepts reference images at all. Re-deriving the same
+  // `campaign override ?? workspace default ?? constant` order there is exactly
+  // the second copy this method's own docblock exists to prevent.
+  async workspaceDefaultModel(
     workspaceId: string,
     type: GeneratedAssetType,
   ): Promise<string> {

@@ -13,6 +13,8 @@ import {
 import { McpToolRegistry } from '../../src/modules/marketing/mcp/mcp-tool-registry';
 import { registerContentTools } from '../../src/modules/marketing/mcp/tools/content.tools';
 import { MediaGenService } from '../../src/modules/marketing/ai/media/media-gen.service';
+import { CampaignItemArmingService } from '../../src/modules/marketing/social-campaigns/campaign-item-arming.service';
+import { DEFAULT_VIDEO_MODEL } from '../../src/modules/marketing/ai/media/media-models.config';
 import { MEDIA_PROVIDER } from '../../src/modules/marketing/ai/providers/media-provider.interface';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
@@ -136,6 +138,9 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
       if (generationFails) throw generationFails;
       return { assetId: `asset-${requests.length}-${randomUUID().slice(0, 6)}` };
     }),
+    // See the note in content-concepts.realdb: the promotion service resolves
+    // `campaign ?? workspace ?? platform` through this one call.
+    workspaceDefaultModel: jest.fn().mockResolvedValue(DEFAULT_VIDEO_MODEL),
   };
   const scheduled: Array<Record<string, unknown>> = [];
   const fakeJobs = {
@@ -151,6 +156,7 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
       fakeMediaGen as never,
       fakeJobs as never,
       { registerHandler: () => undefined } as never,
+      new CampaignItemArmingService(prisma, fakeJobs as never),
     );
 
   const conceptsSvc = (completion?: unknown) =>

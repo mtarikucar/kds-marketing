@@ -1,0 +1,28 @@
+-- WHEN THE PUBLISH GATE WAS ARMED.
+--
+-- The confirm gate waits for still-generating media before it publishes, and
+-- that wait is bounded (SOCIAL_CAMPAIGN_MEDIA_WAIT_MS, 30 minutes by default).
+-- It measured the bound from `scheduledFor` — the campaign CALENDAR SLOT — on
+-- the assumption that the gate fires at the slot, so "now - slot" is "how long
+-- we have been waiting".
+--
+-- That assumption stopped being true when the content-concept producer started
+-- arming items itself. Its clips are bought at production time, and production
+-- reschedules itself for up to an hour while the workspace generation queue is
+-- full. A FULL_AUTO item with a slot ten minutes out can therefore be ARMED an
+-- hour AFTER its slot, with every clip still QUEUED. The gate then fired
+-- immediately, computed a `waitedMs` of an hour, skipped the wait-for-READY
+-- branch entirely, attached nothing, and published the caption to every target
+-- with an empty mediaUrls — the video arriving minutes later with nowhere to go.
+--
+-- A window needs a start, and the start is when somebody actually started
+-- waiting. That is this column. The gate now waits from
+-- `max(scheduledFor, armedAt)`: identical behaviour for the ordinary item armed
+-- days before its slot, and a real 30-minute window for the item armed late.
+--
+-- NULLABLE, and it stays nullable: an item that has never been armed (PLANNED,
+-- GENERATING, or NEEDS_APPROVAL under APPROVAL mode) has no such moment, and
+-- inventing one would be a claim about a gate that was never scheduled. Rows
+-- armed before this migration read as null and fall back to `scheduledFor`,
+-- which is exactly the behaviour they were armed under.
+ALTER TABLE "social_campaign_items" ADD COLUMN IF NOT EXISTS "armedAt" TIMESTAMP(3);

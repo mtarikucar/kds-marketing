@@ -264,6 +264,7 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
+import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
 import { McpPrincipalService } from './mcp/mcp-principal.service';
@@ -1159,6 +1160,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MediaModelDefaultsService,
     BrandKitService,
     SocialCampaignsService,
+    // The one implementation of "what happens to a generated item next", shared
+    // by the generic generator and the content-concept producer.
+    CampaignItemArmingService,
     SocialCampaignLinkService,
     SocialOAuthService,
     AccountCenterService,
