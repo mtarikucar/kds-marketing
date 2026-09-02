@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EmailService } from '../../../common/services/email.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
+import { workspaceLocalParts } from '../../../common/scheduling/workspace-local-day';
 import { DailyDigestService } from './daily-digest.service';
 
 /** Local hour each workspace receives its brief. */
@@ -42,28 +43,12 @@ export class DailyDigestCron {
     private readonly email: EmailService,
   ) {}
 
-  /** Local wall-clock parts for a workspace, via the Intl database. */
+  /** Local wall-clock parts for a workspace, via the Intl database. Kept as a
+   *  static (callers and tests reach for it here) but the implementation now
+   *  lives in common/scheduling so the strategy-apply tick shares ONE
+   *  workspace-timezone reading rather than a second copy of it. */
   static localParts(timezone: string, now = new Date()): { hour: number; date: string } {
-    try {
-      const fmt = new Intl.DateTimeFormat('en-CA', {
-        timeZone: timezone || 'UTC',
-        hour12: false,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-      });
-      const parts = Object.fromEntries(fmt.formatToParts(now).map((p) => [p.type, p.value]));
-      return {
-        // 24:00 is a legal formatToParts output for midnight in some locales.
-        hour: Number(parts.hour) % 24,
-        date: `${parts.year}-${parts.month}-${parts.day}`,
-      };
-    } catch {
-      // An unknown/typo'd timezone must not silence a workspace forever.
-      const iso = now.toISOString();
-      return { hour: now.getUTCHours(), date: iso.slice(0, 10) };
-    }
+    return workspaceLocalParts(timezone, now);
   }
 
   private enabled(settings: unknown): boolean {

@@ -142,6 +142,7 @@ import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiCreditsService } from './ai/ai-credits.service';
+import { BrandSafetyService } from './ai/brand-safety.service';
 import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
 import { KnowledgeService } from './ai/knowledge.service';
 import { AgentProfileService } from './ai/agent-profile.service';
@@ -577,6 +578,7 @@ import { StrategyIntakeService } from './strategy/intake/strategy-intake.service
 import { StrategySynthesisService } from './strategy/synthesis/strategy-synthesis.service';
 import { StrategyProvisioningService } from './strategy/provisioning/strategy-provisioning.service';
 import { StrategyOrchestrator } from './strategy/orchestrator/strategy-orchestrator.service';
+import { StrategyApplyCron } from './strategy/orchestrator/strategy-apply.cron';
 import { LeadHuntExecutor } from './strategy/executors/lead-hunt.executor';
 import { ContentExecutor } from './strategy/executors/content.executor';
 import { CommunityEngageExecutor } from './strategy/executors/community-engage.executor';
@@ -871,6 +873,11 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiCreditsService,
+    // The ONE brand-safety screen. Every path that publishes machine-written
+    // copy on a customer's behalf goes through this instance — it lived as a
+    // private method on the social-campaigns service, which is why the
+    // unattended community publisher never had one.
+    BrandSafetyService,
     AiCreditWalletService,
     KnowledgeService,
     AgentProfileService,
@@ -1182,6 +1189,14 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // APPROVED action to the executor for its kind (LEAD_HUNT → research worker,
     // CONTENT → content-AI + social planner).
     StrategyOrchestrator,
+    // Strategy Engine - the daily driver. `applyPlan` had exactly one caller
+    // (the tail of a synthesis run) and synthesis is only re-run by a weekly
+    // cron that skips a workspace unless an action moved - which only applyPlan
+    // or a human does. That is a closed loop with no entry point: an armed
+    // AUTONOMOUS workspace with a plan full of PROPOSED actions could never be
+    // driven again. This supplies the clock and nothing else; every gate stays
+    // where it was.
+    StrategyApplyCron,
     LeadHuntExecutor,
     ContentExecutor,
     CommunityEngageExecutor,

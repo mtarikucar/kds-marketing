@@ -6,21 +6,53 @@ import { ContentExecutor } from '../executors/content.executor';
 import { CommunityEngageExecutor } from '../executors/community-engage.executor';
 import { AdCampaignExecutor } from '../executors/ad-campaign.executor';
 import { growthAutopilotAutonomyEnabled } from '../../budget/growth-autonomy.flag';
+import { SKIP_KILL_SWITCH, SKIP_NO_EXECUTOR, SKIP_RUN_CAP } from './skip-reasons';
 
 export type ExecuteResult =
   | { status: 'DONE'; resultRef: string | null }
   | { status: 'FAILED'; error: string }
   | { skipped: 'executor-not-available' };
 
-/** The outcome of a lane-aware `applyPlan` sweep for one workspace. */
+/**
+ * The outcome of a lane-aware `applyPlan` sweep for one workspace.
+ *
+ * `applied` USED TO MEAN "we called an executor", which is not a thing anyone
+ * wants to be told. It counted the executor-not-available case, the FAILED
+ * case, and every `resultRef: undefined` degradation - and three of the four
+ * executors degrade on a common, real condition (no AI key, no connected ad
+ * account). `setAutonomy` hands this number straight to the console the moment
+ * an owner arms autonomy, so "10 applied" could mean ten actions that produced
+ * exactly nothing. The counters below say which of those happened, and the
+ * daily brief already draws the same line between produced and hollow, so both
+ * surfaces now count the same thing.
+ *
+ * INVARIANT: attempted === applied + noResult + failed + noExecutor.
+ */
 export interface ApplyPlanResult {
   /** The strategy's autonomy lane ('NONE' when the workspace has no strategy). */
   lane: string;
-  /** How many PROPOSED actions this run auto-executed (AUTONOMOUS only). */
+  /** Ran AND produced something: DONE with a resultRef. The honest headline. */
   applied: number;
-  /** How many were left PROPOSED by the machine guardrail (kill-switch off). */
+  /** Handed to an executor at all. THIS is what MAX_AUTO_ACTIONS bounds - the
+   *  blast radius of a sweep is what it tried, not what worked. */
+  attempted: number;
+  /** Ran and produced nothing (DONE, no resultRef): the executor came back
+   *  empty-handed, usually because the tool it needs is not connected. */
+  noResult: number;
+  /** The executor threw; the reason is recorded on the action. */
+  failed: number;
+  /** Nothing is registered for this kind, so nothing ran (CHANNEL_SETUP). */
+  noExecutor: number;
+  /** How many were left un-run by a machine guardrail (kill-switch, run cap). */
   skipped: number;
+  /** Why they were left, counted by reason - the readable half of `skipped`. */
+  skippedReasons: Record<string, number>;
 }
+
+/** A sweep that did nothing at all, for the lanes that return early. */
+const idleResult = (lane: string): ApplyPlanResult => ({
+  lane, applied: 0, attempted: 0, noResult: 0, failed: 0, noExecutor: 0, skipped: 0, skippedReasons: {},
+});
 
 /** Per-run safety cap: never auto-apply more than this many actions in one
  *  AUTONOMOUS sweep, bounding worst-case blast radius per synthesis/feedback tick. */
@@ -85,12 +117,12 @@ export class StrategyOrchestrator {
    */
   async applyPlan(workspaceId: string): Promise<ApplyPlanResult> {
     const strategy = await this.prisma.marketingStrategy.findUnique({ where: { workspaceId } });
-    if (!strategy) return { lane: 'NONE', applied: 0, skipped: 0 };
+    if (!strategy) return idleResult('NONE');
 
     const lane = String((strategy as { autonomyLevel?: string }).autonomyLevel ?? 'ASSISTED');
     // SHADOW = observe; ASSISTED = approval-gated (approveAction already wired).
     // Neither auto-executes here — the common path is untouched.
-    if (lane !== 'AUTONOMOUS') return { lane, applied: 0, skipped: 0 };
+    if (lane !== 'AUTONOMOUS') return idleResult(lane);
 
     const proposedActions = await this.prisma.strategyAction.findMany({
       where: { workspaceId, strategyId: strategy.id, status: 'PROPOSED' },
@@ -99,27 +131,120 @@ export class StrategyOrchestrator {
 
     const killSwitchOn = growthAutopilotAutonomyEnabled();
     let applied = 0;
+    let attempted = 0;
+    let noResult = 0;
+    let failed = 0;
+    let noExecutor = 0;
     let skipped = 0;
+    const skippedReasons: Record<string, number> = {};
+    const note = (reason: string) => {
+      skipped += 1;
+      skippedReasons[reason] = (skippedReasons[reason] ?? 0) + 1;
+    };
     for (const action of proposedActions) {
-      if (applied >= MAX_AUTO_ACTIONS) break; // per-run cap
       const kind = action.kind as ActionKind;
       // Machine guardrail: spend/publish kinds are inert unless the env flag arms them.
+      //
+      // CHECKED BEFORE THE CAP, and the order is the whole point of stamping a
+      // reason at all. A kill-switched action never consumes an attempt, so
+      // which test runs first cannot change what executes - it changes only
+      // what the owner is TOLD. Test the cap first and an action the switch
+      // blocks gets stamped `run-cap`, whose owner-facing wording is "these
+      // will be handled on the next run" - a promise the next run cannot keep,
+      // because the switch is still off and will be off tomorrow too. The
+      // owner is sent to wait when the one thing that would unblock them is to
+      // arm the switch. The standing blocker is the honest reason; the cap is
+      // incidental to it.
       if (SPEND_OR_PUBLISH_KINDS.has(kind) && !killSwitchOn) {
-        skipped += 1;
-        continue; // leave PROPOSED
+        note(SKIP_KILL_SWITCH);
+        await this.stampSkip(action, SKIP_KILL_SWITCH); // leave PROPOSED
+        continue;
       }
-      await this.prisma.strategyAction.update({ where: { id: action.id }, data: { status: 'APPROVED' } });
-      await this.execute(workspaceId, action.id).catch((e) => {
+      // Per-run cap. The loop no longer `break`s: the remaining actions are
+      // still walked so each one gets told WHY it is waiting. Nothing is
+      // executed past the cap - they are only stamped.
+      // Bounded by what was ATTEMPTED, not by what produced. `applied` now
+      // counts only actions that came back with something, and a cap on that
+      // is not a cap: a plan of fifty actions whose executors all degrade
+      // (no AI key, no connected account) would dispatch all fifty, burning a
+      // compose apiece and posting whatever the ones that DO work produce -
+      // the blast radius this cap exists to bound, opened by making the
+      // headline number honest.
+      if (attempted >= MAX_AUTO_ACTIONS) {
+        note(SKIP_RUN_CAP);
+        await this.stampSkip(action, SKIP_RUN_CAP);
+        continue;
+      }
+      // ATOMIC CLAIM, not a plain write. Until now `applyPlan` had exactly one
+      // caller, at the tail of a synthesis run that was itself under an
+      // advisory lock. It now has two more that are not: the hourly driver, and
+      // the arming handler on an HTTP request a browser can fire twice. Nothing
+      // else claims the row - `execute` only asserts the status it finds - so a
+      // read-then-write here lets two runners both see PROPOSED, both flip it
+      // to APPROVED and both dispatch. The executor then runs twice: two AI
+      // composes billed to the workspace's credits, two staged drafts, and for
+      // COMMUNITY_ENGAGE with a connected Discord/Reddit channel the same copy
+      // posted to a live community twice. Narrowing the update by the status we
+      // read makes the PROPOSED -> APPROVED transition itself the claim, so
+      // exactly one writer comes back with count 1.
+      const claimed = await this.prisma.strategyAction.updateMany({
+        where: { id: action.id, status: 'PROPOSED' },
+        data: { status: 'APPROVED' },
+      });
+      // Someone else took it between the read and here (a concurrent sweep, or
+      // a human pressing Approve in the console). Theirs is running it; ours
+      // must not run it a second time, and must not count it as its own work.
+      if (claimed.count === 0) continue;
+      attempted += 1;
+      const outcome = await this.execute(workspaceId, action.id).catch((e) => {
         // execute() records executor failures on the action itself; this guards
         // only an unexpected dispatch-time throw so one bad action can't halt the sweep.
         this.logger.error(`applyPlan: dispatch failed for action ${action.id}: ${(e as Error)?.message ?? e}`);
+        // A dispatch that threw is a failure like any other, and counting it as
+        // anything else is how a number nobody can act on gets reported as work.
+        return { status: 'FAILED', error: 'dispatch' } as ExecuteResult;
       });
-      applied += 1;
+      if ('skipped' in outcome) noExecutor += 1;
+      else if (outcome.status === 'FAILED') failed += 1;
+      else if (outcome.resultRef) applied += 1;
+      else noResult += 1;
     }
     this.logger.log(
-      `applyPlan ws ${workspaceId}: AUTONOMOUS auto-applied ${applied}, guardrail-skipped ${skipped} (kill-switch ${killSwitchOn ? 'ON' : 'OFF'})`,
+      `applyPlan ws ${workspaceId}: AUTONOMOUS attempted ${attempted} - ${applied} produced, ` +
+        `${noResult} came back empty, ${failed} failed, ${noExecutor} had no executor; ` +
+        `guardrail-skipped ${skipped} (kill-switch ${killSwitchOn ? 'ON' : 'OFF'})`,
     );
-    return { lane, applied, skipped };
+    return { lane, applied, attempted, noResult, failed, noExecutor, skipped, skippedReasons };
+  }
+
+  /**
+   * Write a skip reason onto an action - but ONLY when it differs from the one
+   * already there.
+   *
+   * The conditional is not a micro-optimisation, it is the cost control. Every
+   * write to a StrategyAction bumps its `updatedAt` above `strategy.updatedAt`,
+   * which is precisely the predicate the weekly feedback cron uses to decide
+   * whether a workspace has a new outcome worth paying for a re-synthesis
+   * (`strategy.controller.ts` documents the ordering this depends on, and names
+   * `applyPlan` as the one legitimate writer). Stamping unconditionally on a
+   * DAILY tick would hand that cron a fresh "something moved" every single week
+   * for a workspace where, in fact, nothing moved - billing the most expensive
+   * action in the product to re-learn "the kill-switch is still off".
+   *
+   * A reason that CHANGES is genuinely new information and re-opening the gate
+   * for it is correct. A reason that repeats is not, and stays silent.
+   */
+  private async stampSkip(
+    action: { id: string; resultRef: string | null },
+    reason: string,
+  ): Promise<void> {
+    if (action.resultRef === reason) return;
+    await this.prisma.strategyAction
+      .update({ where: { id: action.id }, data: { resultRef: reason } })
+      .catch((e) => {
+        // A missing reason must never cost the sweep an action it could run.
+        this.logger.warn(`applyPlan: could not stamp ${reason} on ${action.id}: ${(e as Error)?.message ?? e}`);
+      });
   }
 
   async execute(workspaceId: string, actionId: string): Promise<ExecuteResult> {
@@ -136,6 +261,10 @@ export class StrategyOrchestrator {
       // AD_CAMPAIGN / CHANNEL_SETUP are later phases — leave the
       // action APPROVED so it can run once its executor ships. Not a failure.
       this.logger.log(`no executor for kind ${action.kind} yet — leaving action ${actionId} APPROVED`);
+      // Not nothing, either: without a stamp an action parked here forever
+      // looks exactly like one the sweep has not got to yet, and the brief
+      // cannot name it.
+      await this.stampSkip(action, SKIP_NO_EXECUTOR);
       return { skipped: 'executor-not-available' };
     }
 
