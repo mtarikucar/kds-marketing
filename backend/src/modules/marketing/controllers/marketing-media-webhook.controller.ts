@@ -3,6 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 import { MediaGenService } from '../ai/media/media-gen.service';
 import { MediaGenResult } from '../ai/providers/media-provider.interface';
+import { mapFalOutputs } from '../ai/providers/fal.provider';
 
 interface FalWebhookBody { request_id?: string; status?: string; payload?: any; error?: string; }
 
@@ -44,10 +45,9 @@ export class MarketingMediaWebhookController {
       const msg = body.error ?? 'fal webhook error';
       return { status: /nsfw|moderat|content polic|safety/i.test(msg) ? 'BLOCKED' : 'FAILED', error: msg };
     }
-    const out: NonNullable<MediaGenResult['outputs']> = [];
-    for (const img of body.payload?.images ?? []) out.push({ url: img.url, mime: img.content_type ?? 'image/png', width: img.width, height: img.height });
-    const vids = body.payload?.video ? [body.payload.video] : (body.payload?.videos ?? []);
-    for (const v of vids) out.push({ url: v.url, mime: v.content_type ?? 'video/mp4', durationSec: v.duration });
-    return { status: 'COMPLETED', outputs: out };
+    // Shared with the poll path: fal has no single result envelope (images[] vs a
+    // singular image vs video vs audio), and the two paths finalizing the SAME
+    // asset must not disagree about what the payload contained.
+    return { status: 'COMPLETED', outputs: mapFalOutputs(body.payload) };
   }
 }

@@ -7,7 +7,7 @@ import {
 
 describe('media-asset constants', () => {
   it('pins the asset type + status vocabularies', () => {
-    expect([...GENERATED_ASSET_TYPES]).toEqual(['IMAGE', 'VIDEO']);
+    expect([...GENERATED_ASSET_TYPES]).toEqual(['IMAGE', 'VIDEO', 'AUDIO']);
     expect([...GENERATED_ASSET_STATUSES]).toEqual([
       'QUEUED', 'GENERATING', 'READY', 'FAILED', 'BLOCKED',
     ]);

@@ -28,6 +28,29 @@ describe('MarketingMediaController', () => {
     await ctrl.putBrandKit({ tone: 'x' } as any, user);
     expect(brand.upsert).toHaveBeenCalledWith('ws-1', { tone: 'x' });
   });
+
+  it('GET /models does not serve a withheld model', () => {
+    // This endpoint IS the studio's catalogue: anything it lists is offerable,
+    // priced and clickable. The four models priced by measuring a
+    // customer-supplied file are withheld until a real server-side probe exists,
+    // so they must not reach the picker at all — the service refuses them too,
+    // and a UI that offers a model the API refuses is worse than one that does
+    // not offer it.
+    const { ctrl } = makeMedia();
+    const ids = ctrl.models().models.map((m) => m.id);
+    expect(ids).toEqual(expect.not.arrayContaining([
+      'fal-ai/topaz/upscale/video',
+      'fal-ai/topaz/upscale/image',
+      'fal-ai/qwen-image-edit/inpaint',
+      'fal-ai/latentsync',
+    ]));
+    // Served, though: the withdrawal is five endpoints, not a shutdown — and
+    // AVATAR survives it, because this one is metered on the SCRIPT.
+    expect(ids).toContain('veed/avatars/text-to-video');
+    // 31 verified endpoints, 5 withheld until a real probe can measure the
+    // customer file each of them is priced by.
+    expect(ids.length).toBe(26);
+  });
 });
 
 describe('MarketingMediaWebhookController', () => {

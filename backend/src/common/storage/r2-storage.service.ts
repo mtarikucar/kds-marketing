@@ -105,12 +105,22 @@ export class R2StorageService {
     return `${this.publicBase}/${key}`;
   }
 
+  /**
+   * The key prefix every object this workspace uploads lands under. Named
+   * rather than inlined so that anything asking "is this object this
+   * workspace's?" answers with the same string `upload()` writes to, instead of
+   * half-matching a hand-rolled copy of it.
+   */
+  keyPrefix(workspaceId: string): string {
+    return `social/${workspaceId}/`;
+  }
+
   /** Upload one file and return its public URL + key + mime. */
   async upload(workspaceId: string, file: UploadInput): Promise<UploadedMedia> {
     if (!this.isConfigured()) {
       throw new Error('R2 storage is not configured');
     }
-    const key = `social/${workspaceId}/${randomUUID()}.${this.extFor(file)}`;
+    const key = `${this.keyPrefix(workspaceId)}${randomUUID()}.${this.extFor(file)}`;
     await this.getClient().send(
       new PutObjectCommand({
         Bucket: this.bucket,

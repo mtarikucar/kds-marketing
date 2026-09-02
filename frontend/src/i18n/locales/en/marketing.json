@@ -2318,7 +2318,8 @@
     "mediaType": "Media type",
     "type": {
       "image": "Image",
-      "video": "Video"
+      "video": "Video",
+      "audio": "Audio"
     },
     "prompt": "Prompt",
     "promptPlaceholder": "Describe the image or video to generate…",
@@ -2357,6 +2358,135 @@
       "deleted": "Asset deleted",
       "deleteFailed": "Delete failed",
       "blocked": "Blocked by moderation"
+    },
+    "technique": {
+      "IMAGE_CREATE": {
+        "title": "Create an image",
+        "desc": "Make a picture from a description."
+      },
+      "IMAGE_EDIT": {
+        "title": "Edit an image",
+        "desc": "Change one thing and keep the rest — one product shot becomes a campaign."
+      },
+      "IMAGE_CLEANUP": {
+        "title": "Clean up an image",
+        "desc": "Cut out the background, enlarge it, or drop a product into a scene."
+      },
+      "VIDEO_CREATE": {
+        "title": "Create a video",
+        "desc": "Make a clip from a description."
+      },
+      "VIDEO_ANIMATE": {
+        "title": "Animate a still",
+        "desc": "Turn a photo you already have into a moving clip."
+      },
+      "VIDEO_REFERENCE": {
+        "title": "Keep a character or product the same",
+        "desc": "The same face or the same product across every shot."
+      },
+      "VIDEO_TRANSITION": {
+        "title": "Go from one frame to another",
+        "desc": "Give the opening and closing frame; the move between them is made for you."
+      },
+      "VIDEO_EXTEND": {
+        "title": "Continue a clip",
+        "desc": "Carry an existing video on from where it stops."
+      },
+      "VIDEO_UPSCALE": {
+        "title": "Sharpen a video",
+        "desc": "Finish a clip at delivery resolution."
+      },
+      "AVATAR": {
+        "title": "A presenter reads your script",
+        "desc": "Write the words and get a person on camera saying them."
+      },
+      "LIPSYNC": {
+        "title": "Match lips to a voice",
+        "desc": "Make a face in an existing video speak a recording."
+      },
+      "VOICE": {
+        "title": "Voiceover",
+        "desc": "Turn written text into a spoken Turkish voice track."
+      },
+      "MUSIC": {
+        "title": "Music or a sound effect",
+        "desc": "A background bed for a video, or one short effect."
+      },
+      "VIDEO_SOUND": {
+        "title": "Add sound to a silent clip",
+        "desc": "Generate matching sound and effects for a video that has none."
+      }
+    },
+    "source": {
+      "image_url": {
+        "title": "Source image",
+        "hint": "The picture this is made from."
+      },
+      "image_urls": {
+        "title": "Source images",
+        "hint": "Reference shots of the product or person to keep the same."
+      },
+      "start_image_url": {
+        "title": "Opening frame",
+        "hint": "The frame the clip starts on."
+      },
+      "end_image_url": {
+        "title": "Closing frame",
+        "hint": "The frame the clip ends on."
+      },
+      "video_url": {
+        "title": "Source video",
+        "hint": "The clip this works on."
+      },
+      "audio_url": {
+        "title": "Voice track",
+        "hint": "The recording the picture is driven by."
+      },
+      "mask_url": {
+        "title": "Mask",
+        "hint": "A black-and-white image marking the area to change."
+      },
+      "fromLibrary": "From library",
+      "libraryTitle": "Pick from your library",
+      "libraryDesc": "Everything this workspace has already generated.",
+      "libraryEmpty": {
+        "title": "Nothing to pick yet",
+        "desc": "Generate something of this kind first, or upload a file."
+      },
+      "upload": "Upload",
+      "uploadFailed": "Upload failed",
+      "link": "Paste a link",
+      "addLink": "Add link",
+      "badLink": "That does not look like a link",
+      "remove": "Remove"
+    },
+    "step": {
+      "technique": "What do you want to make?",
+      "tier": "Quality and price"
+    },
+    "estimate": "Estimated cost",
+    "estimateNeedsScript": "This one is as long as its script, so write the script above to see what it costs.",
+    "creditsUnit": "credits",
+    "rate": {
+      "perSec": "credits/sec",
+      "perRun": "credits each",
+      "perKChar": "credits / 1000 characters",
+      "perMinute": "credits/minute"
+    },
+    "needSource": "Add the source media above to generate.",
+    "resolution": "Resolution",
+    "script": "Script",
+    "voice": "Voice",
+    "voiceHint": "An ElevenLabs voice name.",
+    "language": "Language",
+    "languageHint": "Two-letter code — tr for Turkish.",
+    "avatar": "Presenter",
+    "negativePrompt": "Avoid",
+    "negativePromptHint": "What must not appear.",
+    "generateAudio": "Generate sound with the video",
+    "catalogueError": {
+      "title": "Could not load the model list",
+      "desc": "Generation is unavailable until the model list loads. Try again in a moment."
     }
   },
   "brandKit": {

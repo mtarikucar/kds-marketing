@@ -14,18 +14,23 @@ import { GrowthWalletService } from '../../wallet/growth-wallet.service';
 import { MediaSpendService } from '../../budget/media-spend.service';
 import { growthAutopilotAutonomyEnabled } from '../../budget/growth-autonomy.flag';
 import {
-  MediaProvider, MEDIA_PROVIDER, MediaGenResult,
+  MediaProvider, MEDIA_PROVIDER, MediaGenResult, MediaGenSources,
 } from '../providers/media-provider.interface';
 import {
-  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, estimateMediaCredits, estimateMediaUsd, getMediaModel,
+  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, DEFAULT_AUDIO_MODEL, MediaEstimateOpts, MediaModel,
+  estimateMediaCredits, estimateMediaUsd, getMediaModel, isMediaModelWithheld, meteredUnits,
 } from './media-models.config';
-import { TERMINAL_ASSET_STATUSES, isTerminalAssetStatus } from './media-asset.constants';
+import { GeneratedAssetType, TERMINAL_ASSET_STATUSES, isTerminalAssetStatus } from './media-asset.constants';
 
 export const MEDIA_GEN_POLL_KIND = 'social.media.generate.poll';
 export const MEDIA_GEN_CLEANUP_KIND = 'social.media.cleanup.orphans';
 
 const MAX_INFLIGHT = Number(process.env.MEDIA_GEN_MAX_INFLIGHT ?? 4);
 const MAX_VIDEO_SEC = Number(process.env.MEDIA_GEN_MAX_VIDEO_SEC ?? 10);
+// Audio has its own ceiling: a music bed or a voiceover routinely outruns a
+// clip, and ElevenLabs Music bills in whole minutes anyway, so capping it at the
+// video ceiling would make the MUSIC technique useless without making it cheaper.
+const MAX_AUDIO_SEC = Number(process.env.MEDIA_GEN_MAX_AUDIO_SEC ?? 60);
 const POLL_DELAY_MS = 20_000;
 const POLL_RETRY_MS = 30_000;
 const RETENTION_DAYS = Number(process.env.MEDIA_GEN_RETENTION_DAYS ?? 30);
@@ -40,10 +45,88 @@ const MAX_GEN_AGE_MS = Number(process.env.MEDIA_GEN_MAX_AGE_MS ?? 60 * 60 * 1000
 const DOWNLOAD_TIMEOUT_MS = Number(process.env.MEDIA_GEN_DOWNLOAD_TIMEOUT_MS ?? 60_000);
 const MAX_DOWNLOAD_BYTES = Number(process.env.MEDIA_GEN_MAX_DOWNLOAD_BYTES ?? 250 * 1024 * 1024);
 
+/** Default model per asset type, used when the caller names no model. */
+const DEFAULT_MODEL_BY_TYPE: Record<GeneratedAssetType, string> = {
+  IMAGE: DEFAULT_IMAGE_MODEL,
+  VIDEO: DEFAULT_VIDEO_MODEL,
+  AUDIO: DEFAULT_AUDIO_MODEL,
+};
+
 /** Engine context (Growth Autopilot D4): the generation belongs to a
  *  social-campaign pipeline item — i.e. the ENGINE requested it, not a user. */
 function isEngineAsset(params: unknown): boolean {
   return Boolean((params as { campaignItemId?: unknown } | null | undefined)?.campaignItemId);
+}
+
+/** Reject a request the model's input contract cannot serve BEFORE credits are
+ *  reserved and the provider is engaged. Without this the failure surfaces as a
+ *  fal 422 after a reserve/refund round trip — or worse, as a silently dropped
+ *  parameter (a required source image that never reaches the wire). */
+function assertContractSatisfied(m: MediaModel, dto: RequestGenerationDto, sources: MediaGenSources): void {
+  const c = m.contract;
+  const bad = (message: string): never => {
+    throw new BadRequestException({ code: 'MEDIA_GEN_INVALID_INPUT', message });
+  };
+
+  if (dto.aspectRatio && c.aspect && !c.aspect.values[dto.aspectRatio]) {
+    bad(`${m.id} does not support aspect ratio ${dto.aspectRatio}`);
+  }
+  if (dto.aspectRatio && !c.aspect) bad(`${m.id} does not take an aspect ratio`);
+  if (dto.resolution && !c.resolution?.values.includes(dto.resolution)) {
+    bad(`${m.id} does not support resolution ${dto.resolution}`);
+  }
+
+  for (const req of c.sources ?? []) {
+    if (!req.required) continue;
+    const present = req.slot === 'images' || req.slot === 'firstImage'
+      ? (sources.images?.length ?? 0) > 0
+      : Boolean(sources[req.slot as 'lastImage' | 'video' | 'audio' | 'mask']);
+    if (!present) bad(`${m.id} requires a source ${req.slot} (${req.param})`);
+  }
+
+  // The only source-metered quantity the REQUEST can honestly carry, and the
+  // only one this service serves: a metered script IS the prompt, and the
+  // prompt is ours to read. Every model billed on a property of a customer's
+  // FILE is withheld instead (see `assertNotWithheld`), because measuring that
+  // file needs a real probe we do not have.
+  if (m.contract.sourceMetering?.from === 'script' && !dto.prompt?.trim()) {
+    bad(`${m.label} is billed by how long its script takes to read, so it cannot be `
+      + 'priced without one. Write the script you want read and try again.');
+  }
+}
+
+/**
+ * A catalogued model that is not for sale is refused HERE — before the reserve,
+ * before the provider, before anything is charged.
+ *
+ * Withdrawal is enforced in two places for two different callers: the models
+ * endpoint drops these so no picker can offer one, and this drops them so an
+ * API caller naming one directly gets a 400 rather than a render priced off a
+ * quantity nobody measured. Serving-side filtering alone would leave the second
+ * door open, which is the door that costs money.
+ */
+function assertNotWithheld(m: MediaModel): void {
+  if (!m.withheld) return;
+  throw new BadRequestException({
+    code: 'MEDIA_GEN_MODEL_WITHHELD',
+    message: `${m.label} is not available. ${m.withheld}`,
+  });
+}
+
+/** Past the endpoint's own published ceiling there is no rate to bill at, so
+ *  the request is refused rather than silently charged the top rung. No served
+ *  model publishes a ceiling today (the ones that did are withheld), but the
+ *  rule is generic and rides on the contract, so a ceiling added to a served
+ *  model is enforced the moment it is declared rather than the moment someone
+ *  remembers to check for it. */
+function assertWithinPublishedCeiling(
+  m: MediaModel, opts: MediaEstimateOpts, bad: (message: string) => never,
+): void {
+  const sm = m.contract.sourceMetering;
+  const units = meteredUnits(m, opts);
+  if (!sm || sm.maxUnits === undefined || units === null || units <= sm.maxUnits) return;
+  bad(`${m.label} tops out at ${sm.maxUnits} ${sm.quantity === 'megapixels' ? 'megapixels' : 'seconds'}`
+    + `, and this one works out at ${Math.round(units)}. Use a smaller source.`);
 }
 
 /** Block SSRF to internal targets: reject loopback/private/link-local hosts. */
@@ -68,17 +151,52 @@ function isBlockedDownloadHost(host: string): boolean {
 }
 
 export interface RequestGenerationDto {
-  type: 'IMAGE' | 'VIDEO';
+  /** Only consulted to pick a default model; a catalogued model's own type wins. */
+  type: GeneratedAssetType;
   model?: string;
   prompt: string;
   negativePrompt?: string;
   aspectRatio?: string;
+  /** Wire resolution value ('720p', '4k', '2K', '1024x1024' — casing matters). */
+  resolution?: string;
   durationSec?: number;
+  // NOTE — there is deliberately NO sourceDurationSec/sourceWidth/sourceHeight
+  // here, and there never will be. A caller-stated property of a file is not a
+  // measurement, it is a number the payer chooses: one curl claiming
+  // `sourceDurationSec: 0.1` for a ten-minute 4K clip reserves a single credit
+  // against a $96 Topaz render, and that endpoint reports no duration back, so
+  // nothing ever trues it up. The models whose price is such a property are
+  // withheld from the catalogue until the server can measure the file itself.
+  generateAudio?: boolean;
   referenceImageUrls?: string[];
+  /** Source media for the edit/animate/lipsync/extend techniques. */
+  lastImageUrl?: string;
+  videoUrl?: string;
+  audioUrl?: string;
+  maskUrl?: string;
+  /** Catalogue-declared enum choices (TTS voice/language, stock avatar id). */
+  voice?: string;
+  language?: string;
+  avatar?: string;
   seed?: number;
   createdById: string;
   socialCampaignId?: string;
   campaignItemId?: string;
+}
+
+/** The fields the credit estimate is a function of, as persisted on the asset.
+ *  finalize re-runs the estimate against the provider's ACTUAL duration, so it
+ *  has to reconstruct the rest of the estimate's inputs or it silently trues up
+ *  a 1080p Seedance generation at the 720p base rate. */
+function estimateOptsFrom(
+  params: unknown, durationSec: number | null | undefined, prompt: string | null | undefined,
+): MediaEstimateOpts {
+  const p = (params ?? {}) as { resolution?: string | null };
+  return {
+    durationSec: durationSec ?? undefined,
+    resolution: p.resolution ?? undefined,
+    textLength: (prompt ?? '').length,
+  };
 }
 
 @Injectable()
@@ -123,6 +241,23 @@ export class MediaGenService implements OnModuleInit {
     if (dto.model && !getMediaModel(dto.model)) {
       throw new BadRequestException({ code: 'MEDIA_GEN_UNKNOWN_MODEL', message: `Unknown media model: ${dto.model}` });
     }
+    const model = dto.model ?? DEFAULT_MODEL_BY_TYPE[dto.type];
+    // The catalogue's type is authoritative: a caller asking for VIDEO while
+    // naming an ElevenLabs model must not have an mp3 stored as a video.
+    const catalogued = getMediaModel(model);
+
+    // Catalogued but withdrawn. Checked here rather than only where the
+    // catalogue is served, so naming one on the API is refused too — and
+    // refused BEFORE the inflight count, the reserve and the provider, because
+    // the whole point is that nothing about it may be charged.
+    //
+    // Keyed on the RESOLVED model, not on `dto.model`: a request that names no
+    // model at all still generates one — the type's default — and that is the
+    // shape of the ordinary call (the MCP tools and the campaign engine both
+    // omit the id routinely). Gating on `dto.model` left that path unguarded,
+    // so withholding a default would have dropped it from the picker while the
+    // modelless POST kept reserving and submitting it.
+    if (catalogued && isMediaModelWithheld(model)) assertNotWithheld(catalogued);
 
     const inflight = await this.prisma.generatedAsset.count({
       where: { workspaceId, status: { in: ['QUEUED', 'GENERATING'] } },
@@ -131,10 +266,32 @@ export class MediaGenService implements OnModuleInit {
       throw new BadRequestException({ code: 'MEDIA_GEN_TOO_MANY', message: `Too many running generations (max ${MAX_INFLIGHT})` });
     }
 
-    const model = dto.model ?? (dto.type === 'VIDEO' ? DEFAULT_VIDEO_MODEL : DEFAULT_IMAGE_MODEL);
-    const durationSec = dto.type === 'VIDEO' ? Math.min(dto.durationSec ?? 5, MAX_VIDEO_SEC) : undefined;
-    const estimate = estimateMediaCredits(model, durationSec);
-    const estimateUsd = estimateMediaUsd(model, durationSec);
+    const type: GeneratedAssetType = catalogued?.type ?? dto.type;
+
+    const sources: MediaGenSources = {
+      images: dto.referenceImageUrls?.length ? dto.referenceImageUrls : undefined,
+      lastImage: dto.lastImageUrl,
+      video: dto.videoUrl,
+      audio: dto.audioUrl,
+      mask: dto.maskUrl,
+    };
+    if (catalogued) assertContractSatisfied(catalogued, dto, sources);
+
+    const durationSec = type === 'IMAGE'
+      ? undefined
+      : Math.min(dto.durationSec ?? 5, type === 'AUDIO' ? MAX_AUDIO_SEC : MAX_VIDEO_SEC);
+    // The estimate is a function of duration, the resolution TIER and — for the
+    // TTS models, which bill per 1000 characters — the script length.
+    const estimateOpts: MediaEstimateOpts = {
+      durationSec, resolution: dto.resolution, textLength: dto.prompt.length,
+    };
+    if (catalogued) {
+      assertWithinPublishedCeiling(catalogued, estimateOpts, (message) => {
+        throw new BadRequestException({ code: 'MEDIA_GEN_INVALID_INPUT', message });
+      });
+    }
+    const estimate = estimateMediaCredits(model, estimateOpts);
+    const estimateUsd = estimateMediaUsd(model, estimateOpts);
     // Growth Autopilot D4: an ENGINE generation (campaign-item linkage) under the
     // workspace's current-period armed-AUTONOMOUS budget pre-debits the growth
     // wallet with the USD estimate BEFORE the provider is engaged — fail-closed,
@@ -151,15 +308,26 @@ export class MediaGenService implements OnModuleInit {
     try {
       const params: Prisma.InputJsonValue = {
         aspectRatio: dto.aspectRatio ?? null,
+        // Persisted because finalize re-runs the estimate: without the tier, a
+        // 1080p Seedance clip would true up at the 720p rate and under-charge.
+        resolution: dto.resolution ?? null,
         durationSec: durationSec ?? null,
+        generateAudio: dto.generateAudio ?? null,
         seed: dto.seed ?? null,
         referenceImageUrls: dto.referenceImageUrls ?? [],
+        lastImageUrl: dto.lastImageUrl ?? null,
+        videoUrl: dto.videoUrl ?? null,
+        audioUrl: dto.audioUrl ?? null,
+        maskUrl: dto.maskUrl ?? null,
+        voice: dto.voice ?? null,
+        language: dto.language ?? null,
+        avatar: dto.avatar ?? null,
         campaignItemId: dto.campaignItemId ?? null,
       };
       asset = await this.prisma.generatedAsset.create({
         data: {
           workspaceId,
-          type: dto.type,
+          type,
           status: 'QUEUED',
           provider: this.provider.name,
           model,
@@ -188,13 +356,18 @@ export class MediaGenService implements OnModuleInit {
       }
 
       const { providerRequestId } = await this.provider.submit({
-        type: dto.type,
+        type,
         model,
         prompt: dto.prompt,
         negativePrompt: dto.negativePrompt,
         aspectRatio: dto.aspectRatio,
+        resolution: dto.resolution,
         durationSec,
-        referenceImageUrls: dto.referenceImageUrls,
+        generateAudio: dto.generateAudio,
+        sources,
+        voice: dto.voice,
+        language: dto.language,
+        avatar: dto.avatar,
         seed: dto.seed,
         webhookUrl: this.webhookUrl(),
       });
@@ -279,13 +452,26 @@ export class MediaGenService implements OnModuleInit {
         // permanently pins a MAX_INFLIGHT slot (sweepOrphanAssets only reaps READY).
         return this.failTerminal(asset, `finalize failed: ${String(e?.message ?? e)}`.slice(0, 500), reserved);
       }
-      const actual = estimateMediaCredits(asset.model, primary.durationSec ?? asset.durationSec ?? undefined);
+      // What fal says it actually rendered outranks what was requested. This is
+      // the whole settlement for a `returnsDuration` model like the Kling
+      // avatar, whose length follows its AUDIO and cannot be requested at all:
+      // the reserve rode the service's default, and this is where a 60-second
+      // read stops being priced as a 5-second one. Where the model HAS no
+      // duration in the response there is nothing to true up to, and the
+      // requested (wire-encoded) length — which is what fal rendered and
+      // billed — stands.
+      const rendered = primary.durationSec;
+      const trueUp = estimateOptsFrom(asset.params, rendered ?? asset.durationSec, asset.prompt);
+      const actual = estimateMediaCredits(asset.model, trueUp);
       const claim = await this.prisma.generatedAsset.updateMany({
         where: { id: assetId, status: { notIn: TERMINAL } },
         data: {
           status: 'READY', url: stored.url, r2Key: stored.key, mime: stored.mime,
-          width: primary.width ?? null, height: primary.height ?? null,
-          durationSec: primary.durationSec ?? asset.durationSec ?? null,
+          // What the provider reports beats what was requested on every field
+          // the row carries — these are what the library later shows.
+          width: primary.width ?? null,
+          height: primary.height ?? null,
+          durationSec: rendered ?? asset.durationSec ?? null,
           costCredits: actual, error: null,
         },
       });
@@ -295,7 +481,7 @@ export class MediaGenService implements OnModuleInit {
         // so the real-cash wallet pre-debit (charged on the REQUESTED duration)
         // must be too — else a 10s request that returns a 4s clip refunds the
         // credit delta but keeps the wallet overcharged for capacity never used.
-        const actualUsd = estimateMediaUsd(asset.model, primary.durationSec ?? asset.durationSec ?? undefined);
+        const actualUsd = estimateMediaUsd(asset.model, trueUp);
         await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, actualUsd);
         // Record what fal actually cost US, on the SAME trued-up figure. This is
         // the vendor-cost ledger, not the customer's credit meter above: every
@@ -544,14 +730,39 @@ export class MediaGenService implements OnModuleInit {
   async regenerate(workspaceId: string, id: string, createdById: string) {
     const a = await this.getAsset(workspaceId, id);
     const p = (a.params ?? {}) as any;
+    // Rows written before the input contract existed stored whatever ratio the
+    // old flat provider was handed — including ones the endpoint never published
+    // (`fal-ai/qwen-image` takes none at all; Seedream v4 sizes through ImageSize
+    // presets, which have no 4:5). Replaying such a value verbatim now trips the
+    // pre-reserve contract check and 400s a re-run of the workspace's OWN
+    // history. It was ignored on the wire when the asset was first made, so
+    // dropping it reproduces the original generation rather than blocking it.
+    const aspect = getMediaModel(a.model)?.contract.aspect;
+    const aspectRatio = p.aspectRatio && aspect?.values[p.aspectRatio] ? p.aspectRatio : undefined;
     return this.requestGeneration(workspaceId, {
-      type: a.type as 'IMAGE' | 'VIDEO',
+      type: a.type as GeneratedAssetType,
       model: a.model,
       prompt: a.prompt,
       negativePrompt: a.negativePrompt ?? undefined,
-      aspectRatio: p.aspectRatio ?? undefined,
+      aspectRatio,
+      resolution: p.resolution ?? undefined,
       durationSec: a.durationSec ?? undefined,
+      // No source measurement is replayed: the re-run re-measures the same
+      // source files server-side. Replaying the stored numbers would let a row
+      // written when the quantity was still caller-supplied re-spend that
+      // quantity forever, which is the one thing the measurement replaced.
+      generateAudio: p.generateAudio ?? undefined,
       referenceImageUrls: p.referenceImageUrls ?? undefined,
+      // Source media has to ride along too: a re-run of an edit/animate/lipsync
+      // without it fails the contract check (and, before that check existed,
+      // would have reached fal as an unsatisfiable request).
+      lastImageUrl: p.lastImageUrl ?? undefined,
+      videoUrl: p.videoUrl ?? undefined,
+      audioUrl: p.audioUrl ?? undefined,
+      maskUrl: p.maskUrl ?? undefined,
+      voice: p.voice ?? undefined,
+      language: p.language ?? undefined,
+      avatar: p.avatar ?? undefined,
       seed: p.seed ?? undefined,
       createdById,
       socialCampaignId: a.socialCampaignId ?? undefined,

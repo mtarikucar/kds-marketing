@@ -2,6 +2,9 @@ import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import { MediaGenService } from '../../ai/media/media-gen.service';
+import {
+  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, getMediaModel,
+} from '../../ai/media/media-models.config';
 import { UnifiedCalendarService } from '../../trends/unified-calendar.service';
 import { assertFeature } from '../mcp-feature-gate';
 import { McpPrincipalService } from '../mcp-principal.service';
@@ -19,7 +22,20 @@ const DEFAULT_BACK_MS = 7 * 86_400_000;
 const DEFAULT_FORWARD_MS = 60 * 86_400_000;
 const MAX_RANGE_MS = 180 * 86_400_000;
 
-const ASPECT_RATIOS = ['1:1', '9:16', '16:9', '4:5'] as const;
+/**
+ * The ratios each tool's DEFAULT model actually publishes, read off the catalogue
+ * rather than copied. MediaGenService rejects a ratio the chosen model has no
+ * contract for — BEFORE the reserve — so one shared union here advertises 400s:
+ * the default image model (Seedream v4) takes no 4:5, while the default video
+ * model does. Deriving them means a catalogue edit cannot leave the schema
+ * offering a value that is now a hard rejection.
+ */
+function aspectRatiosOf(modelId: string): [string, ...string[]] {
+  const keys = Object.keys(getMediaModel(modelId)?.contract.aspect?.values ?? {});
+  return keys.length ? (keys as [string, ...string[]]) : ['1:1'];
+}
+const IMAGE_ASPECT_RATIOS = aspectRatiosOf(DEFAULT_IMAGE_MODEL);
+const VIDEO_ASPECT_RATIOS = aspectRatiosOf(DEFAULT_VIDEO_MODEL);
 const ASSET_TYPES = ['IMAGE', 'VIDEO'] as const;
 const ASSET_STATUSES = ['QUEUED', 'GENERATING', 'READY', 'FAILED', 'BLOCKED'] as const;
 /** `MediaGenService` clamps to MEDIA_GEN_MAX_VIDEO_SEC (10 by default); the
@@ -129,7 +145,7 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
         .optional()
         .describe('Catalogued image model id (see media-models.config). Defaults to the workspace default; an uncatalogued id is refused because its price is unknown.'),
       negativePrompt: z.string().max(1000).optional().describe('What to avoid.'),
-      aspectRatio: z.enum(ASPECT_RATIOS).optional().describe('Output aspect ratio.'),
+      aspectRatio: z.enum(IMAGE_ASPECT_RATIOS).optional().describe('Output aspect ratio.'),
       referenceImageUrls: z
         .array(z.string())
         .max(5)
@@ -174,7 +190,7 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
         .optional()
         .describe('Catalogued video model id (see media-models.config). Defaults to the workspace default; an uncatalogued id is refused because its price is unknown.'),
       negativePrompt: z.string().max(1000).optional().describe('What to avoid.'),
-      aspectRatio: z.enum(ASPECT_RATIOS).optional().describe('Output aspect ratio.'),
+      aspectRatio: z.enum(VIDEO_ASPECT_RATIOS).optional().describe('Output aspect ratio.'),
       durationSec: z
         .number()
         .int()

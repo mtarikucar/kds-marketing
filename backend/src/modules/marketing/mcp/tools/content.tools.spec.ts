@@ -1,6 +1,9 @@
 import { ForbiddenException } from '@nestjs/common';
 import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerContentTools } from './content.tools';
+import {
+  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, MEDIA_MODELS,
+} from '../../ai/media/media-models.config';
 
 function build(over: { features?: Record<string, boolean> } = {}) {
   const registry = new McpToolRegistry();
@@ -98,13 +101,33 @@ describe('Faz 5 D2 — AI media generation', () => {
     const { registry, media } = build();
     await registry
       .get('jeeta.generate_image')!
-      .handler(ctx(), { prompt: 'a plate of manti', aspectRatio: '4:5' });
+      .handler(ctx(), { prompt: 'a plate of manti', aspectRatio: '9:16' });
     expect(media.requestGeneration).toHaveBeenCalledWith('ws1', {
       type: 'IMAGE',
       prompt: 'a plate of manti',
-      aspectRatio: '4:5',
+      aspectRatio: '9:16',
       createdById: 'sys-1',
     });
+  });
+
+  it('offers only the aspect ratios each tool default model actually publishes', () => {
+    // MediaGenService rejects a ratio the chosen model has no contract for, before
+    // the reserve. A schema that offers one is inviting a 400: the default IMAGE
+    // model (Seedream v4, sized through ImageSize presets) has no 4:5, while the
+    // default VIDEO model does.
+    const { registry } = build();
+    const accepts = (tool: string, aspectRatio: string) =>
+      registry.get(tool)!.inputSchema.safeParse({ prompt: 'x', aspectRatio }).success;
+
+    for (const r of Object.keys(MEDIA_MODELS[DEFAULT_IMAGE_MODEL].contract.aspect!.values)) {
+      expect(accepts('jeeta.generate_image', r)).toBe(true);
+    }
+    expect(accepts('jeeta.generate_image', '4:5')).toBe(false);
+
+    for (const r of Object.keys(MEDIA_MODELS[DEFAULT_VIDEO_MODEL].contract.aspect!.values)) {
+      expect(accepts('jeeta.generate_video', r)).toBe(true);
+    }
+    expect(accepts('jeeta.generate_video', '4:5')).toBe(true);
   });
 
   it('generate_video forwards the duration and defaults nothing else', async () => {
