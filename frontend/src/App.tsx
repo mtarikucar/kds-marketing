@@ -15,6 +15,8 @@ import { RouteFallback } from './components/RouteFallback';
 const LandingPage              = lazy(() => import('./pages/landing/LandingPage'));
 const PrivacyPage              = lazy(() => import('./pages/legal/PrivacyPage'));
 const TermsPage                = lazy(() => import('./pages/legal/TermsPage'));
+const DataDeletionPage         = lazy(() => import('./pages/legal/DataDeletionPage'));
+const DataDeletionStatusPage   = lazy(() => import('./pages/legal/DataDeletionStatusPage'));
 const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
 const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvitePage'));
@@ -180,6 +182,11 @@ export default function App() {
       {/* Public legal pages — linked from the landing footer. */}
       <Route path="/privacy"  element={<S><PrivacyPage /></S>} />
       <Route path="/terms"    element={<S><TermsPage /></S>} />
+      {/* Data deletion: the instructions page platform reviews (Meta, TikTok,
+          Pinterest, LinkedIn) ask for, and the status page the `url` we return
+          from Meta's deletion callback points at. Both public, no session. */}
+      <Route path="/data-deletion"        element={<S><DataDeletionPage /></S>} />
+      <Route path="/data-deletion-status" element={<S><DataDeletionStatusPage /></S>} />
       <Route path="/login"    element={<S><MarketingLoginPage /></S>} />
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public accept-invite landing — the invite TOKEN in the query string
