@@ -222,18 +222,32 @@ describe('media-models config — catalogue membership by KIND', () => {
 
   /**
    * The settings card is a PRICE list, so the catalogue has to be readable as
-   * one. Every entry must carry the number its kind is billed by — an entry
-   * with no price would render as a free option next to paid ones.
+   * one. Every entry must carry a price — an entry with no number renders as a
+   * free option next to paid ones.
+   *
+   * What it may NOT assume is that the unit follows the asset TYPE. That held
+   * while the catalogue was five text-to-something models; it stopped holding
+   * when the techniques arrived. wan-flf2v and latentsync are VIDEO and billed
+   * flat per run; MMAudio is VIDEO and billed per second of AUDIO; the music
+   * and TTS entries bill per minute and per 1000 characters. So the assertion
+   * is that SOME rate is carried and that its credit side agrees with its
+   * dollar side — which is the property the card actually needs.
    */
-  it('prices every catalogued model in the unit its kind is billed in', () => {
+  it('prices every catalogued model, in whichever unit that model is billed by', () => {
+    const RATES: Array<[keyof MediaModel, keyof MediaModel]> = [
+      ['priceUsd', 'credits'],
+      ['pricePerSecUsd', 'creditsPerSec'],
+      ['pricePerKCharUsd', 'creditsPerKChar'],
+      ['pricePerMinuteUsd', 'creditsPerMinute'],
+    ];
     for (const m of Object.values(MEDIA_MODELS)) {
-      if (m.type === 'VIDEO') {
-        expect(m.pricePerSecUsd).toBeGreaterThan(0);
-        expect(m.creditsPerSec).toBeGreaterThan(0);
-      } else {
-        expect(m.priceUsd).toBeGreaterThan(0);
-        expect(m.credits).toBeGreaterThan(0);
-      }
+      const carried = RATES.filter(([usd]) => typeof m[usd] === 'number');
+      // Exactly one: two rates on one model is an ambiguity the estimator
+      // would resolve by branch order rather than by intent.
+      expect({ id: m.id, rates: carried.length }).toEqual({ id: m.id, rates: 1 });
+      const [usdKey, creditKey] = carried[0];
+      expect(m[usdKey] as number).toBeGreaterThan(0);
+      expect(m[creditKey] as number).toBeGreaterThan(0);
     }
   });
 });

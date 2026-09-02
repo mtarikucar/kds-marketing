@@ -11,6 +11,10 @@ interface SvcOpts {
 
 function makeSvc(opts: SvcOpts = {}) {
   const prisma: any = {
+    // The model is resolved `campaign override ?? workspace default ?? code
+    // constant`, so every generation now reads the workspace first. A harness
+    // without this row throws before the assertion it was written for.
+    workspace: { findUnique: jest.fn().mockResolvedValue(null) },
     generatedAsset: {
       count: jest.fn().mockResolvedValue(0),
       create: jest.fn().mockResolvedValue({ id: 'asset-1' }),
@@ -102,12 +106,30 @@ describe('MediaGenService — input contract enforcement', () => {
 });
 
 describe('MediaGenService — asset typing and pricing', () => {
-  it("stores an AUDIO model's output as AUDIO even when the caller asked for VIDEO", async () => {
-    // The catalogue's type is authoritative; otherwise an mp3 is filed as a clip
-    // and every consumer that switches on type renders a broken <video>.
+  it('refuses a named model whose KIND does not match the request', async () => {
+    // Two guards met here and the stricter one wins. The catalogue's type is
+    // authoritative when nothing else settles it (`catalogued?.type ?? dto.type`,
+    // which is what keeps an mp3 from being filed as a clip on the paths that
+    // name no model). But when the caller DOES name one, a kind mismatch is a
+    // mistake worth saying out loud rather than silently reclassifying: the
+    // caller asked for a video and would have received an audio file.
+    //
+    // Nothing in the studio can trigger it — the panel sends the selected
+    // MODEL's own type — so this refusal is for the API and MCP callers.
+    const { svc, credits, provider } = makeSvc();
+    const err = await svc.requestGeneration(WS, {
+      ...base, type: 'VIDEO', model: 'fal-ai/elevenlabs/tts/multilingual-v2',
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err.getResponse() as { code: string }).code).toBe('MEDIA_GEN_UNKNOWN_MODEL');
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  it("stores an AUDIO model's output as AUDIO when the caller names no type of its own", async () => {
     const { svc, prisma } = makeSvc();
     await svc.requestGeneration(WS, {
-      ...base, type: 'VIDEO', model: 'fal-ai/elevenlabs/tts/multilingual-v2',
+      ...base, type: 'AUDIO', model: 'fal-ai/elevenlabs/tts/multilingual-v2',
     });
     expect(prisma.generatedAsset.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ type: 'AUDIO' }),

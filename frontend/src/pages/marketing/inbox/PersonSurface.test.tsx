@@ -96,6 +96,15 @@ function LocationProbe() {
   return <div data-testid="location-search">{loc.search}</div>;
 }
 
+/**
+ * The surface behind these routes is lazy, and on a loaded machine the first
+ * mount of its chunk regularly runs past testing-library's 1000 ms default —
+ * the failure is a spinner still on screen, not a wrong render. Every wait for
+ * the FIRST element of a cold mount uses this instead, so a slow transform is
+ * a slow test rather than a red one.
+ */
+const COLD_MOUNT = { timeout: 15_000 };
+
 function renderAt(path: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -172,13 +181,13 @@ beforeEach(() => {
 describe('The person surface — two routes, one page', () => {
   it('renders the three columns at /inbox', async () => {
     renderAt('/inbox');
-    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+    expect(await screen.findByTestId('person-surface', {}, COLD_MOUNT)).toBeInTheDocument();
     expect(await screen.findByTestId('person-row-p1')).toBeInTheDocument();
   });
 
   it('renders the same three columns at /leads', async () => {
     renderAt('/leads');
-    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+    expect(await screen.findByTestId('person-surface', {}, COLD_MOUNT)).toBeInTheDocument();
     expect(await screen.findByTestId('person-row-p1')).toBeInTheDocument();
   });
 
