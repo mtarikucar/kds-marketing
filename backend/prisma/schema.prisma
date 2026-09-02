@@ -3278,6 +3278,48 @@ model DataRequest {
   @@map("data_requests")
 }
 
+/// A data-deletion request that arrived from a SOCIAL PLATFORM callback — today
+/// Meta's signed_request Data Deletion Callback, which every Meta App Review
+/// requires an app to answer.
+///
+/// Deliberately NOT workspace-owned: the callback carries only a platform-scoped
+/// user id and no tenant context whatsoever, so this row records the REQUEST
+/// (the thing we can always be honest about) while the actual erasure runs per
+/// matched lead through the audited, workspace-scoped ComplianceService path —
+/// `dataRequestIds` points at those DataRequest rows, which remain the erasure
+/// audit trail.
+///
+/// `subjectHash` is a SHA-256 of the platform user id, never the raw id: the
+/// callback is the last time we ever need to recognise that id, and keeping it
+/// in plaintext would re-create an identifier for someone who just asked to be
+/// forgotten.
+///
+/// `status` is the honest state machine the public status page renders:
+///   RECEIVED  — recorded; the erasure has not finished
+///   COMPLETED — every matched lead was erased
+///   UNMATCHED — verified and recorded, but NO data of this person was found
+///   FAILED    — recorded, and the erasure errored; needs a human
+/// UNMATCHED exists so an unresolvable request is never answered as a deletion
+/// that did not happen.
+model PlatformDeletionRequest {
+  id               String    @id @default(uuid())
+  platform         String // META
+  /// SHA-256 (hex) of the platform-scoped user id. NEVER the raw id.
+  subjectHash      String
+  /// Alphanumeric code returned to the platform and shown on the status page.
+  confirmationCode String    @unique
+  status           String    @default("RECEIVED") // RECEIVED | COMPLETED | UNMATCHED | FAILED
+  /// How many leads the id resolved to (0 for UNMATCHED).
+  matchedLeads     Int       @default(0)
+  /// Ids of the workspace-scoped DataRequest rows that carry the erasure audit.
+  dataRequestIds   String[]
+  receivedAt       DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@index([platform, subjectHash])
+  @@map("platform_deletion_requests")
+}
+
 /// Epic E — an A/B (split) experiment over a funnel/site page. `variants` is a
 /// JSON array of { key, label, weight, blocks? }; selection is weighted-random
 /// and each impression/conversion is an ExperimentEvent for results aggregation.
