@@ -227,6 +227,14 @@ export class AdManagementService {
     if (asset.status !== 'READY' || !asset.url) {
       throw new BadRequestException('The creative asset is not READY');
     }
+    // Meta ad creatives are image or video only. The studio also produces AUDIO
+    // now (TTS, music, SFX), and an mp3 would otherwise fall through to the ELSE
+    // branch below and be uploaded as an ad IMAGE — after the campaign and ad set
+    // have already been created, leaving two orphaned objects in the customer's
+    // Meta account behind an opaque upload error. Reject before anything is built.
+    if (asset.type !== 'IMAGE' && asset.type !== 'VIDEO') {
+      throw new BadRequestException(`A ${asset.type} asset cannot be an ad creative — use an image or a video`);
+    }
     const status = dto.status ?? 'PAUSED';
     const run = async (p: Promise<MetaWriteResult>): Promise<MetaWriteResult> =>
       this.onResult(account.id, await p);

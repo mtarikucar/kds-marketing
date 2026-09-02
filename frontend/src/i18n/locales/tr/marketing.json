@@ -2700,7 +2700,8 @@
     "mediaType": "Medya türü",
     "type": {
       "image": "Görsel",
-      "video": "Video"
+      "video": "Video",
+      "audio": "Ses"
     },
     "prompt": "İstem",
     "promptPlaceholder": "Üretilecek görseli veya videoyu tanımlayın…",
@@ -2739,6 +2740,135 @@
       "deleted": "İçerik silindi",
       "deleteFailed": "Silme başarısız",
       "blocked": "Moderasyon tarafından engellendi"
+    },
+    "technique": {
+      "IMAGE_CREATE": {
+        "title": "Görsel üret",
+        "desc": "Bir tariften resim yap."
+      },
+      "IMAGE_EDIT": {
+        "title": "Görseli düzenle",
+        "desc": "Tek bir şeyi değiştir, gerisi kalsın — bir ürün fotoğrafı bir kampanyaya dönüşür."
+      },
+      "IMAGE_CLEANUP": {
+        "title": "Görseli temizle",
+        "desc": "Arka planı kes, büyüt, ya da ürünü bir sahnenin içine yerleştir."
+      },
+      "VIDEO_CREATE": {
+        "title": "Video üret",
+        "desc": "Bir tariften klip yap."
+      },
+      "VIDEO_ANIMATE": {
+        "title": "Duran görseli canlandır",
+        "desc": "Elindeki fotoğrafı hareketli bir klibe çevir."
+      },
+      "VIDEO_REFERENCE": {
+        "title": "Karakteri veya ürünü aynı tut",
+        "desc": "Her çekimde aynı yüz ya da aynı ürün."
+      },
+      "VIDEO_TRANSITION": {
+        "title": "Bir kareden diğerine geç",
+        "desc": "Açılış ve kapanış karesini ver; aradaki hareket senin için üretilsin."
+      },
+      "VIDEO_EXTEND": {
+        "title": "Klibi devam ettir",
+        "desc": "Var olan bir videoyu bittiği yerden sürdür."
+      },
+      "VIDEO_UPSCALE": {
+        "title": "Videoyu keskinleştir",
+        "desc": "Klibi teslim çözünürlüğünde bitir."
+      },
+      "AVATAR": {
+        "title": "Bir sunucu metnini okusun",
+        "desc": "Sözleri yaz, kamera karşısında söyleyen bir insan al."
+      },
+      "LIPSYNC": {
+        "title": "Dudakları sese uydur",
+        "desc": "Var olan bir videodaki yüze bir kaydı konuştur."
+      },
+      "VOICE": {
+        "title": "Seslendirme",
+        "desc": "Yazılı metni Türkçe bir ses kaydına çevir."
+      },
+      "MUSIC": {
+        "title": "Müzik ya da ses efekti",
+        "desc": "Videoya fon, ya da tek bir kısa efekt."
+      },
+      "VIDEO_SOUND": {
+        "title": "Sessiz klibe ses ekle",
+        "desc": "Sesi olmayan bir videoya uyumlu ses ve efektleri üret."
+      }
+    },
+    "source": {
+      "image_url": {
+        "title": "Kaynak görsel",
+        "hint": "Bunun yapılacağı resim."
+      },
+      "image_urls": {
+        "title": "Kaynak görseller",
+        "hint": "Aynı kalmasını istediğin ürünün ya da kişinin referans çekimleri."
+      },
+      "start_image_url": {
+        "title": "Açılış karesi",
+        "hint": "Klibin başladığı kare."
+      },
+      "end_image_url": {
+        "title": "Kapanış karesi",
+        "hint": "Klibin bittiği kare."
+      },
+      "video_url": {
+        "title": "Kaynak video",
+        "hint": "Üzerinde çalışılacak klip."
+      },
+      "audio_url": {
+        "title": "Ses kaydı",
+        "hint": "Görselin sürüleceği kayıt."
+      },
+      "mask_url": {
+        "title": "Maske",
+        "hint": "Değişecek alanı işaretleyen siyah-beyaz görsel."
+      },
+      "fromLibrary": "Kitaplıktan",
+      "libraryTitle": "Kitaplığından seç",
+      "libraryDesc": "Bu çalışma alanının şimdiye kadar ürettiği her şey.",
+      "libraryEmpty": {
+        "title": "Henüz seçilecek bir şey yok",
+        "desc": "Önce bu türden bir şey üret ya da bir dosya yükle."
+      },
+      "upload": "Yükle",
+      "uploadFailed": "Yükleme başarısız",
+      "link": "Bağlantı yapıştır",
+      "addLink": "Bağlantıyı ekle",
+      "badLink": "Bu bir bağlantıya benzemiyor",
+      "remove": "Kaldır"
+    },
+    "step": {
+      "technique": "Ne yapmak istiyorsun?",
+      "tier": "Kalite ve fiyat"
+    },
+    "estimate": "Tahmini maliyet",
+    "estimateNeedsScript": "Bunun uzunluğu metnine göre belirlenir; maliyeti görmek için yukarıya metni yaz.",
+    "creditsUnit": "kredi",
+    "rate": {
+      "perSec": "kredi/sn",
+      "perRun": "kredi (her üretim)",
+      "perKChar": "kredi / 1000 karakter",
+      "perMinute": "kredi/dakika"
+    },
+    "needSource": "Üretmek için yukarıya kaynak dosyayı ekle.",
+    "resolution": "Çözünürlük",
+    "script": "Metin",
+    "voice": "Ses",
+    "voiceHint": "Bir ElevenLabs ses adı.",
+    "language": "Dil",
+    "languageHint": "İki harfli kod — Türkçe için tr.",
+    "avatar": "Sunucu",
+    "negativePrompt": "İstenmeyenler",
+    "negativePromptHint": "Görünmemesi gerekenler.",
+    "generateAudio": "Videoyla birlikte ses üret",
+    "catalogueError": {
+      "title": "Model listesi yüklenemedi",
+      "desc": "Model listesi yüklenene kadar üretim yapılamaz. Birazdan tekrar dene."
     }
   },
   "brandKit": {

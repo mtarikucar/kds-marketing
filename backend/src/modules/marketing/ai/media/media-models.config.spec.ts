@@ -2,18 +2,102 @@ import {
   MEDIA_MODELS,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_VIDEO_MODEL,
+  DEFAULT_AUDIO_MODEL,
   getMediaModel,
   isCataloguedModel,
   defaultModelFor,
+  listMediaModels,
+  allMediaModels,
+  isMediaModelWithheld,
   estimateMediaCredits,
   estimateMediaUsd,
 } from './media-models.config';
+import { buildFalInput } from '../providers/fal.provider';
 
 describe('media-models config', () => {
-  it('registers the spec default image + video models', () => {
+  it('registers the spec default image + video + audio models', () => {
     expect(getMediaModel(DEFAULT_IMAGE_MODEL)?.type).toBe('IMAGE');
     expect(getMediaModel(DEFAULT_VIDEO_MODEL)?.type).toBe('VIDEO');
+    expect(getMediaModel(DEFAULT_AUDIO_MODEL)?.type).toBe('AUDIO');
     expect(MEDIA_MODELS['fal-ai/bytedance/seedance/v1/pro/text-to-video'].type).toBe('VIDEO');
+  });
+
+  it('keeps every previously-catalogued id and price (old assets reference them)', () => {
+    // Existing GeneratedAsset rows carry these ids; dropping or re-pricing one
+    // breaks regenerate and re-meters history.
+    const legacy: Record<string, number> = {
+      'fal-ai/qwen-image': 2,
+      'fal-ai/bytedance/seedream/v4/text-to-image': 3,
+    };
+    for (const [id, credits] of Object.entries(legacy)) {
+      expect(MEDIA_MODELS[id].credits).toBe(credits);
+    }
+    expect(MEDIA_MODELS['fal-ai/bytedance/seedance/v1/lite/text-to-video'].creditsPerSec).toBe(3);
+    expect(MEDIA_MODELS['fal-ai/bytedance/seedance/v1/pro/text-to-video'].creditsPerSec).toBe(15);
+    expect(MEDIA_MODELS['fal-ai/veo3/fast'].creditsPerSec).toBe(25);
+  });
+
+  it('groups models by technique', () => {
+    expect(listMediaModels('VOICE').map((m) => m.id)).toEqual([DEFAULT_AUDIO_MODEL]);
+    expect(listMediaModels('AVATAR').map((m) => m.id)).toEqual([
+      'veed/avatars/text-to-video',
+    ]);
+  });
+
+  /**
+   * WITHHELD entries stay in the catalogue — verified id, contract and published
+   * pricing — but are not sold, because their price is a property of a file the
+   * customer supplies and nothing here can measure that file yet.
+   *
+   * `listMediaModels` is the one place that decision is made, so it is the one
+   * place it is tested. Everything customer-facing is built from it.
+   */
+  describe('withheld models', () => {
+    const WITHHELD = [
+      'fal-ai/topaz/upscale/video',
+      'fal-ai/topaz/upscale/image',
+      'fal-ai/qwen-image-edit/inpaint',
+      'fal-ai/latentsync',
+      // Kept when the four were withdrawn, on the strength of its returned
+      // `duration` — which settles the LEDGER but not the AUTHORISATION. The
+      // reserve is the only gate that can refuse, and it is sized off a
+      // 5-second default because the length is never on the wire.
+      'fal-ai/kling-video/ai-avatar/v2/standard',
+    ];
+
+    it('serves every catalogued model except the withheld ones', () => {
+      expect(listMediaModels().length).toBe(Object.keys(MEDIA_MODELS).length - WITHHELD.length);
+      expect(listMediaModels().map((m) => m.id)).toEqual(
+        expect.not.arrayContaining(WITHHELD),
+      );
+    });
+
+    it('empties the techniques whose only model was withheld', () => {
+      // Not a bug to hide: Topaz was the only VIDEO_UPSCALE and LatentSync the
+      // only LIPSYNC, so those two jobs are genuinely not on offer right now and
+      // the studio drops a technique nothing sits under.
+      expect(listMediaModels('VIDEO_UPSCALE')).toEqual([]);
+      expect(listMediaModels('LIPSYNC')).toEqual([]);
+    });
+
+    it('keeps them catalogued, priced and flagged rather than deleting them', () => {
+      // The research is the asset. `allMediaModels` is what the live endpoint
+      // probe walks, so a withheld model that dies on fal still turns a test red.
+      for (const id of WITHHELD) {
+        const m = MEDIA_MODELS[id];
+        expect(m).toBeDefined();
+        expect(isMediaModelWithheld(id)).toBe(true);
+        expect(allMediaModels().map((x) => x.id)).toContain(id);
+        // The reason is a paragraph a human can act on, not a boolean.
+        expect(m.withheld!.length).toBeGreaterThan(200);
+        expect(m.withheld).toContain('ffprobe');
+      }
+    });
+
+    it('marks nothing else withheld', () => {
+      const flagged = allMediaModels().filter((m) => m.withheld).map((m) => m.id);
+      expect(flagged.sort()).toEqual([...WITHHELD].sort());
+    });
   });
 
   it('estimates image credits as a flat per-image cost', () => {
@@ -36,6 +120,68 @@ describe('media-models config', () => {
 
   it('falls back to a safe non-zero estimate for an unknown model', () => {
     expect(estimateMediaCredits('fal-ai/unknown')).toBeGreaterThan(0);
+  });
+
+  it('bills the TOP resolution tier at its own rate, not an average', () => {
+    // The reason tiers exist. Seedance 2.5 is ~2.5x more expensive at 1080p than
+    // at 720p; one averaged rate would under-charge every 1080p render.
+    const id = 'bytedance/seedance-2.5/text-to-video';
+    expect(estimateMediaCredits(id, { durationSec: 5, resolution: '720p' })).toBe(240);
+    expect(estimateMediaCredits(id, { durationSec: 5, resolution: '1080p' })).toBe(585);
+    expect(estimateMediaCredits(id, { durationSec: 5, resolution: '480p' })).toBe(115);
+    // An unpriced tier (and no tier at all) falls back to the model's own rate,
+    // which is the rate for contract.resolution.default.
+    expect(estimateMediaCredits(id, { durationSec: 5 })).toBe(240);
+  });
+
+  it('bills a flat-per-run video model per run, not per second', () => {
+    // wan-flf2v and latentsync are VIDEO but priced per run — so the estimate
+    // branch has to key off the RATE the model carries, not its asset type.
+    expect(estimateMediaCredits('fal-ai/wan-flf2v', { durationSec: 5 })).toBe(40);
+    expect(estimateMediaCredits('fal-ai/wan-flf2v', { durationSec: 5, resolution: '480p' })).toBe(20);
+    expect(estimateMediaCredits('fal-ai/latentsync', { durationSec: 30 })).toBe(20);
+  });
+
+  it('bills TTS per 1000 characters of script', () => {
+    expect(estimateMediaCredits(DEFAULT_AUDIO_MODEL, { textLength: 150 })).toBe(2); // ceil(1.5)
+    expect(estimateMediaCredits(DEFAULT_AUDIO_MODEL, { textLength: 2000 })).toBe(20);
+    expect(estimateMediaUsd(DEFAULT_AUDIO_MODEL, { textLength: 1000 })).toBeCloseTo(0.10, 6);
+  });
+
+  it('bills the length fal will RENDER, not the length that was asked for', () => {
+    // The estimate and the wire duration are two views of one number. The
+    // provider clamps a request into the model's published range and snaps it
+    // DOWN to an offered value; billing the raw request instead is wrong in both
+    // directions, and the expensive models are exactly where it bites.
+    //
+    // 1s on Seedance 2.5 renders a 4s clip (its floor). At 1080p that costs us
+    // 4 x $1.164 = $4.66 — charging the requested second would reserve 117
+    // credits ($1.17) for it and lose $3.49 on every call.
+    const seedance = 'bytedance/seedance-2.5/text-to-video';
+    expect(buildFalInput({ type: 'VIDEO', model: seedance, prompt: 'x', durationSec: 1 }).duration)
+      .toBe('4');
+    expect(estimateMediaCredits(seedance, { durationSec: 1, resolution: '1080p' })).toBe(468);
+    expect(estimateMediaUsd(seedance, { durationSec: 1, resolution: '1080p' })).toBeCloseTo(4.656, 6);
+
+    // Veo publishes an enum [4,6,8]: 5s renders 4s, so quoting five over-charges
+    // the customer for a second fal never produces (and Veo returns no duration,
+    // so the finalize true-up cannot correct it afterwards).
+    expect(buildFalInput({ type: 'VIDEO', model: 'fal-ai/veo3.1', prompt: 'x', durationSec: 5 }).duration)
+      .toBe('4s');
+    expect(estimateMediaCredits('fal-ai/veo3.1', { durationSec: 5 })).toBe(160);
+    expect(estimateMediaCredits('fal-ai/veo3.1', { durationSec: 1 })).toBe(160);
+    expect(estimateMediaCredits('fal-ai/veo3.1', { durationSec: 10 })).toBe(320); // snapped to 8
+
+    // A model with no duration contract is untouched: it bills flat per run.
+    expect(estimateMediaCredits('fal-ai/latentsync', { durationSec: 1 })).toBe(20);
+  });
+
+  it('bills music in whole minutes, rounded up', () => {
+    // ElevenLabs charges a full minute for a 30-second bed and two for a 61-second
+    // one; a per-second rate would under-charge both.
+    expect(estimateMediaCredits('fal-ai/elevenlabs/music', { durationSec: 30 })).toBe(60);
+    expect(estimateMediaCredits('fal-ai/elevenlabs/music', { durationSec: 61 })).toBe(120);
+    expect(estimateMediaUsd('fal-ai/elevenlabs/music', { durationSec: 61 })).toBeCloseTo(1.20, 6);
   });
 });
 

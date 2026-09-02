@@ -3829,7 +3829,7 @@ model BrandAnalysisRun {
 model GeneratedAsset {
   id                  String          @id @default(uuid())
   workspaceId         String
-  type                String // IMAGE | VIDEO
+  type                String // IMAGE | VIDEO | AUDIO
   status              String          @default("QUEUED") // QUEUED|GENERATING|READY|FAILED|BLOCKED
   provider            String // e.g. "fal"
   model               String // provider model id
