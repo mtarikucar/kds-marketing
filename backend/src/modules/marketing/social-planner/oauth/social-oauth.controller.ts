@@ -122,7 +122,10 @@ export class SocialOAuthController {
     // signed state; peek it (best-effort) so even the error redirects go to the
     // right page. handleCallback still runs its own authoritative verify below.
     const origin = state ? verifyState(state)?.origin : undefined;
-    const path: ConnectResultRoute = (origin && ORIGIN_LANDING[origin]) ?? 'accounts';
+    // Absent, or a value this build does not know (a state signed by another
+    // deploy), falls back to the same param-reading route rather than to a
+    // page that would drop the result.
+    const path: ConnectResultRoute = ORIGIN_LANDING[origin as StartOrigin] ?? 'accounts';
     if (error || !code || !state) {
       return res.redirect(302, `${appUrl}/${path}?connect_error=1`);
     }
