@@ -13,8 +13,14 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
-import { assertCataloguedModel } from '../ai/media/media-models.config';
+import { assertCataloguedModel, assertModelOffersAspect } from '../ai/media/media-models.config';
+import { DEFAULT_SHOT_ASPECT } from '../video/video-pipeline.service';
 import { Cadence, nextCadenceSlot } from './cadence.util';
+import {
+  CampaignItemArmingService,
+  SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND,
+  confirmDedup,
+} from './campaign-item-arming.service';
 import {
   CONCEPT_PRODUCE_KIND,
   produceDedup,
@@ -22,11 +28,17 @@ import {
 
 export const SOCIAL_CAMPAIGN_PLAN_KIND = 'social.campaign.plan';
 export const SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND = 'social.campaign.item.generate';
-export const SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND = 'social.campaign.item.confirm';
 
 export const planDedup = (id: string) => `social-campaign-plan-${id}`;
 export const generateDedup = (id: string) => `social-campaign-generate-${id}`;
-export const confirmDedup = (id: string) => `social-campaign-confirm-${id}`;
+
+// The confirm gate's job kind and dedup key now live beside the ONE service
+// that arms it (`campaign-item-arming.service.ts`), so the concept producer can
+// reuse the arming without importing this file — which imports it back for
+// CONCEPT_PRODUCE_KIND, and a cycle between two service modules is how a
+// `const` ends up `undefined` at module-init time. Re-exported here because
+// this is the name every existing caller already imports.
+export { SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, confirmDedup };
 
 // Item states from which the confirm gate may publish. SCHEDULED = auto/approved;
 // NEEDS_APPROVAL is publishable only for SEMI_AUTO (auto-publish-unless-rejected).
@@ -36,6 +48,14 @@ const REJECTABLE_STATES = ['PLANNED', 'NEEDS_APPROVAL', 'SCHEDULED'];
 // before giving up, retrying every MEDIA_READY_RETRY_MS.
 const MEDIA_READY_MAX_WAIT_MS = Number(process.env.SOCIAL_CAMPAIGN_MEDIA_WAIT_MS ?? 30 * 60 * 1000);
 const MEDIA_READY_RETRY_MS = Number(process.env.SOCIAL_CAMPAIGN_MEDIA_RETRY_MS ?? 2 * 60 * 1000);
+
+/** Whether a generated asset can actually be put on a post, and how to SAY what
+ *  it is when it cannot. READY with no stored file is not a publishable asset —
+ *  it is a row that finished with nothing behind it — and describing it as
+ *  "READY" in a message about why nothing was sent would read as a lie. */
+const isAttachable = (a: { status: string; url: string | null }) => a.status === 'READY' && !!a.url;
+const describeAsset = (a: { status: string; url: string | null }) =>
+  a.status === 'READY' && !a.url ? 'READY but no file' : a.status;
 
 export interface CreateSocialCampaignInput {
   name: string;
@@ -74,6 +94,7 @@ export class SocialCampaignsService implements OnModuleInit {
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
     private readonly mediaGen: MediaGenService,
+    private readonly arming: CampaignItemArmingService,
   ) {}
 
   onModuleInit(): void {
@@ -113,7 +134,21 @@ export class SocialCampaignsService implements OnModuleInit {
     defaultVideoModel?: string | null;
   }): void {
     if (input.defaultImageModel) assertCataloguedModel(input.defaultImageModel, 'IMAGE');
-    if (input.defaultVideoModel) assertCataloguedModel(input.defaultVideoModel, 'VIDEO');
+    if (input.defaultVideoModel) {
+      assertCataloguedModel(input.defaultVideoModel, 'VIDEO');
+      // And it must be able to shoot the frame this content line plans in.
+      //
+      // This question used to be asked in `ConceptPromotionService.produce` —
+      // after a human had approved the concept, after the item existed, and with
+      // no way back: an approved concept cannot be re-decided and a promoted
+      // item cannot be regenerated, so a campaign pointed at a model that does
+      // not publish 9:16 failed every concept it was ever given, permanently.
+      // Asked here it is one sentence on the screen where the model is being
+      // chosen, before anything is planned or bought. A model that publishes NO
+      // ratio at all is fine and is deliberately allowed — see
+      // `assertModelOffersAspect`.
+      assertModelOffersAspect(input.defaultVideoModel, DEFAULT_SHOT_ASPECT);
+    }
   }
 
   async create(workspaceId: string, input: CreateSocialCampaignInput) {
@@ -349,17 +384,16 @@ export class SocialCampaignsService implements OnModuleInit {
     if (item.status !== 'NEEDS_APPROVAL') {
       throw new BadRequestException(`Cannot approve an item in status ${item.status}`);
     }
-    // Approval makes the item publishable: move it to SCHEDULED and arm the same
-    // confirm gate the auto modes use (which attaches media, runs brand-safety,
-    // honors dailyPublishCap, then publishes via the social-planner path).
-    const updated = await this.prisma.socialCampaignItem.update({
-      where: { id: itemId }, data: { status: 'SCHEDULED' },
-    });
-    await this.scheduledJobs.schedule({
-      workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
-      payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
-    });
-    return updated;
+    // Approval makes the item publishable: SCHEDULED, and the same confirm gate
+    // the auto modes arm (which attaches media, runs brand-safety, honors
+    // dailyPublishCap, then publishes via the social-planner path).
+    //
+    // Through the SAME service the two producers use, not a third copy of
+    // status + schedule + dedup. The copy that used to live here was not merely
+    // duplication: arming is what starts the media-ready window (`armedAt`), and
+    // a door that arms without stamping it is a door that publishes a caption
+    // with no video.
+    return this.arming.armApproved({ workspaceId, itemId, scheduledFor: item.scheduledFor });
   }
 
   async rejectItem(workspaceId: string, itemId: string) {
@@ -592,33 +626,18 @@ export class SocialCampaignsService implements OnModuleInit {
         },
       });
 
-      if (c.automationMode === 'FULL_AUTO') {
-        // Fully automatic: schedule the slot and gate it at scheduledFor.
-        await this.prisma.socialCampaignItem.update({
-          where: { id: itemId }, data: { status: 'SCHEDULED', socialPostId: post.id, generatedAssetIds: assetIds },
-        });
-        await this.scheduledJobs.schedule({
-          workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
-          payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
-        });
-      } else if (c.automationMode === 'SEMI_AUTO') {
-        // Review window: surface the item in the approval queue (NEEDS_APPROVAL) AND
-        // arm an auto-confirm at the slot that publishes UNLESS the user rejects it
-        // first. This is the SEMI_AUTO distinction from FULL_AUTO (previously it was
-        // identical to FULL_AUTO, giving no review window).
-        await this.prisma.socialCampaignItem.update({
-          where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
-        });
-        await this.scheduledJobs.schedule({
-          workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
-          payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
-        });
-      } else {
-        // APPROVAL: hold for an explicit user decision (approveItem arms the gate).
-        await this.prisma.socialCampaignItem.update({
-          where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
-        });
-      }
+      // FULL_AUTO → SCHEDULED + armed; SEMI_AUTO → NEEDS_APPROVAL + armed (the
+      // review window: publishes at the slot unless rejected first); APPROVAL →
+      // NEEDS_APPROVAL, and `approveItem` arms the gate. The rule itself lives in
+      // `CampaignItemArmingService` because the CONCEPT producer has to obey the
+      // identical one — see that file for why it is shared rather than copied.
+      await this.arming.arm({
+        workspaceId,
+        itemId,
+        automationMode: c.automationMode,
+        scheduledFor: item.scheduledFor,
+        data: { socialPostId: post.id, generatedAssetIds: assetIds },
+      });
       await this.bumpStats(c.id, { generated: 1 });
     } catch (e) {
       // Mark FAILED and DO NOT rethrow — rethrowing would make the runner retry
@@ -659,21 +678,100 @@ export class SocialCampaignsService implements OnModuleInit {
     // text-only post and terminalizing the item, which would orphan the media that
     // finishes moments later.
     const assetIds = item.generatedAssetIds ?? [];
+    const assetRows = assetIds.length
+      ? await this.prisma.generatedAsset.findMany({
+          where: { id: { in: assetIds }, workspaceId },
+          select: { id: true, status: true, url: true, r2Key: true, mime: true },
+        })
+      : [];
+    // IN THE ORDER THEY WERE BOUGHT, which is the order they must be watched in.
+    //
+    // `generatedAssetIds` is beat order: the concept producer appends one id per
+    // beat as it submits them, so index 0 is the hook and the last is the payoff.
+    // `findMany` with an `id: { in: [...] }` has NO ordering guarantee — Postgres
+    // returns whatever the scan produces, which is neither the IN-list order nor
+    // insertion order once a row has been updated in place (every one of these is
+    // updated at least twice: QUEUED → GENERATING → READY). The list then feeds
+    // `attachAssetsToPost`, which writes `mediaUrls` positionally, and an
+    // Instagram carousel plays its children in exactly that order — so a
+    // five-beat concept could publish its call-to-action first and its hook
+    // fourth, with nothing anywhere reporting a fault. The tests could not see
+    // it: a mocked `findMany` hands rows back in the order the spec wrote them.
+    //
+    // Reordering here rather than at the write covers every reader — the pending
+    // check, the "none of them can be sent" message and the attach all see one
+    // list, in one order.
+    //
+    // A SORT, never a rebuild from `assetIds`. Rebuilding by lookup would DROP a
+    // row whose id did not match, and "dropped" is indistinguishable here from
+    // "the asset rows no longer exist" — which fails the item and holds a post
+    // whose media was in fact fine. The count that decides the wait and the
+    // refusal must survive this step untouched; only the order may change.
+    const beatOrder = new Map(assetIds.map((id, i) => [id, i]));
+    const assets = [...assetRows].sort(
+      (a, b) =>
+        (beatOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+        (beatOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+    );
     if (assetIds.length) {
-      const assets = await this.prisma.generatedAsset.findMany({
-        where: { id: { in: assetIds }, workspaceId }, select: { status: true },
-      });
       // Wait while ANY attached asset is still generating — not only when NONE
       // are ready. A multi-media post (e.g. IMAGE + VIDEO) whose image is READY
       // but whose video is still GENERATING must NOT publish image-only and
       // orphan the video that finishes moments later (attachAssetsToPost only
-      // attaches READY assets). Bounded by waitedMs so a permanently-stuck asset
-      // still eventually publishes with whatever IS ready.
+      // attaches READY assets). Bounded by the wait window so a permanently-stuck
+      // asset still eventually publishes with whatever IS ready.
       const anyPending = assets.some((a) => a.status === 'QUEUED' || a.status === 'GENERATING');
-      const waitedMs = Date.now() - new Date(item.scheduledFor).getTime();
+      // THE WINDOW STARTS WHEN SOMEBODY STARTED WAITING, which is when the gate
+      // was ARMED or when the slot arrived, whichever is later — not the slot
+      // alone.
+      //
+      // `scheduledFor` is a CALENDAR SLOT. The concept producer buys its clips
+      // at production time and reschedules itself for up to an hour while the
+      // workspace generation queue is full, so a FULL_AUTO item with a slot ten
+      // minutes out is routinely armed an HOUR after that slot, with every clip
+      // still QUEUED. Measured from the slot, `waitedMs` was already past the
+      // maximum on the gate's very first run: the wait branch was skipped, no
+      // asset was READY, and the post went to every target with an empty
+      // mediaUrls while the video finished minutes later with nowhere to go.
+      const waitFrom = Math.max(
+        new Date(item.scheduledFor).getTime(),
+        item.armedAt ? new Date(item.armedAt).getTime() : 0,
+      );
+      const waitedMs = Date.now() - waitFrom;
       if (anyPending && waitedMs < MEDIA_READY_MAX_WAIT_MS) {
         return { reschedule: { runAt: new Date(Date.now() + MEDIA_READY_RETRY_MS), payload: { itemId, workspaceId } } };
       }
+    }
+
+    // A POST THAT WAS MEANT TO CARRY MEDIA NEVER GOES OUT WITHOUT ANY.
+    //
+    // Unconditional, and deliberately not part of the wait above: the wait is a
+    // question about TIMING and this is a question about the POST. However the
+    // clock lands — the window expired, the clips FAILED, the URLs never
+    // arrived — a caption published where a video was approved is not the
+    // content anybody agreed to, and on the concept line the caption alone is
+    // not the content at all. The item is FAILED with the asset states named, so
+    // the clips (already paid for) stay on the row and a human can see exactly
+    // what happened instead of finding a bare caption live on every channel.
+    //
+    // The claim below is what makes this safe to write: it is a conditional
+    // update over the same publishable states, so a gate that loses the race to
+    // another runner changes nothing.
+    const attachable = assets.filter(isAttachable);
+    if (assetIds.length && !attachable.length) {
+      const states = assets.length
+        ? assets.map(describeAsset).sort().join(', ')
+        : 'the asset rows no longer exist';
+      const why =
+        `not published: this post was built around ${assetIds.length} generated file(s) and none of them can be sent ` +
+        `(${states}). Publishing now would have put the caption out with no media. The generated clips are still on this item, ` +
+        `so nothing was lost — retry once the media is ready, or regenerate it.`;
+      const held = await this.prisma.socialCampaignItem.updateMany({
+        where: { id: itemId, status: { in: publishableFrom } },
+        data: { status: 'FAILED', error: why.slice(0, 500) },
+      });
+      if (held.count) this.logger.warn(`item ${itemId} ${why}`);
+      return;
     }
 
     // dailyPublishCap rollover — count items already PUBLISHED in this UTC day.
@@ -713,21 +811,56 @@ export class SocialCampaignsService implements OnModuleInit {
 
     // Attach the generated media to the post before it goes out, then hand off
     // to the existing social.publish path (per-network adapters unchanged).
-    await this.attachAssetsToPost(workspaceId, assetIds, post.id);
+    const dropped = await this.attachAssetsToPost(post.id, assets, assetIds);
+    if (dropped) {
+      // PUBLISHED, with the sentence. The post is live and its media is what
+      // reached it; what did not reach it is now a fact on the row rather than
+      // an absence nobody can see. Same shape the publish path uses for a
+      // platform that could not carry every file (`PublishResult.droppedMedia`),
+      // one layer up, because the loss is the same loss: the workspace was
+      // charged for every clip either way.
+      this.logger.warn(`item ${itemId} published, ${dropped}`);
+      await this.prisma.socialCampaignItem
+        .update({ where: { id: itemId }, data: { error: `published, ${dropped}`.slice(0, 500) } })
+        .catch(() => undefined);
+    }
     await this.planner.schedulePost(workspaceId, post.id, new Date(), c.targetAccountIds);
     await this.bumpStats(c.id, { published: 1 });
   }
 
-  /** Copy the READY generated assets' URLs onto the post so it publishes with
-   *  media (assets generate async, so this runs at publish time, not at create). */
-  private async attachAssetsToPost(workspaceId: string, assetIds: string[], postId: string): Promise<void> {
-    if (!assetIds.length) return;
-    const assets = await this.prisma.generatedAsset.findMany({
-      where: { id: { in: assetIds }, workspaceId, status: 'READY' },
-      select: { url: true, r2Key: true, mime: true },
-    });
-    const ready = assets.filter((a) => !!a.url);
-    if (!ready.length) return;
+  /**
+   * Copy the READY assets' URLs onto the post so it publishes with media (assets
+   * generate async, so this runs at publish time, not at create).
+   *
+   * RETURNS WHAT IT LEFT BEHIND. Selecting `status: 'READY'` and writing those
+   * URLs is correct — a FAILED or still-QUEUED clip has no URL to send — but
+   * doing it silently is the same defect the adapters were just fixed for, one
+   * layer higher: the workspace was charged for every clip in `assetIds`, and a
+   * post that goes out with three of five had two paid renders disappear with no
+   * error, no warning and no record. The caller writes the sentence onto the
+   * item; the adapters write theirs onto the target row. Neither pretends more
+   * was sent than was.
+   *
+   * The assets are passed in rather than re-read: the gate has already read them
+   * to decide whether to wait at all, and a second read is a second answer —
+   * one that could have changed between the decision and the write.
+   *
+   * COUNTED AGAINST WHAT WAS PAID FOR, not against what was found. `assetIds`
+   * is the item's own list — one id per beat, one purchase each — and `assets`
+   * is the rows that came back for them. Reporting "N of M" over the ROWS made
+   * the worst case invisible: a clip whose row had vanished entirely was
+   * missing from both sides of the fraction, so five bought, one row left and
+   * one attached reported nothing wrong at all. The id is the receipt; the row
+   * is only evidence about it.
+   */
+  private async attachAssetsToPost(
+    postId: string,
+    assets: { id: string; status: string; url: string | null; r2Key: string | null; mime: string | null }[],
+    /** Every asset id the item PAID for, in beat order. */
+    assetIds: string[],
+  ): Promise<string | null> {
+    const ready = assets.filter(isAttachable);
+    if (!ready.length) return null;
     await this.prisma.socialPost.update({
       where: { id: postId },
       data: {
@@ -735,6 +868,20 @@ export class SocialCampaignsService implements OnModuleInit {
         options: { media: ready.map((a) => ({ url: a.url, key: a.r2Key, mime: a.mime })) } as unknown as Prisma.InputJsonValue,
       },
     });
+    const attached = new Set(ready.map((a) => a.id));
+    const lost = assetIds.filter((id) => !attached.has(id));
+    if (!lost.length) return null;
+    const rowById = new Map(assets.map((a) => [a.id, a]));
+    const states = lost
+      .map((id) => {
+        const row = rowById.get(id);
+        // "the row is gone" is a DIFFERENT fact from FAILED or GENERATING, and
+        // it is the one nobody could see before.
+        return row ? describeAsset(row) : 'the asset row no longer exists';
+      })
+      .sort()
+      .join(', ');
+    return `but ${lost.length} of ${assetIds.length} generated file(s) were not attached (${states}) — they were paid for and are still on this item`;
   }
 
   /** SAFE/BLOCK copy screen via Claude; inert (allow) when AI is disabled. */

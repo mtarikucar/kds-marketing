@@ -65,7 +65,7 @@ describe('SocialPlannerService — media + per-target format', () => {
       expect.objectContaining({ id: 'acc1' }),
       'hello',
       ['https://r2/v.mp4'],
-      { format: 'REEL', mediaMime: ['video/mp4'] },
+      { format: 'REEL', mediaMime: ['video/mp4'], mediaGeneratedForPost: false },
     );
     // Cleanup scheduled 7 days out because the post had uploaded (keyed) media.
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(

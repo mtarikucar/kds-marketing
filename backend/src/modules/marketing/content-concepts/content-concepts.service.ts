@@ -14,12 +14,19 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import {
   ConceptScene,
+  PersonaLock,
   ShotPlan,
   VideoModel,
   VideoPipelineService,
 } from '../video/video-pipeline.service';
 import { conceptContractViolations, MIN_SHOTS_PER_CONCEPT } from './concept-distinctness';
-import { ConceptPromotionService } from './concept-promotion.service';
+import {
+  ConceptPromotionService,
+  describeDestination,
+  shotCountOf,
+  type DestinationPreview,
+} from './concept-promotion.service';
+import { withProduction } from './shot-production';
 
 /** The owner's own batch size: five angles on one idea. */
 export const DEFAULT_CONCEPT_COUNT = 5;
@@ -115,6 +122,21 @@ export interface PlanConceptsInput {
   count?: number;
   videoModel?: VideoModel;
   socialCampaignId?: string;
+  /**
+   * The `VideoPersona` whose face/product must be the SAME across every beat.
+   *
+   * Optional, and everything works without it — but supplying one is the only
+   * way a set of clips from one concept reads as one campaign rather than five
+   * unrelated videos, which is the entire purpose of the persona machinery.
+   * `planShots` threads the persona's reference frames and locked seed onto
+   * every shot; `ConceptPromotionService.produce` then sends them to a model
+   * whose contract actually takes an array of reference images.
+   *
+   * Before this field existed the third argument to `planShots` was the literal
+   * `undefined`, so `VideoPersona.referenceImageUrls` — created, sliced to nine,
+   * stored — could not reach a shot plan from anywhere in the product.
+   */
+  personaId?: string;
   createdById: string;
 }
 
@@ -128,6 +150,16 @@ export interface PlannedConcept {
   rationale: string | null;
   status: 'PROPOSED';
   shotPlan: ShotPlan;
+  /**
+   * WHAT EACH DESTINATION WILL ACTUALLY RECEIVE if this concept is approved.
+   *
+   * Empty when the concept is not scoped to a campaign yet — there is no
+   * destination to describe until a reviewer names one. Otherwise one entry per
+   * target account, saying whether it gets the whole carousel, the first beat,
+   * or nothing at all. See {@link ConceptPromotionService.describeDestinations}
+   * for why this exists instead of a refusal.
+   */
+  destinations: DestinationPreview[];
 }
 
 export interface PlanConceptsResult {
@@ -239,9 +271,45 @@ export class ContentConceptsService {
     // `requireCampaign` afterwards, in `review()`. The refusal was right and
     // arrived after the money. Planning UNSCOPED stays legitimate — a reviewer
     // may name the campaign later — so the check only runs when one was named.
-    if (input.socialCampaignId) {
-      await this.promotion.requireCampaign(workspaceId, input.socialCampaignId);
-    }
+    //
+    // What this deliberately no longer does is refuse over DESTINATION CAPACITY.
+    // It used to, at `MIN_SHOTS_PER_CONCEPT` — the fewest clips any concept can
+    // have — which measured against the real network table refused every
+    // campaign not targeting Instagram alone, i.e. seven of the eight networks,
+    // and pointed the user at a "single beat" escape hatch that
+    // `MIN_SHOTS_PER_CONCEPT` itself forbids. Capacity is settled per target at
+    // publish now, and each concept below carries `destinations` saying what
+    // every account will actually receive.
+    const campaign = input.socialCampaignId
+      ? await this.promotion.requireCampaign(workspaceId, input.socialCampaignId)
+      : null;
+
+    // The identity lock, resolved BEFORE the credit reserve: a persona id that is
+    // a typo, or another workspace's, must not cost a batch to discover. A
+    // persona with no reference frames is refused for the same reason it would
+    // be useless — `planShots` only writes `shot.reference` when there are
+    // images, so it would silently plan the un-locked version of what was asked
+    // for, which is the exact failure this whole thread of work exists to end.
+    const persona = input.personaId
+      ? await this.requirePersona(workspaceId, input.personaId)
+      : undefined;
+
+    // WHAT EACH CONCEPT WILL COST, resolved once for the batch: they share a
+    // campaign, a workspace and a persona, so they share an endpoint.
+    //
+    // The persona is the reason this cannot wait until production. A plan
+    // carrying reference frames can only run on the one contract that takes an
+    // array of them, at 48 credits per second against the platform default's 3
+    // and with a 4-second floor under beats planned at 3 — a 5-beat concept
+    // moves from 45 credits to 960. Deciding that inside the producer, after a
+    // human has approved a plan that says otherwise, is a bill nobody agreed to.
+    // `withProduction` writes the endpoint, the billed seconds and the quote
+    // onto the plan itself, so the thing approved is the thing bought.
+    const production = await this.promotion.resolveVideoModel(
+      workspaceId,
+      campaign?.defaultVideoModel,
+      Boolean(persona?.referenceImageUrls?.length),
+    );
 
     await this.credits.reserve(workspaceId, creditCost('content.concepts'));
 
@@ -334,22 +402,39 @@ export class ContentConceptsService {
     }
 
     const batchId = randomUUID();
-    const concepts: PlannedConcept[] = parsed.map((c, i) => ({
-      id: randomUUID(),
-      batchId,
-      ordinal: i,
-      angle: c.angle,
-      hook: c.hook,
-      title: c.title || c.hook,
-      rationale: c.rationale,
-      status: 'PROPOSED' as const,
-      shotPlan: this.videoPipeline.planShots(
-        { product: brand.productName, hook: c.hook },
-        videoModel,
-        undefined,
-        c.shots as ConceptScene[],
-      ),
-    }));
+    // The campaign's destinations, read ONCE for the batch — they share a
+    // campaign, so they share destinations; only the beat count differs.
+    const destinationAccounts = campaign
+      ? ((await this.promotion.destinationAccounts(workspaceId, [campaign.id])).get(campaign.id) ??
+        [])
+      : [];
+    const concepts: PlannedConcept[] = parsed.map((c, i) => {
+      const shotPlan = withProduction(
+        this.videoPipeline.planShots(
+          { product: brand.productName, hook: c.hook },
+          videoModel,
+          persona,
+          c.shots as ConceptScene[],
+        ),
+        production,
+      );
+      return {
+        id: randomUUID(),
+        batchId,
+        ordinal: i,
+        angle: c.angle,
+        hook: c.hook,
+        title: c.title || c.hook,
+        rationale: c.rationale,
+        status: 'PROPOSED' as const,
+        shotPlan,
+        // Said BEFORE anybody approves, which is the whole trade for having
+        // deleted the refusal: nothing is blocked, so everything is disclosed.
+        destinations: destinationAccounts.map((a) =>
+          describeDestination(a, shotCountOf(shotPlan)),
+        ),
+      };
+    });
 
     // ONE write for the batch. A per-row loop could leave three of five
     // concepts on the floor after a mid-loop failure, and a partial batch is
@@ -375,6 +460,43 @@ export class ContentConceptsService {
   }
 
   /**
+   * The persona, proven to belong to this workspace and to be usable.
+   *
+   * Three refusals, each by name, because each is a different mistake: the id is
+   * not this workspace's (or does not exist), the persona has been retired, or
+   * it carries no reference frames. The last one is the important one — an
+   * identity lock with nothing to lock onto plans exactly like no persona at
+   * all, and the difference would only surface as five clips that do not look
+   * like each other, weeks and several renders later.
+   */
+  private async requirePersona(workspaceId: string, personaId: string): Promise<PersonaLock> {
+    const p = await this.prisma.videoPersona.findFirst({
+      where: { id: personaId, workspaceId },
+      select: { id: true, name: true, status: true, referenceImageUrls: true, lockedSeed: true },
+    });
+    if (!p) {
+      throw new NotFoundException(
+        `Persona ${personaId} does not exist in this workspace, so there is no identity to hold across the shots.`,
+      );
+    }
+    if (p.status !== 'ACTIVE') {
+      throw new BadRequestException(
+        `Persona "${p.name}" is ${p.status}, so it cannot be used to plan new concepts.`,
+      );
+    }
+    if (!p.referenceImageUrls?.length) {
+      throw new BadRequestException(
+        `Persona "${p.name}" has no reference images, so there is nothing for the generator to keep consistent. Upload at least one reference frame for it first, or plan without a persona.`,
+      );
+    }
+    return {
+      name: p.name,
+      referenceImageUrls: p.referenceImageUrls,
+      lockedSeed: p.lockedSeed ?? null,
+    };
+  }
+
+  /**
    * The review queue, newest batch first.
    *
    * BOUNDED, because every row carries a whole `ShotPlan` and the only caller
@@ -397,13 +519,13 @@ export class ContentConceptsService {
    * string from any other caller straight to the Prisma enum, where it is a
    * driver-level error instead of a stated refusal.
    */
-  list(workspaceId: string, filter: { status?: string; batchId?: string }) {
+  async list(workspaceId: string, filter: { status?: string; batchId?: string }) {
     if (filter.status && !isConceptStatus(filter.status)) {
       throw new BadRequestException(
         `Unknown concept status "${filter.status}". Use one of: ${CONCEPT_STATUSES.join(', ')}.`,
       );
     }
-    return this.prisma.contentConcept.findMany({
+    const rows = await this.prisma.contentConcept.findMany({
       where: {
         workspaceId,
         ...(filter.status ? { status: filter.status as ContentConceptStatus } : {}),
@@ -412,6 +534,25 @@ export class ContentConceptsService {
       orderBy: [{ createdAt: 'desc' }, { ordinal: 'asc' }],
       take: CONCEPT_LIST_LIMIT,
     });
+
+    // THIS is the approval surface. `jeeta.review_content_concept` starts the
+    // spend, and the only thing a reviewer reads before calling it is this list
+    // — so what each destination will actually receive belongs on every row
+    // here, not only on the freshly-planned batch. Nothing is refused over
+    // capacity any more; this is what replaces the refusal.
+    //
+    // TWO reads for the whole page, not two per row: the queue is at most
+    // CONCEPT_LIST_LIMIT rows sharing a handful of campaigns.
+    const byCampaign = await this.promotion.destinationAccounts(
+      workspaceId,
+      rows.map((r) => r.socialCampaignId).filter((id): id is string => !!id),
+    );
+    return rows.map((row) => ({
+      ...row,
+      destinations: (row.socialCampaignId ? (byCampaign.get(row.socialCampaignId) ?? []) : []).map(
+        (a) => describeDestination(a, shotCountOf(row.shotPlan)),
+      ),
+    }));
   }
 
   /**
@@ -471,12 +612,19 @@ export class ContentConceptsService {
     if (input.decision === 'APPROVED') {
       const target = await this.prisma.contentConcept.findFirst({
         where: { id: conceptId, workspaceId },
-        select: { id: true, socialCampaignId: true },
+        // `shotPlan` joins the select because the pre-flight now also asks
+        // whether the campaign's destinations can CARRY this many clips, and
+        // that question is answered by the plan's own beat count.
+        select: { id: true, socialCampaignId: true, shotPlan: true },
       });
       if (!target) throw new NotFoundException('Concept not found');
       await this.promotion.requireCampaign(
         workspaceId,
         input.socialCampaignId ?? target.socialCampaignId,
+        // The plan answers both pre-flight questions: how many clips the
+        // destination must be able to publish, and whether the quote the
+        // reviewer is approving is the one this campaign would actually charge.
+        { plan: target.shotPlan as unknown as ShotPlan | null },
       );
     }
 

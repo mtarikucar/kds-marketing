@@ -11,6 +11,8 @@ import {
   isMediaModelWithheld,
   estimateMediaCredits,
   estimateMediaUsd,
+  assertModelOffersAspect,
+  mediaModelAspectOptions,
 } from './media-models.config';
 import { buildFalInput } from '../providers/fal.provider';
 
@@ -249,5 +251,44 @@ describe('media-models config — catalogue membership by KIND', () => {
       expect(m[usdKey] as number).toBeGreaterThan(0);
       expect(m[creditKey] as number).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * THE FRAME, REFUSED AT THE DOOR WHERE THE MODEL IS CHOSEN.
+ *
+ * This rule was written inside `ConceptPromotionService.produce`, which is the
+ * one place it could do no good: produce runs after a human has approved the
+ * concept and after the item has been promoted, and neither of those can be
+ * taken back (`review()` refuses a second verdict, `regenerateItem` refuses a
+ * promoted item). A campaign pointed at a model that does not publish this
+ * line's frame therefore failed every concept it was ever given, permanently,
+ * with the reason on an item row nobody could act on.
+ *
+ * The same question asked at campaign create/update and at the workspace
+ * defaults card is one sentence on the screen where the choice is being made.
+ */
+describe('assertModelOffersAspect — the refusal belongs where the model is chosen', () => {
+  it('refuses a model whose published enum does not contain the frame, and names what it does publish', () => {
+    // Veo 3.1 publishes 16:9 and 9:16 and nothing else.
+    expect(mediaModelAspectOptions('fal-ai/veo3.1')).toEqual(['16:9', '9:16']);
+    expect(() => assertModelOffersAspect('fal-ai/veo3.1', '1:1')).toThrow(/1:1/);
+    expect(() => assertModelOffersAspect('fal-ai/veo3.1', '1:1')).toThrow(/16:9, 9:16/);
+  });
+
+  it('accepts a model that publishes the frame', () => {
+    expect(() => assertModelOffersAspect('fal-ai/veo3.1', '9:16')).not.toThrow();
+    expect(() => assertModelOffersAspect(DEFAULT_VIDEO_MODEL, '9:16')).not.toThrow();
+  });
+
+  it('accepts a model that publishes NO aspect contract at all', () => {
+    // `veed/avatars/text-to-video` is a served VIDEO model with no aspect
+    // parameter — its frame comes from the avatar id, and its vertical avatars
+    // are exactly what this line wants. Reading "offers no ratio" as "cannot do
+    // 9:16" refused a legitimate choice AND stranded every concept produced
+    // under it; the producer sends no ratio to such a model and records that on
+    // the plan instead.
+    expect(mediaModelAspectOptions('veed/avatars/text-to-video')).toEqual([]);
+    expect(() => assertModelOffersAspect('veed/avatars/text-to-video', '9:16')).not.toThrow();
   });
 });

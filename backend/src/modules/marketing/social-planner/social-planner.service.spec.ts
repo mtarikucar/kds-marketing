@@ -60,6 +60,9 @@ function makePost(overrides: Partial<any> = {}) {
     publishedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    // A hand-composed post by default: nobody generated media FOR it.
+    socialCampaignId: null,
+    campaignItemId: null,
     targets: [],
     ...overrides,
   };
@@ -294,6 +297,255 @@ describe('SocialPlannerService', () => {
         data: expect.objectContaining({ status: 'PUBLISHED' }),
       }),
     );
+
+    mockPublish.mockReset();
+  });
+
+  /**
+   * Defects 4, 7 and 8, at the publish end — where they are all one question.
+   *
+   * A five-beat concept generates five clips and is CHARGED for five. Facebook
+   * and TikTok publish one, an Instagram feed carousel publishes all five, and X
+   * publishes none. That is not a reason to refuse the concept (defect 7 was a
+   * blanket refusal that cost the feature seven of the eight networks); it is a
+   * reason to decide PER TARGET what that destination takes, and to say what it
+   * left behind.
+   */
+  const FIVE_CLIPS = ['a.mp4', 'b.mp4', 'c.mp4', 'd.mp4', 'e.mp4'];
+
+  // A CAMPAIGN ITEM'S post: the five clips were planned, paid for and approved
+  // AS this post, which is what `campaignItemId` records.
+  const clipPost = (targets: any[]) => ({
+    ...makePost({
+      status: 'SCHEDULED',
+      mediaUrls: [...FIVE_CLIPS],
+      socialCampaignId: 'camp-1',
+      campaignItemId: 'item-1',
+    }),
+    targets,
+  });
+  const targetOn = (network: string, id: string) =>
+    makeTarget({
+      id: `tgt-${id}`,
+      network,
+      socialAccountId: `acc-${id}`,
+      account: makeAccount({ id: `acc-${id}`, network }),
+    });
+
+  it('publishDuePost hands ONE target only what its network carries, and says what it dropped', async () => {
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'ext-1' });
+    prisma.socialPost.findFirst.mockResolvedValue(clipPost([makeTarget()])); // FACEBOOK
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    // One clip reached the adapter — the FIRST, which is the hook. Beat order is
+    // the order the clips were bought in and must not be re-shuffled here.
+    expect(mockPublish.mock.calls[0][2]).toEqual(['a.mp4']);
+    const call = prisma.socialPostTarget.update.mock.calls.at(-1)[0];
+    // PUBLISHED — the post is live. The note is what stops the loss being silent.
+    expect(call.data.status).toBe('PUBLISHED');
+    expect(call.data.error).toMatch(/4 of 5/);
+    expect(call.data.error).toMatch(/FACEBOOK carries 1 video per post/);
+
+    mockPublish.mockReset();
+  });
+
+  it('publishDuePost gives EACH target its own share of the same post', async () => {
+    // The heart of defect 7's fix: one approved concept, two destinations, two
+    // different — and both legitimate — publishes.
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'ext-1' });
+    prisma.socialPost.findFirst.mockResolvedValue(
+      clipPost([targetOn('INSTAGRAM', 'ig'), targetOn('TIKTOK', 'tt')]),
+    );
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    // Instagram's feed carousel carries ten, so it gets the whole concept...
+    expect(mockPublish.mock.calls[0][2]).toEqual(FIVE_CLIPS);
+    // ...and TikTok gets the hook, in the plan's own order.
+    expect(mockPublish.mock.calls[1][2]).toEqual(['a.mp4']);
+
+    const rowFor = (id: string) =>
+      prisma.socialPostTarget.update.mock.calls.find((c: any[]) => c[0].where.id === id)[0];
+    expect(rowFor('tgt-ig').data.status).toBe('PUBLISHED');
+    expect(rowFor('tgt-ig').data.error).toBeNull();
+    expect(rowFor('tgt-tt').data.status).toBe('PUBLISHED');
+    expect(rowFor('tgt-tt').data.error).toMatch(/4 of 5/);
+
+    mockPublish.mockReset();
+  });
+
+  /**
+   * DEFECT 8 — the one thing in this change that has to be airtight.
+   *
+   * `confirmItem` checks that the POST has media and then fans out to every
+   * target without asking what any of them can carry. `publishTwitter` uploads
+   * with `media_category: tweet_image`, so a video yields no media id and the
+   * tweet went out as the caption ALONE with the target recorded PUBLISHED — a
+   * post nobody approved, published under the name of one that was.
+   */
+  it('publishDuePost NEVER publishes a bare caption to a target that can carry no media', async () => {
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'tw-1' });
+    prisma.socialPost.findFirst.mockResolvedValue(clipPost([targetOn('TWITTER', 'x')]));
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    // The vendor is never called at all — nothing goes out.
+    expect(mockPublish).not.toHaveBeenCalled();
+    // ...and X's per-post charge is never reserved for a publish that never ran.
+    expect(credits.reserve).not.toHaveBeenCalled();
+    const call = prisma.socialPostTarget.update.mock.calls.at(-1)[0];
+    expect(call.where.id).toBe('tgt-x');
+    expect(call.data.status).toBe('FAILED');
+    expect(call.data.error).toMatch(/TWITTER cannot carry video at all/);
+    expect(call.data.error).toMatch(/caption/);
+    // No target published, so the post itself is FAILED — not silently "live".
+    expect(prisma.socialPost.update.mock.calls.at(-1)[0].data.status).toBe('FAILED');
+
+    mockPublish.mockReset();
+  });
+
+  it('publishDuePost still publishes the OTHER targets when one can carry nothing', async () => {
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'ext-1' });
+    prisma.socialPost.findFirst.mockResolvedValue(
+      clipPost([targetOn('TWITTER', 'x'), targetOn('INSTAGRAM', 'ig')]),
+    );
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish.mock.calls[0][0].network).toBe('INSTAGRAM');
+    expect(prisma.socialPost.update.mock.calls.at(-1)[0].data.status).toBe('PUBLISHED');
+
+    mockPublish.mockReset();
+  });
+
+  it('publishDuePost still publishes a TEXT-ONLY post to a network that carries no media', async () => {
+    // The invariant is about a post MADE OF MEDIA. A caption-only post to X is
+    // exactly what X is for, and refusing it would be the over-correction all
+    // over again.
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'tw-1' });
+    prisma.socialPost.findFirst.mockResolvedValue({
+      ...makePost({ status: 'SCHEDULED', mediaUrls: [] }),
+      targets: [targetOn('TWITTER', 'x')],
+    });
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(prisma.socialPostTarget.update.mock.calls.at(-1)[0].data.status).toBe('PUBLISHED');
+
+    mockPublish.mockReset();
+  });
+
+  /**
+   * THE SAME SHAPE, TWO POSTS.
+   *
+   * A hand-composed post is words somebody wrote with a picture attached: if the
+   * picture has nowhere to go on this network, the words are still worth
+   * sending, which is the rule `publishTwitter` has always followed. A campaign
+   * item's post IS its clips, and its caption alone is a post the reviewer never
+   * approved. `campaignItemId` is the fact that separates them.
+   */
+  it('publishDuePost DOES publish a HAND-COMPOSED post whose media this network cannot carry', async () => {
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'tw-2' });
+    prisma.socialPost.findFirst.mockResolvedValue({
+      // Same five clips, same X target as the campaign case — only the
+      // provenance differs, and `makePost` leaves campaignItemId null.
+      ...makePost({ status: 'SCHEDULED', mediaUrls: [...FIVE_CLIPS] }),
+      targets: [targetOn('TWITTER', 'x')],
+    });
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    // The words go out...
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish.mock.calls[0][2]).toEqual([]);
+    const call = prisma.socialPostTarget.update.mock.calls.at(-1)[0];
+    expect(call.data.status).toBe('PUBLISHED');
+    // ...and the loss is on the record all the same.
+    expect(call.data.error).toMatch(/5 of 5 media file\(s\) were not sent: TWITTER cannot carry video at all/);
+
+    mockPublish.mockReset();
+  });
+
+  it('publishDuePost tells the adapter WHOSE post it is', async () => {
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'ext-1' });
+    prisma.socialPost.findFirst.mockResolvedValue(clipPost([targetOn('INSTAGRAM', 'ig')]));
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+    expect(mockPublish.mock.calls[0][3]).toEqual(
+      expect.objectContaining({ mediaGeneratedForPost: true }),
+    );
+
+    mockPublish.mockReset();
+
+    // ...and the hand-composed one is not passed off as generated.
+    const second = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'ext-2' });
+    prisma.socialPost.findFirst.mockResolvedValue({
+      ...makePost({ status: 'SCHEDULED', mediaUrls: ['a.jpg'] }),
+      targets: [targetOn('INSTAGRAM', 'ig')],
+    });
+
+    await svc.publishDuePost('post-1', 'ws-a');
+    expect(second.mock.calls[0][3]).toEqual(
+      expect.objectContaining({ mediaGeneratedForPost: false }),
+    );
+
+    second.mockReset();
+  });
+
+  it("publishDuePost keeps the ADAPTER's own drop report alongside the selector's", async () => {
+    // Two different limits, two different denominators: the selector trimmed the
+    // post to what the network carries, and the adapter then reported what IT
+    // could not send out of that. Folding them into one fraction would state a
+    // number that is true of neither.
+    const mockPublish = publishToNetworkMock.mockResolvedValue({
+      ok: true,
+      externalPostId: 'ext-1',
+      droppedMedia: { count: 2, reason: 'a Facebook feed post carries one video and no other media' },
+    });
+    prisma.socialPost.findFirst.mockResolvedValue({
+      ...makePost({ status: 'SCHEDULED', mediaUrls: [...FIVE_CLIPS, 'x.jpg', 'y.jpg'] }),
+      targets: [makeTarget()],
+    });
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    const err = prisma.socialPostTarget.update.mock.calls.at(-1)[0].data.error;
+    expect(err).toMatch(/4 of 7 media file\(s\) were not sent: FACEBOOK carries 1 video per post/);
+    expect(err).toMatch(/2 of 3 media file\(s\) were not sent: a Facebook feed post/);
+
+    mockPublish.mockReset();
+  });
+
+  it('publishDuePost leaves the target error NULL when nothing was dropped', async () => {
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'ext-1' });
+    const postWithTargets = { ...makePost({ status: 'SCHEDULED' }), targets: [makeTarget()] };
+    prisma.socialPost.findFirst.mockResolvedValue(postWithTargets);
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    const call = prisma.socialPostTarget.update.mock.calls.at(-1)[0];
+    expect(call.data.error).toBeNull();
 
     mockPublish.mockReset();
   });
