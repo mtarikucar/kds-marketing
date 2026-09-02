@@ -155,6 +155,19 @@ describe('AdManagementService', () => {
     await expect(svc.launchAdFromCreative('ws', 'acc', launchDto() as any)).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('launchAdFromCreative rejects an AUDIO asset before it creates anything on Meta', async () => {
+    // The studio's TTS/music/SFX models produce AUDIO assets, and the launch
+    // dialog takes a free-typed asset id. Without a type gate an mp3 takes the
+    // IMAGE branch and is uploaded to Meta as an ad image — but only AFTER the
+    // campaign and ad set exist, so the failure leaves both orphaned.
+    prisma.adAccount.findFirst.mockResolvedValue(metaAcc());
+    mediaGen.getAsset.mockResolvedValue({ id: 'asset-1', status: 'READY', url: 'https://r2/vo.mp3', type: 'AUDIO', mime: 'audio/mpeg' });
+    await expect(svc.launchAdFromCreative('ws', 'acc', launchDto() as any)).rejects.toBeInstanceOf(BadRequestException);
+    expect(mClient.createCampaign).not.toHaveBeenCalled();
+    expect(mClient.createAdSet).not.toHaveBeenCalled();
+    expect(mClient.uploadAdImage).not.toHaveBeenCalled();
+  });
+
   it('launchAdFromCreative rejects an asset that is not READY', async () => {
     prisma.adAccount.findFirst.mockResolvedValue(metaAcc());
     mediaGen.getAsset.mockResolvedValue({ id: 'asset-1', status: 'PENDING', url: null });
