@@ -3515,6 +3515,10 @@
         "triggerLinks": "Trigger links",
         "webhooks": "Webhook deliveries",
         "workflows": "Workflows"
+      },
+      "line": {
+        "title": "Content line",
+        "desc": "Concepts from one idea, taking different angles; where each batch stands from proposal to published, and what worked."
       }
     },
     "toolsMenu": {
@@ -3529,7 +3533,8 @@
         "recurring": "What you come back to every week"
       },
       "money": "Money",
-      "ops": "Operations"
+      "ops": "Operations",
+      "line": "Content line"
     },
     "accounts": {
       "title": "Connected accounts",
@@ -4045,6 +4050,49 @@
         "cta": "Add credits"
       },
       "short": "Out of AI credits"
+    }
+  },
+  "contentLine": {
+    "learned": {
+      "title": "What worked",
+      "cold": "Nothing has been published yet, so there is nothing to measure. Batches are planned unbiased for now — this fills in on its own once accounts are connected and the first posts go out.",
+      "thin": "not enough data",
+      "posts": "{{count}} posts",
+      "error": "Angle performance could not be read. The batches are below; only this section is missing."
+    },
+    "card": {
+      "concepts": "{{count}} concepts",
+      "awaiting": "{{count}} awaiting review",
+      "generating": "{{count}} in production",
+      "needsApproval": "{{count}} awaiting publish approval",
+      "scheduled": "{{count}} scheduled",
+      "published": "{{count}} published",
+      "failed": "{{count}} failed",
+      "notPublished": "not published",
+      "reach": "{{n}} reach",
+      "toCampaigns": "Open production in campaigns"
+    },
+    "composer": {
+      "label": "Paste an idea",
+      "placeholder": "A product, an event or an observation — a few sentences is enough. It will be split into concepts from different angles.",
+      "submit": "Plan concepts",
+      "working": "Planning…",
+      "guided": "It will be weighted by the measured angles, with one slot kept for exploration."
+    },
+    "batches": {
+      "error": "Batches could not be read.",
+      "emptyTitle": "No batches yet",
+      "emptyBody": "Paste an idea above and it will be split into concepts that take genuinely different angles."
+    },
+    "detail": {
+      "title": "Concepts from this idea",
+      "error": "Concepts could not be read.",
+      "coldReason": "There was no history to measure — this batch was planned unbiased."
+    },
+    "planned": {
+      "cold": "{{n}} concepts planned. Planned unbiased, because there was no history to measure.",
+      "guided": "{{n}} concepts planned.",
+      "error": "Concepts could not be planned."
     }
   }
 }
