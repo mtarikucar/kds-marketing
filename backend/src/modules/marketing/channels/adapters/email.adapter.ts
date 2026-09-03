@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { ChannelAdapterRegistry } from '../channel-adapter.registry';
+import { EmailOAuthProvider, isEmailOAuthProvider } from '../email-oauth.config';
+import { EmailOAuthSecrets, needsRefresh, sendViaOAuth } from '../email-oauth.sender';
 import {
   ChannelAdapter,
   ChannelCapability,
@@ -44,6 +46,19 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     this.registry.register(this);
   }
 
+  /** A consent-connected mailbox, or null when this channel is SMTP. */
+  private oauth(
+    config: ResolvedChannelConfig,
+  ): { provider: EmailOAuthProvider; accessToken: string; from: string } | null {
+    const s = (config.secrets ?? {}) as EmailOAuthSecrets;
+    if (!isEmailOAuthProvider(s.oauthProvider)) return null;
+    const from = (s.fromEmail ?? '').trim();
+    // No from address means we do not know which mailbox consented, and Gmail
+    // would silently send as the authenticated account instead.
+    if (!from || !s.oauthAccessToken) return null;
+    return { provider: s.oauthProvider, accessToken: s.oauthAccessToken, from };
+  }
+
   private smtp(config: ResolvedChannelConfig): SmtpConfig | null {
     const s = config.secrets ?? {};
     const host = s.smtpHost?.trim();
@@ -56,16 +71,51 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
   }
 
   async send({ config, to, text }: OutboundSend): Promise<SendResult> {
-    const smtp = this.smtp(config);
-    if (!smtp) {
-      return { externalMessageId: null, status: 'FAILED', error: 'SMTP credentials missing' };
-    }
     const recipient = (to || '').trim();
     if (!recipient) {
       return { externalMessageId: null, status: 'FAILED', error: 'recipient email missing' };
     }
     const subject =
       (typeof config.public?.subject === 'string' && config.public.subject) || 'Re: your message';
+
+    /**
+     * A mailbox connected by CONSENT rather than by password takes the HTTP
+     * path — see email-oauth.config.ts for why Google cannot go over SMTP
+     * without moving this product onto a paid annual security assessment.
+     *
+     * The token is used as stored. Refreshing belongs to EmailOAuthRefreshCron,
+     * which owns the database; an adapter that could write its own credentials
+     * back would be the only one in this registry that can, and every other
+     * provider's refresh already lives in a cron for the same reason.
+     */
+    const oauth = this.oauth(config);
+    if (oauth) {
+      if (needsRefresh(config.secrets as EmailOAuthSecrets)) {
+        // Said plainly rather than sent-and-failed: a 401 from Google reads as
+        // a scope problem and sends the operator to the wrong screen.
+        return {
+          externalMessageId: null,
+          status: 'FAILED',
+          error: 'the connected mailbox token has expired and has not been refreshed yet — it renews automatically, try again shortly',
+        };
+      }
+      const r = await sendViaOAuth({
+        provider: oauth.provider,
+        accessToken: oauth.accessToken,
+        from: oauth.from,
+        to: recipient,
+        subject,
+        text,
+      });
+      return r.ok
+        ? { externalMessageId: r.externalId, status: 'SENT' }
+        : { externalMessageId: null, status: 'FAILED', error: String(r.error ?? '').slice(0, 300) };
+    }
+
+    const smtp = this.smtp(config);
+    if (!smtp) {
+      return { externalMessageId: null, status: 'FAILED', error: 'SMTP credentials missing' };
+    }
     try {
       const transport = nodemailer.createTransport({
         host: smtp.host,
