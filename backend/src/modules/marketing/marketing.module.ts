@@ -186,6 +186,9 @@ import { LinkedinEngagementAdapter } from './channels/adapters/linkedin-engageme
 import { LinkedinEngagementPollService } from './channels/linkedin-engagement-poll.service';
 import { TiktokWebhookController } from './controllers/tiktok-webhook.controller';
 import { EmailChannelAdapter } from './channels/adapters/email.adapter';
+import { EmailOAuthService } from './channels/email-oauth.service';
+import { EmailOAuthController } from './channels/email-oauth.controller';
+import { EmailOAuthRefreshService } from './channels/email-oauth-refresh.service';
 import { EmailWebhookController } from './controllers/email-webhook.controller';
 
 // Phase F P3 — workflow automation (trigger → executor → action handlers).
@@ -775,6 +778,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     SocialCampaignsController,
     LinkedinAdsOAuthController,
     GoogleAdsOAuthController,
+    EmailOAuthController,
     // Strategy Engine — onboarding + console surfaces.
     StrategyIntakeController,
     StrategyController,
@@ -900,6 +904,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TiktokDmAdapter,
     LinkedinEngagementAdapter,
     EmailChannelAdapter,
+    EmailOAuthService,
+    EmailOAuthRefreshService,
     MessageQuotaService,
     ChannelsService,
     ConversationStreamService,

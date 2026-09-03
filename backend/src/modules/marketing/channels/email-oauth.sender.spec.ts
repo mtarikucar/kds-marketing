@@ -1,4 +1,11 @@
-import { buildRfc822, needsRefresh, refreshAccessToken, sendViaOAuth } from './email-oauth.sender';
+import {
+  buildRfc822,
+  exchangeCodeForTokens,
+  fetchConnectedAddress,
+  needsRefresh,
+  refreshAccessToken,
+  sendViaOAuth,
+} from './email-oauth.sender';
 
 const okJson = (body: unknown, status = 200) =>
   ({ ok: status < 400, status, json: async () => body }) as unknown as Response;
@@ -86,9 +93,10 @@ describe('sending on a connected mailbox behalf', () => {
       process.env.GOOGLE_MAIL_CLIENT_SECRET = 'secret';
       global.fetch = jest.fn().mockResolvedValue(okJson({ access_token: 'new', expires_in: 3600 })) as never;
       const kept = await refreshAccessToken('GOOGLE', 'rt');
-      // Google omits it and the original stays valid — persisting `undefined`
-      // here would delete a working credential.
-      expect(kept).not.toHaveProperty('refreshToken');
+      // Google omits it and the original stays valid. Null is the caller's
+      // signal to leave the stored one alone — writing this through would
+      // delete a working credential.
+      expect(kept.refreshToken).toBeNull();
 
       global.fetch = jest.fn().mockResolvedValue(
         okJson({ access_token: 'new', expires_in: 3600, refresh_token: 'rotated' }),
@@ -121,6 +129,54 @@ describe('sending on a connected mailbox behalf', () => {
       expect(needsRefresh({ oauthAccessToken: 'a', oauthExpiresAt: String(now + 1) }, now)).toBe(false);
       expect(needsRefresh({ oauthAccessToken: 'a', oauthExpiresAt: String(now) }, now)).toBe(true);
       expect(needsRefresh({ oauthExpiresAt: String(now + 10_000) }, now)).toBe(true);
+    });
+  });
+
+  describe('exchangeCodeForTokens', () => {
+    beforeEach(() => {
+      process.env.GOOGLE_MAIL_CLIENT_ID = 'id';
+      process.env.GOOGLE_MAIL_CLIENT_SECRET = 'secret';
+    });
+
+    it('refuses a grant with no refresh token instead of connecting an hour-long channel', async () => {
+      // An access token alone connects a mailbox that works today and stops
+      // tomorrow — a failure that surfaces days later, far from this code.
+      global.fetch = jest.fn().mockResolvedValue(okJson({ access_token: 'a', expires_in: 3600 })) as never;
+      const r = await exchangeCodeForTokens('GOOGLE', 'code', 'https://x/cb');
+      expect(r).toMatchObject({ accessToken: null, error: expect.stringContaining('did not return a refresh token') });
+    });
+
+    it('sends the redirect_uri back, because the provider re-checks it', async () => {
+      global.fetch = jest.fn().mockResolvedValue(
+        okJson({ access_token: 'a', refresh_token: 'r', expires_in: 3600 }),
+      ) as never;
+      const r = await exchangeCodeForTokens('GOOGLE', 'code', 'https://x/cb');
+      expect(r).toMatchObject({ accessToken: 'a', refreshToken: 'r', error: null });
+      const body = (global.fetch as jest.Mock).mock.calls[0][1].body as string;
+      expect(new URLSearchParams(body).get('redirect_uri')).toBe('https://x/cb');
+      expect(new URLSearchParams(body).get('grant_type')).toBe('authorization_code');
+    });
+  });
+
+  describe('fetchConnectedAddress', () => {
+    it('lower-cases, so the address matches the channel it should update', async () => {
+      // Channel.externalId for EMAIL is stored lower-cased; a mixed-case answer
+      // here would fail to find the existing channel and try to create a second
+      // one for the same mailbox.
+      global.fetch = jest.fn().mockResolvedValue(okJson({ email: 'Admin@Figurunica.com' })) as never;
+      expect(await fetchConnectedAddress('GOOGLE', 't')).toBe('admin@figurunica.com');
+    });
+
+    it('falls back to the UPN, which is the address on an unlicensed Graph account', async () => {
+      global.fetch = jest.fn().mockResolvedValue(
+        okJson({ mail: null, userPrincipalName: 'admin@figurunica.com' }),
+      ) as never;
+      expect(await fetchConnectedAddress('MICROSOFT', 't')).toBe('admin@figurunica.com');
+    });
+
+    it('answers null rather than a non-address', async () => {
+      global.fetch = jest.fn().mockResolvedValue(okJson({ email: 'not-an-address' })) as never;
+      expect(await fetchConnectedAddress('GOOGLE', 't')).toBeNull();
     });
   });
 });

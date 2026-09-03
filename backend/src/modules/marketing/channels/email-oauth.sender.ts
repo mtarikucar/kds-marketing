@@ -19,6 +19,12 @@ export interface EmailOAuthSecrets {
   /** Epoch millis. Absent on a token minted before this field existed. */
   oauthExpiresAt?: string;
   fromEmail?: string;
+  /**
+   * The provider's last refusal, recorded by the refresh sweep. Present means
+   * the owner has to reconnect; the UI reads it to say so before a send fails
+   * on a customer.
+   */
+  oauthError?: string;
 }
 
 export interface OAuthSendInput {
@@ -30,12 +36,22 @@ export interface OAuthSendInput {
   text: string;
 }
 
-export interface RefreshedToken {
-  accessToken: string;
+/**
+ * Flat, like `OAuthSendResult` and for the same reason: `strictNullChecks` is
+ * off in this build, so `{...} | {error}` does not narrow and every caller
+ * would need a cast. `error` non-null means nothing else is meaningful.
+ */
+export interface TokenResult {
+  accessToken: string | null;
   /** Epoch millis. */
-  expiresAt: number;
-  /** Providers may rotate it; when they do, the old one stops working. */
-  refreshToken?: string;
+  expiresAt: number | null;
+  /**
+   * Non-null ONLY when the provider actually issued one. Google omits it on a
+   * refresh (the original stays valid) and Microsoft rotates it; writing this
+   * through unconditionally would delete a working credential.
+   */
+  refreshToken: string | null;
+  error: string | null;
 }
 
 /** Base64url — the Gmail API rejects standard base64 padding. */
@@ -126,23 +142,58 @@ export async function sendViaOAuth(input: OAuthSendInput): Promise<OAuthSendResu
 export async function refreshAccessToken(
   provider: EmailOAuthProvider,
   refreshToken: string,
-): Promise<RefreshedToken | { error: string }> {
+): Promise<TokenResult> {
+  return tokenRequest(provider, {
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+}
+
+/**
+ * Trade the one-time authorization code for the pair that connects the mailbox.
+ *
+ * Unlike a refresh, this MUST come back with a refresh token — an access token
+ * alone connects a channel that works for an hour and then stops, which looks
+ * like a bug days later and far from this code. The providers are configured to
+ * guarantee one (`access_type=offline`+`prompt=consent`, `offline_access`), so
+ * its absence means the consent did not grant what we asked for, and refusing
+ * here is what keeps that from being sealed onto a channel.
+ */
+export async function exchangeCodeForTokens(
+  provider: EmailOAuthProvider,
+  code: string,
+  redirectUri: string,
+): Promise<TokenResult> {
+  const r = await tokenRequest(provider, {
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+  });
+  if (r.error) return r;
+  if (!r.refreshToken) {
+    return { accessToken: null, expiresAt: null, refreshToken: null, error: `${provider} did not return a refresh token` };
+  }
+  return r;
+}
+
+/** Shared token-endpoint call. Both grants post the same form to the same URL
+ *  and read the same response; only the grant-specific fields differ. */
+async function tokenRequest(
+  provider: EmailOAuthProvider,
+  grantFields: Record<string, string>,
+): Promise<TokenResult> {
+  const fail = (error: string): TokenResult => ({ accessToken: null, expiresAt: null, refreshToken: null, error });
   const cfg = EMAIL_OAUTH[provider];
   const clientId = process.env[cfg.clientIdEnv];
   const clientSecret = process.env[cfg.clientSecretEnv];
-  if (!clientId || !clientSecret) return { error: `${provider} mail app is not configured on this deployment` };
+  if (!clientId || !clientSecret) return fail(`${provider} mail app is not configured on this deployment`);
 
   const r = await post(cfg.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    }).toString(),
+    body: new URLSearchParams({ ...grantFields, client_id: clientId, client_secret: clientSecret }).toString(),
   });
-  if (!r.ok || !r.body?.access_token) return { error: `${provider} token refresh ${reason(r.status, r.body)}` };
+  if (!r.ok || !r.body?.access_token) return fail(`${provider} token request ${reason(r.status, r.body)}`);
 
   // 60s of slack: a token that expires while in flight fails the send, and the
   // cost of refreshing a minute early is one extra HTTP call.
@@ -150,11 +201,37 @@ export async function refreshAccessToken(
   return {
     accessToken: String(r.body.access_token),
     expiresAt: Date.now() + Math.max(0, ttl - 60) * 1000,
-    // Google usually omits it (the original stays valid); Microsoft rotates it.
-    // Persisting only when present is what keeps a rotating provider working
-    // and a non-rotating one from having its token overwritten with undefined.
-    ...(r.body.refresh_token ? { refreshToken: String(r.body.refresh_token) } : {}),
+    refreshToken: r.body.refresh_token ? String(r.body.refresh_token) : null,
+    error: null,
   };
+}
+
+/**
+ * Which mailbox was just connected.
+ *
+ * Asked rather than typed: the alternative is a form field where the owner
+ * writes the address they just authenticated, and a typo there produces a
+ * channel that sends from one account while claiming another — mail that
+ * arrives, fails alignment, and lands in spam for reasons nobody can see.
+ */
+export async function fetchConnectedAddress(
+  provider: EmailOAuthProvider,
+  accessToken: string,
+): Promise<string | null> {
+  const url =
+    provider === 'GOOGLE'
+      ? 'https://www.googleapis.com/oauth2/v3/userinfo'
+      : 'https://graph.microsoft.com/v1.0/me';
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+  }).catch(() => null);
+  if (!res || !res.ok) return null;
+  const body: any = await res.json().catch(() => ({}));
+  // Graph's `mail` is null on accounts with no Exchange licence; the UPN is the
+  // address in that case and is what the mailbox actually sends as.
+  const raw = provider === 'GOOGLE' ? body?.email : (body?.mail ?? body?.userPrincipalName);
+  return typeof raw === 'string' && raw.includes('@') ? raw.trim().toLowerCase() : null;
 }
 
 /** True when the stored access token is missing or within its slack window. */

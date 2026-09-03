@@ -129,7 +129,7 @@
     "disconnect": "Bağlantıyı kes",
     "email": {
       "title": "E-posta bağla",
-      "desc": "E-posta iki yönlüdür: SMTP sunucundan gönder, sağlayıcının gelen webhook'uyla yanıtları al.",
+      "desc": "E-posta iki yönlüdür: posta kutundan gönder, sağlayıcının gelen webhook'uyla yanıtları al.",
       "sending": "Gönderim (SMTP)",
       "receiving": "Yanıt alma",
       "webhookLabel": "Gelen webhook URL'si — e-posta sağlayıcının gelen-ayrıştırma rotasına yapıştır",
@@ -147,7 +147,19 @@
       "inboundAddress": "Gelen adres (sağlayıcınızın ayrıştırdığı adres)",
       "receivingHint": "Bu, gelen postasını sağlayıcınızın (Mailgun/SendGrid/Postmark…) bize ilettiği adrestir. Oraya yapıştıracağınız webhook URL'si, kaydettikten sonra görünür.",
       "sendingDone": "Gönderim yapılandırıldı.",
-      "inboundNoAddr": "Gelen imzalama anahtarı ayarlı, ancak hiçbir gelen adres yapılandırılmadı — yanıtlar bu kanalla eşleştirilemez."
+      "inboundNoAddr": "Gelen imzalama anahtarı ayarlı, ancak hiçbir gelen adres yapılandırılmadı — yanıtlar bu kanalla eşleştirilemez.",
+      "consentTitle": "Posta kutunu bağla",
+      "consentDesc": "Sağlayıcında oturum açıp gönderim iznini onaylıyorsun. Burada hiçbir parola saklanmıyor.",
+      "connectWith": "{{provider}} ile bağlan",
+      "ownServer": "Kendi e-posta sunucum var",
+      "address": "E-posta adresi",
+      "addressHint": "Bu adrese gelen yanıtlar gelen kutusuna düşer. Sunucu ayarları adresin alan adından okunur.",
+      "mailboxPassword": "Posta kutusu parolası",
+      "passwordlessAvailable": "Bu adresi {{provider}} yönetiyor — parola girmeden bağlayabilirsin.",
+      "recognised": "{{provider}} tanındı — sunucu ayarları aşağıya dolduruldu.",
+      "notRecognised": "Bu alan adının posta sunucusunu tanımıyoruz — sunucu ayarlarını kendin doldur.",
+      "smtpUserHint": "Genellikle adresin kendisiyle aynıdır.",
+      "connected": "Posta kutusu bağlandı."
     },
     "webchat": {
       "title": "Web sohbet",

@@ -98,3 +98,33 @@ export function isEmailOAuthConfigured(p: EmailOAuthProvider): boolean {
 export function configuredEmailOAuthProviders(): EmailOAuthProvider[] {
   return EMAIL_OAUTH_PROVIDERS.filter(isEmailOAuthConfigured);
 }
+
+/**
+ * ONE callback address for both providers — the provider is carried in the
+ * signed state, not in the path. The owner registers this exact string in their
+ * own Google Cloud / Azure app, and a redirect URI that differed per provider
+ * would be one more thing to get wrong for no gain.
+ */
+export function emailOAuthRedirectUri(): string {
+  const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
+  return `${base}/api/marketing/channels/email/oauth/callback`;
+}
+
+export function buildEmailAuthorizeUrl(provider: EmailOAuthProvider, state: string): string {
+  const c = EMAIL_OAUTH[provider];
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: process.env[c.clientIdEnv] ?? '',
+    redirect_uri: emailOAuthRedirectUri(),
+    scope: c.scopes.join(' '),
+    state,
+    ...c.authParams,
+  });
+  return `${c.authUrl}?${params.toString()}`;
+}
+
+/** The signed-state `network` tag for a provider, so an email state can never
+ *  be replayed against the social-connect callback (or the reverse). */
+export function emailStateNetwork(provider: EmailOAuthProvider): string {
+  return `email-${provider.toLowerCase()}`;
+}
