@@ -43,6 +43,12 @@ import { UpgradeCallout } from './UpgradeCallout';
 // allocator tables; the Studio's three working panels must not pay for that.
 const BudgetAutopilotPage = lazy(() => import('../budget/BudgetAutopilotPage'));
 const StudioCalendarTab = lazy(() => import('./StudioCalendarTab'));
+const ContentLinePanel = lazy(() =>
+  import('./ContentLinePanel').then((m) => ({ default: m.ContentLinePanel })),
+);
+const BatchDetail = lazy(() =>
+  import('./BatchDetail').then((m) => ({ default: m.BatchDetail })),
+);
 const AiStudioPage = lazy(() => import('../social/AiStudioPage'));
 /**
  * The ACCOUNT CENTER, not `settings/connections/ConnectionsPage`.
@@ -123,7 +129,8 @@ export type StudioTool =
   | 'connections'
   | 'money'
   | 'ops'
-  | 'audience';
+  | 'audience'
+  | 'line';
 
 /**
  * What each tool's UNDERLYING page actually requires — the audit, written down,
@@ -187,6 +194,7 @@ const TOOL_MIN_ROLE: Partial<Record<StudioTool, MarketingRole>> = {
   money: MarketingRole.MANAGER,
   ops: MarketingRole.MANAGER,
   audience: MarketingRole.MANAGER,
+  line: MarketingRole.MANAGER,
 };
 
 export interface StudioToolsDrawerProps {
@@ -221,6 +229,14 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
 
   const [budgetDialogOpen, setBudgetDialogOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+
+  /**
+   * Which batch the content line is showing, if any. LOCAL state, not a search
+   * param: the drawer itself is already URL-addressed by `?tool=line`, and a
+   * second param for a view that only exists inside it would outlive the
+   * drawer it belongs to.
+   */
+  const [openedBatch, setOpenedBatch] = useState<string | null>(null);
 
   /**
    * A drawer opened with no tool named still has to render something — Radix
@@ -323,6 +339,13 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
         'Listen nereden geliyor ve nasıl bölünüyor: AI önerileri, içe aktarım, segmentler.',
       ),
     },
+    line: {
+      title: t('studio.tools.line.title', 'İçerik hattı'),
+      description: t(
+        'studio.tools.line.desc',
+        'Bir fikirden farklı açılarda konseptler; her partinin öneriden yayına kadar hâli, ve ne işe yaradığı.',
+      ),
+    },
   };
 
   return (
@@ -418,6 +441,16 @@ export function StudioToolsDrawer({ open, tool, onOpenChange }: StudioToolsDrawe
                     screen is worse than either placement alone — two lists, one
                     of them stale the instant you act on the other. */}
                 <BudgetAutopilotPage embedded hideApprovals />
+              </Lazy>
+            )}
+
+            {allowed && active === 'line' && (
+              <Lazy>
+                {openedBatch ? (
+                  <BatchDetail batchId={openedBatch} onClose={() => setOpenedBatch(null)} />
+                ) : (
+                  <ContentLinePanel onOpenBatch={setOpenedBatch} />
+                )}
               </Lazy>
             )}
 

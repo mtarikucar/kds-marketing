@@ -4360,6 +4360,10 @@
         "triggerLinks": "Tetikleyici linkler",
         "webhooks": "Webhook teslimatları",
         "workflows": "Workflow'lar"
+      },
+      "line": {
+        "title": "İçerik hattı",
+        "desc": "Bir fikirden farklı açılarda konseptler; her partinin öneriden yayına kadar hâli, ve ne işe yaradığı."
       }
     },
     "toolsMenu": {
@@ -4374,7 +4378,8 @@
         "recurring": "Her hafta dönüp bakılan işler"
       },
       "money": "Para",
-      "ops": "İşleyiş"
+      "ops": "İşleyiş",
+      "line": "İçerik hattı"
     },
     "accounts": {
       "title": "Bağlı hesaplar",
@@ -4871,6 +4876,49 @@
         "cta": "Kredi ekle"
       },
       "short": "AI kredisi bitti"
+    }
+  },
+  "contentLine": {
+    "learned": {
+      "title": "Ne işe yaradı",
+      "cold": "Henüz yayınlanmış içerik yok, ölçecek bir şey de yok. Partiler şimdilik tarafsız üretiliyor — hesaplar bağlanıp ilk gönderiler çıktığında burası kendiliğinden dolar.",
+      "thin": "yeterli veri yok",
+      "posts": "{{count}} gönderi",
+      "error": "Açı performansı okunamadı. Partiler aşağıda; yalnızca bu bölüm eksik."
+    },
+    "card": {
+      "concepts": "{{count}} konsept",
+      "awaiting": "{{count}} onay bekliyor",
+      "generating": "{{count}} üretimde",
+      "needsApproval": "{{count}} yayın onayı bekliyor",
+      "scheduled": "{{count}} planlandı",
+      "published": "{{count}} yayında",
+      "failed": "{{count}} başarısız",
+      "notPublished": "yayınlanmadı",
+      "reach": "{{n}} erişim",
+      "toCampaigns": "Üretimi kampanyalarda aç"
+    },
+    "composer": {
+      "label": "Bir fikir yapıştır",
+      "placeholder": "Ürün, olay ya da gözlem — birkaç cümle yeter. Farklı açılardan konseptlere bölünecek.",
+      "submit": "Konsept üret",
+      "working": "Üretiliyor…",
+      "guided": "Ölçülen açılara göre ağırlıklandırılacak, bir slot keşfe ayrılacak."
+    },
+    "batches": {
+      "error": "Partiler okunamadı.",
+      "emptyTitle": "Henüz parti yok",
+      "emptyBody": "Yukarıya bir fikir yapıştır; birbirinden farklı açılarda konseptlere bölünsün."
+    },
+    "detail": {
+      "title": "Bu fikirden çıkan konseptler",
+      "error": "Konseptler okunamadı.",
+      "coldReason": "Ölçülecek geçmiş yoktu — bu parti tarafsız planlandı."
+    },
+    "planned": {
+      "cold": "{{n}} konsept üretildi. Ölçülecek geçmiş olmadığı için tarafsız planlandı.",
+      "guided": "{{n}} konsept üretildi.",
+      "error": "Konseptler üretilemedi."
     }
   }
 }

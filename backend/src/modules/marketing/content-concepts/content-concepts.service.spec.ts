@@ -88,6 +88,8 @@ function deps(
     personaRow?: unknown;
     campaignRow?: unknown;
     workspaceVideoModel?: string;
+    /** Angle history the batch is weighted by. Cold unless a test says otherwise. */
+    anglePerformance?: unknown;
     /** The target accounts of campaign `camp-1`, for the destination preview. */
     destinations?: unknown[];
   } = {},
@@ -146,8 +148,13 @@ function deps(
     credits as any,
     new VideoPipelineService(),
     promotion as any,
+    (over.anglePerformance ?? {
+      byAngle: jest.fn().mockResolvedValue({ cold: true, angles: [], weights: {} }),
+    }) as any,
   );
-  return { svc, prisma, credits, complete, anthropic, promotion, mediaGen };
+  return { svc, prisma, credits, complete, anthropic, promotion, mediaGen, systemOf: () =>
+    String((complete.mock.calls[0]?.[0] as { system?: string })?.system ?? ''), userOf: () =>
+    String(((complete.mock.calls[0]?.[0] as { messages?: { content: string }[] })?.messages?.[0]?.content) ?? '') };
 }
 
 const plan = (svc: ContentConceptsService, over: Record<string, unknown> = {}) =>
@@ -839,5 +846,91 @@ describe('ContentConceptsService.planConcepts — the plan is quoted before it i
     const p = firstPlan(prisma);
     expect(p.production.model).toBe('bytedance/seedance-2.5/text-to-video');
     expect(p.production.modelSource).toBe('workspace');
+  });
+});
+
+/**
+ * The learning loop. Measured angle performance biases the next batch, the
+ * owner can override it, and an unguided batch must SAY it is unguided rather
+ * than quietly looking like a guided one.
+ *
+ * Note what these tests can and cannot pin. The service controls the prompt it
+ * sends and the `selectionReason` it derives from the guidance actually applied;
+ * it does NOT control what the model returns, so "an exploration slot exists" is
+ * asserted as an instruction that was issued and a label that is correct — not
+ * as a promise about Anthropic's output.
+ */
+describe('ContentConceptsService.planConcepts — angle learning', () => {
+  const MEASURED = {
+    cold: false,
+    angles: [],
+    weights: { curiosity: 0.6, engineering: 0.4 },
+  };
+
+  it('says the batch is COLD and labels nothing when no history exists', async () => {
+    const { svc, systemOf, userOf } = deps(); // harness defaults to cold
+    const res = await plan(svc);
+
+    expect(res.cold).toBe(true);
+    expect(res.weights).toEqual({});
+    expect(res.concepts.every((c) => c.selectionReason === null)).toBe(true);
+    expect(systemOf()).toMatch(/No performance history/i);
+    expect(userOf()).not.toMatch(/ANGLE WEIGHTS/);
+  });
+
+  it('feeds measured weights into the prompt and demands an exploration slot', async () => {
+    const { svc, systemOf, userOf } = deps({
+      anglePerformance: { byAngle: jest.fn().mockResolvedValue(MEASURED) },
+    });
+    const res = await plan(svc);
+
+    expect(res.cold).toBe(false);
+    expect(res.weights).toEqual(MEASURED.weights);
+    expect(userOf()).toContain('ANGLE WEIGHTS');
+    expect(userOf()).toContain('curiosity: 60%');
+    // The guard against the line eating itself, stated as a requirement.
+    expect(systemOf()).toMatch(/AT LEAST ONE concept MUST use an angle that is NOT in that list/);
+  });
+
+  it('labels a weighted angle as measured and an unweighted one as exploration', async () => {
+    const { svc } = deps({
+      anglePerformance: { byAngle: jest.fn().mockResolvedValue(MEASURED) },
+    });
+    const res = await plan(svc);
+
+    const byAngle = Object.fromEntries(res.concepts.map((c) => [c.angle, c.selectionReason]));
+    expect(byAngle['curiosity']).toMatch(/^measured — 60%/);
+    expect(byAngle['engineering']).toMatch(/^measured — 40%/);
+    // `sensory` is in the fixture batch and carries no weight — the slot that
+    // keeps the line discovering.
+    expect(byAngle['sensory']).toMatch(/^exploration/);
+  });
+
+  it('uses owner-supplied weights VERBATIM and never reads history', async () => {
+    const byAngle = jest.fn().mockResolvedValue(MEASURED);
+    const { svc, userOf } = deps({ anglePerformance: { byAngle } });
+
+    const res = await plan(svc, { angleWeights: { sensory: 1 } });
+
+    expect(byAngle).not.toHaveBeenCalled();
+    expect(res.weights).toEqual({ sensory: 1 });
+    expect(userOf()).toContain('set by hand');
+    expect(res.concepts.find((c) => c.angle === 'sensory')!.selectionReason).toMatch(
+      /^owner weighting/,
+    );
+  });
+
+  it('plans an unbiased batch instead of refusing one when history cannot be read', async () => {
+    // A learning loop that can BLOCK content production is worse than one that
+    // occasionally forgets what worked.
+    const { svc, systemOf } = deps({
+      anglePerformance: { byAngle: jest.fn().mockRejectedValue(new Error('db down')) },
+    });
+
+    const res = await plan(svc);
+
+    expect(res.cold).toBe(true);
+    expect(res.concepts.length).toBeGreaterThan(0);
+    expect(systemOf()).toMatch(/No performance history/i);
   });
 });

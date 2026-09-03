@@ -4089,6 +4089,17 @@ model ContentConcept {
   reviewedById String?
   reviewNote   String?
 
+  /// WHY this angle was chosen for this batch — measured performance, the
+  /// exploration slot, or a weight the owner set by hand.
+  ///
+  /// Distinct from `rationale`, which argues why the concept is worth shooting
+  /// and is written for the human deciding. This field answers a different
+  /// question — "why are these five the five?" — and it exists because a line
+  /// that biases itself toward what worked becomes unauditable the moment it
+  /// stops saying so. Null on concepts planned before the loop existed, and on
+  /// cold-start batches where nothing was measured to bias with.
+  selectionReason String?
+
   /// Set when the idea arrived already scoped to a campaign. Soft reference,
   /// matching `linkedCampaignId`'s style on SocialCampaign — a concept must
   /// outlive a campaign being deleted, since the idea is still good.
