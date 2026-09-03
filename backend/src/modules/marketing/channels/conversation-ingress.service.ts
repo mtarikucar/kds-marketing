@@ -166,7 +166,9 @@ export class ConversationIngressService {
       // lets the agent surface refresh the one record on screen rather than
       // every record on screen, for every inbound anywhere in the workspace.
       leadId: result.leadId,
-      payload: { id: result.messageId, direction: 'INBOUND', authorType: 'CUSTOMER', body: inbound.text },
+      payload: inbound.echo
+        ? { id: result.messageId, direction: 'OUTBOUND', authorType: 'AGENT', body: inbound.text }
+        : { id: result.messageId, direction: 'INBOUND', authorType: 'CUSTOMER', body: inbound.text },
     });
     return result;
   }
@@ -279,7 +281,12 @@ export class ConversationIngressService {
           data: {
             leadId: lead.id,
             type: 'NOTE',
-            title: `New ${this.label(channel.type)} conversation`,
+            // An echo means the owner messaged this person first, from the
+            // provider's own app. Same note, honest about who spoke — the
+            // description below is OUR text in that case, not theirs.
+            title: inbound.echo
+              ? `New ${this.label(channel.type)} conversation (you messaged first)`
+              : `New ${this.label(channel.type)} conversation`,
             description: inbound.text.slice(0, 500),
             createdById: sentinelId,
           },
@@ -310,28 +317,37 @@ export class ConversationIngressService {
       });
     }
 
-    // 3. Persist the inbound message (externalMessageId unique = dedup backstop).
+    // 3. Persist the message (externalMessageId unique = dedup backstop).
+    // An echo is the account's OWN message seen on the webhook — the owner
+    // replying from the Instagram/Messenger app. It belongs in the thread as
+    // what it is: outbound, from the team, already sent.
     const message = await tx.message.create({
       data: {
         workspaceId,
         conversationId: convo.id,
-        direction: 'INBOUND',
-        authorType: 'CUSTOMER',
+        direction: inbound.echo ? 'OUTBOUND' : 'INBOUND',
+        authorType: inbound.echo ? 'AGENT' : 'CUSTOMER',
         body: inbound.text,
         externalMessageId: inbound.externalMessageId,
-        status: 'RECEIVED',
+        status: inbound.echo ? 'SENT' : 'RECEIVED',
         meta: inbound.raw ? ({ raw: inbound.raw } as Prisma.InputJsonValue) : undefined,
       },
     });
 
     // 4. Bump conversation view + recency state.
+    // An echo bumps recency ONLY. It is not unread — the owner wrote it — and
+    // it is not inbound: `lastInboundAt` is what the provider's 24-hour reply
+    // window is measured from, so stamping it here would show a window this
+    // account does not actually have, and a send inside it fails at Meta.
     await tx.conversation.update({
       where: { id: convo.id },
-      data: {
-        unreadCount: { increment: 1 },
-        lastMessageAt: new Date(),
-        lastInboundAt: new Date(),
-      },
+      data: inbound.echo
+        ? { lastMessageAt: new Date() }
+        : {
+            unreadCount: { increment: 1 },
+            lastMessageAt: new Date(),
+            lastInboundAt: new Date(),
+          },
     });
 
     // 5. Emit domain events in the same tx (fire only on commit).
@@ -370,23 +386,28 @@ export class ConversationIngressService {
         tx as any,
       );
     }
-    await this.outbox.append(
-      {
-        type: MarketingEventTypes.ConversationMessageReceived,
-        idempotencyKey: `conv-msg:${message.id}`,
-        payload: {
-          workspaceId,
-          conversationId: convo.id,
-          channelId: channel.id,
-          channelType: channel.type,
-          leadId: identity.leadId,
-          messageId: message.id,
-          text: inbound.text,
-          occurredAt,
+    // NOT for an echo. This event is what the AI engine replies to, so emitting
+    // it here would have the assistant answer its own owner — and, because each
+    // reply is itself echoed back, do it again on the next webhook.
+    if (!inbound.echo) {
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.ConversationMessageReceived,
+          idempotencyKey: `conv-msg:${message.id}`,
+          payload: {
+            workspaceId,
+            conversationId: convo.id,
+            channelId: channel.id,
+            channelType: channel.type,
+            leadId: identity.leadId,
+            messageId: message.id,
+            text: inbound.text,
+            occurredAt,
+          },
         },
-      },
-      tx as any,
-    );
+        tx as any,
+      );
+    }
 
     return {
       conversationId: convo.id,

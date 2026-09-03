@@ -301,7 +301,16 @@ export class SocialOAuthService {
         // `leadgen` delivers Meta Lead Ads (Instant Form) submissions on this
         // same page webhook (MetaWebhookController routes them to the leadgen
         // ingest). Inert until the app holds leads_retrieval/pages_manage_ads.
-        query: { subscribed_fields: 'messages,messaging_postbacks,message_reactions,leadgen' },
+        //
+        // `message_echoes` is what delivers the owner's OWN replies — the ones
+        // they type in the Instagram or Messenger app on their phone. Without
+        // it the webhook only ever carries one side, and a thread here shows
+        // the customer's messages with no answers under them even though every
+        // one was answered. Existing pages pick this up on their next connect
+        // or re-verify; the subscription is not retroactive.
+        query: {
+          subscribed_fields: 'messages,message_echoes,messaging_postbacks,message_reactions,leadgen',
+        },
       });
       if (!sub.ok) {
         this.logger.warn(
