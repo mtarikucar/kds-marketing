@@ -51,6 +51,11 @@ describe('DailyDigestService', () => {
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      // The strategy autopilot's lane + its plan. Default to a workspace that
+      // never armed autonomy, so every pre-existing expectation in this file
+      // describes the brief an ordinary workspace still receives.
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
     };
     svc = new DailyDigestService(prisma, usage as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
   });
@@ -276,6 +281,8 @@ describe('DailyDigestService — conversations waiting for a reply', () => {
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
     };
     svc = new DailyDigestService(prisma, { breakdown: jest.fn().mockResolvedValue(null) } as never, { workspaceStatus: jest.fn().mockResolvedValue(null) } as never);
     return prisma;
@@ -351,6 +358,8 @@ describe('DailyDigestService — accounts that stopped working', () => {
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const svc = new DailyDigestService(
       prisma,
@@ -429,6 +438,8 @@ describe('DailyDigestService — connection health', () => {
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
       socialAccount: { count: socialCount },
       adAccount: { count: adCount },
     };
@@ -516,6 +527,8 @@ describe('DailyDigestService — vendor refusal', () => {
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
       scheduledJob,
     };
     return {
@@ -584,6 +597,8 @@ describe('DailyDigestService — AI budget', () => {
       campaign: { count: jest.fn().mockResolvedValue(0) },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
       marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
       scheduledJob: { count: jest.fn().mockResolvedValue(0) },
     };
     return new DailyDigestService(
@@ -627,5 +642,303 @@ describe('DailyDigestService — AI budget', () => {
 
     // A metering hiccup must not invent a budget line.
     expect(d!.needsYou.items.join(' | ')).not.toMatch(/bütçe/);
+  });
+});
+
+/**
+ * "What it did, and what it did NOT do and why."
+ *
+ * The owner asked never to DEAL with marketing. They did not ask never to
+ * KNOW. A report that lists only successes is how a machine acting on someone's
+ * behalf loses their trust, and it is also unfalsifiable: "nothing to report"
+ * and "everything is blocked" render identically. These cases exist to keep the
+ * second half of the report attached to the first.
+ */
+describe('DailyDigestService — the autopilot report', () => {
+  const WS = 'ws-1';
+  const NOW = new Date('2026-09-02T09:00:00Z');
+  const YESTERDAY = new Date('2026-09-01T20:00:00Z');
+  const LAST_WEEK = new Date('2026-08-23T10:00:00Z');
+  // NOW (2026-09-02) is a Wednesday; this is the Monday the weekly lines ride.
+  const MONDAY = new Date('2026-09-07T09:00:00Z');
+  let prisma: any;
+  let svc: DailyDigestService;
+
+  /**
+   * One store, TWO reads — the way the service reads it.
+   *
+   * The plan read is `orderBy updatedAt desc take 100`; the blocked read is its
+   * own predicate (`resultRef startsWith 'skipped:'`, still-waiting statuses
+   * only). Routing by the `where` rather than returning the same array to both
+   * is the whole point: a mock that answers every findMany identically cannot
+   * tell a report that survives a hundred fresh actions from one that does not.
+   */
+  const plan = (lane: string | null, actions: any[]) => {
+    prisma.marketingStrategy.findUnique.mockResolvedValue(lane ? { autonomyLevel: lane } : null);
+    prisma.strategyAction.findMany.mockImplementation(async ({ where, take }: any) => {
+      const byRecency = [...actions].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+      if (where?.resultRef?.startsWith) {
+        return byRecency
+          .filter((a) => String(a.resultRef ?? '').startsWith(where.resultRef.startsWith))
+          .filter((a) => where.status.in.includes(a.status))
+          .slice(0, take);
+      }
+      return byRecency.slice(0, take);
+    });
+  };
+
+  beforeEach(() => {
+    prisma = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS, name: 'HummyTummy' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(0) },
+      scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue(null) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    svc = new DailyDigestService(
+      prisma,
+      { breakdown: jest.fn().mockResolvedValue(null) } as never,
+      { workspaceStatus: jest.fn().mockResolvedValue(null) } as never,
+    );
+  });
+
+  it('carries BOTH halves: what ran, and what did not with the reason', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'DONE', resultRef: 'post:p1', updatedAt: YESTERDAY },
+      { kind: 'AD_CAMPAIGN', title: 'Retargeting', status: 'PROPOSED', resultRef: 'skipped:kill-switch', updatedAt: YESTERDAY },
+      { kind: 'CONTENT', title: 'Blog serisi', status: 'PROPOSED', resultRef: 'skipped:kill-switch', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items[0]).toContain('1 eylem uygulandı');
+    expect(d.autopilot.items[0]).toContain('Reels serisi');
+    const refused = d.autopilot.items.find((l) => l.includes('yapılmadı'))!;
+    expect(refused).toContain('2 eylem yapılmadı');
+    // The reason, in the owner's language, naming what would change it.
+    expect(refused).toContain('harcama/yayın anahtarı kapalı');
+    expect(refused).toContain('Retargeting');
+  });
+
+  it('reports a FAILED action with the executor\'s own reason, not a paraphrase', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'FAILED', resultRef: 'error:no ad account connected', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items).toEqual(['"Reels serisi" yapılamadı: no ad account connected']);
+  });
+
+  it('an armed lane that did NOTHING still sends — silence is the finding', async () => {
+    // This is the one inversion of the digest's "stay quiet when nothing
+    // happened" rule, and it is the whole point. The live workspace sat on nine
+    // PROPOSED actions for weeks and no surface anywhere said a word.
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'PROPOSED', resultRef: null, updatedAt: LAST_WEEK },
+      { kind: 'CONTENT', title: 'Blog serisi', status: 'PROPOSED', resultRef: null, updatedAt: LAST_WEEK },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.empty).toBe(false);
+    expect(d.autopilot.items).toEqual([
+      expect.stringContaining('2 eylem hâlâ bekliyor'),
+    ]);
+  });
+
+  it('does not count yesterday-and-older executions as last night\'s work', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Eski iş', status: 'DONE', resultRef: 'post:p0', updatedAt: LAST_WEEK },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items.join(' ')).not.toContain('uygulandı');
+    expect(d.autopilot.items.join(' ')).toContain('uygulanacak eylem kalmadı');
+  });
+
+  it('stays silent for an approval-gated lane — that one already has a surface', async () => {
+    // A daily "your autopilot is off" is a line that can never reach zero, and
+    // a section full of those is a section people learn to skip.
+    plan('ASSISTED', [
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'PROPOSED', resultRef: null, updatedAt: LAST_WEEK },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items).toEqual([]);
+    expect(d.empty).toBe(true);
+  });
+
+  it('reports an unrecognised skip code rather than dropping it', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'PROPOSED', resultRef: 'skipped:brand-new-reason', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items[0]).toContain('brand-new-reason');
+  });
+
+  it('renders the autopilot block in the email body', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'DONE', resultRef: 'post:p1', updatedAt: YESTERDAY },
+    ]);
+    const body = svc.render((await svc.build(WS, NOW))!);
+    expect(body).toContain('Otopilot:');
+    expect(body).toContain('Reels serisi');
+  });
+
+  /**
+   * "What it did NOT do" is the half nothing else in the product can rebuild —
+   * and it was the first half to disappear.
+   *
+   * The plan read is ordered by `updatedAt desc`, and the skip stamps are
+   * deliberately conditional: a reason that has not changed is NOT rewritten, so
+   * a blocked action's timestamp stays where it was while everything that ran
+   * floats above it. Past a hundred lifetime actions the rows that fall out of
+   * that window first are exactly the ones that have been blocked longest.
+   */
+  it('reports blocked actions that fell out of the recent-plan window entirely', async () => {
+    const fresh = Array.from({ length: 120 }, (_, i) => ({
+      kind: 'CONTENT',
+      title: `Taze ${i}`,
+      status: 'DONE',
+      resultRef: `post:p${i}`,
+      updatedAt: YESTERDAY,
+    }));
+    plan('AUTONOMOUS', [
+      ...fresh,
+      // Stamped weeks ago and never re-stamped, so it sorts below all 120.
+      { kind: 'AD_CAMPAIGN', title: 'Retargeting', status: 'PROPOSED', resultRef: 'skipped:kill-switch', updatedAt: LAST_WEEK },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    const refused = d.autopilot.items.find((l) => l.includes('yapılmadı'));
+    expect(refused).toBeDefined();
+    expect(refused).toContain('Retargeting');
+  });
+
+  it('drops a DISMISSED action from the blocked list — declining it is what clears the line', async () => {
+    // The stamp is never cleared, so without a status filter the owner's own
+    // "no thanks" would keep reporting itself every morning, forever.
+    plan('AUTONOMOUS', [
+      { kind: 'CHANNEL_SETUP', title: 'Kanal kurulumu', status: 'DISMISSED', resultRef: 'skipped:no-executor', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, MONDAY))!;
+    expect(d.autopilot.items.join(' ')).not.toContain('Kanal kurulumu');
+  });
+
+  /**
+   * A line the owner cannot clear is a line that teaches people to skip the
+   * section — and `no-executor` is a fact about the PRODUCT (CHANNEL_SETUP has
+   * no executor), identical every morning for as long as the action exists. It
+   * still matters once: an action parked in an armed plan will never run. So it
+   * reports weekly, and says the two things that close it.
+   */
+  it('does NOT repeat the no-executor line daily', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CHANNEL_SETUP', title: 'Kanal kurulumu', status: 'APPROVED', resultRef: 'skipped:no-executor', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!; // NOW is a Wednesday
+    expect(d.autopilot.items.join(' ')).not.toContain('yürütücü');
+    expect(d.autopilot.items.join(' ')).not.toContain('Kanal kurulumu');
+  });
+
+  it('reports the no-executor actions once a week, naming what clears them', async () => {
+    plan('AUTONOMOUS', [
+      { kind: 'CHANNEL_SETUP', title: 'Kanal kurulumu', status: 'APPROVED', resultRef: 'skipped:no-executor', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, MONDAY))!;
+    const line = d.autopilot.items.find((l) => l.includes('Haftalık'))!;
+    expect(line).toContain('Kanal kurulumu');
+    expect(line).toContain('yürütücü');
+    // The half that makes it reachable-zero: what the owner can actually do.
+    expect(line).toContain('reddet');
+  });
+
+  it('still reports the daily skip reasons the owner CAN act on, every day', async () => {
+    // The weekly rule is about one code, not about the section. A kill-switch
+    // line clears the moment the switch is armed, so it belongs in the daily block.
+    plan('AUTONOMOUS', [
+      { kind: 'CONTENT', title: 'Blog serisi', status: 'PROPOSED', resultRef: 'skipped:kill-switch', updatedAt: YESTERDAY },
+      { kind: 'CHANNEL_SETUP', title: 'Kanal kurulumu', status: 'APPROVED', resultRef: 'skipped:no-executor', updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items.join(' ')).toContain('harcama/yayın anahtarı kapalı');
+    expect(d.autopilot.items.join(' ')).not.toContain('Kanal kurulumu');
+  });
+});
+
+/**
+ * "DONE" is not "did something".
+ *
+ * The content and community executors return `{ resultRef: undefined }` when
+ * the Content AI is unconfigured; the ad executor does the same when no
+ * connected Meta ad account exists. In every one of those cases the
+ * orchestrator still records DONE. A brief that counts those as work applied
+ * reports a success for an action that produced nothing — on exactly the
+ * setups where nothing CAN be produced, which is the reading a self-running
+ * system can least afford.
+ */
+describe('DailyDigestService — an action that ran but produced nothing', () => {
+  const WS = 'ws-1';
+  const NOW = new Date('2026-09-02T09:00:00Z');
+  const YESTERDAY = new Date('2026-09-01T20:00:00Z');
+  let prisma: any;
+  let svc: DailyDigestService;
+
+  beforeEach(() => {
+    prisma = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ id: WS, name: 'HummyTummy' }) },
+      lead: { count: jest.fn().mockResolvedValue(0) },
+      message: { count: jest.fn().mockResolvedValue(0) },
+      approvalRequest: { count: jest.fn().mockResolvedValue(0) },
+      researchCandidate: { count: jest.fn().mockResolvedValue(0) },
+      marketingTask: { count: jest.fn().mockResolvedValue(0) },
+      workspaceMembership: { findMany: jest.fn() },
+      marketingUser: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+      socialAccount: { count: jest.fn().mockResolvedValue(0) },
+      scheduledJob: { count: jest.fn().mockResolvedValue(0) },
+      adAccount: { count: jest.fn().mockResolvedValue(0) },
+      socialCampaign: { count: jest.fn().mockResolvedValue(0) },
+      campaign: { count: jest.fn().mockResolvedValue(0) },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(null) },
+      marketingDistributionConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      marketingStrategy: { findUnique: jest.fn().mockResolvedValue({ autonomyLevel: 'AUTONOMOUS' }) },
+      strategyAction: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    svc = new DailyDigestService(
+      prisma,
+      { breakdown: jest.fn().mockResolvedValue(null) } as never,
+      { workspaceStatus: jest.fn().mockResolvedValue(null) } as never,
+    );
+  });
+
+  it('does NOT report a DONE action with no resultRef as work applied', async () => {
+    // The measured workspace's single AD_CAMPAIGN action, on a workspace with
+    // no connected Meta ad account: the executor logs, returns nothing, and the
+    // orchestrator stamps DONE with a null resultRef.
+    prisma.strategyAction.findMany.mockResolvedValue([
+      { kind: 'AD_CAMPAIGN', title: 'Retargeting', status: 'DONE', resultRef: null, updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items.join(' ')).not.toContain('eylem uygulandı');
+    const line = d.autopilot.items.find((l) => l.includes('sonuç yok'))!;
+    expect(line).toContain('1 eylem');
+    expect(line).toContain('Retargeting');
+  });
+
+  it('still counts the ones that produced something, separately', async () => {
+    prisma.strategyAction.findMany.mockResolvedValue([
+      { kind: 'CONTENT', title: 'Reels serisi', status: 'DONE', resultRef: 'post:p1', updatedAt: YESTERDAY },
+      { kind: 'AD_CAMPAIGN', title: 'Retargeting', status: 'DONE', resultRef: null, updatedAt: YESTERDAY },
+    ]);
+    const d = (await svc.build(WS, NOW))!;
+    expect(d.autopilot.items[0]).toBe('1 eylem uygulandı: "Reels serisi"');
+    expect(d.autopilot.items[1]).toContain('1 eylem çalıştı ama ortada bir sonuç yok');
+    expect(d.autopilot.items[1]).toContain('Retargeting');
   });
 });

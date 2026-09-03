@@ -16,35 +16,35 @@ describe('discord.adapter', () => {
   const svc = (webhook: string | null) => ({ getDiscordWebhook: jest.fn(async () => webhook) }) as any;
 
   describe('isDiscordConfigured / resolveDiscordWebhookUrl', () => {
-    it('is false / null when no per-workspace connection and no env (safe default → draft)', async () => {
+    it('is false / null when the workspace has not connected (safe default → draft)', async () => {
       delete process.env.DISCORD_WEBHOOK_URL;
       await expect(resolveDiscordWebhookUrl('ws1', svc(null))).resolves.toBeNull();
       await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(false);
     });
 
-    it('uses the per-workspace sealed webhook from the service (per-workspace wins over env)', async () => {
-      process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/999/global';
+    it('uses the per-workspace sealed webhook from the service', async () => {
       const s = svc(OWNED_WEBHOOK);
       await expect(resolveDiscordWebhookUrl('ws1', s)).resolves.toBe(OWNED_WEBHOOK);
       await expect(isDiscordConfigured('ws1', s)).resolves.toBe(true);
       expect(s.getDiscordWebhook).toHaveBeenCalledWith('ws1');
     });
 
-    it('falls back to the global env webhook when the workspace has not connected', async () => {
-      process.env.DISCORD_WEBHOOK_URL = OWNED_WEBHOOK;
-      await expect(resolveDiscordWebhookUrl('ws1', svc(null))).resolves.toBe(OWNED_WEBHOOK);
-      await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(true);
+    it('IGNORES a global env webhook: an unconnected workspace never posts into another server', async () => {
+      // There used to be a `DISCORD_WEBHOOK_URL` fallback here "for
+      // single-tenant/dev". The caller is an unattended executor that runs on a
+      // clock for every armed tenant, so that one env var did not configure a
+      // deployment — it redirected every workspace that never connected Discord
+      // into ONE server, under someone else's name, with nobody in any of those
+      // workspaces able to see it. Unconfigured must mean inert, not elsewhere.
+      process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/999/global';
+      await expect(resolveDiscordWebhookUrl('ws1', svc(null))).resolves.toBeNull();
+      await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(false);
     });
 
-    it('is inert when no service is supplied and no env is set', async () => {
-      delete process.env.DISCORD_WEBHOOK_URL;
+    it('is inert when no service is supplied at all', async () => {
+      process.env.DISCORD_WEBHOOK_URL = OWNED_WEBHOOK;
       await expect(resolveDiscordWebhookUrl('ws1')).resolves.toBeNull();
       await expect(isDiscordConfigured('ws1')).resolves.toBe(false);
-    });
-
-    it('treats a blank/whitespace env as not-configured', async () => {
-      process.env.DISCORD_WEBHOOK_URL = '   ';
-      await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(false);
     });
   });
 

@@ -8,9 +8,11 @@ import type { CommunityChannelService } from './community-channel.service';
  * SAFETY / ToS: auto-posting marketing into Discord servers you do NOT own (or
  * are not explicitly authorized to post in) violates Discord's ToS + almost every
  * server's rules. This adapter is therefore intended ONLY for a Discord server
- * you control, reached through a server-issued Incoming Webhook URL. Live posting
- * is opt-in and creds-gated: when no webhook is configured the executor stages a
- * human-review DRAFT instead of posting (the safe default). This mirrors the
+ * you control, reached through a server-issued Incoming Webhook URL that THIS
+ * workspace connected. Live posting is opt-in and creds-gated: when no webhook is
+ * configured the executor stages a human-review DRAFT instead of posting (the
+ * safe default), and there is no global fallback that could turn "unconfigured"
+ * into "posts somewhere else". This mirrors the
  * `isNetworkConfigured` gating the X/Pinterest social publishers use — everything
  * here is INERT until a webhook URL exists.
  */
@@ -26,19 +28,23 @@ export interface ChannelPostResult {
  * Resolve the Incoming Webhook URL this workspace posts its OWNED-server community
  * content to, or null when none is configured (→ stage a draft).
  *
- * Per-workspace wins: reads the sealed webhook the workspace connected via
- * CommunityChannelService. The global env `DISCORD_WEBHOOK_URL` remains only as a
- * last-resort fallback (single-tenant/dev), so a workspace that never connected is
- * still inert unless an operator sets the global var.
+ * PER-WORKSPACE ONLY. There used to be a global `DISCORD_WEBHOOK_URL` fallback
+ * "for single-tenant/dev", and it was the most dangerous line in this feature.
+ * The caller is an UNATTENDED executor running on a daily clock for every armed
+ * tenant, so that one env var did not configure a deployment — it silently
+ * redirected every workspace that never connected Discord into ONE server: the
+ * customers' marketing copy posted under someone else's name, into a community
+ * none of them chose, with nobody in any of those workspaces able to see that it
+ * had happened. A fallback is a reasonable default when a human is about to look
+ * at the result; here the whole point is that nobody looks. A workspace that did
+ * not connect its own server does not get one, and stages a draft instead.
  */
 export async function resolveDiscordWebhookUrl(
   workspaceId: string,
   svc?: CommunityChannelService,
 ): Promise<string | null> {
-  const perWorkspace = svc ? await svc.getDiscordWebhook(workspaceId) : null;
-  if (perWorkspace) return perWorkspace;
-  const url = process.env.DISCORD_WEBHOOK_URL?.trim();
-  return url ? url : null;
+  if (!svc) return null;
+  return (await svc.getDiscordWebhook(workspaceId)) ?? null;
 }
 
 /** True when this workspace has a Discord webhook to post to (else stage a draft). */

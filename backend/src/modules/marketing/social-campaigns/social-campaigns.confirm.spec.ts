@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SocialCampaignsService, SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, generateDedup } from './social-campaigns.service';
 import { CONCEPT_PRODUCE_KIND, produceDedup } from '../content-concepts/concept-promotion.service';
+import { BrandSafetyService } from '../ai/brand-safety.service';
 import { CampaignItemArmingService, confirmDedup } from './campaign-item-arming.service';
 
 const WS = 'ws-1';
@@ -36,7 +37,13 @@ function build() {
   const arming = new CampaignItemArmingService(prisma, scheduledJobs as any);
   const svc = new SocialCampaignsService(
     prisma, scheduledJobs as any, runner as any, contentAi as any,
-    planner as any, anthropic as any, credits as any, mediaGen as any,
+    planner as any,
+    // The REAL brand-safety screen on the same anthropic/credits fakes. It is
+    // one shared service now (the community publisher uses the same instance),
+    // and a stub here would stop these tests checking the screen they were
+    // written to check.
+    new BrandSafetyService(anthropic as any, credits as any),
+    mediaGen as any,
     arming,
   );
   return { svc, prisma, scheduledJobs, planner, anthropic, credits, arming };

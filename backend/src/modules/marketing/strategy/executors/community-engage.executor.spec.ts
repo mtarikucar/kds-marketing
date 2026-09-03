@@ -21,7 +21,7 @@ const mPostDiscord = postToDiscord as jest.Mock;
 const mIsReddit = isRedditConfigured as jest.Mock;
 const mPostReddit = postToReddit as jest.Mock;
 
-function deps(overrides: { compose?: any; composeError?: any; post?: any } = {}) {
+function deps(overrides: { compose?: any; composeError?: any; post?: any; verdict?: any } = {}) {
   const content = {
     compose: jest.fn(async () => {
       if (overrides.composeError) throw overrides.composeError;
@@ -34,8 +34,11 @@ function deps(overrides: { compose?: any; composeError?: any; post?: any } = {})
   // The community-channel service is only consumed through the mocked adapters
   // (which take it as an opaque handle), so a stub identity is sufficient here.
   const channels = { __tag: 'CommunityChannelService' } as any;
-  const svc = new CommunityEngageExecutor(content as any, planner as any, channels);
-  return { svc, content, planner, channels };
+  // The shared screen every publish path in this product goes through. Default
+  // SAFE so the pre-existing cases describe the same behaviour they always did.
+  const brandSafety = { screen: jest.fn(async () => overrides.verdict ?? 'SAFE') };
+  const svc = new CommunityEngageExecutor(content as any, planner as any, channels, brandSafety as any);
+  return { svc, content, planner, channels, brandSafety };
 }
 
 const PAYLOAD = {
@@ -182,5 +185,76 @@ describe('CommunityEngageExecutor', () => {
     expect(mPostReddit).not.toHaveBeenCalled();
     expect(planner.createPost).toHaveBeenCalled();
     expect(r).toEqual({ resultRef: 'community:post1' });
+  });
+
+  // ───────────────────────────────── brand safety (the live-publish gate)
+  //
+  // This executor posts machine-written copy into real Discord servers and real
+  // subreddits with nobody in the loop — the AUTONOMOUS lane exists so the owner
+  // never has to look. Every other publish path in the product screens its copy
+  // first; this one did not, and the only thing standing between an unattended
+  // LLM and a live community was whether an env var happened to be empty. These
+  // cases are that gate.
+
+  it('screens the copy BEFORE a live Discord post, and posts what it screened', async () => {
+    mResolveDiscord.mockResolvedValue('https://discord.com/api/webhooks/1/x');
+    const { svc, brandSafety } = deps();
+    await svc.run('ws1', { ...PAYLOAD, channelKey: 'discord' });
+    expect(brandSafety.screen).toHaveBeenCalledWith('ws1', 'Remember grinding the spider dungeon? Come home. 🕷️');
+    // Order matters more than the call itself: a screen after the post is not a gate.
+    expect(brandSafety.screen.mock.invocationCallOrder[0])
+      .toBeLessThan(mPostDiscord.mock.invocationCallOrder[0]);
+  });
+
+  it('screens the Reddit TITLE as well as the body — the title is what the subreddit reads', async () => {
+    mIsReddit.mockResolvedValue(true);
+    const { svc, brandSafety } = deps();
+    await svc.run('ws1', PAYLOAD);
+    const screened = brandSafety.screen.mock.calls[0][1];
+    expect(screened).toContain('Remember the spider dungeon?');
+    expect(screened).toContain('Remember grinding the spider dungeon?');
+  });
+
+  it('BLOCK: nothing is posted, nothing is staged, and the action FAILS with the reason', async () => {
+    // A refusal must not become a draft. Staging it would put copy a reviewer
+    // just called unsafe one click from publishing in the customer's own
+    // planner — and the action would come back DONE with a resultRef, so the
+    // morning brief would report the refusal as work applied.
+    mResolveDiscord.mockResolvedValue('https://discord.com/api/webhooks/1/x');
+    const { svc, planner } = deps({ verdict: 'BLOCK' });
+    await expect(svc.run('ws1', { ...PAYLOAD, channelKey: 'discord' })).rejects.toThrow(/marka güvenliği/);
+    expect(mPostDiscord).not.toHaveBeenCalled();
+    expect(planner.createPost).not.toHaveBeenCalled();
+  });
+
+  it('BLOCK on Reddit: no submit, no draft', async () => {
+    mIsReddit.mockResolvedValue(true);
+    const { svc, planner } = deps({ verdict: 'BLOCK' });
+    await expect(svc.run('ws1', PAYLOAD)).rejects.toThrow(BadRequestException);
+    expect(mPostReddit).not.toHaveBeenCalled();
+    expect(planner.createPost).not.toHaveBeenCalled();
+  });
+
+  it('FAIL-CLOSED: an unreadable verdict stages a draft instead of posting live', async () => {
+    // The social-campaign path fails OPEN here, deliberately, because a person
+    // built that campaign and can see the item. Nobody is watching this one, the
+    // copy is minutes old, and a post into someone else's community cannot be
+    // retracted — so an outage means a human looks at it, not that it goes out.
+    mResolveDiscord.mockResolvedValue('https://discord.com/api/webhooks/1/x');
+    const { svc, planner } = deps({ verdict: 'UNAVAILABLE' });
+    const r = await svc.run('ws1', { ...PAYLOAD, channelKey: 'discord' });
+    expect(mPostDiscord).not.toHaveBeenCalled();
+    expect(planner.createPost).toHaveBeenCalled();
+    expect(r).toEqual({ resultRef: 'community:post1' });
+  });
+
+  it('does not pay for a screen when there is nothing to publish to', async () => {
+    // The screen costs a credit and a provider call. The draft path publishes
+    // nothing and puts the copy in front of a person, which is a stronger
+    // review than this one — so an unconfigured workspace is not billed for it.
+    const { svc, brandSafety, planner } = deps();
+    await svc.run('ws1', PAYLOAD); // reddit, not configured
+    expect(brandSafety.screen).not.toHaveBeenCalled();
+    expect(planner.createPost).toHaveBeenCalled();
   });
 });

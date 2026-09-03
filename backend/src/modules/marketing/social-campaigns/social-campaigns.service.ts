@@ -8,11 +8,9 @@ import {
   ScheduledJobRunnerService, ClaimedJob, JobHandlerResult,
 } from '../scheduling/scheduled-job-runner.service';
 import { ContentAiService } from '../ai/content-ai.service';
-import { AnthropicService } from '../ai/anthropic.service';
-import { AiCreditsService } from '../ai/ai-credits.service';
+import { BrandSafetyService } from '../ai/brand-safety.service';
 import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { assertCataloguedModel, assertModelOffersAspect } from '../ai/media/media-models.config';
 import { DEFAULT_SHOT_ASPECT } from '../video/video-pipeline.service';
 import { Cadence, nextCadenceSlot } from './cadence.util';
@@ -91,8 +89,7 @@ export class SocialCampaignsService implements OnModuleInit {
     private readonly runner: ScheduledJobRunnerService,
     private readonly contentAi: ContentAiService,
     private readonly planner: SocialPlannerService,
-    private readonly anthropic: AnthropicService,
-    private readonly credits: AiCreditsService,
+    private readonly brandSafety: BrandSafetyService,
     private readonly mediaGen: MediaGenService,
     private readonly arming: CampaignItemArmingService,
   ) {}
@@ -801,8 +798,13 @@ export class SocialCampaignsService implements OnModuleInit {
     });
     if (!post) return;
 
-    const safe = await this.brandSafetyCheck(workspaceId, post.content);
-    if (!safe) {
+    // FAIL-OPEN, deliberately, and only here: this item exists because a person
+    // built the campaign and its copy passed through the item lifecycle they can
+    // see. A provider outage on that path strands a chain a human started, so an
+    // unreadable verdict lets it through. The unattended community path decides
+    // the opposite way, for the opposite reason — see CommunityEngageExecutor.
+    const blocked = (await this.brandSafety.screen(workspaceId, post.content)) === 'BLOCK';
+    if (blocked) {
       await this.prisma.socialCampaignItem.update({
         where: { id: itemId }, data: { status: 'SKIPPED', error: 'Blocked by brand-safety check' },
       });
@@ -882,29 +884,5 @@ export class SocialCampaignsService implements OnModuleInit {
       .sort()
       .join(', ');
     return `but ${lost.length} of ${assetIds.length} generated file(s) were not attached (${states}) — they were paid for and are still on this item`;
-  }
-
-  /** SAFE/BLOCK copy screen via Claude; inert (allow) when AI is disabled. */
-  private async brandSafetyCheck(workspaceId: string, copy: string): Promise<boolean> {
-    if (!this.anthropic.isEnabled()) return true;
-    await this.credits.reserve(workspaceId, creditCost('workflow.ai_classify'));
-    try {
-      const res = await this.anthropic.complete({
-        system: 'You are a brand-safety reviewer. Reply with exactly one word: SAFE or BLOCK. '
-          + 'BLOCK only for hate, harassment, sexually explicit, illegal, or defamatory content.',
-        messages: [{ role: 'user', content: copy.slice(0, 2000) }],
-        maxTokens: 4,
-        tier: tierFor('workflow.ai_classify'),
-        // Measured-usage attribution. Without both of these the call never
-        // reaches AiUsageLog: credits are still charged, but nothing records
-        // what the vendor billed, so a price can drift from its cost unseen.
-        workspaceId: workspaceId,
-        action: 'workflow.ai_classify',
-      });
-      return !/BLOCK/i.test(res.text);
-    } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('workflow.ai_classify'));
-      return true; // fail-open on transient errors — don't strand the chain
-    }
   }
 }

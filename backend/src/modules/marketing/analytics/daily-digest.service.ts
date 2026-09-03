@@ -2,6 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
 import { PlatformAiSpendService } from '../ai/platform-ai-spend.service';
+import {
+  SKIP_KILL_SWITCH,
+  SKIP_NO_EXECUTOR,
+  SKIP_PREFIX,
+  SKIP_RUN_CAP,
+} from '../strategy/orchestrator/skip-reasons';
 
 export interface DigestSection {
   title: string;
@@ -15,6 +21,10 @@ export interface WorkspaceDigest {
   /** Local date the digest covers (yesterday). */
   forDate: string;
   didHappen: DigestSection;
+  /** The strategy autopilot's own report: what it did, and what it did NOT do
+   *  and why. Empty (and omitted) unless the workspace armed the AUTONOMOUS
+   *  lane. */
+  autopilot: DigestSection;
   needsYou: DigestSection;
   today: DigestSection;
   /** True when nothing at all is worth sending. */
@@ -22,6 +32,64 @@ export interface WorkspaceDigest {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The columns of a StrategyAction the autopilot report is built from. */
+interface PlanActionRow {
+  kind: string;
+  title: string;
+  status: string;
+  resultRef: string | null;
+  updatedAt: Date;
+}
+
+/**
+ * Owner-facing wording for each machine skip reason the orchestrator stamps.
+ *
+ * The reason codes are written for the row; this is written for the person
+ * paying for the machine. Each one names what happened AND what changes it,
+ * because "yapılmadı" without a cause is indistinguishable from a broken
+ * product, and that is the reading a self-running system can least afford.
+ */
+const SKIP_TEXT: Record<string, string> = {
+  [SKIP_KILL_SWITCH]:
+    'harcama/yayın anahtarı kapalı — o anahtar açılana kadar bu türden eylemler beklemede kalır',
+  [SKIP_RUN_CAP]:
+    'tek turda uygulanan eylem sınırına ulaşıldı — bunlar bir sonraki günün turunda ele alınır',
+  [SKIP_NO_EXECUTOR]:
+    'bu türü çalıştıracak bir yürütücü henüz yok — yalnızca elle yapılabilir',
+};
+
+/** A plan is a handful of rows; this bounds the read against a pathological one. */
+const PLAN_READ_LIMIT = 100;
+
+/**
+ * The blocked half gets its OWN bounded read, and this is why.
+ *
+ * The plan read is `orderBy updatedAt desc take 100`, and the skip stamps are
+ * deliberately CONDITIONAL - a reason that has not changed is not rewritten, so
+ * a blocked action's `updatedAt` stays where it was while every action that
+ * ran, failed or was re-stamped floats above it. Past a hundred lifetime
+ * actions the rows that sink out of that window first are precisely the ones
+ * that have been sitting blocked the longest, which is the half of the report
+ * that exists BECAUSE nothing else in the product can reconstruct it: a DONE
+ * action leaves a post, a lead, a campaign; a blocked one leaves a string in a
+ * column and a line in this brief.
+ */
+const SKIP_READ_LIMIT = 100;
+
+/**
+ * Statuses a `skipped:` stamp still means something on.
+ *
+ * The stamp is never cleared - DONE/FAILED overwrite `resultRef` with their own
+ * value, but a DISMISSED action keeps the last reason it was given forever. The
+ * owner declining an action is exactly the gesture that should make its line
+ * disappear, so reading the reasons back without this filter would report a
+ * dismissed action as still waiting, permanently, with no way to clear it.
+ */
+const BLOCKED_STATUSES = ['PROPOSED', 'APPROVED'];
+
+/** UTC weekday the once-a-week autopilot lines ride on (1 = Monday). */
+const WEEKLY_REPORT_DAY = 1;
 
 /**
  * The morning brief: what the machine did overnight, what it cannot do without
@@ -105,6 +173,9 @@ export class DailyDigestService {
       distribution,
       aiBudget,
       spend,
+      strategyLane,
+      planActions,
+      blockedActions,
     ] = await Promise.all([
       this.prisma.lead.count({
         where: { workspaceId, createdAt: { gte: since }, deletedAt: null, mergedIntoId: null },
@@ -358,6 +429,39 @@ export class DailyDigestService {
       // announced is the failure this brief exists to prevent.
       this.spend.workspaceStatus(workspaceId, now).catch(soft('AI bütçesi', null)),
       this.usage.breakdown(workspaceId, 1).catch(soft('AI harcaması', null)),
+      // The strategy autopilot's lane. Read even when it turns out to be
+      // ASSISTED: the block below is skipped for every lane but AUTONOMOUS, so
+      // the ordinary workspace's brief is byte-for-byte what it was.
+      this.prisma.marketingStrategy
+        .findUnique({ where: { workspaceId }, select: { autonomyLevel: true } })
+        .catch(soft('otopilot şeridi', null)),
+      // What the autopilot RAN, most recent first: DONE/FAILED inside the
+      // window, plus whatever is still PROPOSED.
+      this.prisma.strategyAction
+        .findMany({
+          where: { workspaceId },
+          select: { kind: true, title: true, status: true, resultRef: true, updatedAt: true },
+          orderBy: { updatedAt: 'desc' },
+          take: PLAN_READ_LIMIT,
+        })
+        .catch(soft('otopilot eylemleri', [] as PlanActionRow[])),
+      // The blocked half, read on its own predicate rather than hoped for
+      // inside the hundred freshest rows. See SKIP_READ_LIMIT: the conditional
+      // stamping that keeps the weekly re-synthesis from firing also keeps
+      // these rows' updatedAt down, so they are the first to fall out of a
+      // recency window - the one half of the report nothing else can rebuild.
+      this.prisma.strategyAction
+        .findMany({
+          where: {
+            workspaceId,
+            status: { in: BLOCKED_STATUSES },
+            resultRef: { startsWith: SKIP_PREFIX },
+          },
+          select: { kind: true, title: true, status: true, resultRef: true, updatedAt: true },
+          orderBy: { updatedAt: 'desc' },
+          take: SKIP_READ_LIMIT,
+        })
+        .catch(soft('otopilotun yapmadıkları', [] as PlanActionRow[])),
     ]);
 
     const didHappen: string[] = [];
@@ -451,23 +555,141 @@ export class DailyDigestService {
     if (dueTasks) today.push(`${dueTasks} görevin süresi bugün doluyor`);
     if (dueFollowUps) today.push(`${dueFollowUps} lead için takip zamanı`);
 
+    const autopilot = this.autopilotLines(
+      strategyLane?.autonomyLevel ?? null, planActions, blockedActions, since, now,
+    );
+
     return {
       workspaceId: workspace.id,
       workspaceName: workspace.name,
       forDate: since.toISOString().slice(0, 10),
       didHappen: { title: 'Dün ne oldu', items: didHappen },
+      autopilot: { title: 'Otopilot', items: autopilot },
       needsYou: { title: 'Sensiz ilerlemiyor', items: needsYou },
       today: { title: 'Bugün', items: today },
       // A digest with nothing in any section is noise. Sending "hiçbir şey
       // olmadı" every morning is how a daily email becomes one nobody opens.
-      empty: substantive + needsYou.length + today.length === 0,
+      //
+      // The autopilot section is the ONE inversion of that rule, and it earns
+      // it: for a workspace that armed the autonomous lane, a day on which the
+      // machine did nothing is itself the finding. Staying quiet about it is
+      // precisely how a plan sat frozen at nine PROPOSED actions for weeks with
+      // nothing anywhere saying a word. So its lines count as substance, and
+      // `autopilotLines` always produces at least one for an armed lane.
+      empty: substantive + autopilot.length + needsYou.length + today.length === 0,
     };
+  }
+
+  /**
+   * The autopilot's own report: what it did, and what it did NOT do and why.
+   *
+   * Both halves, always, for an armed lane. A report that lists only successes
+   * is how a machine acting on someone's behalf loses their trust — and it is
+   * also unfalsifiable, because "nothing to report" and "everything is blocked"
+   * render identically. The owner asked never to DEAL with marketing; they did
+   * not ask never to KNOW.
+   *
+   * Silent for SHADOW/ASSISTED: those lanes are approval-gated on purpose and
+   * already have a surface (the approvals queue). A daily "your autopilot is
+   * off" is the kind of line that can never reach zero, which is how a section
+   * teaches people to skip the section.
+   */
+  private autopilotLines(
+    lane: string | null,
+    actions: PlanActionRow[],
+    /** The blocked half, from its own bounded read - see SKIP_READ_LIMIT. */
+    blockedActions: PlanActionRow[],
+    since: Date,
+    now: Date,
+  ): string[] {
+    if (lane !== 'AUTONOMOUS') return [];
+    const lines: string[] = [];
+    const inWindow = (a: { updatedAt: Date }) => new Date(a.updatedAt).getTime() >= since.getTime();
+    const names = (items: Array<{ title: string }>) => {
+      const shown = items.slice(0, 3).map((a) => `"${a.title}"`).join(', ');
+      return items.length > 3 ? `${shown} (+${items.length - 3})` : shown;
+    };
+
+    // DONE does NOT mean "produced something". Three of the four executors
+    // degrade to `{ resultRef: undefined }` on a real, common condition and the
+    // orchestrator still records DONE: the content and community executors when
+    // the Content AI is unconfigured, the ad executor when no connected Meta ad
+    // account exists. Counting those as work applied is the loudest possible
+    // version of the failure this whole section exists to prevent - the brief
+    // reporting a success for an action that did nothing at all, on precisely
+    // the setups where nothing CAN happen. The row already carries the signal:
+    // a DONE action with no `resultRef` produced no entity.
+    const done = actions.filter((a) => a.status === 'DONE' && inWindow(a));
+    const produced = done.filter((a) => !!a.resultRef);
+    const hollow = done.filter((a) => !a.resultRef);
+    if (produced.length) lines.push(`${produced.length} eylem uygulandı: ${names(produced)}`);
+    if (hollow.length) {
+      lines.push(
+        `${hollow.length} eylem çalıştı ama ortada bir sonuç yok — yürütücü elinde araç olmadan döndü ` +
+          `(genellikle AI anahtarı tanımlı değil ya da bağlı bir reklam/sosyal hesap yok): ${names(hollow)}`,
+      );
+    }
+
+    const failed = actions.filter((a) => a.status === 'FAILED' && inWindow(a));
+    for (const f of failed.slice(0, 3)) {
+      // `execute` records the executor's own message as `error:<why>` — the
+      // reason the platform gave, not our paraphrase of it.
+      const why = (f.resultRef ?? '').startsWith('error:')
+        ? f.resultRef!.slice('error:'.length)
+        : 'sebebi kaydedilmemiş';
+      lines.push(`"${f.title}" yapılamadı: ${why}`);
+    }
+    if (failed.length > 3) lines.push(`ve ${failed.length - 3} eylem daha başarısız oldu`);
+
+    // The half nothing could report before: actions the machine DECIDED not to
+    // run, grouped by the reason it stamped on them. Read separately from the
+    // rows above precisely so it cannot be crowded out by them.
+    const blocked = new Map<string, PlanActionRow[]>();
+    for (const a of blockedActions) {
+      const ref = a.resultRef ?? '';
+      if (!ref.startsWith(SKIP_PREFIX)) continue;
+      const bucket = blocked.get(ref) ?? [];
+      bucket.push(a);
+      blocked.set(ref, bucket);
+    }
+    for (const [reason, items] of blocked) {
+      // NOT IN THE DAILY BLOCK. `no-executor` is a fact about the PRODUCT, not
+      // about last night: CHANNEL_SETUP has no executor, so this line would
+      // repeat every single morning, identical, for as long as the action
+      // exists - and this file already names that shape as the thing that
+      // teaches people to skip a section. But it must not vanish either: an
+      // action parked in an armed plan forever is worth knowing about once.
+      // So it reports WEEKLY, on Mondays, and says the two things that clear
+      // it - which is what makes it a line that can reach zero.
+      if (reason === SKIP_NO_EXECUTOR) {
+        if (now.getUTCDay() !== WEEKLY_REPORT_DAY) continue;
+        lines.push(
+          `Haftalık: ${items.length} eylem otomatik çalışmıyor — ${SKIP_TEXT[reason]}. ` +
+            `Elle yapıp ya da plandan çıkarıp (reddet) bu satırı kapatabilirsin: ${names(items)}`,
+        );
+        continue;
+      }
+      // An unknown code still reports, carrying the raw reason: a brief that
+      // silently drops what it does not recognise is back to reporting silence.
+      const text = SKIP_TEXT[reason] ?? reason.slice(SKIP_PREFIX.length);
+      lines.push(`${items.length} eylem yapılmadı — ${text}: ${names(items)}`);
+    }
+
+    if (!lines.length) {
+      const pending = actions.filter((a) => a.status === 'PROPOSED').length;
+      lines.push(
+        pending
+          ? `Otopilot açık ama dün hiçbir eylem uygulanmadı; ${pending} eylem hâlâ bekliyor — bir sonraki tur bunları ele alacak`
+          : 'Otopilot açık ama planda uygulanacak eylem kalmadı — strateji yenilenmeden yeni iş çıkmaz',
+      );
+    }
+    return lines;
   }
 
   /** Plain-text body. Sections with no items are omitted, not shown empty. */
   render(digest: WorkspaceDigest): string {
     const lines: string[] = [`${digest.workspaceName} — ${digest.forDate}`, ''];
-    for (const section of [digest.didHappen, digest.needsYou, digest.today]) {
+    for (const section of [digest.didHappen, digest.autopilot, digest.needsYou, digest.today]) {
       if (!section.items.length) continue;
       lines.push(`${section.title}:`);
       for (const item of section.items) lines.push(`  [ ] ${item}`);
