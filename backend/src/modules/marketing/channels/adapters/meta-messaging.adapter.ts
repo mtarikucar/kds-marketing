@@ -104,6 +104,15 @@ async function metaHealthCheck(
     };
   }
 
+  // Subscribed, but only to one side of the conversation. A page connected
+  // before `message_echoes` was requested still hears customers and still never
+  // hears the owner's own replies from the Instagram/Messenger app — so the
+  // thread reads as unanswered when it was answered. Meta does not backfill a
+  // subscription, so this cannot fix itself; say so where someone is already
+  // looking for why the inbox is wrong. Only when the probe actually returned a
+  // field list — an unanswerable probe must not be reported as a missing field.
+  const echoesMissing = Array.isArray(sub.fields) && !sub.fields.includes('message_echoes');
+
   return {
     ok: true,
     details: {
@@ -112,6 +121,13 @@ async function metaHealthCheck(
       // unanswerable probe is visible as unknown instead of passing as healthy.
       webhookSubscribed: sub.subscribed,
       subscribedFields: sub.fields,
+      ...(echoesMissing
+        ? {
+            echoesSubscribed: false,
+            warning:
+              'This Page is not subscribed to `message_echoes`, so replies you send from the Instagram or Messenger app will not appear here. Reconnect the channel to subscribe.',
+          }
+        : {}),
       ...(sub.error ? { webhookProbeError: sub.error } : {}),
     },
   };
@@ -121,11 +137,21 @@ function parseMetaMessaging(body: unknown, kind: ContactKind): InboundMessage[] 
   const out: InboundMessage[] = [];
   for (const entry of (body as any)?.entry ?? []) {
     for (const ev of entry?.messaging ?? []) {
-      const senderId = ev?.sender?.id;
       const text = ev?.message?.text;
-      // Skip echoes (our own sends) and non-text events (delivery/read receipts
-      // are handled by parseStatusUpdates, not here).
-      if (!senderId || ev?.message?.is_echo || typeof text !== 'string') continue;
+      // An echo is a message the ACCOUNT sent, and its envelope is inverted:
+      // `sender` is the business, `recipient` is the person. So the party this
+      // thread belongs to is on the other side.
+      //
+      // These used to be dropped wholesale as "our own sends". Most of them are
+      // not: they are the owner answering from the Instagram or Messenger app
+      // on their phone, and dropping them is why a thread here could show 25
+      // messages in and none out while the owner had replied to every one. The
+      // ones that genuinely ARE our own sends carry a `mid` we already stored,
+      // and ingest's dedup resolves them to the existing row.
+      const isEcho = !!ev?.message?.is_echo;
+      const partyId = isEcho ? ev?.recipient?.id : ev?.sender?.id;
+      // Non-text events (delivery/read receipts) belong to parseStatusUpdates.
+      if (!partyId || typeof text !== 'string') continue;
       // Click-to-Messenger/Instagram ad referral (D10b): an ads-sourced thread
       // carries `referral` (ad_id + referer_uri + source). Only surface it when
       // it actually identifies a source.
@@ -140,11 +166,12 @@ function parseMetaMessaging(body: unknown, kind: ContactKind): InboundMessage[] 
             }
           : undefined;
       out.push({
-        externalUserId: String(senderId),
+        externalUserId: String(partyId),
         kind,
         externalMessageId: ev?.message?.mid ?? null,
         text,
         ...(referral ? { referral } : {}),
+        ...(isEcho ? { echo: true } : {}),
         raw: ev,
       });
     }

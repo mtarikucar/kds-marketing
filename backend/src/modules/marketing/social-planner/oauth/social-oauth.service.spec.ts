@@ -237,6 +237,17 @@ describe('SocialOAuthService', () => {
       );
     });
 
+    it('asks for message_echoes, or the owner’s own replies never arrive', async () => {
+      // Half the fix for "my Instagram replies don't show up here" lives in
+      // this one string. Meta delivers only the fields a Page is subscribed to
+      // and does not backfill, so dropping it silently returns the inbox to
+      // showing one side of every conversation.
+      await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      const call = mockGraph.mock.calls.find((c: any[]) => c[0] === '/P1/subscribed_apps');
+      const fields = String(call[1].query.subscribed_fields).split(',');
+      expect(fields).toEqual(expect.arrayContaining(['messages', 'message_echoes']));
+    });
+
     it('IG_BUSINESS → an INSTAGRAM channel keyed by the IG id, webhook on the LINKED Page', async () => {
       prisma.pendingSocialConnection.findFirst.mockResolvedValue({
         id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() + 60000),
