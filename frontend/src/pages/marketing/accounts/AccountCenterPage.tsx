@@ -112,7 +112,16 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
   useEffect(() => {
     const connectId = searchParams.get('connect');
     const connectErr = searchParams.get('connect_error');
-    if (connectId) {
+    // The mailbox consent flow comes back here too. It has nothing to pick, so
+    // it lands with a flag rather than a pending id — and deliberately without
+    // the address, which is personal data and has no business in a URL every
+    // proxy on the way writes to a log.
+    const emailConnected = searchParams.get('email_connected');
+    if (emailConnected) {
+      toast.success(t('accounts.email.connected', { defaultValue: 'Mailbox connected.' }));
+      searchParams.delete('email_connected');
+      setSearchParams(searchParams, { replace: true });
+    } else if (connectId) {
       setPendingConnectId(connectId);
       searchParams.delete('connect');
       setSearchParams(searchParams, { replace: true });

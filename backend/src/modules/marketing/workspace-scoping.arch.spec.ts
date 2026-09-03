@@ -281,6 +281,15 @@ const SCOPED_METHODS = [
  * a neighbour's exemption. See the 'exemptions are pinned…' test below.
  */
 const ALLOWED_GLOBAL: Record<string, string> = {
+  // The hourly sweep that keeps consent-connected mailboxes sending. A system
+  // job, like SocialTokenRefreshService: it must see every tenant's due tokens
+  // or those mailboxes go quiet an hour after they are connected. It selects
+  // `id` + the sealed box only — no row data crosses a tenant boundary — and
+  // every write it makes is keyed by that id. Deliberately UNFILTERED and
+  // un-take()d: the expiry lives inside the AES box, so there is no column to
+  // page on, and a take(N) here would pin the sweep to the same N rows forever.
+  'channels/email-oauth-refresh.service.ts:channel.findMany':
+    'system job: refreshes every tenant due OAuth mail token; selects id+sealed box only, writes are id-keyed',
   // Already scoped through its parent: the ids come from a
   // workspaceMembership.findMany that IS workspace-filtered, so this reads
   // only that workspace's members. Filtering on MarketingUser.workspaceId
