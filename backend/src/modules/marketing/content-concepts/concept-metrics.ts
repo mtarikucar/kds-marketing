@@ -6,6 +6,8 @@ export interface ConceptMetrics {
   postIds: Set<string>;
   impressions: number;
   engagements: number;
+  /** Platform-reported unique reach, summed across the published targets. */
+  reach: number;
 }
 
 /**
@@ -57,7 +59,7 @@ export async function walkConceptMetrics(
   const sums = await prisma.socialPostMetric.groupBy({
     by: ['targetId'],
     where: { workspaceId, targetId: { in: targets.map((t) => t.id) } },
-    _sum: { impressions: true, engagements: true },
+    _sum: { impressions: true, engagements: true, reach: true },
   });
 
   const conceptOfPost = new Map<string, string>();
@@ -68,7 +70,11 @@ export async function walkConceptMetrics(
   const totalsOfTarget = new Map(
     sums.map((s) => [
       s.targetId,
-      { impressions: s._sum?.impressions ?? 0, engagements: s._sum?.engagements ?? 0 },
+      {
+        impressions: s._sum?.impressions ?? 0,
+        engagements: s._sum?.engagements ?? 0,
+        reach: s._sum?.reach ?? 0,
+      },
     ]),
   );
 
@@ -81,10 +87,12 @@ export async function walkConceptMetrics(
     const conceptId = conceptOfPost.get(target.postId);
     if (!conceptId) continue;
     const bucket =
-      out.get(conceptId) ?? { postIds: new Set<string>(), impressions: 0, engagements: 0 };
+      out.get(conceptId) ??
+      { postIds: new Set<string>(), impressions: 0, engagements: 0, reach: 0 };
     const totals = totalsOfTarget.get(target.id);
     bucket.impressions += totals?.impressions ?? 0;
     bucket.engagements += totals?.engagements ?? 0;
+    bucket.reach += totals?.reach ?? 0;
     bucket.postIds.add(target.postId);
     out.set(conceptId, bucket);
   }
