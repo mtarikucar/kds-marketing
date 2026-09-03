@@ -12,8 +12,11 @@ describe('reading what ffprobe actually reported', () => {
     parseProbeJson(JSON.stringify({ format, streams }));
 
   it('measures a normal video', () => {
-    expect(ok({ duration: '12.44' }, [{ width: 1920, height: 1080 }])).toEqual({
-      durationSec: 12.44, width: 1920, height: 1080, error: null,
+    expect(ok({ duration: '12.44' }, [
+      { codec_type: 'video', width: 1920, height: 1080 },
+      { codec_type: 'audio' },
+    ])).toEqual({
+      durationSec: 12.44, width: 1920, height: 1080, hasAudio: true, error: null,
     });
   });
 
@@ -28,8 +31,8 @@ describe('reading what ffprobe actually reported', () => {
   });
 
   it('reads a still image, which has dimensions and no duration', () => {
-    expect(ok({}, [{ width: 4000, height: 3000 }])).toEqual({
-      durationSec: null, width: 4000, height: 3000, error: null,
+    expect(ok({}, [{ codec_type: 'video', width: 4000, height: 3000 }])).toEqual({
+      durationSec: null, width: 4000, height: 3000, hasAudio: false, error: null,
     });
   });
 
@@ -48,6 +51,15 @@ describe('reading what ffprobe actually reported', () => {
     const r = ok({ duration: '3' }, [{ width: 0, height: 0 }]);
     expect(r.width).toBeNull();
     expect(r.height).toBeNull();
+  });
+
+  it('reports whether there is an audio stream at all', () => {
+    // Not for pricing — for assembly. A silent clip joined to one with sound
+    // fails the concat graph unless silence is generated for it.
+    expect(ok({ duration: '5' }, [{ codec_type: 'video', width: 8, height: 8 }]).hasAudio).toBe(false);
+    expect(ok({ duration: '5' }, [
+      { codec_type: 'video', width: 8, height: 8 }, { codec_type: 'audio' },
+    ]).hasAudio).toBe(true);
   });
 
   it('errors when the file yielded neither a duration nor a size', () => {

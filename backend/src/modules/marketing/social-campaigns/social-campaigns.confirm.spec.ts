@@ -4,6 +4,15 @@ import { CONCEPT_PRODUCE_KIND, produceDedup } from '../content-concepts/concept-
 import { BrandSafetyService } from '../ai/brand-safety.service';
 import { CampaignItemArmingService, confirmDedup } from './campaign-item-arming.service';
 
+// The assembled file is read off disk before it is uploaded. Nothing in these
+// tests writes one, and the point under test is what the GATE does with the
+// result, not that Node can read a file.
+jest.mock('node:fs/promises', () => ({
+  ...jest.requireActual('node:fs/promises'),
+  readFile: jest.fn().mockResolvedValue(Buffer.from('joined')),
+  unlink: jest.fn().mockResolvedValue(undefined),
+}));
+
 const WS = 'ws-1';
 const SLOT = new Date('2026-07-08T09:00:00Z');
 
@@ -23,6 +32,7 @@ function build() {
     socialCampaignItem: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0), update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     socialPost: { findFirst: jest.fn().mockResolvedValue({ id: 'post-1', content: 'Nice copy' }), update: jest.fn() },
     generatedAsset: { findMany: jest.fn().mockResolvedValue([]) },
+    contentConcept: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const scheduledJobs = { schedule: jest.fn(), cancel: jest.fn() };
   const runner = { registerHandler: jest.fn() };
@@ -35,6 +45,11 @@ function build() {
   // post-generation branch is a shared autonomy rule now, and a stub here would
   // stop these tests from checking the rule they were written to check.
   const arming = new CampaignItemArmingService(prisma, scheduledJobs as any);
+  const assembly = { assemble: jest.fn().mockResolvedValue({ path: '/tmp/joined.mp4', error: null }) };
+  const r2 = {
+    isConfigured: () => true,
+    upload: jest.fn().mockResolvedValue({ url: 'https://r2/joined.mp4', key: 'k', mime: 'video/mp4' }),
+  };
   const svc = new SocialCampaignsService(
     prisma, scheduledJobs as any, runner as any, contentAi as any,
     planner as any,
@@ -45,8 +60,10 @@ function build() {
     new BrandSafetyService(anthropic as any, credits as any),
     mediaGen as any,
     arming,
+    assembly as any,
+    r2 as any,
   );
-  return { svc, prisma, scheduledJobs, planner, anthropic, credits, arming };
+  return { svc, prisma, scheduledJobs, planner, anthropic, credits, arming, assembly, r2 };
 }
 const confirm = (svc: any) => (svc as any).confirmItem('i-1', WS);
 
@@ -533,5 +550,167 @@ describe('item approve / reject / regenerate', () => {
     const { svc, prisma } = build();
     prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(null);
     await expect(svc.approveItem(WS, 'nope')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/**
+ * JOINING A CONCEPT'S BEATS INTO ONE VIDEO.
+ *
+ * A five-beat concept buys five clips and the publisher can send one or two.
+ * The rest were paid for and thrown away, and the video the reviewer approved —
+ * hook, demo, proof, call to action, in that order — existed nowhere. The gate
+ * now joins them before it publishes.
+ *
+ * Every test here is really the same question: does this stay an improvement
+ * when it goes wrong?
+ */
+describe('confirmItem — the concept becomes one video', () => {
+  const clip = (id: string) => ({ id, status: 'READY', url: `https://cdn/${id}.mp4`, r2Key: `k/${id}`, mime: 'video/mp4' });
+  const conceptItem = (over: Partial<any> = {}) =>
+    makeItem({ contentConceptId: 'con-1', generatedAssetIds: ['a1', 'a2', 'a3'], ...over });
+
+  function withClips(prisma: any, assets = [clip('a1'), clip('a2'), clip('a3')]) {
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(conceptItem());
+    prisma.generatedAsset.findMany.mockResolvedValueOnce(assets);
+    prisma.contentConcept.findFirst.mockResolvedValue({
+      shotPlan: {
+        aspectRatio: '9:16',
+        shots: [{ onScreenText: 'Bunun motoru yok.' }, { onScreenText: null }, { onScreenText: 'Şimdi dene' }],
+      },
+    });
+  }
+
+  it('publishes ONE joined video instead of a handful of loose clips', async () => {
+    const { svc, prisma, assembly, r2 } = build();
+    withClips(prisma);
+
+    await confirm(svc);
+
+    expect(assembly.assemble).toHaveBeenCalledTimes(1);
+    expect(r2.upload).toHaveBeenCalled();
+    expect(prisma.socialPost.update).toHaveBeenCalledWith({
+      where: { id: 'post-1' },
+      data: { mediaUrls: ['https://r2/joined.mp4'] },
+    });
+  });
+
+  it('burns each beat’s words over that beat, in the order they were bought', async () => {
+    // The gate sorts assets into beat order before any of this, so index i is
+    // beat i. Pairing by anything else captions the hook with the payoff.
+    const { svc, prisma, assembly } = build();
+    withClips(prisma);
+
+    await confirm(svc);
+
+    expect(assembly.assemble).toHaveBeenCalledWith(
+      [
+        { url: 'https://cdn/a1.mp4', onScreenText: 'Bunun motoru yok.' },
+        { url: 'https://cdn/a2.mp4', onScreenText: null },
+        { url: 'https://cdn/a3.mp4', onScreenText: 'Şimdi dene' },
+      ],
+      '9:16',
+    );
+  });
+
+  it('reports no loss, because every beat is inside the file', async () => {
+    // The positional attach counts attached-vs-paid-for and would call this
+    // "1 of 3", naming a loss that did not happen.
+    const { svc, prisma } = build();
+    withClips(prisma);
+
+    await confirm(svc);
+
+    const errorWrites = prisma.socialCampaignItem.update.mock.calls
+      .map((c: any[]) => c[0]?.data?.error)
+      .filter(Boolean);
+    expect(errorWrites).toEqual([]);
+  });
+
+  it('still publishes when assembly fails — the clips go out as they did before', async () => {
+    // This is the whole safety property: joining is an improvement on the old
+    // behaviour, so it must never be able to take a post down.
+    const { svc, prisma, planner, assembly } = build();
+    withClips(prisma);
+    assembly.assemble.mockResolvedValue({ path: null, error: 'ffmpeg is not installed on this server' });
+
+    await confirm(svc);
+
+    expect(planner.schedulePost).toHaveBeenCalled();
+    expect(prisma.socialPost.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ mediaUrls: expect.any(Array) }) }),
+    );
+    // and the item was NOT failed
+    const failed = prisma.socialCampaignItem.update.mock.calls
+      .some((c: any[]) => c[0]?.data?.status === 'FAILED');
+    expect(failed).toBe(false);
+  });
+
+  it('publishes the clips when the uploader is unavailable, rather than nothing', async () => {
+    const { svc, prisma, planner, assembly, r2 } = build();
+    withClips(prisma);
+    r2.upload.mockRejectedValue(new Error('R2 down'));
+
+    await confirm(svc);
+
+    expect(assembly.assemble).toHaveBeenCalled();
+    expect(planner.schedulePost).toHaveBeenCalled();
+  });
+
+  it('joins BEFORE it claims the publish', async () => {
+    // After the claim, a render that crashes or times out would leave an item
+    // marked PUBLISHED that was never published — the gate no-ops on retry by
+    // design. Before it, the worst case is encoding again.
+    const order: string[] = [];
+    const { svc, prisma, assembly } = build();
+    withClips(prisma);
+    assembly.assemble.mockImplementation(async () => {
+      order.push('assemble');
+      return { path: '/tmp/joined.mp4', error: null };
+    });
+    prisma.socialCampaignItem.updateMany.mockImplementation(async () => {
+      order.push('claim');
+      return { count: 1 };
+    });
+
+    await confirm(svc);
+
+    expect(order).toEqual(['assemble', 'claim']);
+  });
+
+  it('does not join a cadence-planned item, which has no beats', async () => {
+    const { svc, prisma, assembly } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(makeItem({ generatedAssetIds: ['a1', 'a2'] }));
+    prisma.generatedAsset.findMany.mockResolvedValueOnce([clip('a1'), clip('a2')]);
+
+    await confirm(svc);
+
+    expect(assembly.assemble).not.toHaveBeenCalled();
+  });
+
+  it('does not re-encode a single clip, which is already the video', async () => {
+    const { svc, prisma, assembly } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      conceptItem({ generatedAssetIds: ['a1'] }),
+    );
+    prisma.generatedAsset.findMany.mockResolvedValueOnce([clip('a1')]);
+
+    await confirm(svc);
+
+    expect(assembly.assemble).not.toHaveBeenCalled();
+  });
+
+  it('ignores images: only clips are joined', async () => {
+    const { svc, prisma, assembly } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      conceptItem({ generatedAssetIds: ['a1', 'a2'] }),
+    );
+    prisma.generatedAsset.findMany.mockResolvedValueOnce([
+      clip('a1'),
+      { id: 'a2', status: 'READY', url: 'https://cdn/a2.png', r2Key: 'k/a2', mime: 'image/png' },
+    ]);
+
+    await confirm(svc);
+
+    expect(assembly.assemble).not.toHaveBeenCalled();
   });
 });

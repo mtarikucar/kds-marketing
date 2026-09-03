@@ -50,6 +50,15 @@ export interface MediaMeasurement {
   durationSec: number | null;
   width: number | null;
   height: number | null;
+  /**
+   * Whether the file carries an audio stream at all.
+   *
+   * Not for pricing — for assembly. ffmpeg's concat filter requires every input
+   * to have the SAME stream configuration, so joining a clip that has audio to
+   * one that does not fails outright unless silence is generated for the silent
+   * one. The models in this catalogue disagree on this within a single concept.
+   */
+  hasAudio: boolean;
   /** Non-null means nothing above is usable. */
   error: string | null;
 }
@@ -66,14 +75,14 @@ export class MediaProbeService {
 
   async measure(url: string): Promise<MediaMeasurement> {
     const fail = (error: string): MediaMeasurement => ({
-      durationSec: null, width: null, height: null, error,
+      durationSec: null, width: null, height: null, hasAudio: false, error,
     });
     if (!url) return fail('no source url');
 
     let path: string | null = null;
     try {
       path = await this.download(url);
-      return await this.probe(path);
+      return await this.measureFile(path);
     } catch (e: any) {
       // Includes SsrfBlockedError, timeouts, and an oversize body. All of them
       // mean the same thing to the caller: this cannot be priced.
@@ -117,14 +126,20 @@ export class MediaProbeService {
     return path;
   }
 
-  /** Ask ffprobe, and believe only what it actually reports. */
-  private probe(path: string): Promise<MediaMeasurement> {
+  /**
+   * Ask ffprobe about a file already on disk, and believe only what it reports.
+   *
+   * Public because assembly needs it too: those clips are downloaded by the
+   * assembler itself, and fetching each one a second time to measure it would
+   * double the transfer for nothing.
+   */
+  measureFile(path: string): Promise<MediaMeasurement> {
     const args = [
       '-v', 'error',
       // ffprobe may open NOTHING but a local file. Without this it would still
       // honour `concat:` and friends embedded in a crafted container.
       '-protocol_whitelist', 'file',
-      '-show_entries', 'format=duration:stream=width,height',
+      '-show_entries', 'format=duration:stream=width,height,codec_type',
       '-of', 'json',
       '-i', path,
     ];
@@ -135,7 +150,7 @@ export class MediaProbeService {
           // not an error to paper over: it degrades to the same refusal these
           // models had while withheld, and the message says which it was.
           const why = (err as any).code === 'ENOENT' ? 'ffprobe is not installed on this server' : String(err.message);
-          resolve({ durationSec: null, width: null, height: null, error: why.slice(0, 300) });
+          resolve({ durationSec: null, width: null, height: null, hasAudio: false, error: why.slice(0, 300) });
           return;
         }
         resolve(parseProbeJson(stdout));
@@ -150,7 +165,7 @@ export function parseProbeJson(stdout: string): MediaMeasurement {
   try {
     json = JSON.parse(stdout);
   } catch {
-    return { durationSec: null, width: null, height: null, error: 'ffprobe returned no readable output' };
+    return { durationSec: null, width: null, height: null, hasAudio: false, error: 'ffprobe returned no readable output' };
   }
 
   const raw = Number(json?.format?.duration);
@@ -166,9 +181,10 @@ export function parseProbeJson(stdout: string): MediaMeasurement {
   const sized = streams.find((s) => Number(s?.width) > 0 && Number(s?.height) > 0);
   const width = sized ? Number(sized.width) : null;
   const height = sized ? Number(sized.height) : null;
+  const hasAudio = streams.some((s) => s?.codec_type === 'audio');
 
   if (durationSec === null && width === null) {
-    return { durationSec: null, width: null, height: null, error: 'ffprobe could not measure this file' };
+    return { durationSec: null, width: null, height: null, hasAudio, error: 'ffprobe could not measure this file' };
   }
-  return { durationSec, width, height, error: null };
+  return { durationSec, width, height, hasAudio, error: null };
 }
