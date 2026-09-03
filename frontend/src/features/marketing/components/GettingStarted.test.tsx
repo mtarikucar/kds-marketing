@@ -144,12 +144,16 @@ describe('GettingStarted — connect your Claude', () => {
     setOnboardingDismissed.mockReset().mockResolvedValue({ dismissed: true });
   });
 
-  it('offers the step, pointed at the connector console', async () => {
+  it('offers the step, pointed straight at the connector tab', async () => {
+    // The connector became a TAB of the API page in the 2026-09-03 settings
+    // merge. `/settings/mcp-console` still redirects here, so pointing at the
+    // old path would work — and would send someone starting out through a
+    // bounce for no reason.
     getOnboarding.mockReset().mockImplementation(async () => state());
     renderGS();
 
     const step = await screen.findByText('Connect your Claude');
-    expect(step.closest('a')).toHaveAttribute('href', '/settings/mcp-console');
+    expect(step.closest('a')).toHaveAttribute('href', '/settings/api-keys?tab=connector');
   });
 
   it('is NOT done until a research job was actually claimed', async () => {

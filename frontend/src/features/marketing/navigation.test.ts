@@ -318,10 +318,25 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * own rule: the frozen fifty is never edited, and an addition nobody wrote
    * down still fails the exact-equality assertion below.
    */
+  /**
+   * `/settings/domains` (2026-09-03): the ONE path the settings merge added.
+   *
+   * Six pairs of settings entries became six pages that day — Team+Roles,
+   * Segments+Tags, the two Domains, the two Webhook directions, API keys+the
+   * Claude connector, Voice+Phone tree — and eleven of those twelve paths kept
+   * their exact spelling as an ALIAS of the page that absorbed them, which is
+   * why the frozen fifty did not move and why this list gains one entry rather
+   * than losing five. The twelfth pair had no surviving name (neither "sending
+   * domains" nor "custom domains" covers both), so it got a new one.
+   *
+   * That is the merge's own safety property, asserted by machine rather than
+   * claimed: a shorter LIST, and not one address that stopped resolving.
+   */
   const PATHS_ADDED_SINCE = [
     '/settings/pipelines', '/dashboard', '/help',
     '/email-templates', '/reviews', '/affiliates',
     '/settings/ai-models',
+    '/settings/domains',
   ];
 
   it('keeps every retired hub reachable by route, so nothing is lost', () => {
@@ -413,12 +428,21 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * class as the call log that moved on 2026-08-31. They move to Settings with
    * both of their gates, and this is the test that says the move kept them.
    */
-  it('files Ses and Telefon Ağacı under Settings, with their gates intact', () => {
+  it('files Ses under Settings — one entry now, with its gates intact', () => {
+    // The phone tree stopped being a second entry on 2026-09-03: recording the
+    // greeting and wiring the keypad is one sitting of work, and it is now one
+    // page with two tabs. `/voice/ivr` is an ALIAS, so it still resolves — the
+    // frozen-path assertion above is what proves that.
+    const settings = NAV_HUBS.find((h) => h.id === 'settings');
+    const voice = settings?.children?.find((c) => c.path === '/voice');
+    expect(voice?.aliases).toContain('/voice/ivr');
+
     const entitled = childPaths(
       visibleNav(NAV_HUBS, { isManager: true, has: entitle('voiceAi') }),
       'settings',
     );
-    expect(entitled).toEqual(expect.arrayContaining(['/voice', '/voice/ivr']));
+    expect(entitled).toContain('/voice');
+    expect(entitled).not.toContain('/voice/ivr');
     expect(
       childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle('voiceAi') }), 'inbox'),
     ).not.toContain('/voice');
@@ -427,10 +451,52 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
     expect(
       childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle() }), 'settings'),
     ).not.toContain('/voice');
-    // Role gate.
+    // Role gate — the merged entry carries the gate both halves used to.
     expect(
       childPaths(visibleNav(NAV_HUBS, { isManager: false, has: entitle('voiceAi') }), 'settings'),
-    ).not.toContain('/voice/ivr');
+    ).not.toContain('/voice');
+  });
+
+  /**
+   * The merge's own rule, asserted rather than described: a page that absorbed
+   * another must ADOPT its path as an alias. Listing the six pairs would fix
+   * the six; this states what any future merge has to do, which is what stops
+   * the next one quietly deleting an address people have bookmarked.
+   */
+  it('every absorbed settings path survives as an alias of the page that took it', () => {
+    const settings = NAV_HUBS.find((h) => h.id === 'settings');
+    const byPath = new Map((settings?.children ?? []).map((c) => [c.path, c]));
+    const ABSORBED: [string, string][] = [
+      ['/settings/roles', '/users'],
+      ['/tags', '/segments'],
+      ['/settings/sending-domains', '/settings/domains'],
+      ['/settings/custom-domains', '/settings/domains'],
+      ['/settings/inbound-webhooks', '/settings/webhooks'],
+      ['/settings/mcp-console', '/settings/api-keys'],
+      ['/voice/ivr', '/voice'],
+    ];
+    for (const [gone, home] of ABSORBED) {
+      expect({ gone, listed: byPath.has(gone) }).toEqual({ gone, listed: false });
+      expect({ gone, alias: byPath.get(home)?.aliases ?? [] })
+        .toEqual({ gone, alias: expect.arrayContaining([gone]) });
+    }
+  });
+
+  /**
+   * A merged page whose halves were gated SEPARATELY must be reachable when
+   * either is on. Collapsing two gates into one is the regression a merge
+   * creates by accident: the page disappears for a workspace that has only the
+   * other half, and nothing says so.
+   */
+  it('shows Domains to a workspace that has only one of the two domain features', () => {
+    for (const f of ['sendingDomains', 'customDomains'] as const) {
+      expect(
+        childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle(f) }), 'settings'),
+      ).toContain('/settings/domains');
+    }
+    expect(
+      childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle() }), 'settings'),
+    ).not.toContain('/settings/domains');
   });
 
   it('never lands the same page in two surfaces', () => {

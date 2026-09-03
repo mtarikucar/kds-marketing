@@ -33,7 +33,7 @@ function apiErr(e: any, fallback: string): string {
  * DMARC records, and verify it. Inert until an operator enables an ESP
  * transport (register returns 503).
  */
-export default function SendingDomainsPage() {
+export default function SendingDomainsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [domain, setDomain] = useState('');
@@ -87,6 +87,7 @@ export default function SendingDomainsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        embedded={embedded}
         title={t('sendingDomains.title', { defaultValue: 'Sending Domains' })}
         description={t('sendingDomains.subtitle', { defaultValue: 'Send marketing email from your own domain with DKIM/SPF/DMARC.' })}
       />

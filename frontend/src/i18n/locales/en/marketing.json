@@ -167,7 +167,6 @@
     }
   },
   "settingsGroup": {
-    "automation": "Automation",
     "billing": "Products & billing",
     "agency": "Agency",
     "workspace": "Workspace",
@@ -177,9 +176,8 @@
     "developer": "Developer & security",
     "compliance": "Compliance",
     "other": "Other",
-    "connections": "Connections & domains",
-    "telephony": "Telephony",
-    "marketing": "Marketing assets"
+    "marketing": "Marketing",
+    "channels": "Channels & domains"
   },
   "settings.backToApp": "Back to app",
   "leadStatus": {
@@ -368,7 +366,10 @@
     "appointments": "Appointments",
     "brand": "Brand",
     "home": "Home",
-    "aiModels": "AI models"
+    "aiModels": "AI models",
+    "audience": "Segments & tags",
+    "domains": "Domains",
+    "apiAccess": "API & connector"
   },
   "aiModels": {
     "title": "AI generation models",

@@ -130,9 +130,11 @@ test('switching a module off drops its PAGE from the settings menu — live — 
   // one. A menu that needs a refresh to stop offering a deactivated page is a
   // real bug.
   await expect(voiceLink).toHaveCount(0);
-  await expect(
-    settingsNav.getByRole('link', { name: 'Sesli Menü (IVR)', exact: true }),
-  ).toHaveCount(0);
+  // The phone tree used to be asserted here as a second gated child. It is a
+  // TAB of Ses since 2026-09-03, so it is absent from this list whether the
+  // module is on or off — an assertion that can no longer fail, which is worse
+  // than no assertion. The gate it was testing is the line above: Ses itself
+  // leaves, and the tree leaves inside it.
   // Only the deactivated children leave. If the whole list emptied, the two
   // assertions above would pass for entirely the wrong reason — and the owner
   // would have locked themselves out of the switch they just used.
@@ -179,21 +181,25 @@ test('switching a module off drops its PAGE from the settings menu — live — 
  * grab-bag the grouping exists to prevent. So this watches the group heading,
  * not just the link.
  */
-test('the call log is a settings page now, filed under Telephony — with Ses and the phone tree beside it', async ({ app }) => {
+test('the call log is a settings page now, filed with the channels — and the phone is ONE entry', async ({ app }) => {
   await app.goto('/settings/modules');
 
   // Second <aside> = SettingsLayout's page list (the first is the hub rail).
   const settingsNav = app.locator('aside').nth(1);
   await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
-  // Stage 4's other half: Ses and the phone tree followed the log here, for the
-  // reason this group's comment always predicted — they are what you SET UP on
-  // the telephone, and the log is what it then did. An item in no group falls
-  // into "Diğer", which is why that last assertion carries the weight.
   await expect(settingsNav.getByRole('link', { name: 'Sesli AI', exact: true })).toBeVisible();
+  // The phone tree stopped being a line of its own on 2026-09-03: recording the
+  // greeting and wiring the keypad is one sitting of work, so it is a TAB of
+  // Ses. Its route still resolves (navigation.test.ts pins the path set) — it
+  // is the LIST it left.
   await expect(
     settingsNav.getByRole('link', { name: 'Sesli Menü (IVR)', exact: true }),
-  ).toBeVisible();
-  await expect(settingsNav.getByText('Telefon', { exact: true })).toBeVisible();
+  ).toHaveCount(0);
+  // The standalone Telefon group went with it. What is left is the phone as a
+  // channel, sitting with the other channels. An item in no group falls into
+  // "Diğer", which is why that last assertion carries the weight.
+  await expect(settingsNav.getByText('Telefon', { exact: true })).toHaveCount(0);
+  await expect(settingsNav.getByText('Kanallar ve alan adları', { exact: true })).toBeVisible();
   await expect(settingsNav.getByText('Diğer', { exact: true })).toHaveCount(0);
 
   // And it still opens — a menu move, not a route deletion. /calls is in the

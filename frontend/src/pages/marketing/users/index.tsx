@@ -100,7 +100,7 @@ function initials(u: MarketingUser): string {
 }
 
 // ── Component ───────────────────────────────────────────────────────────────
-export default function MarketingUsersPage() {
+export default function MarketingUsersPage({ embedded }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   // Dialog states
@@ -216,6 +216,7 @@ export default function MarketingUsersPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        embedded={embedded}
         title="Sales Team"
         description="Manage team members, roles and access."
         actions={
