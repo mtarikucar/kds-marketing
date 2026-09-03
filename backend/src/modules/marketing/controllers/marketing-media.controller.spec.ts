@@ -40,16 +40,22 @@ describe('MarketingMediaController', () => {
     const ids = ctrl.models().models.map((m) => m.id);
     expect(ids).toEqual(expect.not.arrayContaining([
       'fal-ai/topaz/upscale/video',
-      'fal-ai/topaz/upscale/image',
       'fal-ai/qwen-image-edit/inpaint',
-      'fal-ai/latentsync',
+      'fal-ai/kling-video/ai-avatar/v2/standard',
     ]));
-    // Served, though: the withdrawal is five endpoints, not a shutdown — and
+    // Served, though: the withdrawal is three endpoints, not a shutdown — and
     // AVATAR survives it, because this one is metered on the SCRIPT.
     expect(ids).toContain('veed/avatars/text-to-video');
-    // 31 verified endpoints, 5 withheld until a real probe can measure the
-    // customer file each of them is priced by.
-    expect(ids.length).toBe(26);
+    // Two came BACK when a real probe (ffprobe, server-side) could finally
+    // measure the customer's file before the reserve — measuring it was their
+    // only blocker. The three still held back each have a second one that is
+    // not a measurement problem.
+    expect(ids).toEqual(expect.arrayContaining([
+      'fal-ai/topaz/upscale/image',
+      'fal-ai/latentsync',
+    ]));
+    // 31 verified endpoints, 3 withheld.
+    expect(ids.length).toBe(28);
   });
 });
 

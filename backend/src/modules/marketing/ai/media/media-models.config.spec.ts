@@ -55,17 +55,35 @@ describe('media-models config', () => {
    * place it is tested. Everything customer-facing is built from it.
    */
   describe('withheld models', () => {
+    // A real server-side probe (ffprobe) now measures the customer's file
+    // before the reserve, which released the two whose ONLY blocker was the
+    // measurement — Topaz image and LatentSync. What is left is the three whose
+    // second unknown is not a measurement problem.
     const WITHHELD = [
+      // Measuring the clip settles its seconds. It does not settle the 60fps
+      // multiplier: fal doubles the rate for 60fps OUTPUT, target_fps is
+      // deliberately not sent, and an unset target_fps means the output keeps
+      // the SOURCE's frame rate — so a 1080p60 phone clip really costs $0.16/s
+      // against the $0.08/s metered here.
       'fal-ai/topaz/upscale/video',
-      'fal-ai/topaz/upscale/image',
+      // Measuring the source settles its megapixels. It does not settle whether
+      // the OUTPUT matches the input at all, which is what those megapixels are
+      // standing in for.
       'fal-ai/qwen-image-edit/inpaint',
-      'fal-ai/latentsync',
-      // Kept when the four were withdrawn, on the strength of its returned
-      // `duration` — which settles the LEDGER but not the AUTHORISATION. The
-      // reserve is the only gate that can refuse, and it is sized off a
-      // 5-second default because the length is never on the wire.
+      // Not source-metered at all — per-second with a returned duration — so
+      // nothing carries the measurement into the reserve. Sizing an
+      // authorisation from a measured source, for a model with no duration
+      // input, is a new rule rather than a line deleted.
       'fal-ai/kling-video/ai-avatar/v2/standard',
     ];
+
+    /** The phrase each remaining reason must still contain, so a reason cannot
+     *  go stale without a test noticing. */
+    const REMAINING_BLOCKER: Record<string, string> = {
+      'fal-ai/topaz/upscale/video': '60fps',
+      'fal-ai/qwen-image-edit/inpaint': 'whether the output',
+      'fal-ai/kling-video/ai-avatar/v2/standard': 'MEDIA_GEN_MAX_VIDEO_SEC',
+    };
 
     it('serves every catalogued model except the withheld ones', () => {
       expect(listMediaModels().length).toBe(Object.keys(MEDIA_MODELS).length - WITHHELD.length);
@@ -74,12 +92,17 @@ describe('media-models config', () => {
       );
     });
 
-    it('empties the techniques whose only model was withheld', () => {
-      // Not a bug to hide: Topaz was the only VIDEO_UPSCALE and LatentSync the
-      // only LIPSYNC, so those two jobs are genuinely not on offer right now and
-      // the studio drops a technique nothing sits under.
+    it('empties the technique whose only model is still withheld', () => {
+      // Topaz is the only VIDEO_UPSCALE, so that job is genuinely not on offer
+      // and the studio drops a technique nothing sits under.
       expect(listMediaModels('VIDEO_UPSCALE')).toEqual([]);
-      expect(listMediaModels('LIPSYNC')).toEqual([]);
+    });
+
+    it('puts LIPSYNC back on the menu now that its length can be measured', () => {
+      // LatentSync was the only LIPSYNC model, and the technique disappeared
+      // with it. Measuring the longer of the video and the audio is the whole
+      // of what it was waiting for.
+      expect(listMediaModels('LIPSYNC').map((m) => m.id)).toContain('fal-ai/latentsync');
     });
 
     it('keeps them catalogued, priced and flagged rather than deleting them', () => {
@@ -92,7 +115,12 @@ describe('media-models config', () => {
         expect(allMediaModels().map((x) => x.id)).toContain(id);
         // The reason is a paragraph a human can act on, not a boolean.
         expect(m.withheld!.length).toBeGreaterThan(200);
-        expect(m.withheld).toContain('ffprobe');
+        // And it names THIS model's own remaining blocker. They used to share
+        // one ("no probe exists"); the probe exists now, so a reason that has
+        // not been updated to say what is actually left is a stale reason, and
+        // a stale reason is how a model stays withheld after its blocker is
+        // gone — or gets released while it still has one.
+        expect(m.withheld).toContain(REMAINING_BLOCKER[id]);
       }
     });
 

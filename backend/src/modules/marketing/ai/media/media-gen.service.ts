@@ -10,6 +10,7 @@ import {
   ScheduledJobRunnerService, JobRescheduleDirective,
 } from '../../scheduling/scheduled-job-runner.service';
 import { R2StorageService } from '../../../../common/storage/r2-storage.service';
+import { MediaProbeService } from './media-probe.service';
 import { GrowthWalletService } from '../../wallet/growth-wallet.service';
 import { MediaSpendService } from '../../budget/media-spend.service';
 import { growthAutopilotAutonomyEnabled } from '../../budget/growth-autonomy.flag';
@@ -178,6 +179,53 @@ export interface RequestGenerationDto {
   campaignItemId?: string;
 }
 
+/**
+ * True when this model's price is a property of a FILE the caller supplied, and
+ * therefore cannot be known until that file is measured.
+ *
+ * A script-metered model is deliberately excluded: its quantity is the prompt,
+ * which is in the request and is ours to read.
+ */
+export function needsSourceMeasurement(m: MediaModel): boolean {
+  const sm = m.contract.sourceMetering;
+  return !!sm && sm.from !== 'script';
+}
+
+/** Which request field holds the file for a given contract slot. Exported so
+ *  the catalogue rule test can prove every metered slot is one the service can
+ *  actually reach — a slot it cannot resolve measures nothing, and the model
+ *  would fail at request time instead of being withheld honestly. */
+export function urlForSlot(slot: string, sources: MediaGenSources): string | undefined {
+  switch (slot) {
+    // Both spellings mean "the first reference image" — `firstImage` is the
+    // single-source name and `images` the array one, and the metered quantity
+    // is a property of one file either way.
+    case 'firstImage':
+    case 'images':
+      return sources.images?.[0];
+    case 'lastImage':
+      return sources.lastImage;
+    case 'video':
+      return sources.video;
+    case 'audio':
+      return sources.audio;
+    case 'mask':
+      return sources.mask;
+    default:
+      return undefined;
+  }
+}
+
+/** What a source measurement yielded, and whether it is enough to price on. */
+interface SourceMeasurement {
+  durationSec?: number;
+  width?: number;
+  height?: number;
+  /** False means: do not price this, refuse it. */
+  usable: boolean;
+  error?: string;
+}
+
 /** The fields the credit estimate is a function of, as persisted on the asset.
  *  finalize re-runs the estimate against the provider's ACTUAL duration, so it
  *  has to reconstruct the rest of the estimate's inputs or it silently trues up
@@ -185,11 +233,24 @@ export interface RequestGenerationDto {
 function estimateOptsFrom(
   params: unknown, durationSec: number | null | undefined, prompt: string | null | undefined,
 ): MediaEstimateOpts {
-  const p = (params ?? {}) as { resolution?: string | null };
+  const p = (params ?? {}) as {
+    resolution?: string | null;
+    sourceDurationSec?: number | null;
+    sourceWidth?: number | null;
+    sourceHeight?: number | null;
+  };
   return {
     durationSec: durationSec ?? undefined,
     resolution: p.resolution ?? undefined,
     textLength: (prompt ?? '').length,
+    // The MEASUREMENT the reserve was sized from. Dropping it here is the same
+    // defect as dropping the resolution tier, and worse in one way: a
+    // source-metered model whose quantity goes missing does not merely true up
+    // at the wrong rate, it falls through to a DEFAULT duration — which is how
+    // a 60-second upscale ends up costing what a 5-second one does.
+    sourceDurationSec: p.sourceDurationSec ?? undefined,
+    sourceWidth: p.sourceWidth ?? undefined,
+    sourceHeight: p.sourceHeight ?? undefined,
   };
 }
 
@@ -206,7 +267,60 @@ export class MediaGenService implements OnModuleInit {
     private readonly runner: ScheduledJobRunnerService,
     private readonly wallet: GrowthWalletService,
     private readonly mediaSpend: MediaSpendService,
+    // LAST on purpose. Every spec in this directory constructs the service
+    // positionally, so inserting a dependency in the middle would silently
+    // shift each one of them onto the wrong argument.
+    private readonly probe: MediaProbeService,
   ) {}
+
+  /**
+   * Measure the caller's own file, for the models whose price is a property of
+   * it rather than of the request.
+   *
+   * `usable: false` is the answer that matters. It is what the withheld note
+   * asked for in place of a guess: these endpoints report nothing back that a
+   * finalize true-up could correct, so a quantity invented here is billed
+   * permanently. Refusing a generation is recoverable; a permanent wrong charge
+   * on someone else's money is not.
+   */
+  private async measureMeteredSources(
+    m: MediaModel | undefined,
+    sources: MediaGenSources,
+  ): Promise<SourceMeasurement> {
+    if (!m || !needsSourceMeasurement(m)) return { usable: true };
+    const sm = m.contract.sourceMetering!;
+    const slots = Array.isArray(sm.from) ? sm.from : [];
+
+    let durationSec: number | undefined;
+    let width: number | undefined;
+    let height: number | undefined;
+    let error: string | undefined;
+
+    for (const slot of slots) {
+      const url = urlForSlot(slot, sources);
+      if (!url) continue;
+      const r = await this.probe.measure(url);
+      if (r.error) {
+        error = error ?? r.error;
+        continue;
+      }
+      // The LONGEST of the named slots. A lipsync bills for the whole render,
+      // and the render is as long as the longer of its video and its audio —
+      // taking the first, or the shortest, under-charges every mismatched pair.
+      if (r.durationSec != null && (durationSec == null || r.durationSec > durationSec)) {
+        durationSec = r.durationSec;
+      }
+      if (width == null && r.width != null && r.height != null) {
+        width = r.width;
+        height = r.height;
+      }
+    }
+
+    const usable = sm.quantity === 'durationSec'
+      ? durationSec != null && durationSec > 0
+      : width != null && height != null;
+    return { durationSec, width, height, usable, error };
+  }
 
   onModuleInit(): void {
     this.runner.registerHandler(MEDIA_GEN_POLL_KIND, (job) =>
@@ -374,9 +488,30 @@ export class MediaGenService implements OnModuleInit {
       : Math.min(dto.durationSec ?? 5, type === 'AUDIO' ? MAX_AUDIO_SEC : MAX_VIDEO_SEC);
     // The estimate is a function of duration, the resolution TIER and — for the
     // TTS models, which bill per 1000 characters — the script length.
+    // Measure the caller's own file when the price is a property of it. This is
+    // the whole reason those models were withheld, and the measurement has to
+    // happen HERE — before the reserve, which is the only gate that can say no.
+    const measured = await this.measureMeteredSources(catalogued, sources);
     const estimateOpts: MediaEstimateOpts = {
       durationSec, resolution: dto.resolution, textLength: dto.prompt.length,
+      sourceDurationSec: measured.durationSec,
+      sourceWidth: measured.width,
+      sourceHeight: measured.height,
     };
+    // Refuse rather than fall back. `estimateMediaUsd` does NOT fail closed on a
+    // missing measurement: it drops through to the flat rate, and for a
+    // duration-metered model to DEFAULT_DURATION_SEC — which prices a
+    // ten-minute upscale as a five-second one. That fallthrough was harmless
+    // only while every such model was withheld; it stops being harmless the
+    // moment one is on sale, so the refusal is what replaces the withholding.
+    if (catalogued && needsSourceMeasurement(catalogued) && !measured.usable) {
+      throw new BadRequestException({
+        code: 'MEDIA_GEN_UNMEASURABLE_SOURCE',
+        message:
+          `${catalogued.label} is billed by the size of the file you supply, and that file could not be `
+          + `measured${measured.error ? ` (${measured.error})` : ''}. Try a different source, or a model that is priced per request.`,
+      });
+    }
     if (catalogued) {
       assertWithinPublishedCeiling(catalogued, estimateOpts, (message) => {
         throw new BadRequestException({ code: 'MEDIA_GEN_INVALID_INPUT', message });
@@ -404,6 +539,11 @@ export class MediaGenService implements OnModuleInit {
         // 1080p Seedance clip would true up at the 720p rate and under-charge.
         resolution: dto.resolution ?? null,
         durationSec: durationSec ?? null,
+        // What the source actually measured, so finalize re-runs the estimate
+        // against the same quantity the reserve was sized from.
+        sourceDurationSec: measured.durationSec ?? null,
+        sourceWidth: measured.width ?? null,
+        sourceHeight: measured.height ?? null,
         generateAudio: dto.generateAudio ?? null,
         seed: dto.seed ?? null,
         referenceImageUrls: dto.referenceImageUrls ?? [],

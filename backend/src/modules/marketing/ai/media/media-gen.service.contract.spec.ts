@@ -7,6 +7,9 @@ const WS = 'ws-1';
 interface SvcOpts {
   /** A row `getAsset`/`regenerate` should resolve to. */
   asset?: unknown;
+  /** What ffprobe reports for the caller's source file. The default measures
+   *  nothing, which is what an unreachable or unreadable source looks like. */
+  measurement?: { durationSec: number | null; width: number | null; height: number | null; error: string | null };
 }
 
 function makeSvc(opts: SvcOpts = {}) {
@@ -42,12 +45,17 @@ function makeSvc(opts: SvcOpts = {}) {
   };
   const runner = { registerHandler: jest.fn() };
   const mediaSpend = { settle: jest.fn().mockResolvedValue(null) };
+  const probe = {
+    measure: jest.fn().mockResolvedValue(
+      opts.measurement ?? { durationSec: null, width: null, height: null, error: 'could not measure' },
+    ),
+  };
   const svc = new MediaGenService(
     prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any,
-    undefined as any, mediaSpend as any,
+    undefined as any, mediaSpend as any, probe as any,
   );
   (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
-  return { svc, prisma, credits, provider, mediaSpend };
+  return { svc, prisma, credits, provider, mediaSpend, probe };
 }
 
 const base = { prompt: 'a product on marble', createdById: 'u1' } as const;
@@ -228,10 +236,11 @@ describe('MediaGenService — asset typing and pricing', () => {
  * second door costs money, so it is the one tested here.
  */
 describe('MediaGenService — withdrawn models', () => {
+  // Topaz image and LatentSync were released when the probe landed: measuring
+  // the customer's file was their only blocker. What is left is the three whose
+  // second unknown is not a measurement — see the catalogue's own reasons.
   const WITHHELD = [
     ['fal-ai/topaz/upscale/video', { type: 'VIDEO', videoUrl: 'https://cdn/take.mp4' }],
-    ['fal-ai/topaz/upscale/image', { type: 'IMAGE', referenceImageUrls: ['https://cdn/a.png'] }],
-    ['fal-ai/latentsync', { type: 'VIDEO', videoUrl: 'https://cdn/t.mp4', audioUrl: 'https://cdn/v.mp3' }],
     ['fal-ai/qwen-image-edit/inpaint', {
       type: 'IMAGE', referenceImageUrls: ['https://cdn/a.png'], maskUrl: 'https://cdn/m.png',
     }],
@@ -397,5 +406,91 @@ describe('MediaGenService — the metered models that ship', () => {
     expect(prisma.generatedAsset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ durationSec: 8 }),
     }));
+  });
+});
+
+/**
+ * SELLING A MODEL PRICED ON THE CUSTOMER'S OWN FILE.
+ *
+ * These two were withheld until something could measure that file. Now that a
+ * real probe can, the withdrawal is replaced by a refusal — and the refusal is
+ * the part worth testing, because the estimator does NOT fail closed on its own:
+ * with no measurement it drops through to the flat rate, and for a
+ * duration-metered model to a DEFAULT five seconds. That fallthrough was
+ * harmless only while these models were unreachable.
+ */
+describe('MediaGenService — a price that depends on the caller\u2019s file', () => {
+  const LATENTSYNC = 'fal-ai/latentsync';
+  const TOPAZ_IMAGE = 'fal-ai/topaz/upscale/image';
+  const lipsync = { type: 'VIDEO', model: LATENTSYNC, videoUrl: 'https://cdn/t.mp4', audioUrl: 'https://cdn/v.mp3' };
+  const upscale = { type: 'IMAGE', model: TOPAZ_IMAGE, referenceImageUrls: ['https://cdn/a.png'] };
+
+  const measured = (o: Partial<{ durationSec: number; width: number; height: number }>) => ({
+    durationSec: o.durationSec ?? null, width: o.width ?? null, height: o.height ?? null, error: null,
+  });
+
+  it('refuses when the file cannot be measured, before any credits are held', async () => {
+    // The alternative is not "no charge" — it is DEFAULT_DURATION_SEC quietly
+    // pricing a two-minute lipsync as a five-second one.
+    const { svc, credits, provider } = makeSvc(); // default measurement: unmeasurable
+    const err = await svc.requestGeneration(WS, { ...base, ...lipsync } as any).catch((e) => e);
+
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err.getResponse() as { code: string }).code).toBe('MEDIA_GEN_UNMEASURABLE_SOURCE');
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  it('tells the customer what failed and what to do instead', async () => {
+    const { svc } = makeSvc();
+    const err = await svc.requestGeneration(WS, { ...base, ...upscale } as any).catch((e) => e);
+    const message = String((err.getResponse() as { message: string }).message);
+    expect(message).toContain('could not be measured');
+    expect(message).toMatch(/priced per request/i);
+  });
+
+  it('reserves against the MEASURED length, not a default one', async () => {
+    // 120s of source → 80s past the free 40 → $0.20 + 80 x $0.005 = $0.60.
+    const { svc, credits } = makeSvc({ measurement: measured({ durationSec: 120 }) });
+    await svc.requestGeneration(WS, { ...base, ...lipsync } as any);
+    expect(credits.reserve).toHaveBeenCalledWith(WS, 60);
+  });
+
+  it('takes the LONGER of the slots the model meters on', async () => {
+    // loop_mode makes the output as long as the longer input, so the shorter
+    // one cannot be the bill. The probe answers per slot; the service picks.
+    const { svc, credits, probe } = makeSvc();
+    probe.measure
+      .mockResolvedValueOnce(measured({ durationSec: 30 }))   // video
+      .mockResolvedValueOnce(measured({ durationSec: 120 })); // audio
+    await svc.requestGeneration(WS, { ...base, ...lipsync } as any);
+    expect(probe.measure).toHaveBeenCalledTimes(2);
+    expect(credits.reserve).toHaveBeenCalledWith(WS, 60); // the 120s figure
+  });
+
+  it('prices the upscaler off the source it measured', async () => {
+    // 9000x9000 = 81MP source, x4 output = 324MP → the $1.36 band.
+    const { svc, credits } = makeSvc({ measurement: measured({ width: 9000, height: 9000 }) });
+    await svc.requestGeneration(WS, { ...base, ...upscale } as any);
+    expect(credits.reserve).toHaveBeenCalledWith(WS, 136);
+  });
+
+  it('persists the measurement, so finalize trues up on the same quantity', async () => {
+    // finalize re-runs the estimate from `params`. A measurement that is not
+    // written there does not merely true up at the wrong rate — it falls back
+    // to a default duration, which is the whole defect this change removes.
+    const { svc, prisma } = makeSvc({ measurement: measured({ durationSec: 120 }) });
+    await svc.requestGeneration(WS, { ...base, ...lipsync } as any);
+    const params = prisma.generatedAsset.create.mock.calls[0][0].data.params;
+    expect(params.sourceDurationSec).toBe(120);
+  });
+
+  it('does not go near the network for a model whose price is in the request', async () => {
+    // Probing costs a download. A model that is not source-metered has nothing
+    // to measure, and paying for one on every ordinary generation would be a
+    // tax on the common case.
+    const { svc, probe } = makeSvc();
+    await svc.requestGeneration(WS, { ...base, type: 'VIDEO', videoUrl: undefined } as any);
+    expect(probe.measure).not.toHaveBeenCalled();
   });
 });
