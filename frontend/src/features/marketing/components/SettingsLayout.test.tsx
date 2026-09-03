@@ -50,12 +50,15 @@ describe('SettingsLayout — sub-grouping', () => {
     renderSettings();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByText('Data')).toBeInTheDocument();
-    // Gained when Growth Studio collapsed into one screen: the template library,
-    // review setup and partner programme had been sub-tabs of a tab and now have
-    // a home. Their own group, so no existing one has to mean "and also these".
-    expect(screen.getByText('Marketing assets')).toBeInTheDocument();
-    expect(screen.getByText('Connections & domains')).toBeInTheDocument();
+    // Seven groups since 2026-09-03, down from nine. "Marketing assets" folded
+    // into "Marketing" and the standalone "Telephony" into "Channels &
+    // domains": a workflow running unattended and an email template waiting to
+    // be used is a true difference, and not one anybody navigates by.
+    expect(screen.getByText('Marketing')).toBeInTheDocument();
+    expect(screen.getByText('Channels & domains')).toBeInTheDocument();
     expect(screen.getByText('Developer & security')).toBeInTheDocument();
+    expect(screen.queryByText('Marketing assets')).not.toBeInTheDocument();
+    expect(screen.queryByText('Telephony')).not.toBeInTheDocument();
     // No leftover ungrouped bucket: every settings child belongs to a group.
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
   });
@@ -80,12 +83,16 @@ describe('SettingsLayout — sub-grouping', () => {
     await i18n.changeLanguage('tr');
     try {
       renderSettings();
-      expect(screen.getByText('Pazarlama varlıkları')).toBeInTheDocument();
+      expect(screen.getByText('Pazarlama')).toBeInTheDocument();
       expect(screen.getByText('Uygulamaya dön')).toBeInTheDocument();
       // Its neighbours, to prove the assertion is about a Turkish list rather
-      // than about one string that happens to be translated.
+      // than about one string that happens to be translated. The two renamed
+      // groups are here on purpose: a heading that lost its catalogue entry in
+      // the merge would read as English in an otherwise Turkish list, which is
+      // exactly the defect this test was written for.
       expect(screen.getByText('Çalışma Alanı')).toBeInTheDocument();
-      expect(screen.getByText('Telefon')).toBeInTheDocument();
+      expect(screen.getByText('Kanallar ve alan adları')).toBeInTheDocument();
+      expect(screen.getByText('Veri')).toBeInTheDocument();
     } finally {
       await i18n.changeLanguage('en');
     }
@@ -111,7 +118,7 @@ describe('SettingsLayout — sub-grouping', () => {
     renderSettings();
     // Inside the group, not merely somewhere on the page: the whole point of
     // the move is WHERE it lands, and the mobile strip renders every item flat.
-    const group = screen.getByText('Telephony').parentElement as HTMLElement;
+    const group = screen.getByText('Channels & domains').parentElement as HTMLElement;
     expect(within(group).getByRole('link', { name: 'Calls' })).toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
   });
@@ -127,14 +134,30 @@ describe('SettingsLayout — sub-grouping', () => {
    * silent regression would show up as a THIRD assertion failing rather than
    * as these two.
    */
-  it('files Ses and Telefon Ağacı in that same telephony group', () => {
+  it('files Ses in that same channels group — as ONE entry, not two', () => {
     renderSettings();
-    const group = screen.getByText('Telephony').parentElement as HTMLElement;
-    // The translated labels, not the inline fallbacks: nav.voice is "Voice AI"
-    // and nav.ivr is "IVR Menus" ("Sesli AI" / "Sesli Menü (IVR)" in Turkish),
-    // which is what a user actually reads in this list.
+    const group = screen.getByText('Channels & domains').parentElement as HTMLElement;
+    // The translated label, not the inline fallback: nav.voice is "Voice AI"
+    // ("Sesli AI" in Turkish), which is what a user actually reads here.
     expect(within(group).getByRole('link', { name: 'Voice AI' })).toBeInTheDocument();
-    expect(within(group).getByRole('link', { name: 'IVR Menus' })).toBeInTheDocument();
+    // The phone tree is a TAB of that page now, so it must not also be a line
+    // in this list — two entries onto one page is the shape being removed.
+    expect(screen.queryByRole('link', { name: 'IVR Menus' })).not.toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The six pairs, from the reader's side: each absorbed page must be GONE from
+   * the list. navigation.test.ts proves their paths still resolve; this proves
+   * the list actually got shorter, which is the half a user experiences.
+   */
+  it('lists each merged page once, not once per half', () => {
+    renderSettings();
+    for (const gone of ['Roles & permissions', 'Tags', 'Inbound webhooks', 'Claude connector', 'Custom Domains']) {
+      expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
+    }
+    for (const kept of ['Team', 'Segments & tags', 'Domains', 'Webhooks', 'API & connector']) {
+      expect(screen.getAllByRole('link', { name: kept }).length).toBeGreaterThan(0);
+    }
   });
 });

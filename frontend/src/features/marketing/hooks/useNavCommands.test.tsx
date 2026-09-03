@@ -85,8 +85,11 @@ describe('useNavCommands', () => {
     const paths = pathsOf(container);
     expect(paths).toContain('/dashboard');
     expect(paths).toContain('/leads');
-    // managerOnly + no entitlement flag → visible to a manager.
-    expect(paths).toContain('/tags');
+    // managerOnly + no entitlement flag → visible to a manager. Tags is a TAB
+    // of Segments since the 2026-09-03 settings merge, and the palette offers
+    // it under its own name at its own address.
+    expect(paths).toContain('/segments');
+    expect(paths).toContain('/segments?tab=tags');
   });
 
   it('hides manager-only destinations from a rep', () => {
@@ -172,5 +175,62 @@ describe('useNavCommands', () => {
     // The other half of the gate: hiding it from everyone would satisfy the two
     // assertions above and take the page away from the people it belongs to.
     expect(paths).toContain('/appointments');
+  });
+});
+
+/**
+ * THE MERGE'S SIDE OF THE BARGAIN.
+ *
+ * Six pairs of settings pages became six pages with tabs on 2026-09-03. That
+ * made the sidebar shorter, and it would have made this list WORSE unless the
+ * absorbed names came with it: somebody who knows the thing is called "Roles"
+ * types it, finds nothing, and concludes it was removed.
+ *
+ * The list is something you scan; the palette is something you ask. Only the
+ * list was too long.
+ */
+describe('useNavCommands — the merged pages keep every name they absorbed', () => {
+  it('offers each absorbed page by its own name, aimed at its tab', () => {
+    loginAs(MANAGER);
+    const { container } = renderProbe();
+    const byPath = new Map(
+      Array.from(container.querySelectorAll('[data-path]')).map((el) => [
+        el.getAttribute('data-path'),
+        el.textContent,
+      ]),
+    );
+
+    // Path → the label the person is likely to type.
+    const ABSORBED: [string, RegExp][] = [
+      ['/users?tab=roles', /rol/i],
+      ['/segments?tab=tags', /etiket|tag/i],
+      ['/settings/webhooks?tab=inbound', /gelen|inbound/i],
+      ['/settings/api-keys?tab=connector', /claude|ba.lay/i],
+    ];
+    for (const [path, label] of ABSORBED) {
+      expect({ path, present: byPath.has(path) }).toEqual({ path, present: true });
+      expect(byPath.get(path) ?? '').toMatch(label);
+    }
+  });
+
+  it('does not offer the first tab twice under two names', () => {
+    // The bare path already opens it. Two entries onto one view is the exact
+    // duplication the merge removed from the sidebar.
+    loginAs(MANAGER);
+    const { container } = renderProbe();
+    const paths = pathsOf(container);
+    expect(paths).toContain('/users');
+    expect(paths).not.toContain('/users?tab=members');
+    expect(paths).not.toContain('/segments?tab=segments');
+  });
+
+  it('never offers a tab of a page the person cannot reach', () => {
+    // The tabs ride on the child, so the child's role/plan gate decides. A rep
+    // who cannot open Team must not be offered its Roles tab either.
+    loginAs(REP);
+    const { container } = renderProbe();
+    const paths = pathsOf(container);
+    expect(paths).not.toContain('/users');
+    expect(paths).not.toContain('/users?tab=roles');
   });
 });

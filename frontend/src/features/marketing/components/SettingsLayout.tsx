@@ -10,29 +10,29 @@ import { cn } from '../../../components/ui/cn';
 /**
  * Ordered sub-grouping for the Settings area, so the list reads as everyday
  * admin up top and developer/compliance tooling last instead of one
- * undifferentiated grab-bag. Brand is ONE page now (kit + brain are tabs inside
- * /branding) and the Account Center is THE connections surface.
+ * undifferentiated grab-bag.
  *
- * Grew from four clusters to seven with the 2026-08 surface merge: the retired
- * Strategy / Automation / Payments / Sites / Courses / Agency hubs landed here,
- * and thirteen unclustered pages would have made this exactly the grab-bag the
- * grouping exists to prevent. An eighth arrived with the call log on
- * 2026-08-31 — see the Telephony entry for why it is its own cluster rather
- * than an exception inside someone else's. Paths not listed fall into "Other"
- * — which the test asserts stays EMPTY, so a new settings page has to be
- * placed on purpose.
+ * SEVEN groups over ~35 pages, down from nine over forty-two. Six pairs that
+ * were one job each became one page each with deep-linkable tabs (Team+Roles,
+ * Segments+Tags, the two Domains, the two Webhook directions, API keys+the
+ * Claude connector, Voice+Phone tree), and two groups whose distinction nobody
+ * navigates by were folded into their neighbours. Every old path still
+ * resolves — App.tsx redirects each one to its tab — so the LIST got shorter
+ * without anything becoming unreachable.
+ *
+ * Paths not listed fall into "Other" — which the test asserts stays EMPTY, so a
+ * new settings page has to be placed on purpose.
  */
 const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
   {
     key: 'workspace',
     label: 'Workspace',
-    // /booking configures the public booking page — workspace setup. The
-    // appointments it produces stay in the Inbox surface, alongside the
-    // calendar they land on.
+    // What you configure once about the BUSINESS. /users is Team AND the roles
+    // its members carry — one page, two tabs — because nobody thinks about a
+    // role without thinking about the person who has it.
     paths: [
       '/branding',
       '/users',
-      '/settings/roles',
       '/targets',
       // Pipelines sits beside Targets rather than in a group of its own: both
       // are the sales SHAPE a manager defines once (the stages a deal moves
@@ -49,62 +49,52 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     ],
   },
   {
-    key: 'automation',
-    label: 'Automation',
-    // Set-and-forget machinery, absorbed from the Strategy and Automation hubs:
-    // you configure the plan, the system runs it without you.
-    //
-    // /settings/ai-models joined on 2026-09-01 and belongs here for exactly that
-    // reason: it is the model — and therefore the PRICE PER CLIP — that the
-    // content engine spends on when nobody is watching. Grouping it with the
-    // things that run unattended is more honest than filing it under Workspace
-    // beside the logo and the timezone.
-    paths: ['/studio/strategy', '/automations', '/settings/ai-models', '/trigger-links'],
-  },
-  {
     key: 'marketing',
-    label: 'Marketing assets',
+    label: 'Marketing',
     /**
-     * The three pages that lost their hiding place when Growth Studio collapsed
-     * into one working screen (2026-08). They were sub-tabs of a "More" tab
-     * inside a mode you had to know to open; now they have a home.
+     * Everything you SET UP about marketing, whether it then runs itself or
+     * waits to be drawn on.
      *
-     * Their own group, for the reason the Telephony note below gives at length.
-     * Workspace is what you configure once about the BUSINESS; Automation is
-     * machinery that runs without you; Products & billing is what you sell.
-     * These three are none of those: they are the reusable assets the outbound
-     * side draws on — the template library a campaign sends from, the
-     * review-request setup, the partner programme. Filing them under Workspace
-     * would make that group mean "and also some marketing", which is exactly
-     * how the grab-bag this grouping exists to prevent gets rebuilt.
+     * This was two groups — "Automation" and "Marketing assets" — and the line
+     * between them did not survive contact with the list. A workflow runs
+     * unattended and an email template does not, which is a true difference and
+     * not one anybody navigates by: both answer "where do I go to change how we
+     * market". Two four-item groups also cost more to scan than one of seven,
+     * which is the whole reason this grouping exists.
+     *
+     * /settings/ai-models belongs here for its own reason: it is the model —
+     * and therefore the PRICE PER CLIP — the content engine spends on when
+     * nobody is watching.
      */
-    paths: ['/email-templates', '/reviews', '/affiliates'],
+    paths: [
+      '/studio/strategy',
+      '/automations',
+      '/settings/ai-models',
+      '/trigger-links',
+      '/email-templates',
+      '/reviews',
+      '/affiliates',
+    ],
   },
   {
-    key: 'telephony',
-    label: 'Telephony',
+    key: 'channels',
+    label: 'Channels & domains',
     /**
-     * The call log, moved out of the Inbox surface (see navigation.ts) — and
-     * given a group of its own rather than folded into one of the seven that
-     * already existed.
+     * How the outside world reaches you and you reach it: the accounts you have
+     * connected, the domains you own, and the telephone.
      *
-     * None of them is honest about it. Workspace is what you configure once;
-     * Automation is machinery that runs without you; Products & billing is
-     * what you sell; Data is what SHAPES contact records; Connections &
-     * domains is external plumbing; Developer & security is tooling; Agency is
-     * the sub-account console. A call log is an operational record of work
-     * that already happened, and filing it under any of those would make that
-     * group mean "and also calls" — which is how the grab-bag this grouping
-     * exists to prevent gets rebuilt one exception at a time.
+     * Absorbed the standalone Telephony group. Its own note argued a call log
+     * is "an operational record of work that already happened" and fitted no
+     * other group — true of the LOG, and the group had since grown to hold
+     * voice CONFIGURATION as well, which is plainly channel setup. With the
+     * greeting and the phone tree now one page, what is left is the phone as a
+     * channel, sitting with the other channels.
      *
-     * That day was 2026-09-01. /voice and /voice/ivr joined it in stage 4 of
-     * the one-screen brief, for a reason next to the log's rather than the same
-     * one: those two are channel CONFIGURATION — record a greeting, wire a menu
-     * of options, leave it running — and nothing you configure once arrives
-     * with a person attached, which is what the Inbox surface is for. The group
-     * now reads as the whole telephone: what you set up, and what it did.
+     * /settings/domains is Sending + Website in one: both are a domain you own
+     * and prove with DNS records, and which one it is depends only on what the
+     * domain is FOR.
      */
-    paths: ['/calls', '/voice', '/voice/ivr'],
+    paths: ['/accounts', '/settings/domains', '/calls', '/voice'],
   },
   {
     key: 'billing',
@@ -115,31 +105,26 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
   {
     key: 'data',
     label: 'Data',
-    // Segments/Tags/Import moved here from the Contacts hub (2026-08 rail cut):
-    // they SHAPE contact data rather than being contacts you work, which is
-    // the same reason Custom Fields already lived here.
+    // What SHAPES contact records rather than being contacts you work.
+    // /segments is Segments AND Tags: a rule the system keeps applying and a
+    // label somebody sticks on are two answers to one question, and the choice
+    // between them is only visible when both are on the same page.
     paths: [
       '/settings/custom-fields',
-      '/custom-objects',
-      '/research',
       '/segments',
-      '/tags',
       '/import',
+      '/research',
     ],
-  },
-  {
-    key: 'connections',
-    label: 'Connections & domains',
-    paths: ['/accounts', '/settings/sending-domains', '/settings/custom-domains'],
   },
   {
     key: 'developer',
     label: 'Developer & security',
+    // /settings/api-keys is keys AND the Claude connector — both are granting
+    // something outside this app the right to act inside it. /settings/webhooks
+    // is outgoing AND inbound, which is one concept pointing two ways.
     paths: [
       '/settings/api-keys',
-      '/settings/mcp-console',
       '/settings/webhooks',
-      '/settings/inbound-webhooks',
       '/settings/compliance',
       '/settings/two-factor',
     ],

@@ -165,6 +165,24 @@ export interface NavChild {
    * a URL people have saved.
    */
   aliases?: string[];
+  /** Visible when ANY of these features is on — for a page that merged two
+   *  separately-gated ones. Applied on top of `feature`, not instead of it. */
+  anyFeature?: readonly FeatureKey[];
+  /**
+   * The named views INSIDE this page, for surfaces that can offer more than a
+   * flat list — the command palette, today.
+   *
+   * A page that absorbed another keeps the shorter sidebar AND the absorbed
+   * page's name. Without this the merge would trade one problem for a worse
+   * one: somebody who knows the thing is called "Roles" types it, finds
+   * nothing, and concludes it was removed. The sidebar is a list you scan and
+   * the palette is a thing you ASK, and only the list was too long.
+   *
+   * Deliberately not rendered in the sidebar. Every one of these is one click
+   * from a page already in it, and putting them back would rebuild the list
+   * this exists to shorten.
+   */
+  tabs?: readonly { tab: string; labelKey: string; label: string }[];
   /** i18n key; `label` is the inline fallback so a missing translation still reads well. */
   labelKey: string;
   label: string;
@@ -425,8 +443,14 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       // Workspace
       { path: '/branding', labelKey: 'nav.brand', label: 'Brand', icon: Palette, managerOnly: true },
-      { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
-      { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: ShieldCheck, managerOnly: true },
+      // Members and the permissions each role carries — one page, two tabs.
+      // Nobody thinks about a role without thinking about the person who has it.
+      { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true,
+        aliases: ['/settings/roles'],
+        tabs: [
+          { tab: 'members', labelKey: 'nav.users', label: 'Team' },
+          { tab: 'roles', labelKey: 'nav.roles', label: 'Roles & permissions' },
+        ] },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
       /**
        * Pipeline + stage configuration — a route since long before this menu,
@@ -485,8 +509,14 @@ export const NAV_HUBS: NavHub[] = [
        * permission change: `/voice` and `/voice/ivr` are in the frozen path
        * set and both still resolve.
        */
-      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
-      { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
+      // The greeting and the menu the caller hears after it: one sitting of
+      // work, and neither half is finished without the other.
+      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi',
+        managerOnly: true, aliases: ['/voice/ivr'],
+        tabs: [
+          { tab: 'assistant', labelKey: 'nav.voice', label: 'Voice' },
+          { tab: 'ivr', labelKey: 'nav.ivr', label: 'Phone Tree' },
+        ] },
       { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       // Public surfaces you configure once (were their own single-page hubs).
       { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
@@ -535,22 +565,45 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
       // Moved out of the Contacts hub (2026-08): these SHAPE contacts, they are
       // not contacts you work.
-      { path: '/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
-      { path: '/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
+      // A segment is a rule the system keeps applying; a tag is a label somebody
+      // sticks on. You choose between them for the SAME job, so they are one page.
+      { path: '/segments', labelKey: 'nav.audience', label: 'Segments & tags', icon: Filter,
+        managerOnly: true, aliases: ['/tags'],
+        tabs: [
+          { tab: 'segments', labelKey: 'nav.segments', label: 'Segments' },
+          { tab: 'tags', labelKey: 'nav.tags', label: 'Tags' },
+        ] },
       { path: '/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true, feature: 'research' },
       // Connections & domains (Account Center absorbed Settings→Connections)
       { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },
-      { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },
-      { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
+      // One job under two names: you own a domain, you paste DNS records, you
+      // wait for it to verify. `anyFeature` because each half had its own gate
+      // and a workspace with only one of them must still get here.
+      { path: '/settings/domains', labelKey: 'nav.domains', label: 'Domains', icon: Globe,
+        managerOnly: true, anyFeature: ['sendingDomains', 'customDomains'],
+        aliases: ['/settings/sending-domains', '/settings/custom-domains'],
+        tabs: [
+          { tab: 'sending', labelKey: 'nav.sendingDomains', label: 'Sending Domains' },
+          { tab: 'custom', labelKey: 'nav.customDomains', label: 'Custom Domains' },
+        ] },
       // Developer & security
-      { path: '/settings/api-keys', labelKey: 'nav.apiKeys', label: 'API Keys', icon: KeyRound, managerOnly: true },
-      // MCP connector console (Faz 4). `managerOnly` mirrors McpConsoleController's
-      // class-level @MarketingRoles('MANAGER') — not ownerOnly: a MANAGER reads the
-      // whole page, and only the write-mode switch inside self-disables for them.
-      { path: '/settings/mcp-console', labelKey: 'nav.mcpConsole', label: 'Claude connector', icon: Bot, managerOnly: true },
-      { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook, managerOnly: true },
-      { path: '/settings/inbound-webhooks', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks', icon: Webhook, managerOnly: true },
+      // Keys for your own code and the Claude connector are the same decision:
+      // granting something outside this app the right to act inside it.
+      { path: '/settings/api-keys', labelKey: 'nav.apiAccess', label: 'API & connector',
+        icon: KeyRound, managerOnly: true, aliases: ['/settings/mcp-console'],
+        tabs: [
+          { tab: 'keys', labelKey: 'nav.apiKeys', label: 'API Keys' },
+          { tab: 'connector', labelKey: 'nav.mcpConsole', label: 'Claude connector' },
+        ] },
+      // Outgoing and inbound are one concept — a URL and a payload — pointing
+      // opposite ways. Two names for it taught two names for one idea.
+      { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook,
+        managerOnly: true, aliases: ['/settings/inbound-webhooks'],
+        tabs: [
+          { tab: 'outgoing', labelKey: 'nav.webhooks', label: 'Webhooks' },
+          { tab: 'inbound', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks' },
+        ] },
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
       // Agency console — every /agency/* backend route is @MarketingRoles('OWNER'),
@@ -576,14 +629,25 @@ export interface NavVisibilityOpts {
 
 /** The four gates, read off anything that carries them. */
 function gatesPass(
-  g: { feature?: FeatureKey; managerOnly?: boolean; ownerOnly?: boolean; agencyOnly?: boolean },
+  g: {
+    feature?: FeatureKey;
+    anyFeature?: readonly FeatureKey[];
+    managerOnly?: boolean;
+    ownerOnly?: boolean;
+    agencyOnly?: boolean;
+  },
   opts: NavVisibilityOpts,
 ): boolean {
   return (
     (g.managerOnly ? opts.isManager : true) &&
     (g.ownerOnly ? !!opts.isOwner : true) &&
     (g.agencyOnly ? !!opts.isAgency : true) &&
-    opts.has(g.feature)
+    opts.has(g.feature) &&
+    // A page that MERGED two separately-gated ones is reachable when EITHER of
+    // them is on. Squeezing it back into the single `feature` gate would take
+    // the page away from a workspace that has only the other half — which is a
+    // regression the merge itself created, not a rule anybody chose.
+    (g.anyFeature ? g.anyFeature.some((f) => opts.has(f)) : true)
   );
 }
 

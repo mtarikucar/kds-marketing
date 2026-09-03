@@ -39,7 +39,7 @@ export function tagFormPayload(values: TagFormValues): { name: string; color: st
   return { name: values.name, color: values.color || null };
 }
 
-export default function TagsPage() {
+export default function TagsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const { data, isLoading } = useTags();
   const { create, update, remove } = useTagMutations();
@@ -143,6 +143,7 @@ export default function TagsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        embedded={embedded}
         title={t('crm.tags.title', { defaultValue: 'Tags' })}
         description={t('crm.tags.subtitle', { defaultValue: 'Label leads and build segments from tag membership.' })}
         actions={

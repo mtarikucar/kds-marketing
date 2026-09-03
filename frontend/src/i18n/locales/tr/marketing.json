@@ -384,7 +384,6 @@
     }
   },
   "settingsGroup": {
-    "automation": "Otomasyon",
     "billing": "Ürünler ve faturalama",
     "agency": "Ajans",
     "workspace": "Çalışma Alanı",
@@ -394,9 +393,8 @@
     "developer": "Geliştirici ve güvenlik",
     "compliance": "Uyumluluk",
     "other": "Diğer",
-    "connections": "Bağlantılar ve alan adları",
-    "telephony": "Telefon",
-    "marketing": "Pazarlama varlıkları"
+    "marketing": "Pazarlama",
+    "channels": "Kanallar ve alan adları"
   },
   "settings.backToApp": "Uygulamaya dön",
   "leadStatus": {
@@ -636,7 +634,10 @@
     "brandBrain": "Marka Beyni",
     "brand": "Marka",
     "home": "Ana ekran",
-    "aiModels": "Yapay zeka modelleri"
+    "aiModels": "Yapay zeka modelleri",
+    "audience": "Segmentler ve etiketler",
+    "domains": "Alan adları",
+    "apiAccess": "API ve bağlayıcı"
   },
   "aiModels": {
     "title": "Yapay zeka üretim modelleri",
@@ -4919,6 +4920,54 @@
       "cold": "{{n}} konsept üretildi. Ölçülecek geçmiş olmadığı için tarafsız planlandı.",
       "guided": "{{n}} konsept üretildi.",
       "error": "Konseptler üretilemedi."
+    }
+  },
+  "domains": {
+    "title": "Alan adları",
+    "subtitle": "Posta gönderdiğin ve sayfalarını yayınladığın alan adları, ve senin olduğunu kanıtlayan DNS kayıtları.",
+    "tab": {
+      "sending": "Gönderim",
+      "custom": "Web sitesi"
+    }
+  },
+  "webhooksHub": {
+    "title": "Webhook’lar",
+    "subtitle": "Kendi sistemlerine olay gönder, onlarınkinden olay al.",
+    "tab": {
+      "outgoing": "Giden",
+      "inbound": "Gelen"
+    }
+  },
+  "apiAccess": {
+    "title": "API ve bağlayıcı",
+    "subtitle": "Kendi kodun için anahtarlar, ve Claude bağlayıcısı.",
+    "tab": {
+      "keys": "API anahtarları",
+      "connector": "Claude bağlayıcısı"
+    }
+  },
+  "team": {
+    "title": "Ekip",
+    "subtitle": "Üyeler, davetler ve her rolün taşıdığı yetkiler.",
+    "tab": {
+      "members": "Üyeler",
+      "roles": "Roller ve yetkiler"
+    }
+  },
+  "audience": {
+    "title": "Segmentler ve etiketler",
+    "subtitle": "Kişileri kendiliğinden gruplayan kurallar, ve elle yapıştırdığın etiketler.",
+    "tab": {
+      "segments": "Segmentler",
+      "tags": "Etiketler"
+    }
+  },
+  "voiceHub": {
+    "title": "Ses",
+    "subtitle": "Hattına ne cevap veriyor, ve arayana hangi seçenekleri sunuyor.",
+    "tab": {
+      "assistant": "Asistan",
+      "ivr": "Telefon ağacı"
     }
   }
 }
