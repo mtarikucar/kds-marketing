@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { walkConceptMetrics } from './concept-metrics';
 
 /**
  * How many PUBLISHED posts an angle must carry before it is allowed to rank.
@@ -57,11 +58,9 @@ export interface AnglePerformance {
  *       → SocialPostTarget.postId              (PUBLISHED targets only)
  *         → SocialPostMetric.targetId          (daily rows, summed per target)
  *
- * Both concept links are soft references rather than foreign keys, so this
- * cannot be one nested `include`; it is four scoped queries with the ids
- * carried between them. Every query is bounded by `workspaceId` at its own
- * level — not just the first — because a soft reference offers no database-side
- * tenant guarantee to inherit.
+ * The walk itself lives in `walkConceptMetrics` because `ContentLineService`
+ * needs the same one grouped by batch instead of by angle; this service only
+ * regroups its result and decides what ranks.
  */
 @Injectable()
 export class AnglePerformanceService {
@@ -74,65 +73,26 @@ export class AnglePerformanceService {
     });
     if (concepts.length === 0) return COLD;
 
-    const items = await this.prisma.socialCampaignItem.findMany({
-      where: {
-        workspaceId,
-        contentConceptId: { in: concepts.map((c) => c.id) },
-        socialPostId: { not: null },
-      },
-      select: { contentConceptId: true, socialPostId: true },
-    });
-    if (items.length === 0) return COLD;
-
-    const targets = await this.prisma.socialPostTarget.findMany({
-      where: {
-        workspaceId,
-        postId: { in: items.map((i) => i.socialPostId as string) },
-        status: 'PUBLISHED',
-      },
-      select: { id: true, postId: true },
-    });
-    if (targets.length === 0) return COLD;
-
-    const sums = await this.prisma.socialPostMetric.groupBy({
-      by: ['targetId'],
-      where: { workspaceId, targetId: { in: targets.map((t) => t.id) } },
-      _sum: { impressions: true, engagements: true },
-    });
-
-    // concept id → angle, then post id → angle.
-    const angleOfConcept = new Map(concepts.map((c) => [c.id, c.angle]));
-    const angleOfPost = new Map<string, string>();
-    for (const item of items) {
-      const angle = angleOfConcept.get(item.contentConceptId as string);
-      if (angle) angleOfPost.set(item.socialPostId as string, angle);
-    }
-
-    const totalsOfTarget = new Map(
-      sums.map((s) => [
-        s.targetId,
-        {
-          impressions: s._sum?.impressions ?? 0,
-          engagements: s._sum?.engagements ?? 0,
-        },
-      ]),
+    const perConcept = await walkConceptMetrics(
+      this.prisma,
+      workspaceId,
+      concepts.map((c) => c.id),
     );
+    if (perConcept.size === 0) return COLD;
 
-    // Accumulate per angle. `posts` counts DISTINCT posts, not targets: one post
-    // published to four networks is one piece of content that worked or didn't,
-    // and counting it four times would let a wide-fanout post clear the ranking
-    // floor on its own.
+    // Regroup the per-concept totals by ANGLE. `posts` stays a set across the
+    // concepts sharing an angle so one post counts once for that angle even if
+    // it somehow arrives twice.
     const acc = new Map<string, { impressions: number; engagements: number; posts: Set<string> }>();
-    for (const target of targets) {
-      const angle = angleOfPost.get(target.postId);
-      if (!angle) continue;
+    for (const concept of concepts) {
+      const metrics = perConcept.get(concept.id);
+      if (!metrics) continue;
       const bucket =
-        acc.get(angle) ?? { impressions: 0, engagements: 0, posts: new Set<string>() };
-      const totals = totalsOfTarget.get(target.id);
-      bucket.impressions += totals?.impressions ?? 0;
-      bucket.engagements += totals?.engagements ?? 0;
-      bucket.posts.add(target.postId);
-      acc.set(angle, bucket);
+        acc.get(concept.angle) ?? { impressions: 0, engagements: 0, posts: new Set<string>() };
+      bucket.impressions += metrics.impressions;
+      bucket.engagements += metrics.engagements;
+      for (const postId of metrics.postIds) bucket.posts.add(postId);
+      acc.set(concept.angle, bucket);
     }
     if (acc.size === 0) return COLD;
 
