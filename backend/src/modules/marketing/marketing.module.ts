@@ -268,6 +268,8 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
+import { AnglePerformanceService } from './content-concepts/angle-performance.service';
+import { ContentLineService } from './content-concepts/content-line.service';
 import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
@@ -1027,6 +1029,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // rather than through jeeta.generate_video — see its class docblock for the
     // three measured reasons the MCP route cannot carry this.
     ConceptPromotionService,
+    AnglePerformanceService,
+    ContentLineService,
     ContentDistributionService,
     DistributionSendService,
     McpToolRegistry,
