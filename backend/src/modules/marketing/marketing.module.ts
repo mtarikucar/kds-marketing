@@ -304,6 +304,7 @@ import { registerContentDistributionTools } from './mcp/tools/content-distributi
 import { ContentDistributionService } from './distribution/content-distribution.service';
 import { DistributionSendService } from './distribution/distribution-send.service';
 import { MarketingContentDistributionController } from './controllers/marketing-content-distribution.controller';
+import { MarketingContentLineController } from './controllers/marketing-content-line.controller';
 import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
@@ -685,6 +686,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // Phase F P2 — inbox + channel config (workspace) and the public webhooks.
     MarketingConversationsController,
     MarketingContentDistributionController,
+    MarketingContentLineController,
     MarketingChannelsController,
     WebchatPublicController,
     MetaWebhookController,
