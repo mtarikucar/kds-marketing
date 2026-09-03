@@ -339,19 +339,19 @@ const VEO_31_DURATION: MediaDurationContract = {
  * asserting it.
  */
 const WITHHELD_NEEDS_A_REAL_PROBE =
-  'This model is priced by measuring a file the customer supplies, and there is '
-  + 'no sound way to measure it yet, so it is not sold. A quantity stated by the '
-  + 'CALLER is not a measurement — it is a number the payer chooses — and these '
-  + 'endpoints report nothing back that a finalize true-up could correct, so '
-  + 'whatever is used at reserve time is what is billed, permanently. The '
-  + 'server-side container parser written to read it was withdrawn for being '
-  + 'unsound in BOTH directions: it invented a duration for roughly one ordinary '
-  + 'non-faststart phone video in three (52x to 419x OVER) and a decoy `mvhd` box '
-  + 'walked it into a 600x UNDER-charge. Guessing dear is not safer than guessing '
-  + 'cheap; it is the same defect. What unblocks it is a real probe in the '
-  + 'production image (ffprobe, server-side) so the billable quantity is MEASURED '
-  + 'rather than asserted — its own change, with its own deploy risk. Until then '
-  + 'the entry stays exactly as verified against fal\'s published contract and '
+  'The probe these entries were waiting for now EXISTS: MediaProbeService reads '
+  + 'the real container with ffprobe, server-side, in the production image and '
+  + 'before the reserve — so the billable quantity is measured rather than '
+  + 'asserted. That is what released the two whose only blocker was the '
+  + 'measurement (Topaz image, LatentSync). This one is still withheld because '
+  + 'measuring the source was never its ONLY unknown, and what remains is not a '
+  + 'measurement problem — it is stated below. The history is kept because it is '
+  + 'the reason the bar is where it is: the hand-written container parser tried '
+  + 'first was withdrawn for being unsound in BOTH directions — it invented a '
+  + 'duration for roughly one ordinary non-faststart phone video in three (52x to '
+  + '419x OVER) and a decoy `mvhd` box walked it into a 600x UNDER-charge. '
+  + 'Guessing dear is not safer than guessing cheap; it is the same defect. The '
+  + 'entry stays exactly as verified against fal\'s published contract and '
   + 'pricing, and un-withholding it is deleting one line. ';
 
 /**
@@ -537,11 +537,6 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'fal-ai/topaz/upscale/image',
     technique: 'IMAGE_CLEANUP', type: 'IMAGE', label: 'Topaz — print-ready upscale',
     priceUsd: 0.32, credits: 32,
-    withheld: WITHHELD_NEEDS_A_REAL_PROBE
-      + 'Here the quantity is the source image\'s pixel count, and the spread is '
-      + 'the widest in the catalogue: the same published ladder charges $0.08 for '
-      + 'a small source and $1.36 for a large one, a 17x range decided entirely '
-      + 'by a number nobody has measured.',
     note: 'Billed by OUTPUT megapixels ($0.08 ≤24MP, $0.16 ≤48MP, $0.32 ≤96MP, '
       + '$1.36 ≤512MP), and upscale_factor is pinned at 2 so the output is 4x the '
       + 'SOURCE\'s megapixels. The old ≤96MP flat meter assumed the source came '
@@ -892,9 +887,14 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
       + 'chargeOverage is an unconditional bump that cannot refuse — 112x the '
       + 'authorisation, and a workspace with 30 credits left can commit $200 of '
       + 'vendor spend in one call. An honest ledger after the fact is not an '
-      + 'honest authorisation before it. The same server-side probe that unblocks '
-      + 'the upscalers unblocks this — ffprobe in the production image — by '
-      + 'measuring the audio before the reserve. '
+      + 'honest authorisation before it. The probe now exists and can measure '
+      + 'that audio, but this model is NOT source-metered — it is per-second with '
+      + 'a returned duration — so nothing yet carries the measurement into the '
+      + 'reserve. What remains is a rule the other four never needed: size the '
+      + 'authorisation from the measured audio for a model that has no duration '
+      + 'input, and bring it under MEDIA_GEN_MAX_VIDEO_SEC, which today cannot '
+      + 'reach it. That changes what a reserve MEANS, so it is its own change '
+      + 'rather than a line deleted here. '
       + 'The AVATAR technique still ships: veed/avatars/text-to-video is metered '
       + 'on the SCRIPT, which is in the request.',
     note: 'One still + an audio track → a talking head, in any language the audio '
@@ -922,12 +922,6 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'fal-ai/latentsync',
     technique: 'LIPSYNC', type: 'VIDEO', label: 'LatentSync — drive a face from an audio track',
     priceUsd: 0.20, credits: 20,
-    withheld: WITHHELD_NEEDS_A_REAL_PROBE
-      + 'Here the quantity is whichever of the video and the audio is longer, and '
-      + 'only the overage past the flat 40-second window depends on it — which is '
-      + 'precisely why an unsound parser is worse than none: nearly every request '
-      + 'is the flat $0.20, so inventing a length turns the common, '
-      + 'correctly-priced case into a wild over-charge for no revenue at all.',
     note: 'FLAT $0.20 for anything up to 40 seconds, then $0.005/s — so it is '
       + 'priced per run for the length that covers nearly every ad, and metered '
       + 'from the source only past that line. Takes no prompt at all. Returns no '
