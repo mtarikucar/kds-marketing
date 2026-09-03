@@ -412,6 +412,7 @@ import { MarketingMediaController } from './controllers/marketing-media.controll
 import { MarketingMediaWebhookController } from './controllers/marketing-media-webhook.controller';
 import { MediaGenService } from './ai/media/media-gen.service';
 import { MediaProbeService } from './ai/media/media-probe.service';
+import { VideoAssemblyService } from './ai/media/video-assembly.service';
 import { MediaModelDefaultsService } from './ai/media/media-model-defaults.service';
 import { BrandKitService } from './ai/media/brand-kit.service';
 import { FalProvider } from './ai/providers/fal.provider';
@@ -1185,6 +1186,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     { provide: MEDIA_PROVIDER, useExisting: FalProvider },
     MediaGenService,
     MediaProbeService,
+    VideoAssemblyService,
     MediaModelDefaultsService,
     BrandKitService,
     SocialCampaignsService,

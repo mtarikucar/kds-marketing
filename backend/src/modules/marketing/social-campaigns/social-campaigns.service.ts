@@ -13,6 +13,9 @@ import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { assertCataloguedModel, assertModelOffersAspect } from '../ai/media/media-models.config';
 import { DEFAULT_SHOT_ASPECT } from '../video/video-pipeline.service';
+import { VideoAssemblyService } from '../ai/media/video-assembly.service';
+import { R2StorageService } from '../../../common/storage/r2-storage.service';
+import { readFile, unlink } from 'node:fs/promises';
 import { Cadence, nextCadenceSlot } from './cadence.util';
 import {
   CampaignItemArmingService,
@@ -92,6 +95,11 @@ export class SocialCampaignsService implements OnModuleInit {
     private readonly brandSafety: BrandSafetyService,
     private readonly mediaGen: MediaGenService,
     private readonly arming: CampaignItemArmingService,
+    // Appended, not inserted: the specs for this service construct it
+    // positionally, and a dependency added mid-list shifts every one of them
+    // onto the wrong argument without a single test going red.
+    private readonly assembly: VideoAssemblyService,
+    private readonly r2: R2StorageService,
   ) {}
 
   onModuleInit(): void {
@@ -783,6 +791,15 @@ export class SocialCampaignsService implements OnModuleInit {
       return { reschedule: { runAt: next, payload: { itemId, workspaceId } } };
     }
 
+    // JOIN THE BEATS INTO THE VIDEO THIS ITEM WAS APPROVED AS.
+    //
+    // BEFORE the claim, on purpose. Assembly re-encodes every clip and can take
+    // minutes; after the claim, a crash or a timeout in the middle would leave
+    // an item marked PUBLISHED that was never published, and the gate no-ops on
+    // retry by design. Before it, the worst case is that the next run encodes
+    // again — wasted CPU, and nothing lost.
+    const assembledUrl = await this.assembleConceptVideo(workspaceId, item, attachable);
+
     // Atomically claim the publish (publishableFrom → PUBLISHED) BEFORE the paid
     // brand-safety check and schedulePost. If a later step throws and the runner
     // retries, the item is already PUBLISHED (no longer in publishableFrom) so the
@@ -813,7 +830,16 @@ export class SocialCampaignsService implements OnModuleInit {
 
     // Attach the generated media to the post before it goes out, then hand off
     // to the existing social.publish path (per-network adapters unchanged).
-    const dropped = await this.attachAssetsToPost(post.id, assets, assetIds);
+    // An assembled video is not a subset of the clips — every beat is INSIDE
+    // it — so there is nothing dropped to report and nothing for the positional
+    // attach to do. Reporting "1 of 5 attached" here would name a loss that did
+    // not happen.
+    let dropped: string | null = null;
+    if (assembledUrl) {
+      await this.prisma.socialPost.update({ where: { id: post.id }, data: { mediaUrls: [assembledUrl] } });
+    } else {
+      dropped = await this.attachAssetsToPost(post.id, assets, assetIds);
+    }
     if (dropped) {
       // PUBLISHED, with the sentence. The post is live and its media is what
       // reached it; what did not reach it is now a fact on the row rather than
@@ -828,6 +854,71 @@ export class SocialCampaignsService implements OnModuleInit {
     }
     await this.planner.schedulePost(workspaceId, post.id, new Date(), c.targetAccountIds);
     await this.bumpStats(c.id, { published: 1 });
+  }
+
+  /**
+   * The concept's beats, joined into the one video it was approved as.
+   *
+   * A five-beat concept buys five generations and, until this existed, handed
+   * five separate files to a publisher that can send one or two of them. The
+   * rest were paid for and thrown away, and the thing the reviewer approved — a
+   * hook, then a demo, then a proof, then the call to action, in that order —
+   * existed nowhere.
+   *
+   * Returns null to mean "publish the clips as they are", and returns it for
+   * every reason including failure. Assembly is an IMPROVEMENT on the old
+   * behaviour, so it must never be able to take a post down: an ffmpeg that is
+   * missing, a render that times out, a clip that will not download all leave
+   * the item exactly where it would have been without this method.
+   */
+  private async assembleConceptVideo(
+    workspaceId: string,
+    item: { id: string; contentConceptId: string | null },
+    attachable: { id: string; url: string | null; mime: string | null }[],
+  ): Promise<string | null> {
+    // Only the concept line has beats. A cadence-planned item is one asset.
+    if (!item.contentConceptId) return null;
+    const clips = attachable.filter((a) => a.url && (a.mime ?? '').startsWith('video/'));
+    // One clip is already the video; joining it would re-encode for nothing.
+    if (clips.length < 2) return null;
+    if (!this.r2.isConfigured()) return null;
+
+    try {
+      const concept = await this.prisma.contentConcept.findFirst({
+        where: { id: item.contentConceptId, workspaceId },
+        select: { shotPlan: true },
+      });
+      const plan = (concept?.shotPlan ?? null) as { shots?: { onScreenText?: string }[]; aspectRatio?: string } | null;
+      const shots = Array.isArray(plan?.shots) ? plan.shots : [];
+
+      // BEAT ORDER, and the caller already guaranteed it: `assets` was sorted
+      // into `generatedAssetIds` order before any of this, so index i here is
+      // beat i there and the words burned over a clip are the words written for
+      // it. Pairing by anything else would caption the hook with the payoff.
+      const result = await this.assembly.assemble(
+        clips.map((c, i) => ({ url: c.url as string, onScreenText: shots[i]?.onScreenText ?? null })),
+        plan?.aspectRatio,
+      );
+      if (result.error || !result.path) {
+        this.logger.warn(`item ${item.id}: clips published unjoined (${result.error})`);
+        return null;
+      }
+
+      try {
+        const buffer = await readFile(result.path);
+        const stored = await this.r2.upload(workspaceId, {
+          buffer,
+          mimetype: 'video/mp4',
+          originalname: `concept-${item.id}.mp4`,
+        } as never);
+        return stored.url;
+      } finally {
+        await unlink(result.path).catch(() => undefined);
+      }
+    } catch (e) {
+      this.logger.warn(`item ${item.id}: assembly failed, publishing the clips as they are: ${String((e as Error)?.message ?? e)}`);
+      return null;
+    }
   }
 
   /**
