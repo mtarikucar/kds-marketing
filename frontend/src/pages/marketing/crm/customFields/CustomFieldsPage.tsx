@@ -30,7 +30,7 @@ function apiError(e: unknown, fallback: string): string {
   return msg ?? fallback;
 }
 
-export default function CustomFieldsPage() {
+export default function CustomFieldsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data, isLoading } = useCustomFields(includeArchived);
@@ -190,6 +190,7 @@ export default function CustomFieldsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        embedded={embedded}
         title={t('crm.cf.title', { defaultValue: 'Custom fields' })}
         description={t('crm.cf.subtitle', {
           defaultValue: 'Define workspace-specific data captured on every lead.',

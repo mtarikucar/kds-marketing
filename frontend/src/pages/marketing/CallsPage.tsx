@@ -105,8 +105,19 @@ function TableSkeleton({ cols, rows = 8 }: { cols: number; rows?: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export interface CallsPageProps {
-  /** Hosted inside another screen's column: no chrome, and no URL of its own. */
+  /** Hosted inside another screen: no <h1> of its own, and no URL of its own. */
   embedded?: boolean;
+  /**
+   * Drop the header ENTIRELY — action and description included.
+   *
+   * `embedded` means "something else owns the page title", which is what a tab
+   * of Voice wants: it still needs Click-to-dial and the one line explaining the
+   * single-line rule. The person surface's left column wants neither — it is
+   * narrow, the dialer is already on screen, and prose there pushes the rows
+   * somebody came to read off the top. Two hosts, two answers, said explicitly
+   * rather than inferred from a prop that means something else.
+   */
+  headerless?: boolean;
   /** Who the host is showing; only used to light the matching row. */
   selectedLeadId?: string | null;
   /** A SELECTION handed up to the host — never a navigation. */
@@ -129,7 +140,7 @@ export interface CallsPageProps {
  * state and this page writes NO parameter at all — the same call
  * `PeopleColumn` already makes about `?create=1`.
  */
-export default function CallsPage({ embedded, selectedLeadId, onSelectPerson }: CallsPageProps = {}) {
+export default function CallsPage({ embedded, headerless, selectedLeadId, onSelectPerson }: CallsPageProps = {}) {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
   const [localTab, setLocalTab] = useState<CallsPageTab>('calls');
@@ -151,8 +162,16 @@ export default function CallsPage({ embedded, selectedLeadId, onSelectPerson }: 
 
   return (
     <div className="space-y-6">
-      {!embedded && (
+      {/* Two hosts embed this page and they want different things. As a TAB of
+          Voice it keeps its action and its one-line explanation, like every
+          other merged tab. As the left COLUMN of the person surface it wants
+          neither: the column is narrow, the dialer is already on the screen,
+          and a paragraph of prose there is noise pushed above the rows somebody
+          came to read. `headerless` is the column saying so, rather than the
+          page guessing from a prop that means something else. */}
+      {!headerless && (
         <PageHeader
+          embedded={embedded}
           title="Sales Calls"
           description="Single company line — one active call at a time. Your softphone opens via the tel: link; log the outcome when the call ends."
           actions={<ClickToDialButton />}

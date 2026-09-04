@@ -239,7 +239,7 @@ export function PeopleColumn({
           ) : active === 'calendar' ? (
             <CalendarPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
           ) : active === 'calls' ? (
-            <CallsPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
+            <CallsPage embedded headerless selectedLeadId={selectedId} onSelectPerson={report} />
           ) : (
             <TasksPage embedded selectedLeadId={selectedId} onSelectPerson={report} />
           )}

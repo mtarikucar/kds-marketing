@@ -29,20 +29,34 @@ function Lazy({ children }: { children: ReactNode }) {
  * app lands exactly where it used to. Nothing became unreachable; the LIST got
  * shorter, which is the only thing that was too long.
  */
-export default function AudiencePage() {
+export default function AudiencePage(
+  {
+    embedded,
+    /**
+     * Which query parameter names THIS page's tab.
+     *
+     * Inside the Inbox `?tab=` already means "which config surface is open", so
+     * a nested shell reading the same parameter sees `audience`, recognises
+     * none of its own tabs and silently shows the first one — Tags becomes
+     * unreachable, with nothing anywhere reporting a fault.
+     */
+    param = 'tab',
+  }: { embedded?: boolean; param?: string } = {},
+) {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
-  const raw = params.get('tab');
+  const raw = params.get(param);
   const tab: Tab = (TABS as readonly string[]).includes(raw ?? '') ? (raw as Tab) : 'segments';
 
   const setTab = (v: string) => setParams((p) => {
-    p.set('tab', v);
+    p.set(param, v);
     return p;
   }, { replace: true });
 
   return (
     <div className="space-y-5">
       <PageHeader
+        embedded={embedded}
         title={t('audience.title', { defaultValue: 'Segments & tags' })}
         description={t('audience.subtitle', { defaultValue: 'Rules that group people automatically, and labels you apply by hand.' })}
       />

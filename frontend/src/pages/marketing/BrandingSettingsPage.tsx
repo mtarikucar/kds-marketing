@@ -28,8 +28,12 @@ import { WorkspaceTimezoneCard } from './WorkspaceTimezoneCard';
 // Lazy so a tab's code only loads when opened (each was its own route before).
 const BrandKitPage = lazy(() => import('./BrandKitPage'));
 const BrandBrainPage = lazy(() => import('./brandBrain/BrandBrainPage'));
+// The sales SHAPE a manager defines once, beside the brand identity they
+// define once. Both are 'what this business IS' — the first thing somebody
+// opening a new workspace has to fill in, and the last thing they touch again.
+const PipelineSettingsPage = lazy(() => import('./opportunities/PipelineSettingsPage'));
 
-const TABS = ['business', 'kit', 'brain'] as const;
+const TABS = ['business', 'kit', 'brain', 'pipelines'] as const;
 type BrandTab = (typeof TABS)[number];
 
 function Lazy({ children }: { children: ReactNode }) {
@@ -56,8 +60,8 @@ export default function BrandingSettingsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={t('brand.title', 'Brand')}
-        description={t('brand.subtitle', 'Your business identity, visual kit and AI brand voice — one place.')}
+        title={t('brand.title', 'Business')}
+        description={t('brand.subtitle', 'Your identity, your visual kit, your AI brand voice and the stages a deal moves through.')}
       />
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -65,6 +69,7 @@ export default function BrandingSettingsPage() {
           <TabsTrigger value="business">{t('brand.tab.business', 'Business')}</TabsTrigger>
           <TabsTrigger value="kit">{t('brand.tab.kit', 'Brand Kit')}</TabsTrigger>
           <TabsTrigger value="brain">{t('brand.tab.brain', 'Brand Brain')}</TabsTrigger>
+          <TabsTrigger value="pipelines">{t('brand.tab.pipelines', 'Pipelines')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="business" className="pt-5">
@@ -75,6 +80,9 @@ export default function BrandingSettingsPage() {
         </TabsContent>
         <TabsContent value="brain" className="pt-5">
           <Lazy><BrandBrainPage embedded /></Lazy>
+        </TabsContent>
+        <TabsContent value="pipelines" className="pt-5">
+          <Lazy><PipelineSettingsPage embedded /></Lazy>
         </TabsContent>
       </Tabs>
     </div>

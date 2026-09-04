@@ -30,6 +30,18 @@ const SnippetsPage = lazy(() => import('../settings/snippets'));
 const AgentStudioPage = lazy(() => import('../AgentStudioPage'));
 const KnowledgeBasePage = lazy(() => import('../KnowledgeBasePage'));
 const LeadsPage = lazy(() => import('../leads/LeadsPage'));
+/**
+ * The three that came out of Settings on 2026-09-04.
+ *
+ * Each one only ever means something about the PEOPLE in this inbox: importing
+ * is how they arrive, segments and tags are how they are grouped, custom fields
+ * are what a record can hold. Filing them under Settings put them a whole
+ * surface away from the only place their effect is visible — you edited a field
+ * definition on one screen and looked for it on another.
+ */
+const ImportWizardPage = lazy(() => import('../imports'));
+const AudiencePage = lazy(() => import('../crm/AudiencePage'));
+const CustomFieldsPage = lazy(() => import('../crm/customFields'));
 
 /**
  * The conversation-domain config surfaces, reachable at `?tab=`.
@@ -41,7 +53,11 @@ const LeadsPage = lazy(() => import('../leads/LeadsPage'));
  * added to either side is caught here instead of on a surface where a deep
  * link silently opens the wrong thing.
  */
-export const CONFIG_TABS = ['channels', 'snippets', 'agents', 'knowledge'] as const;
+export const CONFIG_TABS = [
+  'channels', 'snippets', 'agents', 'knowledge',
+  // What shapes the people on this surface, rather than what talks to them.
+  'import', 'audience', 'fields',
+] as const;
 type ConfigTab = (typeof CONFIG_TABS)[number];
 const isConfigTab = (v: string | null): v is ConfigTab =>
   (CONFIG_TABS as readonly string[]).includes(v ?? '');
@@ -516,6 +532,12 @@ export default function InboxPage() {
                 <SnippetsPage embedded />
               ) : configTab === 'agents' ? (
                 <AgentStudioPage embedded />
+              ) : configTab === 'import' ? (
+                <ImportWizardPage embedded />
+              ) : configTab === 'audience' ? (
+                <AudiencePage embedded param="sub" />
+              ) : configTab === 'fields' ? (
+                <CustomFieldsPage embedded />
               ) : (
                 <KnowledgeBasePage embedded />
               )}

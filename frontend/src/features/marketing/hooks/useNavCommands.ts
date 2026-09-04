@@ -72,6 +72,10 @@ export function useNavCommands(): NavCommand[] {
            * whole change is removing.
            */
           for (const sub of child.tabs?.slice(1) ?? []) {
+            // A tab can be gated more tightly than the page that holds it —
+            // /calls needed `telephony` before it became a tab of Voice. The
+            // palette must not offer a jump to a half the workspace cannot use.
+            if (!has(sub.feature)) continue;
             push({
               id: `${child.path}?tab=${sub.tab}`,
               label: t(sub.labelKey, sub.label),

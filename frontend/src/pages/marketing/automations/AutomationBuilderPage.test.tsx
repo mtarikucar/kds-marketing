@@ -45,7 +45,12 @@ function renderAt(path: string) {
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/automations" element={<div data-testid="list-page" />} />
+          {/* Where the list actually lives since 2026-09-04: a tab of Strategy,
+              because a workflow is machinery in service of a plan. Leaving the
+              builder is an all-day flow, so it goes straight there rather than
+              through the redirect `/automations` still serves. */}
+          <Route path="/studio/strategy" element={<div data-testid="list-page" />} />
+          <Route path="/automations" element={<div data-testid="old-list-path" />} />
           <Route path="/automations/new" element={<AutomationBuilderPage />} />
           <Route path="/automations/:id/edit" element={<AutomationBuilderPage />} />
         </Routes>

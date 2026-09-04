@@ -182,7 +182,21 @@ export interface NavChild {
    * from a page already in it, and putting them back would rebuild the list
    * this exists to shorten.
    */
-  tabs?: readonly { tab: string; labelKey: string; label: string }[];
+  tabs?: readonly {
+    tab: string;
+    labelKey: string;
+    label: string;
+    /**
+     * The entitlement this HALF needs, when it is stricter than the page's.
+     *
+     * Several pages that became tabs carried their own gate — /calls needed
+     * `telephony`, /automations `workflows`, /invoices `invoicing`. Folding them
+     * in without carrying the gate would offer a workspace a tab for a feature
+     * it has not bought, which is worse than the long list this merge replaced:
+     * a list you cannot use is a list that lies.
+     */
+    feature?: FeatureKey;
+  }[];
   /** i18n key; `label` is the inline fallback so a missing translation still reads well. */
   labelKey: string;
   label: string;
@@ -194,15 +208,15 @@ export interface NavChild {
   /** When true, ONLY an OWNER sees it (stricter than managerOnly). */
   ownerOnly?: boolean;
   /**
-   * Opt OUT of the Settings-area chrome for a page that lives in the settings
-   * hub (see MarketingLayout). One page needs it: the workflow builder is a
-   * `h-[calc(100vh-7rem)]` canvas, and the settings pane is a scroll container
-   * with no height beside a 240px sidebar — so it renders as a canvas jammed
-   * into a column. This is deliberately a per-ITEM escape hatch and not a
-   * regrouping: /automations stays a settings page in the nav, the palette and
-   * the frozen path set, and only its chrome differs.
+   * (Removed 2026-09-04 — see FULL_BLEED_PREFIXES.)
+   *
+   * Owning the viewport is a property of the ROUTE, not of a menu entry. This
+   * lived here until the workflow list stopped being a menu entry at all, at
+   * which point the builder silently started rendering inside the settings
+   * chrome: a viewport-height canvas in a letterbox beside a 240px sidebar,
+   * with nothing anywhere reporting a fault. Any page that leaves the menu
+   * would have lost it the same way.
    */
-  fullBleed?: boolean;
   /**
    * When true, only an AGENCY workspace sees it. Was a hub-level flag only,
    * until the Agency console's pages moved INTO Settings (2026-08 surface
@@ -366,10 +380,19 @@ export const NAV_HUBS: NavHub[] = [
        */
       {
         path: '/leads',
-        aliases: ['/inbox'],
+        // Importing people, grouping them and defining what a record can hold
+        // are all about the people on THIS surface. They were Settings pages,
+        // a whole surface away from the only place their effect is visible.
+        aliases: ['/inbox', '/import', '/segments', '/tags', '/settings/custom-fields'],
         labelKey: 'nav.people',
         label: 'People',
         icon: Users,
+        tabs: [
+          { tab: 'people', labelKey: 'nav.people', label: 'People' },
+          { tab: 'import', labelKey: 'nav.import', label: 'Import' },
+          { tab: 'audience', labelKey: 'nav.audience', label: 'Segments & tags' },
+          { tab: 'fields', labelKey: 'nav.customFields', label: 'Custom Fields' },
+        ],
       },
       /**
        * ...and since stage 4 of the one-screen brief (2026-09-01) it is the
@@ -442,16 +465,25 @@ export const NAV_HUBS: NavHub[] = [
     area: 'settings', tier: 'core',
     children: [
       // Workspace
-      { path: '/branding', labelKey: 'nav.brand', label: 'Brand', icon: Palette, managerOnly: true },
+      // Identity, visual kit, AI brand voice AND the stages a deal moves through:
+      // all four are the SHAPE of the business, filled in once by whoever opens
+      // the workspace and rarely touched again.
+      { path: '/branding', labelKey: 'nav.business', label: 'Business', icon: Palette,
+        managerOnly: true, aliases: ['/settings/pipelines'],
+        tabs: [
+          { tab: 'business', labelKey: 'nav.brand', label: 'Brand' },
+          { tab: 'pipelines', labelKey: 'nav.pipelines', label: 'Pipelines' },
+        ] },
       // Members and the permissions each role carries — one page, two tabs.
       // Nobody thinks about a role without thinking about the person who has it.
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true,
-        aliases: ['/settings/roles'],
+        aliases: ['/settings/roles', '/targets', '/booking'],
         tabs: [
           { tab: 'members', labelKey: 'nav.users', label: 'Team' },
           { tab: 'roles', labelKey: 'nav.roles', label: 'Roles & permissions' },
+          { tab: 'targets', labelKey: 'nav.targets', label: 'Targets' },
+          { tab: 'booking', labelKey: 'nav.booking', label: 'Booking', feature: 'funnels' },
         ] },
-      { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
       /**
        * Pipeline + stage configuration — a route since long before this menu,
        * and until 2026-09-01 it was in NO menu at all.
@@ -471,8 +503,6 @@ export const NAV_HUBS: NavHub[] = [
        * Workspace beside Targets: both are the sales SHAPE a manager sets up
        * once and everyone then works inside.
        */
-      { path: '/settings/pipelines', labelKey: 'nav.pipelines', label: 'Pipelines', icon: GitBranch, managerOnly: true },
-      { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
       /**
        * The call LOG, moved out of the Inbox surface on 2026-08-31.
        *
@@ -494,7 +524,6 @@ export const NAV_HUBS: NavHub[] = [
        * which menu names it. The Power Dialer stays a TAB of that page: it
        * belongs to the operations surface, not to a person.
        */
-      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
       /**
        * Ses and Telefon Agaci, moved off the Inbox surface on 2026-09-01 for
        * the reason the call log moved a day earlier: they are channel
@@ -512,22 +541,30 @@ export const NAV_HUBS: NavHub[] = [
       // The greeting and the menu the caller hears after it: one sitting of
       // work, and neither half is finished without the other.
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi',
-        managerOnly: true, aliases: ['/voice/ivr'],
+        managerOnly: true, aliases: ['/voice/ivr', '/calls'],
         tabs: [
           { tab: 'assistant', labelKey: 'nav.voice', label: 'Voice' },
           { tab: 'ivr', labelKey: 'nav.ivr', label: 'Phone Tree' },
+          { tab: 'calls', labelKey: 'nav.calls', label: 'Calls', feature: 'telephony' },
         ] },
-      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       // Public surfaces you configure once (were their own single-page hubs).
       { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
       { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, feature: 'memberships', managerOnly: true },
       // Set-and-forget automation. The AI Strategy Engine console is the same
       // kind of thing: you tell it the plan and it runs; first-run onboarding
       // still lives at /onboarding/strategy behind the console's CTA.
-      { path: '/studio/strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass, managerOnly: true },
-      // fullBleed: the builder (/automations/new, /automations/:id/edit) owns the
-      // viewport. See NavChild.fullBleed.
-      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true, fullBleed: true },
+      // FIRST, and it will stay first: a workspace without a strategy is not one
+      // with a blank page, it is one whose automations have nothing to be FOR.
+      // The workflows that serve it, and the research that feeds them, are its
+      // tabs rather than its siblings — 'AI research' was a third entry whose
+      // difference from an automation nobody could state.
+      { path: '/studio/strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass,
+        managerOnly: true, aliases: ['/automations', '/research'],
+        tabs: [
+          { tab: 'strategy', labelKey: 'nav.strategy', label: 'Strategy' },
+          { tab: 'automations', labelKey: 'nav.automations', label: 'Workflows', feature: 'workflows' },
+          { tab: 'research', labelKey: 'nav.research', label: 'Research', feature: 'research' },
+        ] },
       // Which fal.ai model — and therefore what per-clip price — this workspace
       // generates on. `managerOnly` mirrors the route's MANAGER gate in App.tsx
       // and the PATCH's own MANAGER + settings.manage floor.
@@ -555,26 +592,28 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, managerOnly: true },
       // Products & billing
       // Tax Rates + Coupons are tabs inside Products now.
-      { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
-      { path: '/subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions', icon: Repeat, managerOnly: true },
-      { path: '/order-forms', labelKey: 'nav.orderForms', label: 'Order forms', icon: ShoppingCart, managerOnly: true },
-      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
-      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
+      // The whole sale, in the order it happens: what you sell, how somebody
+      // buys it, what recurs, what gets paid.
+      { path: '/products', labelKey: 'nav.selling', label: 'Selling', icon: Package,
+        managerOnly: true, aliases: ['/order-forms', '/subscriptions', '/invoices'],
+        tabs: [
+          { tab: 'products', labelKey: 'nav.products', label: 'Products' },
+          { tab: 'order-forms', labelKey: 'nav.orderForms', label: 'Order forms' },
+          { tab: 'subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions' },
+          { tab: 'invoices', labelKey: 'nav.invoices', label: 'Invoices', feature: 'invoicing' },
+        ] },
+      // The plan, and the switch that turns features off. Last in the list.
+      { path: '/billing', labelKey: 'nav.planAccess', label: 'Plan & access', icon: CreditCard,
+        managerOnly: true, aliases: ['/settings/modules'],
+        tabs: [
+          { tab: 'plan', labelKey: 'nav.billing', label: 'Billing' },
+          { tab: 'modules', labelKey: 'nav.modules', label: 'Modules' },
+        ] },
       // Data (Custom Objects deleted — 2026-07 trim: an island with no consumer
       // anywhere and no record-to-contact linking UI at all)
-      { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
       // Moved out of the Contacts hub (2026-08): these SHAPE contacts, they are
       // not contacts you work.
       // A segment is a rule the system keeps applying; a tag is a label somebody
-      // sticks on. You choose between them for the SAME job, so they are one page.
-      { path: '/segments', labelKey: 'nav.audience', label: 'Segments & tags', icon: Filter,
-        managerOnly: true, aliases: ['/tags'],
-        tabs: [
-          { tab: 'segments', labelKey: 'nav.segments', label: 'Segments' },
-          { tab: 'tags', labelKey: 'nav.tags', label: 'Tags' },
-        ] },
-      { path: '/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
-      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true, feature: 'research' },
       // Connections & domains (Account Center absorbed Settings→Connections)
       { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },
       // One job under two names: you own a domain, you paste DNS records, you
@@ -739,6 +778,24 @@ export function findActiveHub(hubs: NavHub[], pathname: string): NavHub | undefi
  * `/automations` item, not merely to the hub containing it. Undefined when the
  * match is a single-page hub (which has no child) or nothing matches.
  */
+/**
+ * Routes that own the whole viewport, whatever area they belong to.
+ *
+ * The workflow builder is a `h-[calc(100vh-7rem)]` canvas and the settings pane
+ * is a heightless scroll column beside a 240px sidebar, so inside it the canvas
+ * renders letterboxed. Giving the pane `h-full` would fix the height and leave
+ * the canvas jammed against the sidebar, so the page leaves the area instead.
+ *
+ * A PREFIX list keyed on the path, deliberately: the flag used to ride on the
+ * nav item, and disappeared the day that item was absorbed into another page.
+ * These routes are full-bleed whether or not anything lists them.
+ */
+export const FULL_BLEED_PREFIXES = ['/automations'] as const;
+
+export function isFullBleedPath(pathname: string): boolean {
+  return FULL_BLEED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
 export function findActiveChild(hubs: NavHub[], pathname: string): NavChild | undefined {
   let best: { child: NavChild; len: number } | undefined;
   for (const h of hubs) {

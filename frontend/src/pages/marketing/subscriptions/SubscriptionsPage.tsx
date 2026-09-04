@@ -261,18 +261,17 @@ export default function SubscriptionsPage({ embedded }: { embedded?: boolean } =
 
   return (
     <div className="space-y-4">
-      {!embedded && (
-        <PageHeader
-          title={t('subscriptions.title', 'Subscriptions')}
-          description={t('subscriptions.subtitle', 'Recurring plans that auto-generate invoices each period.')}
-          actions={
-            <Button size="md" onClick={openNew}>
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              {t('subscriptions.newPlan', 'New subscription')}
-            </Button>
-          }
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('subscriptions.title', 'Subscriptions')}
+        description={t('subscriptions.subtitle', 'Recurring plans that auto-generate invoices each period.')}
+        actions={
+          <Button size="md" onClick={openNew}>
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            {t('subscriptions.newPlan', 'New subscription')}
+          </Button>
+        }
+      />
 
       <QueryStateBoundary
         isLoading={isLoading}

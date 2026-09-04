@@ -33,7 +33,11 @@ import { test, expect } from './support/fixtures';
 test('a new workspace has no automations and is offered the two ways to make one', async ({ app }) => {
   await app.goto('/automations');
 
-  await expect(app.getByRole('heading', { level: 1, name: 'Otomasyonlar' })).toBeVisible();
+  // A TAB of Strategy since 2026-09-04 — a workflow is machinery in service of
+  // a plan. `/automations` still resolves; it redirects here, and the page's
+  // own <h1> gave way to the shell's, which is the one heading on the page.
+  await expect(app).toHaveURL(/\/studio\/strategy\?tab=automations$/);
+  await expect(app.getByRole('tab', { name: 'Akışlar', selected: true })).toBeVisible();
 
   // The real empty state, not just "no rows".
   await expect(app.getByText('Henüz otomasyon yok', { exact: true })).toBeVisible();
@@ -84,7 +88,7 @@ test('a named automation with one step saves and appears in the list as a draft'
   await app.getByRole('button', { name: 'Kaydet', exact: true }).click();
 
   // A successful save leaves the builder for the list.
-  await expect(app).toHaveURL(/\/automations$/);
+  await expect(app).toHaveURL(/\/studio\/strategy\?tab=automations$/);
   await expect(app.getByText('E2E takip otomasyonu')).toBeVisible();
   // The row shows what fires it — proof the trigger survived the round trip and
   // was not dropped on the way to the DSL.

@@ -8,120 +8,85 @@ import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
 
 /**
- * Ordered sub-grouping for the Settings area, so the list reads as everyday
- * admin up top and developer/compliance tooling last instead of one
- * undifferentiated grab-bag.
+ * Ordered sub-grouping for the Settings area.
  *
- * SEVEN groups over ~35 pages, down from nine over forty-two. Six pairs that
- * were one job each became one page each with deep-linkable tabs (Team+Roles,
- * Segments+Tags, the two Domains, the two Webhook directions, API keys+the
- * Claude connector, Voice+Phone tree), and two groups whose distinction nobody
- * navigates by were folded into their neighbours. Every old path still
- * resolves — App.tsx redirects each one to its tab — so the LIST got shorter
- * without anything becoming unreachable.
+ * SEVEN groups over SEVENTEEN pages, from nine over forty-two two days ago. The
+ * cut was not "put things in better boxes" — it was noticing how many entries
+ * were one job filed under two or four names, and how many were filed in
+ * Settings at all when their effect is only visible somewhere else.
  *
- * Paths not listed fall into "Other" — which the test asserts stays EMPTY, so a
- * new settings page has to be placed on purpose.
+ * Three left entirely: importing people, grouping them, and defining what a
+ * record can hold are all about the people in the INBOX, and living here put
+ * them a whole surface away from the only place you can see them work.
+ *
+ * Every absorbed path still resolves — App.tsx redirects each to its tab, and
+ * the command palette offers each by its own name. Paths not listed fall into
+ * "Other", which the test asserts stays EMPTY, so a new settings page has to be
+ * placed on purpose.
  */
 const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
   {
     key: 'workspace',
-    label: 'Workspace',
-    // What you configure once about the BUSINESS. /users is Team AND the roles
-    // its members carry — one page, two tabs — because nobody thinks about a
-    // role without thinking about the person who has it.
-    paths: [
-      '/branding',
-      '/users',
-      '/targets',
-      // Pipelines sits beside Targets rather than in a group of its own: both
-      // are the sales SHAPE a manager defines once (the stages a deal moves
-      // through, the numbers it is measured against) and everybody then works
-      // inside. Filing it under Data would make that group mean "what shapes
-      // contact records, and also deals".
-      '/settings/pipelines',
-      '/settings/modules',
-      '/booking',
-      // Public surfaces you configure once, absorbed from the Sites and
-      // Courses hubs — they are workspace setup, not somewhere you work daily.
-      '/sites',
-      '/memberships/courses',
-    ],
+    label: 'Your business',
+    /**
+     * What somebody opening a new workspace has to fill in before anything else
+     * works, and rarely touches again: who this business IS, and who works here.
+     *
+     * Two pages, not seven. `/branding` carries the identity, the visual kit,
+     * the AI brand voice AND the deal stages — all four are "the shape of the
+     * business". `/users` carries the members, what they may do, what they are
+     * aiming at and when they can be booked — all four are about PEOPLE, and
+     * three of them used to be findable only if you already knew they were not
+     * on the page about people.
+     */
+    paths: ['/branding', '/users'],
   },
   {
     key: 'marketing',
     label: 'Marketing',
     /**
-     * Everything you SET UP about marketing, whether it then runs itself or
-     * waits to be drawn on.
+     * `/studio/strategy` is first and always will be: a workspace without a
+     * strategy is not one with a blank page, it is one whose automations have
+     * nothing to be FOR. The machinery that serves it — the workflows, and the
+     * research that feeds them — are tabs of it rather than siblings.
      *
-     * This was two groups — "Automation" and "Marketing assets" — and the line
-     * between them did not survive contact with the list. A workflow runs
-     * unattended and an email template does not, which is a true difference and
-     * not one anybody navigates by: both answer "where do I go to change how we
-     * market". Two four-item groups also cost more to scan than one of seven,
-     * which is the whole reason this grouping exists.
+     * "AI research" stopped being its own entry because nobody could state its
+     * difference from an automation: both are standing instructions that run
+     * without you and put data into the funnel.
      *
-     * /settings/ai-models belongs here for its own reason: it is the model —
-     * and therefore the PRICE PER CLIP — the content engine spends on when
-     * nobody is watching.
+     * Sites & funnels moved in from workspace setup. A funnel is not something
+     * you configure once about the business; it is a thing you build to market
+     * with, and it belongs with the other things you build to market with.
      */
     paths: [
       '/studio/strategy',
-      '/automations',
-      '/settings/ai-models',
-      '/trigger-links',
+      '/sites',
       '/email-templates',
+      '/settings/ai-models',
       '/reviews',
+      '/trigger-links',
       '/affiliates',
+      '/memberships/courses',
     ],
+  },
+  {
+    key: 'selling',
+    label: 'Selling',
+    // One page, in the order a sale happens: a product is what you sell, an
+    // order form is how somebody buys it, a subscription is what recurs, an
+    // invoice is what gets paid — and the payment provider that settles it.
+    paths: ['/products'],
   },
   {
     key: 'channels',
     label: 'Channels & domains',
-    /**
-     * How the outside world reaches you and you reach it: the accounts you have
-     * connected, the domains you own, and the telephone.
-     *
-     * Absorbed the standalone Telephony group. Its own note argued a call log
-     * is "an operational record of work that already happened" and fitted no
-     * other group — true of the LOG, and the group had since grown to hold
-     * voice CONFIGURATION as well, which is plainly channel setup. With the
-     * greeting and the phone tree now one page, what is left is the phone as a
-     * channel, sitting with the other channels.
-     *
-     * /settings/domains is Sending + Website in one: both are a domain you own
-     * and prove with DNS records, and which one it is depends only on what the
-     * domain is FOR.
-     */
-    paths: ['/accounts', '/settings/domains', '/calls', '/voice'],
-  },
-  {
-    key: 'billing',
-    label: 'Products & billing',
-    // Absorbed from the Payments hub — what you sell and how you get paid.
-    paths: ['/products', '/subscriptions', '/order-forms', '/invoices', '/billing'],
-  },
-  {
-    key: 'data',
-    label: 'Data',
-    // What SHAPES contact records rather than being contacts you work.
-    // /segments is Segments AND Tags: a rule the system keeps applying and a
-    // label somebody sticks on are two answers to one question, and the choice
-    // between them is only visible when both are on the same page.
-    paths: [
-      '/settings/custom-fields',
-      '/segments',
-      '/import',
-      '/research',
-    ],
+    // How the outside world reaches you and you reach it. `/voice` is now the
+    // whole telephone: what answers it, the options it offers, and what it did.
+    paths: ['/accounts', '/settings/domains', '/voice'],
   },
   {
     key: 'developer',
     label: 'Developer & security',
-    // /settings/api-keys is keys AND the Claude connector — both are granting
-    // something outside this app the right to act inside it. /settings/webhooks
-    // is outgoing AND inbound, which is one concept pointing two ways.
     paths: [
       '/settings/api-keys',
       '/settings/webhooks',
@@ -130,10 +95,18 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     ],
   },
   {
+    key: 'plan',
+    label: 'Plan & access',
+    // LAST, deliberately. Modules used to sit near the top, which put a switch
+    // that REMOVES features next to the logo and the timezone. It belongs with
+    // the plan that pays for them, at the end, where you go once.
+    paths: ['/billing'],
+  },
+  {
     key: 'agency',
     label: 'Agency',
-    // Last, and invisible to everyone but an AGENCY workspace's owner (the
-    // gating rides on the items themselves — see navigation.ts).
+    // Invisible to everyone but an AGENCY workspace's owner (the gating rides
+    // on the items themselves — see navigation.ts).
     paths: ['/agency/locations', '/agency/snapshots', '/agency/rebilling'],
   },
 ];

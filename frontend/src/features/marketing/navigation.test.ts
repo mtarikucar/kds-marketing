@@ -58,16 +58,19 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
     expect(childPaths(hubs, 'studio')).toEqual(['/studio', '/reports']);
     const settings = childPaths(hubs, 'settings');
-    // Absorbed from the retired Automation hub; /automations is workflows-gated.
     expect(settings).toContain('/trigger-links');
-    expect(settings).not.toContain('/automations');
-    // Absorbed from the retired Strategy hub (managerOnly, no entitlement).
+    // Strategy is managerOnly with no entitlement, and it is the page the
+    // workflows- and research-gated halves now live INSIDE. The entry is always
+    // there; what varies is how many tabs it has.
     expect(settings).toContain('/studio/strategy');
-    // Absorbed from the retired Payments hub; /invoices is invoicing-gated.
-    expect(settings).toEqual(expect.arrayContaining([
-      '/products', '/subscriptions', '/order-forms', '/billing',
-    ]));
+    expect(settings).not.toContain('/automations');
+    // Selling is one entry covering products, order forms, subscriptions and
+    // invoices. The invoicing gate moved onto its tab, not off the product.
+    expect(settings).toContain('/products');
+    expect(settings).not.toContain('/subscriptions');
+    expect(settings).not.toContain('/order-forms');
     expect(settings).not.toContain('/invoices');
+    expect(settings).toContain('/billing');
     // Sites (funnels) and Courses (memberships module, OFF by default) keep the
     // entitlement gates they carried as hubs.
     expect(settings).not.toContain('/sites');
@@ -85,25 +88,42 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
    * It stays a ROUTE (the frozen set above is unchanged, byte for byte) and it
    * keeps its `telephony` gate. This is a menu move, not a deletion.
    */
-  it('files the call log under settings, not on the person surface', () => {
+  it('files the call log with the phone that made the calls, not on the person surface', () => {
+    // It became a TAB of /voice on 2026-09-04: what answers the line, the
+    // options it offers, and what it then did are one subject.
     const hubs = visibleNav(NAV_HUBS, {
       isManager: true, isOwner: true, has: () => true, isAgency: false,
     });
-    expect(childPaths(hubs, 'settings')).toContain('/calls');
+    expect(childPaths(hubs, 'settings')).not.toContain('/calls');
     expect(childPaths(hubs, 'inbox')).not.toContain('/calls');
+    const voice = NAV_HUBS.find((h) => h.id === 'settings')?.children
+      ?.find((c) => c.path === '/voice');
+    expect(voice?.aliases).toContain('/calls');
   });
 
-  it('carries the telephony gate with it rather than leaving it behind', () => {
-    const withTelephony = childPaths(
-      visibleNav(NAV_HUBS, { isManager: true, has: entitle('telephony') }),
-      'settings',
-    );
-    const without = childPaths(
-      visibleNav(NAV_HUBS, { isManager: true, has: entitle() }),
-      'settings',
-    );
-    expect(withTelephony).toContain('/calls');
-    expect(without).not.toContain('/calls');
+  /**
+   * THE GATE A MERGE CAN DROP WITHOUT ANYONE NOTICING.
+   *
+   * /calls carried `telephony`, /automations `workflows`, /invoices `invoicing`,
+   * /booking `funnels`. Each is now a tab inside a page with a different gate,
+   * and folding one in without carrying its own would offer a workspace a tab
+   * for a feature it has not bought — a click, a blank panel, no explanation.
+   * A list you cannot use is worse than the long list this merge replaced.
+   */
+  it('carries each absorbed page’s own entitlement onto its tab', () => {
+    const settings = NAV_HUBS.find((h) => h.id === 'settings');
+    const tabFeature = (path: string, tab: string) =>
+      settings?.children?.find((c) => c.path === path)?.tabs?.find((t) => t.tab === tab)?.feature;
+
+    expect(tabFeature('/voice', 'calls')).toBe('telephony');
+    expect(tabFeature('/studio/strategy', 'automations')).toBe('workflows');
+    expect(tabFeature('/studio/strategy', 'research')).toBe('research');
+    expect(tabFeature('/products', 'invoices')).toBe('invoicing');
+    expect(tabFeature('/users', 'booking')).toBe('funnels');
+    // And an ungated half stays ungated — a blanket gate would hide the half
+    // everybody is entitled to.
+    expect(tabFeature('/users', 'members')).toBeUndefined();
+    expect(tabFeature('/products', 'products')).toBeUndefined();
   });
 
   it('keeps the moved single-page hubs gated on the SAME entitlement they had', () => {
@@ -111,8 +131,8 @@ describe('visibleNav — surface model, role + entitlement gating', () => {
       childPaths(visibleNav(NAV_HUBS, { isManager: true, has: entitle(...keys) }), 'settings');
     expect(paths('funnels')).toContain('/sites');
     expect(paths('memberships')).toContain('/memberships/courses');
-    expect(paths('workflows')).toContain('/automations');
-    expect(paths('invoicing')).toContain('/invoices');
+    // Workflows and invoicing became TABS on 2026-09-04. Their gates went with
+    // them — asserted directly above, where a tab's feature is readable.
   });
 
   /**
@@ -364,10 +384,14 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
    * route (requiredRole={MANAGER}) rather than being offered to a rep who
    * would only meet a redirect.
    */
-  it('gives /settings/pipelines a Settings entry, manager-gated like its route', () => {
+  it('gives /settings/pipelines a Settings door, manager-gated like its route', () => {
+    // A tab of /branding since 2026-09-04: the stages a deal moves through are
+    // the SHAPE of the business, beside its identity. The door is the page that
+    // absorbed it, and it carries the same manager gate.
     const settings = NAV_HUBS.find((h) => h.id === 'settings');
-    const item = settings?.children?.find((c) => c.path === '/settings/pipelines');
+    const item = settings?.children?.find((c) => c.path === '/branding');
     expect(item).toBeDefined();
+    expect(item?.aliases).toContain('/settings/pipelines');
     expect(item?.managerOnly).toBe(true);
     expect(childPaths(
       visibleNav(NAV_HUBS, { isManager: false, isOwner: false, has: entitle(), isAgency: false }),
@@ -468,16 +492,37 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
     const byPath = new Map((settings?.children ?? []).map((c) => [c.path, c]));
     const ABSORBED: [string, string][] = [
       ['/settings/roles', '/users'],
-      ['/tags', '/segments'],
       ['/settings/sending-domains', '/settings/domains'],
       ['/settings/custom-domains', '/settings/domains'],
       ['/settings/inbound-webhooks', '/settings/webhooks'],
       ['/settings/mcp-console', '/settings/api-keys'],
       ['/voice/ivr', '/voice'],
+      // The second pass, 2026-09-04.
+      ['/settings/pipelines', '/branding'],
+      ['/targets', '/users'],
+      ['/booking', '/users'],
+      ['/automations', '/studio/strategy'],
+      ['/research', '/studio/strategy'],
+      ['/order-forms', '/products'],
+      ['/subscriptions', '/products'],
+      ['/invoices', '/products'],
+      ['/settings/modules', '/billing'],
+      ['/calls', '/voice'],
     ];
     for (const [gone, home] of ABSORBED) {
       expect({ gone, listed: byPath.has(gone) }).toEqual({ gone, listed: false });
       expect({ gone, alias: byPath.get(home)?.aliases ?? [] })
+        .toEqual({ gone, alias: expect.arrayContaining([gone]) });
+    }
+
+    // Three went OUT of Settings entirely — importing people, grouping them and
+    // defining what a record holds are about the people in the INBOX, and
+    // living here put them a surface away from where their effect is visible.
+    const inbox = NAV_HUBS.find((h) => h.id === 'inbox');
+    const people = inbox?.children?.find((c) => c.path === '/leads');
+    for (const gone of ['/import', '/segments', '/tags', '/settings/custom-fields']) {
+      expect({ gone, inSettings: byPath.has(gone) }).toEqual({ gone, inSettings: false });
+      expect({ gone, alias: people?.aliases ?? [] })
         .toEqual({ gone, alias: expect.arrayContaining([gone]) });
     }
   });
@@ -558,12 +603,20 @@ describe('findActiveHub — path → owning hub', () => {
     expect(findActiveHub(NAV_HUBS, '/reports')?.id).toBe('studio');
     expect(findActiveHub(NAV_HUBS, '/prospecting')?.id).toBe('studio');
     // Set up.
-    expect(findActiveHub(NAV_HUBS, '/tags')?.id).toBe('settings');
-    expect(findActiveHub(NAV_HUBS, '/segments')?.id).toBe('settings');
-    expect(findActiveHub(NAV_HUBS, '/settings/custom-fields')?.id).toBe('settings');
     expect(findActiveHub(NAV_HUBS, '/trigger-links')?.id).toBe('settings');
     expect(findActiveHub(NAV_HUBS, '/accounts')?.id).toBe('settings');
+    // Selling absorbed invoices, so an old invoice bookmark resolves through
+    // the page that took it — still Settings, by a different door.
     expect(findActiveHub(NAV_HUBS, '/invoices')?.id).toBe('settings');
+    // WORK, not set-up, since 2026-09-04. Grouping people, importing them and
+    // defining what a record holds only ever mean something about the people on
+    // the Inbox surface; filing them under Settings put them a whole surface
+    // away from the only place their effect is visible. The paths still
+    // resolve — this is what they resolve TO now.
+    expect(findActiveHub(NAV_HUBS, '/tags')?.id).toBe('inbox');
+    expect(findActiveHub(NAV_HUBS, '/segments')?.id).toBe('inbox');
+    expect(findActiveHub(NAV_HUBS, '/settings/custom-fields')?.id).toBe('inbox');
+    expect(findActiveHub(NAV_HUBS, '/import')?.id).toBe('inbox');
   });
 
   it('keeps /studio and /studio/strategy in DIFFERENT surfaces without ambiguity', () => {

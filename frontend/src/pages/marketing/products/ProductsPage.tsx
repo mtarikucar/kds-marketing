@@ -117,7 +117,7 @@ function Labeled({
  * (tax rates, coupons) folded in as deep-linkable `?tab=` tabs, so everything
  * about "what you sell and how it's priced" lives on one page.
  */
-export default function ProductsPage() {
+export default function ProductsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
@@ -137,6 +137,7 @@ export default function ProductsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+          embedded={embedded}
         title={t('products.title', 'Products')}
         description={t('products.subtitle', 'Reusable priced items you sell.')}
       />

@@ -90,7 +90,11 @@ test('a product created through the UI is listed with Turkish lira formatting', 
 test('order forms stay locked until the catalog has a product', async ({ app, api, workspace }) => {
   await app.goto('/order-forms');
 
-  await expect(app.getByRole('heading', { name: 'Sipariş Formları', level: 1 })).toBeVisible();
+  // A TAB of Selling since 2026-09-04: a product is what you sell and an order
+  // form is how somebody buys it. The old path redirects, and the page's own
+  // <h1> gave way to the shell's.
+  await expect(app).toHaveURL(/\/products\?tab=order-forms$/);
+  await expect(app.getByRole('tab', { name: 'Sipariş formları', selected: true })).toBeVisible();
 
   // With no product there is nothing an order form could sell, so the page
   // explains that and disables creation instead of offering a dead-end dialog.
