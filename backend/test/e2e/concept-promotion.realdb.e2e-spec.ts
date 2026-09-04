@@ -4,7 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { AiCreditsService } from '../../src/modules/marketing/ai/ai-credits.service';
 import { VideoPipelineService } from '../../src/modules/marketing/video/video-pipeline.service';
-import { ContentConceptsService } from '../../src/modules/marketing/content-concepts/content-concepts.service';
+import { ContentConceptsService, MIN_SHOT_SEC, MAX_SHOT_SEC } from '../../src/modules/marketing/content-concepts/content-concepts.service';
 import {
   ConceptPromotionService,
   CONCEPT_PRODUCE_KIND,
@@ -657,7 +657,9 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     await svc.produce(item.id, workspaceId);
 
     const durations = requests.map((r) => r.dto.durationSec as number);
-    expect(durations).toEqual([10, 1, 10]);
+    // The floor is the default video model's own contract floor (Seedance 1.0
+    // Pro Fast: 2s), read off the catalogue rather than restated here.
+    expect(durations).toEqual([MAX_SHOT_SEC, MIN_SHOT_SEC, MAX_SHOT_SEC]);
 
     // The real tool schema, not a restatement of it.
     const registry = new McpToolRegistry();
