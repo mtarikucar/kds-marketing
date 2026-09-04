@@ -582,11 +582,14 @@ export class MediaGenService implements OnModuleInit {
       if (claim.count === 1) {
         await this.reconcile(asset.workspaceId, reserved, actual);
         // The credit meter is trued up to the provider's ACTUAL duration above,
-        // so the real-cash wallet pre-debit (charged on the REQUESTED duration,
-        // at the fal estimate) must be too — else a 10s request that returns a
-        // 4s clip refunds the credit delta but keeps the wallet overcharged for
-        // capacity never used. A cheaper vendor shows up here as a larger refund.
-        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, vendorUsd);
+        // so the real-cash wallet pre-debit (charged on the REQUESTED duration)
+        // must be too — else a 10s request that returns a 4s clip refunds the
+        // credit delta but keeps the wallet overcharged for capacity never used.
+        // At the CATALOGUE rate, deliberately: the customer-facing charge is the
+        // catalogue's on both meters, whichever vendor rendered. The vendor's
+        // own figure is bookkeeping (costUsd above, the ledger below) — a
+        // cheaper vendor is margin, not a customer refund (design §2.3).
+        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, estimateMediaUsd(asset.model, trueUp));
         // Record the vendor cost on the SAME trued-up figure. This is the
         // vendor-cost ledger, not the customer's credit meter above: every other
         // vendor lands there and fal never did, so the spend report read 0 for
@@ -701,7 +704,10 @@ export class MediaGenService implements OnModuleInit {
       });
       if (!entry || entry.workspaceId !== workspaceId) return;
       const reservedUsd = new Prisma.Decimal(entry.delta).negated();
-      const refundUsd = reservedUsd.minus(new Prisma.Decimal(actualUsd));
+      // At the ledger's own precision: the two figures come from the same
+      // per-second rate multiplied in floating point, and a 2e-16 remainder is
+      // not a refund, it is a dust row.
+      const refundUsd = reservedUsd.minus(new Prisma.Decimal(actualUsd)).toDecimalPlaces(4);
       if (refundUsd.lte(0)) return;
       await this.wallet.credit(workspaceId, {
         amount: refundUsd,
@@ -841,7 +847,12 @@ export class MediaGenService implements OnModuleInit {
     // pre-reserve contract check and 400s a re-run of the workspace's OWN
     // history. It was ignored on the wire when the asset was first made, so
     // dropping it reproduces the original generation rather than blocking it.
-    const aspect = getMediaModel(a.model)?.contract.aspect;
+    //
+    // Checked against the SUCCESSOR's contract where the row names an id fal
+    // has retired: that is the model requestGeneration will resolve to and
+    // enforce, and a ratio the old model published but the new one does not
+    // (Lite's 4:5) would otherwise 400 the re-run of the workspace's own history.
+    const aspect = getMediaModel(resolveMediaModelId(a.model))?.contract.aspect;
     const aspectRatio = p.aspectRatio && aspect?.values[p.aspectRatio] ? p.aspectRatio : undefined;
     return this.requestGeneration(workspaceId, {
       type: a.type as GeneratedAssetType,

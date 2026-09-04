@@ -218,6 +218,28 @@ describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
       expect(wallet.credit.mock.calls[0][1].amount.toString()).toBe('0.9');
     });
 
+    it('a Runware-rendered engine clip reconciles the wallet at the CATALOGUE rate — the vendor saving is margin, not a refund', async () => {
+      // Seedance 2.5, 5s at 720p: catalogue (fal) $0.473/s = $2.365 pre-debited;
+      // Runware reports $1.152. The wallet is the customer's money at the
+      // catalogue price, so nothing comes back; costUsd records what it cost us.
+      const VIDEO_ASSET = {
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING', provider: 'runware',
+        model: 'bytedance/seedance-2.5/text-to-video', costCreditsReserved: 240,
+        params: { campaignItemId: 'ci-1', resolution: '720p' }, type: 'VIDEO', durationSec: 5,
+      };
+      const { svc, prisma, wallet } = makeSvc({
+        asset: VIDEO_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-2.365') },
+      });
+      (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
+      (prisma as any).generatedAsset.updateMany.mockResolvedValue({ count: 1 });
+      ((svc as any).r2.upload as jest.Mock).mockResolvedValue({ url: 'u', key: 'k', mime: 'video/mp4' });
+      // Runware returns no duration, so the requested length stands.
+      await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'u', mime: 'video/mp4' }], costUsd: 1.152 });
+      expect(wallet.credit).not.toHaveBeenCalled();
+      expect(Number((prisma as any).generatedAsset.updateMany.mock.calls[0][0].data.costUsd)).toBeCloseTo(1.152, 6);
+    });
+
     it('COMPLETED at the EXACT requested duration → no wallet reconcile (nothing unused)', async () => {
       const VIDEO_ASSET = {
         // Veo 3.1 Fast offers 4/6/8s, so 8s is the exact length that can be

@@ -284,6 +284,16 @@ describe('retired ids (replacedBy)', () => {
     expect(isMediaModelReplaced(DEFAULT_VIDEO_MODEL)).toBe(false);
   });
 
+  it('never chains or cycles: every successor is a live, same-kind model', () => {
+    for (const m of allMediaModels().filter((x) => x.replacedBy)) {
+      const successor = MEDIA_MODELS[m.replacedBy!];
+      expect(successor).toBeDefined();
+      expect(successor.replacedBy).toBeUndefined();
+      expect(successor.withheld).toBeUndefined();
+      expect(successor.type).toBe(m.type);
+    }
+  });
+
   it('keeps retired ids priced and typed (old rows reference them) but off the menu and off the write gate', () => {
     expect(isCataloguedModel(RETIRED_SEEDANCE_LITE_MODEL, 'VIDEO')).toBe(true);
     expect(MEDIA_MODELS[RETIRED_SEEDANCE_LITE_MODEL].creditsPerSec).toBe(3);
@@ -319,6 +329,11 @@ describe('runware bindings', () => {
       .toBeCloseTo(3.0677, 4);
     // Flat image rate; a model with no binding falls back to the fal figure.
     expect(estimateVendorUsd('fal-ai/qwen-image', {}, 'runware')).toBeCloseTo(0.0058, 6);
+    expect(estimateVendorUsd('fal-ai/birefnet/v2', {}, 'runware')).toBeCloseTo(0.0006, 6);
     expect(estimateVendorUsd(DEFAULT_IMAGE_MODEL, {}, 'runware')).toBeCloseTo(0.03, 6);
+    // The default video model's Runware tiers: 5s at 480p / 720p / 1080p.
+    expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '480p' }, 'runware')).toBeCloseTo(0.03145, 6);
+    expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '720p' }, 'runware')).toBeCloseTo(0.0668, 6);
+    expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '1080p' }, 'runware')).toBeCloseTo(0.15885, 6);
   });
 });

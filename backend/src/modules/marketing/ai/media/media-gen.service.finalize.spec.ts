@@ -22,7 +22,7 @@ function makeSvc(asset: any) {
   return { svc, prisma, credits, provider, r2, mediaSpend };
 }
 
-const QUEUED = { id: 'a1', workspaceId: WS, status: 'GENERATING', model: 'fal-ai/qwen-image', costCreditsReserved: 2, params: {}, type: 'IMAGE' };
+const QUEUED = { id: 'a1', workspaceId: WS, status: 'GENERATING', provider: 'fal', model: 'fal-ai/qwen-image', costCreditsReserved: 2, params: {}, type: 'IMAGE' };
 
 describe('MediaGenService.finalizeAsset', () => {
   it('records what the generation cost US, on the trued-up credit count', async () => {
@@ -31,7 +31,7 @@ describe('MediaGenService.finalizeAsset', () => {
     // on the wiring, deleting the call again would break no test.
     const { svc, mediaSpend } = makeSvc({ ...QUEUED });
     await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png' }] });
-    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, expect.objectContaining({ assetId: 'a1', credits: 2 }));
+    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, { assetId: 'a1', credits: 2, vendor: 'fal', vendorUsd: 0.02 });
   });
 
   it('does not bill for a generation that failed', async () => {

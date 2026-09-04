@@ -27,6 +27,18 @@ describe('buildRunwareTask — per-model wire shape', () => {
     });
   });
 
+  it('drops reference images on a text-to-video model instead of promoting one into a first frame', () => {
+    // The campaign engine passes the brand kit's reference images on EVERY
+    // generation. fal ignores them on a model with no source slot; Runware must
+    // too, or the clip becomes an image-to-video render of the logo.
+    for (const model of ['bytedance/seedance-2.5/text-to-video', DEFAULT_VIDEO_MODEL]) {
+      const t = build({ model, aspectRatio: '9:16', sources: { images: ['https://cdn/logo.png'], lastImage: 'https://cdn/b.png' } });
+      expect(t).not.toHaveProperty('inputs');
+      expect(t).not.toHaveProperty('resolution');
+      expect(t).toHaveProperty('width');
+    }
+  });
+
   it('Seedance 2.5 text-to-video: width/height from the aspect table, integer duration, audio on by default, no seed', () => {
     const t = build({
       model: 'bytedance/seedance-2.5/text-to-video', aspectRatio: '9:16', resolution: '720p', durationSec: 8, seed: 7,
@@ -88,6 +100,8 @@ describe('buildRunwareTask — per-model wire shape', () => {
       taskType: 'removeBackground', model: 'runware:112@5', inputs: { image: 'https://cdn/p.jpg' }, outputFormat: 'PNG',
     });
     expect(t).not.toHaveProperty('positivePrompt');
+    // Not in the removeBackground schema; an unknown field is a validation error.
+    expect(t).not.toHaveProperty('numberResults');
     expect(() => build({ model: 'fal-ai/birefnet/v2', type: 'IMAGE', prompt: '' })).toThrow(/source image/);
   });
 

@@ -153,11 +153,9 @@ tercih hâlâ çalışıyor).
 
 - `GeneratedAsset.costUsd`: oluştururken fal tahmini (temkinli; motor cüzdan ön
   borcu da bunu kullanır). Finalize'de Runware satırları için sağlayıcının bildirdiği
-  gerçek USD (yoksa `estimateVendorUsd(..., 'runware')`) yazılır; motor cüzdanı
-  farkı iade eder (`reconcileEngineWallet` gerçek USD ile çağrılır).
+  gerçek USD (yoksa `estimateVendorUsd(..., 'runware')`) yazılır; motor cüzdanı ise **katalog fiyatından** mutabakat yapılır (`reconcileEngineWallet` `estimateMediaUsd` ile): müşteriye dönük ücret her iki sayaçta da kataloğun ücretidir, satıcı farkı marjdır (§2.3). Satıcı USD'si yalnız defter kaydıdır.
 - `MediaSpendService.settle(ws, { assetId, credits, vendor, vendorUsd })`:
-  `vendor === 'runware'` ise `CONTENT / RUNWARE_CENT` tarifesi, miktar
-  `round(vendorUsd × 100)`; aksi halde bugünkü `FAL_CREDIT` yolu.
+  `vendor === 'runware'` ise `CONTENT / RUNWARE_CENT` tarifesi, miktar `vendorUsd × 100` **kesirli cent** (4 hane; BiRefNet $0.0006 = 0.06 cent, tam cente yuvarlansa ya düşer ya 17 kat yazılırdı); aksi halde bugünkü `FAL_CREDIT` yolu.
 - Tarife tohumu: `20260904120000_seed_runware_cent_tariff` — platform satırı
   `('CONTENT','runware','RUNWARE_CENT', 0.4000 TRY)`; `FAL_CREDIT` ile aynı kur
   varsayımı. `migration.sql` + `down.sql` (yalnız o platform satırını siler).
@@ -173,6 +171,9 @@ tercih hâlâ çalışıyor).
 
 ## 4. Hata ve kenar durumları
 
+- Runware poll'u geçici hata verirse (429/5xx, adressiz `rateLimit`/`timeout` kodu)
+  iş uçuşta kalır (`IN_PROGRESS`); Runware render'ı bitirip faturalıyor, satırı
+  FAILED yapıp iade etmek hem müşteriyi hem defteri yanıltırdı. Yaş tavanı sınırlar.
 - Runware `submit` başarısız → mevcut `catch` yolu: satır FAILED, kredi iadesi. fal'a
   otomatik geri düşüş **yok** (çift ücret riski, farklı fiyat); operatör anahtarı
   kaldırarak tüm trafiği fal'a döndürür.

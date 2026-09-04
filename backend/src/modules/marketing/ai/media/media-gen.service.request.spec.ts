@@ -180,3 +180,24 @@ describe('MediaGenService.requestGeneration — vendors and retired ids', () => 
     expect(prisma.generatedAsset.create.mock.calls[0][0].data.provider).toBe('fal');
   });
 });
+
+describe('MediaGenService.regenerate — rows on a fal-retired model', () => {
+  const ROW = {
+    id: 'old', workspaceId: WS, type: 'VIDEO', model: RETIRED_SEEDANCE_LITE_MODEL, prompt: 'p', negativePrompt: null,
+    params: { aspectRatio: '4:5' }, durationSec: 5, socialCampaignId: null,
+  };
+
+  it('drops a replayed ratio the successor does not publish instead of 400ing the re-run', async () => {
+    const { svc, prisma, provider } = makeSvc();
+    prisma.generatedAsset.findFirst = jest.fn().mockResolvedValue(ROW);
+    await svc.regenerate(WS, 'old', 'u1');
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({ model: DEFAULT_VIDEO_MODEL, aspectRatio: undefined }));
+  });
+
+  it('keeps a replayed ratio the successor does publish', async () => {
+    const { svc, prisma, provider } = makeSvc();
+    prisma.generatedAsset.findFirst = jest.fn().mockResolvedValue({ ...ROW, params: { aspectRatio: '9:16' } });
+    await svc.regenerate(WS, 'old', 'u1');
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({ model: DEFAULT_VIDEO_MODEL, aspectRatio: '9:16' }));
+  });
+});

@@ -1251,12 +1251,18 @@ export function getMediaModel(id: string): MediaModel | undefined {
 }
 
 /** Follow `replacedBy` (bounded) to the id that actually runs today. An id that
- *  is not catalogued, or whose successor is not, resolves to itself. */
+ *  is not catalogued, or whose successor is not, resolves to itself — and so
+ *  does a cycle, which is a catalogue authoring error the config spec refuses
+ *  to ship rather than something to resolve one way on odd hops and the other
+ *  on even ones. */
 export function resolveMediaModelId(id: string): string {
+  const seen = new Set<string>([id]);
   let current = id;
   for (let hop = 0; hop < 3; hop++) {
     const next = MEDIA_MODELS[current]?.replacedBy;
-    if (!next || next === current || !MEDIA_MODELS[next]) return current;
+    if (!next || !MEDIA_MODELS[next]) return current;
+    if (seen.has(next)) return id;
+    seen.add(next);
     current = next;
   }
   return current;

@@ -6,9 +6,23 @@ import {
 import { billableDurationSec, getMediaModel } from '../media/media-models.config';
 
 const RUNWARE_API = 'https://api.runware.ai/v1';
+/** A positive integer from the environment, or the fallback. `Number('')` is 0
+ *  and `Number('abc')` is NaN — both would abort every call at once — so a
+ *  blank or mistyped value means "the default", never "no timeout". */
+function envPositiveInt(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
 // Bound every call, as the fal provider does: submit runs after credits are
 // reserved and a hung poll would pin the scheduled-job worker.
-const RUNWARE_TIMEOUT_MS = Number(process.env.RUNWARE_TIMEOUT_MS ?? 30_000);
+const RUNWARE_TIMEOUT_MS = envPositiveInt('RUNWARE_TIMEOUT_MS', 30_000);
+/** A poll that fails for a reason that is about the POLL, not the task — the
+ *  queue is saturated, a gateway timed out, Runware is briefly down — must
+ *  leave the job in flight: Runware keeps rendering and bills the result, so
+ *  failing the row here would refund the customer for a clip that arrives and
+ *  is paid for. The service's own age cap bounds how long this can go on. */
+const TRANSIENT_HTTP = new Set([408, 425, 429, 500, 502, 503, 504]);
+const TRANSIENT_CODE_RE = /rateLimit|timeout|serverError|serviceUnavailable|serverUnavailable|noAvailableServer|internalServerError|unknownError|connection/i;
 /** The codes Runware's own SDK normalises to "safety" — a moderation refusal,
  *  which is refunded (BLOCKED) rather than retried. Runware publishes no code
  *  catalogue of its own, so the message regex is the second line of defence. */
@@ -87,16 +101,27 @@ export function buildRunwareTask(opts: MediaGenSubmit, taskUUID: string): Record
 
   const task: Record<string, unknown> = {
     taskType: recipe.task, taskUUID, model: binding.model,
-    deliveryMethod: 'async', outputType: 'URL', includeCost: true, numberResults: 1,
+    deliveryMethod: 'async', outputType: 'URL', includeCost: true,
   };
-  const first = opts.sources?.images?.[0];
+  // Source media goes on the wire ONLY through the slots the catalogue contract
+  // declares for this model — the same rule the fal provider follows. The
+  // campaign engine hands its brand-kit reference images to EVERY generation,
+  // video included; on a text-to-video model (no source slots) they are
+  // dropped, not promoted into a first frame that turns the clip into an
+  // image-to-video render of the logo.
+  const slots = new Set((catalogued.contract.sources ?? []).map((src) => src.slot));
+  const first = slots.has('firstImage') || slots.has('images') ? opts.sources?.images?.[0] : undefined;
+  const last = slots.has('lastImage') ? opts.sources?.lastImage : undefined;
 
   if (recipe.task === 'removeBackground') {
     if (!first) throw new Error(`${opts.model} requires a source image`);
+    // No numberResults: the removeBackground schema does not list it.
     task.inputs = { image: first };
     task.outputFormat = 'PNG'; // keeps the alpha channel
     return task;
   }
+
+  task.numberResults = 1;
 
   task.positivePrompt = opts.prompt;
   if (recipe.negativePrompt && opts.negativePrompt) task.negativePrompt = opts.negativePrompt;
@@ -124,8 +149,8 @@ export function buildRunwareTask(opts: MediaGenSubmit, taskUUID: string): Record
 
   if (recipe.frameImages && first) {
     const frames: Array<{ image: string; frame: 'first' | 'last' }> = [{ image: first, frame: 'first' }];
-    if (recipe.frameImages === 'firstLast' && opts.sources?.lastImage) {
-      frames.push({ image: opts.sources.lastImage, frame: 'last' });
+    if (recipe.frameImages === 'firstLast' && last) {
+      frames.push({ image: last, frame: 'last' });
     }
     task.inputs = { frameImages: frames };
     // width/height cannot be combined with frameImages; the tier is named instead
@@ -213,11 +238,21 @@ export class RunwareProvider implements MediaProvider {
 
   async getResult(requestId: string, _model: string): Promise<MediaGenResult> {
     const { ok, status, body } = await this.post([{ taskType: 'getResponse', taskUUID: requestId }]);
-    // An error addressed to this task (or to nobody — auth, malformed body) is
-    // terminal whatever the HTTP status said.
-    const err = this.errorFor(body, requestId);
-    if (err) return this.errorResult(err);
-    if (!ok) return { status: 'FAILED', error: `runware poll failed (${status})` };
+    const errors: RunwareError[] = Array.isArray(body?.errors) ? body.errors : [];
+    // An error addressed to THIS task is terminal whatever the HTTP status said.
+    const addressed = errors.find((e) => e?.taskUUID === requestId);
+    if (addressed) return this.errorResult(addressed);
+    // An unaddressed error is about the poll itself. A transient one (queue
+    // full, gateway timeout) leaves the job in flight; a permanent one (bad
+    // key) cannot be recovered by polling again.
+    const unaddressed = errors.find((e) => !e?.taskUUID);
+    if (unaddressed && !TRANSIENT_CODE_RE.test(unaddressed.code ?? '')) return this.errorResult(unaddressed);
+    if (!ok) {
+      return TRANSIENT_HTTP.has(status)
+        ? { status: 'IN_PROGRESS' }
+        : { status: 'FAILED', error: `runware poll failed (${status})` };
+    }
+    if (unaddressed) return { status: 'IN_PROGRESS' };
 
     const item = (Array.isArray(body?.data) ? body.data : []).find((d: any) => d?.taskUUID === requestId);
     // Nothing yet under this id and no error either: still queued. The service
@@ -236,12 +271,6 @@ export class RunwareProvider implements MediaProvider {
         : { status: 'IN_PROGRESS' };
     }
     return { status: 'COMPLETED', outputs, costUsd: typeof item.cost === 'number' ? item.cost : undefined };
-  }
-
-  /** The error addressed to THIS task, or one with no address at all. */
-  private errorFor(body: any, taskUUID: string): RunwareError | undefined {
-    const errors: RunwareError[] = Array.isArray(body?.errors) ? body.errors : [];
-    return errors.find((e) => !e?.taskUUID || e.taskUUID === taskUUID);
   }
 
   private errorResult(e: RunwareError): MediaGenResult {

@@ -95,10 +95,28 @@ describe('RunwareProvider', () => {
     expect((await provider.getResult('u1', 'fal-ai/qwen-image')).status).toBe('IN_PROGRESS');
   });
 
-  it('reports a non-2xx poll as FAILED with the HTTP detail', async () => {
+  it('fails a poll that cannot be recovered by polling again (bad key, plain 400)', async () => {
     fetchMock.mockReturnValueOnce(json({ errors: [{ code: 'invalidApiKey', message: 'nope' }] }, 401));
     expect(await provider.getResult('u1', 'fal-ai/qwen-image')).toEqual({ status: 'FAILED', error: 'invalidApiKey: nope' });
-    fetchMock.mockReturnValueOnce(json(null, 503));
-    expect(await provider.getResult('u1', 'fal-ai/qwen-image')).toEqual({ status: 'FAILED', error: 'runware poll failed (503)' });
+    fetchMock.mockReturnValueOnce(json(null, 400));
+    expect(await provider.getResult('u1', 'fal-ai/qwen-image')).toEqual({ status: 'FAILED', error: 'runware poll failed (400)' });
+  });
+
+  it('keeps the job in flight on a transient poll failure — Runware still renders and bills it', async () => {
+    for (const status of [429, 503, 504]) {
+      fetchMock.mockReturnValueOnce(json(null, status));
+      expect((await provider.getResult('u1', 'fal-ai/qwen-image')).status).toBe('IN_PROGRESS');
+    }
+    // An unaddressed rate-limit error in a 200 body is about the poll, not the task.
+    fetchMock.mockReturnValueOnce(json({ errors: [{ code: 'providerRateLimitExceeded', message: 'slow down' }] }));
+    expect((await provider.getResult('u1', 'fal-ai/qwen-image')).status).toBe('IN_PROGRESS');
+    // …but the same code ADDRESSED to the task is the task's own verdict.
+    fetchMock.mockReturnValueOnce(json({ errors: [{ code: 'timeoutProvider', message: 'gave up', taskUUID: 'u1' }] }));
+    expect(await provider.getResult('u1', 'fal-ai/qwen-image')).toEqual({ status: 'FAILED', error: 'timeoutProvider: gave up' });
+  });
+
+  it('maps a moderation refusal by MESSAGE to BLOCKED when the code is generic', async () => {
+    fetchMock.mockReturnValueOnce(json({ errors: [{ code: 'providerError', message: 'Prompt was flagged by content moderation', taskUUID: 'u1' }] }));
+    expect((await provider.getResult('u1', 'fal-ai/qwen-image')).status).toBe('BLOCKED');
   });
 });
