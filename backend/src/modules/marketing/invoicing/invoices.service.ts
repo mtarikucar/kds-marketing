@@ -6,6 +6,8 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { Prisma } from '@prisma/client';
@@ -38,6 +40,10 @@ import {
  * AES-256-GCM box — never the platform's billing PSP. `markPaid` emits
  * invoice.paid (a workflow trigger).
  */
+/** Stripe expires a Checkout Session after 24 hours; past that there is
+ *  nothing left to ask about, so the sweep stops looking. */
+const STRIPE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class InvoicesService {
   private readonly logger = new Logger(InvoicesService.name);
@@ -352,6 +358,17 @@ export class InvoicesService {
         success_url: `${this.base()}/api/public/i/${token}/return?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${this.base()}/api/public/i/${token}`,
       });
+      // RECORD THE SESSION, because the only other place it exists is the
+      // buyer's browser.
+      //
+      // Stripe tells us a payment happened by sending the BUYER to `success_url`.
+      // Somebody who pays and closes the tab never makes that request, so the
+      // money is taken and this invoice stays SENT with nothing anywhere saying
+      // otherwise. Writing the id down turns that into a question we can ask
+      // Stripe ourselves — see `reconcileStripeSessions`.
+      await this.prisma.invoice
+        .update({ where: { id: inv.id }, data: { pspSessionId: session.id } })
+        .catch(() => undefined);
       return { redirectUrl: session.url ?? undefined };
     }
     // MANUAL: surface the workspace's bank details for an offline transfer.
@@ -366,24 +383,114 @@ export class InvoicesService {
     const key = this.openPsp(psp?.configSealed).secretKey;
     if (!key) return { paid: false };
     const session = await new Stripe(key).checkout.sessions.retrieve(sessionId);
-    // Bind the session to THIS invoice. Without this, ANY `paid` session in the
-    // workspace's Stripe account (e.g. a cheap invoice the buyer really paid)
-    // could be replayed here to settle a different, more expensive invoice for
-    // free. Require the invoice id we stamped at creation AND an exact amount +
-    // currency match (defence in depth) before settling.
+    return { paid: await this.settleIfSessionPaid(inv, session) };
+  }
+
+  /**
+   * Settle `inv` if — and only if — this Stripe session really paid for it.
+   *
+   * Shared by the buyer's return trip and the reconcile sweep, deliberately:
+   * these are two doors onto the same decision about money, and two copies of
+   * it is where the strict one and the loose one drift apart.
+   *
+   * The binding is the whole of it. Without it, ANY `paid` session in the
+   * workspace's Stripe account — a cheap invoice the buyer really did pay —
+   * could be replayed to settle a different, more expensive one for free. So
+   * the invoice id we stamped at creation must match, AND the amount and
+   * currency must match exactly, before a single kuruş is marked received.
+   */
+  private async settleIfSessionPaid(
+    inv: { id: string; total: number; currency: string },
+    // Typed structurally rather than as `Stripe.Checkout.Session`: the
+    // stripe import in this file is the constructor, not the namespace, and
+    // these four fields are the whole of what the decision reads.
+    session: {
+      payment_status?: string | null;
+      amount_total?: number | null;
+      currency?: string | null;
+      metadata?: Record<string, string> | null;
+      client_reference_id?: string | null;
+    },
+  ): Promise<boolean> {
     const boundToInvoice =
       session.metadata?.invoiceId === inv.id || session.client_reference_id === inv.id;
     const amountMatches =
       session.amount_total === inv.total &&
       (session.currency ?? '').toLowerCase() === inv.currency.toLowerCase();
-    if (session.payment_status === 'paid' && boundToInvoice && amountMatches) {
-      await this.settle(inv, 'stripe');
-      return { paid: true };
-    }
-    if (session.payment_status === 'paid' && (!boundToInvoice || !amountMatches)) {
+    if (session.payment_status !== 'paid') return false;
+    if (!boundToInvoice || !amountMatches) {
       this.logger.warn(`Stripe session/invoice mismatch for invoice ${inv.id} — refusing to settle`);
+      return false;
     }
-    return { paid: false };
+    await this.settle(inv as never, 'stripe');
+    return true;
+  }
+
+  /**
+   * Ask Stripe about the invoices whose buyer never came back.
+   *
+   * Stripe confirms a payment by redirecting the BUYER to a return URL. That is
+   * the whole confirmation: no server-to-server call, nothing retried. Someone
+   * who pays and closes the tab, loses signal in a lift, or is bounced by a
+   * bank's 3-D Secure page leaves the money taken and the invoice SENT, and
+   * every part of this product that could notice lives in the browser that
+   * left. PayTR and iyzico post to us directly and have no such hole; this
+   * closes the one Stripe has.
+   *
+   * WHY A SWEEP AND NOT A WEBHOOK. A Stripe webhook is the textbook answer and
+   * it cannot be built safely here yet: every workspace brings its OWN Stripe
+   * account, and verifying an incoming event needs that account's webhook
+   * SIGNING secret, which `WorkspacePspConfig` does not hold. An unverified
+   * payment webhook is an endpoint where anyone who guesses a URL can mark an
+   * invoice paid. Asking Stripe ourselves, with the key we already hold, needs
+   * no new secret and cannot be spoofed — the call goes the other way.
+   *
+   * The filter is a real predicate, not a window: `status: SENT` AND
+   * `pspSessionId != null`. That is the whole set of invoices this can help,
+   * and it shrinks by one every time one settles, so the sweep can never go
+   * blind past the oldest N the way a `take()` over an unfiltered table does.
+   * The age bound is Stripe's, not ours: a Checkout Session expires after 24
+   * hours, so past that there is nothing left to ask about.
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES, { name: 'invoice-stripe-reconcile' })
+  async reconcileStripeSessions(): Promise<void> {
+    await withAdvisoryLock(this.prisma, 'invoicing:stripe-reconcile', async () => {
+      const since = new Date(Date.now() - STRIPE_SESSION_TTL_MS);
+      // Cross-workspace by design: a system job, id-keyed on every write.
+      const pending = await this.prisma.invoice.findMany({
+        where: { status: 'SENT', pspSessionId: { not: null }, createdAt: { gte: since } },
+        select: { id: true, workspaceId: true, total: true, currency: true, pspSessionId: true },
+      });
+      if (!pending.length) return;
+
+      // One Stripe client per workspace, not per invoice: a workspace with a
+      // dozen unpaid invoices is one account and one key.
+      const clients = new Map<string, InstanceType<typeof Stripe> | null>();
+      for (const inv of pending) {
+        try {
+          if (!clients.has(inv.workspaceId)) {
+            const psp = await this.prisma.workspacePspConfig.findUnique({
+              where: { workspaceId: inv.workspaceId },
+              select: { provider: true, configSealed: true },
+            });
+            const key = psp?.provider === 'STRIPE' ? this.openPsp(psp.configSealed).secretKey : null;
+            clients.set(inv.workspaceId, key ? new Stripe(key) : null);
+          }
+          const stripe = clients.get(inv.workspaceId);
+          if (!stripe) continue;
+
+          const session = await stripe.checkout.sessions.retrieve(inv.pspSessionId as string);
+          if (await this.settleIfSessionPaid(inv, session)) {
+            this.logger.log(`invoice ${inv.id} settled by reconcile — the buyer never returned`);
+          }
+        } catch (e) {
+          // One workspace's revoked key, one expired session, one Stripe
+          // hiccup. None of them is a reason to stop asking about everybody
+          // else's money.
+          this.logger.warn(`stripe reconcile failed for invoice ${inv.id}: ${(e as Error).message}`);
+        }
+      }
+    });
   }
 
   // ---- PayTR (Epic 13, inert) ----

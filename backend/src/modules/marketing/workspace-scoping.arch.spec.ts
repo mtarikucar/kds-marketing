@@ -281,6 +281,16 @@ const SCOPED_METHODS = [
  * a neighbour's exemption. See the 'exemptions are pinned…' test below.
  */
 const ALLOWED_GLOBAL: Record<string, string> = {
+  // The half-hourly sweep that finds Stripe payments whose buyer never came
+  // back. A system job, like the token refreshers: it must see every tenant's
+  // pending invoices or the ones it cannot see stay unpaid forever, with the
+  // money already taken. It selects the five fields the decision reads — id,
+  // workspace, total, currency, session — and never row content beyond them,
+  // and every settle it triggers is keyed by the invoice id it just read.
+  // Filtered by a real predicate (status SENT + a session to ask about), not by
+  // a take-N window.
+  'invoicing/invoices.service.ts:invoice.findMany':
+    'system job: reconciles every tenant pending Stripe checkout; id-keyed writes, predicate-filtered',
   // The hourly sweep that keeps consent-connected mailboxes sending. A system
   // job, like SocialTokenRefreshService: it must see every tenant's due tokens
   // or those mailboxes go quiet an hour after they are connected. It selects

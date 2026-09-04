@@ -16,10 +16,16 @@ vi.mock('../settings/connections/ConnectionsPage', () => ({
 }));
 vi.mock('../settings/connections/SsoTab', () => ({ SsoTab: () => <div>sso-stub</div> }));
 vi.mock('../settings/connections/SlackTab', () => ({ SlackTab: () => <div>slack-stub</div> }));
+// Interpolates, unlike a bare default-value mock. The page's summary line is
+// built from counts, and asserting on a literal `{{count}}` would pass while
+// the person reads a template.
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (k: string, o?: { defaultValue?: string } | string) =>
-      (typeof o === 'string' ? o : o?.defaultValue) ?? k,
+    t: (k: string, o?: Record<string, unknown> | string) => {
+      const base = typeof o === 'string' ? o : ((o?.defaultValue as string) ?? k);
+      const vars = typeof o === 'string' ? {} : (o ?? {});
+      return base.replace(/\{\{(\w+)\}\}/g, (_m, name) => String((vars as any)[name] ?? ''));
+    },
     i18n: { language: 'en' },
   }),
 }));
@@ -200,5 +206,104 @@ describe('AccountCenterPage — WhatsApp connect', () => {
 
     await screen.findByText('Acme Clinic');
     expect(screen.queryByText('WhatsApp Business')).toBeNull();
+  });
+});
+
+/**
+ * ARRANGED BY WHAT THE READER NEEDS.
+ *
+ * This page was one flat grid of every provider, connected and not, in a fixed
+ * order. Two things it could not tell you — and both are why somebody opens a
+ * connections page: whether anything is BROKEN, and what connecting the rest
+ * would buy. An account whose session had been invalidated, which is the exact
+ * state that silently loses posts, looked identical to a working one until you
+ * read every card.
+ */
+describe('AccountCenterPage — the shape of the page', () => {
+  const broken = {
+    ...PAYLOAD,
+    providers: [
+      {
+        provider: 'META',
+        displayName: 'Meta — Facebook, Instagram, WhatsApp & Ads',
+        connectMethod: 'OAUTH',
+        configured: true,
+        connections: [
+          {
+            identityKey: 'META:P1', externalId: 'P1', displayName: 'Acme Clinic',
+            connectedVia: 'OAUTH', capabilities: ['PUBLISH'], health: 'REAUTH_REQUIRED', sources: [],
+          },
+        ],
+      },
+      {
+        provider: 'LINKEDIN', displayName: 'LinkedIn', connectMethod: 'OAUTH', configured: true,
+        connections: [
+          {
+            identityKey: 'LI:1', externalId: '1', displayName: 'Acme on LinkedIn',
+            connectedVia: 'OAUTH', capabilities: ['PUBLISH'], health: 'HEALTHY', sources: [],
+          },
+        ],
+      },
+      { provider: 'TIKTOK', displayName: 'TikTok', connectMethod: 'OAUTH', configured: true, connections: [] },
+    ],
+  };
+
+  async function withPayload(payload: unknown) {
+    const api = (await import('../../../features/marketing/api/marketingApi')).default as any;
+    api.get.mockResolvedValue({ data: payload });
+    return wrap();
+  }
+
+  it('says whether anything is broken BEFORE any card has to be read', async () => {
+    await withPayload(broken);
+    expect(await screen.findByText(/1 of your 2 connected accounts is not working/i)).toBeInTheDocument();
+  });
+
+  it('says so plainly when nothing is broken', async () => {
+    await withPayload(PAYLOAD);
+    expect(await screen.findByText(/All 1 connected accounts are working/i)).toBeInTheDocument();
+  });
+
+  it('puts what needs you first, then what works, then what is available', async () => {
+    await withPayload(broken);
+    await screen.findByText('Acme Clinic');
+
+    const headings = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((h) => h.textContent)
+      .filter((x): x is string => !!x);
+    expect(headings.slice(0, 3)).toEqual([
+      'Needs your attention',
+      'Connected and working',
+      'Not connected yet',
+    ]);
+  });
+
+  it('does not offer an attention section when there is nothing wrong', async () => {
+    // A permanent red heading is a heading people stop reading.
+    await withPayload(PAYLOAD);
+    await screen.findByText('Acme Clinic');
+    expect(screen.queryByRole('heading', { name: 'Needs your attention' })).not.toBeInTheDocument();
+  });
+
+  it('tells an unconnected provider what it would ADD, not that it is absent', async () => {
+    // "Not connected" answers a question nobody asked. The one somebody arrives
+    // with is "do I need this?".
+    await withPayload(broken);
+    expect(await screen.findByText(/Publish to TikTok/i)).toBeInTheDocument();
+  });
+
+  describe('the second tab, sorted by who it affects', () => {
+    it('separates your own calendar from what changes for the whole team', async () => {
+      // Three unrelated things used to live here under one word, and one of them
+      // changes how everybody signs in.
+      const user = userEvent.setup();
+      await withPayload(PAYLOAD);
+      await user.click(await screen.findByRole('tab', { name: /Integrations/i }));
+
+      expect(await screen.findByRole('heading', { name: 'Only you' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Everyone in this workspace' })).toBeInTheDocument();
+      expect(screen.getByText(/Changing these changes it for everybody/i)).toBeInTheDocument();
+    });
   });
 });

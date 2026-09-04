@@ -332,7 +332,35 @@
     "tab": {
       "accounts": "Hesaplar",
       "integrations": "Entegrasyonlar"
-    }
+    },
+    "does": {
+      "META": "Facebook ve Instagram’a paylaş, DM’lerini buradan yanıtla, reklam ver.",
+      "LINKEDIN": "LinkedIn sayfana paylaş ve reklam ver.",
+      "TIKTOK": "TikTok’a paylaş, DM’lerini buradan yanıtla.",
+      "TWITTER": "X’e paylaş.",
+      "PINTEREST": "Pin paylaş.",
+      "GOOGLE": "Google reklamı ver ve sonuçlarını oku.",
+      "SMS": "SMS gönder ve al — telefon bırakmış bir adayı en hızlı yakalama yolu.",
+      "EMAIL": "Kendi posta kutundan gönder, yanıtlar bu gelen kutusuna düşsün.",
+      "WEBCHAT": "Siteni sohbet balonu ile donat; ziyaretçiler bu gelen kutusuna gelir.",
+      "VOICE": "Çağrıları yapay zekâ sesli asistanı karşılasın."
+    },
+    "section": {
+      "attention": "Senden bir şey bekliyor",
+      "attentionDesc": "Bunlar bağlı ama çalışmıyor. Üzerlerinden gönderilen her şey kayboluyor.",
+      "working": "Bağlı ve çalışıyor",
+      "workingDesc": "Rozetler her birinin bu ürüne ne yaptırdığını söylüyor.",
+      "available": "Henüz bağlanmadı",
+      "availableDesc": "Her birinin ne katacağı."
+    },
+    "summaryBroken": "Bağlı {{total}} hesabından {{count}} tanesi çalışmıyor. Yeniden bağlanana kadar üzerinden gönderilen her şey kayboluyor.",
+    "summaryOk": "Bağlı {{count}} hesabın da çalışıyor.",
+    "onlyYou": "Yalnızca sen",
+    "onlyYouDesc": "Kendi takvimin, randevular oraya düşsün diye. Çalışma alanındaki kimse etkilenmez.",
+    "phoneSetup": "Telefon hattın",
+    "phoneSetupDesc": "Aramalar ve SMS çalışmadan önce tamamlanacaklar.",
+    "wholeTeam": "Bu çalışma alanındaki herkes",
+    "wholeTeamDesc": "Ekibinin nasıl giriş yaptığı ve bildirimlerin nereye düştüğü. Bunları değiştirmek herkes için değiştirir."
   },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",
