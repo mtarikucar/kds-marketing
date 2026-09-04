@@ -64,3 +64,26 @@ describe('MediaSpendService', () => {
     expect(price).not.toHaveBeenCalled();
   });
 });
+
+describe('MediaSpendService — two vendors', () => {
+  it('settles a Runware asset in USD cents under RUNWARE_CENT, not in fal credits', async () => {
+    const { service, price, debitOnce } = make({ unitCost: '0.4000', amount: '46.8000' });
+    await service.settle('ws-1', { assetId: 'a-2', credits: 240, vendor: 'runware', vendorUsd: 1.1652 });
+    expect(price).toHaveBeenCalledWith('ws-1', 'CONTENT', 'RUNWARE_CENT', 117);
+    expect(debitOnce).toHaveBeenCalledWith('ws-1', expect.objectContaining({ ref: 'mediagen:a-2', quantity: 117 }));
+  });
+
+  it('still settles fal assets in credits, whether the vendor is named or not', async () => {
+    const { service, price } = make({ unitCost: '0.4000', amount: '1.2000' });
+    await service.settle('ws-1', { assetId: 'a-3', credits: 3 });
+    await service.settle('ws-1', { assetId: 'a-4', credits: 3, vendor: 'fal', vendorUsd: 0.03 });
+    expect(price).toHaveBeenNthCalledWith(1, 'ws-1', 'CONTENT', 'FAL_CREDIT', 3);
+    expect(price).toHaveBeenNthCalledWith(2, 'ws-1', 'CONTENT', 'FAL_CREDIT', 3);
+  });
+
+  it('records nothing for a Runware asset whose cost rounds to zero cents', async () => {
+    const { service, debitOnce } = make({ unitCost: '0.4000', amount: '0' });
+    expect(await service.settle('ws-1', { assetId: 'a-5', credits: 1, vendor: 'runware', vendorUsd: 0.004 })).toBeNull();
+    expect(debitOnce).not.toHaveBeenCalled();
+  });
+});

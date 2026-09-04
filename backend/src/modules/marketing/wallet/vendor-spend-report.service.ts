@@ -25,6 +25,7 @@ export const VENDOR_UNITS: ReadonlyArray<{
   { channel: 'WHATSAPP', unitType: 'WA_SERVICE', vendor: 'Meta', what: 'WhatsApp servis konuşması' },
   { channel: 'VOICE', unitType: 'VOICE_MINUTE', vendor: 'NetGSM', what: 'Sesli arama dakikası' },
   { channel: 'CONTENT', unitType: 'FAL_CREDIT', vendor: 'fal.ai', what: 'Görsel/video üretim kredisi' },
+  { channel: 'CONTENT', unitType: 'RUNWARE_CENT', vendor: 'Runware', what: 'Görsel/video üretimi (USD cent)' },
   { channel: 'RESEARCH', unitType: 'FIRECRAWL_PAGE', vendor: 'Firecrawl', what: 'Taranan sayfa' },
   { channel: 'RESEARCH', unitType: 'APIFY_RUN', vendor: 'Apify', what: 'Apify actor koşusu' },
   { channel: 'RESEARCH', unitType: 'RESEARCH_LEAD', vendor: 'Jeeta', what: 'Teslim edilen araştırma lead’i' },

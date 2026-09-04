@@ -42,17 +42,34 @@ export class MediaSpendService {
    */
   async settle(
     workspaceId: string,
-    opts: { assetId: string; credits: number; budgetId?: string | null },
+    opts: {
+      assetId: string;
+      credits: number;
+      budgetId?: string | null;
+      /** Who rendered it. Absent = fal (every row before hybrid routing). */
+      vendor?: 'fal' | 'runware';
+      /** The vendor's USD figure for this generation (Runware reports its own). */
+      vendorUsd?: number;
+    },
   ): Promise<{ amount: Prisma.Decimal; quantity: number } | null> {
-    const qty = Math.max(0, Math.round(opts.credits ?? 0));
+    // fal is metered in the catalogue's credits (1 ≈ $0.01). Runware reports
+    // its own USD per task and the credit meter stays the catalogue's whichever
+    // vendor ran, so a Runware generation is metered in CENTS of that figure
+    // under its own tariff row — same currency assumption, two vendors on the
+    // report, and never fal's rate for a render fal did not do.
+    const runware = opts.vendor === 'runware';
+    const unitType = runware ? 'RUNWARE_CENT' : 'FAL_CREDIT';
+    const qty = runware
+      ? Math.max(0, Math.round((opts.vendorUsd ?? 0) * 100))
+      : Math.max(0, Math.round(opts.credits ?? 0));
     if (qty === 0) return null;
     try {
-      const priced = await this.tariffs.price(workspaceId, 'CONTENT', 'FAL_CREDIT', qty);
+      const priced = await this.tariffs.price(workspaceId, 'CONTENT', unitType, qty);
       if (!priced) {
         this.unpriced.warn(
           workspaceId,
-          'FAL_CREDIT',
-          `no CONTENT tariff for FAL_CREDIT (ws ${workspaceId}, ${qty} credits)`,
+          unitType,
+          `no CONTENT tariff for ${unitType} (ws ${workspaceId}, ${qty} ${runware ? 'cents' : 'credits'})`,
         );
         return null;
       }
