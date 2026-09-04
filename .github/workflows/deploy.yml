@@ -185,6 +185,10 @@ jobs:
           # public fal completion callback; unset = poll-only fallback path.
           FAL_KEY: ${{ secrets.FAL_KEY }}
           FAL_WEBHOOK_SECRET: ${{ secrets.FAL_WEBHOOK_SECRET }}
+          # Runware — second media vendor for the catalogue models that carry a
+          # `runware` binding (Seedance 2.5, Seedance 1.0 Pro Fast, Qwen-Image,
+          # BiRefNet). OPTIONAL — unset = every model stays on fal.
+          RUNWARE_API_KEY: ${{ secrets.RUNWARE_API_KEY }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -313,6 +317,8 @@ jobs:
           # AI media generation (fal.ai); empty = inert.
           FAL_KEY=${FAL_KEY}
           FAL_WEBHOOK_SECRET=${FAL_WEBHOOK_SECRET}
+          # Runware media vendor (per-model routing); empty = all on fal.
+          RUNWARE_API_KEY=${RUNWARE_API_KEY}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
