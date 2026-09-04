@@ -222,8 +222,11 @@ test('the call log is a settings page now, filed with the channels — and the p
   // than under the Inbox sub-nav. Two <aside>s is that shell, structurally —
   // the hub rail plus SettingsLayout's own page list.
   await expect(app.locator('aside')).toHaveCount(2);
+  // The list entry that owns this page is Ses — the log is a tab of it, not a
+  // line of its own. Naming Aramalar here would assert the very thing the merge
+  // removed, one screen after asserting it is gone.
   await expect(
-    app.locator('aside').nth(1).getByRole('link', { name: 'Aramalar', exact: true }),
+    app.locator('aside').nth(1).getByRole('link', { name: 'Sesli AI', exact: true }),
   ).toBeVisible();
 });
 
