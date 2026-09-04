@@ -7,6 +7,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { OnboardingService } from '../services/onboarding.service';
+import { WorkspaceReadinessService } from '../services/workspace-readiness.service';
 
 export class SetOnboardingDismissedDto {
   @IsBoolean()
@@ -25,11 +26,24 @@ export class SetOnboardingDismissedDto {
 @UseGuards(MarketingGuard, MarketingRolesGuard)
 @MarketingRoles('MANAGER')
 export class OnboardingController {
-  constructor(private readonly onboarding: OnboardingService) {}
+  constructor(
+    private readonly onboarding: OnboardingService,
+    private readonly readiness: WorkspaceReadinessService,
+  ) {}
 
   @Get()
   get(@CurrentMarketingUser() a: MarketingUserPayload) {
     return this.onboarding.get(a.workspaceId);
+  }
+
+  /**
+   * Everything the engine still needs, as opposed to the four first-run chores
+   * above. Read-only and computed on demand: it is a photograph of the
+   * workspace, and caching it would be caching the thing it exists to notice.
+   */
+  @Get('readiness')
+  readinessState(@CurrentMarketingUser() a: MarketingUserPayload) {
+    return this.readiness.get(a.workspaceId);
   }
 
   @Patch()

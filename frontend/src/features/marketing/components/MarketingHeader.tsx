@@ -18,6 +18,7 @@ import { useTourStore } from '../../../store/tourStore';
 import { useTwoFactorStatus } from '../hooks/useTwoFactorStatus';
 import { useEntitlements } from '../hooks/useEntitlements';
 import { notificationRoute } from '../notifications/notificationRoute';
+import { SetupReadinessButton } from './SetupReadinessButton';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
@@ -429,6 +430,14 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
             <LanguageSwitcher />
             <ThemeToggle />
           </div>
+
+          {/*
+            Beside the bell, and before it: the bell says what HAPPENED, this
+            says what the engine still cannot do. Manager-only, because every
+            gap it lists is fixed on a manager-gated page — showing a rep a list
+            of doors they cannot open is worse than showing them nothing.
+          */}
+          {isManager && <SetupReadinessButton />}
 
           {/* Notification Bell */}
           <Popover open={showNotifications} onOpenChange={setShowNotifications}>

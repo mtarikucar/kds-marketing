@@ -5029,5 +5029,103 @@
       "plan": "Plan",
       "modules": "Modüller"
     }
+  },
+  "readiness": {
+    "title": "Kurulum durumu",
+    "subtitle": "{{total}} maddeden {{ready}} tanesi yerinde. Kalanlar tamamlanmadan sistemin bazı parçaları düşük güçte çalışır ya da hiç çalışmaz.",
+    "allDone": "{{count}} maddenin hepsi yerinde. Sistem tam güçte çalışıyor.",
+    "mcpCanDo": "Bağlı Claude bunu kendi yapabilir",
+    "askClaude": "Robot işaretli olanlar: bağlı Claude’una “bu çalışma alanının kurulumunu tamamla” dersen onları kendisi kapatabilir.",
+    "group": {
+      "identity": "Kimlik",
+      "plan": "Plan",
+      "reach": "Erişim",
+      "content": "İçerik",
+      "selling": "Satış",
+      "pages": "Sayfalar",
+      "fuel": "Yakıt"
+    },
+    "item": {
+      "brand-profile": {
+        "label": "Marka profili",
+        "why": "İşin ne yaptığı, kime hitap ettiği ve nasıl konuştuğu yazılmadan hiçbir metin senin sesinle yazılamaz."
+      },
+      "brand-knowledge": {
+        "label": "Marka bilgisi",
+        "why": "Ürünlerin, politikaların, sık sorulanlar. AI bunlar olmadan tahmin eder."
+      },
+      "strategy": {
+        "label": "Strateji",
+        "why": "Otomasyonların, içeriğin ve reklamın hizmet edeceği plan. Taslakta kalırsa makine onu çalıştırmaz."
+      },
+      "automations": {
+        "label": "Otomasyonlar",
+        "why": "Bir şey olduğunda ne yapılacağı. Hiçbiri yoksa gelen her aday elle işlenir."
+      },
+      "research": {
+        "label": "Araştırma profili",
+        "why": "Yeni adayları bulan taraf. Kapalıysa huniye kimse girmez."
+      },
+      "social-accounts": {
+        "label": "Sosyal hesaplar",
+        "why": "Üretilen içeriğin gideceği yer. Bozuk bir hesap sessizce her gönderiyi düşürür."
+      },
+      "email-sending": {
+        "label": "E-posta gönderimi",
+        "why": "Doğrulanmış alan adı ya da bağlı posta kutusu olmadan kampanya postası spam’e düşer — hiç göndermemekten kötüdür."
+      },
+      "sms": {
+        "label": "SMS kanalı",
+        "why": "Telefon bırakmış bir adaya ulaşmanın en hızlı yolu."
+      },
+      "products": {
+        "label": "Ürünler",
+        "why": "Sipariş formu, fatura ve fırsat bunlara dayanır; ürün yoksa hiçbiri kurulamaz."
+      },
+      "tax-rates": {
+        "label": "Vergi oranları",
+        "why": "Tanımlı oran yoksa her fatura net tutardan kesilir — hata vermez, sessizce eksik keser."
+      },
+      "payment-provider": {
+        "label": "Ödeme sağlayıcısı",
+        "why": "Yoksa sipariş formu kimsenin ödeyemeyeceği bir fatura üretir. Anahtarı yalnızca sen girebilirsin."
+      },
+      "order-form": {
+        "label": "Sipariş formu",
+        "why": "Ziyaretçinin kendi kendine satın aldığı sayfa. Zincirin para getiren ucu."
+      },
+      "pipeline": {
+        "label": "Satış hattı",
+        "why": "Bir fırsatın geçtiği aşamalar. Tanımsızsa hiçbir anlaşma takip edilemez."
+      },
+      "landing-page": {
+        "label": "Açılış sayfası",
+        "why": "Reklamın ve gönderinin işaret edeceği yer. Olmadan trafik hiçbir yere gitmez."
+      },
+      "email-templates": {
+        "label": "E-posta şablonları",
+        "why": "Kampanyaların gönderdiği metin. Şablon yoksa gönderecek bir şey yok."
+      },
+      "active-campaign": {
+        "label": "Aktif kampanya",
+        "why": "İçerik fikri bir kampanya kalemine dönüşerek üretilir. Aktif kampanya yoksa üretim hattı hiçbir şey üretmez ve bunu söylemez."
+      },
+      "content-concepts": {
+        "label": "İçerik fikirleri",
+        "why": "Üretim hattının hammaddesi."
+      },
+      "ai-credits": {
+        "label": "AI kredisi",
+        "why": "Metin, görsel ve video üretiminin yakıtı."
+      },
+      "growth-wallet": {
+        "label": "Growth cüzdanı",
+        "why": "Otopilot boş cüzdanla ilk satırında reddediyor. Bu listede bu kadar azla bu kadar çok şeyi durduran başka madde yok."
+      },
+      "autonomy": {
+        "label": "Otonomi",
+        "why": "En sonda: yukarıdakiler eksikken makineyi çalıştırmak, kimsenin kullanamayacağı işe para harcamaktır."
+      }
+    }
   }
 }
