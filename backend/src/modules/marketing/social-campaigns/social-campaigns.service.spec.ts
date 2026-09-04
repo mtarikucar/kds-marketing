@@ -227,16 +227,16 @@ describe('SocialCampaignsService — the model override is checked at the write'
     const { svc } = build();
     await expect(
       svc.create(WS, { ...INPUT, defaultVideoModel: 'nope' }),
-    ).rejects.toThrow(/fal-ai\/veo3\/fast/);
+    ).rejects.toThrow(/fal-ai\/veo3\.1\/fast/);
   });
 
   it('accepts a catalogued id of the right kind — the guard is not always-refuse', async () => {
     const { svc, prisma } = build();
     prisma.socialCampaign.create.mockResolvedValue(makeCampaign());
-    await svc.create(WS, { ...INPUT, defaultVideoModel: 'fal-ai/veo3/fast' });
+    await svc.create(WS, { ...INPUT, defaultVideoModel: 'fal-ai/veo3.1/fast' });
     expect(prisma.socialCampaign.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ defaultVideoModel: 'fal-ai/veo3/fast' }),
+        data: expect.objectContaining({ defaultVideoModel: 'fal-ai/veo3.1/fast' }),
       }),
     );
   });

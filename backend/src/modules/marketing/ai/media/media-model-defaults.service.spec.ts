@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MediaModelDefaultsService } from './media-model-defaults.service';
-import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, MEDIA_MODELS } from './media-models.config';
+import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, MEDIA_MODELS, RETIRED_SEEDANCE_LITE_MODEL } from './media-models.config';
 
 const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
@@ -110,7 +110,8 @@ describe('MediaModelDefaultsService.get', () => {
   it('returns the whole catalogue, each entry priced in the unit its kind bills in', async () => {
     const { svc } = makeSvc();
     const res = await svc.get(WS);
-    expect(res.models).toHaveLength(Object.keys(MEDIA_MODELS).length);
+    const retired = Object.values(MEDIA_MODELS).filter((m) => m.replacedBy).length;
+    expect(res.models).toHaveLength(Object.keys(MEDIA_MODELS).length - retired);
 
     const video = res.models.find((m) => m.id === 'fal-ai/veo3.1/fast');
     expect(video).toMatchObject({
@@ -215,5 +216,23 @@ describe('MediaModelDefaultsService.set', () => {
     expect(prisma.workspace.update).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: WS } }),
     );
+  });
+});
+
+describe('MediaModelDefaultsService — fal-retired ids', () => {
+  it('reports a fal-retired stored choice as its successor: it still runs, under the new id', async () => {
+    const { svc } = makeSvc({ defaultImageModel: null, defaultVideoModel: RETIRED_SEEDANCE_LITE_MODEL });
+    const res = await svc.get(WS);
+    expect(res.defaultVideoModel).toBe(DEFAULT_VIDEO_MODEL);
+    expect(res.effectiveVideoModel).toBe(DEFAULT_VIDEO_MODEL);
+    expect(res.retiredVideoModel).toBeNull();
+    expect(res.models.map((m) => m.id)).not.toContain(RETIRED_SEEDANCE_LITE_MODEL);
+    expect(res.models.map((m) => m.id)).not.toContain('fal-ai/veo3/fast');
+  });
+
+  it('refuses to store a fal-retired id and names the successor', async () => {
+    const { svc, prisma } = makeSvc();
+    await expect(svc.set(WS, { defaultVideoModel: 'fal-ai/veo3/fast' })).rejects.toThrow(/retired.*veo3\.1\/fast/);
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
   });
 });

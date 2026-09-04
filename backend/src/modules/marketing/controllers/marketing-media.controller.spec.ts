@@ -47,9 +47,13 @@ describe('MarketingMediaController', () => {
     // Served, though: the withdrawal is five endpoints, not a shutdown — and
     // AVATAR survives it, because this one is metered on the SCRIPT.
     expect(ids).toContain('veed/avatars/text-to-video');
-    // 31 verified endpoints, 5 withheld until a real probe can measure the
-    // customer file each of them is priced by.
-    expect(ids.length).toBe(26);
+    // 32 verified endpoints: 5 withheld until a real probe can measure the
+    // customer file each of them is priced by, and 2 retired by fal (Seedance
+    // 1.0 Lite, Veo 3 Fast) that stay catalogued for old rows but are not sold.
+    expect(ids.length).toBe(25);
+    expect(ids).not.toContain('fal-ai/bytedance/seedance/v1/lite/text-to-video');
+    expect(ids).not.toContain('fal-ai/veo3/fast');
+    expect(ids).toContain('fal-ai/bytedance/seedance/v1/pro/fast/text-to-video');
   });
 });
 

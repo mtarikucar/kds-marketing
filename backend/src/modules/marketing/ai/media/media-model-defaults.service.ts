@@ -7,6 +7,7 @@ import {
   assertCataloguedModel,
   defaultModelFor,
   isCataloguedModel,
+  resolveMediaModelId,
 } from './media-models.config';
 
 /** What a settings card needs to render one row: the model, and what it costs. */
@@ -21,7 +22,9 @@ export interface MediaModelDefaults {
   /** The workspace's CHOICE, verbatim — including one the catalogue has since
    *  dropped. `null` means it has not made one. Reported unchanged rather than
    *  scrubbed: a manager who chose a model and finds the card silently back on
-   *  "Platform default" has been told their choice never happened. */
+   *  "Platform default" has been told their choice never happened. The one
+   *  translation applied: an id fal has RETIRED is reported as its successor,
+   *  because that is the model the choice now runs on (see `replacedBy`). */
   defaultImageModel: string | null;
   defaultVideoModel: string | null;
   /** What would actually run today — the choice, or the platform constant. */
@@ -139,7 +142,12 @@ export class MediaModelDefaultsService {
    * and REPORTED — the retired id travels beside it so the card can name the
    * choice that is no longer honoured instead of quietly dropping it.
    */
-  private project(image: string | null, video: string | null): MediaModelDefaults {
+  private project(imageStored: string | null, videoStored: string | null): MediaModelDefaults {
+    // A choice fal has retired is honoured under its successor's id — and
+    // reported as that id, so the card selects the row that actually runs
+    // rather than one it no longer lists.
+    const image = imageStored === null ? null : resolveMediaModelId(imageStored);
+    const video = videoStored === null ? null : resolveMediaModelId(videoStored);
     const platform = new Set([defaultModelFor('IMAGE'), defaultModelFor('VIDEO')]);
     const imageLive = image !== null && isCataloguedModel(image, 'IMAGE');
     const videoLive = video !== null && isCataloguedModel(video, 'VIDEO');
@@ -150,7 +158,9 @@ export class MediaModelDefaultsService {
       effectiveVideoModel: videoLive ? (video as string) : defaultModelFor('VIDEO'),
       retiredImageModel: image !== null && !imageLive ? image : null,
       retiredVideoModel: video !== null && !videoLive ? video : null,
-      models: Object.values(MEDIA_MODELS).map((m) => ({ ...m, isPlatformDefault: platform.has(m.id) })),
+      models: Object.values(MEDIA_MODELS)
+        .filter((m) => !m.replacedBy)
+        .map((m) => ({ ...m, isPlatformDefault: platform.has(m.id) })),
     };
   }
 }
