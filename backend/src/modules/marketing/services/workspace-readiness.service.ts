@@ -40,6 +40,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 export type ReadinessState = 'READY' | 'MISSING' | 'ATTENTION';
 
 export type ReadinessGroup =
+  /** The connector itself. First, because every other line depends on it. */
+  | 'connector'
   | 'identity'
   | 'plan'
   | 'reach'
@@ -87,6 +89,9 @@ export class WorkspaceReadinessService {
     // exactly the kind of file people add a line to in a hurry.
 
     const [
+      liveMcpTokens,
+      mcpApiKeys,
+      workspaceRow,
       brandProfile,
       knowledgeDocs,
       strategy,
@@ -109,6 +114,17 @@ export class WorkspaceReadinessService {
       aiWallet,
       growthWallet,
     ] = await Promise.all([
+      // "Connected" as the console itself defines it: a token that is neither
+      // revoked nor expired. A client whose every token is dead is disconnected,
+      // however many rows it left behind.
+      this.prisma.mcpOAuthToken.count({
+        where: { workspaceId, revokedAt: null, expiresAt: { gt: new Date() } },
+      }),
+      this.prisma.apiKey.count({ where: { workspaceId, status: 'ACTIVE' } }),
+      this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { mcpWriteMode: true },
+      }),
       this.prisma.brandProfile.findFirst({
         where: { workspaceId },
         select: { id: true, description: true, voiceGuide: true, icpDescription: true },
@@ -141,7 +157,45 @@ export class WorkspaceReadinessService {
 
     const yes = (ok: boolean): ReadinessState => (ok ? 'READY' : 'MISSING');
 
+    const connected = liveMcpTokens > 0 || mcpApiKeys > 0;
+    // Fails towards APPROVAL, the same direction `McpInvokerService` does:
+    // showing a warning that might not apply costs a sentence, hiding one that
+    // does is indistinguishable from a lane working properly.
+    const autonomous = workspaceRow?.mcpWriteMode === 'AUTONOMOUS';
+
     const items: ReadinessItem[] = [
+      // ── connector ───────────────────────────────────────────────────────
+      {
+        id: 'claude-connector',
+        group: 'connector',
+        /**
+         * FIRST, and the only item that is a precondition for the rest of the
+         * list rather than for the product. Every gap below names a tool that
+         * can close it — a promise that is empty until something is connected
+         * to call those tools.
+         *
+         * ATTENTION rather than READY under APPROVAL, and this is not
+         * pedantry: measured in v2.286.0, the Jeeta-keyed data tools do not
+         * merely QUEUE under approval, they are unusable — the approval
+         * executor returns the tool result to the approving human's HTTP
+         * response and never to the agent's turn, so the agent receives
+         * PENDING_APPROVAL and can never obtain the record inside its own
+         * session, however fast anyone clicks. The connector still runs and
+         * silently does less, which is exactly the state this whole list
+         * exists to make visible.
+         */
+        state: !connected ? 'MISSING' : autonomous ? 'READY' : 'ATTENTION',
+        to: '/settings/api-keys?tab=connector',
+        // Nothing can connect itself. The address, the key and the scheduled-
+        // task prompt are all on that page.
+        mcpTool: null,
+        detail: {
+          connectors: liveMcpTokens,
+          apiKeys: mcpApiKeys,
+          writeMode: autonomous ? 'AUTONOMOUS' : 'APPROVAL',
+        },
+      },
+
       // ── identity ────────────────────────────────────────────────────────
       {
         id: 'brand-profile',

@@ -30,7 +30,18 @@ interface Readiness {
 export const READINESS_QUERY_KEY = ['marketing', 'readiness'] as const;
 
 /** The order the groups are worked through, and the order they read in. */
-const GROUPS = ['identity', 'plan', 'reach', 'content', 'selling', 'pages', 'fuel'] as const;
+const GROUPS = [
+  // The connector first: every other line below names a tool that can close it,
+  // and that promise is empty until something is connected to call those tools.
+  'connector',
+  'identity',
+  'plan',
+  'reach',
+  'content',
+  'selling',
+  'pages',
+  'fuel',
+] as const;
 
 /**
  * What this workspace still needs, beside the notification bell.
@@ -165,7 +176,18 @@ export function SetupReadinessButton() {
                           </span>
                           {i.state !== 'READY' && (
                             <span className="block text-caption text-muted-foreground">
-                              {t(`readiness.item.${i.id}.why`, { defaultValue: '' })}
+                              {/*
+                                A state-specific line when one exists, because
+                                "not connected" and "connected but running in a
+                                mode where half its tools cannot return a result"
+                                are different sentences and only one of them is
+                                about connecting anything. Falls back to the
+                                item's single explanation, which is all most of
+                                them need.
+                              */}
+                              {t(`readiness.item.${i.id}.why_${i.state}`, {
+                                defaultValue: t(`readiness.item.${i.id}.why`, { defaultValue: '' }),
+                              })}
                             </span>
                           )}
                         </span>

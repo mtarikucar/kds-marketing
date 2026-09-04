@@ -5037,6 +5037,7 @@
     "mcpCanDo": "Bağlı Claude bunu kendi yapabilir",
     "askClaude": "Robot işaretli olanlar: bağlı Claude’una “bu çalışma alanının kurulumunu tamamla” dersen onları kendisi kapatabilir.",
     "group": {
+      "connector": "Claude bağlantısı",
       "identity": "Kimlik",
       "plan": "Plan",
       "reach": "Erişim",
@@ -5046,6 +5047,12 @@
       "fuel": "Yakıt"
     },
     "item": {
+      "claude-connector": {
+        "label": "Claude bağlantısı",
+        "why": "Ayarlar → API ve bağlayıcı → Claude bağlayıcısı. Adres, anahtar ve kopyalanacak zamanlanmış görev metni orada. Bağlı değilken aşağıdaki hiçbir işi Claude senin yerine yapamaz.",
+        "why_MISSING": "Ayarlar → API ve bağlayıcı → Claude bağlayıcısı. Adres, anahtar ve kopyalanacak zamanlanmış görev metni orada. Bağlı değilken aşağıdaki hiçbir işi Claude senin yerine yapamaz.",
+        "why_ATTENTION": "Bağlı, ama onay kipinde çalışıyor. Bu kipte Jeeta anahtarlı veri araçları gecikmiyor — sonuç onaylayanın ekranına dönüyor, ajanın turuna hiç ulaşmıyor. Yani hat sessizce düz web aramasına düşüyor. Bağlayıcı sayfasından otonom kipe al."
+      },
       "brand-profile": {
         "label": "Marka profili",
         "why": "İşin ne yaptığı, kime hitap ettiği ve nasıl konuştuğu yazılmadan hiçbir metin senin sesinle yazılamaz."
