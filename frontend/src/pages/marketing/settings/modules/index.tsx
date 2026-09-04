@@ -42,7 +42,7 @@ const MODULE_META: { key: string; labelKey: string; label: string; icon: LucideI
  * read the same entitlements map, which the backend intersects with the
  * activation allow-list). Anything the plan doesn't entitle simply isn't listed.
  */
-export default function ModulesPage() {
+export default function ModulesPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const { entitledModules, features, isLoading } = useEntitlements();
@@ -71,7 +71,8 @@ export default function ModulesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t('modules.title', 'Modules')} description={t('modules.subtitle', 'Turn modules on or off to keep your console focused. Off modules disappear from the menu until you re-enable them.')} />
+      <PageHeader
+          embedded={embedded} title={t('modules.title', 'Modules')} description={t('modules.subtitle', 'Turn modules on or off to keep your console focused. Off modules disappear from the menu until you re-enable them.')} />
 
       {!isOwner && (
         <Callout tone="info" title={t('modules.ownerOnly', 'Only the workspace owner can change which modules are active.')} />

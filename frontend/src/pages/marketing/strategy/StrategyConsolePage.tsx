@@ -44,7 +44,7 @@ const AUTONOMY_LEVELS: AutonomyLevel[] = ['SHADOW', 'ASSISTED', 'AUTONOMOUS'];
  * autonomy lane selector. When no strategy exists yet it shows a CTA into the
  * onboarding wizard.
  */
-export default function StrategyConsolePage() {
+export default function StrategyConsolePage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -206,7 +206,13 @@ export default function StrategyConsolePage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
-            <h1 className="font-display text-h2 text-foreground">{t('strategy.console.title', 'Strategy')}</h1>
+            {/* One <h1> per page. Embedded, the shell above owns it — this keeps
+                the same line (and the badges beside it) without a second one. */}
+            {embedded ? (
+              <p className="font-display text-h2 text-foreground">{t('strategy.console.title', 'Strategy')}</p>
+            ) : (
+              <h1 className="font-display text-h2 text-foreground">{t('strategy.console.title', 'Strategy')}</h1>
+            )}
             {strategy.archetype && <Badge tone="primary">{strategy.archetype}</Badge>}
             <Badge tone={strategy.status === 'ACTIVE' ? 'success' : 'neutral'}>{strategy.status}</Badge>
           </div>

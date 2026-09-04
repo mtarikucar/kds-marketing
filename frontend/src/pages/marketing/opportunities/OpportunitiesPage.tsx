@@ -519,7 +519,10 @@ export default function OpportunitiesPage({
             <div className="flex items-center gap-2">
               {isManager && (
                 <Button asChild variant="outline" size="md">
-                  <Link to="/settings/pipelines">
+                  {/* A tab of Business since 2026-09-04: the stages a deal moves through
+                    are the SHAPE of the business, beside its identity. The old path
+                    still redirects, but the board's own link should not bounce. */}
+                  <Link to="/branding?tab=pipelines">
                     <Settings className="w-4 h-4" aria-hidden="true" />
                     {t('opportunities.managePipelines', 'Pipelines')}
                   </Link>

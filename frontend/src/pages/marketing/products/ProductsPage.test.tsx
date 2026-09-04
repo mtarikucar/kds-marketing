@@ -107,10 +107,13 @@ describe('ProductsPage', () => {
 
   it('renders the three hub tabs with the catalog selected by default', async () => {
     renderAt('/products');
-    for (const label of ['Products', 'Tax Rates', 'Coupons']) {
+    // 'Catalogue', not 'Products': this strip lives inside the Selling page's
+// Products tab now, and two controls one click apart with the same name is
+// exactly the confusion the settings merge exists to remove.
+    for (const label of ['Catalogue', 'Tax Rates', 'Coupons']) {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole('tab', { name: 'Products' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'Catalogue' })).toHaveAttribute('data-state', 'active');
     // The catalog body (not a stub) is what the default tab shows.
     expect(await screen.findByText('Pro plan')).toBeInTheDocument();
   });
@@ -130,7 +133,7 @@ describe('ProductsPage', () => {
 
   it('falls back to the catalog tab on an unknown ?tab= value', () => {
     renderAt('/products?tab=bogus');
-    expect(screen.getByRole('tab', { name: 'Products' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'Catalogue' })).toHaveAttribute('data-state', 'active');
   });
 
   it('switches tabs on click and keeps the New product action reachable on the catalog tab', async () => {

@@ -158,15 +158,14 @@ export default function BillingPage({ embedded }: { embedded?: boolean } = {}) {
 
   return (
     <div className="space-y-6">
-      {!embedded && (
-        <PageHeader
-          title={t('billing.title', 'Billing & Packages')}
-          description={t(
-            'billing.subtitle',
-            'Your plan decides how many leads the research agent delivers every day.',
-          )}
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('billing.title', 'Billing & Packages')}
+        description={t(
+          'billing.subtitle',
+          'Your plan decides how many leads the research agent delivers every day.',
+        )}
+      />
 
       {/* Summary fetch error */}
       <QueryStateBoundary

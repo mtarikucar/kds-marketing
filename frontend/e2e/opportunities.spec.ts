@@ -154,11 +154,14 @@ test('the board links to pipeline settings, which shows the seed as editable sta
   // opportunities.managePipelines — manager-only, and the only route from the
   // board to its own configuration.
   const toSettings = app.locator('main').getByRole('link', { name: "Pipeline'lar" });
-  await expect(toSettings).toHaveAttribute('href', '/settings/pipelines');
+  await expect(toSettings).toHaveAttribute('href', '/branding?tab=pipelines');
   await toSettings.click();
 
-  await expect(app).toHaveURL(/\/settings\/pipelines$/);
-  await expect(app.getByRole('heading', { level: 1, name: "Pipeline'lar" })).toBeVisible();
+  await expect(app).toHaveURL(/\/branding\?tab=pipelines$/);
+  await expect(app.getByRole('tab', { name: 'Satış hattı', selected: true })).toBeVisible();
+  // The <h1> belongs to the Business shell now; the tab above is what says
+  // which half of it is open.
+  await expect(app.getByRole('heading', { level: 1, name: 'İşletme' })).toBeVisible();
 
   // The seeded pipeline, flagged as the default new deals land in.
   await expect(app.getByRole('heading', { name: 'Sales Pipeline' })).toBeVisible();

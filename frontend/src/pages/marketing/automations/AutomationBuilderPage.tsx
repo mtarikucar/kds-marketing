@@ -20,6 +20,13 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
  * Owns the typed builder state; the canvas, rail, and property panel are
  * presentational. Backend/API unchanged.
  */
+/**
+ * Where the list lives since 2026-09-04: a tab of Strategy, because a workflow
+ * is machinery in service of a plan. `/automations` still redirects here, but
+ * leaving the builder is a flow people run all day and it should not bounce.
+ */
+const AUTOMATIONS_LIST = '/studio/strategy?tab=automations';
+
 export default function AutomationBuilderPage() {
   const { t } = useTranslation('marketing');
   const { id } = useParams<{ id: string }>();
@@ -89,7 +96,7 @@ export default function AutomationBuilderPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'workflows'] });
       toast.success(t('automations.saved', 'Automation saved'));
-      navigate('/automations');
+      navigate(AUTOMATIONS_LIST);
     },
     onError: (e: any) =>
       toast.error(e.response?.data?.message ?? e.message ?? t('automations.saveFailed', 'Save failed')),
@@ -180,7 +187,7 @@ export default function AutomationBuilderPage() {
       setDiscardConfirmOpen(true);
       return;
     }
-    navigate('/automations');
+    navigate(AUTOMATIONS_LIST);
   };
 
   const selectedStep = selected != null ? state.steps[selected] ?? null : null;
@@ -250,7 +257,7 @@ export default function AutomationBuilderPage() {
         cancelLabel={t('common.cancel', 'Cancel')}
         onConfirm={() => {
           setDiscardConfirmOpen(false);
-          navigate('/automations');
+          navigate(AUTOMATIONS_LIST);
         }}
       />
     </div>

@@ -52,10 +52,15 @@ describe('MarketingLayout — which shell wraps the page', () => {
   });
 
   it('leaves the workflow BUILDER out of the settings area (fullBleed)', () => {
-    // /automations moved into the settings hub with the 2026-08 surface merge.
     // The builder is a h-[calc(100vh-7rem)] canvas; the settings pane is a
     // heightless scroll column beside a 240px sidebar, so it would render
-    // letterboxed. `fullBleed` on the nav item is the opt-out.
+    // letterboxed. FULL_BLEED_PREFIXES is the opt-out.
+    //
+    // Keyed on the PATH since 2026-09-04. The flag used to ride on the
+    // `/automations` nav item, and vanished the day the workflow list stopped
+    // being a nav item — the builder started rendering letterboxed with nothing
+    // reporting a fault. Any page leaving the menu would have lost it the same
+    // way, which is why the opt-out no longer depends on being listed.
     renderAt('/automations/abc-123/edit');
     expect(screen.queryByText(SETTINGS_CHROME)).not.toBeInTheDocument();
   });

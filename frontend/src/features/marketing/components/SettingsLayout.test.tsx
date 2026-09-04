@@ -48,15 +48,16 @@ describe('SettingsLayout — sub-grouping', () => {
 
   it('renders labelled setting groups instead of one flat list', () => {
     renderSettings();
-    expect(screen.getByText('Workspace')).toBeInTheDocument();
-    expect(screen.getByText('Data')).toBeInTheDocument();
-    // Seven groups since 2026-09-03, down from nine. "Marketing assets" folded
-    // into "Marketing" and the standalone "Telephony" into "Channels &
-    // domains": a workflow running unattended and an email template waiting to
-    // be used is a true difference, and not one anybody navigates by.
-    expect(screen.getByText('Marketing')).toBeInTheDocument();
-    expect(screen.getByText('Channels & domains')).toBeInTheDocument();
-    expect(screen.getByText('Developer & security')).toBeInTheDocument();
+    // SEVEN groups over seventeen pages, from nine over forty-two two days
+    // earlier. "Data" is gone as a group because all three of its pages went to
+    // the Inbox, where the people they shape actually live.
+    expect(screen.getByText('Your business', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Marketing', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Selling', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Channels & domains', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Developer & security', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Plan & access', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.queryByText('Data')).not.toBeInTheDocument();
     expect(screen.queryByText('Marketing assets')).not.toBeInTheDocument();
     expect(screen.queryByText('Telephony')).not.toBeInTheDocument();
     // No leftover ungrouped bucket: every settings child belongs to a group.
@@ -83,16 +84,17 @@ describe('SettingsLayout — sub-grouping', () => {
     await i18n.changeLanguage('tr');
     try {
       renderSettings();
-      expect(screen.getByText('Pazarlama')).toBeInTheDocument();
+      expect(screen.getByText('Pazarlama', { selector: 'p' })).toBeInTheDocument();
       expect(screen.getByText('Uygulamaya dön')).toBeInTheDocument();
+      expect(screen.getByText('İşletmen', { selector: 'p' })).toBeInTheDocument();
+      expect(screen.getByText('Plan ve erişim', { selector: 'p' })).toBeInTheDocument();
       // Its neighbours, to prove the assertion is about a Turkish list rather
       // than about one string that happens to be translated. The two renamed
       // groups are here on purpose: a heading that lost its catalogue entry in
       // the merge would read as English in an otherwise Turkish list, which is
       // exactly the defect this test was written for.
-      expect(screen.getByText('Çalışma Alanı')).toBeInTheDocument();
-      expect(screen.getByText('Kanallar ve alan adları')).toBeInTheDocument();
-      expect(screen.getByText('Veri')).toBeInTheDocument();
+      expect(screen.getByText('Kanallar ve alan adları', { selector: 'p' })).toBeInTheDocument();
+      expect(screen.getByText('Satış', { selector: 'p' })).toBeInTheDocument();
     } finally {
       await i18n.changeLanguage('en');
     }
@@ -114,12 +116,16 @@ describe('SettingsLayout — sub-grouping', () => {
    * would make that group mean "and also calls". A telephony group also gives
    * /voice and /voice/ivr an obvious home the day they follow.
    */
-  it('places the call log in a telephony group rather than the Other bucket', () => {
+  it('keeps the phone as ONE entry in the channels group', () => {
     renderSettings();
     // Inside the group, not merely somewhere on the page: the whole point of
     // the move is WHERE it lands, and the mobile strip renders every item flat.
-    const group = screen.getByText('Channels & domains').parentElement as HTMLElement;
-    expect(within(group).getByRole('link', { name: 'Calls' })).toBeInTheDocument();
+    const group = screen.getByText('Channels & domains', { selector: 'p' })
+      .parentElement as HTMLElement;
+    expect(within(group).getByRole('link', { name: 'Voice AI' })).toBeInTheDocument();
+    // The call log is a TAB of it since 2026-09-04 — what answers the line and
+    // what it then did are one subject, and were two lines in this list.
+    expect(screen.queryByRole('link', { name: 'Calls' })).not.toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
   });
 
@@ -136,7 +142,7 @@ describe('SettingsLayout — sub-grouping', () => {
    */
   it('files Ses in that same channels group — as ONE entry, not two', () => {
     renderSettings();
-    const group = screen.getByText('Channels & domains').parentElement as HTMLElement;
+    const group = screen.getByText('Channels & domains', { selector: 'p' }).parentElement as HTMLElement;
     // The translated label, not the inline fallback: nav.voice is "Voice AI"
     // ("Sesli AI" in Turkish), which is what a user actually reads here.
     expect(within(group).getByRole('link', { name: 'Voice AI' })).toBeInTheDocument();
@@ -153,10 +159,15 @@ describe('SettingsLayout — sub-grouping', () => {
    */
   it('lists each merged page once, not once per half', () => {
     renderSettings();
-    for (const gone of ['Roles & permissions', 'Tags', 'Inbound webhooks', 'Claude connector', 'Custom Domains']) {
+    for (const gone of [
+      'Roles & permissions', 'Inbound webhooks', 'Claude connector', 'Custom Domains',
+      // The second pass. Three of these left Settings altogether.
+      'Targets', 'Booking', 'Pipelines', 'Subscriptions', 'Order forms', 'Invoices',
+      'Modules', 'Calls', 'Workflows', 'Research', 'Segments & tags', 'Custom Fields', 'Import',
+    ]) {
       expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
     }
-    for (const kept of ['Team', 'Segments & tags', 'Domains', 'Webhooks', 'API & connector']) {
+    for (const kept of ['Team', 'Domains', 'Webhooks', 'API & connector', 'Selling', 'Business']) {
       expect(screen.getAllByRole('link', { name: kept }).length).toBeGreaterThan(0);
     }
   });

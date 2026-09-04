@@ -216,7 +216,11 @@ describe('The person surface — the calls arrangement', () => {
     renderAt('/inbox');
 
     await user.click(await screen.findByTestId('view-tab-calls'));
-    expect(await screen.findByText('+905551112233')).toBeInTheDocument();
+    // COLD_MOUNT, like the two arrangements above: this is the first mount of a
+    // lazily-loaded page and its query, and under a loaded machine the default
+    // 1s is not enough. It passes alone and fails in a full run, which is the
+    // signature of a budget rather than a bug.
+    expect(await screen.findByText('+905551112233', {}, COLD_MOUNT)).toBeInTheDocument();
   });
 
   /**

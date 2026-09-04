@@ -746,14 +746,13 @@ export default function ImportWizardPage({ embedded }: { embedded?: boolean } = 
 
   return (
     <div className="space-y-6">
-      {!embedded && (
-        <PageHeader
-          title={t('import.title', { defaultValue: 'Import leads' })}
-          description={t('import.subtitle', {
-            defaultValue: 'Upload a CSV file to bulk-import leads into your workspace.',
-          })}
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('import.title', { defaultValue: 'Import leads' })}
+        description={t('import.subtitle', {
+          defaultValue: 'Upload a CSV file to bulk-import leads into your workspace.',
+        })}
+      />
 
       {/* Wizard card */}
       <Card>

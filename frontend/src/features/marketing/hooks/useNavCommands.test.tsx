@@ -85,11 +85,11 @@ describe('useNavCommands', () => {
     const paths = pathsOf(container);
     expect(paths).toContain('/dashboard');
     expect(paths).toContain('/leads');
-    // managerOnly + no entitlement flag → visible to a manager. Tags is a TAB
-    // of Segments since the 2026-09-03 settings merge, and the palette offers
-    // it under its own name at its own address.
-    expect(paths).toContain('/segments');
-    expect(paths).toContain('/segments?tab=tags');
+    // Segments and Tags left Settings entirely on 2026-09-04 — they are about
+    // the people on the Inbox surface. The palette still offers both by name,
+    // now as tabs of the surface that took them.
+    expect(paths).toContain('/leads?tab=audience');
+    expect(paths).toContain('/leads?tab=import');
   });
 
   it('hides manager-only destinations from a rep', () => {
@@ -203,9 +203,16 @@ describe('useNavCommands — the merged pages keep every name they absorbed', ()
     // Path → the label the person is likely to type.
     const ABSORBED: [string, RegExp][] = [
       ['/users?tab=roles', /rol/i],
-      ['/segments?tab=tags', /etiket|tag/i],
+      ['/users?tab=targets', /hedef|target/i],
       ['/settings/webhooks?tab=inbound', /gelen|inbound/i],
       ['/settings/api-keys?tab=connector', /claude|ba.lay/i],
+      // The second pass: selling took the whole sale, the business page took the
+      // deal stages, and the inbox took what shapes its people. The GATED
+      // halves (workflows, research, invoicing, telephony, funnels) are absent
+      // here on purpose — see the entitlement test below.
+      ['/products?tab=order-forms', /sipari|order/i],
+      ['/branding?tab=pipelines', /hat|pipeline/i],
+      ['/leads?tab=fields', /alan|field/i],
     ];
     for (const [path, label] of ABSORBED) {
       expect({ path, present: byPath.has(path) }).toEqual({ path, present: true });
@@ -221,7 +228,23 @@ describe('useNavCommands — the merged pages keep every name they absorbed', ()
     const paths = pathsOf(container);
     expect(paths).toContain('/users');
     expect(paths).not.toContain('/users?tab=members');
-    expect(paths).not.toContain('/segments?tab=segments');
+    expect(paths).not.toContain('/leads?tab=people');
+    expect(paths).not.toContain('/products?tab=products');
+  });
+
+  it('never offers a tab for a feature the workspace has not bought', () => {
+    // /calls carried `telephony` before it became a tab of Voice. Folding it in
+    // without the gate would put a jump in the palette that lands on a blank
+    // panel — worse than the long list this merge replaced.
+    loginAs(MANAGER);
+    const { container } = renderProbe();
+    const paths = pathsOf(container);
+    // The default test entitlement set is empty, so every gated half is absent
+    // while its ungated siblings are present.
+    expect(paths).toContain('/studio/strategy');
+    expect(paths).not.toContain('/studio/strategy?tab=research');
+    expect(paths).not.toContain('/products?tab=invoices');
+    expect(paths).not.toContain('/voice?tab=calls');
   });
 
   it('never offers a tab of a page the person cannot reach', () => {

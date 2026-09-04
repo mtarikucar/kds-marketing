@@ -384,17 +384,14 @@
     }
   },
   "settingsGroup": {
-    "billing": "Ürünler ve faturalama",
     "agency": "Ajans",
-    "workspace": "Çalışma Alanı",
-    "team": "Ekip ve erişim",
-    "data": "Veri",
-    "integrations": "Kanallar ve entegrasyonlar",
+    "workspace": "İşletmen",
     "developer": "Geliştirici ve güvenlik",
-    "compliance": "Uyumluluk",
     "other": "Diğer",
     "marketing": "Pazarlama",
-    "channels": "Kanallar ve alan adları"
+    "channels": "Kanallar ve alan adları",
+    "selling": "Satış",
+    "plan": "Plan ve erişim"
   },
   "settings.backToApp": "Uygulamaya dön",
   "leadStatus": {
@@ -637,7 +634,10 @@
     "aiModels": "Yapay zeka modelleri",
     "audience": "Segmentler ve etiketler",
     "domains": "Alan adları",
-    "apiAccess": "API ve bağlayıcı"
+    "apiAccess": "API ve bağlayıcı",
+    "business": "İşletme",
+    "selling": "Satış",
+    "planAccess": "Plan ve erişim"
   },
   "aiModels": {
     "title": "Yapay zeka üretim modelleri",
@@ -1188,7 +1188,8 @@
     "tab": {
       "products": "Ürünler",
       "taxRates": "Vergi Oranları",
-      "coupons": "Kuponlar"
+      "coupons": "Kuponlar",
+      "catalogue": "Katalog"
     }
   },
   "documents": {
@@ -4419,12 +4420,13 @@
     }
   },
   "brand": {
-    "title": "Marka",
-    "subtitle": "İşletme kimliğin, görsel kitin ve AI marka sesin — tek yerde.",
+    "title": "İşletme",
+    "subtitle": "Kimliğin, görsel kitin, AI marka sesin ve bir fırsatın geçtiği aşamalar.",
     "tab": {
       "business": "İşletme",
       "kit": "Marka Kiti",
-      "brain": "Marka Beyni"
+      "brain": "Marka Beyni",
+      "pipelines": "Satış hattı"
     },
     "brain": {
       "editor": {
@@ -4481,7 +4483,7 @@
   },
   "calls": {
     "tab": {
-      "calls": "Aramalar",
+      "calls": "Kayıt",
       "dialer": "Güçlü Arayıcı",
       "voice": "Yapay zekâ görüşmeleri"
     },
@@ -4948,10 +4950,12 @@
   },
   "team": {
     "title": "Ekip",
-    "subtitle": "Üyeler, davetler ve her rolün taşıdığı yetkiler.",
+    "subtitle": "Kim burada, ne yapabilir, neyi hedefliyor ve ne zaman randevu alınabilir.",
     "tab": {
       "members": "Üyeler",
-      "roles": "Roller ve yetkiler"
+      "roles": "Roller ve yetkiler",
+      "targets": "Hedefler",
+      "booking": "Randevu"
     }
   },
   "audience": {
@@ -4964,10 +4968,38 @@
   },
   "voiceHub": {
     "title": "Ses",
-    "subtitle": "Hattına ne cevap veriyor, ve arayana hangi seçenekleri sunuyor.",
+    "subtitle": "Hattına ne cevap veriyor, hangi seçenekleri sunuyor, ve ne yaptı.",
     "tab": {
       "assistant": "Asistan",
-      "ivr": "Telefon ağacı"
+      "ivr": "Telefon ağacı",
+      "calls": "Aramalar"
+    }
+  },
+  "growthEngine": {
+    "title": "Strateji",
+    "subtitle": "Plan, onu yürüten mekanizma, ve ikisini besleyen araştırma.",
+    "tab": {
+      "strategy": "Strateji",
+      "automations": "Akışlar",
+      "research": "Araştırma"
+    }
+  },
+  "selling": {
+    "title": "Satış",
+    "subtitle": "Ne sattığın, insanların nasıl aldığı, ne tekrar ettiği ve neyin faturalandığı.",
+    "tab": {
+      "products": "Ürünler",
+      "order-forms": "Sipariş formları",
+      "subscriptions": "Abonelikler",
+      "invoices": "Faturalar"
+    }
+  },
+  "planAccess": {
+    "title": "Plan ve erişim",
+    "subtitle": "Bu çalışma alanının planı, ve ürünün hangi parçalarını açtığı.",
+    "tab": {
+      "plan": "Plan",
+      "modules": "Modüller"
     }
   }
 }

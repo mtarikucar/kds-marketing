@@ -30,7 +30,11 @@ const modulesWrite = (url: string, method: string) =>
 test('the catalogue lists what the plan entitles — and nothing else', async ({ app }) => {
   await app.goto('/settings/modules');
 
-  await expect(app.getByRole('heading', { name: 'Modüller', level: 1 })).toBeVisible();
+  // A TAB of 'Plan ve erişim' since 2026-09-04. A switch that REMOVES features
+  // belongs with the plan that pays for them, at the end of the list, rather
+  // than near the top beside the logo and the timezone.
+  await expect(app).toHaveURL(/\/billing\?tab=modules$/);
+  await expect(app.getByRole('tab', { name: 'Modüller', selected: true })).toBeVisible();
 
   // A fresh workspace is on the 14-day TRIAL, which grants every toggleable
   // module and starts them all ACTIVE (DEFAULT_ACTIVATED_MODULES).
@@ -138,8 +142,12 @@ test('switching a module off drops its PAGE from the settings menu — live — 
   // Only the deactivated children leave. If the whole list emptied, the two
   // assertions above would pass for entirely the wrong reason — and the owner
   // would have locked themselves out of the switch they just used.
-  await expect(settingsNav.getByRole('link', { name: 'Modüller', exact: true })).toBeVisible();
-  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
+  // Only the deactivated child leaves. The survivors named here have to be
+  // pages the switch does NOT gate — naming Ses would assert the presence of
+  // the very thing just switched off, and naming Modules or the call log would
+  // name entries that are tabs and never in this list at all.
+  await expect(settingsNav.getByRole('link', { name: 'Plan ve erişim', exact: true })).toBeVisible();
+  await expect(settingsNav.getByRole('link', { name: 'Bağlantılar', exact: true })).toBeVisible();
 
   // And the person surface is untouched by any of it — one entry, still there.
   await inboxSurface.click();
@@ -186,8 +194,10 @@ test('the call log is a settings page now, filed with the channels — and the p
 
   // Second <aside> = SettingsLayout's page list (the first is the hub rail).
   const settingsNav = app.locator('aside').nth(1);
-  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
+  // ONE entry for the whole telephone since 2026-09-04: what answers the line,
+  // the options it offers, and what it did. The log was a second line here.
   await expect(settingsNav.getByRole('link', { name: 'Sesli AI', exact: true })).toBeVisible();
+  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toHaveCount(0);
   // The phone tree stopped being a line of its own on 2026-09-03: recording the
   // greeting and wiring the keypad is one sitting of work, so it is a TAB of
   // Ses. Its route still resolves (navigation.test.ts pins the path set) — it
@@ -205,14 +215,18 @@ test('the call log is a settings page now, filed with the channels — and the p
   // And it still opens — a menu move, not a route deletion. /calls is in the
   // frozen 50-path set navigation.test.ts pins.
   await app.goto('/calls');
-  await expect(app.getByRole('heading', { level: 1, name: 'Sales Calls' })).toBeVisible();
+  await expect(app).toHaveURL(/\/voice\?tab=calls$/);
+  await expect(app.getByRole('tab', { name: 'Aramalar', selected: true })).toBeVisible();
   // Inside the settings chrome now: MarketingLayout picks the shell from the
   // owning hub's `area`, so the page arrives beside the settings list rather
   // than under the Inbox sub-nav. Two <aside>s is that shell, structurally —
   // the hub rail plus SettingsLayout's own page list.
   await expect(app.locator('aside')).toHaveCount(2);
+  // The list entry that owns this page is Ses — the log is a tab of it, not a
+  // line of its own. Naming Aramalar here would assert the very thing the merge
+  // removed, one screen after asserting it is gone.
   await expect(
-    app.locator('aside').nth(1).getByRole('link', { name: 'Aramalar', exact: true }),
+    app.locator('aside').nth(1).getByRole('link', { name: 'Sesli AI', exact: true }),
   ).toBeVisible();
 });
 
@@ -325,25 +339,42 @@ test('the command palette still offers the pages that left the menu', async ({ a
   await expect(app.getByRole('heading', { level: 1 })).toBeVisible();
 });
 
-test('deactivating a module also drops its page from the Settings menu', async ({ app }) => {
+test('deactivating a module also drops its TAB from the page that absorbed it', async ({ app }) => {
+  /**
+   * The per-CHILD gating path, one level down since 2026-09-04.
+   *
+   * Research used to be its own Settings entry, and switching the module off
+   * removed that entry. It is a TAB of Strategy now — a workspace without a
+   * strategy is not one with a blank page, it is one whose machinery has
+   * nothing to be for — so the same gate has to travel with it.
+   *
+   * That is the failure a merge causes silently: fold a gated page into an
+   * ungated one and the check disappears, leaving a tab that opens on a panel
+   * the plan does not include. A shorter list you cannot use is worse than the
+   * long one it replaced, so this asserts the gate in a real browser rather
+   * than only in the unit tests.
+   */
   await app.goto('/settings/modules');
-
-  // Second <aside> = SettingsLayout's page list (the first is the hub rail).
-  // This is the per-CHILD gating path in visibleNav (childVisible), a
-  // different branch from the per-HUB one the Inbox test covers.
-  const settingsNav = app.locator('aside').nth(1);
-  const researchLink = settingsNav.getByRole('link', { name: 'AI Araştırma', exact: true });
   const toggle = app.getByRole('switch', { name: 'Araştırma', exact: true });
 
-  await expect(researchLink).toBeVisible();
+  await app.goto('/studio/strategy');
+  const researchTab = app.getByRole('tab', { name: 'Araştırma', exact: true });
+  await expect(researchTab).toBeVisible();
 
+  await app.goto('/settings/modules');
   const write = app.waitForResponse((r) => modulesWrite(r.url(), r.request().method()));
   await toggle.click();
   expect((await write).status()).toBe(200);
 
-  await expect(researchLink).toHaveCount(0);
-  // Only the deactivated child leaves. If the whole Settings list emptied out,
-  // the assertion above would pass for entirely the wrong reason — and the
-  // owner would have locked themselves out of the switch they just used.
-  await expect(settingsNav.getByRole('link', { name: 'Modüller', exact: true })).toBeVisible();
+  await app.goto('/studio/strategy');
+  await expect(researchTab).toHaveCount(0);
+  // Only the deactivated half leaves. If the whole page emptied out, the
+  // assertion above would pass for entirely the wrong reason.
+  await expect(app.getByRole('tab', { name: 'Strateji', exact: true })).toBeVisible();
+
+  // And the URL cannot get past the gate either — otherwise it is a decoration
+  // anybody who knows the tab name can type around.
+  await app.goto('/studio/strategy?tab=research');
+  await expect(researchTab).toHaveCount(0);
+  await expect(app.getByRole('tab', { name: 'Strateji', selected: true })).toBeVisible();
 });
