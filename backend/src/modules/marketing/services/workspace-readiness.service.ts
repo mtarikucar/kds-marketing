@@ -96,6 +96,7 @@ export class WorkspaceReadinessService {
       knowledgeDocs,
       strategy,
       workflows,
+      workflowsAnyStatus,
       researchProfiles,
       socialAccounts,
       unhealthySocial,
@@ -136,9 +137,34 @@ export class WorkspaceReadinessService {
         select: { id: true, status: true, autonomyLevel: true },
       }),
       this.prisma.workflow.count({ where: { workspaceId, status: 'ACTIVE' } }),
+      // Drafts count SEPARATELY, because "you have none" and "you have one and
+      // never armed it" need opposite advice. Telling an owner to create an
+      // automation when a finished one is sitting in DRAFT is how a checklist
+      // sends someone to build a second copy of what they already have.
+      this.prisma.workflow.count({ where: { workspaceId } }),
       this.prisma.researchProfile.count({ where: { workspaceId, status: 'ACTIVE' } }),
       this.prisma.socialAccount.count({ where: { workspaceId, enabled: true } }),
-      this.prisma.socialAccount.count({ where: { workspaceId, enabled: true, lastError: { not: null } } }),
+      // The SAME predicate `DailyDigestService` uses, deliberately — "something
+      // the owner switched ON has stopped working".
+      //
+      // What it must not do is what this line used to do: filter on
+      // `enabled: true, lastError: { not: null }`. That misses the failure that
+      // actually happens. A token simply RUNS OUT: `tokenExpiresAt` passes,
+      // nothing writes `lastError`, the row stays enabled — and the old
+      // predicate reported it as a healthy connection while every publish
+      // through it failed. It also swept up benign strings: `disconnected` on
+      // an account the owner retired, and `mistagged_page_superseded` from the
+      // Page repair, are both deliberate and neither is a problem to report
+      // forever.
+      this.prisma.socialAccount.count({
+        where: {
+          workspaceId,
+          OR: [
+            { lastError: 'reauth_required' },
+            { enabled: true, tokenExpiresAt: { lt: new Date() } },
+          ],
+        },
+      }),
       this.prisma.sendingDomain.count({ where: { workspaceId, status: 'VERIFIED' } }),
       this.prisma.channel.count({ where: { workspaceId, type: 'EMAIL', status: 'ACTIVE' } }),
       this.prisma.channel.count({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } }),
@@ -231,16 +257,28 @@ export class WorkspaceReadinessService {
         // everywhere except the machinery that will not run on it.
         state: !strategy ? 'MISSING' : strategy.status === 'ACTIVE' ? 'READY' : 'ATTENTION',
         to: '/studio/strategy',
-        mcpTool: 'jeeta.synthesize_strategy',
+        // NOT `jeeta.synthesize_strategy`, though the name reads like the one.
+        // That tool is `StrategyFeedbackService.refresh`: it RE-synthesizes an
+        // existing ACTIVE strategy from the workspace's intake session, and
+        // returns `{ skipped: 'no-active-strategy' }` when there is none —
+        // precisely the MISSING case this line describes. The first strategy
+        // comes out of the intake interview, whose session id an agent has no
+        // way to obtain. Naming it here promised a fix that silently no-ops.
+        mcpTool: null,
         detail: strategy ? { status: strategy.status } : undefined,
       },
       {
         id: 'automations',
         group: 'plan',
-        state: yes(workflows > 0),
+        // A workspace with drafts is NOT a workspace with no automations. The
+        // live one here had a finished lead-routing workflow sitting in DRAFT
+        // — its own description recording that 299 leads had piled up untouched
+        // because the step was still manual — and this line said MISSING, which
+        // reads as "build one".
+        state: workflows > 0 ? 'READY' : workflowsAnyStatus > 0 ? 'ATTENTION' : 'MISSING',
         to: '/studio/strategy?tab=automations',
         mcpTool: 'jeeta.create_workflow',
-        detail: { active: workflows },
+        detail: { active: workflows, total: workflowsAnyStatus },
       },
       {
         id: 'research',
@@ -356,7 +394,12 @@ export class WorkspaceReadinessService {
         // campaign the whole production line produces nothing and says nothing.
         state: yes(activeCampaigns > 0),
         to: '/studio',
-        mcpTool: 'jeeta.create_social_campaign',
+        // `jeeta.create_social_campaign` creates a DRAFT, and this line counts
+        // ACTIVE. Activation is withheld from MCP on purpose — "restarting an
+        // unattended publisher stays a panel decision" — so no tool in the
+        // catalogue can move this to READY. An agent can still prepare the
+        // draft; a person arms it, which is the design and not a gap.
+        mcpTool: null,
         detail: { active: activeCampaigns },
       },
       {
@@ -395,7 +438,13 @@ export class WorkspaceReadinessService {
         // is a precondition for this one being a good idea.
         state: yes(strategy?.autonomyLevel === 'AUTONOMOUS'),
         to: '/studio/strategy',
-        mcpTool: 'jeeta.set_strategy_autonomy',
+        // `jeeta.set_strategy_autonomy` exists, and REFUSES the only value that
+        // would satisfy this line: `SETTABLE_AUTONOMY` is SHADOW and ASSISTED,
+        // because "AUTONOMOUS removes the human approval gate from the strategy
+        // lane, which an agent must not grant itself". Naming it here asked an
+        // agent to grant itself exactly that, and the refusal it would hit is
+        // the product working correctly.
+        mcpTool: null,
         detail: strategy ? { level: strategy.autonomyLevel } : undefined,
       },
     ];
