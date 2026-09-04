@@ -20,6 +20,7 @@ import { CampaignItemArmingService } from '../social-campaigns/campaign-item-arm
 import { maxPublishableVideos } from '../social-planner/network-adapters';
 import {
   DEFAULT_VIDEO_MODEL,
+  resolveMediaModelId,
   DEFAULT_VIDEO_REFERENCE_MODEL,
   mediaModelAcceptsReferenceImages,
   mediaModelTakesSeed,
@@ -636,7 +637,7 @@ export class ConceptPromotionService implements OnModuleInit {
     // anyone spends money on.
     const modelSource: VideoModelChoice['modelSource'] = chosen
       ? 'campaign'
-      : model === DEFAULT_VIDEO_MODEL
+      : resolveMediaModelId(model) === DEFAULT_VIDEO_MODEL
         ? 'platform'
         : 'workspace';
 

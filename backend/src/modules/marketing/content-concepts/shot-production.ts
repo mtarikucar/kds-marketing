@@ -1,5 +1,6 @@
 import {
   billableDurationSec,
+  resolveMediaModelId,
   estimateMediaCredits,
   estimateMediaUsd,
   getMediaModel,
@@ -50,7 +51,9 @@ const SUBMIT_MAX_SEC = 10;
  * bought and the number that is charged.
  */
 export function billedBeatSec(model: string, requestedSec: number | undefined): number {
-  const contract = getMediaModel(model)?.contract.duration;
+  // The model that will RUN: a stored id fal has retired renders on its
+  // successor, whose floor and ceiling are what the invoice will show.
+  const contract = getMediaModel(resolveMediaModelId(model))?.contract.duration;
   const asked = Math.min(Math.max(1, Math.round(requestedSec ?? 5)), SUBMIT_MAX_SEC);
   return contract ? billableDurationSec(contract, asked) : asked;
 }

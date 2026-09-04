@@ -1,3 +1,4 @@
+import { DEFAULT_VIDEO_MODEL, getMediaModel } from '../ai/media/media-models.config';
 import { randomUUID } from 'crypto';
 import {
   BadRequestException,
@@ -54,7 +55,12 @@ export const MAX_CONCEPT_COUNT = 8;
  * Measured before this existed: a well-formed batch produced beats of 1800s and
  * 0s, and both persisted as approvable rows. Neither can ever be generated.
  */
-export const MIN_SHOT_SEC = 1;
+/** The shortest beat the platform default video model will render — its own
+ *  contract floor (Seedance 1.0 Pro Fast: 2s). Read off the catalogue rather
+ *  than written here, so the planner's floor and the quote's floor cannot
+ *  disagree: a beat clamped to 1s that the model renders (and bills) at 2s is
+ *  a plan that lies about its own length. */
+export const MIN_SHOT_SEC = getMediaModel(DEFAULT_VIDEO_MODEL)?.contract.duration?.minSec ?? 1;
 export const MAX_SHOT_SEC = 10;
 
 /**

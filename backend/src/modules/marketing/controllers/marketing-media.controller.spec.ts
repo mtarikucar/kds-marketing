@@ -54,8 +54,12 @@ describe('MarketingMediaController', () => {
       'fal-ai/topaz/upscale/image',
       'fal-ai/latentsync',
     ]));
-    // 31 verified endpoints, 3 withheld.
-    expect(ids.length).toBe(28);
+    // 32 verified endpoints: 3 withheld, and 2 retired by fal (Seedance 1.0
+    // Lite, Veo 3 Fast) that stay catalogued for old rows but are not sold.
+    expect(ids.length).toBe(27);
+    expect(ids).not.toContain('fal-ai/bytedance/seedance/v1/lite/text-to-video');
+    expect(ids).not.toContain('fal-ai/veo3/fast');
+    expect(ids).toContain('fal-ai/bytedance/seedance/v1/pro/fast/text-to-video');
   });
 });
 

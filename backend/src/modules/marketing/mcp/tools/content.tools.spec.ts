@@ -112,9 +112,10 @@ describe('Faz 5 D2 — AI media generation', () => {
 
   it('offers only the aspect ratios each tool default model actually publishes', () => {
     // MediaGenService rejects a ratio the chosen model has no contract for, before
-    // the reserve. A schema that offers one is inviting a 400: the default IMAGE
-    // model (Seedream v4, sized through ImageSize presets) has no 4:5, while the
-    // default VIDEO model does.
+    // the reserve. A schema that offers one is inviting a 400: neither default
+    // publishes 4:5 — the IMAGE model (Seedream v4) sizes through ImageSize
+    // presets, and the VIDEO model (Seedance 1.0 Pro Fast) publishes 21:9 down
+    // to 9:16 with no 4:5 — so the schema must refuse it for both.
     const { registry } = build();
     const accepts = (tool: string, aspectRatio: string) =>
       registry.get(tool)!.inputSchema.safeParse({ prompt: 'x', aspectRatio }).success;
@@ -127,19 +128,20 @@ describe('Faz 5 D2 — AI media generation', () => {
     for (const r of Object.keys(MEDIA_MODELS[DEFAULT_VIDEO_MODEL].contract.aspect!.values)) {
       expect(accepts('jeeta.generate_video', r)).toBe(true);
     }
-    expect(accepts('jeeta.generate_video', '4:5')).toBe(true);
+    expect(accepts('jeeta.generate_video', '4:5')).toBe(false);
+    expect(accepts('jeeta.generate_video', '21:9')).toBe(true);
   });
 
   it('generate_video forwards the duration and defaults nothing else', async () => {
     const { registry, media } = build();
     await registry
       .get('jeeta.generate_video')!
-      .handler(ctx(), { prompt: 'dough being rolled', durationSec: 8, model: 'fal-ai/veo3/fast' });
+      .handler(ctx(), { prompt: 'dough being rolled', durationSec: 8, model: 'fal-ai/veo3.1/fast' });
     expect(media.requestGeneration).toHaveBeenCalledWith('ws1', {
       type: 'VIDEO',
       prompt: 'dough being rolled',
       durationSec: 8,
-      model: 'fal-ai/veo3/fast',
+      model: 'fal-ai/veo3.1/fast',
       createdById: 'sys-1',
     });
   });

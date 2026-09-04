@@ -245,6 +245,19 @@ export interface MediaRate {
   creditsPerMinute?: number;
 }
 
+export type MediaVendor = 'fal' | 'runware';
+
+/** A second source for the same model. The rate fields are Runware's LIST
+ *  price and feed ONLY the vendor-cost ledger; the customer credit meter stays
+ *  derived from the fal rate on the model itself (design §2.3). The wire recipe
+ *  for `model` lives in runware.provider.ts, keyed on this id. */
+export interface RunwareBinding extends MediaRate {
+  /** AIR id, e.g. `bytedance:seedance@2.5`. */
+  model: string;
+  tiers?: Readonly<Record<string, MediaRate>>;
+  note?: string;
+}
+
 export interface MediaModel extends MediaRate {
   /** The EXACT queue.fal.run/{id} path. Never derived from a sibling. */
   id: string;
@@ -271,10 +284,20 @@ export interface MediaModel extends MediaRate {
    * the reason clears, un-withholding is deleting one line.
    */
   withheld?: string;
+  runware?: RunwareBinding;
+  /**
+   * fal retired this endpoint. The entry stays — old rows, stored workspace
+   * defaults and campaign overrides all reference it — but a generation naming
+   * it runs on the successor (`resolveMediaModelId`), the menu hides it, and the
+   * write gate (`assertCataloguedModel`) refuses to store it anew.
+   */
+  replacedBy?: string;
 }
 
 export const DEFAULT_IMAGE_MODEL = 'fal-ai/bytedance/seedream/v4/text-to-image';
-export const DEFAULT_VIDEO_MODEL = 'fal-ai/bytedance/seedance/v1/lite/text-to-video';
+export const DEFAULT_VIDEO_MODEL = 'fal-ai/bytedance/seedance/v1/pro/fast/text-to-video';
+/** fal retired this in 2026-09 and silently re-routes it to Pro Fast at 1080p. */
+export const RETIRED_SEEDANCE_LITE_MODEL = 'fal-ai/bytedance/seedance/v1/lite/text-to-video';
 export const DEFAULT_AUDIO_MODEL = 'fal-ai/elevenlabs/tts/multilingual-v2';
 
 // Shared aspect maps. Reused verbatim where two endpoints genuinely publish the
@@ -316,6 +339,34 @@ const SEEDANCE_25_DURATION: MediaDurationContract = {
 const SEEDANCE_25_TIERS: Record<string, MediaRate> = {
   '480p': { pricePerSecUsd: 0.2205, creditsPerSec: 23 },
   '1080p': { pricePerSecUsd: 1.164, creditsPerSec: 117 },
+};
+
+/** Runware's per-second list for the same model (its 720p base sits on the
+ *  binding itself). Vendor bookkeeping only — see `RunwareBinding`. */
+const SEEDANCE_25_RUNWARE: RunwareBinding = {
+  model: 'bytedance:seedance@2.5', pricePerSecUsd: 0.2304,
+  tiers: { '480p': { pricePerSecUsd: 0.1025 }, '1080p': { pricePerSecUsd: 0.61354 } },
+};
+
+/** Seedance 1.0 Pro Fast — schema-read 2026-09-04. No 4:5. */
+const SEEDANCE_1_FAST_ASPECT: MediaAspectContract = {
+  param: 'aspect_ratio',
+  values: { '21:9': '21:9', '16:9': '16:9', '4:3': '4:3', '1:1': '1:1', '3:4': '3:4', '9:16': '9:16' },
+};
+/** The endpoint DEFAULTS to 1080p, so this is always sent. */
+const SEEDANCE_1_FAST_RESOLUTION: MediaResolutionContract = {
+  param: 'resolution', values: ['480p', '720p', '1080p'], default: '720p',
+};
+/** Digit-string enum "2".."12". */
+const SEEDANCE_1_FAST_DURATION: MediaDurationContract = {
+  param: 'duration', encoding: 'digitStringSeconds', minSec: 2, maxSec: 12,
+};
+/** $1.00 per million video tokens, tokens = h·w·24·s/1024. 480p (864×480)
+ *  ≈ 9,720 tok/s ≈ $0.0097/s; 720p is billed at the 1280×720 figure the page
+ *  quotes, 21,600 tok/s = $0.0216/s; 1080p (1920×1088) ≈ 48,960 ≈ $0.049/s. */
+const SEEDANCE_1_FAST_TIERS: Record<string, MediaRate> = {
+  '480p': { pricePerSecUsd: 0.0097, creditsPerSec: 1 },
+  '1080p': { pricePerSecUsd: 0.049, creditsPerSec: 5 },
 };
 
 const VEO_31_RESOLUTION: MediaResolutionContract = {
@@ -375,6 +426,10 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'fal-ai/qwen-image',
     technique: 'IMAGE_CREATE', type: 'IMAGE', label: 'Draft image',
     priceUsd: 0.02, credits: 2,
+    runware: {
+      model: 'runware:108@1', priceUsd: 0.0058,
+      note: 'Compute-billed "from" price at 1024x1024 / 20 steps; the real figure is read back per request.',
+    },
     // Legacy entry, catalogued before the 2026-09-02 schema pass and not covered
     // by it. Its aspect handling is deliberately absent rather than guessed: the
     // old provider sent `aspect_ratio`, which this endpoint does not document, so
@@ -570,6 +625,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'fal-ai/birefnet/v2',
     technique: 'IMAGE_CLEANUP', type: 'IMAGE', label: 'BiRefNet v2 — background removal',
     priceUsd: 0.02, credits: 2,
+    runware: { model: 'runware:112@5', priceUsd: 0.0006, note: 'BiRefNet General; every published run $0.0006.' },
     note: 'PRICE IS UNPUBLISHED: the page shows only a per-compute-second estimator '
       + 'with no rate. 2 credits is a deliberately generous placeholder for a '
       + 'few GPU-seconds and MUST be replaced with a measured figure. '
@@ -607,10 +663,30 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
   [DEFAULT_VIDEO_MODEL]: {
     id: DEFAULT_VIDEO_MODEL,
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Short video',
+    pricePerSecUsd: 0.0216, creditsPerSec: 3, tiers: SEEDANCE_1_FAST_TIERS,
+    runware: {
+      model: 'bytedance:2@2', pricePerSecUsd: 0.01336,
+      tiers: { '480p': { pricePerSecUsd: 0.00629 }, '1080p': { pricePerSecUsd: 0.03177 } },
+    },
+    note: 'The platform default. fal retired Seedance 1.0 Lite and re-routes it here, '
+      + 'and this endpoint DEFAULTS TO 1080p ($0.049/s) — so resolution is always sent, '
+      + 'and 720p is the tier the 3-credit meter was set against. No negative_prompt, '
+      + 'no audio; seed is accepted. Duration is a digit-string "2".."12".',
+    contract: {
+      promptParam: 'prompt', negativePrompt: false, seedInput: true,
+      duration: SEEDANCE_1_FAST_DURATION, resolution: SEEDANCE_1_FAST_RESOLUTION,
+      aspect: SEEDANCE_1_FAST_ASPECT,
+    },
+  },
+  [RETIRED_SEEDANCE_LITE_MODEL]: {
+    id: RETIRED_SEEDANCE_LITE_MODEL,
+    technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Short video (retired)',
     pricePerSecUsd: 0.025, creditsPerSec: 3,
-    // Legacy entry: catalogued before the 2026-09-02 schema pass and not re-read
-    // by it, so its contract is exactly the shape this repo has been shipping
-    // (integer duration, bare aspect_ratio) rather than a guess at a newer one.
+    replacedBy: DEFAULT_VIDEO_MODEL,
+    note: 'RETIRED BY FAL (its page: "deprecated … re-routed to Seedance 1.0 Pro '
+      + 'Fast"). Kept so rows, stored defaults and campaign overrides that name it '
+      + 'still resolve; every generation runs on the successor at its own price. '
+      + 'The contract below is the legacy shape as it shipped, never re-read.',
     contract: {
       promptParam: 'prompt', negativePrompt: true, seedInput: true,
       duration: { param: 'duration', encoding: 'integerSeconds', minSec: 1, maxSec: 10 },
@@ -629,9 +705,12 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
   },
   'fal-ai/veo3/fast': {
     id: 'fal-ai/veo3/fast',
-    technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Video + audio',
+    technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Video + audio (retired)',
     pricePerSecUsd: 0.25, creditsPerSec: 25,
-    note: 'Legacy entry, inherited unchanged. Its successor fal-ai/veo3.1/fast was '
+    replacedBy: 'fal-ai/veo3.1/fast',
+    note: 'RETIRED BY FAL (Google shut Veo 3 down on 2026-06-30; the fal page says '
+      + '"no longer supported"). Kept for the rows and stored choices that name it; '
+      + 'generations run on veo3.1/fast. Legacy entry, inherited unchanged. Its successor fal-ai/veo3.1/fast was '
       + 'schema-read on 2026-09-02 and wants "8s"; this v3 endpoint was NOT '
       + 're-read, so its integer duration is kept as shipped rather than migrated '
       + 'on a guess. Prefer veo3.1/fast — it is verified and cheaper.',
@@ -645,6 +724,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'bytedance/seedance-2.5/text-to-video',
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Seedance 2.5 — 30s single shot + audio',
     pricePerSecUsd: 0.4730, creditsPerSec: 48, tiers: SEEDANCE_25_TIERS,
+    runware: SEEDANCE_25_RUNWARE,
     note: 'NO fal-ai/ prefix. The only model here that holds one coherent shot to '
       + '30s, with native synchronised audio at no premium — and by far the most '
       + 'expensive per second (a 5s 720p clip is ~240 credits), so the estimate '
@@ -694,6 +774,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'bytedance/seedance-2.5/image-to-video',
     technique: 'VIDEO_ANIMATE', type: 'VIDEO', label: 'Seedance 2.5 — animate a still',
     pricePerSecUsd: 0.4730, creditsPerSec: 48, tiers: SEEDANCE_25_TIERS,
+    runware: SEEDANCE_25_RUNWARE,
     note: 'NO fal-ai/ prefix. Unlike its text-to-video sibling this endpoint DOES '
       + 'take a seed. An optional end_image_url turns the same call into a '
       + 'controlled A→B transition.',
@@ -1163,6 +1244,28 @@ export function getMediaModel(id: string): MediaModel | undefined {
   return MEDIA_MODELS[id];
 }
 
+/** Follow `replacedBy` (bounded) to the id that actually runs today. An id that
+ *  is not catalogued, or whose successor is not, resolves to itself — and so
+ *  does a cycle, which is a catalogue authoring error the config spec refuses
+ *  to ship rather than something to resolve one way on odd hops and the other
+ *  on even ones. */
+export function resolveMediaModelId(id: string): string {
+  const seen = new Set<string>([id]);
+  let current = id;
+  for (let hop = 0; hop < 3; hop++) {
+    const next = MEDIA_MODELS[current]?.replacedBy;
+    if (!next || !MEDIA_MODELS[next]) return current;
+    if (seen.has(next)) return id;
+    seen.add(next);
+    current = next;
+  }
+  return current;
+}
+
+export function isMediaModelReplaced(id: string): boolean {
+  return Boolean(MEDIA_MODELS[id]?.replacedBy);
+}
+
 /**
  * Does this model publish `ratio` in its own aspect contract?
  *
@@ -1179,13 +1282,15 @@ export function getMediaModel(id: string): MediaModel | undefined {
  * exists.
  */
 export function mediaModelOffersAspect(id: string, ratio: string): boolean {
-  return Boolean(MEDIA_MODELS[id]?.contract.aspect?.values[ratio]);
+  // Asked of the model that will actually RUN: a stored id fal has retired
+  // generates on its successor, whose enum is the one the wire enforces.
+  return Boolean(MEDIA_MODELS[resolveMediaModelId(id)]?.contract.aspect?.values[ratio]);
 }
 
 /** Every ratio this model offers, for a refusal that names the alternatives
  *  instead of only the problem. Empty when the model takes no ratio at all. */
 export function mediaModelAspectOptions(id: string): string[] {
-  return Object.keys(MEDIA_MODELS[id]?.contract.aspect?.values ?? {});
+  return Object.keys(MEDIA_MODELS[resolveMediaModelId(id)]?.contract.aspect?.values ?? {});
 }
 
 /**
@@ -1240,7 +1345,7 @@ export function assertModelOffersAspect(id: string, ratio: string): void {
  */
 export function mediaModelAcceptsReferenceImages(id: string): boolean {
   return Boolean(
-    MEDIA_MODELS[id]?.contract.sources?.some((s) => s.slot === 'images' && s.arity === 'array'),
+    MEDIA_MODELS[resolveMediaModelId(id)]?.contract.sources?.some((s) => s.slot === 'images' && s.arity === 'array'),
   );
 }
 
@@ -1295,13 +1400,20 @@ export function isCataloguedModel(id: string, type: GeneratedAssetType): boolean
  * what those options are.
  */
 export function assertCataloguedModel(id: string, type: GeneratedAssetType): string {
-  if (isCataloguedModel(id, type)) return id;
-  const options = Object.values(MEDIA_MODELS)
-    .filter((m) => m.type === type && !m.withheld)
+  const options = () => Object.values(MEDIA_MODELS)
+    .filter((m) => m.type === type && !m.withheld && !m.replacedBy)
     .map((m) => m.id)
     .join(', ');
+  // A retired id still VALIDATES (isCataloguedModel) so what was stored before
+  // keeps running on its successor; it may not be chosen anew.
+  if (MEDIA_MODELS[id]?.replacedBy && MEDIA_MODELS[id].type === type) {
+    throw new BadRequestException(
+      `"${id}" has been retired by its provider and can no longer be chosen; its successor is "${resolveMediaModelId(id)}". Choose one of: ${options()}.`,
+    );
+  }
+  if (isCataloguedModel(id, type)) return id;
   throw new BadRequestException(
-    `"${id}" is not a catalogued ${type.toLowerCase()} model, so its price is unknown and it cannot be run. Choose one of: ${options}.`,
+    `"${id}" is not a catalogued ${type.toLowerCase()} model, so its price is unknown and it cannot be run. Choose one of: ${options()}.`,
   );
 }
 
@@ -1320,7 +1432,7 @@ export function defaultModelFor(type: GeneratedAssetType): string {
  *  Withheld models are dropped here, which is the single place that decision is
  *  made — the models endpoint, and therefore the studio, is built from this. */
 export function listMediaModels(technique?: MediaTechnique): MediaModel[] {
-  const served = allMediaModels().filter((m) => !m.withheld);
+  const served = allMediaModels().filter((m) => !m.withheld && !m.replacedBy);
   return technique ? served.filter((m) => m.technique === technique) : served;
 }
 
@@ -1373,7 +1485,12 @@ export function estimateMediaUsd(modelId: string, arg?: EstimateArg): number {
   // and the credit figure is this one in cents.
   const meteredUsd = sourceMeteredUsd(m, rate, meteredUnits(m, opts));
   if (meteredUsd !== null) return meteredUsd;
+  return rateUsd(m, rate, opts);
+}
 
+/** The USD a rate produces for `opts` — the non-metered branches, shared by the
+ *  fal figure and the Runware figure so the two can never disagree on units. */
+function rateUsd(m: MediaModel, rate: MediaRate, opts: MediaEstimateOpts): number {
   if (rate.pricePerKCharUsd !== undefined) {
     const chars = Math.max(1, opts.textLength ?? DEFAULT_TEXT_LENGTH);
     return (rate.pricePerKCharUsd * chars) / 1000;
@@ -1384,6 +1501,21 @@ export function estimateMediaUsd(modelId: string, arg?: EstimateArg): number {
   }
   if (rate.pricePerSecUsd !== undefined) return rate.pricePerSecUsd * durationOrDefault(m, opts);
   return rate.priceUsd ?? 0;
+}
+
+/**
+ * What the generation costs US at `vendor`. 'fal' is `estimateMediaUsd`;
+ * 'runware' reads the binding's rate (its own tiers, else its base) and falls
+ * back to the fal figure for a model with no binding — never to zero, because a
+ * zero here would tell the spend ledger the render was free.
+ */
+export function estimateVendorUsd(modelId: string, arg: EstimateArg, vendor: MediaVendor): number {
+  const m = MEDIA_MODELS[modelId];
+  if (!m || vendor !== 'runware' || !m.runware) return estimateMediaUsd(modelId, arg);
+  const opts = toOpts(arg);
+  const b = m.runware;
+  const rate: MediaRate = (opts.resolution && b.tiers?.[opts.resolution]) || b;
+  return rateUsd(m, rate, opts);
 }
 
 /** The billable length for `m`: the request, defaulted, then put through the

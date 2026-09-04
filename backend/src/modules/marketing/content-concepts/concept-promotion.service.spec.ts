@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { DEFAULT_VIDEO_MODEL } from '../ai/media/media-models.config';
 import { Prisma } from '@prisma/client';
 import { ConceptPromotionService, PRODUCE_MAX_WAITS } from './concept-promotion.service';
 import {
@@ -117,7 +118,7 @@ function harness(
     // every other buyer of a clip. Seedance v1 lite publishes 9:16.
     workspaceDefaultModel: jest
       .fn()
-      .mockResolvedValue('fal-ai/bytedance/seedance/v1/lite/text-to-video'),
+      .mockResolvedValue(DEFAULT_VIDEO_MODEL),
   };
   const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
   const runner = { registerHandler: jest.fn() };
@@ -655,7 +656,7 @@ describe('ConceptPromotionService.produce — the frame is SENT, not merely desc
     await svc.produce(ITEM_ID, WS);
     expect(mediaGen.workspaceDefaultModel).toHaveBeenCalledWith(WS, 'VIDEO');
     const calls = mediaGen.requestGeneration.mock.calls.map((c: unknown[]) => c[1] as Record<string, unknown>);
-    expect(calls.every((c) => c.model === 'fal-ai/bytedance/seedance/v1/lite/text-to-video')).toBe(true);
+    expect(calls.every((c) => c.model === DEFAULT_VIDEO_MODEL)).toBe(true);
   });
 });
 
@@ -818,7 +819,7 @@ describe('ConceptPromotionService.produce — the reference images reach the gen
     await svc.produce(ITEM_ID, WS);
     const calls = mediaGen.requestGeneration.mock.calls.map((c: unknown[]) => c[1] as Record<string, unknown>);
     expect(calls.every((c) => c.referenceImageUrls === undefined)).toBe(true);
-    expect(calls.every((c) => c.model === 'fal-ai/bytedance/seedance/v1/lite/text-to-video')).toBe(true);
+    expect(calls.every((c) => c.model === DEFAULT_VIDEO_MODEL)).toBe(true);
   });
 });
 
@@ -1041,7 +1042,7 @@ describe('ConceptPromotionService.produce — it buys what the plan was quoted f
     expect(written.where).toEqual(expect.objectContaining({ id: CONCEPT_ID, workspaceId: WS }));
     expect(written.data.shotPlan.production).toEqual(
       expect.objectContaining({
-        model: 'fal-ai/bytedance/seedance/v1/lite/text-to-video',
+        model: DEFAULT_VIDEO_MODEL,
         modelSource: 'platform',
         credits: 27,
       }),
@@ -1058,7 +1059,7 @@ describe('ConceptPromotionService.produce — it buys what the plan was quoted f
       production: {
         model: 'bytedance/seedance-2.5/reference-to-video',
         modelSource: 'persona',
-        replacedModel: 'fal-ai/bytedance/seedance/v1/lite/text-to-video',
+        replacedModel: DEFAULT_VIDEO_MODEL,
         aspectRatio: '9:16',
         billedSecPerBeat: [4, 4, 4],
         billedSec: 12,
@@ -1092,7 +1093,7 @@ describe('ConceptPromotionService.produce — it buys what the plan was quoted f
  */
 describe('ConceptPromotionService.requireCampaign — the approved price is the charged price', () => {
   const quoted = {
-    model: 'fal-ai/bytedance/seedance/v1/lite/text-to-video',
+    model: DEFAULT_VIDEO_MODEL,
     modelSource: 'platform' as const,
     aspectRatio: '9:16',
     billedSecPerBeat: [2, 3, 4],

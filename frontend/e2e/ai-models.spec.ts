@@ -63,7 +63,9 @@ test('the model picker shows each model’s price on the option itself', async (
   await expect(priced).toHaveCount(await video.getByRole('radio').count());
   // Anchored, because the platform row legitimately quotes the SAME number as
   // the model it currently points at — two rows, one price, on purpose.
-  await expect(video.getByRole('radio', { name: /^Video \+ audio saniyede 25 kredi/ })).toBeVisible();
+  // Veo 3 Fast ("Video + audio", 25 credits/s) was retired by fal and left the
+  // menu; its successor Veo 3.1 Fast is the premium row now.
+  await expect(video.getByRole('radio', { name: /^Veo 3\.1 Fast — draft tier saniyede 15 kredi/ })).toBeVisible();
   await expect(video.getByRole('radio', { name: /^Short video saniyede 3 kredi/ })).toBeVisible();
 
   // A workspace that has chosen nothing sits on a NAMED platform default, not

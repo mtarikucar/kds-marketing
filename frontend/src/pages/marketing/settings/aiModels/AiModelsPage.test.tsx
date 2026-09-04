@@ -35,7 +35,7 @@ const CATALOGUE = [
   { id: 'fal-ai/qwen-image', type: 'IMAGE' as const, label: 'Draft image', priceUsd: 0.02, credits: 2, isPlatformDefault: false },
   { id: 'fal-ai/seedream', type: 'IMAGE' as const, label: 'Final image', priceUsd: 0.03, credits: 3, isPlatformDefault: true },
   { id: 'fal-ai/seedance-lite', type: 'VIDEO' as const, label: 'Short video', pricePerSecUsd: 0.025, creditsPerSec: 3, isPlatformDefault: true },
-  { id: 'fal-ai/veo3/fast', type: 'VIDEO' as const, label: 'Video + audio', pricePerSecUsd: 0.25, creditsPerSec: 25, isPlatformDefault: false },
+  { id: 'fal-ai/veo3.1/fast', type: 'VIDEO' as const, label: 'Video + audio', pricePerSecUsd: 0.15, creditsPerSec: 15, isPlatformDefault: false },
 ];
 
 function payload(over: Partial<Record<string, unknown>> = {}) {
@@ -113,7 +113,7 @@ describe('AiModelsPage', () => {
     // the page — so this cannot pass with the number rendered next to the wrong
     // option, or rendered outside the control a manager is choosing with.
     const video = card('Video model');
-    expect(video.getByRole('radio', { name: /Video \+ audio.*25 credits\/sec \(\$0\.25\/sec\)/ })).toBeInTheDocument();
+    expect(video.getByRole('radio', { name: /Video \+ audio.*15 credits\/sec \(\$0\.15\/sec\)/ })).toBeInTheDocument();
     expect(video.getByRole('radio', { name: /^Short video .*3 credits\/sec \(\$0\.025\/sec\)/ })).toBeInTheDocument();
 
     // Images bill FLAT, per image — a different unit, said differently.
@@ -142,7 +142,7 @@ describe('AiModelsPage', () => {
 
   it('shows a stored choice as the selected option', async () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(
-      payload({ defaultVideoModel: 'fal-ai/veo3/fast', effectiveVideoModel: 'fal-ai/veo3/fast' }) as never,
+      payload({ defaultVideoModel: 'fal-ai/veo3.1/fast', effectiveVideoModel: 'fal-ai/veo3.1/fast' }) as never,
     );
     renderPage();
 
@@ -163,7 +163,7 @@ describe('AiModelsPage', () => {
   it('patches only the field the manager changed', async () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(payload() as never);
     vi.mocked(setMediaModelDefaults).mockResolvedValue(
-      payload({ defaultVideoModel: 'fal-ai/veo3/fast' }) as never,
+      payload({ defaultVideoModel: 'fal-ai/veo3.1/fast' }) as never,
     );
     renderPage();
 
@@ -172,12 +172,12 @@ describe('AiModelsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Save/i }));
 
     await waitFor(() => expect(setMediaModelDefaults).toHaveBeenCalledTimes(1));
-    expect(setMediaModelDefaults).toHaveBeenCalledWith({ defaultVideoModel: 'fal-ai/veo3/fast' });
+    expect(setMediaModelDefaults).toHaveBeenCalledWith({ defaultVideoModel: 'fal-ai/veo3.1/fast' });
   });
 
   it('clears a choice back to the platform default with an explicit null', async () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(
-      payload({ defaultVideoModel: 'fal-ai/veo3/fast', effectiveVideoModel: 'fal-ai/veo3/fast' }) as never,
+      payload({ defaultVideoModel: 'fal-ai/veo3.1/fast', effectiveVideoModel: 'fal-ai/veo3.1/fast' }) as never,
     );
     vi.mocked(setMediaModelDefaults).mockResolvedValue(payload() as never);
     renderPage();
@@ -252,8 +252,8 @@ describe('AiModelsPage', () => {
   it('says nothing of the sort when the stored choice is fine', async () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(
       payload({
-        defaultVideoModel: 'fal-ai/veo3/fast',
-        effectiveVideoModel: 'fal-ai/veo3/fast',
+        defaultVideoModel: 'fal-ai/veo3.1/fast',
+        effectiveVideoModel: 'fal-ai/veo3.1/fast',
       }) as never,
     );
     renderPage();

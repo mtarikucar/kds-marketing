@@ -18,9 +18,9 @@ import {
   MediaProvider, MEDIA_PROVIDER, MediaGenResult, MediaGenSources,
 } from '../providers/media-provider.interface';
 import {
-  MediaEstimateOpts, MediaModel,
-  defaultModelFor, estimateMediaCredits, estimateMediaUsd, getMediaModel, isCataloguedModel,
-  isMediaModelWithheld, meteredUnits,
+  MediaEstimateOpts, MediaModel, MediaVendor,
+  defaultModelFor, estimateMediaCredits, estimateMediaUsd, estimateVendorUsd, getMediaModel,
+  isCataloguedModel, isMediaModelWithheld, meteredUnits, resolveMediaModelId,
 } from './media-models.config';
 import { GeneratedAssetType, TERMINAL_ASSET_STATUSES, isTerminalAssetStatus } from './media-asset.constants';
 
@@ -447,7 +447,17 @@ export class MediaGenService implements OnModuleInit {
         });
       }
     }
-    const model = dto.model ?? (await this.workspaceDefaultModel(workspaceId, dto.type));
+    const requested = dto.model ?? (await this.workspaceDefaultModel(workspaceId, dto.type));
+    // A fal-retired id — a stored default, a campaign override, or a regenerate
+    // of an old row — runs on its successor. The row records the successor, so
+    // history and regenerate converge on the live model; the log line is the
+    // only trace, and it is what makes a silently re-priced workspace findable.
+    const model = resolveMediaModelId(requested);
+    if (model !== requested) {
+      this.logger.warn(
+        `${requested} was retired by its provider; generating on ${model} instead (workspace ${workspaceId})`,
+      );
+    }
     // The catalogue's type is authoritative: a caller asking for VIDEO while
     // naming an ElevenLabs model must not have an mp3 stored as a video.
     const catalogued = getMediaModel(model);
@@ -561,7 +571,9 @@ export class MediaGenService implements OnModuleInit {
           workspaceId,
           type,
           status: 'QUEUED',
-          provider: this.provider.name,
+          // The vendor that will actually render it — a routed provider names
+          // it per model; a single-vendor provider is its own name.
+          provider: this.provider.resolveName?.(model) ?? this.provider.name,
           model,
           prompt: dto.prompt,
           negativePrompt: dto.negativePrompt ?? null,
@@ -695,6 +707,12 @@ export class MediaGenService implements OnModuleInit {
       const rendered = primary.durationSec;
       const trueUp = estimateOptsFrom(asset.params, rendered ?? asset.durationSec, asset.prompt);
       const actual = estimateMediaCredits(asset.model, trueUp);
+      // What the generation cost US, at the vendor that actually rendered it.
+      // Runware reports its own figure per task; fal never does, so the
+      // catalogue's fal rate stands there. The credit meter above is untouched
+      // by this: the customer's price is the catalogue's, whichever vendor ran.
+      const vendor: MediaVendor = asset.provider === 'runware' ? 'runware' : 'fal';
+      const vendorUsd = result.costUsd ?? estimateVendorUsd(asset.model, trueUp, vendor);
       const claim = await this.prisma.generatedAsset.updateMany({
         where: { id: assetId, status: { notIn: TERMINAL } },
         data: {
@@ -704,7 +722,7 @@ export class MediaGenService implements OnModuleInit {
           width: primary.width ?? null,
           height: primary.height ?? null,
           durationSec: rendered ?? asset.durationSec ?? null,
-          costCredits: actual, error: null,
+          costCredits: actual, costUsd: new Prisma.Decimal(vendorUsd), error: null,
         },
       });
       if (claim.count === 1) {
@@ -713,13 +731,16 @@ export class MediaGenService implements OnModuleInit {
         // so the real-cash wallet pre-debit (charged on the REQUESTED duration)
         // must be too — else a 10s request that returns a 4s clip refunds the
         // credit delta but keeps the wallet overcharged for capacity never used.
-        const actualUsd = estimateMediaUsd(asset.model, trueUp);
-        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, actualUsd);
-        // Record what fal actually cost US, on the SAME trued-up figure. This is
-        // the vendor-cost ledger, not the customer's credit meter above: every
-        // other vendor lands there and fal never did, so the spend report read 0
-        // for it while the invoices were real.
-        await this.mediaSpend.settle(asset.workspaceId, { assetId, credits: actual });
+        // At the CATALOGUE rate, deliberately: the customer-facing charge is the
+        // catalogue's on both meters, whichever vendor rendered. The vendor's
+        // own figure is bookkeeping (costUsd above, the ledger below) — a
+        // cheaper vendor is margin, not a customer refund (design §2.3).
+        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, estimateMediaUsd(asset.model, trueUp));
+        // Record the vendor cost on the SAME trued-up figure. This is the
+        // vendor-cost ledger, not the customer's credit meter above: every other
+        // vendor lands there and fal never did, so the spend report read 0 for
+        // it while the invoices were real.
+        await this.mediaSpend.settle(asset.workspaceId, { assetId, credits: actual, vendor, vendorUsd });
       } else {
         // Lost the finalize race (webhook + poll both completed the same asset):
         // the winner already stored its own object, so delete ours to avoid an
@@ -829,7 +850,10 @@ export class MediaGenService implements OnModuleInit {
       });
       if (!entry || entry.workspaceId !== workspaceId) return;
       const reservedUsd = new Prisma.Decimal(entry.delta).negated();
-      const refundUsd = reservedUsd.minus(new Prisma.Decimal(actualUsd));
+      // At the ledger's own precision: the two figures come from the same
+      // per-second rate multiplied in floating point, and a 2e-16 remainder is
+      // not a refund, it is a dust row.
+      const refundUsd = reservedUsd.minus(new Prisma.Decimal(actualUsd)).toDecimalPlaces(4);
       if (refundUsd.lte(0)) return;
       await this.wallet.credit(workspaceId, {
         amount: refundUsd,
@@ -969,7 +993,12 @@ export class MediaGenService implements OnModuleInit {
     // pre-reserve contract check and 400s a re-run of the workspace's OWN
     // history. It was ignored on the wire when the asset was first made, so
     // dropping it reproduces the original generation rather than blocking it.
-    const aspect = getMediaModel(a.model)?.contract.aspect;
+    //
+    // Checked against the SUCCESSOR's contract where the row names an id fal
+    // has retired: that is the model requestGeneration will resolve to and
+    // enforce, and a ratio the old model published but the new one does not
+    // (Lite's 4:5) would otherwise 400 the re-run of the workspace's own history.
+    const aspect = getMediaModel(resolveMediaModelId(a.model))?.contract.aspect;
     const aspectRatio = p.aspectRatio && aspect?.values[p.aspectRatio] ? p.aspectRatio : undefined;
     return this.requestGeneration(workspaceId, {
       type: a.type as GeneratedAssetType,

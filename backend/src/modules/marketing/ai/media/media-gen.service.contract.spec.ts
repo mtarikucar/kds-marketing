@@ -167,7 +167,7 @@ describe('MediaGenService — asset typing and pricing', () => {
       status: 'COMPLETED',
       outputs: [{ url: 'https://fal/a.mp4', mime: 'video/mp4', durationSec: 5 }],
     });
-    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, { assetId: 'a1', credits: 585 });
+    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, expect.objectContaining({ assetId: 'a1', credits: 585, vendor: 'fal' }));
     expect(credits.refund).not.toHaveBeenCalled();
     expect(credits.chargeOverage).not.toHaveBeenCalled();
   });
@@ -369,7 +369,7 @@ describe('MediaGenService — the metered models that ship', () => {
       outputs: [{ url: 'https://fal/a.mp4', mime: 'video/mp4', durationSec: 60 }],
     });
     expect(credits.chargeOverage).toHaveBeenCalledWith(WS, 330);
-    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, { assetId: 'a1', credits: 360 });
+    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, expect.objectContaining({ assetId: 'a1', credits: 360, vendor: 'fal' }));
     expect(prisma.generatedAsset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ durationSec: 60, costCredits: 360 }),
     }));
