@@ -142,10 +142,12 @@ test('switching a module off drops its PAGE from the settings menu — live — 
   // Only the deactivated children leave. If the whole list emptied, the two
   // assertions above would pass for entirely the wrong reason — and the owner
   // would have locked themselves out of the switch they just used.
-  // Modules and the call log are TABS now, so the entry that must survive is
-  // the page each lives in — an emptied list would still fail this.
+  // Only the deactivated child leaves. The survivors named here have to be
+  // pages the switch does NOT gate — naming Ses would assert the presence of
+  // the very thing just switched off, and naming Modules or the call log would
+  // name entries that are tabs and never in this list at all.
   await expect(settingsNav.getByRole('link', { name: 'Plan ve erişim', exact: true })).toBeVisible();
-  await expect(settingsNav.getByRole('link', { name: 'Sesli AI', exact: true })).toBeVisible();
+  await expect(settingsNav.getByRole('link', { name: 'Bağlantılar', exact: true })).toBeVisible();
 
   // And the person surface is untouched by any of it — one entry, still there.
   await inboxSurface.click();
@@ -192,8 +194,10 @@ test('the call log is a settings page now, filed with the channels — and the p
 
   // Second <aside> = SettingsLayout's page list (the first is the hub rail).
   const settingsNav = app.locator('aside').nth(1);
-  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toBeVisible();
+  // ONE entry for the whole telephone since 2026-09-04: what answers the line,
+  // the options it offers, and what it did. The log was a second line here.
   await expect(settingsNav.getByRole('link', { name: 'Sesli AI', exact: true })).toBeVisible();
+  await expect(settingsNav.getByRole('link', { name: 'Aramalar', exact: true })).toHaveCount(0);
   // The phone tree stopped being a line of its own on 2026-09-03: recording the
   // greeting and wiring the keypad is one sitting of work, so it is a TAB of
   // Ses. Its route still resolves (navigation.test.ts pins the path set) — it
@@ -211,7 +215,8 @@ test('the call log is a settings page now, filed with the channels — and the p
   // And it still opens — a menu move, not a route deletion. /calls is in the
   // frozen 50-path set navigation.test.ts pins.
   await app.goto('/calls');
-  await expect(app.getByRole('heading', { level: 1, name: 'Sales Calls' })).toBeVisible();
+  await expect(app).toHaveURL(/\/voice\?tab=calls$/);
+  await expect(app.getByRole('tab', { name: 'Aramalar', selected: true })).toBeVisible();
   // Inside the settings chrome now: MarketingLayout picks the shell from the
   // owning hub's `area`, so the page arrives beside the settings list rather
   // than under the Inbox sub-nav. Two <aside>s is that shell, structurally —
