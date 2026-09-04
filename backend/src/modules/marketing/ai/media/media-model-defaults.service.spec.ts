@@ -34,10 +34,10 @@ describe('MediaModelDefaultsService.get', () => {
   });
 
   it('reports a stored choice as both the choice and the effective model', async () => {
-    const { svc } = makeSvc({ defaultImageModel: 'fal-ai/qwen-image', defaultVideoModel: 'fal-ai/veo3/fast' });
+    const { svc } = makeSvc({ defaultImageModel: 'fal-ai/qwen-image', defaultVideoModel: 'fal-ai/veo3.1/fast' });
     const res = await svc.get(WS);
-    expect(res.defaultVideoModel).toBe('fal-ai/veo3/fast');
-    expect(res.effectiveVideoModel).toBe('fal-ai/veo3/fast');
+    expect(res.defaultVideoModel).toBe('fal-ai/veo3.1/fast');
+    expect(res.effectiveVideoModel).toBe('fal-ai/veo3.1/fast');
     // Nothing retired, so nothing to explain away.
     expect(res.retiredVideoModel).toBeNull();
     expect(res.retiredImageModel).toBeNull();
@@ -92,7 +92,7 @@ describe('MediaModelDefaultsService.get', () => {
   it('always names an effective model that is IN the catalogue', async () => {
     for (const row of [
       { defaultImageModel: null, defaultVideoModel: null },
-      { defaultImageModel: 'fal-ai/qwen-image', defaultVideoModel: 'fal-ai/veo3/fast' },
+      { defaultImageModel: 'fal-ai/qwen-image', defaultVideoModel: 'fal-ai/veo3.1/fast' },
       { defaultImageModel: 'gone', defaultVideoModel: 'also-gone' },
     ]) {
       const res = await makeSvc(row).svc.get(WS);
@@ -112,12 +112,12 @@ describe('MediaModelDefaultsService.get', () => {
     const res = await svc.get(WS);
     expect(res.models).toHaveLength(Object.keys(MEDIA_MODELS).length);
 
-    const video = res.models.find((m) => m.id === 'fal-ai/veo3/fast');
+    const video = res.models.find((m) => m.id === 'fal-ai/veo3.1/fast');
     expect(video).toMatchObject({
       type: 'VIDEO',
-      label: 'Video + audio',
-      pricePerSecUsd: 0.25,
-      creditsPerSec: 25,
+      label: 'Veo 3.1 Fast — draft tier',
+      pricePerSecUsd: 0.15,
+      creditsPerSec: 15,
       isPlatformDefault: false,
     });
 
@@ -145,10 +145,10 @@ describe('MediaModelDefaultsService.get', () => {
 describe('MediaModelDefaultsService.set', () => {
   it('stores a catalogued id of the matching kind', async () => {
     const { svc, prisma } = makeSvc();
-    await svc.set(WS, { defaultVideoModel: 'fal-ai/veo3/fast' });
+    await svc.set(WS, { defaultVideoModel: 'fal-ai/veo3.1/fast' });
     expect(prisma.workspace.update).toHaveBeenCalledWith({
       where: { id: WS },
-      data: { defaultVideoModel: 'fal-ai/veo3/fast' },
+      data: { defaultVideoModel: 'fal-ai/veo3.1/fast' },
       select: { defaultImageModel: true, defaultVideoModel: true },
     });
   });
@@ -180,7 +180,7 @@ describe('MediaModelDefaultsService.set', () => {
   });
 
   it('clears a choice with an explicit null, back to the platform default', async () => {
-    const { svc, prisma } = makeSvc({ defaultImageModel: null, defaultVideoModel: 'fal-ai/veo3/fast' });
+    const { svc, prisma } = makeSvc({ defaultImageModel: null, defaultVideoModel: 'fal-ai/veo3.1/fast' });
     const res = await svc.set(WS, { defaultVideoModel: null });
     expect(prisma.workspace.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { defaultVideoModel: null } }),
@@ -195,7 +195,7 @@ describe('MediaModelDefaultsService.set', () => {
    */
   it('leaves an unnamed field untouched', async () => {
     const { svc, prisma } = makeSvc();
-    await svc.set(WS, { defaultVideoModel: 'fal-ai/veo3/fast' });
+    await svc.set(WS, { defaultVideoModel: 'fal-ai/veo3.1/fast' });
     const data = prisma.workspace.update.mock.calls[0][0].data;
     expect(Object.keys(data)).toEqual(['defaultVideoModel']);
   });
@@ -208,7 +208,7 @@ describe('MediaModelDefaultsService.set', () => {
 
   it('writes only to the calling workspace', async () => {
     const { svc, prisma } = makeSvc();
-    await svc.set(OTHER_WS, { defaultVideoModel: 'fal-ai/veo3/fast' });
+    await svc.set(OTHER_WS, { defaultVideoModel: 'fal-ai/veo3.1/fast' });
     expect(prisma.workspace.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: OTHER_WS } }),
     );
