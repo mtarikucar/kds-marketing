@@ -74,11 +74,18 @@ test('the hub lists the whole provider catalogue, all unconnected on a fresh wor
     await expect(card, `${name} is missing from the catalogue`).toBeVisible();
   }
 
-  // The row of an unconnected provider says what CONNECTING it would add, not
+  // The row of an unconnected PROVIDER says what connecting it would add, not
   // that it is absent — "Bağlı değil" answers a question nobody asked, and the
   // one somebody arrives with is "do I need this?".
   await expect(app.getByText(/SMS gönder ve al/)).toBeVisible();
-  await expect(app.getByText('Bağlı değil')).toHaveCount(0);
+  for (const name of CATALOGUE) {
+    const card = app.getByText(name, { exact: true }).locator(CARD);
+    await expect(card.getByText('Bağlı değil'), `${name} still only says it is absent`).toHaveCount(0);
+  }
+  // Scoped to those rows on purpose. The telephony and voice-AI cards below
+  // them use the same words as a status BADGE beside a title that already
+  // explains the feature, which is a different thing from a row whose only
+  // description was "not connected".
 
   // Nothing may claim a connection: accounts.connectedCount renders "N bağlı",
   // and every connected identity gets a disconnect control. Both absent is the
