@@ -406,6 +406,8 @@ import { MediaGenService } from './ai/media/media-gen.service';
 import { MediaModelDefaultsService } from './ai/media/media-model-defaults.service';
 import { BrandKitService } from './ai/media/brand-kit.service';
 import { FalProvider } from './ai/providers/fal.provider';
+import { RunwareProvider } from './ai/providers/runware.provider';
+import { RoutingMediaProvider } from './ai/providers/routing.provider';
 import { MEDIA_PROVIDER } from './ai/providers/media-provider.interface';
 import { SocialCampaignsController } from './social-campaigns/social-campaigns.controller';
 import { SocialCampaignsService } from './social-campaigns/social-campaigns.service';
@@ -1152,9 +1154,13 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
     R2StorageService,
-    // AI Social Content Studio — fal.ai media generation behind MediaProvider.
+    // AI Social Content Studio — fal.ai + Runware behind ONE MediaProvider,
+    // dispatched per model (media-models.config `runware` bindings). fal is the
+    // base; Runware takes its bound models only while RUNWARE_API_KEY is set.
     FalProvider,
-    { provide: MEDIA_PROVIDER, useExisting: FalProvider },
+    RunwareProvider,
+    RoutingMediaProvider,
+    { provide: MEDIA_PROVIDER, useExisting: RoutingMediaProvider },
     MediaGenService,
     MediaModelDefaultsService,
     BrandKitService,
