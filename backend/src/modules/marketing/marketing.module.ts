@@ -122,6 +122,7 @@ import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.cont
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 import { OnboardingController } from './controllers/onboarding.controller';
 import { OnboardingService } from './services/onboarding.service';
+import { WorkspaceReadinessService } from './services/workspace-readiness.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -284,6 +285,8 @@ import { McpConsoleController } from './mcp/mcp-console.controller';
 import { McpConsoleService } from './mcp/mcp-console.service';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
+import { registerReadinessTools } from './mcp/tools/readiness.tools';
+import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -870,6 +873,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TelephonyStreamService,
     NetgsmOnboardingService,
     OnboardingService,
+    WorkspaceReadinessService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
@@ -1363,9 +1367,19 @@ export class MarketingModule {
     reviews: ReviewsService,
     aiUsage: AiUsageStatsService,
     vendorSpend: VendorSpendReportService,
+    // Appended, like every dependency added to a positional list in this repo:
+    // inserting one mid-list shifts every argument after it, and Nest resolves
+    // by type so nothing would complain until something was quietly wrong.
+    readiness: WorkspaceReadinessService,
+    taxRates: TaxRatesService,
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
+    // The same computation the setup panel reads, so the two can never
+    // disagree about what this workspace is missing.
+    registerReadinessTools(registry, { readiness });
+    // The three gaps the readiness list could NAME and not close.
+    registerSetupWriteTools(registry, { taxRates, orderForms, emailTemplates });
     registerLeadsTools(registry, { leads, distribution });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
     registerTasksTools(registry, { tasks, principals });
