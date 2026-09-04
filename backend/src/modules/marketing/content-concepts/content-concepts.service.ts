@@ -174,6 +174,28 @@ export interface PlannedConcept {
   selectionReason: string | null;
 }
 
+/** The workspace columns the planner reads. */
+type BrandRow = { productName: string | null; productDescription: string | null; defaultLanguage: string | null };
+
+/**
+ * Everything resolved before the concepts exist and still needed after them.
+ * Passed as one object so `generate` and `finalize` cannot drift on argument
+ * order — the campaign, persona and production quote are the expensive locks,
+ * and silently swapping two of them would price a batch wrong.
+ */
+interface FinalizeCtx {
+  idea: string;
+  count: number;
+  brand: BrandRow;
+  campaign: { id: string } | null;
+  persona: PersonaLock | undefined;
+  videoModel: VideoModel;
+  production: Awaited<ReturnType<ConceptPromotionService['resolveVideoModel']>>;
+  guidance: AngleGuidance;
+  cold: boolean;
+  weights: Record<string, number>;
+}
+
 export interface PlanConceptsResult {
   batchId: string;
   sourceIdea: string;
@@ -191,7 +213,7 @@ export interface PlanConceptsResult {
   weights: Record<string, number>;
 }
 
-interface SubmittedShot {
+export interface SubmittedShot {
   scene?: unknown;
   cameraNote?: unknown;
   onScreenText?: unknown;
@@ -200,7 +222,7 @@ interface SubmittedShot {
   durationSec?: unknown;
 }
 
-interface SubmittedConcept {
+export interface SubmittedConcept {
   angle?: unknown;
   hook?: unknown;
   title?: unknown;
@@ -261,7 +283,59 @@ export class ContentConceptsService {
     private readonly anglePerformance: AnglePerformanceService,
   ) {}
 
+  /**
+   * Plan concepts by asking the PLATFORM's model — the original path, and the
+   * one that spends a credit and a vendor call.
+   */
   async planConcepts(workspaceId: string, input: PlanConceptsInput): Promise<PlanConceptsResult> {
+    return this.run(workspaceId, input, null);
+  }
+
+  /**
+   * Take concepts an already-connected Claude planned ITSELF, and run them
+   * through the identical gauntlet.
+   *
+   * ── WHY THIS EXISTS ─────────────────────────────────────────────────────
+   *
+   * `planConcepts` reached here from an MCP tool call, which meant a model
+   * asking the server to ask another model. The caller IS Claude; the round
+   * trip bought nothing, cost the platform an Opus call, and made the feature
+   * fail whenever the PLATFORM's key was dry — which is exactly how it failed
+   * in production, with the vendor's "credit balance is too low" coming back
+   * out of a tool result.
+   *
+   * ── WHAT IS DELIBERATELY NOT RELAXED ────────────────────────────────────
+   *
+   * Everything except the generation step. The count check, the distinctness
+   * contract, the shot-duration clamp, the campaign and persona locks, the
+   * production quote and the single batched write are the same code on the
+   * same path — an agent's concepts are not exempt from being variations of
+   * one another. Being Claude is not evidence about THIS batch.
+   *
+   * No credit is reserved, because none is spent: the thinking happened in the
+   * caller's own context, on the caller's own subscription. That is the point.
+   */
+  async submitConcepts(
+    workspaceId: string,
+    input: PlanConceptsInput,
+    concepts: SubmittedConcept[],
+  ): Promise<PlanConceptsResult> {
+    if (!Array.isArray(concepts) || concepts.length === 0) {
+      throw new BadRequestException('No concepts were submitted.');
+    }
+    return this.run(workspaceId, input, concepts);
+  }
+
+  /**
+   * `supplied === null` means "ask the platform's model"; an array means the
+   * caller did the thinking and these are the results. Everything before and
+   * after the generation step is shared on purpose — see `submitConcepts`.
+   */
+  private async run(
+    workspaceId: string,
+    input: PlanConceptsInput,
+    preplanned: SubmittedConcept[] | null,
+  ): Promise<PlanConceptsResult> {
     const idea = String(input.idea ?? '').trim();
     if (!idea) throw new BadRequestException('An idea is required to plan concepts from');
 
@@ -273,8 +347,11 @@ export class ContentConceptsService {
     }
 
     // Checked BEFORE the credit reserve so an unconfigured workspace is told
-    // what is wrong instead of being charged to find out.
-    if (!this.anthropic.isEnabled()) {
+    // what is wrong instead of being charged to find out. Only the generating
+    // path asks: a caller that brought its own concepts needs nothing from the
+    // platform's key, and refusing it for a key it never planned to use is the
+    // whole outage this seam exists to end.
+    if (!preplanned && !this.anthropic.isEnabled()) {
       throw new ServiceUnavailableException(
         'AI is not configured, so no concepts could be planned. This is not a judgement about the idea.',
       );
@@ -361,6 +438,41 @@ export class ContentConceptsService {
     const cold = guidance.source === 'cold';
 
 
+    let raw: SubmittedConcept[];
+    if (preplanned) {
+      // Nothing reserved and nothing refunded: the thinking already happened,
+      // in the caller's context, on the caller's subscription.
+      raw = preplanned;
+    } else {
+      raw = await this.generate(workspaceId, { idea, count, brand, guidance });
+    }
+
+    if (raw.length < count) {
+      throw new BadRequestException(
+        `Asked for ${count} distinct concepts and got ${raw.length}. Nothing was saved rather than presenting a short batch as the full set.`,
+      );
+    }
+
+    return this.finalize(workspaceId, input, raw, {
+      idea,
+      count,
+      brand,
+      campaign,
+      persona,
+      videoModel,
+      production,
+      guidance,
+      cold,
+      weights,
+    });
+  }
+
+  /** The platform's own model plans the batch. The only step MCP replaces. */
+  private async generate(
+    workspaceId: string,
+    ctx: { idea: string; count: number; brand: BrandRow; guidance: AngleGuidance },
+  ): Promise<SubmittedConcept[]> {
+    const { idea, count, brand, guidance } = ctx;
     await this.credits.reserve(workspaceId, creditCost('content.concepts'));
 
     let res: Awaited<ReturnType<AnthropicService['complete']>>;
@@ -399,12 +511,22 @@ export class ContentConceptsService {
         'The model produced no concepts for this idea. That is a generation failure, not a verdict on the idea — nothing was saved.',
       );
     }
-    if (raw.length < count) {
-      throw new BadRequestException(
-        `Asked for ${count} distinct concepts and the model returned ${raw.length}. Nothing was saved rather than presenting a short batch as the full set.`,
-      );
-    }
+    return raw;
+  }
 
+  /**
+   * Everything after the concepts exist, whoever thought of them: the clamp,
+   * the distinctness contract, the production quote, the destinations and the
+   * one batched write.
+   */
+  private async finalize(
+    workspaceId: string,
+    input: PlanConceptsInput,
+    raw: SubmittedConcept[],
+    ctx: FinalizeCtx,
+  ): Promise<PlanConceptsResult> {
+    const { idea, count, brand, campaign, persona, videoModel, production, guidance, cold, weights } =
+      ctx;
     let clamped = 0;
     const parsed = raw.slice(0, count).map((c) => ({
       angle: String(c?.angle ?? '').trim(),

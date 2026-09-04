@@ -438,6 +438,7 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.pause_social_campaign` | Pause a RUNNING AI social campaign and cancel its scheduled plan job | `campaigns.write` | WRITE | CAMPAIGN_PAUSE | no |
 | `jeeta.unschedule_social_post` | Pull a SCHEDULED post back to DRAFT so its copy, media or targets can be corrected, then schedule it again | `campaigns.send` | WRITE | — | no |
 | `jeeta.plan_content_concepts` | Open ONE idea into several genuinely different video concepts, each planned shot by shot — **spends AI credits (one Opus call)** | `campaigns.write` | WRITE | — | no |
+| `jeeta.submit_content_concepts` | Save concepts **you planned yourself** — same distinctness contract, same clamp, same campaign/persona locks, same production quote, **no credits and no platform model call**. Prefer this over `plan_content_concepts` when you are a connected Claude | `campaigns.write` | WRITE | — | no |
 | `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans — newest 40 (five batches); `batchId` returns a batch whole | `campaigns.read` | READ | — | no |
 | `jeeta.review_content_concept` | Approve or discard one concept. **Approving starts production and spends credits** — the concept becomes a campaign item and one clip is generated per beat. **Requires a signed-in human** | `campaigns.write` | WRITE | — | no |
 | `jeeta.produce_content_concept` | Produce a concept a human ALREADY approved — the repair for one that never became a campaign item, or an item stuck `GENERATING`. Idempotent: a produced concept is returned unchanged, a partly produced one resumes at the next unbought beat. **Spends when the concept was approved and never produced** | `campaigns.write` | WRITE | — | no |
@@ -445,6 +446,25 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.list_distribution_drafts` | Prepared outreach messages and their state (DRAFT / SENT / DISMISSED / FAILED) | `campaigns.read` | READ | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
+
+### Why there are two ways to make concepts
+
+`jeeta.plan_content_concepts` asks the PLATFORM's model to invent the batch.
+Reached from an MCP tool call that is a model asking the server to ask another
+model — the caller is already Claude, so the round trip buys nothing, costs the
+workspace 16 credits, and fails outright whenever the platform's own key is dry.
+That last part is not hypothetical: it is how the tool failed in production, with
+the vendor's "credit balance is too low" coming back inside a tool result.
+
+`jeeta.submit_content_concepts` is the same feature with the generation step
+removed: plan the concepts in your own context, submit them, and the server runs
+the identical gauntlet — count, distinctness contract, beat clamp, campaign and
+persona locks, production quote, destinations, one batched write. Nothing is
+relaxed because the author is an agent; being Claude is not evidence about a
+particular batch. No credits are reserved, because none are spent.
+
+Use `plan_content_concepts` when there is no agent in the loop (the panel, a
+scheduled job). Use `submit_content_concepts` whenever you are the one asking.
 
 `jeeta.plan_content_concepts` costs money (16 AI credits, one Opus call) and is
 still **ungated**, which is a decision about `requiresApproval` — the field the

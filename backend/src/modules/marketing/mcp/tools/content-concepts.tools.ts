@@ -8,7 +8,11 @@ import {
   MAX_CONCEPT_COUNT,
   MIN_CONCEPT_COUNT,
   DEFAULT_CONCEPT_COUNT,
+  MIN_SHOT_SEC,
+  MAX_SHOT_SEC,
+  type SubmittedConcept,
 } from '../../content-concepts/content-concepts.service';
+import { MIN_SHOTS_PER_CONCEPT } from '../../content-concepts/concept-distinctness';
 import { assertFeature } from '../mcp-feature-gate';
 import { McpPrincipalService } from '../mcp-principal.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
@@ -301,4 +305,89 @@ export function registerContentConceptTools(
       });
     },
   });
+
+  registry.register({
+    name: 'jeeta.submit_content_concepts',
+    description:
+      `Save video concepts YOU planned yourself, instead of paying the platform's model to plan them for you. This is the preferred way to create concepts when you are a connected Claude: you already have the brand context, and jeeta.plan_content_concepts would only be you asking the server to ask another model — a round trip that costs the workspace AI credits and stops working entirely whenever the platform's own key is dry. This call spends NO credits. Everything else is identical: the same distinctness contract, the same beat-length clamp, the same campaign and persona locks, the same production quote and destination lines come back on the result. Read jeeta.get_brand_profile first and write in that voice. The batch is REFUSED WHOLE if the concepts are variations of one another — each needs a genuinely different angle (not a reworded hook), a distinct hook, and at least ${MIN_SHOTS_PER_CONCEPT} shots each with a visual description. Beats outside ${MIN_SHOT_SEC}-${MAX_SHOT_SEC}s are clamped to what the generator accepts. Concepts are saved as PROPOSED for a human to approve with jeeta.review_content_concept; nothing is generated or published here.`,
+    domain: 'content',
+    defer: true,
+    scopes: ['campaigns.write'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      idea: z
+        .string()
+        .min(1)
+        .describe('The idea these concepts came from, recorded on every row so a reviewer can see what was asked for.'),
+      concepts: z
+        .array(
+          z.object({
+            angle: z.string().min(1).describe('The distinct take this concept argues. Two concepts sharing an angle are one concept.'),
+            hook: z.string().min(1).describe('The opening line or image. Must not be a rewording of the hook on any other concept in the batch.'),
+            title: z.string().optional().describe('Short label for the reviewer. Defaults to the hook.'),
+            rationale: z.string().nullable().optional().describe('Why this angle is worth shooting.'),
+            shots: z
+              .array(
+                z.object({
+                  scene: z.string().optional().describe('Short label for the beat.'),
+                  description: z.string().min(1).describe('What is IN FRAME. Required — a beat with no visual description renders as an empty prompt.'),
+                  cameraNote: z.string().optional().describe('Framing or camera-movement note for the shot.'),
+                  onScreenText: z.string().optional().describe('Text burned into the frame. Empty for none.'),
+                  voiceover: z.string().optional().describe('Spoken line. Empty for a silent beat, which is legitimate.'),
+                  durationSec: z
+                    .number()
+                    .optional()
+                    .describe(`Seconds for this beat, ${MIN_SHOT_SEC}-${MAX_SHOT_SEC}. Omit to let the planner split evenly; out-of-range values are clamped.`),
+                }),
+              )
+              .min(MIN_SHOTS_PER_CONCEPT)
+              .describe('The beats, in order. A concept is planned shot by shot.'),
+          }),
+        )
+        .min(MIN_CONCEPT_COUNT)
+        .max(MAX_CONCEPT_COUNT)
+        .describe('The concepts you planned. Must be at least as many as `count` asks for.'),
+      count: z
+        .number()
+        .int()
+        .min(MIN_CONCEPT_COUNT)
+        .max(MAX_CONCEPT_COUNT)
+        .optional()
+        .describe(`How many the batch is expected to contain. Defaults to ${DEFAULT_CONCEPT_COUNT}; submitting fewer than this is refused whole.`),
+      videoModel: z
+        .enum(VIDEO_MODELS)
+        .optional()
+        .describe('Which video model the shot prompts are formatted for. Defaults to seedance.'),
+      socialCampaignId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe('Scope to an ACTIVE or PAUSED social campaign, which is what approving one later requires. Validated here.'),
+      personaId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe('A VideoPersona locking one face or product across every shot. CHANGES THE PRICE of producing the batch — reference frames only run on the reference-to-video endpoint; the returned plan quotes it.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
+      const createdById = ctx.userId ?? (await deps.principals.resolve(ctx)).id;
+      return deps.concepts.submitConcepts(
+        ctx.workspaceId,
+        {
+          idea: String(args.idea ?? ''),
+          ...(typeof args.count === 'number' ? { count: args.count } : {}),
+          ...(args.videoModel !== undefined ? { videoModel: args.videoModel as never } : {}),
+          ...(args.socialCampaignId !== undefined
+            ? { socialCampaignId: String(args.socialCampaignId) }
+            : {}),
+          ...(args.personaId !== undefined ? { personaId: String(args.personaId) } : {}),
+          createdById,
+        },
+        args.concepts as SubmittedConcept[],
+      );
+    },
+  });
+
 }
