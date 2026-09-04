@@ -117,10 +117,25 @@ function Labeled({
  * (tax rates, coupons) folded in as deep-linkable `?tab=` tabs, so everything
  * about "what you sell and how it's priced" lives on one page.
  */
-export default function ProductsPage({ embedded }: { embedded?: boolean } = {}) {
+export default function ProductsPage(
+  {
+    embedded,
+    /**
+     * Which query parameter names THIS strip's tab.
+     *
+     * As a tab of Selling, `?tab=` already means "which half of the sale is
+     * open". A nested strip reading the same parameter sees `products`,
+     * recognises none of its own, silently shows the first — and the moment
+     * somebody clicks Coupons it writes `?tab=coupons`, which the SHELL does
+     * not recognise either, so the whole page snaps back. Both strips broken,
+     * neither reporting a fault.
+     */
+    param = 'tab',
+  }: { embedded?: boolean; param?: string } = {},
+) {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
-  const raw = params.get('tab');
+  const raw = params.get(param);
   const tab: ProductsTab = (TABS as readonly string[]).includes(raw ?? '')
     ? (raw as ProductsTab)
     : 'products';
@@ -128,7 +143,7 @@ export default function ProductsPage({ embedded }: { embedded?: boolean } = {}) 
   const setTab = (v: string) =>
     setParams(
       (p) => {
-        p.set('tab', v);
+        p.set(param, v);
         return p;
       },
       { replace: true },
@@ -144,7 +159,11 @@ export default function ProductsPage({ embedded }: { embedded?: boolean } = {}) 
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="products">{t('products.tab.products', 'Products')}</TabsTrigger>
+          {/* "Catalogue", not "Products": as a tab of Selling this strip sits
+              INSIDE a tab already called Products, and two controls one click
+              apart with the same name is the confusion this whole merge is
+              removing. */}
+          <TabsTrigger value="products">{t('products.tab.catalogue', 'Catalogue')}</TabsTrigger>
           <TabsTrigger value="tax-rates">{t('products.tab.taxRates', 'Tax Rates')}</TabsTrigger>
           <TabsTrigger value="coupons">{t('products.tab.coupons', 'Coupons')}</TabsTrigger>
         </TabsList>

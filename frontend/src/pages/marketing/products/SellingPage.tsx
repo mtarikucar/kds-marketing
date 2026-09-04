@@ -68,7 +68,7 @@ export default function SellingPage() {
         </TabsList>
 
         {allowed.includes('products') && <TabsContent value="products" className="pt-5">
-          <Lazy><ProductsPage embedded /></Lazy>
+          <Lazy><ProductsPage embedded param="sub" /></Lazy>
         </TabsContent>}
         {allowed.includes('order-forms') && <TabsContent value="order-forms" className="pt-5">
           <Lazy><OrderFormsPage embedded /></Lazy>

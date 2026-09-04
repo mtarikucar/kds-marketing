@@ -905,7 +905,8 @@
     "tab": {
       "products": "Products",
       "taxRates": "Tax Rates",
-      "coupons": "Coupons"
+      "coupons": "Coupons",
+      "catalogue": "Catalogue"
     }
   },
   "documents": {
@@ -3636,7 +3637,7 @@
   },
   "calls": {
     "tab": {
-      "calls": "Calls",
+      "calls": "Log",
       "dialer": "Power Dialer",
       "voice": "AI calls"
     },
@@ -4094,6 +4095,11 @@
       "cold": "{{n}} concepts planned. Planned unbiased, because there was no history to measure.",
       "guided": "{{n}} concepts planned.",
       "error": "Concepts could not be planned."
+    }
+  },
+  "voiceHub": {
+    "tab": {
+      "calls": "Calls"
     }
   }
 }

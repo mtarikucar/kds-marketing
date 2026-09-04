@@ -118,6 +118,16 @@ export interface CallsPageProps {
    * rather than inferred from a prop that means something else.
    */
   headerless?: boolean;
+  /**
+   * Which query parameter names THIS page's tab strip.
+   *
+   * As a tab of Voice, `?tab=` already means "which part of the telephone is
+   * open". A nested strip reading the same parameter recognises none of its own
+   * values, silently shows the first, and then writes one the SHELL does not
+   * recognise the moment anybody clicks — both strips broken, neither
+   * reporting a fault.
+   */
+  param?: string;
   /** Who the host is showing; only used to light the matching row. */
   selectedLeadId?: string | null;
   /** A SELECTION handed up to the host — never a navigation. */
@@ -140,11 +150,11 @@ export interface CallsPageProps {
  * state and this page writes NO parameter at all — the same call
  * `PeopleColumn` already makes about `?create=1`.
  */
-export default function CallsPage({ embedded, headerless, selectedLeadId, onSelectPerson }: CallsPageProps = {}) {
+export default function CallsPage({ embedded, headerless, param = 'tab', selectedLeadId, onSelectPerson }: CallsPageProps = {}) {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
   const [localTab, setLocalTab] = useState<CallsPageTab>('calls');
-  const raw = params.get('tab');
+  const raw = params.get(param);
   const urlTab: CallsPageTab = (CALLS_TABS as readonly string[]).includes(raw ?? '')
     ? (raw as CallsPageTab)
     : 'calls';
@@ -155,7 +165,7 @@ export default function CallsPage({ embedded, headerless, selectedLeadId, onSele
       return;
     }
     setParams((p) => {
-      p.set('tab', v);
+      p.set(param, v);
       return p;
     }, { replace: true });
   };
@@ -180,7 +190,10 @@ export default function CallsPage({ embedded, headerless, selectedLeadId, onSele
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="calls">{t('calls.tab.calls', 'Calls')}</TabsTrigger>
+          {/* "Log", not "Calls": this strip lives inside a tab already called
+              Aramalar, and two controls one click apart with the same name is
+              the confusion this merge exists to remove. */}
+          <TabsTrigger value="calls">{t('calls.tab.calls', 'Log')}</TabsTrigger>
           <TabsTrigger value="dialer">{t('calls.tab.dialer', 'Power Dialer')}</TabsTrigger>
           {/* The tab appears with its gates, or it does not appear. navigation.ts
               gives /voice `feature: 'voiceAi'` + `managerOnly`, mirroring

@@ -61,7 +61,7 @@ export default function VoiceHubPage() {
         <TabsList>
           {allowed.includes('assistant') && <TabsTrigger value="assistant">{t('voiceHub.tab.assistant', { defaultValue: 'Assistant' })}</TabsTrigger>}
           {allowed.includes('ivr') && <TabsTrigger value="ivr">{t('voiceHub.tab.ivr', { defaultValue: 'Phone tree' })}</TabsTrigger>}
-          {allowed.includes('calls') && <TabsTrigger value="calls">{t('voiceHub.tab.calls', { defaultValue: 'Call log' })}</TabsTrigger>}
+          {allowed.includes('calls') && <TabsTrigger value="calls">{t('voiceHub.tab.calls', { defaultValue: 'Calls' })}</TabsTrigger>}
         </TabsList>
 
         {allowed.includes('assistant') && <TabsContent value="assistant" className="pt-5">
@@ -71,7 +71,7 @@ export default function VoiceHubPage() {
           <Lazy><IvrMenusPage embedded /></Lazy>
         </TabsContent>}
         {allowed.includes('calls') && <TabsContent value="calls" className="pt-5">
-          <Lazy><CallsPage embedded /></Lazy>
+          <Lazy><CallsPage embedded param="sub" /></Lazy>
         </TabsContent>}
       </Tabs>
     </div>
