@@ -36,7 +36,11 @@ const TRY_1234_50 = /^(₺\s?1\.234,50|1\.234,50\s?₺)$/;
 test('a new workspace has an empty product catalog', async ({ app }) => {
   await app.goto('/products');
 
-  await expect(app.getByRole('heading', { name: 'Ürünler', level: 1 })).toBeVisible();
+  // A TAB of Satış since 2026-09-04: products, order forms, subscriptions and
+  // invoices in the order a sale happens. The page's own <h1> gave way to the
+  // shell's, which is the one heading on the page.
+  await expect(app.getByRole('heading', { name: 'Satış', level: 1 })).toBeVisible();
+  await expect(app.getByRole('tab', { name: 'Ürünler', selected: true })).toBeVisible();
 
   // The catalog renders EITHER this empty state or a grid of product cards, so
   // its presence is the "no rows leaked into this workspace" assertion.
@@ -121,7 +125,8 @@ test('order forms stay locked until the catalog has a product', async ({ app, ap
 test('the invoices page starts empty and will not create a blank invoice', async ({ app }) => {
   await app.goto('/invoices');
 
-  await expect(app.getByRole('heading', { name: 'Faturalar', level: 1 })).toBeVisible();
+  await expect(app).toHaveURL(/\/products\?tab=invoices$/);
+  await expect(app.getByRole('tab', { name: 'Faturalar', selected: true })).toBeVisible();
   await expect(app.getByText('Nasıl ödeme alırsınız')).toBeVisible();
 
   // The empty state is rendered only when the list query SUCCEEDED and came

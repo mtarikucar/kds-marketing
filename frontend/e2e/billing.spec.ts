@@ -11,7 +11,10 @@ import { test, expect } from './support/fixtures';
 test('the pricing page offers exactly one plan', async ({ app }) => {
   await app.goto('/billing');
 
-  await expect(app.getByRole('heading', { name: /faturalama/i }).first()).toBeVisible();
+  // /billing is 'Plan ve erişim' since 2026-09-04 — the plan, and the switch
+  // that turns features off, which belong together at the end of the list.
+  await expect(app.getByRole('heading', { name: /plan ve eri.im/i }).first()).toBeVisible();
+  await expect(app.getByRole('tab', { name: 'Plan', selected: true })).toBeVisible();
 
   // Exactly one buyable card. The retired STARTER/GROWTH/SCALE rows still
   // exist in the database on purpose — subscriptions point at them by a
