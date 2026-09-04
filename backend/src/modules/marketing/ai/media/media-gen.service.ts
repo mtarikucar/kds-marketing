@@ -17,9 +17,9 @@ import {
   MediaProvider, MEDIA_PROVIDER, MediaGenResult, MediaGenSources,
 } from '../providers/media-provider.interface';
 import {
-  MediaEstimateOpts, MediaModel,
-  defaultModelFor, estimateMediaCredits, estimateMediaUsd, getMediaModel, isCataloguedModel,
-  isMediaModelWithheld, meteredUnits,
+  MediaEstimateOpts, MediaModel, MediaVendor,
+  defaultModelFor, estimateMediaCredits, estimateMediaUsd, estimateVendorUsd, getMediaModel,
+  isCataloguedModel, isMediaModelWithheld, meteredUnits, resolveMediaModelId,
 } from './media-models.config';
 import { GeneratedAssetType, TERMINAL_ASSET_STATUSES, isTerminalAssetStatus } from './media-asset.constants';
 
@@ -327,7 +327,17 @@ export class MediaGenService implements OnModuleInit {
         });
       }
     }
-    const model = dto.model ?? (await this.workspaceDefaultModel(workspaceId, dto.type));
+    const requested = dto.model ?? (await this.workspaceDefaultModel(workspaceId, dto.type));
+    // A fal-retired id — a stored default, a campaign override, or a regenerate
+    // of an old row — runs on its successor. The row records the successor, so
+    // history and regenerate converge on the live model; the log line is the
+    // only trace, and it is what makes a silently re-priced workspace findable.
+    const model = resolveMediaModelId(requested);
+    if (model !== requested) {
+      this.logger.warn(
+        `${requested} was retired by its provider; generating on ${model} instead (workspace ${workspaceId})`,
+      );
+    }
     // The catalogue's type is authoritative: a caller asking for VIDEO while
     // naming an ElevenLabs model must not have an mp3 stored as a video.
     const catalogued = getMediaModel(model);
@@ -415,7 +425,9 @@ export class MediaGenService implements OnModuleInit {
           workspaceId,
           type,
           status: 'QUEUED',
-          provider: this.provider.name,
+          // The vendor that will actually render it — a routed provider names
+          // it per model; a single-vendor provider is its own name.
+          provider: this.provider.resolveName?.(model) ?? this.provider.name,
           model,
           prompt: dto.prompt,
           negativePrompt: dto.negativePrompt ?? null,
@@ -549,6 +561,12 @@ export class MediaGenService implements OnModuleInit {
       const rendered = primary.durationSec;
       const trueUp = estimateOptsFrom(asset.params, rendered ?? asset.durationSec, asset.prompt);
       const actual = estimateMediaCredits(asset.model, trueUp);
+      // What the generation cost US, at the vendor that actually rendered it.
+      // Runware reports its own figure per task; fal never does, so the
+      // catalogue's fal rate stands there. The credit meter above is untouched
+      // by this: the customer's price is the catalogue's, whichever vendor ran.
+      const vendor: MediaVendor = asset.provider === 'runware' ? 'runware' : 'fal';
+      const vendorUsd = result.costUsd ?? estimateVendorUsd(asset.model, trueUp, vendor);
       const claim = await this.prisma.generatedAsset.updateMany({
         where: { id: assetId, status: { notIn: TERMINAL } },
         data: {
@@ -558,22 +576,22 @@ export class MediaGenService implements OnModuleInit {
           width: primary.width ?? null,
           height: primary.height ?? null,
           durationSec: rendered ?? asset.durationSec ?? null,
-          costCredits: actual, error: null,
+          costCredits: actual, costUsd: new Prisma.Decimal(vendorUsd), error: null,
         },
       });
       if (claim.count === 1) {
         await this.reconcile(asset.workspaceId, reserved, actual);
         // The credit meter is trued up to the provider's ACTUAL duration above,
-        // so the real-cash wallet pre-debit (charged on the REQUESTED duration)
-        // must be too — else a 10s request that returns a 4s clip refunds the
-        // credit delta but keeps the wallet overcharged for capacity never used.
-        const actualUsd = estimateMediaUsd(asset.model, trueUp);
-        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, actualUsd);
-        // Record what fal actually cost US, on the SAME trued-up figure. This is
-        // the vendor-cost ledger, not the customer's credit meter above: every
-        // other vendor lands there and fal never did, so the spend report read 0
-        // for it while the invoices were real.
-        await this.mediaSpend.settle(asset.workspaceId, { assetId, credits: actual });
+        // so the real-cash wallet pre-debit (charged on the REQUESTED duration,
+        // at the fal estimate) must be too — else a 10s request that returns a
+        // 4s clip refunds the credit delta but keeps the wallet overcharged for
+        // capacity never used. A cheaper vendor shows up here as a larger refund.
+        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, vendorUsd);
+        // Record the vendor cost on the SAME trued-up figure. This is the
+        // vendor-cost ledger, not the customer's credit meter above: every other
+        // vendor lands there and fal never did, so the spend report read 0 for
+        // it while the invoices were real.
+        await this.mediaSpend.settle(asset.workspaceId, { assetId, credits: actual, vendor, vendorUsd });
       } else {
         // Lost the finalize race (webhook + poll both completed the same asset):
         // the winner already stored its own object, so delete ours to avoid an
