@@ -934,3 +934,99 @@ describe('ContentConceptsService.planConcepts — angle learning', () => {
     expect(systemOf()).toMatch(/No performance history/i);
   });
 });
+
+/**
+ * THE SAME FEATURE, WITHOUT ASKING A MODEL TO ASK A MODEL.
+ *
+ * `plan_content_concepts` was reached from an MCP tool call — a model asking
+ * the server to ask another model. The caller IS Claude, so the round trip
+ * bought nothing, cost the workspace 16 credits and failed outright whenever
+ * the PLATFORM's key was dry, which is exactly how it failed in production.
+ *
+ * What has to stay true is that removing the generation step removed ONLY the
+ * generation step. An agent's batch is not exempt from the contract; being
+ * Claude is not evidence about this particular batch.
+ */
+describe('ContentConceptsService.submitConcepts', () => {
+  const submitFrom = (
+    svc: ContentConceptsService,
+    concepts: unknown[],
+    over: Record<string, unknown> = {},
+  ) =>
+    svc.submitConcepts(
+      'ws1',
+      { idea: IDEA, count: 3, createdById: 'u1', ...over },
+      concepts as never,
+    );
+
+  it('works with the platform model switched off entirely', async () => {
+    // The whole point. `planConcepts` raises ServiceUnavailable here, and that
+    // refusal is right for it and wrong for this: nothing on this path needs
+    // the platform's key.
+    const { svc, complete } = deps({ aiEnabled: false });
+    const res = await submitFrom(svc, GOOD);
+    expect(res.concepts).toHaveLength(3);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('reserves no credits, because nothing was spent', async () => {
+    const { svc, credits } = deps({ aiEnabled: false });
+    await submitFrom(svc, GOOD);
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.refund).not.toHaveBeenCalled();
+  });
+
+  it('persists the batch exactly as the generated path does', async () => {
+    const { svc, prisma } = deps({ aiEnabled: false });
+    const res = await submitFrom(svc, GOOD);
+    expect(prisma.contentConcept.createMany).toHaveBeenCalledTimes(1);
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data;
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r: any) => r.workspaceId === 'ws1' && r.sourceIdea === IDEA)).toBe(true);
+    expect(new Set(rows.map((r: any) => r.batchId)).size).toBe(1);
+    expect(res.concepts.every((c) => c.status === 'PROPOSED')).toBe(true);
+  });
+
+  it('still refuses a batch that is one script reworded', async () => {
+    // The contract is the feature. An agent that submits paraphrases gets the
+    // same whole-batch refusal a model does.
+    const { svc, prisma } = deps({ aiEnabled: false });
+    await expect(submitFrom(svc, PARAPHRASES)).rejects.toThrow(BadRequestException);
+    expect(prisma.contentConcept.createMany).not.toHaveBeenCalled();
+  });
+
+  it('still refuses a batch shorter than the count asked for', async () => {
+    const { svc, prisma } = deps({ aiEnabled: false });
+    await expect(submitFrom(svc, GOOD.slice(0, 2))).rejects.toThrow(BadRequestException);
+    expect(prisma.contentConcept.createMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty submission by name rather than saving nothing quietly', async () => {
+    const { svc } = deps({ aiEnabled: false });
+    await expect(submitFrom(svc, [])).rejects.toThrow(BadRequestException);
+  });
+
+  it('still clamps a beat the generator could never shoot', async () => {
+    // A concept is decided ONCE, so an approved row carrying an unshootable
+    // beat has no path back — the clamp is what guarantees whatever reaches the
+    // row is producible, and it has to hold at this boundary too.
+    const { svc } = deps({ aiEnabled: false });
+    const wild = JSON.parse(JSON.stringify(GOOD));
+    wild[0].shots[0].durationSec = 1800;
+    wild[1].shots[0].durationSec = 0;
+    const res = await submitFrom(svc, wild);
+    const seconds = res.concepts.flatMap((c: any) =>
+      (c.shotPlan.shots ?? []).map((sh: any) => sh.durationSec),
+    );
+    expect(Math.max(...seconds)).toBeLessThanOrEqual(MAX_SHOT_SEC);
+    expect(Math.min(...seconds)).toBeGreaterThanOrEqual(MIN_SHOT_SEC);
+  });
+
+  it('still validates a named campaign', async () => {
+    const { svc, promotion } = deps({ aiEnabled: false });
+    promotion.requireCampaign.mockRejectedValueOnce(new NotFoundException('no such campaign'));
+    await expect(submitFrom(svc, GOOD, { socialCampaignId: 'nope' })).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+});

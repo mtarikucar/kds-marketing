@@ -464,6 +464,10 @@ describe('MCP tool catalogue', () => {
         // and review() answering "already approved" forever — a paid-for
         // decision with no way to act on it.
         'jeeta.produce_content_concept',
+        // The generation-free twin of plan_content_concepts: a connected
+        // Claude plans the batch itself and submits it, so the platform
+        // makes no model call and the workspace spends no credit.
+        'jeeta.submit_content_concepts',
         // İçerik üretim hattı, aşama 4. Two tools, both deferred, and note
         // which verb is NOT among them: there is no send. Sending a prepared
         // message is a REST route behind an authenticated human, because
@@ -495,7 +499,7 @@ describe('MCP tool catalogue', () => {
     // over-counts; re-measured, grep did not — the counts have always matched,
     // and the figure to trust is the one this assertion takes from a built
     // registry.
-    expect(names).toHaveLength(126);
+    expect(names).toHaveLength(127);
   });
 
   /**
@@ -581,14 +585,14 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 126 total, 45 advertised (+2 discovery) and 79 deferred: everything a
+    // 127 total, 45 advertised (+2 discovery) and 80 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
-    // hundred. Stage 4's two distribution tools are the newest pair, and both
-    // are deferred for that reason. The number in this comment said 120 while
-    // the assertion below said 123; a comment that disagrees with its own
-    // assertion is how a measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(126);
+    // hundred. `jeeta.submit_content_concepts` is the newest, and deferred for
+    // that reason. The number in this comment said 120 while the assertion
+    // below said 123; a comment that disagrees with its own assertion is how a
+    // measured figure quietly becomes a remembered one.
+    expect(registry.list(ALL_SCOPES)).toHaveLength(127);
   });
 });
 
