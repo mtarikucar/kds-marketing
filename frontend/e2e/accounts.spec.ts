@@ -62,12 +62,23 @@ test('the hub lists the whole provider catalogue, all unconnected on a fresh wor
 
   // Hardcoded on purpose: a provider quietly dropped from the server catalogue
   // would still pass a test that only re-read the API it is checking.
+  // Every one of them is under the "not connected yet" heading on a fresh
+  // workspace, and the other two sections do not render at all when there is
+  // nothing connected and nothing broken.
+  await expect(app.getByRole('heading', { name: 'Henüz bağlanmadı' })).toBeVisible();
+  await expect(app.getByRole('heading', { name: 'Senden bir şey bekliyor' })).toHaveCount(0);
+  await expect(app.getByRole('heading', { name: 'Bağlı ve çalışıyor' })).toHaveCount(0);
+
   for (const name of CATALOGUE) {
     const card = app.getByText(name, { exact: true }).locator(CARD);
     await expect(card, `${name} is missing from the catalogue`).toBeVisible();
-    // accounts.notConnected — the per-provider state, not a page-wide banner.
-    await expect(card.getByText('Bağlı değil'), `${name} should read as unconnected`).toBeVisible();
   }
+
+  // The row of an unconnected provider says what CONNECTING it would add, not
+  // that it is absent — "Bağlı değil" answers a question nobody asked, and the
+  // one somebody arrives with is "do I need this?".
+  await expect(app.getByText(/SMS gönder ve al/)).toBeVisible();
+  await expect(app.getByText('Bağlı değil')).toHaveCount(0);
 
   // Nothing may claim a connection: accounts.connectedCount renders "N bağlı",
   // and every connected identity gets a disconnect control. Both absent is the
