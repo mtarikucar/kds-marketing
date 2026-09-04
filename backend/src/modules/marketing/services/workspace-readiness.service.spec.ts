@@ -16,6 +16,7 @@ describe('workspace readiness', () => {
 
   /** Everything absent, which is a brand-new workspace. */
   const EMPTY = {
+    workspaceRow: null as { mcpWriteMode: string } | null,
     brandProfile: null,
     strategy: null,
     psp: null,
@@ -31,6 +32,9 @@ describe('workspace readiness', () => {
 
     const counter = (model: string) => jest.fn(async () => count(model));
     prisma = {
+      mcpOAuthToken: { count: counter('mcpOAuthToken') },
+      apiKey: { count: counter('apiKey') },
+      workspace: { findUnique: jest.fn(async () => o.workspaceRow) },
       brandProfile: { findFirst: jest.fn(async () => o.brandProfile) },
       knowledgeDoc: { count: counter('knowledgeDoc') },
       marketingStrategy: { findFirst: jest.fn(async () => o.strategy) },
@@ -73,6 +77,57 @@ describe('workspace readiness', () => {
     expect(r.ready).toBe(0);
     expect(r.total).toBeGreaterThan(15);
     expect(r.items.every((i) => i.state !== 'READY')).toBe(true);
+  });
+
+  describe('the Claude connector, which the rest of the list depends on', () => {
+    it('is FIRST, because every gap below promises a tool nothing can call yet', async () => {
+      build();
+      const r = await svc.get(WS);
+      expect(r.items[0].id).toBe('claude-connector');
+    });
+
+    it('is missing when no live token and no key exist', async () => {
+      build();
+      expect((await item('claude-connector')).state).toBe('MISSING');
+    });
+
+    it('counts a connector the console would call connected', async () => {
+      // The console's own definition: a token neither revoked nor expired.
+      build({ counts: { mcpOAuthToken: 1 } as any, workspaceRow: { mcpWriteMode: 'AUTONOMOUS' } });
+      expect((await item('claude-connector')).state).toBe('READY');
+      const where = prisma.mcpOAuthToken.count.mock.calls[0][0].where;
+      expect(where).toMatchObject({ revokedAt: null });
+      expect(where.expiresAt).toMatchObject({ gt: expect.any(Date) });
+    });
+
+    it('counts an API key too, which is the other way in', async () => {
+      build({ counts: { apiKey: 1 } as any, workspaceRow: { mcpWriteMode: 'AUTONOMOUS' } });
+      expect((await item('claude-connector')).state).toBe('READY');
+    });
+
+    it('calls a connector in APPROVAL mode attention, not ready', async () => {
+      // Measured: under approval the Jeeta-keyed data tools do not queue, they
+      // are unusable — the result goes to the approver's HTTP response and
+      // never to the agent's turn. The lane runs and silently does less, which
+      // is the exact state this list exists to make visible.
+      build({ counts: { mcpOAuthToken: 1 } as any, workspaceRow: { mcpWriteMode: 'APPROVAL' } });
+      const i = await item('claude-connector');
+      expect(i.state).toBe('ATTENTION');
+      expect(i.detail).toMatchObject({ writeMode: 'APPROVAL' });
+    });
+
+    it('fails towards APPROVAL when the mode cannot be read', async () => {
+      // Showing a warning that might not apply costs a sentence; hiding one
+      // that does is indistinguishable from a lane working properly.
+      build({ counts: { mcpOAuthToken: 1 } as any, workspaceRow: null });
+      expect((await item('claude-connector')).state).toBe('ATTENTION');
+    });
+
+    it('offers no tool, because nothing can connect itself', async () => {
+      build();
+      expect((await item('claude-connector')).mcpTool).toBeNull();
+      expect((await item('claude-connector')).to).toBe('/settings/api-keys?tab=connector');
+    });
   });
 
   describe('the state a two-state checklist gets wrong', () => {
@@ -184,7 +239,12 @@ describe('workspace readiness', () => {
       for (const fn of Object.values(api as Record<string, jest.Mock>)) {
         for (const call of fn.mock.calls) {
           const where = call[0]?.where ?? {};
-          expect({ model, scoped: where.workspaceId === WS }).toEqual({ model, scoped: true });
+          // The Workspace row is the one table addressed by its own primary
+          // key, because that key IS the workspace id. Every other read here
+          // has to carry `workspaceId`, and the tenancy fitness test reads this
+          // service's source for exactly that.
+          const scoped = model === 'workspace' ? where.id === WS : where.workspaceId === WS;
+          expect({ model, scoped }).toEqual({ model, scoped: true });
         }
       }
     }
