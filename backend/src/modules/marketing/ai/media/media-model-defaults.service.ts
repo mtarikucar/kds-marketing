@@ -5,10 +5,12 @@ import {
   MEDIA_MODELS,
   MediaModel,
   assertCataloguedModel,
+  assertModelOffersAspect,
   defaultModelFor,
   isCataloguedModel,
   resolveMediaModelId,
 } from './media-models.config';
+import { DEFAULT_SHOT_ASPECT } from '../../video/video-pipeline.service';
 
 /** What a settings card needs to render one row: the model, and what it costs. */
 export interface PricedMediaModel extends MediaModel {
@@ -121,7 +123,16 @@ export class MediaModelDefaultsService {
     // (`SocialCampaignsService`) enforces the same rule at its own write, and
     // the two doors must not tell a manager two different things about the same
     // five options.
-    return assertCataloguedModel(id, type);
+    assertCataloguedModel(id, type);
+    // The frame, at the same door and for the same reason. A workspace default
+    // that cannot shoot 9:16 is a choice that fails every content concept
+    // planned under it — and that failure used to surface inside the producer,
+    // after a human had approved the work, where nothing could act on it. Here
+    // it is one sentence, on the card where the model is being picked, naming
+    // the ratios the model does publish. A model that takes no ratio at all is
+    // allowed: see `assertModelOffersAspect`.
+    if (type === 'VIDEO') assertModelOffersAspect(id, DEFAULT_SHOT_ASPECT);
+    return id;
   }
 
   /**

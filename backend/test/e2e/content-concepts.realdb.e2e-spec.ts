@@ -10,6 +10,8 @@ import {
   MIN_SHOT_SEC,
 } from '../../src/modules/marketing/content-concepts/content-concepts.service';
 import { ConceptPromotionService } from '../../src/modules/marketing/content-concepts/concept-promotion.service';
+import { CampaignItemArmingService } from '../../src/modules/marketing/social-campaigns/campaign-item-arming.service';
+import { DEFAULT_VIDEO_MODEL } from '../../src/modules/marketing/ai/media/media-models.config';
 import { createRealDbTestApp, closeTestApp, realDbEnabled } from '../utils/test-app';
 
 /**
@@ -126,9 +128,17 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   const promotion = (client: PrismaService = prisma) =>
     new ConceptPromotionService(
       client,
-      { requestGeneration: jest.fn().mockResolvedValue({ assetId: randomUUID() }) } as never,
+      {
+        requestGeneration: jest.fn().mockResolvedValue({ assetId: randomUUID() }),
+        // The promotion service asks this to resolve `campaign ?? workspace ??
+        // platform` in ONE place. These suites carry no workspace row, so the
+        // honest answer is the platform constant — which is also what the real
+        // service returns for a workspace that never chose one.
+        workspaceDefaultModel: jest.fn().mockResolvedValue(DEFAULT_VIDEO_MODEL),
+      } as never,
       { schedule: jest.fn().mockResolvedValue('job-1') } as never,
       { registerHandler: () => undefined } as never,
+      new CampaignItemArmingService(client, { schedule: jest.fn().mockResolvedValue('job-1') } as never),
     );
 
   /** A service wired to a scripted model instead of a live one. */

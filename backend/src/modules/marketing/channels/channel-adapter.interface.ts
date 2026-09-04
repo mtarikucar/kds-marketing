@@ -55,6 +55,21 @@ export interface InboundMessage {
   referral?: InboundReferral | null;
   /** Raw provider payload, stored on Message.meta for audit/debug. */
   raw?: unknown;
+  /**
+   * This is a message the ACCOUNT sent, observed on the webhook — Meta's own
+   * `is_echo`. Almost always it is the owner replying from the Instagram or
+   * Messenger app on their phone, which is a real message in the thread that
+   * this product would otherwise never see.
+   *
+   * `externalUserId` is still the CUSTOMER. An echo inverts the envelope —
+   * `sender` is the business and `recipient` is the person — so the adapter
+   * reads the other side; passing the raw sender would file every outbound
+   * message into one conversation with the business itself.
+   *
+   * Our OWN sends echo back too, and need no special handling: their `mid` is
+   * already stored, so ingest's dedup resolves them to the existing row.
+   */
+  echo?: boolean;
 }
 
 /** Decrypted, ready-to-use channel config. Built by the registry, never the DB. */

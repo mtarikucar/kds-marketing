@@ -281,6 +281,25 @@ const SCOPED_METHODS = [
  * a neighbour's exemption. See the 'exemptions are pinned…' test below.
  */
 const ALLOWED_GLOBAL: Record<string, string> = {
+  // The half-hourly sweep that finds Stripe payments whose buyer never came
+  // back. A system job, like the token refreshers: it must see every tenant's
+  // pending invoices or the ones it cannot see stay unpaid forever, with the
+  // money already taken. It selects the five fields the decision reads — id,
+  // workspace, total, currency, session — and never row content beyond them,
+  // and every settle it triggers is keyed by the invoice id it just read.
+  // Filtered by a real predicate (status SENT + a session to ask about), not by
+  // a take-N window.
+  'invoicing/invoices.service.ts:invoice.findMany':
+    'system job: reconciles every tenant pending Stripe checkout; id-keyed writes, predicate-filtered',
+  // The hourly sweep that keeps consent-connected mailboxes sending. A system
+  // job, like SocialTokenRefreshService: it must see every tenant's due tokens
+  // or those mailboxes go quiet an hour after they are connected. It selects
+  // `id` + the sealed box only — no row data crosses a tenant boundary — and
+  // every write it makes is keyed by that id. Deliberately UNFILTERED and
+  // un-take()d: the expiry lives inside the AES box, so there is no column to
+  // page on, and a take(N) here would pin the sweep to the same N rows forever.
+  'channels/email-oauth-refresh.service.ts:channel.findMany':
+    'system job: refreshes every tenant due OAuth mail token; selects id+sealed box only, writes are id-keyed',
   // Already scoped through its parent: the ids come from a
   // workspaceMembership.findMany that IS workspace-filtered, so this reads
   // only that workspace's members. Filtering on MarketingUser.workspaceId
@@ -370,6 +389,20 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // metering/KB/agent reads are keyed off the resolved channel's OWN workspaceId.
   'voice-ai/voice-ai-bridge.controller.ts:channel.findFirst':
     'public partner-LLM bridge resolves the VOICE channel by id before any workspace context exists (bearer-secret authed)',
+  // Meta's data-deletion callback (App Review prerequisite): a PUBLIC endpoint
+  // Meta POSTs a signed_request to, authenticated ONLY by the HMAC over that
+  // payload. It carries a platform-scoped user id and NO tenant context at all,
+  // so "which tenants hold this id" is a question across workspaces by
+  // definition — scoping the probe would need a workspaceId nobody can supply.
+  // The probe projects only workspaceId + leadId, and every step after it is
+  // scoped to the workspaceId the MATCHED ROW ITSELF carries: the erasure runs
+  // through ComplianceService.requestErasure/fulfillErasure, both of which
+  // re-resolve the lead/request under that workspaceId before touching a row.
+  // Runtime proof that no match ever crosses tenants lives in
+  // platform-data-deletion.service.spec.ts ('erases each match under its OWN
+  // workspace'), which cross-stamps two tenants holding the same id.
+  'compliance/platform-data-deletion.service.ts:contactIdentity.findMany':
+    'Meta data-deletion callback resolves a platform-scoped id before any workspace context exists; each match is then erased under its own workspaceId',
   // Review-sync sweep (Epic 13, inert): the hourly cron reads ACTIVE review
   // sources with a token across ALL workspaces — a system job, same shape as the
   // ads/recording sweeps. Every write it triggers (review upsert / source update)

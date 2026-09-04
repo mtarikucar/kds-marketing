@@ -26,7 +26,7 @@ interface Props {
 }
 
 /**
- * After the OAuth callback redirects to /social?connect=<id> (or /channels?connect=),
+ * After the OAuth callback redirects to /accounts?connect=<id>,
  * this lists the provider assets the user can connect (pages, IG accounts,
  * LinkedIn org/profile) and turns the chosen ones into SocialAccounts — and,
  * for Meta Page/IG assets, optionally a two-way messaging Channel.
@@ -133,7 +133,24 @@ export function AccountSelectDialog({ pendingId, onOpenChange, context = 'social
               <div key={i} className="h-10 animate-pulse rounded-lg bg-surface-muted" />
             ))}
           </div>
-        ) : isError || !data || data.assets.length === 0 ? (
+        ) : isError ? (
+          /* A hand-off that cannot be LOADED is not a hand-off that returned
+             nothing. It expired (they last 15 minutes) or belongs to another
+             workspace — telling that user to check what they granted sends
+             them to re-examine a permission that was never the problem, and
+             omits the one action that works. */
+          <EmptyState
+            icon={<Link2 className="h-8 w-8" />}
+            title={t('social.oauth.pendingUnavailable', {
+              defaultValue: 'This connection attempt is no longer available',
+            })}
+            description={t('social.oauth.pendingUnavailableHint', {
+              defaultValue:
+                'Connection attempts expire after 15 minutes. Close this and start the connection again.',
+            })}
+            className="border-0 py-4"
+          />
+        ) : !data || data.assets.length === 0 ? (
           <EmptyState
             icon={<Link2 className="h-8 w-8" />}
             title={t('social.oauth.noAssets', { defaultValue: 'No connectable accounts found' })}

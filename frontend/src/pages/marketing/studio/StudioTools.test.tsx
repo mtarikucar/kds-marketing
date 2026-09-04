@@ -742,6 +742,7 @@ describe('StudioToolsMenu', () => {
       ['Para', '/studio?tool=money'],
       ['İşleyiş', '/studio?tool=ops'],
       ['Kitle', '/studio?tool=audience'],
+      ['İçerik hattı', '/studio?tool=line'],
       ['Tüm araçlar', '/studio?view=tools'],
     ];
     for (const [label, href] of expected) {

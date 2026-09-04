@@ -5,6 +5,7 @@ import {
 } from './media-models.config';
 import { GENERATED_ASSET_TYPES } from './media-asset.constants';
 import { buildFalInput } from '../providers/fal.provider';
+import { urlForSlot } from './media-gen.service';
 
 /**
  * CATALOGUE FITNESS.
@@ -313,22 +314,42 @@ describe('media catalogue — a rate is only a price if its quantity is knowable
   /**
    * THE WITHDRAWAL, AS A RULE RATHER THAN A LIST.
    *
-   * Four models are withheld because their price is a property of a file the
-   * customer supplies and nothing here can measure that file. The listing four
-   * ids would fix those four; asserting the RULE stops the fifth — which is
-   * what happened last time, when a per-second rate with unknowable seconds was
-   * added three separate times before anyone noticed.
+   * These models are priced on a property of a file the customer supplies. That
+   * used to mean "never sold", because nothing here could measure the file. A
+   * real server-side probe (ffprobe) now can, so the rule is no longer "don't
+   * sell them" — it is that a sold one must be MEASURABLE.
+   *
+   * The rule is asserted rather than the list, because listing ids fixes the
+   * ids and asserting the rule stops the next one — which is what happened
+   * before, when a per-second rate with unknowable seconds was added three
+   * separate times before anyone noticed.
    */
-  it('never SELLS a model priced by measuring a customer-supplied file', () => {
+  it('only SELLS a file-metered model whose source the service can actually reach', () => {
+    // Every field a request can carry a source in, all populated. A slot that
+    // does not resolve here measures nothing, forever: `usable` is false on
+    // every call, so the model is not withheld — it is broken, and it fails in
+    // front of a customer instead of in this file.
+    const everySource = {
+      images: ['https://x/i.png'],
+      lastImage: 'https://x/l.png',
+      video: 'https://x/v.mp4',
+      audio: 'https://x/a.mp3',
+      mask: 'https://x/m.png',
+    } as any;
+
     for (const m of listMediaModels()) {
       const sm = m.contract.sourceMetering;
       if (!sm) continue;
-      // `script` is the one metered quantity the request honestly carries: the
-      // script IS the prompt, and the prompt is already ours to read. Anything
-      // else is a property of a FILE, and a caller-stated file property is the
-      // payer choosing their own bill. Withhold it until a real server-side
-      // probe (ffprobe) can measure the quantity instead of asserting it.
-      expect({ id: m.id, from: sm.from }).toEqual({ id: m.id, from: 'script' });
+      // `script` is the one metered quantity that is not a file at all: the
+      // script IS the prompt, and the prompt is already ours to read.
+      if (sm.from === 'script') continue;
+
+      const slots = Array.isArray(sm.from) ? sm.from : [];
+      expect({ id: m.id, slots: slots.length > 0 }).toEqual({ id: m.id, slots: true });
+      for (const slot of slots) {
+        expect({ id: m.id, slot, reachable: Boolean(urlForSlot(slot, everySource)) })
+          .toEqual({ id: m.id, slot, reachable: true });
+      }
     }
   });
 

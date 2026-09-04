@@ -42,7 +42,7 @@ function errMessage(e: unknown, fallback: string): string {
  * isWon/isLost terminal flags that resolve deals on entry. Route is manager-gated
  * (MarketingProtectedRoute) and the backend enforces leads.manage.
  */
-export default function PipelineSettingsPage() {
+export default function PipelineSettingsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [newPipeline, setNewPipeline] = useState('');
@@ -142,6 +142,7 @@ export default function PipelineSettingsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
+          embedded={embedded}
         title={t('opportunities.pipelinesTitle', 'Pipelines')}
         description={t('opportunities.pipelinesSubtitle', 'Define the stages deals move through.')}
       />

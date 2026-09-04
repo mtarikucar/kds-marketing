@@ -62,15 +62,14 @@ export default function VoicePage({ embedded }: { embedded?: boolean } = {}) {
 
   return (
     <div className="space-y-6">
-      {!embedded && (
-        <PageHeader
-          title={t('voice.title', 'Voice AI')}
-          description={t(
-            'voice.subtitle',
-            'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).',
-          )}
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('voice.title', 'Voice AI')}
+        description={t(
+          'voice.subtitle',
+          'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).',
+        )}
+      />
 
       {/* A viewport calc inside a host that is NOT the viewport letterboxes the
           panel — the same trap NavChild.fullBleed's docstring records for the

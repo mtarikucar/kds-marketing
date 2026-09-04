@@ -16,7 +16,20 @@ import {
   ScheduledJobRunnerService,
 } from '../scheduling/scheduled-job-runner.service';
 import { Cadence, nextCadenceSlot } from '../social-campaigns/cadence.util';
-import type { ShotPlan } from '../video/video-pipeline.service';
+import { CampaignItemArmingService } from '../social-campaigns/campaign-item-arming.service';
+import { maxPublishableVideos } from '../social-planner/network-adapters';
+import {
+  DEFAULT_VIDEO_MODEL,
+  resolveMediaModelId,
+  DEFAULT_VIDEO_REFERENCE_MODEL,
+  mediaModelAcceptsReferenceImages,
+  mediaModelTakesSeed,
+} from '../ai/media/media-models.config';
+import {
+  type ShotPlan,
+  type ShotProduction,
+} from '../video/video-pipeline.service';
+import { quoteProduction, type VideoModelChoice } from './shot-production';
 
 export const CONCEPT_PRODUCE_KIND = 'content.concept.produce';
 export const produceDedup = (itemId: string) => `content-concept-produce-${itemId}`;
@@ -74,6 +87,18 @@ const NO_SLOT_FALLBACK_MS = 24 * 60 * 60 * 1000;
  */
 const PRODUCIBLE_CAMPAIGN_STATUSES: readonly string[] = ['ACTIVE', 'PAUSED'];
 
+/**
+ * The format every post this line produces is published in.
+ *
+ * Not a choice yet, and stating it as a constant is how that stays honest:
+ * nothing on the concept path sets `options.formats`, and `attachAssetsToPost`
+ * overwrites `options` wholesale at publish time, so FEED is what the platform
+ * actually receives. The destination preview below has to ask its question
+ * about the same format the publish will use, or it is describing a post nobody
+ * sends — FEED is also the only format on which Instagram carries ten.
+ */
+export const CONCEPT_PUBLISH_FORMAT = 'FEED' as const;
+
 /** Item statuses from which re-driving the produce queue is meaningful. Only
  *  GENERATING: it is the state `produce()` acts on, the state a promoted item is
  *  created in, and — because `REGENERATABLE_STATES` excludes it — the one state
@@ -92,6 +117,95 @@ function isQueueFull(e: unknown): boolean {
   if (!(e instanceof HttpException)) return false;
   const body = e.getResponse();
   return typeof body === 'object' && body !== null && (body as { code?: string }).code === 'MEDIA_GEN_TOO_MANY';
+}
+
+/** How many clips a stored plan will buy. The unit the destination preview
+ *  reasons in — one beat is one generation is one video file. */
+export function shotCountOf(shotPlan: unknown): number {
+  const plan = shotPlan as ShotPlan | null;
+  return Array.isArray(plan?.shots) ? plan.shots.length : 0;
+}
+
+/** A campaign's target account, as the destination preview needs it. */
+export interface DestinationAccount {
+  id: string;
+  network: string;
+  displayName: string | null;
+  enabled: boolean;
+}
+
+/** What ONE destination does with a concept of N beats. See {@link describeDestination}. */
+export interface DestinationPreview {
+  accountId: string;
+  network: string;
+  displayName: string;
+  /** Clips this destination will publish. */
+  willPublish: number;
+  /** Clips this destination cannot take. */
+  willDrop: number;
+  /** True when this destination publishes nothing at all. */
+  publishesNothing: boolean;
+  /** One plain sentence, for a human deciding whether to approve. */
+  summary: string;
+}
+
+/**
+ * WHAT THIS DESTINATION RECEIVES, in one sentence — the whole point of not
+ * refusing any more.
+ *
+ * PURE, and it answers with the same table the publish path selects with
+ * (`maxPublishableVideos` at {@link CONCEPT_PUBLISH_FORMAT}), so the preview
+ * and the publish cannot disagree: "Instagram: all 5 clips as a carousel ·
+ * TikTok: beat 1 only · X: nothing, it cannot carry video".
+ *
+ * A DISCONNECTED account gets its own sentence rather than a capacity one. The
+ * network could carry the clips; the account cannot receive them, and telling a
+ * reviewer "5 clips as a carousel" about an account `attachTargets` will skip
+ * would be a worse lie than the silence this replaces.
+ */
+export function describeDestination(
+  account: DestinationAccount,
+  shotCount: number,
+): DestinationPreview {
+  const name = account.displayName || account.network;
+  const base = { accountId: account.id, network: account.network, displayName: name };
+  const beats = Math.max(0, shotCount);
+
+  if (!account.enabled) {
+    return {
+      ...base,
+      willPublish: 0,
+      willDrop: beats,
+      publishesNothing: true,
+      summary: `${name} (${account.network}): nothing — this account is disconnected, so the post will not reach it. Reconnect it or drop it from the campaign's targets.`,
+    };
+  }
+
+  const cap = maxPublishableVideos(account.network, CONCEPT_PUBLISH_FORMAT);
+  const willPublish = Math.min(cap, beats);
+  const willDrop = beats - willPublish;
+
+  if (willPublish === 0) {
+    return {
+      ...base,
+      willPublish: 0,
+      willDrop,
+      publishesNothing: true,
+      summary: `${name} (${account.network}): nothing — ${account.network} cannot carry video, so this post will not be published there at all.`,
+    };
+  }
+  if (willDrop === 0) {
+    const how = beats > 1 ? `all ${beats} clips, as a carousel` : 'the single clip';
+    return { ...base, willPublish, willDrop, publishesNothing: false, summary: `${name} (${account.network}): ${how}.` };
+  }
+  const which = willPublish === 1 ? 'beat 1 only' : `beats 1-${willPublish} only`;
+  return {
+    ...base,
+    willPublish,
+    willDrop,
+    publishesNothing: false,
+    summary: `${name} (${account.network}): ${which} — ${account.network} carries ${cap} video${cap === 1 ? '' : 's'} per post, so ${willDrop} of the ${beats} clips will not be published there.`,
+  };
 }
 
 function reason(e: unknown): string {
@@ -163,6 +277,7 @@ export class ConceptPromotionService implements OnModuleInit {
     private readonly mediaGen: MediaGenService,
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
+    private readonly arming: CampaignItemArmingService,
   ) {}
 
   onModuleInit(): void {
@@ -241,6 +356,26 @@ export class ConceptPromotionService implements OnModuleInit {
       }
     }
 
+    // NO PLAN, AND THEREFORE NO QUOTE CHECK — this side of the verdict.
+    //
+    // `assertQuoteHolds` refuses a campaign whose model is not the one the
+    // reviewer was quoted, and its whole safety rests on being asked BEFORE the
+    // verdict: `review()` calls `requireCampaign` with the plan while the
+    // concept is still PROPOSED, so a refusal leaves every remedy open.
+    //
+    // Here the verdict is already written. `promote()` runs AFTER approval, and
+    // it is also the documented recovery for an APPROVED concept whose item was
+    // never created (a crash in `review()`'s window) or was cascaded away with
+    // its campaign — the state `ContentConceptsService.produce` exists to close
+    // and the only route out of it. Asking the quote question here refuses that
+    // recovery the moment somebody changes the campaign's `defaultVideoModel`
+    // (or the workspace default moves) between the approval and the rescue: the
+    // concept cannot be decided again, `promote` throws every time, and the
+    // approved work is stranded permanently — which is exactly what this file
+    // says about the aspect check it moved OUT of `produce` for the same reason.
+    //
+    // The pre-verdict door keeps the guarantee; a second copy of it downstream
+    // could only take remedies away.
     const campaign = await this.requireCampaign(
       workspaceId,
       opts.socialCampaignId ?? concept.socialCampaignId,
@@ -296,7 +431,15 @@ export class ConceptPromotionService implements OnModuleInit {
    * approval that has nowhere to land while the concept is still PROPOSED —
    * a human can then retry, which an already-decided concept cannot.
    */
-  async requireCampaign(workspaceId: string, campaignId: string | null | undefined) {
+  async requireCampaign(
+    workspaceId: string,
+    campaignId: string | null | undefined,
+    opts: {
+      /** The concept's own plan, when there is one. Carries the QUOTE the
+       *  reviewer is about to approve. */
+      plan?: ShotPlan | null;
+    } = {},
+  ) {
     if (!campaignId) {
       throw new BadRequestException(
         'This concept is not scoped to a social campaign, so there is no calendar, no target accounts and no model choice to produce it under. Pass socialCampaignId (see jeeta.list_social_campaigns) when approving it.',
@@ -319,7 +462,216 @@ export class ConceptPromotionService implements OnModuleInit {
           `Activate the campaign in the panel first (activation is deliberately a human act, not an agent one), or pass a different socialCampaignId; see jeeta.list_social_campaigns.`,
       );
     }
+    // NOTE: there is deliberately no destination-capacity refusal here any more.
+    // `assertDestinationsCanCarry` used to refuse the whole approval unless
+    // EVERY targeted account could publish EVERY beat, which — measured against
+    // the real network table — refused seven of the eight networks and left the
+    // feature working on all-Instagram campaigns only. Capacity is now settled
+    // per target at publish (`selectMediaForTarget`), and what each destination
+    // will actually receive is shown to the reviewer BEFORE they approve
+    // (`describeDestinations`), which is the honest replacement for a refusal.
+    await this.assertQuoteHolds(workspaceId, campaign, opts.plan);
     return campaign;
+  }
+
+  /**
+   * THE PRICE THE REVIEWER SAW IS THE PRICE THAT WILL BE PAID.
+   *
+   * A plan carries the quote it was made under — the endpoint, the billed
+   * seconds, the credits, the dollars (see {@link ShotProduction}). That quote
+   * was computed against a specific model, resolved from the campaign the
+   * concept was planned for (or, unscoped, from the workspace default). A
+   * reviewer may approve it into a DIFFERENT campaign, and a campaign carries
+   * its own `defaultVideoModel` — 3 credits per second on the platform default,
+   * 48 on Seedance 2.5. Producing under a model nobody was quoted for is the
+   * same defect as the persona substitution this quote exists to end, arriving
+   * through the other door.
+   *
+   * So it is refused, and refused HERE: `review()` calls this before the verdict
+   * is recorded, so the concept stays PROPOSED and every remedy is still open —
+   * approve it into the campaign it was planned for, re-plan it under this one
+   * (the quote is then the one on screen), or clear the campaign's override. A
+   * refusal after the verdict would be a stranded approval, which is exactly
+   * what the aspect check used to do from inside `produce`.
+   *
+   * Silence for a plan with no quote: those predate the record, nobody was
+   * quoted anything, and there is no promise to keep.
+   */
+  private async assertQuoteHolds(
+    workspaceId: string,
+    campaign: { name: string; defaultVideoModel: string | null },
+    plan: ShotPlan | null | undefined,
+  ): Promise<void> {
+    const quoted = plan?.production;
+    if (!quoted) return;
+
+    const wantsReference = (plan?.shots ?? []).some((sh) => (sh.reference?.images?.length ?? 0) > 0);
+    const choice = await this.resolveVideoModel(
+      workspaceId,
+      campaign.defaultVideoModel,
+      wantsReference,
+    );
+    if (choice.model === quoted.model) return;
+
+    const now = quoteProduction(plan as ShotPlan, choice);
+    // Name WHERE the other model comes from: "the campaign chose it" and "the
+    // workspace default changed under it" are different mistakes with different
+    // fixes, and a message that says "campaign" about a workspace setting sends
+    // the reader to the wrong screen.
+    const source =
+      choice.modelSource === 'campaign'
+        ? `Campaign "${campaign.name}" runs ${choice.model}`
+        : `This workspace now produces on ${choice.model}`;
+    throw new BadRequestException(
+      `This concept was planned and quoted on ${quoted.model}: ${quoted.credits} credits ` +
+        `($${quoted.usd.toFixed(2)}) for ${quoted.billedSecPerBeat.length} clips. ` +
+        `${source}, which would cost ${now.credits} credits ($${now.usd.toFixed(2)}) instead — ` +
+        `a price nobody approved. Approve it into the campaign it was planned for, or re-plan the ` +
+        `concept as it will actually be produced (jeeta.plan_content_concepts with socialCampaignId) ` +
+        `so the quote you approve is the one that is charged.`,
+    );
+  }
+
+  /**
+   * WHAT EACH DESTINATION WILL ACTUALLY RECEIVE — told to the reviewer BEFORE
+   * they approve.
+   *
+   * This is the honest replacement for the refusal that used to live here, and
+   * the reason deleting that refusal is safe. Nothing is refused over capacity
+   * any more: the same five-beat concept is a five-clip carousel on Instagram,
+   * beat 1 alone on TikTok, and nothing at all on X — three different truths
+   * about one approval, and a reviewer is entitled to all three before they
+   * spend the money rather than after.
+   *
+   * The read is deliberately NOT filtered by `enabled`. The old check read
+   * `enabled: true` accounts only, so a disconnected account was invisible at
+   * approval and could still be attached at publish; here a disconnected target
+   * is shown, saying it will receive nothing, which is what will happen
+   * (`attachTargets` skips it).
+   *
+   * `campaignIds` rather than one id because the review queue lists many
+   * concepts at once and they share a handful of campaigns: two reads for the
+   * whole page instead of two per row.
+   */
+  async destinationAccounts(
+    workspaceId: string,
+    campaignIds: string[],
+  ): Promise<Map<string, DestinationAccount[]>> {
+    const wanted = [...new Set(campaignIds.filter(Boolean))];
+    const byCampaign = new Map<string, DestinationAccount[]>();
+    if (!wanted.length) return byCampaign;
+
+    const campaigns = await this.prisma.socialCampaign.findMany({
+      where: { id: { in: wanted }, workspaceId },
+      select: { id: true, targetAccountIds: true },
+    });
+    const accountIds = [...new Set(campaigns.flatMap((c) => c.targetAccountIds ?? []))];
+    // A campaign id that is a typo, a neighbour's, or since deleted resolves to
+    // no campaign and therefore to no destinations — never to another
+    // workspace's accounts: both reads carry `workspaceId`.
+    const accounts = accountIds.length
+      ? await this.prisma.socialAccount.findMany({
+          where: { id: { in: accountIds }, workspaceId },
+          select: { id: true, network: true, displayName: true, enabled: true },
+        })
+      : [];
+    const byId = new Map(accounts.map((a) => [a.id, a as DestinationAccount]));
+
+    for (const c of campaigns) {
+      byCampaign.set(
+        c.id,
+        (c.targetAccountIds ?? []).map((id) => byId.get(id)).filter((a): a is DestinationAccount => !!a),
+      );
+    }
+    return byCampaign;
+  }
+
+  /**
+   * The per-destination sentences for ONE concept, ready to show a reviewer.
+   *
+   * `shotCount` is the plan's beat count — one beat is one clip is one video
+   * file, which is the unit every network limit in `maxPublishableVideos` is
+   * expressed in.
+   */
+  async describeDestinations(
+    workspaceId: string,
+    campaignId: string | null | undefined,
+    shotCount: number,
+  ): Promise<DestinationPreview[]> {
+    if (!campaignId) return [];
+    const byCampaign = await this.destinationAccounts(workspaceId, [campaignId]);
+    return (byCampaign.get(campaignId) ?? []).map((a) => describeDestination(a, shotCount));
+  }
+
+  /**
+   * WHICH ENDPOINT WILL RUN, and why — one implementation, used by the planner
+   * (to quote before a human approves) and by the producer (for a plan made
+   * before quotes existed).
+   *
+   * The order is the product's, stated once in
+   * `MediaGenService.workspaceDefaultModel`: campaign override ?? workspace
+   * default ?? platform constant.
+   *
+   * THE PERSONA OVERRIDE IS THE EXPENSIVE ONE. `VIDEO_REFERENCE` is a different
+   * TECHNIQUE, not a styling preference: it is the only contract that takes an
+   * ARRAY of reference frames, which is what holds one face or one product
+   * identical across every beat. A campaign's `defaultVideoModel` names a
+   * text-to-video endpoint, and `buildFalInput` maps sources by CONTRACT — so
+   * nine reference frames sent there reach the wire as none at all. Substituting
+   * the reference model is therefore right; doing it silently was not. It is 48
+   * credits per second against the platform default's 3, with a 4-second floor
+   * under beats approved at 3, and deciding it HERE means the substitution and
+   * its price land on the plan a human reads, instead of in a log line written
+   * after they approved something else.
+   */
+  async resolveVideoModel(
+    workspaceId: string,
+    campaignVideoModel: string | null | undefined,
+    wantsReference: boolean,
+  ): Promise<VideoModelChoice> {
+    const chosen = campaignVideoModel ?? null;
+    const model = chosen ?? (await this.mediaGen.workspaceDefaultModel(workspaceId, 'VIDEO'));
+    // 'platform' vs 'workspace' is decided by comparing with the constant: a
+    // workspace that explicitly chose the platform default is reported as
+    // 'platform', which is true of what will run and is the only part of this
+    // anyone spends money on.
+    const modelSource: VideoModelChoice['modelSource'] = chosen
+      ? 'campaign'
+      : resolveMediaModelId(model) === DEFAULT_VIDEO_MODEL
+        ? 'platform'
+        : 'workspace';
+
+    if (wantsReference && !mediaModelAcceptsReferenceImages(model)) {
+      return {
+        model: DEFAULT_VIDEO_REFERENCE_MODEL,
+        modelSource: 'persona',
+        replacedModel: model,
+      };
+    }
+    return { model, modelSource };
+  }
+
+  /**
+   * Write the production record onto a plan that predates it.
+   *
+   * Best-effort by construction: the clips are about to be bought either way,
+   * and a failed write here must not fail an approved item. What it buys is that
+   * the plan a human opens afterwards says what was actually purchased — the
+   * endpoint, the frame, the seconds, the price — instead of staying silent the
+   * way every plan did before the record existed.
+   */
+  private async recordProduction(
+    workspaceId: string,
+    conceptId: string,
+    plan: ShotPlan,
+    production: ShotProduction,
+  ): Promise<void> {
+    await this.prisma.contentConcept
+      .updateMany({
+        where: { id: conceptId, workspaceId },
+        data: { shotPlan: { ...plan, production } as unknown as Prisma.InputJsonValue },
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -424,21 +776,79 @@ export class ConceptPromotionService implements OnModuleInit {
       return;
     }
 
+    // WHAT THIS PLAN BUYS — read off the plan, not re-decided here.
+    //
+    // `ShotPlan.production` is written when the plan is MADE (see
+    // `shot-production.ts`): the catalogued endpoint that will run, the frame it
+    // will be asked for, the seconds each beat will be billed at, and the quote
+    // in credits and dollars. A human approved THAT. Re-deriving any of it here
+    // would mean the thing bought is decided after the approval, which is the
+    // defect this record exists to close — a persona plan silently swapped the
+    // model for one at 16x the rate, and the plan still said otherwise.
+    //
+    // A plan persisted before the record existed gets one now, resolved the same
+    // way and WRITTEN BACK onto the concept, so no plan stays silent about what
+    // it bought.
+    let production = plan?.production;
+    if (!production) {
+      const choice = await this.resolveVideoModel(
+        workspaceId,
+        item.campaign.defaultVideoModel,
+        shots.some((sh) => (sh.reference?.images?.length ?? 0) > 0),
+      );
+      production = quoteProduction(plan as ShotPlan, choice);
+      await this.recordProduction(workspaceId, item.contentConceptId, plan as ShotPlan, production);
+    }
+
+    const model = production.model;
+    // NULL means the endpoint takes no ratio, or takes an enum this frame is not
+    // in. Either way the clip is framed by the model and `production.frameNote`
+    // says so on the plan — it is NOT a reason to fail an item a human already
+    // approved. That refusal now lives at the door where the model is chosen
+    // (`assertModelOffersAspect`, called by campaign create/update and by the
+    // workspace defaults card), where a person is present to act on it; here it
+    // could only strand approved work, because `review()` refuses a second
+    // verdict and `regenerateItem` refuses a promoted item.
+    const aspectRatio = production.aspectRatio ?? undefined;
+    if (production.frameNote) {
+      this.logger.log(`item ${itemId}: ${production.frameNote}`);
+    }
+    const seedable = mediaModelTakesSeed(model);
+
     const assetIds = [...item.generatedAssetIds];
     // The cursor is what has already been PAID FOR, so a retry never re-buys a
     // clip. It also means a partially produced item is resumable rather than
     // restartable.
     for (let i = assetIds.length; i < shots.length; i++) {
       const shot = shots[i];
+      const refs = shot.reference?.images ?? [];
       try {
         const { assetId } = await this.mediaGen.requestGeneration(workspaceId, {
           type: 'VIDEO',
           prompt: shot.prompt,
-          durationSec: shot.durationSec,
-          // The campaign's choice, or the service default. The shot plan's own
-          // `model` is a PROMPT-FORMAT label ("seedance"), not a catalogued
-          // model id, and handing it over would be refused for unknown pricing.
-          ...(item.campaign.defaultVideoModel ? { model: item.campaign.defaultVideoModel } : {}),
+          // The BILLED length from the quote, not the raw beat: a model with a
+          // 4-second floor renders and charges 4 for a 3-second beat, and the
+          // approved plan already says 4 because the quote put it there.
+          durationSec: production.billedSecPerBeat[i] ?? shot.durationSec,
+          // THE PARAMETER that decides the frame - the same value the prompt
+          // text was built from, so the words and the wire cannot disagree.
+          // Omitted entirely for a model that takes none.
+          ...(aspectRatio ? { aspectRatio } : {}),
+          // From the plan's own production record. The shot plan's `model` field
+          // is a PROMPT-FORMAT label ("seedance"), not a catalogued model id,
+          // and handing it over would be refused for unknown pricing.
+          model,
+          // The identity lock, finally leaving the plan. `PersonaLock` puts the
+          // persona's reference frames on EVERY shot precisely so one face or
+          // one product is the same object in all of them; they were persisted
+          // on the shot and then never sent, which is why five clips from one
+          // concept looked like five unrelated videos.
+          ...(refs.length ? { referenceImageUrls: refs } : {}),
+          // Only where the endpoint takes one as INPUT. Seedance 2.5's
+          // text-to-video RETURNS a seed and accepts none; its reference-to-video
+          // sibling accepts one, and there a locked seed is a real second lever
+          // on identity rather than an unsupported parameter.
+          ...(seedable && shot.reference?.seed != null ? { seed: shot.reference.seed } : {}),
           // Both linkage fields. Without socialCampaignId the asset is on
           // `sweepOrphanAssets`' 30-day delete list; without campaignItemId it
           // is off the armed-budget pre-debit path.
@@ -475,8 +885,7 @@ export class ConceptPromotionService implements OnModuleInit {
     }
 
     // Every clip is submitted. Hand the item to the lifecycle it was created
-    // for: NEEDS_APPROVAL is the PUBLISH gate, a different decision from the
-    // one the human already made about the idea.
+    // for.
     const postId =
       item.socialPostId ??
       (
@@ -495,9 +904,30 @@ export class ConceptPromotionService implements OnModuleInit {
         })
       ).id;
 
-    await this.prisma.socialCampaignItem.update({
-      where: { id: itemId },
-      data: { status: 'NEEDS_APPROVAL', socialPostId: postId, generatedAssetIds: assetIds, error: null },
+    // The campaign's OWN autonomy setting decides what happens next, through the
+    // same service the generic generator uses.
+    //
+    // This used to write `NEEDS_APPROVAL` unconditionally and schedule nothing,
+    // ignoring `automationMode` entirely - so a workspace that chose FULL_AUTO
+    // got a SECOND human gate on every concept, and its items sat in the
+    // approval queue forever with only `approveItem` able to arm the publish.
+    // That is the precise opposite of what this file says about itself: the
+    // human decision stays exactly where the owner put it, ONCE, on the concept.
+    //
+    // Reusing `CampaignItemArmingService` rather than repeating the branch is
+    // deliberate: this is an autonomy rule about money and publishing, and two
+    // copies is where the strict one and the loose one drift apart. Nothing is
+    // loosened by sharing it - arming schedules the same `confirmItem` gate,
+    // with the same dedup key, at the same slot, and every guard that gate
+    // enforces (campaign ACTIVE, media READY, dailyPublishCap, brand safety)
+    // applies to an item that arrived this way exactly as it does to one a human
+    // approved.
+    await this.arming.arm({
+      workspaceId,
+      itemId,
+      automationMode: item.campaign.automationMode,
+      scheduledFor: item.scheduledFor,
+      data: { socialPostId: postId, generatedAssetIds: assetIds, error: null },
     });
     await this.bumpStats(item.socialCampaignId, { generated: 1 });
   }

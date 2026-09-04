@@ -390,19 +390,19 @@ const VEO_31_DURATION: MediaDurationContract = {
  * asserting it.
  */
 const WITHHELD_NEEDS_A_REAL_PROBE =
-  'This model is priced by measuring a file the customer supplies, and there is '
-  + 'no sound way to measure it yet, so it is not sold. A quantity stated by the '
-  + 'CALLER is not a measurement — it is a number the payer chooses — and these '
-  + 'endpoints report nothing back that a finalize true-up could correct, so '
-  + 'whatever is used at reserve time is what is billed, permanently. The '
-  + 'server-side container parser written to read it was withdrawn for being '
-  + 'unsound in BOTH directions: it invented a duration for roughly one ordinary '
-  + 'non-faststart phone video in three (52x to 419x OVER) and a decoy `mvhd` box '
-  + 'walked it into a 600x UNDER-charge. Guessing dear is not safer than guessing '
-  + 'cheap; it is the same defect. What unblocks it is a real probe in the '
-  + 'production image (ffprobe, server-side) so the billable quantity is MEASURED '
-  + 'rather than asserted — its own change, with its own deploy risk. Until then '
-  + 'the entry stays exactly as verified against fal\'s published contract and '
+  'The probe these entries were waiting for now EXISTS: MediaProbeService reads '
+  + 'the real container with ffprobe, server-side, in the production image and '
+  + 'before the reserve — so the billable quantity is measured rather than '
+  + 'asserted. That is what released the two whose only blocker was the '
+  + 'measurement (Topaz image, LatentSync). This one is still withheld because '
+  + 'measuring the source was never its ONLY unknown, and what remains is not a '
+  + 'measurement problem — it is stated below. The history is kept because it is '
+  + 'the reason the bar is where it is: the hand-written container parser tried '
+  + 'first was withdrawn for being unsound in BOTH directions — it invented a '
+  + 'duration for roughly one ordinary non-faststart phone video in three (52x to '
+  + '419x OVER) and a decoy `mvhd` box walked it into a 600x UNDER-charge. '
+  + 'Guessing dear is not safer than guessing cheap; it is the same defect. The '
+  + 'entry stays exactly as verified against fal\'s published contract and '
   + 'pricing, and un-withholding it is deleting one line. ';
 
 /**
@@ -592,11 +592,6 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'fal-ai/topaz/upscale/image',
     technique: 'IMAGE_CLEANUP', type: 'IMAGE', label: 'Topaz — print-ready upscale',
     priceUsd: 0.32, credits: 32,
-    withheld: WITHHELD_NEEDS_A_REAL_PROBE
-      + 'Here the quantity is the source image\'s pixel count, and the spread is '
-      + 'the widest in the catalogue: the same published ladder charges $0.08 for '
-      + 'a small source and $1.36 for a large one, a 17x range decided entirely '
-      + 'by a number nobody has measured.',
     note: 'Billed by OUTPUT megapixels ($0.08 ≤24MP, $0.16 ≤48MP, $0.32 ≤96MP, '
       + '$1.36 ≤512MP), and upscale_factor is pinned at 2 so the output is 4x the '
       + 'SOURCE\'s megapixels. The old ≤96MP flat meter assumed the source came '
@@ -973,9 +968,14 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
       + 'chargeOverage is an unconditional bump that cannot refuse — 112x the '
       + 'authorisation, and a workspace with 30 credits left can commit $200 of '
       + 'vendor spend in one call. An honest ledger after the fact is not an '
-      + 'honest authorisation before it. The same server-side probe that unblocks '
-      + 'the upscalers unblocks this — ffprobe in the production image — by '
-      + 'measuring the audio before the reserve. '
+      + 'honest authorisation before it. The probe now exists and can measure '
+      + 'that audio, but this model is NOT source-metered — it is per-second with '
+      + 'a returned duration — so nothing yet carries the measurement into the '
+      + 'reserve. What remains is a rule the other four never needed: size the '
+      + 'authorisation from the measured audio for a model that has no duration '
+      + 'input, and bring it under MEDIA_GEN_MAX_VIDEO_SEC, which today cannot '
+      + 'reach it. That changes what a reserve MEANS, so it is its own change '
+      + 'rather than a line deleted here. '
       + 'The AVATAR technique still ships: veed/avatars/text-to-video is metered '
       + 'on the SCRIPT, which is in the request.',
     note: 'One still + an audio track → a talking head, in any language the audio '
@@ -1003,12 +1003,6 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     id: 'fal-ai/latentsync',
     technique: 'LIPSYNC', type: 'VIDEO', label: 'LatentSync — drive a face from an audio track',
     priceUsd: 0.20, credits: 20,
-    withheld: WITHHELD_NEEDS_A_REAL_PROBE
-      + 'Here the quantity is whichever of the video and the audio is longer, and '
-      + 'only the overage past the flat 40-second window depends on it — which is '
-      + 'precisely why an unsound parser is worse than none: nearly every request '
-      + 'is the flat $0.20, so inventing a length turns the common, '
-      + 'correctly-priced case into a wild over-charge for no revenue at all.',
     note: 'FLAT $0.20 for anything up to 40 seconds, then $0.005/s — so it is '
       + 'priced per run for the length that covers nearly every ad, and metered '
       + 'from the source only past that line. Takes no prompt at all. Returns no '
@@ -1271,6 +1265,107 @@ export function resolveMediaModelId(id: string): string {
 export function isMediaModelReplaced(id: string): boolean {
   return Boolean(MEDIA_MODELS[id]?.replacedBy);
 }
+
+/**
+ * Does this model publish `ratio` in its own aspect contract?
+ *
+ * Asked BEFORE a generation is submitted, by callers that hold an intent (a
+ * shot plan says 9:16) and a model id (a campaign override, or a workspace
+ * default) and must not send one to the other on hope. A ratio absent from
+ * `contract.aspect.values` is a ratio the endpoint does not offer, and a model
+ * with no `aspect` block at all takes no ratio parameter — both are `false`,
+ * because both mean "asking for this frame here does not work".
+ *
+ * The distinction that matters: a prompt can SAY "vertical 9:16" to any model
+ * alive, and every model will happily render whatever its own default is. Only
+ * the wire parameter decides, and only this says whether the wire parameter
+ * exists.
+ */
+export function mediaModelOffersAspect(id: string, ratio: string): boolean {
+  // Asked of the model that will actually RUN: a stored id fal has retired
+  // generates on its successor, whose enum is the one the wire enforces.
+  return Boolean(MEDIA_MODELS[resolveMediaModelId(id)]?.contract.aspect?.values[ratio]);
+}
+
+/** Every ratio this model offers, for a refusal that names the alternatives
+ *  instead of only the problem. Empty when the model takes no ratio at all. */
+export function mediaModelAspectOptions(id: string): string[] {
+  return Object.keys(MEDIA_MODELS[resolveMediaModelId(id)]?.contract.aspect?.values ?? {});
+}
+
+/**
+ * Refuse a model that cannot shoot in `ratio` — AT THE DOOR WHERE IT IS CHOSEN.
+ *
+ * The two doors are `SocialCampaignsService` (the campaign's `defaultVideoModel`
+ * override) and `MediaModelDefaultsService` (the workspace default), the same
+ * two `assertCataloguedModel` guards, for the same reason: the person choosing
+ * the model is on a screen, is choosing between a handful of options, and can
+ * act on the answer. Everywhere downstream of that choice, the answer arrives
+ * too late to be useful.
+ *
+ * IT WAS DOWNSTREAM, and downstream was worse than nothing. The check lived in
+ * `ConceptPromotionService.produce`, which runs AFTER a human has approved the
+ * concept and after the item exists — and `produce` has no way to hand the work
+ * back: `review()` refuses a second verdict on a decided concept and
+ * `regenerateItem` refuses a promoted item, so failing there stranded approved
+ * work permanently, with the reason on an item row and no button that could act
+ * on it.
+ *
+ * A MODEL WITH NO ASPECT CONTRACT PASSES, and that is the other half of the same
+ * bug. `veed/avatars/text-to-video` is a served VIDEO model that takes no
+ * `aspect_ratio` at all — its frame comes from the avatar id, and its vertical
+ * avatars are exactly what this line wants. Treating "offers no ratio" as
+ * "cannot do 9:16" refused a legitimate choice and stranded every concept
+ * produced under it. The producer sends no ratio to such a model and records
+ * that on the plan (`ShotProduction.frameNote`), which is the honest report:
+ * nobody asked for a frame, so the endpoint's own is what arrives.
+ */
+export function assertModelOffersAspect(id: string, ratio: string): void {
+  const offered = mediaModelAspectOptions(id);
+  // No aspect contract at all → nothing to disagree with. See above.
+  if (!offered.length || offered.includes(ratio)) return;
+  throw new BadRequestException(
+    `"${MEDIA_MODELS[id]?.label ?? id}" (${id}) publishes ${offered.join(', ')} and cannot shoot ${ratio}, `
+      + `which is the frame this content line plans every shot in. Choose a model that offers ${ratio}, `
+      + `or the platform default will be used instead.`,
+  );
+}
+
+/**
+ * Does this model accept a LIST of reference images — the identity-lock
+ * primitive?
+ *
+ * Deliberately narrower than "has an image source". Four spellings of "the
+ * source image" exist in this catalogue and only one of them is this one:
+ * `image-to-video` takes a SINGLE `image_url` (one still, animated), while
+ * `reference-to-video` takes an ARRAY under `image_urls` and addresses its
+ * members positionally from the prompt ([Image1], [Image2]). A persona's nine
+ * reference frames handed to the singular slot is eight frames on the floor —
+ * so the question a caller with a `PersonaLock` must ask is the array one.
+ */
+export function mediaModelAcceptsReferenceImages(id: string): boolean {
+  return Boolean(
+    MEDIA_MODELS[resolveMediaModelId(id)]?.contract.sources?.some((s) => s.slot === 'images' && s.arity === 'array'),
+  );
+}
+
+/** Does the endpoint take a seed as INPUT? Seedance 2.5's text-to-video RETURNS
+ *  one and accepts none, so a locked seed is not a lever there — sending it is
+ *  an unsupported param, not a stronger identity lock. */
+export function mediaModelTakesSeed(id: string): boolean {
+  return Boolean(MEDIA_MODELS[id]?.contract.seedInput);
+}
+
+/**
+ * The VIDEO model to use when a shot carries reference images.
+ *
+ * `VIDEO_REFERENCE` is the technique whose entire purpose is holding one
+ * face/product identical across shots, and this is the only served endpoint
+ * that implements it. Named as a constant rather than searched for by technique
+ * so the choice is greppable and a second reference model arriving later is a
+ * deliberate decision rather than an ordering accident.
+ */
+export const DEFAULT_VIDEO_REFERENCE_MODEL = 'bytedance/seedance-2.5/reference-to-video';
 
 /**
  * Is `id` in the catalogue AS a model of this kind?

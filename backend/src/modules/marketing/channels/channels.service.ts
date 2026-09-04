@@ -42,6 +42,14 @@ export interface UpdateChannelInput {
   agentProfileId?: string | null;
   externalId?: string | null;
   secrets?: Record<string, string>;
+  /**
+   * Secret keys to DROP in this write. `secrets` merges, so it can set a key
+   * and never unset one — which is right for a rotate-one-field edit and wrong
+   * when a channel switches how it authenticates: connecting a mailbox by
+   * consent must leave no SMTP password sealed behind the live token.
+   * Opt-in, so no existing caller starts deleting keys by omission.
+   */
+  clearSecretKeys?: string[];
   configPublic?: Record<string, unknown>;
 }
 
@@ -287,7 +295,7 @@ export class ChannelsService {
       await this.assertExternalIdFree(existing.type, existing.externalId, existing.id);
     }
     if (dto.configPublic !== undefined) data.configPublic = dto.configPublic;
-    if (dto.secrets && Object.keys(dto.secrets).length) {
+    if ((dto.secrets && Object.keys(dto.secrets).length) || dto.clearSecretKeys?.length) {
       // Merge onto existing secrets so a partial update (e.g. rotate one key)
       // doesn't wipe the rest.
       let current: Record<string, string> = {};
@@ -298,7 +306,10 @@ export class ChannelsService {
           /* unreadable box — replace wholesale */
         }
       }
-      const merged = { ...current, ...dto.secrets };
+      const merged = { ...current, ...(dto.secrets ?? {}) };
+      // After the merge, so a key named in both is dropped rather than set —
+      // a caller asking to clear something means it, whatever else it sent.
+      for (const k of dto.clearSecretKeys ?? []) delete merged[k];
       if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
       else if (existing.type === 'TIKTOK') assertTiktokDmSecrets(merged);
       else if (isMetaChannelType(existing.type)) assertMetaSecrets(existing.type, merged);

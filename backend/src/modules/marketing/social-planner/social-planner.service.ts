@@ -15,7 +15,13 @@ import {
   isSecretBoxConfigured,
   maskSecret,
 } from '../../../common/crypto/secret-box.helper';
-import { publishToNetwork, isNetworkConfigured, PostFormat } from './network-adapters';
+import {
+  publishToNetwork,
+  isNetworkConfigured,
+  selectMediaForTarget,
+  MediaItem,
+  PostFormat,
+} from './network-adapters';
 import { queryCreatorInfo } from './tiktok-creator-info.util';
 import { R2StorageService, UploadedMedia, UploadInput } from '../../../common/storage/r2-storage.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
@@ -793,12 +799,87 @@ export class SocialPlannerService implements OnModuleInit {
       if (m?.url) mimeByUrl[m.url] = m.mime;
     }
     const mediaUrls = post.mediaUrls as string[];
+    // The post's media, once, in the post's own order. Each target takes its
+    // own share of this below — the list itself is never reordered.
+    const postMedia: MediaItem[] = (mediaUrls ?? []).map((url) => ({ url, mime: mimeByUrl[url] }));
+
+    // WAS THIS POST'S MEDIA GENERATED FOR IT?
+    //
+    // `campaignItemId` is the signal, and it is a fact the row already carries.
+    // It is set at creation by exactly the two producers that BUY media for a
+    // post — `SocialCampaignsService.generateItem` and
+    // `ConceptPromotionService` — and the only writer of `mediaUrls` on such a
+    // post is `attachAssetsToPost`, which copies the item's `generatedAssetIds`
+    // in beat order. A post with this id set and media on it is a post whose
+    // media was rendered, paid for and approved AS the post.
+    //
+    // What it misses, both ways round and both by design:
+    //  - an operator who REPLACES the media on a campaign post by hand still
+    //    counts as generated. That errs toward refusing to publish a caption
+    //    alone, which is the safe direction.
+    //  - a hand-composed post to which somebody attached a file they had made
+    //    in the AI studio does NOT count: nothing links that upload back to a
+    //    campaign item, and `options.media` descriptors carry only {url,key,mime}
+    //    — no asset id — so there is no fact here to read. The post still
+    //    publishes text-only, and the row still says what was left behind.
+    const mediaWasGeneratedForPost = post.campaignItemId != null;
 
     const pendingTargets = post.targets.filter((t) => t.status === 'PENDING');
     let publishedCount = 0;
     let failedCount = 0;
 
     for (const target of pendingTargets) {
+      const format: PostFormat = formats[target.socialAccountId] ?? 'FEED';
+
+      // WHAT THIS DESTINATION TAKES, decided before anything is spent or sent.
+      //
+      // Not all-or-nothing: the same approved post is a ten-clip carousel on
+      // Instagram and one hero clip on TikTok, and both are real publishes. The
+      // selector hands each target the first N its network carries, in the
+      // post's order, and names what it left behind.
+      const selection = selectMediaForTarget(postMedia, target.account.network, format);
+
+      // A POST WHOSE MEDIA WAS GENERATED FOR IT NEVER GOES OUT AS A BARE
+      // CAPTION — per TARGET.
+      //
+      // The post-level version of this invariant lives in
+      // `SocialCampaignsService.confirmItem`, and it was never enough: it asks
+      // whether the POST has media and then fans out to every target without
+      // asking what any of them can carry. X carries no video at all, so a
+      // five-clip concept reached `publishTwitter`, uploaded nothing, tweeted
+      // the caption on its own and recorded the target PUBLISHED. That is a
+      // post nobody approved, published under the name of one that was.
+      //
+      // CONDITIONAL on `mediaWasGeneratedForPost`, because the same shape means
+      // two different things. A campaign item's clips ARE the post: the caption
+      // alone is a post the reviewer never saw, published while the renders they
+      // paid for sit unused, so this target FAILS and nothing is sent. A
+      // hand-composed post is words with a picture attached: if the picture has
+      // nowhere to go on this network, the words are still worth sending, and
+      // that is the older rule the X adapter has always followed (see
+      // `publishTwitter`). Such a post falls through and publishes text-only,
+      // with `selection.dropped` written onto the row so the loss is on the
+      // record either way.
+      //
+      // Checked HERE, ahead of the credit reserve and the vendor call, so the
+      // refusal costs nothing and the row says why. FAILED rather than skipped:
+      // a target that did not publish what it was given did not succeed, and
+      // `unschedulePost` can put it back after somebody fixes the destination.
+      if (selection.carriesNothing && mediaWasGeneratedForPost) {
+        const why =
+          `not published: this post carries ${postMedia.length} media file(s) and ` +
+          `${selection.dropped?.reason ?? `${target.account.network} can carry none of them`}. ` +
+          `Publishing here would have put the caption out with no media, which is not the post that was approved. ` +
+          `Point this campaign at a destination that can carry video, or remove this account from its targets.`;
+        await this.prisma.socialPostTarget.update({
+          where: { id: target.id },
+          data: { status: 'FAILED', error: why.slice(0, 500) },
+        });
+        failedCount++;
+        this.logger.warn(`Post ${postId} target ${target.id} (${target.network}) ${why}`);
+        continue;
+      }
+
       // X (Twitter) is the only network that charges per post — meter it into AI
       // credits BEFORE the vendor call (a link tweet costs more). Every other
       // network publishes for free, so `xAction` is null and nothing is reserved.
@@ -829,12 +910,22 @@ export class SocialPlannerService implements OnModuleInit {
 
       let result;
       try {
-        result = await publishToNetwork(target.account, post.content, mediaUrls, {
-          format: formats[target.socialAccountId] ?? 'FEED',
-          mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
-          linkedin: options.linkedin,
-          tiktok: options.tiktok as any,
-        });
+        result = await publishToNetwork(
+          target.account,
+          post.content,
+          selection.media.map((m) => m.url),
+          {
+            format,
+            mediaMime: selection.media.map((m) => m.mime),
+            linkedin: options.linkedin,
+            tiktok: options.tiktok as any,
+            // The same fact the gate above used. X is the one adapter that can
+            // publish without the media it was handed (an upload it refuses is
+            // swallowed to a text-only tweet), so it is the one adapter that has
+            // to know whose post this is.
+            mediaGeneratedForPost: mediaWasGeneratedForPost,
+          },
+        );
       } catch (err) {
         // An UNEXPECTED throw (not a returned {ok:false}) must also refund the
         // reserved X credits before propagating — otherwise the charge leaks. This
@@ -845,9 +936,40 @@ export class SocialPlannerService implements OnModuleInit {
       }
 
       if (result.ok) {
+        // A publish that went out but left media behind is a SUCCESS with a
+        // caveat, and the caveat is the point: `videos[0]` / `mediaUrls[0]` used
+        // to discard the rest with no error, no warning and no record, so a
+        // five-clip concept that was CHARGED for five published one and nothing
+        // anywhere said so. The row now carries the sentence. It stays PUBLISHED
+        // — the post is live — and the note rides in `error`, which is the only
+        // free-text column on the target and is read as "what happened here".
+        //
+        // TWO sources, both counted against the denominator they are true of:
+        // what the SELECTOR left behind out of the whole post, and what the
+        // ADAPTER left behind out of what it was handed. Folding them into one
+        // number would report a fraction that is true of neither.
+        const notes: string[] = [];
+        if (selection.dropped) {
+          notes.push(
+            `${selection.dropped.count} of ${postMedia.length} media file(s) were not sent: ${selection.dropped.reason}`,
+          );
+        }
+        if (result.droppedMedia) {
+          notes.push(
+            `${result.droppedMedia.count} of ${selection.media.length} media file(s) were not sent: ${result.droppedMedia.reason}`,
+          );
+        }
+        const note = notes.length ? `published, but ${notes.join('; ')}` : null;
+        if (note) {
+          this.logger.warn(`Post ${postId} target ${target.id} (${target.network}) ${note}`);
+        }
         await this.prisma.socialPostTarget.update({
           where: { id: target.id },
-          data: { status: 'PUBLISHED', externalPostId: result.externalPostId ?? null, error: null },
+          data: {
+            status: 'PUBLISHED',
+            externalPostId: result.externalPostId ?? null,
+            error: note?.slice(0, 500) ?? null,
+          },
         });
         publishedCount++;
       } else {

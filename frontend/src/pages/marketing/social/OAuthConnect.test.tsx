@@ -1,9 +1,17 @@
+/**
+ * The post-consent account picker.
+ *
+ * `OAuthConnectButtons` used to be tested here too. It was a second, parallel
+ * connect surface that NOTHING imported — the Account Center owns the connect
+ * affordance now — and it was the only caller that started an OAuth flow
+ * without an `origin`, i.e. the only way to reach the callback's stranded
+ * landing path. Deleting it removes that caller; its live test suite was the
+ * only thing keeping a dead component looking maintained.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { OAuthConnectButtons } from './OAuthConnectButtons';
 import { AccountSelectDialog } from './AccountSelectDialog';
-import type { NetworkStatus } from './types';
 
 const getMock = vi.fn();
 const postMock = vi.fn().mockResolvedValue({ data: {} });
@@ -19,48 +27,6 @@ function wrap(node: React.ReactNode) {
   return render(<QueryClientProvider client={qc}>{node}</QueryClientProvider>);
 }
 
-const status: NetworkStatus = {
-  FACEBOOK: true,
-  INSTAGRAM: true,
-  INSTAGRAM_LOGIN: false,
-  LINKEDIN: false,
-  TIKTOK: false,
-  TWITTER: false,
-  PINTEREST: false,
-  GMB: false,
-  secretBoxConfigured: true,
-};
-
-describe('OAuthConnectButtons', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    postMock.mockResolvedValue({ data: { authorizeUrl: 'https://provider/auth' } });
-    // jsdom: stub location.assign (navigateExternal uses it) without navigating.
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: { href: '', assign: vi.fn() },
-    });
-  });
-
-  it('enables configured networks and disables unconfigured ones', () => {
-    wrap(<OAuthConnectButtons status={status} />);
-    expect(screen.getByText(/Connect Facebook/i).closest('button')).not.toBeDisabled();
-    // Anchor the Instagram match so it doesn't also catch "Connect Instagram (Login)".
-    expect(screen.getByText(/Connect Instagram$/i).closest('button')).not.toBeDisabled();
-    expect(screen.getByText(/Connect Instagram \(Login\)/i).closest('button')).toBeDisabled();
-    expect(screen.getByText(/Connect LinkedIn/i).closest('button')).toBeDisabled();
-    expect(screen.getByText(/Connect TikTok/i).closest('button')).toBeDisabled();
-  });
-
-  it('starts OAuth and redirects to the authorize URL', async () => {
-    wrap(<OAuthConnectButtons status={status} />);
-    fireEvent.click(screen.getByText(/Connect Facebook/i));
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith('/social/oauth/facebook/start'),
-    );
-    await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith('https://provider/auth'));
-  });
-});
 
 describe('AccountSelectDialog', () => {
   beforeEach(() => {
@@ -99,6 +65,34 @@ describe('AccountSelectDialog', () => {
         { selected: ['P1', 'IG1'] },
       ),
     );
+  });
+
+  /**
+   * Error is not empty. A pending hand-off that cannot be LOADED — it expired
+   * (they are valid 15 minutes), or it belongs to another workspace — used to
+   * render the same panel as a successful load of zero assets: "No connectable
+   * accounts found — make sure you granted access to at least one page". That
+   * sends someone who consented correctly off to re-check permissions that were
+   * never the problem, and the one action that would work (start again) is the
+   * one it does not mention.
+   */
+  it('says the attempt could not be loaded — not that the user granted nothing', async () => {
+    getMock.mockRejectedValue(new Error('Request failed with status code 400'));
+    const onOpenChange = vi.fn();
+    wrap(<AccountSelectDialog pendingId="pend-expired" onOpenChange={onOpenChange} />);
+
+    expect(await screen.findByText(/no longer available/i)).toBeTruthy();
+    expect(screen.getByText(/start the connection again/i)).toBeTruthy();
+    expect(screen.queryByText(/granted access/i)).toBeNull();
+  });
+
+  it('still says "nothing to connect" when the hand-off loads with no assets', async () => {
+    getMock.mockResolvedValue({ data: { network: 'FACEBOOK', assets: [] } });
+    const onOpenChange = vi.fn();
+    wrap(<AccountSelectDialog pendingId="pend-empty" onOpenChange={onOpenChange} />);
+
+    expect(await screen.findByText(/granted access/i)).toBeTruthy();
+    expect(screen.queryByText(/no longer available/i)).toBeNull();
   });
 
   it('includes provisionMessaging when the per-account messaging toggle is on', async () => {

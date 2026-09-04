@@ -2771,6 +2771,23 @@ model Invoice {
   paidAt      DateTime?
   paidVia     String?
 
+  /// The PSP checkout session this invoice's buyer was sent to, recorded when
+  /// the session is created.
+  ///
+  /// Stripe confirms a payment by sending the BUYER back to a return URL. A
+  /// buyer who pays and then closes the tab never makes that request, so the
+  /// money is taken and the invoice stays SENT forever — the one failure on
+  /// this path nobody can see, because everything that would report it lives in
+  /// the browser that left. PayTR and iyzico post server-to-server and have no
+  /// such hole.
+  ///
+  /// Storing the id is what makes the gap recoverable: it turns "did anyone
+  /// pay?" into a question we can ask Stripe ourselves, about one exact
+  /// session, with the workspace's own key. It is also the queryable predicate
+  /// the reconcile sweep filters on, so the sweep can never go blind past a
+  /// take-N window.
+  pspSessionId String?
+
   // Set when this invoice was minted by the CustomerSubscription sweep (null for
   // hand-made invoices). The partial-unique index on (subscriptionId,
   // subscriptionPeriodKey) — added in raw SQL, Prisma can't model partial-unique
@@ -3276,6 +3293,48 @@ model DataRequest {
 
   @@index([workspaceId, status])
   @@map("data_requests")
+}
+
+/// A data-deletion request that arrived from a SOCIAL PLATFORM callback — today
+/// Meta's signed_request Data Deletion Callback, which every Meta App Review
+/// requires an app to answer.
+///
+/// Deliberately NOT workspace-owned: the callback carries only a platform-scoped
+/// user id and no tenant context whatsoever, so this row records the REQUEST
+/// (the thing we can always be honest about) while the actual erasure runs per
+/// matched lead through the audited, workspace-scoped ComplianceService path —
+/// `dataRequestIds` points at those DataRequest rows, which remain the erasure
+/// audit trail.
+///
+/// `subjectHash` is a SHA-256 of the platform user id, never the raw id: the
+/// callback is the last time we ever need to recognise that id, and keeping it
+/// in plaintext would re-create an identifier for someone who just asked to be
+/// forgotten.
+///
+/// `status` is the honest state machine the public status page renders:
+///   RECEIVED  — recorded; the erasure has not finished
+///   COMPLETED — every matched lead was erased
+///   UNMATCHED — verified and recorded, but NO data of this person was found
+///   FAILED    — recorded, and the erasure errored; needs a human
+/// UNMATCHED exists so an unresolvable request is never answered as a deletion
+/// that did not happen.
+model PlatformDeletionRequest {
+  id               String    @id @default(uuid())
+  platform         String // META
+  /// SHA-256 (hex) of the platform-scoped user id. NEVER the raw id.
+  subjectHash      String
+  /// Alphanumeric code returned to the platform and shown on the status page.
+  confirmationCode String    @unique
+  status           String    @default("RECEIVED") // RECEIVED | COMPLETED | UNMATCHED | FAILED
+  /// How many leads the id resolved to (0 for UNMATCHED).
+  matchedLeads     Int       @default(0)
+  /// Ids of the workspace-scoped DataRequest rows that carry the erasure audit.
+  dataRequestIds   String[]
+  receivedAt       DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@index([platform, subjectHash])
+  @@map("platform_deletion_requests")
 }
 
 /// Epic E — an A/B (split) experiment over a funnel/site page. `variants` is a
@@ -3966,6 +4025,19 @@ model SocialCampaignItem {
   contentConceptId  String?                  @unique
   socialPostId      String?
   generatedAssetIds String[]
+  /// When the publish gate was ARMED for this item — the moment a confirm job
+  /// was scheduled for it, by autonomy (`CampaignItemArmingService.arm`) or by a
+  /// human clicking Approve (`armApproved`). Null while nothing is armed.
+  ///
+  /// It exists because the media-ready wait is a WINDOW and a window needs a
+  /// start. That window used to be measured from `scheduledFor`, which is a
+  /// CALENDAR SLOT, not the moment anyone started waiting: a FULL_AUTO item
+  /// whose clips were still queueing when its slot passed got armed an hour
+  /// late, the gate fired immediately, `now - scheduledFor` was already past
+  /// `SOCIAL_CAMPAIGN_MEDIA_WAIT_MS`, and the post published with an EMPTY
+  /// mediaUrls — a caption where a video should be. The gate now waits from
+  /// `max(scheduledFor, armedAt)`, which is when it genuinely began waiting.
+  armedAt           DateTime?
   error             String?
   createdAt         DateTime                 @default(now())
   updatedAt         DateTime                 @updatedAt
@@ -4033,6 +4105,17 @@ model ContentConcept {
   reviewedAt   DateTime?
   reviewedById String?
   reviewNote   String?
+
+  /// WHY this angle was chosen for this batch — measured performance, the
+  /// exploration slot, or a weight the owner set by hand.
+  ///
+  /// Distinct from `rationale`, which argues why the concept is worth shooting
+  /// and is written for the human deciding. This field answers a different
+  /// question — "why are these five the five?" — and it exists because a line
+  /// that biases itself toward what worked becomes unauditable the moment it
+  /// stops saying so. Null on concepts planned before the loop existed, and on
+  /// cold-start batches where nothing was measured to bias with.
+  selectionReason String?
 
   /// Set when the idea arrived already scoped to a campaign. Soft reference,
   /// matching `linkedCampaignId`'s style on SocialCampaign — a concept must

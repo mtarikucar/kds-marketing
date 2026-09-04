@@ -183,23 +183,22 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
 
   return (
     <div className="space-y-6">
-      {!embedded && (
-        <PageHeader
-          title={t('invoices.title', 'Invoices')}
-          description={t(
-            'invoices.subtitle',
-            'Bill your customers and collect via your own Stripe or bank transfer.',
-          )}
-          actions={
-            !showForm && (
-              <Button onClick={() => setShowForm(true)}>
-                <Plus className="h-4 w-4" aria-hidden />
-                {t('invoices.new', 'New invoice')}
-              </Button>
-            )
-          }
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('invoices.title', 'Invoices')}
+        description={t(
+          'invoices.subtitle',
+          'Bill your customers and collect via your own Stripe or bank transfer.',
+        )}
+        actions={
+          !showForm && (
+            <Button onClick={() => setShowForm(true)}>
+              <Plus className="h-4 w-4" aria-hidden />
+              {t('invoices.new', 'New invoice')}
+            </Button>
+          )
+        }
+      />
 
       {/* PSP settings */}
       <Card>

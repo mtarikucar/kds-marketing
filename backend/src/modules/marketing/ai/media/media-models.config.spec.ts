@@ -16,6 +16,9 @@ import {
   isMediaModelReplaced,
   assertCataloguedModel,
   estimateVendorUsd,
+  assertModelOffersAspect,
+  mediaModelAspectOptions,
+  mediaModelOffersAspect,
 } from './media-models.config';
 import { buildFalInput } from '../providers/fal.provider';
 
@@ -58,17 +61,35 @@ describe('media-models config', () => {
    * place it is tested. Everything customer-facing is built from it.
    */
   describe('withheld models', () => {
+    // A real server-side probe (ffprobe) now measures the customer's file
+    // before the reserve, which released the two whose ONLY blocker was the
+    // measurement — Topaz image and LatentSync. What is left is the three whose
+    // second unknown is not a measurement problem.
     const WITHHELD = [
+      // Measuring the clip settles its seconds. It does not settle the 60fps
+      // multiplier: fal doubles the rate for 60fps OUTPUT, target_fps is
+      // deliberately not sent, and an unset target_fps means the output keeps
+      // the SOURCE's frame rate — so a 1080p60 phone clip really costs $0.16/s
+      // against the $0.08/s metered here.
       'fal-ai/topaz/upscale/video',
-      'fal-ai/topaz/upscale/image',
+      // Measuring the source settles its megapixels. It does not settle whether
+      // the OUTPUT matches the input at all, which is what those megapixels are
+      // standing in for.
       'fal-ai/qwen-image-edit/inpaint',
-      'fal-ai/latentsync',
-      // Kept when the four were withdrawn, on the strength of its returned
-      // `duration` — which settles the LEDGER but not the AUTHORISATION. The
-      // reserve is the only gate that can refuse, and it is sized off a
-      // 5-second default because the length is never on the wire.
+      // Not source-metered at all — per-second with a returned duration — so
+      // nothing carries the measurement into the reserve. Sizing an
+      // authorisation from a measured source, for a model with no duration
+      // input, is a new rule rather than a line deleted.
       'fal-ai/kling-video/ai-avatar/v2/standard',
     ];
+
+    /** The phrase each remaining reason must still contain, so a reason cannot
+     *  go stale without a test noticing. */
+    const REMAINING_BLOCKER: Record<string, string> = {
+      'fal-ai/topaz/upscale/video': '60fps',
+      'fal-ai/qwen-image-edit/inpaint': 'whether the output',
+      'fal-ai/kling-video/ai-avatar/v2/standard': 'MEDIA_GEN_MAX_VIDEO_SEC',
+    };
 
     it('serves every catalogued model except the withheld and the fal-retired ones', () => {
       const retired = Object.values(MEDIA_MODELS).filter((m) => m.replacedBy).map((m) => m.id);
@@ -79,12 +100,17 @@ describe('media-models config', () => {
       );
     });
 
-    it('empties the techniques whose only model was withheld', () => {
-      // Not a bug to hide: Topaz was the only VIDEO_UPSCALE and LatentSync the
-      // only LIPSYNC, so those two jobs are genuinely not on offer right now and
-      // the studio drops a technique nothing sits under.
+    it('empties the technique whose only model is still withheld', () => {
+      // Topaz is the only VIDEO_UPSCALE, so that job is genuinely not on offer
+      // and the studio drops a technique nothing sits under.
       expect(listMediaModels('VIDEO_UPSCALE')).toEqual([]);
-      expect(listMediaModels('LIPSYNC')).toEqual([]);
+    });
+
+    it('puts LIPSYNC back on the menu now that its length can be measured', () => {
+      // LatentSync was the only LIPSYNC model, and the technique disappeared
+      // with it. Measuring the longer of the video and the audio is the whole
+      // of what it was waiting for.
+      expect(listMediaModels('LIPSYNC').map((m) => m.id)).toContain('fal-ai/latentsync');
     });
 
     it('keeps them catalogued, priced and flagged rather than deleting them', () => {
@@ -97,7 +123,12 @@ describe('media-models config', () => {
         expect(allMediaModels().map((x) => x.id)).toContain(id);
         // The reason is a paragraph a human can act on, not a boolean.
         expect(m.withheld!.length).toBeGreaterThan(200);
-        expect(m.withheld).toContain('ffprobe');
+        // And it names THIS model's own remaining blocker. They used to share
+        // one ("no probe exists"); the probe exists now, so a reason that has
+        // not been updated to say what is actually left is a stale reason, and
+        // a stale reason is how a model stays withheld after its blocker is
+        // gone — or gets released while it still has one.
+        expect(m.withheld).toContain(REMAINING_BLOCKER[id]);
       }
     });
 
@@ -284,6 +315,15 @@ describe('retired ids (replacedBy)', () => {
     expect(isMediaModelReplaced(DEFAULT_VIDEO_MODEL)).toBe(false);
   });
 
+  it('answers the aspect question for the model that will actually run', () => {
+    // Lite published 4:5; its successor does not. A shot plan asking the stored
+    // (retired) id must hear the successor's answer, or the plan passes here and
+    // 400s at the wire.
+    expect(mediaModelOffersAspect(RETIRED_SEEDANCE_LITE_MODEL, '4:5')).toBe(false);
+    expect(mediaModelOffersAspect(RETIRED_SEEDANCE_LITE_MODEL, '9:16')).toBe(true);
+    expect(mediaModelAspectOptions('fal-ai/veo3/fast')).toEqual(['16:9', '9:16']);
+  });
+
   it('never chains or cycles: every successor is a live, same-kind model', () => {
     for (const m of allMediaModels().filter((x) => x.replacedBy)) {
       const successor = MEDIA_MODELS[m.replacedBy!];
@@ -335,5 +375,44 @@ describe('runware bindings', () => {
     expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '480p' }, 'runware')).toBeCloseTo(0.03145, 6);
     expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '720p' }, 'runware')).toBeCloseTo(0.0668, 6);
     expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '1080p' }, 'runware')).toBeCloseTo(0.15885, 6);
+  });
+});
+
+/**
+ * THE FRAME, REFUSED AT THE DOOR WHERE THE MODEL IS CHOSEN.
+ *
+ * This rule was written inside `ConceptPromotionService.produce`, which is the
+ * one place it could do no good: produce runs after a human has approved the
+ * concept and after the item has been promoted, and neither of those can be
+ * taken back (`review()` refuses a second verdict, `regenerateItem` refuses a
+ * promoted item). A campaign pointed at a model that does not publish this
+ * line's frame therefore failed every concept it was ever given, permanently,
+ * with the reason on an item row nobody could act on.
+ *
+ * The same question asked at campaign create/update and at the workspace
+ * defaults card is one sentence on the screen where the choice is being made.
+ */
+describe('assertModelOffersAspect — the refusal belongs where the model is chosen', () => {
+  it('refuses a model whose published enum does not contain the frame, and names what it does publish', () => {
+    // Veo 3.1 publishes 16:9 and 9:16 and nothing else.
+    expect(mediaModelAspectOptions('fal-ai/veo3.1')).toEqual(['16:9', '9:16']);
+    expect(() => assertModelOffersAspect('fal-ai/veo3.1', '1:1')).toThrow(/1:1/);
+    expect(() => assertModelOffersAspect('fal-ai/veo3.1', '1:1')).toThrow(/16:9, 9:16/);
+  });
+
+  it('accepts a model that publishes the frame', () => {
+    expect(() => assertModelOffersAspect('fal-ai/veo3.1', '9:16')).not.toThrow();
+    expect(() => assertModelOffersAspect(DEFAULT_VIDEO_MODEL, '9:16')).not.toThrow();
+  });
+
+  it('accepts a model that publishes NO aspect contract at all', () => {
+    // `veed/avatars/text-to-video` is a served VIDEO model with no aspect
+    // parameter — its frame comes from the avatar id, and its vertical avatars
+    // are exactly what this line wants. Reading "offers no ratio" as "cannot do
+    // 9:16" refused a legitimate choice AND stranded every concept produced
+    // under it; the producer sends no ratio to such a model and records that on
+    // the plan instead.
+    expect(mediaModelAspectOptions('veed/avatars/text-to-video')).toEqual([]);
+    expect(() => assertModelOffersAspect('veed/avatars/text-to-video', '9:16')).not.toThrow();
   });
 });

@@ -14,7 +14,7 @@ jest.mock('@anthropic-ai/sdk', () => {
 });
 
 import Anthropic from '@anthropic-ai/sdk';
-import { AnthropicService } from './anthropic.service';
+import { AnthropicService, PLATFORM_AI_COOLDOWN_MS } from './anthropic.service';
 import { priceFor } from './ai-model-prices';
 
 const mockCtor = Anthropic as unknown as jest.Mock & {
@@ -205,5 +205,104 @@ describe('AnthropicService — tier model ids are resolvable', () => {
     // inflate every cost report instead of failing.
     expect(priceFor(HAIKU)).toEqual(priceFor('claude-haiku-4-5'));
     expect(priceFor(HAIKU)).not.toEqual(priceFor('some-unknown-model'));
+  });
+
+  /**
+   * THE GATE HAS TO KNOW THE DIFFERENCE BETWEEN "OFF" AND "REFUSED".
+   *
+   * `isEnabled()` asked whether a key STRING existed, so a key with no credit
+   * passed it. Every one of the two dozen callers then took the happy path,
+   * called out, and handed a raw vendor 400 to whatever surface had asked —
+   * observed in production, coming back verbatim out of an MCP tool result.
+   *
+   * The risky half of this fix is the false trip: closing the gate on a blip
+   * would take AI down for every workspace, which is a worse outage than the
+   * one being prevented. So most of what follows pins what must NOT trip it.
+   */
+  describe('platform-key circuit breaker', () => {
+    const KEY = { ANTHROPIC_API_KEY: 'sk-test' };
+
+    // Self-contained rather than borrowing the outer helper: this block lives
+    // beside a second describe whose fixtures are about model ids.
+    const make = (env: Record<string, string | undefined>) =>
+      new AnthropicService({ get: (k: string) => env[k] } as any, undefined as any);
+
+    beforeEach(() => mockCreate.mockReset());
+
+    /** The shape the SDK actually throws: status + a nested error envelope. */
+    const apiError = (status: number, type: string, message: string) =>
+      Object.assign(new Error(message), { status, error: { error: { type, message } } });
+
+    const CREDIT = () =>
+      apiError(400, 'invalid_request_error',
+        'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.');
+
+    async function callAndCatch(svc: AnthropicService) {
+      await expect(svc.complete({ messages: [{ role: 'user', content: 'hi' }] } as any)).rejects.toBeDefined();
+    }
+
+    it('closes the gate when the account is out of credit', async () => {
+      const svc = make(KEY);
+      expect(svc.isEnabled()).toBe(true);
+      mockCreate.mockRejectedValueOnce(CREDIT());
+      await callAndCatch(svc);
+      expect(svc.isEnabled()).toBe(false);
+      expect(svc.platformAiUnavailable()?.reason).toBe('the account is out of credit');
+    });
+
+    it('closes it when the key itself is rejected', async () => {
+      const svc = make(KEY);
+      mockCreate.mockRejectedValueOnce(apiError(401, 'authentication_error', 'invalid x-api-key'));
+      await callAndCatch(svc);
+      expect(svc.isEnabled()).toBe(false);
+      expect(svc.platformAiUnavailable()?.reason).toBe('the API key was rejected');
+    });
+
+    it.each([
+      ['a rate limit', apiError(429, 'rate_limit_error', 'slow down')],
+      ['an overload', apiError(529, 'overloaded_error', 'overloaded')],
+      ['a server error', apiError(500, 'api_error', 'internal')],
+      ['a socket timeout', Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' })],
+      ['a MALFORMED request, which is also a 400', apiError(400, 'invalid_request_error', 'messages: field required')],
+    ])('leaves the gate open on %s', async (_label, err) => {
+      // Every one of these is either transient or this call's own fault. None
+      // says the account cannot serve, and closing on any of them would be an
+      // outage caused by the outage detector.
+      const svc = make(KEY);
+      mockCreate.mockRejectedValueOnce(err);
+      await callAndCatch(svc);
+      expect(svc.isEnabled()).toBe(true);
+      expect(svc.platformAiUnavailable()).toBeNull();
+    });
+
+    it('still throws the original error, so callers refund and retry as before', async () => {
+      // The breaker observes; it must not swallow. Credit reservation is the
+      // caller's job and it refunds on the throw.
+      const svc = make(KEY);
+      const err = CREDIT();
+      mockCreate.mockRejectedValueOnce(err);
+      await expect(svc.complete({ messages: [{ role: 'user', content: 'hi' }] } as any)).rejects.toBe(err);
+    });
+
+    it('reopens on its own, so a top-up needs no restart', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-04T12:00:00Z'));
+      try {
+        const svc = make(KEY);
+        mockCreate.mockRejectedValueOnce(CREDIT());
+        await callAndCatch(svc);
+        expect(svc.isEnabled()).toBe(false);
+
+        jest.setSystemTime(new Date(Date.now() + PLATFORM_AI_COOLDOWN_MS + 1));
+        expect(svc.isEnabled()).toBe(true);
+        expect(svc.platformAiUnavailable()).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('stays shut for AI_DISABLED regardless, which is a different switch', async () => {
+      const svc = make({ ...KEY, AI_DISABLED: '1' });
+      expect(svc.isEnabled()).toBe(false);
+    });
   });
 });

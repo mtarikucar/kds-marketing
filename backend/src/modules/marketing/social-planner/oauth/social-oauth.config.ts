@@ -1,6 +1,7 @@
 import {
-  googleOAuthClientId,
-  googleOAuthClientSecret,
+  GOOGLE_CLIENT_ID_ENVS,
+  GOOGLE_CLIENT_SECRET_ENVS,
+  firstEnv,
 } from '../../../../common/util/google-oauth-env';
 
 export type Network =
@@ -27,8 +28,19 @@ export const OAUTH_NETWORKS: Network[] = [
 interface OAuthDef {
   authorizeUrl: string;
   scopes: string[];
-  clientIdEnv: string;
-  clientSecretEnv: string;
+  /**
+   * Env var(s) holding the client id — the FIRST one with a non-blank value
+   * wins, so a list expresses "this app is configurable under either name".
+   *
+   * A list rather than a resolver callback, and a list rather than a
+   * special-case inside the resolver: the table stays plain data (greppable,
+   * printable in an operator-facing error, and true when read on its own).
+   * Google is the only entry that needs one — its app has two historical env
+   * names — and it takes them from google-oauth-env so the spelling and the
+   * precedence live in exactly one place.
+   */
+  clientIdEnv: string | readonly string[];
+  clientSecretEnv: string | readonly string[];
   /** Scope delimiter the provider's authorize endpoint expects. */
   scopeSep: string;
   /** OAuth2 PKCE (S256) — required by X/Twitter's confidential-client flow. */
@@ -124,13 +136,14 @@ export const NETWORK_OAUTH: Record<Network, OAuthDef> = {
     scopeSep: ',',
   },
   // Google Business Profile — Google OAuth2 with the business.manage scope. Shares
-  // the Google app creds (dual env names handled below); access_type=offline +
+  // the ONE Google app, which is configurable under either historical env name
+  // (deploy.yml ships the OAUTH-prefixed pair); access_type=offline +
   // prompt=consent are required to receive a refresh token.
   GMB: {
     authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     scopes: ['https://www.googleapis.com/auth/business.manage'],
-    clientIdEnv: 'GOOGLE_CLIENT_ID',
-    clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
+    clientIdEnv: GOOGLE_CLIENT_ID_ENVS,
+    clientSecretEnv: GOOGLE_CLIENT_SECRET_ENVS,
     scopeSep: ' ',
     extraAuthParams: { access_type: 'offline', prompt: 'consent' },
   },
@@ -140,15 +153,20 @@ export function isOAuthNetwork(n: string): n is Network {
   return (OAUTH_NETWORKS as string[]).includes(n);
 }
 
+/** The env names a network's credentials may be configured under, in order. */
+export function credentialEnvNames(n: Network): { id: string[]; secret: string[] } {
+  return {
+    id: [NETWORK_OAUTH[n].clientIdEnv].flat(),
+    secret: [NETWORK_OAUTH[n].clientSecretEnv].flat(),
+  };
+}
+
 export function clientId(n: Network): string | undefined {
-  // GMB shares the Google OAuth app, which has two historical env names.
-  if (n === 'GMB') return googleOAuthClientId();
-  return process.env[NETWORK_OAUTH[n].clientIdEnv];
+  return firstEnv(credentialEnvNames(n).id);
 }
 
 export function clientSecret(n: Network): string | undefined {
-  if (n === 'GMB') return googleOAuthClientSecret();
-  return process.env[NETWORK_OAUTH[n].clientSecretEnv];
+  return firstEnv(credentialEnvNames(n).secret);
 }
 
 export function isOAuthConfigured(n: Network): boolean {

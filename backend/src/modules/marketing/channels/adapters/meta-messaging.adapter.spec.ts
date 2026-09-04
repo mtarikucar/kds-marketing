@@ -211,3 +211,91 @@ describe("Meta webhook probe targets the token's own node", () => {
     expect(res.details!.webhookSubscribed).toBe(true);
   });
 });
+
+describe('the owner replying from their phone', () => {
+  // Meta calls these echoes. They used to be dropped wholesale as "our own
+  // sends", which is why a thread could show 25 messages in and none out while
+  // every one had been answered from the Instagram app.
+  const echoEvent = (over: any = {}) => ({
+    entry: [
+      {
+        messaging: [
+          {
+            sender: { id: 'PAGE_1' },
+            recipient: { id: 'CUSTOMER_9' },
+            message: { mid: 'mid.echo1', text: 'Tabii, yarın gönderiyoruz', is_echo: true, ...over },
+          },
+        ],
+      },
+    ],
+  });
+
+  it('keeps the echo, and files it under the CUSTOMER, not the business', () => {
+    // The envelope is inverted on an echo. Taking `sender` would file every
+    // outbound message into one conversation with the page itself.
+    const a = new MessengerAdapter(reg() as any);
+    const [m] = a.parseInbound(cfg(), echoEvent());
+    expect(m).toMatchObject({
+      externalUserId: 'CUSTOMER_9',
+      externalMessageId: 'mid.echo1',
+      text: 'Tabii, yarın gönderiyoruz',
+      echo: true,
+    });
+  });
+
+  it('does not mark an ordinary customer message as an echo', () => {
+    const a = new MessengerAdapter(reg() as any);
+    const [m] = a.parseInbound(cfg(), {
+      entry: [{ messaging: [{ sender: { id: 'CUSTOMER_9' }, message: { mid: 'm1', text: 'merhaba' } }] }],
+    });
+    expect(m.externalUserId).toBe('CUSTOMER_9');
+    expect(m.echo).toBeUndefined();
+  });
+
+  it('still ignores a non-text echo — receipts belong to parseStatusUpdates', () => {
+    const a = new MessengerAdapter(reg() as any);
+    expect(a.parseInbound(cfg(), echoEvent({ text: undefined }))).toEqual([]);
+  });
+
+  it('drops an echo with no recipient rather than inventing a thread', () => {
+    const a = new MessengerAdapter(reg() as any);
+    const body = echoEvent();
+    delete (body.entry[0].messaging[0] as any).recipient;
+    expect(a.parseInbound(cfg(), body)).toEqual([]);
+  });
+
+  it('reads Instagram echoes the same way', () => {
+    const a = new InstagramAdapter(reg() as any);
+    const [m] = a.parseInbound(cfg(), echoEvent());
+    expect(m).toMatchObject({ externalUserId: 'CUSTOMER_9', kind: 'IGSID', echo: true });
+  });
+
+  describe('health check', () => {
+    it('warns when the Page never subscribed to echoes — Meta does not backfill', async () => {
+      mockFetch.mockResolvedValue({ ok: true, data: { id: 'page1', name: 'Acme' } });
+      mockSub.mockResolvedValue({ subscribed: true, fields: ['messages', 'leadgen'] });
+      const r: any = await new MessengerAdapter(reg() as any).healthCheck(cfg());
+      expect(r.ok).toBe(true); // still healthy — it hears customers
+      expect(r.details.echoesSubscribed).toBe(false);
+      expect(r.details.warning).toMatch(/message_echoes/);
+    });
+
+    it('says nothing when echoes ARE subscribed', async () => {
+      mockFetch.mockResolvedValue({ ok: true, data: { id: 'page1', name: 'Acme' } });
+      mockSub.mockResolvedValue({ subscribed: true, fields: ['messages', 'message_echoes'] });
+      const r: any = await new MessengerAdapter(reg() as any).healthCheck(cfg());
+      expect(r.details.echoesSubscribed).toBeUndefined();
+      expect(r.details.warning).toBeUndefined();
+    });
+
+    it('does not claim a missing field when the probe could not answer', async () => {
+      // An unanswerable probe is unknown, not "not subscribed" — reporting a
+      // gap here would send someone to reconnect a channel that is fine.
+      mockFetch.mockResolvedValue({ ok: true, data: { id: 'page1', name: 'Acme' } });
+      mockSub.mockResolvedValue({ subscribed: null, fields: null, error: 'probe failed' });
+      const r: any = await new MessengerAdapter(reg() as any).healthCheck(cfg());
+      expect(r.details.echoesSubscribed).toBeUndefined();
+      expect(r.details.warning).toBeUndefined();
+    });
+  });
+});

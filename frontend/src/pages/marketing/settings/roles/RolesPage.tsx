@@ -28,7 +28,7 @@ function apiError(e: unknown, fallback: string): string {
   return msg ?? fallback;
 }
 
-export default function RolesPage() {
+export default function RolesPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
 
   const { data: roles, isLoading } = useRoles();
@@ -158,6 +158,7 @@ export default function RolesPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        embedded={embedded}
         title={t('roles.title', { defaultValue: 'Roles & permissions' })}
         description={t('roles.subtitle', {
           defaultValue: 'Define custom roles from the permission catalog and assign them to your team.',

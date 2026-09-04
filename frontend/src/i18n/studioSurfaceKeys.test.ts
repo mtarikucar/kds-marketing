@@ -62,22 +62,31 @@ const KEY_FIELD =
 
 /**
  * `t(`settingsGroup.${g.key}`, g.label)` — a template literal no regex can
- * resolve, and the key class this program has already lost twice. Named
- * explicitly so the one heading nobody could see missing is the one heading
- * that cannot go missing again.
+ * resolve, and the key class this program has already lost twice.
+ *
+ * DERIVED from SettingsLayout's own `SETTINGS_GROUPS` rather than mirrored by
+ * hand. The hand-written version was correct on the day it was written and
+ * wrong on 2026-09-03, when the settings area went from nine groups to seven:
+ * it still demanded catalogue entries for three groups that no longer exist and
+ * did not know about the one that replaced them. That is the exact failure this
+ * whole file was written to argue against — "whoever forgot the catalogue also
+ * forgot the list" — reproduced one level up, in the list of lists.
+ *
+ * `other` is appended because it is a literal in the render path, not a row in
+ * the table: the bucket for a page nobody placed.
  */
-const TEMPLATED = [
-  'settingsGroup.workspace',
-  'settingsGroup.automation',
-  'settingsGroup.marketing',
-  'settingsGroup.telephony',
-  'settingsGroup.billing',
-  'settingsGroup.data',
-  'settingsGroup.connections',
-  'settingsGroup.developer',
-  'settingsGroup.agency',
-  'settingsGroup.other',
-];
+const GROUP_KEY = /^\s{4}key: '([a-z-]+)',$/gm;
+
+function templatedGroupKeys(): string[] {
+  const layout = files.find(([p]) => p.endsWith('/SettingsLayout.tsx'))?.[1] ?? '';
+  const keys = [...layout.matchAll(GROUP_KEY)].map((m) => `settingsGroup.${m[1]}`);
+  // A derivation that silently finds nothing would turn this assertion green
+  // for the wrong reason — the failure mode a hand-list at least cannot have.
+  if (keys.length < 5) {
+    throw new Error(`settingsGroup keys could not be read from SettingsLayout (found ${keys.length})`);
+  }
+  return [...keys, 'settingsGroup.other'];
+}
 
 function scan(): Map<string, string[]> {
   const found = new Map<string, string[]>();
@@ -90,7 +99,7 @@ function scan(): Map<string, string[]> {
     for (const m of src.matchAll(T_CALL)) add(m[2], path);
     for (const m of src.matchAll(KEY_FIELD)) add(m[2], path);
   }
-  for (const k of TEMPLATED) add(k, '/src/features/marketing/components/SettingsLayout.tsx');
+  for (const k of templatedGroupKeys()) add(k, '/src/features/marketing/components/SettingsLayout.tsx');
   return found;
 }
 
@@ -116,7 +125,7 @@ describe('Growth Studio i18n — every key the surface renders is in both catalo
     // turn every assertion below into a vacuous pass.
     expect(files.length).toBeGreaterThan(15);
     expect(KEYS.length).toBeGreaterThan(200);
-    expect(KEYS).toEqual(expect.arrayContaining(['settingsGroup.marketing', 'studio.stats.title']));
+    expect(KEYS).toEqual(expect.arrayContaining(['settingsGroup.marketing', 'studio.stats.refresh']));
   });
 
   it('tr defines every one of them', () => {

@@ -58,7 +58,7 @@ const ACTION_ICON: Record<IvrAction, typeof Phone> = {
 
 const QK = ['marketing', 'ivr', 'menus'];
 
-export default function IvrMenusPage() {
+export default function IvrMenusPage({ embedded }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
 
@@ -246,6 +246,7 @@ export default function IvrMenusPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        embedded={embedded}
         title={t('ivr.title', { defaultValue: 'Phone tree' })}
         description={t('ivr.subtitle', {
           defaultValue: 'Build IVR menus that greet callers and route them by keypad before the AI receptionist.',

@@ -78,17 +78,97 @@ export interface AiCompletion {
  * Credit metering is the caller's job (AiCreditsService.reserve before the
  * call, refund on failure) — this service only talks to the API.
  */
+/**
+ * How long the platform key stays shut after the vendor refuses the ACCOUNT.
+ *
+ * Short, because the cure is a top-up and the operator should not have to
+ * restart anything for the product to come back; long enough that a dry key
+ * is not re-probed by every one of the two dozen callers. Each expiry costs
+ * exactly one failed call to re-learn.
+ */
+export const PLATFORM_AI_COOLDOWN_MS = 5 * 60 * 1000;
+
+/**
+ * Does this error mean the ACCOUNT cannot serve, as opposed to this call
+ * failing?
+ *
+ * The distinction is the whole safety of the breaker. A rate limit, an
+ * overload, a socket timeout — all transient, all already handled by the SDK's
+ * retries, and tripping on any of them would take AI down for every workspace
+ * over a blip. What belongs here is only what a retry cannot fix: no credit, a
+ * rejected key, a revoked permission.
+ *
+ * The credit case is matched on the message because Anthropic reports it as a
+ * generic `invalid_request_error` with a 400 — the same shape as a malformed
+ * request, which must NOT trip anything. Matching the wording is a bounded
+ * risk: if it changes we stop tripping and behave exactly as before.
+ */
+export function isAccountLevelAiFailure(err: unknown): false | string {
+  const e = err as { status?: number; error?: { error?: { type?: string; message?: string } }; message?: string };
+  const status = e?.status;
+  const inner = e?.error?.error;
+  const message = String(inner?.message ?? e?.message ?? '');
+  if (status === 401) return 'the API key was rejected';
+  if (status === 403) return 'the API key lacks permission';
+  if (status === 400 && /credit balance is too low/i.test(message)) return 'the account is out of credit';
+  return false;
+}
+
 @Injectable()
 export class AnthropicService {
   private readonly logger = new Logger(AnthropicService.name);
   private client: Anthropic | null = null;
+
+  /**
+   * When the platform key is known not to work, and why.
+   *
+   * ── WHY A GATE AND NOT JUST A LOG ───────────────────────────────────────
+   *
+   * `isEnabled()` used to ask "is a key configured", and every one of the two
+   * dozen callers treats a false from it as "AI is off" and takes a graceful
+   * path it already implements — declining a reply with a reason, returning
+   * `skipped: 'ai-not-configured'`, marking a brand-safety verdict UNAVAILABLE.
+   * Those paths are good, and a dry key reached none of them: the key EXISTED,
+   * so the gate said yes, the call went out, and a raw vendor 400 came back
+   * through whatever surface asked — including, verbatim, out of an MCP tool
+   * result.
+   *
+   * The daily digest already spots this after the fact (`scheduled_jobs
+   * .lastError contains 'credit balance'), which reports the outage but does
+   * not stop it. This is the other half: the system behaves correctly WHILE it
+   * is happening, and every existing decline path starts working for the case
+   * they were written for.
+   *
+   * Per-process and in-memory on purpose. It is a cache of a fact the vendor
+   * will happily repeat, so a second instance costs one extra failed call to
+   * learn the same thing — which is far cheaper than a table, a write on the
+   * AI hot path, and a second source of truth to keep fresh.
+   */
+  private unusableUntil = 0;
+  private unusableReason: string | null = null;
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * What the operator has to fix, or null while the platform key is fine.
+   *
+   * Exposed so a panel or a health check can say WHICH failure this is —
+   * "out of credit" and "key rejected" have different fixes, and a caller that
+   * only sees `isEnabled(): false` cannot tell either from "AI was never set
+   * up".
+   */
+  platformAiUnavailable(): { reason: string; until: Date } | null {
+    if (Date.now() >= this.unusableUntil || !this.unusableReason) return null;
+    return { reason: this.unusableReason, until: new Date(this.unusableUntil) };
+  }
+
   isEnabled(): boolean {
+    // A key that the vendor is refusing is not a configured key, for every
+    // purpose a caller uses this for.
+    if (Date.now() < this.unusableUntil) return false;
     return (
       !!this.config.get<string>('ANTHROPIC_API_KEY') &&
       this.config.get<string>('AI_DISABLED') !== '1'
@@ -197,16 +277,37 @@ export class AnthropicService {
    */
   async complete(opts: AiCallOpts): Promise<AiCompletion> {
     const client = this.getClient();
-    const res = await client.messages.create({
-      model: this.modelFor(opts.tier ?? 'default'),
-      max_tokens: opts.maxTokens ?? 1024,
-      system: this.buildSystem(opts.system, opts.cacheSystem ?? false),
-      messages: this.cachePrefix(opts.messages, opts.cacheConversation ?? false),
-      ...(opts.tools && opts.tools.length
-        ? { tools: this.buildTools(opts.tools, opts.cacheTools ?? false) }
-        : {}),
-      ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
-    });
+    let res: Anthropic.Message;
+    try {
+      res = await client.messages.create({
+        model: this.modelFor(opts.tier ?? 'default'),
+        max_tokens: opts.maxTokens ?? 1024,
+        system: this.buildSystem(opts.system, opts.cacheSystem ?? false),
+        messages: this.cachePrefix(opts.messages, opts.cacheConversation ?? false),
+        ...(opts.tools && opts.tools.length
+          ? { tools: this.buildTools(opts.tools, opts.cacheTools ?? false) }
+          : {}),
+        ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
+      });
+    } catch (err) {
+      // Only an ACCOUNT-level refusal closes the gate. Everything else — a
+      // rate limit, an overload, a timeout — is this call's problem and is
+      // rethrown untouched, because taking AI down for every workspace over a
+      // transient blip is a worse outage than the one being prevented.
+      const accountLevel = isAccountLevelAiFailure(err);
+      if (accountLevel) {
+        this.unusableUntil = Date.now() + PLATFORM_AI_COOLDOWN_MS;
+        this.unusableReason = accountLevel;
+        // ERROR, and naming the operator's fix: this is a platform-wide
+        // outage of every AI feature for every workspace, and until now its
+        // only trace was whatever surface the raw 400 happened to reach.
+        this.logger.error(
+          `platform AI unavailable — ${accountLevel}. All AI features will decline for the next ` +
+            `${Math.round(PLATFORM_AI_COOLDOWN_MS / 60000)} minutes, then retry once.`,
+        );
+      }
+      throw err;
+    }
 
     let text = '';
     const toolUses: Anthropic.ToolUseBlock[] = [];

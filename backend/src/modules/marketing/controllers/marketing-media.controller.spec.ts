@@ -40,17 +40,23 @@ describe('MarketingMediaController', () => {
     const ids = ctrl.models().models.map((m) => m.id);
     expect(ids).toEqual(expect.not.arrayContaining([
       'fal-ai/topaz/upscale/video',
-      'fal-ai/topaz/upscale/image',
       'fal-ai/qwen-image-edit/inpaint',
-      'fal-ai/latentsync',
+      'fal-ai/kling-video/ai-avatar/v2/standard',
     ]));
-    // Served, though: the withdrawal is five endpoints, not a shutdown — and
+    // Served, though: the withdrawal is three endpoints, not a shutdown — and
     // AVATAR survives it, because this one is metered on the SCRIPT.
     expect(ids).toContain('veed/avatars/text-to-video');
-    // 32 verified endpoints: 5 withheld until a real probe can measure the
-    // customer file each of them is priced by, and 2 retired by fal (Seedance
-    // 1.0 Lite, Veo 3 Fast) that stay catalogued for old rows but are not sold.
-    expect(ids.length).toBe(25);
+    // Two came BACK when a real probe (ffprobe, server-side) could finally
+    // measure the customer's file before the reserve — measuring it was their
+    // only blocker. The three still held back each have a second one that is
+    // not a measurement problem.
+    expect(ids).toEqual(expect.arrayContaining([
+      'fal-ai/topaz/upscale/image',
+      'fal-ai/latentsync',
+    ]));
+    // 32 verified endpoints: 3 withheld, and 2 retired by fal (Seedance 1.0
+    // Lite, Veo 3 Fast) that stay catalogued for old rows but are not sold.
+    expect(ids.length).toBe(27);
     expect(ids).not.toContain('fal-ai/bytedance/seedance/v1/lite/text-to-video');
     expect(ids).not.toContain('fal-ai/veo3/fast');
     expect(ids).toContain('fal-ai/bytedance/seedance/v1/pro/fast/text-to-video');

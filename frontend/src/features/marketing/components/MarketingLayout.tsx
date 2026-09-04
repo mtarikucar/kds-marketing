@@ -11,7 +11,7 @@ import { AgencyImpersonationBanner } from './AgencyImpersonationBanner';
 import WebphoneHost from '../webphone/WebphoneHost';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
-import { NAV_HUBS, findActiveHub, findActiveChild } from '../navigation';
+import { NAV_HUBS, findActiveHub, isFullBleedPath } from '../navigation';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
 import { usePageViewTracking } from '../hooks/usePageViewTracking';
 
@@ -33,7 +33,7 @@ export default function MarketingLayout() {
   // canvas jammed next to the sidebar, so the page leaves the area instead.
   const isSettings =
     findActiveHub(NAV_HUBS, location.pathname)?.area === 'settings' &&
-    !findActiveChild(NAV_HUBS, location.pathname)?.fullBleed;
+    !isFullBleedPath(location.pathname);
 
   // Global command palette shortcut (Cmd/Ctrl+K) — a deliberate app-wide
   // override, so it fires even while a form field is focused (like Slack/Linear).

@@ -93,12 +93,13 @@ const QK = {
   session: (id: string) => ['marketing', 'mcp-console', 'session', id] as const,
 };
 
-export default function McpConsolePage() {
+export default function McpConsolePage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
 
   return (
     <div className="space-y-5 p-4 md:p-6">
       <PageHeader
+        embedded={embedded}
         title={t('mcpConsole.title', 'Claude connector')}
         description={t(
           'mcpConsole.subtitle',

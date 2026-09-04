@@ -57,7 +57,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function InboundWebhooksPage() {
+export default function InboundWebhooksPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
@@ -113,6 +113,7 @@ export default function InboundWebhooksPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        embedded={embedded}
         title={t('inboundWebhooks.title', 'Inbound webhooks')}
         description={t(
           'inboundWebhooks.subtitle',

@@ -359,3 +359,126 @@ describe('ConversationIngressService — P2002 handling', () => {
     await expect(svc.ingest(channel, inbound)).rejects.toThrow();
   });
 });
+
+/**
+ * An echo is the account's OWN message arriving on the webhook — the owner
+ * answering from the Instagram or Messenger app. It has to land in the thread
+ * as an outbound message, and it must not be mistaken for a customer speaking:
+ * five separate behaviours in this funnel are inbound-specific, and each one is
+ * wrong for an echo.
+ */
+describe('ConversationIngressService — the owner replying from their phone', () => {
+  const WS = 'ws-1';
+  const channel = { id: 'ch-1', workspaceId: WS, type: 'INSTAGRAM' };
+  let prisma: any;
+  let outbox: { append: jest.Mock };
+  let stream: { push: jest.Mock };
+  let svc: ConversationIngressService;
+
+  const base: InboundMessage = {
+    externalUserId: 'IGSID_9',
+    kind: 'IGSID',
+    externalMessageId: 'mid.1',
+    text: 'Tabii, yarın gönderiyoruz',
+  };
+  const echo: InboundMessage = { ...base, echo: true };
+
+  beforeEach(() => {
+    prisma = {
+      message: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+      },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      lead: { create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'conv-1', leadId: 'lead-1' }),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sys-1' }) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    outbox = { append: jest.fn().mockResolvedValue('evt') };
+    stream = { push: jest.fn() };
+    svc = new ConversationIngressService(
+      prisma as any,
+      { pickAssignee: jest.fn().mockResolvedValue(null) } as any,
+      outbox as any,
+      stream as any,
+      { capture: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+  });
+
+  const emitted = () => outbox.append.mock.calls.map((c) => c[0].type);
+  const written = () => prisma.message.create.mock.calls[0][0].data;
+  const bumped = () => prisma.conversation.update.mock.calls[0][0].data;
+
+  it('stores it as an outbound message from the team, already sent', async () => {
+    await svc.ingest(channel as any, echo);
+    expect(written()).toMatchObject({
+      direction: 'OUTBOUND',
+      authorType: 'AGENT',
+      status: 'SENT',
+      body: 'Tabii, yarın gönderiyoruz',
+    });
+  });
+
+  it('does not make the owner unread to themselves', async () => {
+    await svc.ingest(channel as any, echo);
+    expect(bumped().unreadCount).toBeUndefined();
+    expect(bumped().lastMessageAt).toBeInstanceOf(Date);
+  });
+
+  it('never stamps lastInboundAt — that is the 24-hour reply window', async () => {
+    // Stamping it would show a window this account does not have, and the send
+    // made inside it fails at Meta.
+    await svc.ingest(channel as any, echo);
+    expect(bumped().lastInboundAt).toBeUndefined();
+  });
+
+  it('does not wake the AI engine, which would answer its own owner', async () => {
+    // And each reply is itself echoed back, so the loop would not stop at one.
+    await svc.ingest(channel as any, echo);
+    expect(emitted()).not.toContain('marketing.conversation.message.received.v1');
+  });
+
+  it('pushes it to the open inbox as outbound, not as a new customer message', async () => {
+    await svc.ingest(channel as any, echo);
+    expect(stream.push.mock.calls[0][1].payload).toMatchObject({
+      direction: 'OUTBOUND',
+      authorType: 'AGENT',
+    });
+  });
+
+  it('says who spoke first when the owner starts the conversation', async () => {
+    prisma.contactIdentity.findUnique.mockResolvedValue(null);
+    await svc.ingest(channel as any, echo);
+    expect(prisma.leadActivity.create.mock.calls[0][0].data.title).toMatch(/you messaged first/i);
+  });
+
+  it('resolves our OWN send to the row we already have, instead of doubling it', async () => {
+    // Every send through this product is echoed back with the mid we stored.
+    prisma.message.findFirst.mockResolvedValue({ id: 'msg-existing', conversationId: 'conv-1' });
+    const res = await svc.ingest(channel as any, echo);
+    expect(res).toMatchObject({ deduped: true, messageId: 'msg-existing' });
+    expect(prisma.message.create).not.toHaveBeenCalled();
+  });
+
+  describe('a real customer message is untouched by all of this', () => {
+    it('still stores inbound, bumps unread, stamps the window, and wakes the engine', async () => {
+      await svc.ingest(channel as any, base);
+      expect(written()).toMatchObject({ direction: 'INBOUND', authorType: 'CUSTOMER', status: 'RECEIVED' });
+      expect(bumped().unreadCount).toEqual({ increment: 1 });
+      expect(bumped().lastInboundAt).toBeInstanceOf(Date);
+      expect(emitted()).toContain('marketing.conversation.message.received.v1');
+      expect(stream.push.mock.calls[0][1].payload).toMatchObject({ direction: 'INBOUND' });
+    });
+  });
+});

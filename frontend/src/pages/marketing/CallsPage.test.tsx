@@ -1,3 +1,5 @@
+// 'Log', not 'Calls': this strip lives inside the Voice page's Aramalar tab
+// since 2026-09-04, and the outer control already carries that name.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -91,7 +93,7 @@ describe('CallsPage repro', () => {
 
   it('renders the Calls and Power Dialer tabs (calls active by default)', async () => {
     renderAt();
-    expect(screen.getByRole('tab', { name: 'Calls' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'Log' })).toHaveAttribute('data-state', 'active');
     expect(screen.getByRole('tab', { name: 'Power Dialer' })).toHaveAttribute('data-state', 'inactive');
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
   });
@@ -105,7 +107,7 @@ describe('CallsPage repro', () => {
 
   it('falls back to the calls tab on an unknown ?tab= value', () => {
     renderAt('/?tab=nope');
-    expect(screen.getByRole('tab', { name: 'Calls' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'Log' })).toHaveAttribute('data-state', 'active');
   });
 
   // ── NetGSM Phase 4 Task 4: queue wallboard gating ──────────────────────────
@@ -184,7 +186,7 @@ describe('CallsPage — the merged voice tab', () => {
 
     await screen.findByText('Queue wallboard');
     // Positive anchor: the other two tabs are there, so this is about the gate.
-    expect(screen.getByRole('tab', { name: 'Calls' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Log' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Power Dialer' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Yapay zekâ görüşmeleri' })).not.toBeInTheDocument();
   });
@@ -195,7 +197,7 @@ describe('CallsPage — the merged voice tab', () => {
     renderAt();
 
     await screen.findByText('Queue wallboard');
-    expect(screen.getByRole('tab', { name: 'Calls' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Log' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Yapay zekâ görüşmeleri' })).not.toBeInTheDocument();
   });
 
@@ -221,7 +223,7 @@ describe('CallsPage — the merged voice tab', () => {
 
     auth.role = 'REP';
     renderAt('/?tab=voice', qc);
-    await screen.findByRole('tab', { name: 'Calls' });
+    await screen.findByRole('tab', { name: 'Log' });
     expect(screen.queryByText('voice-stub')).not.toBeInTheDocument();
   });
 });

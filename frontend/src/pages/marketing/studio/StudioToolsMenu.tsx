@@ -125,6 +125,7 @@ const RECURRING_LINKS: readonly ToolLink[] = [
   { to: '/studio?tool=money', key: 'studio.toolsMenu.money', label: 'Para', role: MarketingRole.MANAGER },
   { to: '/studio?tool=ops', key: 'studio.toolsMenu.ops', label: 'İşleyiş', role: MarketingRole.MANAGER },
   { to: '/studio?tool=audience', key: 'studio.toolsMenu.audience', label: 'Kitle', role: MarketingRole.MANAGER },
+  { to: '/studio?tool=line', key: 'studio.toolsMenu.line', label: 'İçerik hattı', role: MarketingRole.MANAGER },
 ];
 
 export function StudioToolsMenu({ className }: { className?: string }) {

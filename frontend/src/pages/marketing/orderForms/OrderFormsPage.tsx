@@ -86,7 +86,7 @@ function Labeled({ label, children }: { label: string; children: React.ReactNode
  * lead + invoice and sends them to pay. The public page is server-rendered at
  * /api/public/o/:token (no React route).
  */
-export default function OrderFormsPage() {
+export default function OrderFormsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -171,6 +171,7 @@ export default function OrderFormsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
+          embedded={embedded}
         title={t('orderForms.title', 'Order forms')}
         description={t('orderForms.subtitle', 'Shareable links that sell a product and collect payment.')}
         actions={

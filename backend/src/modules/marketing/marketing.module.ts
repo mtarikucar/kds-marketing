@@ -122,6 +122,7 @@ import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.cont
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 import { OnboardingController } from './controllers/onboarding.controller';
 import { OnboardingService } from './services/onboarding.service';
+import { WorkspaceReadinessService } from './services/workspace-readiness.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -142,6 +143,7 @@ import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiCreditsService } from './ai/ai-credits.service';
+import { BrandSafetyService } from './ai/brand-safety.service';
 import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
 import { KnowledgeService } from './ai/knowledge.service';
 import { AgentProfileService } from './ai/agent-profile.service';
@@ -185,6 +187,9 @@ import { LinkedinEngagementAdapter } from './channels/adapters/linkedin-engageme
 import { LinkedinEngagementPollService } from './channels/linkedin-engagement-poll.service';
 import { TiktokWebhookController } from './controllers/tiktok-webhook.controller';
 import { EmailChannelAdapter } from './channels/adapters/email.adapter';
+import { EmailOAuthService } from './channels/email-oauth.service';
+import { EmailOAuthController } from './channels/email-oauth.controller';
+import { EmailOAuthRefreshService } from './channels/email-oauth-refresh.service';
 import { EmailWebhookController } from './controllers/email-webhook.controller';
 
 // Phase F P3 — workflow automation (trigger → executor → action handlers).
@@ -264,6 +269,9 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
+import { AnglePerformanceService } from './content-concepts/angle-performance.service';
+import { ContentLineService } from './content-concepts/content-line.service';
+import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
 import { McpPrincipalService } from './mcp/mcp-principal.service';
@@ -277,6 +285,8 @@ import { McpConsoleController } from './mcp/mcp-console.controller';
 import { McpConsoleService } from './mcp/mcp-console.service';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
+import { registerReadinessTools } from './mcp/tools/readiness.tools';
+import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -297,6 +307,7 @@ import { registerContentDistributionTools } from './mcp/tools/content-distributi
 import { ContentDistributionService } from './distribution/content-distribution.service';
 import { DistributionSendService } from './distribution/distribution-send.service';
 import { MarketingContentDistributionController } from './controllers/marketing-content-distribution.controller';
+import { MarketingContentLineController } from './controllers/marketing-content-line.controller';
 import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
@@ -403,6 +414,8 @@ import { R2StorageService } from '../../common/storage/r2-storage.service';
 import { MarketingMediaController } from './controllers/marketing-media.controller';
 import { MarketingMediaWebhookController } from './controllers/marketing-media-webhook.controller';
 import { MediaGenService } from './ai/media/media-gen.service';
+import { MediaProbeService } from './ai/media/media-probe.service';
+import { VideoAssemblyService } from './ai/media/video-assembly.service';
 import { MediaModelDefaultsService } from './ai/media/media-model-defaults.service';
 import { BrandKitService } from './ai/media/brand-kit.service';
 import { FalProvider } from './ai/providers/fal.provider';
@@ -448,6 +461,8 @@ import { MarketingHomeController } from './controllers/marketing-home.controller
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
+import { PlatformDataDeletionService } from './compliance/platform-data-deletion.service';
+import { PublicDataDeletionController } from './compliance/public-data-deletion.controller';
 // NetGSM Phase 2 Task 3 — İYS auto-push (consent writes -> İYS proof queue).
 import { IysSyncService } from './compliance/iys-sync.service';
 // NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (applies
@@ -578,6 +593,7 @@ import { StrategyIntakeService } from './strategy/intake/strategy-intake.service
 import { StrategySynthesisService } from './strategy/synthesis/strategy-synthesis.service';
 import { StrategyProvisioningService } from './strategy/provisioning/strategy-provisioning.service';
 import { StrategyOrchestrator } from './strategy/orchestrator/strategy-orchestrator.service';
+import { StrategyApplyCron } from './strategy/orchestrator/strategy-apply.cron';
 import { LeadHuntExecutor } from './strategy/executors/lead-hunt.executor';
 import { ContentExecutor } from './strategy/executors/content.executor';
 import { CommunityEngageExecutor } from './strategy/executors/community-engage.executor';
@@ -676,6 +692,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // Phase F P2 — inbox + channel config (workspace) and the public webhooks.
     MarketingConversationsController,
     MarketingContentDistributionController,
+    MarketingContentLineController,
     MarketingChannelsController,
     WebchatPublicController,
     MetaWebhookController,
@@ -748,6 +765,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     PageViewStatsController,
     MarketingHomeController,
     ComplianceController,
+    // PUBLIC (unauthenticated) Meta data-deletion callback + its status endpoint.
+    PublicDataDeletionController,
     TwoFactorController,
     SlackController,
     RolesController,
@@ -770,6 +789,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     SocialCampaignsController,
     LinkedinAdsOAuthController,
     GoogleAdsOAuthController,
+    EmailOAuthController,
     // Strategy Engine — onboarding + console surfaces.
     StrategyIntakeController,
     StrategyController,
@@ -855,6 +875,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TelephonyStreamService,
     NetgsmOnboardingService,
     OnboardingService,
+    WorkspaceReadinessService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
@@ -872,6 +893,11 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiCreditsService,
+    // The ONE brand-safety screen. Every path that publishes machine-written
+    // copy on a customer's behalf goes through this instance — it lived as a
+    // private method on the social-campaigns service, which is why the
+    // unattended community publisher never had one.
+    BrandSafetyService,
     AiCreditWalletService,
     KnowledgeService,
     AgentProfileService,
@@ -890,6 +916,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TiktokDmAdapter,
     LinkedinEngagementAdapter,
     EmailChannelAdapter,
+    EmailOAuthService,
+    EmailOAuthRefreshService,
     MessageQuotaService,
     ChannelsService,
     ConversationStreamService,
@@ -1010,6 +1038,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // rather than through jeeta.generate_video — see its class docblock for the
     // three measured reasons the MCP route cannot carry this.
     ConceptPromotionService,
+    AnglePerformanceService,
+    ContentLineService,
     ContentDistributionService,
     DistributionSendService,
     McpToolRegistry,
@@ -1117,6 +1147,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     LeadStreamService,
     // Epic F (compliance).
     ComplianceService,
+    // Platform (Meta) data-deletion callback — resolves the platform id and
+    // reuses ComplianceService's audited erasure; never deletes rows itself.
+    PlatformDataDeletionService,
     // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.
     IysSyncService,
     // NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (subscribes via
@@ -1162,9 +1195,14 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     RoutingMediaProvider,
     { provide: MEDIA_PROVIDER, useExisting: RoutingMediaProvider },
     MediaGenService,
+    MediaProbeService,
+    VideoAssemblyService,
     MediaModelDefaultsService,
     BrandKitService,
     SocialCampaignsService,
+    // The one implementation of "what happens to a generated item next", shared
+    // by the generic generator and the content-concept producer.
+    CampaignItemArmingService,
     SocialCampaignLinkService,
     SocialOAuthService,
     AccountCenterService,
@@ -1184,6 +1222,14 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // APPROVED action to the executor for its kind (LEAD_HUNT → research worker,
     // CONTENT → content-AI + social planner).
     StrategyOrchestrator,
+    // Strategy Engine - the daily driver. `applyPlan` had exactly one caller
+    // (the tail of a synthesis run) and synthesis is only re-run by a weekly
+    // cron that skips a workspace unless an action moved - which only applyPlan
+    // or a human does. That is a closed loop with no entry point: an armed
+    // AUTONOMOUS workspace with a plan full of PROPOSED actions could never be
+    // driven again. This supplies the clock and nothing else; every gate stays
+    // where it was.
+    StrategyApplyCron,
     LeadHuntExecutor,
     ContentExecutor,
     CommunityEngageExecutor,
@@ -1327,9 +1373,19 @@ export class MarketingModule {
     reviews: ReviewsService,
     aiUsage: AiUsageStatsService,
     vendorSpend: VendorSpendReportService,
+    // Appended, like every dependency added to a positional list in this repo:
+    // inserting one mid-list shifts every argument after it, and Nest resolves
+    // by type so nothing would complain until something was quietly wrong.
+    readiness: WorkspaceReadinessService,
+    taxRates: TaxRatesService,
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
+    // The same computation the setup panel reads, so the two can never
+    // disagree about what this workspace is missing.
+    registerReadinessTools(registry, { readiness });
+    // The three gaps the readiness list could NAME and not close.
+    registerSetupWriteTools(registry, { taxRates, orderForms, emailTemplates });
     registerLeadsTools(registry, { leads, distribution });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
     registerTasksTools(registry, { tasks, principals });

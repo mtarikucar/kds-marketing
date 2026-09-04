@@ -41,7 +41,27 @@ CMD ["npm", "run", "start:dev"]
 # Production stage
 FROM node:20 AS production
 
-RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+# ffmpeg is here for ffprobe (MediaProbeService) and for ffmpeg itself
+# (VideoAssemblyService).
+#
+# Five models in the media catalogue are priced on a property of the customer's
+# own file — its duration, or its pixel count — and were withheld from sale
+# because nothing could measure that file. A hand-written container parser was
+# tried and withdrawn for being unsound in both directions. This is the real
+# probe the withheld note asked for; without the binary the service degrades to
+# refusing those generations, which is exactly where they were before.
+#
+# The font is not decoration: VideoAssemblyService burns each beat's on-screen
+# text with drawtext, which needs a real font file, and DejaVu is the small
+# one that actually covers the Turkish alphabet these captions are written
+# in. Without it drawtext fails the whole render rather than dropping glyphs.
+#
+# From Debian's own repository rather than a downloaded static build, and with
+# --no-install-recommends, which keeps the added layer to the codecs and drops
+# the desktop/X11 tail the metapackage would otherwise pull in.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ffmpeg fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

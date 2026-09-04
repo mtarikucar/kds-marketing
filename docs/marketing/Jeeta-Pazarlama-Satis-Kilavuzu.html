@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Jeeta — Pazarlama & Satış Kılavuzu</title>
+<style>
+  :root{
+    --navy:#0f2350; --blue:#2458e6; --blue-700:#1d48c4; --accent:#f5620f;
+    --accent-subtle:#fff2ea; --ink:#1a2338; --muted:#5b6577; --line:#e4e8f0;
+    --bg-soft:#f6f8fc; --ok:#0f9d58; --gold:#b8860b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    color:var(--ink);font-size:11pt;line-height:1.5;background:#fff}
+  @page{size:A4;margin:0}
+  .page{width:210mm;min-height:297mm;padding:15mm 18mm;position:relative;page-break-after:always;overflow:hidden}
+  .page:last-child{page-break-after:auto}
+  h1,h2,h3,h4{line-height:1.2;color:var(--navy)}
+  p{margin:0 0 8px}
+  strong{color:var(--navy)}
+  .muted{color:var(--muted)}
+  .small{font-size:9.5pt}
+  .tiny{font-size:8.5pt}
+
+  /* Cover */
+  .cover{background:linear-gradient(150deg,#0f2350 0%,#1b3a86 55%,#2458e6 100%);color:#fff;
+    display:flex;flex-direction:column;justify-content:space-between;padding:26mm 20mm}
+  .cover h1{color:#fff;font-size:40pt;letter-spacing:-1px;margin:0 0 6px}
+  .cover .wordmark{font-size:22pt;font-weight:800;letter-spacing:.5px;color:#fff;display:flex;align-items:center;gap:10px}
+  .cover .dot{width:14px;height:14px;border-radius:50%;background:var(--accent);display:inline-block}
+  .cover .kicker{text-transform:uppercase;letter-spacing:3px;font-size:10pt;color:#bcd0ff;font-weight:600}
+  .cover .lead{font-size:15pt;color:#dce6ff;max-width:135mm;line-height:1.45}
+  .cover .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .cover .chip{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
+    border-radius:20px;padding:6px 14px;font-size:9.5pt;color:#eaf1ff}
+  .cover .foot{font-size:9pt;color:#9fb6ee;border-top:1px solid rgba(255,255,255,.2);padding-top:10px}
+
+  /* Section header */
+  .sec-h{display:flex;align-items:baseline;gap:12px;border-bottom:3px solid var(--blue);
+    padding-bottom:8px;margin-bottom:16px}
+  .sec-n{font-size:13pt;font-weight:800;color:var(--accent)}
+  .sec-h h2{font-size:19pt}
+  .lead-p{font-size:12pt;color:var(--muted);margin-bottom:16px;max-width:150mm}
+
+  /* Cards & grids */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .card{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff;page-break-inside:avoid}
+  .card.soft{background:var(--bg-soft)}
+  .card h3{font-size:12pt;margin-bottom:5px;display:flex;align-items:center;gap:8px}
+  .card .em{font-size:15pt}
+  .card p{font-size:10pt;color:var(--muted);margin:0}
+  .card .ben{font-size:9.5pt;color:var(--navy);margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)}
+  .card .ben b{color:var(--accent)}
+
+  /* Persona */
+  .persona{border-left:4px solid var(--blue);background:var(--bg-soft);border-radius:0 12px 12px 0;
+    padding:14px 16px;margin-bottom:12px;page-break-inside:avoid}
+  .persona h3{font-size:13pt;margin-bottom:4px}
+  .persona .pain{font-size:10pt;color:var(--muted)}
+  .persona .hook{font-size:10pt;color:var(--navy);margin-top:7px;background:#fff;border:1px solid var(--line);
+    border-radius:8px;padding:8px 11px}
+  .persona .hook b{color:var(--accent)}
+
+  /* Value props */
+  .vp{display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--line);page-break-inside:avoid}
+  .vp:last-child{border-bottom:none}
+  .vp .num{flex:0 0 42px;height:42px;border-radius:50%;background:var(--navy);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:16pt;font-weight:800}
+  .vp h3{font-size:13pt;margin-bottom:3px}
+  .vp p{font-size:10.5pt;color:var(--muted);margin:0}
+
+  /* Pricing */
+  .price-wrap{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:6px}
+  .price{border:1px solid var(--line);border-radius:14px;overflow:hidden;page-break-inside:avoid}
+  .price.hi{border:2px solid var(--blue);box-shadow:0 8px 24px rgba(36,88,230,.14)}
+  .price .top{padding:14px 16px;background:var(--bg-soft)}
+  .price.hi .top{background:var(--blue);color:#fff}
+  .price.hi .top h3,.price.hi .top .amt{color:#fff}
+  .price h3{font-size:14pt;margin-bottom:2px}
+  .price .tag{font-size:8.5pt;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted)}
+  .price.hi .tag{color:#cfe0ff}
+  .price .amt{font-size:20pt;font-weight:800;color:var(--navy);margin-top:8px}
+  .price .amt small{font-size:10pt;font-weight:500;color:var(--muted)}
+  .price.hi .amt small{color:#cfe0ff}
+  .price .yr{font-size:8.5pt;color:var(--muted)}
+  .price.hi .yr{color:#cfe0ff}
+  .price ul{list-style:none;padding:12px 16px;font-size:9.5pt}
+  .price li{padding:3px 0 3px 18px;position:relative;color:var(--ink)}
+  .price li::before{content:"✓";position:absolute;left:0;color:var(--ok);font-weight:800}
+  .price li.off{color:#aab2c2}
+  .price li.off::before{content:"–";color:#c9cfdb}
+
+  /* Comparison table */
+  table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-top:6px}
+  th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--navy);color:#fff;font-size:9pt;text-transform:uppercase;letter-spacing:.5px}
+  th:first-child{border-radius:8px 0 0 0}th:last-child{border-radius:0 8px 0 0}
+  tbody tr:nth-child(even){background:var(--bg-soft)}
+  .yes{color:var(--ok);font-weight:700}.no{color:#c05050;font-weight:700}
+
+  /* Callout */
+  .callout{border-radius:12px;padding:14px 16px;margin:14px 0;page-break-inside:avoid}
+  .callout.blue{background:#eef3ff;border:1px solid #cdddff}
+  .callout.orange{background:var(--accent-subtle);border:1px solid #ffd4b8}
+  .callout.navy{background:var(--navy);color:#eaf1ff}
+  .callout.navy h3{color:#fff}
+  .callout h3{font-size:12pt;margin-bottom:5px}
+  .callout p{font-size:10pt;margin:0}
+  .callout.navy p{color:#cdd8f0}
+
+  /* Objection */
+  .obj{page-break-inside:avoid;margin-bottom:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .obj .q{background:var(--bg-soft);padding:7px 12px;font-weight:700;color:var(--navy);font-size:10.5pt}
+  .obj .a{padding:7px 12px;font-size:10pt;color:var(--muted)}
+  .obj .a b{color:var(--navy)}
+
+  .pitch{background:var(--bg-soft);border:1px dashed var(--blue);border-radius:12px;padding:16px 18px;margin:12px 0}
+  .pitch p{font-size:11.5pt;font-style:italic;color:var(--navy);line-height:1.55}
+
+  ul.clean{list-style:none;padding:0}
+  ul.clean li{padding:5px 0 5px 22px;position:relative;font-size:10.5pt}
+  ul.clean li::before{content:"→";position:absolute;left:0;color:var(--accent);font-weight:800}
+
+  .foot-note{position:absolute;bottom:10mm;left:18mm;right:18mm;font-size:8pt;color:#9aa4b6;
+    border-top:1px solid var(--line);padding-top:6px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<section class="page cover">
+  <div>
+    <div class="wordmark"><span class="dot"></span>Jeeta</div>
+  </div>
+  <div>
+    <div class="kicker">Satış Ekibi Kılavuzu</div>
+    <h1>Pazarlama &amp; Satış Playbook'u</h1>
+    <p class="lead">Jeeta'yı kime, nasıl ve hangi sözlerle satacağınızın tam rehberi — değer önerileri, hedef kitleler, planlar, rakip konumlama, itiraz karşılama ve hazır satış konuşmaları.</p>
+    <div class="chips">
+      <span class="chip">Hepsi bir arada pazarlama &amp; CRM</span>
+      <span class="chip">13+ entegre modül</span>
+      <span class="chip">Türkiye-yerel: NetGSM · İYS · Iyzico/PayTR</span>
+      <span class="chip">KVKK uyumlu</span>
+    </div>
+  </div>
+  <div class="foot">jeetagrowth.com · Bu belge satış ekibi içindir · Sürüm 2026-07</div>
+</section>
+
+<!-- ============ 1. JEETA NEDİR ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">01</span><h2>Jeeta nedir? Tek cümlede.</h2></div>
+  <p class="lead-p"><strong>Jeeta, bir işletmenin lead bulmaktan satışı kapatmaya kadar tüm pazarlama, satış ve iletişimini tek panelden yöneten, yapay zeka destekli ve Türkiye'ye özel kurgulanmış "hepsi bir arada" büyüme platformudur.</strong></p>
+
+  <div class="callout blue">
+    <h3>Konumlama: "Türkiye'nin GoHighLevel'ı — ama yerli güçlerle"</h3>
+    <p>Dünyada işletmeler bugün onlarca ayrı araç kullanıyor: CRM için biri, e-posta için başkası, sosyal medya, reklam, WhatsApp, faturalama, randevu... Hepsi ayrı ayrı, birbiriyle konuşmadan ve her biri ayrı fatura. Jeeta bunların <b>hepsini tek platformda</b> birleştirir — ve üstüne Türkiye'de kimsenin yapamadığını ekler: NetGSM ile gerçek 0850 SMS/çağrı, İYS yasal izin uyumu, Iyzico/PayTR ile yerli ödeme.</p>
+  </div>
+
+  <h3 style="margin:16px 0 8px">İşletmenin çektiği 3 büyük acı — ve Jeeta'nın cevabı</h3>
+  <div class="grid3">
+    <div class="card soft"><h3><span class="em">🧩</span>Araç kaosu</h3><p>10 farklı abonelik, hiçbiri konuşmuyor, veri dağınık.</p><div class="ben"><b>Jeeta:</b> tek panel, tek veri, tek fatura.</div></div>
+    <div class="card soft"><h3><span class="em">📉</span>Boş pipeline</h3><p>"Yeterince müşteri adayı gelmiyor" — en sık şikayet.</p><div class="ben"><b>Jeeta:</b> AI araştırma motoru her gün nitelikli lead üretir.</div></div>
+    <div class="card soft"><h3><span class="em">🐌</span>Yavaş takip</h3><p>Gelen mesaj/lead saatlerce yanıtsız kalıyor, fırsat kaçıyor.</p><div class="ben"><b>Jeeta:</b> AI ajan saniyede yanıtlar, otomasyon anında atar.</div></div>
+  </div>
+
+  <div class="callout orange" style="margin-top:16px">
+    <h3>Neden şimdi? Neden bu ürün kolay satılır?</h3>
+    <p>Ekonomi sıkışırken işletmeler hem <b>maliyet düşürmek</b> (10 aboneliği 1'e indirmek) hem de <b>daha çok satmak</b> (pipeline'ı doldurmak) istiyor. Jeeta tam ortada oturuyor: harcamayı kısarken satışı artırıyor. Bu, indirim değil <b>yatırım</b> olarak satılır.</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>01</span></div>
+</section>
+
+<!-- ============ 2. KİME SATIYORUZ ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">02</span><h2>Kime satıyoruz? Üç hedef kitle</h2></div>
+  <p class="lead-p">Jeeta üç farklı alıcıya da uyar — ama her birine <strong>farklı acı noktasından</strong> girilir. Karşındakinin kim olduğunu erken anla, doğru kancayı at.</p>
+
+  <div class="persona">
+    <h3>① KOBİ &amp; Yerel İşletme <span class="tiny muted">— restoran, klinik, kuaför, emlak, e-ticaret, danışman</span></h3>
+    <p class="pain"><b>Acısı:</b> Tek başına ya da küçük ekiple her şeyi yürütüyor. Instagram DM, WhatsApp, telefon, randevu defteri, Excel'de müşteri listesi — hepsi dağınık, çoğu unutuluyor.</p>
+    <div class="hook"><b>Kanca:</b> "Tüm müşteri mesajlarını tek ekranda topla, gece bile yapay zekan cevaplasın, randevuları otomatik al, hiçbir müşteriyi kaçırma — hem de tek uygulamada." Başlangıç planı tam onlara göre.</div>
+  </div>
+
+  <div class="persona">
+    <h3>② Kurumsal &amp; Çok Şubeli Marka <span class="tiny muted">— zincir işletme, franchise, çok lokasyonlu hizmet</span></h3>
+    <p class="pain"><b>Acısı:</b> Şubeler dağınık çalışıyor, merkez ne olduğunu göremiyor. Kim hangi lead'i aldı, hangi şube ne kadar sattı, ekip performansı ne — belirsiz. Reklam bütçesi harcanıyor ama geri dönüşü ölçülemiyor.</p>
+    <div class="hook"><b>Kanca:</b> "Tüm şubeleri tek merkezden yönet: rol bazlı yetki, ekip performans raporları, reklamdan satışa kapalı-döngü ROAS. Hangi liranın nereye gittiğini gör." Ölçek planı + kurumsal roller.</div>
+  </div>
+
+  <div class="persona">
+    <h3>③ Dijital Ajans <span class="tiny muted">— pazarlama ajansı, freelance uzman, danışmanlık</span></h3>
+    <p class="pain"><b>Acısı:</b> Her müşteri için ayrı araçlar, ayrı loginler, kaos. Müşteriye "değer" göstermek zor. Kendi markasıyla bir ürün sunamıyor, hep başkasının aracını kiralıyor.</p>
+    <div class="hook"><b>Kanca:</b> "Tüm müşterilerini alt-hesap olarak tek çatıda topla, bir müşteride kurduğun düzeni snapshot'la diğerine kopyala, kendi markanla (white-label) sun ve üstüne kâr koyup yeniden faturalandır (rebilling)." Ajans katmanı GoHighLevel seviyesinde.</div>
+  </div>
+
+  <div class="callout navy">
+    <h3>Altın kural</h3>
+    <p>Jeeta'yı "özellik listesi" olarak değil, <b>"karşındakinin bu hafta çektiği acının çözümü"</b> olarak sat. Önce dinle, acıyı bul, sonra o acıya denk gelen 2-3 özelliği göster. 135 özelliğin hepsini anlatmak satışı öldürür.</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>02</span></div>
+</section>
+
+<!-- ============ 3. 5 BÜYÜK DEĞER ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">03</span><h2>5 büyük değer önerisi</h2></div>
+  <p class="lead-p">Bir müşteriye Jeeta'yı 5 dakikada anlatman gerekse, sadece bunları söyle. Hepsi rakiplerin yapamadığı, koda gömülü gerçek yeteneklerdir.</p>
+
+  <div class="vp"><div class="num">1</div><div>
+    <h3>Her gün AI ile araştırılmış nitelikli lead</h3>
+    <p>Jeeta'nın yapay zeka araştırma motoru web'i canlı tarar (Firecrawl + Apify), Claude ile işletmeleri <b>kanıta dayalı</b> niteler (kötü yorumlar, büyüme sinyalleri), Türkçe pitch üretir ve pipeline'a düşürür — planına göre günde 10, 25 veya 50 lead. <b>GoHighLevel'da bu yok.</b> "Müşteri adayı yok" derdine doğrudan cevap.</p>
+  </div></div>
+
+  <div class="vp"><div class="num">2</div><div>
+    <h3>10+ aracın işini tek panelde</h3>
+    <p>CRM + omnichannel gelen kutusu + e-posta/SMS/WhatsApp kampanyaları + sosyal medya planlayıcı + AI içerik stüdyosu + otomasyon + funnel/site + randevu + faturalama + reklam yönetimi. Mailchimp + Buffer + Kajabi + Calendly + bir CRM + bir ajans... hepsi tek abonelik, tek veri.</p>
+  </div></div>
+
+  <div class="vp"><div class="num">3</div><div>
+    <h3>Türkiye-yerel güçler (rakiplerin giremediği alan)</h3>
+    <p>Gerçek 0850 numarasından <b>NetGSM</b> SMS ve bulut santral çağrı, yasal <b>İYS</b> ticari izin uyumu (fail-closed — izinsiz mesaj gitmez), <b>Iyzico ve PayTR</b> ile yerli kart tahsilatı, havale/EFT, Türkçe-öncelikli AI. Yabancı platformlar Türkiye'de bunların hiçbirini pratikte sunamaz.</p>
+  </div></div>
+
+  <div class="vp"><div class="num">4</div><div>
+    <h3>Her yerde yapay zeka</h3>
+    <p>Müşteri mesajlarını 7/24 yanıtlayan AI ajan (kendi bilgi tabanınla), Türkçe reklam/sosyal metin üretimi, AI görsel &amp; video üretimi, sesli telefon ajanı, verilerin üstünde doğal dille "Ask AI" analisti. Yapay zeka bir eklenti değil, platformun her yerinde.</p>
+  </div></div>
+
+  <div class="vp"><div class="num">5</div><div>
+    <h3>Reklamdan satışa kapalı döngü</h3>
+    <p>Meta/Google/TikTok/LinkedIn reklamlarını tek yerden yönet; kapanan satış CRM'den <b>geri</b> reklam algoritmasına beslenir (Meta CAPI + TikTok Events + Google offline). Üç kademeli bütçe otopilotu parayı en çok kazandıran kanala kaydırır. Rakipler sadece <i>raporlar</i>; Jeeta parayı <i>yönetir</i>.</p>
+  </div></div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>03</span></div>
+</section>
+
+<!-- ============ 4. ÖZELLİK EVRENİ ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">04</span><h2>Özellik evreni — fayda diliyle</h2></div>
+  <p class="lead-p">Kategoriler halinde ne var. Müşteriye <strong>özelliği değil, kazandığını</strong> söyle (turuncu satır).</p>
+
+  <div class="grid2">
+    <div class="card"><h3><span class="em">👥</span>CRM &amp; Satış</h3><p>Lead/kişi/şirket yönetimi, sürükle-bırak pipeline (kanban), ağırlıklı gelir tahmini, otomatik lead dağıtımı (round-robin), görevler, randevu takvimleri, komisyon takibi, özel alanlar.</p><div class="ben"><b>Kazanç:</b> Hiçbir müşteri adayı kaçmaz, ekip disiplinli satar, patron gerçek boru hattını görür.</div></div>
+
+    <div class="card"><h3><span class="em">💬</span>Konuşmalar (Omnichannel)</h3><p>9 kanal tek gelen kutusunda: WhatsApp, Instagram DM, Messenger, TikTok DM, LinkedIn, web-chat, e-posta, SMS, sesli. AI yanıt ajanı, bilgi tabanı, insana devir, hazır yanıtlar.</p><div class="ben"><b>Kazanç:</b> Tüm mesajlar tek ekranda, gece bile yapay zeka yanıtlar, hiçbir sohbet kaybolmaz.</div></div>
+
+    <div class="card"><h3><span class="em">📣</span>Pazarlama &amp; İçerik</h3><p>E-posta/SMS/WhatsApp/sesli kampanya, 7 ağda sosyal medya planlayıcı, AI görsel/video stüdyosu, sürükle-bırak otomasyon, funnel &amp; açılış sayfaları, üyelik/kurs, affiliate.</p><div class="ben"><b>Kazanç:</b> Pazarlamacı tek yerden üretir, planlar, gönderir; ajans parası cepte kalır.</div></div>
+
+    <div class="card"><h3><span class="em">🚀</span>Reklam &amp; Growth Engine</h3><p>Çok platform reklam raporlama/yönetim, AI araştırma lead motoru, kapalı-döngü ROAS, dönüşüm API'si (CAPI), özel/benzer kitle senkronu, üç kademeli bütçe otopilotu, reklam kuralları.</p><div class="ben"><b>Kazanç:</b> Reklam bütçesi kendini yönetir, her lira en çok kazandıran yere gider.</div></div>
+
+    <div class="card"><h3><span class="em">📞</span>Telefon &amp; NetGSM</h3><p>İki yönlü 0850 SMS, İYS uyumu, bulut santral tıkla-ara, çağrı kaydı + kuyruk panosu, sesli kampanya + otomatik arama, dinamik IVR, faks, WhatsApp OTP.</p><div class="ben"><b>Kazanç:</b> Kurumsal çağrı merkezi altyapısı, tek NetGSM hesabıyla, yasal ve Türkçe.</div></div>
+
+    <div class="card"><h3><span class="em">💳</span>Ticaret &amp; Ödeme</h3><p>Ürün kataloğu, teklif/fiyat teklifi (online kabul), fatura (online ödeme), tekrarlayan abonelik, e-imza sözleşme, sipariş formu, kupon/KDV, SMS ile ödeme linki, Iyzico/PayTR/Stripe/havale.</p><div class="ben"><b>Kazanç:</b> Teklif → sözleşme → tahsilat tek akışta, yerli kartla, kuruşu şaşmadan.</div></div>
+  </div>
+
+  <div class="callout blue" style="margin-top:12px">
+    <h3><span class="em">🏢</span> Ve üstüne: Platform, Ajans &amp; Güven</h3>
+    <p>Çok kiracılı izolasyon (build'i kıran mimari testle güvenceli), ajans alt-hesapları + snapshot + rebilling, OWNER/MANAGER/REP rolleri + özel yetkiler, kurumsal SSO, 2FA, değiştirilemez denetim kaydı, AES-256 mühürlü sırlar, white-label, 5 dil (TR/EN/RU/UZ/AR + RTL), mobil uyumlu.</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>04</span></div>
+</section>
+
+<!-- ============ 5. PLANLAR & FİYATLAR ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">05</span><h2>Planlar &amp; fiyatlar</h2></div>
+  <p class="lead-p">3 herkese açık plan + 14 günlük ücretsiz deneme. Doğru planı acıya göre öner. <strong>Growth en çok satılan denge noktasıdır</strong> (telefon + faturalama + AI medya burada açılır).</p>
+
+  <div class="price-wrap">
+    <div class="price">
+      <div class="top"><span class="tag">Başlangıç</span><h3>Starter</h3>
+        <div class="amt">3.490₺<small>/ay</small></div><div class="yr">yıllık 34.900₺ (2 ay bedava)</div></div>
+      <ul>
+        <li>Günde 10 AI-lead</li><li>3 kullanıcı · 1 araştırma odağı</li>
+        <li>CRM + pipeline + görevler</li><li>Omnichannel gelen kutusu + AI ajan</li>
+        <li>E-posta/SMS/WhatsApp kampanya</li><li>Otomasyon, funnel, form, randevu</li>
+        <li>Gelişmiş raporlar</li>
+        <li class="off">Telefon / faturalama / AI medya</li>
+      </ul>
+    </div>
+    <div class="price hi">
+      <div class="top"><span class="tag">En popüler</span><h3>Growth</h3>
+        <div class="amt">8.490₺<small>/ay</small></div><div class="yr">yıllık 84.900₺ (2 ay bedava)</div></div>
+      <ul>
+        <li>Günde 25 AI-lead</li><li>10 kullanıcı · 2 araştırma odağı</li>
+        <li><b>Starter'daki her şey +</b></li><li>Telefon / tıkla-ara (NetGSM)</li>
+        <li>Faturalama + Iyzico/PayTR</li><li>AI görsel &amp; video stüdyosu</li>
+        <li>AI sosyal kampanya · değerlendirmeler</li>
+        <li class="off">Voice AI / komisyon / API</li>
+      </ul>
+    </div>
+    <div class="price">
+      <div class="top"><span class="tag">Ölçek</span><h3>Scale</h3>
+        <div class="amt">16.900₺<small>/ay</small></div><div class="yr">yıllık 169.000₺ (2 ay bedava)</div></div>
+      <ul>
+        <li>Günde 50 AI-lead</li><li>25 kullanıcı · 4 araştırma odağı</li>
+        <li><b>Growth'taki her şey +</b></li><li>Voice AI telefon ajanı</li>
+        <li>Sesli arama kampanyaları</li><li>Saha operasyonları + komisyon</li>
+        <li>API erişimi · sınırsız funnel/akış</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin:16px 0 6px;font-size:12pt">İhtiyaca göre ek paketler (add-on)</h3>
+  <table>
+    <thead><tr><th>Ek paket</th><th>Ne açar</th><th>Fiyat/ay</th></tr></thead>
+    <tbody>
+      <tr><td>Lead kotası +10/gün</td><td>Günlük AI-lead sayısını artırır</td><td>2.690₺</td></tr>
+      <tr><td>Ek araştırma odağı</td><td>+1 farklı hedef kitle profili</td><td>1.690₺</td></tr>
+      <tr><td>Sesli kampanya paketi</td><td>Scale altı planlarda sesli arama</td><td>1.490₺</td></tr>
+      <tr><td>Faks paketi</td><td>Faks gönder/al</td><td>990₺</td></tr>
+      <tr><td>SMS OTP paketi</td><td>SMS/WhatsApp doğrulama kodu</td><td>490₺</td></tr>
+      <tr><td>+500 AI kredi/ay · +1000 mesaj/ay</td><td>Yoğun kullanım için ölçek</td><td>290₺ · 190₺</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout orange" style="margin-top:12px">
+    <p class="small"><b>Not:</b> Fiyatlar sistemin resmi paket tanımından alınmıştır (2026 çıpası). Kampanya/güncel fiyat için her zaman <b>jeetagrowth.com</b> üzerindeki güncel fiyat sayfasını esas al.</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>05</span></div>
+</section>
+
+<!-- ============ 6. RAKİP KONUMLAMA ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">06</span><h2>Rakip konumlama &amp; ROI</h2></div>
+  <p class="lead-p">İki cephede kazanırsın: <strong>dağınık araç yığınına</strong> karşı "tek platform" ve <strong>GoHighLevel gibi yabancı ürünlere</strong> karşı "Türkiye-yerel".</p>
+
+  <h3 style="margin-bottom:6px;font-size:12pt">Jeeta vs. ayrı ayrı araçlar (aylık maliyet)</h3>
+  <table>
+    <thead><tr><th>İhtiyaç</th><th>Ayrı araç örneği</th><th>Tahmini/ay</th></tr></thead>
+    <tbody>
+      <tr><td>CRM</td><td>HubSpot / Pipedrive</td><td>~1.500₺</td></tr>
+      <tr><td>E-posta pazarlama</td><td>Mailchimp</td><td>~900₺</td></tr>
+      <tr><td>Sosyal planlama</td><td>Buffer / Hootsuite</td><td>~800₺</td></tr>
+      <tr><td>Randevu</td><td>Calendly</td><td>~500₺</td></tr>
+      <tr><td>Üyelik/kurs</td><td>Kajabi</td><td>~4.000₺</td></tr>
+      <tr><td>WhatsApp/SMS + otomasyon</td><td>Çeşitli</td><td>~1.800₺</td></tr>
+      <tr><td>AI içerik + reklam yönetimi</td><td>Çeşitli</td><td>~2.500₺</td></tr>
+      <tr style="background:var(--accent-subtle)"><td><b>Toplam yığın</b></td><td><b>7+ abonelik, dağınık</b></td><td><b>~12.000₺+</b></td></tr>
+      <tr style="background:#eef3ff"><td><b>Jeeta Growth</b></td><td><b>Hepsi tek platform + AI-lead motoru</b></td><td><b>8.490₺</b></td></tr>
+    </tbody>
+  </table>
+  <p class="tiny muted" style="margin-top:4px">Rakamlar örnektir; asıl mesaj: Jeeta hem daha ucuz hem entegre hem de rakiplerde olmayan AI-lead motorunu içerir.</p>
+
+  <h3 style="margin:12px 0 6px;font-size:12pt">Jeeta vs. GoHighLevel (yabancı "all-in-one")</h3>
+  <table>
+    <thead><tr><th>Yetenek</th><th>Jeeta</th><th>GoHighLevel</th></tr></thead>
+    <tbody>
+      <tr><td>Hepsi bir arada CRM+pazarlama+otomasyon</td><td class="yes">✓ Var</td><td class="yes">✓ Var</td></tr>
+      <tr><td>Ajans: alt-hesap + snapshot + rebilling</td><td class="yes">✓ Var</td><td class="yes">✓ Var</td></tr>
+      <tr><td>Gerçek 0850 NetGSM SMS + bulut santral</td><td class="yes">✓ Yerli</td><td class="no">✗ Yok</td></tr>
+      <tr><td>İYS yasal ticari izin uyumu</td><td class="yes">✓ Var</td><td class="no">✗ Yok</td></tr>
+      <tr><td>Iyzico / PayTR yerli ödeme</td><td class="yes">✓ Var</td><td class="no">✗ Yok</td></tr>
+      <tr><td>AI araştırma ile günlük lead üretimi</td><td class="yes">✓ Var</td><td class="no">✗ Yok</td></tr>
+      <tr><td>Bütçe otopilotu (parayı yönetir)</td><td class="yes">✓ Var</td><td class="no">✗ Sadece rapor</td></tr>
+      <tr><td>Türkçe arayüz + Türkçe-öncelikli AI</td><td class="yes">✓ Yerli</td><td class="no">✗ Çeviri</td></tr>
+      <tr><td>Türkçe destek &amp; KVKK/yerel uyum</td><td class="yes">✓ Var</td><td class="no">✗ Yok</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout navy" style="margin-top:14px">
+    <h3>Tek cümlelik konumlama</h3>
+    <p>"GoHighLevel'ın tüm gücü — ama Türkçe, NetGSM'li, İYS uyumlu, Iyzico/PayTR'li ve üstüne size her gün müşteri adayı bulan bir yapay zekayla."</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>06</span></div>
+</section>
+
+<!-- ============ 7. İTİRAZ KARŞILAMA ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">07</span><h2>İtiraz karşılama</h2></div>
+  <p class="lead-p">En sık gelen 8 itiraz ve nasıl döneceğin. İtirazı <strong>reddetme, kabul et ve çevir.</strong></p>
+
+  <div class="obj"><div class="q">"Pahalı geldi."</div><div class="a"><b>Çevir:</b> "Şu an kaç ayrı araca ödeme yapıyorsunuz? CRM, e-posta, sosyal, randevu... Bunları toplayın; Jeeta genelde daha ucuza gelirken üstüne size her gün müşteri adayı buluyor. Bu bir gider değil, kendini ödeyen bir yatırım."</div></div>
+
+  <div class="obj"><div class="q">"Zaten X aracını kullanıyoruz."</div><div class="a"><b>Çevir:</b> "Harika, demek süreçleriniz oturmuş. Peki o araç WhatsApp'ınızı, 0850 SMS'inizi, İYS izninizi, Iyzico tahsilatınızı ve reklamlarınızı da yönetiyor mu? Jeeta hepsini tek yere alıp o aracın da yerini kapatıyor."</div></div>
+
+  <div class="obj"><div class="q">"Kurulumu zor/uzun olur."</div><div class="a"><b>Çevir:</b> "Kredi kartı bile istemeden dakikalar içinde başlıyorsunuz. NetGSM/ödeme gibi entegrasyonlar için sistem sizi adım adım yönlendiren bir kurulum kontrol listesi sunuyor. İsterseniz kurulumda yanınızdayız."</div></div>
+
+  <div class="obj"><div class="q">"Yapay zeka Türkçede iyi çalışır mı?"</div><div class="a"><b>Çevir:</b> "Jeeta Türkçe-öncelikli kuruldu: ajan dili varsayılan Türkçe, bilgi tabanı Türkçe kök-analizli arama yapıyor, içerik ve pitch doğrudan Türkçe üretiliyor. Çeviri değil, yerli."</div></div>
+
+  <div class="obj"><div class="q">"Verilerimiz güvende mi? KVKK?"</div><div class="a"><b>Çevir:</b> "Her müşterinin verisi mimari olarak izole (build'i kıran güvenlik testiyle garanti), tokenlar AES-256 ile mühürlü, değiştirilemez denetim kaydı var, İYS izin uyumu gömülü. KVKK uyumu tasarımın parçası."</div></div>
+
+  <div class="obj"><div class="q">"Ekibim yeni araca alışamaz."</div><div class="a"><b>Çevir:</b> "Tek panel olması işi kolaylaştırır — 10 uygulama arasında gezmek yerine tek ekran. Roller sayesinde her çalışan yalnızca kendi işini görür, karmaşa yok. Onboarding turu ve Türkçe arayüz geçişi hızlandırır."</div></div>
+
+  <div class="obj"><div class="q">"Bize AI lead lazım değil, müşterimiz zaten var."</div><div class="a"><b>Çevir:</b> "O zaman AI motorunu kapatın — Jeeta yine de mevcut müşterilerinizi tek yerde yönetmenizi, WhatsApp'tan otomatik yanıtlamanızı, tekrar satış yapmanızı ve faturalamanızı sağlar. Lead motoru bonus, çekirdek değer zaten güçlü."</div></div>
+
+  <div class="obj"><div class="q">"Bir düşüneyim / yönetime soracağım."</div><div class="a"><b>Çevir:</b> "Tabii. Karar için en iyisi görmek — 14 gün ücretsiz deneme var, kredi kartı gerekmez. Ben size hesabı kurayım, bir hafta kendi işinizle deneyin, sonuç kendini gösterir. Hangi gün başlayalım?"</div></div>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu</span><span>07</span></div>
+</section>
+
+<!-- ============ 8. SATIŞ KONUŞMASI ============ -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">08</span><h2>Satış konuşması &amp; kapanış</h2></div>
+
+  <h3 style="font-size:12pt;margin-bottom:4px">30 saniyelik asansör konuşması</h3>
+  <div class="pitch"><p>"Jeeta, işletmenizin tüm pazarlama ve satışını tek panelde toplayan yapay zeka destekli bir büyüme platformu. WhatsApp'tan reklamlarınıza, randevudan faturaya kadar her şey tek yerde — üstüne yapay zeka her gün size yeni müşteri adayları buluyor ve gelen mesajları 7/24 yanıtlıyor. Hepsi Türkçe, NetGSM'li, İYS uyumlu ve yerli ödeme altyapılı. Kısacası: 10 ayrı aracın işini tek uygulamayla, daha ucuza ve daha akıllı yapıyorsunuz."</p></div>
+
+  <h3 style="font-size:12pt;margin:14px 0 4px">Keşif (discovery) soruları — önce bunları sor</h3>
+  <ul class="clean">
+    <li>Şu an müşteri adaylarınız nereden geliyor? Yeterli mi?</li>
+    <li>Gelen WhatsApp/Instagram mesajlarına ne kadar hızlı dönebiliyorsunuz?</li>
+    <li>Hangi araçlara ayrı ayrı ödeme yapıyorsunuz? Aylık toplam ne kadar?</li>
+    <li>Reklam veriyor musunuz? Geri dönüşünü ölçebiliyor musunuz?</li>
+    <li>Ekipte kim neyi yapıyor, kim hangi müşteriyle ilgileniyor — görebiliyor musunuz?</li>
+    <li>(Ajanssa) Kaç müşteriyi kaç farklı araçla yönetiyorsunuz?</li>
+  </ul>
+
+  <h3 style="font-size:12pt;margin:14px 0 4px">Demo daveti (kapanış)</h3>
+  <div class="callout blue">
+    <p>"Anlattıklarımın işinizde nasıl duracağını 15 dakikalık canlı bir gösterimde göstereyim — kendi senaryonuzla. Beğenirseniz 14 gün ücretsiz kurarız, kredi kartı bile istemeden. <b>Bu hafta Salı mı Perşembe mi uygun?</b>"</p>
+  </div>
+
+  <div class="callout navy" style="margin-top:16px">
+    <h3>Satışta 3 kural</h3>
+    <p>① <b>Acıyı sat, özelliği değil</b> — önce dinle, sonra 2-3 ilgili özellik göster. ② <b>Yerli gücü öne çıkar</b> — NetGSM/İYS/Iyzico/PayTR/Türkçe AI, yabancı rakiplerin giremediği hendek. ③ <b>Denemeye götür</b> — "göreceksiniz" en güçlü kapanıştır; 14 gün ücretsiz, kredi kartı yok.</p>
+  </div>
+
+  <p class="small muted" style="margin-top:18px">Bu belge Jeeta'nın gerçek, koda dayalı özellik ve fiyat envanterinden hazırlanmıştır. Bazı entegrasyonlar (WhatsApp Cloud, sosyal OAuth, ödeme sağlayıcıları, NetGSM) müşteri tarafında sağlayıcı kurulumu gerektirir — bunları "kutudan çıktığı gibi hazır" diye vaat etme; "sistem sizi kurulumda adım adım yönlendiriyor" de. Detay için "Jeeta Nasıl Çalışır" kılavuzuna bak.</p>
+
+  <div class="foot-note"><span>Jeeta — Pazarlama &amp; Satış Kılavuzu · jeetagrowth.com</span><span>08</span></div>
+</section>
+
+</body>
+</html>

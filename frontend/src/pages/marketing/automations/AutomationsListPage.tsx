@@ -101,36 +101,35 @@ export default function AutomationsListPage({
 
   return (
     <div className="space-y-5">
-      {!embedded && (
-        <PageHeader
-          title={t('automations.title', 'Automations')}
-          description={t('automations.subtitle', 'When something happens, do this. Triggers fire steps — send, wait, branch, create tasks, update leads.')}
-          actions={
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="md">
-                  <Plus className="h-4 w-4" />
-                  {t('automations.new', 'New automation')}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => navigate('/automations/new')}>
-                  <Zap className="mr-2 h-4 w-4" />
-                  {t('automations.newBlank', 'Blank automation')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTemplatesOpen(true)}>
-                  <LayoutTemplate className="mr-2 h-4 w-4" />
-                  {t('automations.newFromTemplate', 'From a template')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => { setAiPrompt(''); setAiOpen(true); }}>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  {t('automations.newWithAi', 'Describe with AI')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          }
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('automations.title', 'Automations')}
+        description={t('automations.subtitle', 'When something happens, do this. Triggers fire steps — send, wait, branch, create tasks, update leads.')}
+        actions={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="md">
+                <Plus className="h-4 w-4" />
+                {t('automations.new', 'New automation')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => navigate('/automations/new')}>
+                <Zap className="mr-2 h-4 w-4" />
+                {t('automations.newBlank', 'Blank automation')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setTemplatesOpen(true)}>
+                <LayoutTemplate className="mr-2 h-4 w-4" />
+                {t('automations.newFromTemplate', 'From a template')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { setAiPrompt(''); setAiOpen(true); }}>
+                <Sparkles className="mr-2 h-4 w-4" />
+                {t('automations.newWithAi', 'Describe with AI')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
+      />
 
       {/* ── Search + status filter ─────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3">

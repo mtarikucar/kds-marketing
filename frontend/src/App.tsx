@@ -15,6 +15,8 @@ import { RouteFallback } from './components/RouteFallback';
 const LandingPage              = lazy(() => import('./pages/landing/LandingPage'));
 const PrivacyPage              = lazy(() => import('./pages/legal/PrivacyPage'));
 const TermsPage                = lazy(() => import('./pages/legal/TermsPage'));
+const DataDeletionPage         = lazy(() => import('./pages/legal/DataDeletionPage'));
+const DataDeletionStatusPage   = lazy(() => import('./pages/legal/DataDeletionStatusPage'));
 const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
 const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvitePage'));
@@ -30,79 +32,64 @@ const LeadDetailPage           = lazy(() => import('./pages/marketing/leadDetail
 const TasksPage                = lazy(() => import('./pages/marketing/tasks/TasksPage'));
 const CalendarPage             = lazy(() => import('./pages/marketing/calendar/CalendarPage'));
 const OpportunitiesPage        = lazy(() => import('./pages/marketing/opportunities/OpportunitiesPage'));
-const PipelineSettingsPage     = lazy(() => import('./pages/marketing/opportunities/PipelineSettingsPage'));
 // Offers + Estimates + Documents are TABS of the Documents hub now.
 const DocumentsHubPage         = lazy(() => import('./pages/marketing/documents/DocumentsHubPage'));
 // Ads / Performance / Analytics are TABS inside ReportsPage now.
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const GrowthStudioPage         = lazy(() => import('./pages/marketing/studio/GrowthStudioPage'));
-const StrategyConsolePage      = lazy(() => import('./pages/marketing/strategy/StrategyConsolePage'));
 const StrategyOnboarding       = lazy(() => import('./pages/marketing/strategy/StrategyOnboarding'));
 const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
 const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTemplates'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
-// The Power Dialer is a TAB inside CallsPage now.
-const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
 const ProspectingPage          = lazy(() => import('./pages/marketing/ProspectingPage'));
-const BillingPage              = lazy(() => import('./pages/marketing/billing'));
 // Manager-only pages
-const MarketingUsersPage       = lazy(() => import('./pages/marketing/users'));
-const TargetsPage              = lazy(() => import('./pages/marketing/targets'));
 const AccountCenterPage        = lazy(() => import('./pages/marketing/accounts/AccountCenterPage'));
-const CustomFieldsPage         = lazy(() => import('./pages/marketing/crm/customFields'));
-const TagsPage                 = lazy(() => import('./pages/marketing/crm/tags'));
-const SegmentsPage             = lazy(() => import('./pages/marketing/crm/segments'));
 const CoursesPage              = lazy(() => import('./pages/marketing/memberships/courses'));
 const CourseEditorPage         = lazy(() => import('./pages/marketing/memberships/courses/CourseEditorPage'));
 const AffiliatePortalPage      = lazy(() => import('./pages/marketing/affiliate-portal/AffiliatePortalPage'));
 const AgencyLocationsPage      = lazy(() => import('./pages/marketing/agency/LocationsPage'));
 const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/SnapshotsPage'));
 const AgencyRebillingPage      = lazy(() => import('./pages/marketing/agency/RebillingPage'));
-const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
 const ResearchSuggestionsPage  = lazy(() => import('./pages/marketing/research/ResearchSuggestionsPage'));
 // Channels / Canned Responses / AI Agents / Knowledge are TABS of /inbox now.
-const SendingDomainsPage       = lazy(() => import('./pages/marketing/settings/SendingDomainsPage'));
-const CustomDomainsPage        = lazy(() => import('./pages/marketing/settings/CustomDomainsPage'));
+// SIX PAIRS THAT WERE ONE JOB EACH, now one page each with deep-linkable tabs.
+// The old paths still resolve — they redirect here with their tab set — so the
+// LIST got shorter without anything becoming unreachable.
+const DomainsPage              = lazy(() => import('./pages/marketing/settings/DomainsPage'));
+const WebhooksHubPage          = lazy(() => import('./pages/marketing/settings/WebhooksHubPage'));
+const ApiAccessPage            = lazy(() => import('./pages/marketing/settings/ApiAccessPage'));
+const TeamPage                 = lazy(() => import('./pages/marketing/TeamPage'));
+const VoiceHubPage             = lazy(() => import('./pages/marketing/VoiceHubPage'));
+// 2026-09-04: the second settings pass. Strategy owns the machinery that serves
+// it; selling is one page in the order a sale happens; the plan owns the switch
+// that turns features off. Every absorbed route below redirects to its tab.
+const GrowthEnginePage         = lazy(() => import('./pages/marketing/strategy/GrowthEnginePage'));
+const SellingPage              = lazy(() => import('./pages/marketing/products/SellingPage'));
+const PlanAndAccessPage        = lazy(() => import('./pages/marketing/billing/PlanAndAccessPage'));
 const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLinks'));
 // Tax Rates + Coupons are TABS of /products now.
-const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
 const AutomationBuilderPage    = lazy(() => import('./pages/marketing/automations/AutomationBuilderPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
-const BookingSettingsPage      = lazy(() => import('./pages/marketing/BookingSettingsPage'));
 const AppointmentsPage         = lazy(() => import('./pages/marketing/appointments/AppointmentsPage'));
 const PublicBookingPage        = lazy(() => import('./pages/marketing/appointments/PublicBookingPage'));
 const ReviewsPage              = lazy(() => import('./pages/marketing/ReviewsPage'));
-const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'));
-const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
-const ProductsPage             = lazy(() => import('./pages/marketing/products/ProductsPage'));
-const SubscriptionsPage        = lazy(() => import('./pages/marketing/subscriptions/SubscriptionsPage'));
-const OrderFormsPage           = lazy(() => import('./pages/marketing/orderForms/OrderFormsPage'));
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
-const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
 // GHL-parity settings/tools UIs
-const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/apiKeys'));
-const ModulesPage              = lazy(() => import('./pages/marketing/settings/modules'));
-const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
-const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
 // MCP connector console (Faz 4) — the operator mirror of the MCP surface:
 // endpoint address, write mode, connected clients, session audit.
 const AiModelsPage             = lazy(() => import('./pages/marketing/settings/aiModels'));
-const McpConsolePage           = lazy(() => import('./pages/marketing/settings/mcpConsole'));
 // Settings→Connections is the Integrations TAB of the Account Center now.
 const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
 // MCP OAuth consent (Faz 3) — the SPA route `GET /api/mcp-oauth/authorize`
 // 302s the browser to. Path is fixed by MCP_OAUTH_CONSENT_PAGE_PATH on the
 // backend; changing it here alone silently breaks the connector flow.
 const McpConsentPage           = lazy(() => import('./pages/marketing/oauth/McpConsentPage'));
-const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
 const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
 // AI Studio + UGC Personas live in Growth Studio's Create tab; Brand Kit and
 // Brand Brain are tabs of the ONE Brand page (/branding).
-const SocialCampaignsPage      = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignsPage'));
 const SocialCampaignDetailPage = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignDetailPage'));
-const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
@@ -180,6 +167,11 @@ export default function App() {
       {/* Public legal pages — linked from the landing footer. */}
       <Route path="/privacy"  element={<S><PrivacyPage /></S>} />
       <Route path="/terms"    element={<S><TermsPage /></S>} />
+      {/* Data deletion: the instructions page platform reviews (Meta, TikTok,
+          Pinterest, LinkedIn) ask for, and the status page the `url` we return
+          from Meta's deletion callback points at. Both public, no session. */}
+      <Route path="/data-deletion"        element={<S><DataDeletionPage /></S>} />
+      <Route path="/data-deletion-status" element={<S><DataDeletionStatusPage /></S>} />
       <Route path="/login"    element={<S><MarketingLoginPage /></S>} />
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public accept-invite landing — the invite TOKEN in the query string
@@ -243,7 +235,7 @@ export default function App() {
           <Route path="/studio"         element={<S><GrowthStudioPage /></S>} />
           {/* AI Strategy Engine (Task 9): the console + its first-run onboarding
               wizard. Both live under the standard marketing auth guard. */}
-          <Route path="/studio/strategy"   element={<S><StrategyConsolePage /></S>} />
+          <Route path="/studio/strategy"   element={<S><GrowthEnginePage /></S>} />
           <Route path="/onboarding/strategy" element={<S><StrategyOnboarding /></S>} />
           {/*
             `/budget` is the one saved address that ever named the Growth
@@ -259,9 +251,9 @@ export default function App() {
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           {/* Calls | Power Dialer — ONE page, tabs at ?tab= */}
-          <Route path="/calls"          element={<S><CallsPage /></S>} />
+          <Route path="/calls"          element={<RedirectMergingParams to="/voice" set={{ tab: 'calls' }} />} />
           <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
-          <Route path="/billing"        element={<S><BillingPage /></S>} />
+          <Route path="/billing"        element={<S><PlanAndAccessPage /></S>} />
           {/* In-app help center (connection guides) — available to everyone. */}
           <Route path="/help"           element={<S><HelpPage /></S>} />
           <Route path="/help/:slug"     element={<S><HelpPage /></S>} />
@@ -270,16 +262,16 @@ export default function App() {
         </Route>
         <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.MANAGER} />}>
           <Route element={<MarketingLayout />}>
-            <Route path="/users"       element={<S><MarketingUsersPage /></S>} />
-            <Route path="/targets"     element={<S><TargetsPage /></S>} />
+            <Route path="/users"       element={<S><TeamPage /></S>} />
+            <Route path="/targets"     element={<RedirectMergingParams to="/users" set={{ tab: 'targets' }} />} />
             <Route path="/accounts"    element={<S><AccountCenterPage /></S>} />
-            <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
-            <Route path="/settings/pipelines" element={<S><PipelineSettingsPage /></S>} />
-            <Route path="/tags" element={<S><TagsPage /></S>} />
+            <Route path="/settings/custom-fields" element={<RedirectMergingParams to="/inbox" set={{ tab: 'fields' }} />} />
+            <Route path="/settings/pipelines" element={<RedirectMergingParams to="/branding" set={{ tab: 'pipelines' }} />} />
+            <Route path="/tags" element={<RedirectMergingParams to="/inbox" set={{ tab: 'audience', sub: 'tags' }} />} />
             <Route path="/settings/tags" element={<Navigate to="/tags" replace />} />
-            <Route path="/segments" element={<S><SegmentsPage /></S>} />
+            <Route path="/segments" element={<RedirectMergingParams to="/inbox" set={{ tab: 'audience' }} />} />
             <Route path="/settings/segments" element={<Navigate to="/segments" replace />} />
-            <Route path="/import" element={<S><ImportWizardPage /></S>} />
+            <Route path="/import" element={<RedirectMergingParams to="/inbox" set={{ tab: 'import' }} />} />
             <Route path="/settings/import" element={<Navigate to="/import" replace />} />
             <Route path="/memberships/courses"            element={<S><CoursesPage /></S>} />
             <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
@@ -288,36 +280,37 @@ export default function App() {
             <Route path="/agency/locations"  element={<S><AgencyLocationsPage /></S>} />
             <Route path="/agency/snapshots"  element={<S><AgencySnapshotsPage /></S>} />
             <Route path="/agency/rebilling"  element={<S><AgencyRebillingPage /></S>} />
-            <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
+            <Route path="/research"    element={<RedirectMergingParams to="/studio/strategy" set={{ tab: 'research' }} />} />
             <Route path="/research/suggestions" element={<S><ResearchSuggestionsPage /></S>} />
             {/* Channels / Canned Responses / AI Agents / Knowledge → /inbox?tab=… */}
-            <Route path="/settings/sending-domains" element={<S><SendingDomainsPage /></S>} />
-            <Route path="/settings/custom-domains" element={<S><CustomDomainsPage /></S>} />
+            <Route path="/settings/domains" element={<S><DomainsPage /></S>} />
+            <Route path="/settings/sending-domains" element={<RedirectMergingParams to="/settings/domains" set={{ tab: 'sending' }} />} />
+            <Route path="/settings/custom-domains" element={<RedirectMergingParams to="/settings/domains" set={{ tab: 'custom' }} />} />
             {/* Tax Rates + Coupons → /products?tab=… */}
-            <Route path="/automations" element={<S><AutomationsPage /></S>} />
+            <Route path="/automations" element={<RedirectMergingParams to="/studio/strategy" set={{ tab: 'automations' }} />} />
             <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/campaigns"   element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
             <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />
-            <Route path="/booking"     element={<S><BookingSettingsPage /></S>} />
+            <Route path="/booking"     element={<RedirectMergingParams to="/users" set={{ tab: 'booking' }} />} />
             <Route path="/appointments" element={<S><AppointmentsPage /></S>} />
             <Route path="/reviews"     element={<S><ReviewsPage /></S>} />
-            <Route path="/voice"       element={<S><VoicePage /></S>} />
-            <Route path="/invoices"    element={<S><InvoicesPage /></S>} />
-            <Route path="/products"    element={<S><ProductsPage /></S>} />
-            <Route path="/subscriptions" element={<S><SubscriptionsPage /></S>} />
-            <Route path="/order-forms"   element={<S><OrderFormsPage /></S>} />
+            <Route path="/voice"       element={<S><VoiceHubPage /></S>} />
+            <Route path="/invoices"    element={<RedirectMergingParams to="/products" set={{ tab: 'invoices' }} />} />
+            <Route path="/products"    element={<S><SellingPage /></S>} />
+            <Route path="/subscriptions" element={<RedirectMergingParams to="/products" set={{ tab: 'subscriptions' }} />} />
+            <Route path="/order-forms"   element={<RedirectMergingParams to="/products" set={{ tab: 'order-forms' }} />} />
             {/* Business | Brand Kit | Brand Brain — ONE Brand page, tabs at ?tab= */}
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
-            <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
-            <Route path="/settings/modules"     element={<S><ModulesPage /></S>} />
-            <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
-            <Route path="/settings/inbound-webhooks" element={<S><InboundWebhooksPage /></S>} />
+            <Route path="/settings/api-keys"    element={<S><ApiAccessPage /></S>} />
+            <Route path="/settings/modules"     element={<RedirectMergingParams to="/billing" set={{ tab: 'modules' }} />} />
+            <Route path="/settings/webhooks"    element={<S><WebhooksHubPage /></S>} />
+            <Route path="/settings/inbound-webhooks" element={<RedirectMergingParams to="/settings/webhooks" set={{ tab: 'inbound' }} />} />
             {/* MCP connector console (Faz 4) — MANAGER-readable; the write-mode
                 switch inside self-disables from overview.canToggle (OWNER-only). */}
-            <Route path="/settings/mcp-console" element={<S><McpConsolePage /></S>} />
+            <Route path="/settings/mcp-console" element={<RedirectMergingParams to="/settings/api-keys" set={{ tab: 'connector' }} />} />
             {/* Which fal.ai model this workspace generates on, with each one's
                 price. MANAGER-gated here, matching the PATCH's own
                 MANAGER + settings.manage floor. */}
@@ -325,7 +318,7 @@ export default function App() {
             {/* Backend calendar-OAuth callbacks 302 to /settings/connections?gcal=… —
                 params must survive into the Account Center's Integrations tab. */}
             <Route path="/settings/connections" element={<RedirectMergingParams to="/accounts" set={{ tab: 'integrations' }} />} />
-            <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
+            <Route path="/settings/roles"       element={<RedirectMergingParams to="/users" set={{ tab: 'roles' }} />} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             {/* Telephony + Voice-AI setup now lives in the Account Center. */}
             <Route path="/settings/telephony"   element={<Navigate to="/accounts" replace />} />
@@ -338,7 +331,7 @@ export default function App() {
             <Route path="/social-campaigns"      element={<Navigate to="/studio?view=tools&tab=campaigns&sub=social" replace />} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
-            <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />
+            <Route path="/voice/ivr"   element={<RedirectMergingParams to="/voice" set={{ tab: 'ivr' }} />} />
             <Route path="/affiliates"  element={<S><AffiliatesPage /></S>} />
           </Route>
         </Route>

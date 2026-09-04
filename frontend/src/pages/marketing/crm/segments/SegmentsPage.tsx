@@ -163,18 +163,17 @@ export default function SegmentsPage({ embedded }: { embedded?: boolean } = {}) 
 
   return (
     <div className="space-y-5">
-      {!embedded && (
-        <PageHeader
-          title={t('crm.seg.title', { defaultValue: 'Segments' })}
-          description={t('crm.seg.subtitle', { defaultValue: 'Saved, live filters over your leads.' })}
-          actions={
-            <Button onClick={openCreate}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {t('crm.seg.createTitle', { defaultValue: 'New segment' })}
-            </Button>
-          }
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title={t('crm.seg.title', { defaultValue: 'Segments' })}
+        description={t('crm.seg.subtitle', { defaultValue: 'Saved, live filters over your leads.' })}
+        actions={
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            {t('crm.seg.createTitle', { defaultValue: 'New segment' })}
+          </Button>
+        }
+      />
 
       <DataTable
         columns={columns}

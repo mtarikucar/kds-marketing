@@ -28,6 +28,7 @@ import { VoiceAiCard } from './VoiceAiCard';
 import { NetgsmOnboardingCard } from './NetgsmOnboardingCard';
 import { WhatsappSignupButton } from '../WhatsappSignupButton';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
+import { cn } from '@/components/ui/cn';
 import { CopyField } from './CopyField';
 import { FeatureGate } from '@/components/ui/access-gates';
 // Company (workspace-level) identity + notifications — reused from the (now
@@ -112,7 +113,16 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
   useEffect(() => {
     const connectId = searchParams.get('connect');
     const connectErr = searchParams.get('connect_error');
-    if (connectId) {
+    // The mailbox consent flow comes back here too. It has nothing to pick, so
+    // it lands with a flag rather than a pending id — and deliberately without
+    // the address, which is personal data and has no business in a URL every
+    // proxy on the way writes to a log.
+    const emailConnected = searchParams.get('email_connected');
+    if (emailConnected) {
+      toast.success(t('accounts.email.connected', { defaultValue: 'Mailbox connected.' }));
+      searchParams.delete('email_connected');
+      setSearchParams(searchParams, { replace: true });
+    } else if (connectId) {
       setPendingConnectId(connectId);
       searchParams.delete('connect');
       setSearchParams(searchParams, { replace: true });
@@ -180,6 +190,28 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
     }
     const network = PROVIDER_NETWORK[provider];
     if (network) startConnect(network, { origin: 'account-center' });
+  };
+
+  /**
+   * What connecting this actually buys you, for a provider that is not yet
+   * connected.
+   *
+   * "Not connected" answers a question nobody asked. The one somebody arrives
+   * with is "do I need this?", and a row that cannot answer it is a row they
+   * skip past — which is how a workspace ends up publishing to one network
+   * because that is the card they happened to recognise.
+   */
+  const WHAT_IT_DOES: Partial<Record<Provider, string>> = {
+    META: t('accounts.does.META', 'Publish to Facebook and Instagram, answer their DMs here, and run ads.'),
+    LINKEDIN: t('accounts.does.LINKEDIN', 'Publish to your LinkedIn page and run ads.'),
+    TIKTOK: t('accounts.does.TIKTOK', 'Publish to TikTok and answer its DMs here.'),
+    TWITTER: t('accounts.does.TWITTER', 'Publish to X.'),
+    PINTEREST: t('accounts.does.PINTEREST', 'Publish pins.'),
+    GOOGLE: t('accounts.does.GOOGLE', 'Run Google ads and read their results.'),
+    SMS: t('accounts.does.SMS', 'Send and receive SMS — the fastest way to reach a lead who left a phone number.'),
+    EMAIL: t('accounts.does.EMAIL', 'Send from your own mailbox and get the replies in this inbox.'),
+    WEBCHAT: t('accounts.does.WEBCHAT', 'Put a chat bubble on your site; visitors land in this inbox.'),
+    VOICE: t('accounts.does.VOICE', 'Answer calls with an AI voice assistant.'),
   };
 
   const capLabel = (c: Capability) =>
@@ -257,6 +289,26 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
     );
   };
 
+  /**
+   * The three states a provider can be in, from the reader's side.
+   *
+   * `attention` first and deliberately: a connection whose session has expired
+   * still LOOKS connected everywhere else in the product, and the posts it drops
+   * fail quietly. It is the one thing on this page that is costing something
+   * right now.
+   */
+  const providers = data?.providers ?? [];
+  const attention = providers.filter((p) => p.connections.some((g) => g.health !== 'HEALTHY'));
+  const working = providers.filter(
+    (p) => p.connections.length > 0 && p.connections.every((g) => g.health === 'HEALTHY'),
+  );
+  const available = providers.filter((p) => p.connections.length === 0);
+  const connectedCount = providers.reduce((n, p) => n + p.connections.length, 0);
+  const brokenCount = providers.reduce(
+    (n, p) => n + p.connections.filter((g) => g.health !== 'HEALTHY').length,
+    0,
+  );
+
   const renderProvider = (p: ProviderBlock) => {
     const network = PROVIDER_NETWORK[p.provider];
     const manualChannel = MANUAL_CHANNEL[p.provider];
@@ -279,8 +331,19 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
                         count: p.connections.length,
                         defaultValue: '{{count}} connected',
                       })
-                    : t('accounts.notConnected', 'Not connected')}
+                    : (WHAT_IT_DOES[p.provider] ?? t('accounts.notConnected', 'Not connected'))}
                 </p>
+                {/* A disabled Connect button that does not say why reads as
+                    broken. The reason used to live only in a `title` tooltip —
+                    invisible on touch, to a keyboard user, and to anyone who
+                    does not hover a dead control. */}
+                {p.connectMethod === 'OAUTH' && network && !p.configured && (
+                  <p className="text-micro text-muted-foreground">
+                    {t('accounts.notConfigured', {
+                      defaultValue: 'An admin must add this provider’s app credentials first',
+                    })}
+                  </p>
+                )}
               </div>
             </div>
             {p.connectMethod === 'OAUTH' && network ? (
@@ -409,6 +472,37 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
         }}
       />
 
+      {/*
+        The one line this page was missing.
+ 
+        Everything below it is a card you have to read. This says, before any of
+        them, whether anything is wrong — which is the question somebody opening
+        a connections page is usually here to answer, and the one a grid of
+        identical cards makes you do by hand.
+      */}
+      {!isLoading && !isError && connectedCount > 0 && (
+        <p
+          className={cn(
+            'rounded-lg border px-3 py-2 text-sm',
+            brokenCount > 0
+              ? 'border-danger/30 bg-danger/5 text-foreground'
+              : 'border-border bg-surface-muted text-muted-foreground',
+          )}
+        >
+          {brokenCount > 0
+            ? t('accounts.summaryBroken', {
+                count: brokenCount,
+                total: connectedCount,
+                defaultValue:
+                  '{{count}} of your {{total}} connected accounts is not working. Until it is reconnected, anything sent through it is lost.',
+              })
+            : t('accounts.summaryOk', {
+                count: connectedCount,
+                defaultValue: 'All {{count}} connected accounts are working.',
+              })}
+        </p>
+      )}
+
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="accounts">{t('accounts.tab.accounts', 'Accounts')}</TabsTrigger>
@@ -423,8 +517,63 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
             onRetry={() => refetch()}
             errorMessage={t('accounts.loadError', 'Could not load your connections.')}
           >
-            <div className="grid gap-3 md:grid-cols-2">
-              {(data?.providers ?? []).map(renderProvider)}
+            {/*
+              ARRANGED BY WHAT THE READER NEEDS, not by vendor.
+ 
+              This was one flat grid of every provider, connected and not, in a
+              fixed order. Two things it could not tell you, and both are the
+              reason somebody opens this page: whether anything is BROKEN, and
+              what you would gain by connecting the rest. An account whose
+              session had been invalidated — the exact state that silently loses
+              posts — looked identical to a working one until you read every
+              card.
+ 
+              So: what needs you first, then what is working, then what is
+              available. The rows themselves are unchanged; it is the order and
+              the headings that answer the question.
+            */}
+            {attention.length > 0 && (
+              <section className="space-y-3">
+                <div>
+                  <h2 className="text-base font-semibold text-danger">
+                    {t('accounts.section.attention', 'Needs your attention')}
+                  </h2>
+                  <p className="text-caption text-muted-foreground">
+                    {t(
+                      'accounts.section.attentionDesc',
+                      'These are connected but not working. Anything sent through them is being lost.',
+                    )}
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">{attention.map(renderProvider)}</div>
+              </section>
+            )}
+
+            {working.length > 0 && (
+              <section className="space-y-3">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    {t('accounts.section.working', 'Connected and working')}
+                  </h2>
+                  <p className="text-caption text-muted-foreground">
+                    {t('accounts.section.workingDesc', 'The badges say what each one lets this product do.')}
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">{working.map(renderProvider)}</div>
+              </section>
+            )}
+
+            <section className="space-y-3">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  {t('accounts.section.available', 'Not connected yet')}
+                </h2>
+                <p className="text-caption text-muted-foreground">
+                  {t('accounts.section.availableDesc', 'What each one would add.')}
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+              {available.map(renderProvider)}
               {/* id anchors the guided-setup deep-link (?focus=telephony). */}
               <div id="telephony-card">
                 <TelephonyCard />
@@ -454,20 +603,32 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
                   </CardContent>
                 </Card>
               </FeatureGate>
-            </div>
+              </div>
+            </section>
           </QueryStateBoundary>
         </TabsContent>
 
-        {/* Integrations — personal Google/Outlook calendars (the absorbed
-            Settings › Connections page) + company SSO/Slack. */}
+        {/*
+          SORTED BY WHO IT AFFECTS, which is the distinction this tab was
+          hiding in parentheses.
+ 
+          Three unrelated things lived here under one word: YOUR own calendar,
+          the workspace's TELEPHONE setup, and single sign-on and Slack for the
+          WHOLE TEAM. Getting that wrong is not a cosmetic mistake — one of them
+          changes how everybody signs in. The heading says whose it is, before
+          the control does anything.
+        */}
         <TabsContent value="integrations" className="space-y-6 pt-2">
           <section className="space-y-3">
             <div>
               <h2 className="text-base font-semibold text-foreground">
-                {t('accounts.myCalendar', 'My calendar connections')}
+                {t('accounts.onlyYou', 'Only you')}
               </h2>
               <p className="text-caption text-muted-foreground">
-                {t('connections.mySubtitle', 'Your personal calendar connections.')}
+                {t(
+                  'accounts.onlyYouDesc',
+                  'Your own calendar, so bookings land in it. Nobody else in the workspace is affected.',
+                )}
               </p>
             </div>
             <Suspense fallback={<RouteFallback />}>
@@ -475,10 +636,19 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
             </Suspense>
           </section>
 
-          {/* NetGSM setup checklist — only relevant to workspaces entitled to
-              telephony (same gate the /calls nav item and the webphone use). */}
+          {/* The workspace's telephone line — shared, but a setup checklist
+              rather than a control, so it gets its own heading rather than
+              sitting under "whole team" beside single sign-on. */}
           <FeatureGate feature="telephony">
             <section className="space-y-3">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  {t('accounts.phoneSetup', 'Your phone line')}
+                </h2>
+                <p className="text-caption text-muted-foreground">
+                  {t('accounts.phoneSetupDesc', 'What is left to finish before calls and SMS work.')}
+                </p>
+              </div>
               <NetgsmOnboardingCard />
             </section>
           </FeatureGate>
@@ -487,10 +657,13 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
           <section className="space-y-3">
             <div>
               <h2 className="text-base font-semibold text-foreground">
-                {t('accounts.identityNotifs', 'Identity & notifications (company)')}
+                {t('accounts.wholeTeam', 'Everyone in this workspace')}
               </h2>
               <p className="text-caption text-muted-foreground">
-                {t('accounts.identityNotifsDesc', 'Workspace single sign-on and Slack notifications — shared across your whole team.')}
+                {t(
+                  'accounts.wholeTeamDesc',
+                  'How your team signs in, and where the workspace posts its notifications. Changing these changes it for everybody.',
+                )}
               </p>
             </div>
             <SsoTab />

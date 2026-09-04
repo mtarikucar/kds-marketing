@@ -188,12 +188,11 @@ export default function TargetsPage({ embedded }: { embedded?: boolean } = {}) {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {!embedded && (
-        <PageHeader
-          title="Sales Targets"
-          description="Set monthly targets per rep and track attainment."
-        />
-      )}
+      <PageHeader
+        embedded={embedded}
+        title="Sales Targets"
+        description="Set monthly targets per rep and track attainment."
+      />
 
       {/*
         The write half, behind the role the SERVER actually enforces.

@@ -33,7 +33,7 @@ function apiErr(e: any, fallback: string): string {
  * Custom domains (Epic 13) — point your own hostname at the platform to white-
  * label your public site. Inert until an operator enables it (register → 503).
  */
-export default function CustomDomainsPage() {
+export default function CustomDomainsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [hostname, setHostname] = useState('');
@@ -83,6 +83,7 @@ export default function CustomDomainsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        embedded={embedded}
         title={t('customDomains.title', { defaultValue: 'Custom Domains' })}
         description={t('customDomains.subtitle', { defaultValue: 'Serve your public site on your own domain.' })}
       />

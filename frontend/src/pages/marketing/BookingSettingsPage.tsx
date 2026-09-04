@@ -136,7 +136,7 @@ const DEFAULT_VALUES: CalFormValues = {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function BookingSettingsPage() {
+export default function BookingSettingsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const wsId = (useMarketingAuthStore().user as any)?.workspaceId as string | undefined;
@@ -298,6 +298,7 @@ export default function BookingSettingsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+          embedded={embedded}
         title={t('booking.title', 'Booking')}
         description={t('booking.subtitle', "Let leads book a slot. Availability windows use the calendar's timezone.")}
         actions={

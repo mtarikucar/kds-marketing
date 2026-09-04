@@ -148,7 +148,10 @@ export function useOnboardingChecklist(): OnboardingChecklist {
       id: 'claude',
       // The connector console: the MCP address, the key, and the copy-paste
       // scheduled-task prompt all live on one page there.
-      to: '/settings/mcp-console',
+      // The connector is a TAB of the API page since the settings merge. The
+      // old path still redirects here, but a checklist should not send someone
+      // through a bounce it can skip.
+      to: '/settings/api-keys?tab=connector',
       done: state.data?.claudeLaneProven === true,
       // Only while it applies. Under APPROVAL the three Jeeta-keyed data tools
       // are not delayed, they are UNUSABLE (the approval executor returns their

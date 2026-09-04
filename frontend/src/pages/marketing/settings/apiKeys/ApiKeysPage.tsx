@@ -44,7 +44,7 @@ interface CreatedApiKey extends Omit<ApiKeyRow, 'lastUsedAt' | 'revokedAt'> {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function ApiKeysPage() {
+export default function ApiKeysPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
@@ -204,6 +204,7 @@ export default function ApiKeysPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        embedded={embedded}
         title={t('apiKeys.title', { defaultValue: 'API keys' })}
         description={t('apiKeys.subtitle', {
           defaultValue:

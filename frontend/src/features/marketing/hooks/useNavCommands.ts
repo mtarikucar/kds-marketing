@@ -57,6 +57,33 @@ export function useNavCommands(): NavCommand[] {
             path: child.path,
             icon: child.icon ?? hub.icon,
           });
+          /**
+           * A merged page's tabs are destinations too.
+           *
+           * Six pairs of settings pages became six pages with tabs, which made
+           * the sidebar shorter and would — without this — have made the
+           * palette worse: somebody who knows the thing is called "Roles" types
+           * it, finds nothing, and concludes it was removed. The list is
+           * something you SCAN and the palette is something you ASK, and only
+           * the list was too long.
+           *
+           * The first tab is skipped: it is what the bare path already opens,
+           * and offering it twice under two names is the duplication this
+           * whole change is removing.
+           */
+          for (const sub of child.tabs?.slice(1) ?? []) {
+            // A tab can be gated more tightly than the page that holds it —
+            // /calls needed `telephony` before it became a tab of Voice. The
+            // palette must not offer a jump to a half the workspace cannot use.
+            if (!has(sub.feature)) continue;
+            push({
+              id: `${child.path}?tab=${sub.tab}`,
+              label: t(sub.labelKey, sub.label),
+              hubLabel,
+              path: `${child.path}?tab=${sub.tab}`,
+              icon: child.icon ?? hub.icon,
+            });
+          }
         }
       } else if (hub.path) {
         push({ id: hub.path, label: hubLabel, hubLabel: null, path: hub.path, icon: hub.icon });

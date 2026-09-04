@@ -167,19 +167,14 @@
     }
   },
   "settingsGroup": {
-    "automation": "Automation",
-    "billing": "Products & billing",
     "agency": "Agency",
-    "workspace": "Workspace",
-    "team": "Team & access",
-    "data": "Data",
-    "integrations": "Channels & integrations",
+    "workspace": "Your business",
     "developer": "Developer & security",
-    "compliance": "Compliance",
     "other": "Other",
-    "connections": "Connections & domains",
-    "telephony": "Telephony",
-    "marketing": "Marketing assets"
+    "marketing": "Marketing",
+    "channels": "Channels & domains",
+    "selling": "Selling",
+    "plan": "Plan & access"
   },
   "settings.backToApp": "Back to app",
   "leadStatus": {
@@ -368,7 +363,13 @@
     "appointments": "Appointments",
     "brand": "Brand",
     "home": "Home",
-    "aiModels": "AI models"
+    "aiModels": "AI models",
+    "audience": "Segments & tags",
+    "domains": "Domains",
+    "apiAccess": "API & connector",
+    "business": "Business",
+    "selling": "Selling",
+    "planAccess": "Plan & access"
   },
   "aiModels": {
     "title": "AI generation models",
@@ -904,7 +905,8 @@
     "tab": {
       "products": "Products",
       "taxRates": "Tax Rates",
-      "coupons": "Coupons"
+      "coupons": "Coupons",
+      "catalogue": "Catalogue"
     }
   },
   "documents": {
@@ -2910,6 +2912,7 @@
       "linkRegister": "Sign up",
       "linkPrivacy": "Privacy (KVKK)",
       "linkTerms": "Terms of use",
+      "linkDataDeletion": "Data deletion",
       "rights": "All rights reserved."
     }
   },
@@ -3255,7 +3258,26 @@
         "unknown": "This build doesn't recognise this idea type; we can't tell you what it will do."
       },
       "whatLabel": "What will this do?",
-      "refreshDoneNoCount": "A new plan is ready"
+      "refreshDoneNoCount": "A new plan is ready",
+      "detail": {
+        "back": "Back to ideas",
+        "loadFailed": "The idea could not be loaded.",
+        "notFoundTitle": "This idea is no longer on the list",
+        "notFoundDesc": "It may have been decided, dismissed, or dropped when the plan was refreshed. You can go back to the pending ideas.",
+        "resultLabel": "Result",
+        "strategyLabel": "The strategy it belongs to",
+        "whyLabel": "Why this idea?"
+      },
+      "dismissFailure": "Dismiss this warning",
+      "failedBanner": "“{{title}}” could not be run: {{reason}}",
+      "status": {
+        "proposed": "Proposed",
+        "approved": "Approved",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "dismissed": "Dismissed"
+      }
     }
   },
   "studio": {
@@ -3345,7 +3367,24 @@
       "unknownCurrency": "Currency could not be read — the amount is shown with no unit",
       "followersPartial": "{{k}} of {{n}} accounts reported a follower count — the total covers only those",
       "organicUnread": "Account statistics could not be read",
-      "adsUnread": "Ad data could not be read"
+      "adsUnread": "Ad data could not be read",
+      "bandTitle": "Key statistics",
+      "leads": "Leads from ads",
+      "leadsAria": "Daily leads from ads",
+      "followersTotalAria": "Total followers per day",
+      "followersPartialShort": "{{k}} of {{n}} accounts reported",
+      "missing": "Not shown",
+      "reasonNoOrganic": "no organic data",
+      "reasonNoAds": "no ad data",
+      "reasonNoPublished": "nothing published in this range",
+      "reasonNoFollowers": "no follower count reported",
+      "noTrend": "no daily trend",
+      "moveFlow": "vs. the previous {{d}} days",
+      "moveStock": "vs. the start of the range",
+      "nothingConnected": "Nothing connected yet — these numbers start filling in the moment an account is connected.",
+      "noneAtAll": "There is no statistic to show for this range.",
+      "blindSpots": "{{n}} sources cannot be read — the numbers do not cover them",
+      "coverageDetail": "Coverage"
     },
     "today": {
       "brokenCount": "{{count}} posts have a problem",
@@ -3478,6 +3517,10 @@
         "triggerLinks": "Trigger links",
         "webhooks": "Webhook deliveries",
         "workflows": "Workflows"
+      },
+      "line": {
+        "title": "Content line",
+        "desc": "Concepts from one idea, taking different angles; where each batch stands from proposal to published, and what worked."
       }
     },
     "toolsMenu": {
@@ -3492,7 +3535,34 @@
         "recurring": "What you come back to every week"
       },
       "money": "Money",
-      "ops": "Operations"
+      "ops": "Operations",
+      "line": "Content line"
+    },
+    "accounts": {
+      "title": "Connected accounts",
+      "none": "No accounts connected yet",
+      "connect": "Connect an account",
+      "healthy": "Working",
+      "reauth": "Reconnect",
+      "disabled": "Disabled",
+      "reauthWhy": "This account lost its permission — until it is reconnected nothing publishes and no statistics arrive.",
+      "disabledWhy": "This account is off — nothing is queued to it.",
+      "reconnect": "Fix it in the Account Center",
+      "manage": "Open in the Account Center",
+      "followers": "Followers",
+      "followersAria": "{{name}}'s followers per day",
+      "noFollowers": "No follower count reported",
+      "reach": "Reach",
+      "engagements": "Engagement",
+      "posts": "Published",
+      "recent": "Recent activity",
+      "noRecent": "Nothing among the last {{n}} posts went to this account",
+      "noText": "(post with no text)",
+      "postPublished": "Published",
+      "postPending": "Queued",
+      "postFailed": "Failed",
+      "postsUnread": "Recent activity could not be read",
+      "noOrganicRow": "Organic statistics are not being read for this connection."
     }
   },
   "documentsHub": {
@@ -3567,7 +3637,7 @@
   },
   "calls": {
     "tab": {
-      "calls": "Calls",
+      "calls": "Log",
       "dialer": "Power Dialer",
       "voice": "AI calls"
     },
@@ -3982,6 +4052,54 @@
         "cta": "Add credits"
       },
       "short": "Out of AI credits"
+    }
+  },
+  "contentLine": {
+    "learned": {
+      "title": "What worked",
+      "cold": "Nothing has been published yet, so there is nothing to measure. Batches are planned unbiased for now — this fills in on its own once accounts are connected and the first posts go out.",
+      "thin": "not enough data",
+      "posts": "{{count}} posts",
+      "error": "Angle performance could not be read. The batches are below; only this section is missing."
+    },
+    "card": {
+      "concepts": "{{count}} concepts",
+      "awaiting": "{{count}} awaiting review",
+      "generating": "{{count}} in production",
+      "needsApproval": "{{count}} awaiting publish approval",
+      "scheduled": "{{count}} scheduled",
+      "published": "{{count}} published",
+      "failed": "{{count}} failed",
+      "notPublished": "not published",
+      "reach": "{{n}} reach",
+      "toCampaigns": "Open production in campaigns"
+    },
+    "composer": {
+      "label": "Paste an idea",
+      "placeholder": "A product, an event or an observation — a few sentences is enough. It will be split into concepts from different angles.",
+      "submit": "Plan concepts",
+      "working": "Planning…",
+      "guided": "It will be weighted by the measured angles, with one slot kept for exploration."
+    },
+    "batches": {
+      "error": "Batches could not be read.",
+      "emptyTitle": "No batches yet",
+      "emptyBody": "Paste an idea above and it will be split into concepts that take genuinely different angles."
+    },
+    "detail": {
+      "title": "Concepts from this idea",
+      "error": "Concepts could not be read.",
+      "coldReason": "There was no history to measure — this batch was planned unbiased."
+    },
+    "planned": {
+      "cold": "{{n}} concepts planned. Planned unbiased, because there was no history to measure.",
+      "guided": "{{n}} concepts planned.",
+      "error": "Concepts could not be planned."
+    }
+  },
+  "voiceHub": {
+    "tab": {
+      "calls": "Calls"
     }
   }
 }
