@@ -5063,11 +5063,14 @@
       },
       "strategy": {
         "label": "Strateji",
-        "why": "Otomasyonların, içeriğin ve reklamın hizmet edeceği plan. Taslakta kalırsa makine onu çalıştırmaz."
+        "why": "Otomasyonların, içeriğin ve reklamın hizmet edeceği plan. Taslakta kalırsa makine onu çalıştırmaz.",
+        "why_MISSING": "Otomasyonların, içeriğin ve reklamın hizmet edeceği plan. İlk stratejiyi kurulum söyleşisi üretir — Claude bunu senin yerine yapamaz, panelden başlat."
       },
       "automations": {
         "label": "Otomasyonlar",
-        "why": "Bir şey olduğunda ne yapılacağı. Hiçbiri yoksa gelen her aday elle işlenir."
+        "why": "Bir şey olduğunda ne yapılacağı. Hiçbiri yoksa gelen her aday elle işlenir.",
+        "why_ATTENTION": "Otomasyon var ama hiçbiri açık değil — taslakta duruyor. Yenisini kurma; Otomasyonlar sekmesinden var olanı aç.",
+        "why_MISSING": "Bir şey olduğunda ne yapılacağı. Hiçbiri yoksa gelen her aday elle işlenir."
       },
       "research": {
         "label": "Araştırma profili",
@@ -5075,7 +5078,8 @@
       },
       "social-accounts": {
         "label": "Sosyal hesaplar",
-        "why": "Üretilen içeriğin gideceği yer. Bozuk bir hesap sessizce her gönderiyi düşürür."
+        "why": "Üretilen içeriğin gideceği yer. Bozuk bir hesap sessizce her gönderiyi düşürür.",
+        "why_ATTENTION": "Bir hesabın oturumu düşmüş ya da jetonunun süresi dolmuş. Hesap bağlı görünür, gönderiler sessizce düşer. Hesaplar ekranından yeniden bağla."
       },
       "email-sending": {
         "label": "E-posta gönderimi",
@@ -5115,7 +5119,8 @@
       },
       "active-campaign": {
         "label": "Aktif kampanya",
-        "why": "İçerik fikri bir kampanya kalemine dönüşerek üretilir. Aktif kampanya yoksa üretim hattı hiçbir şey üretmez ve bunu söylemez."
+        "why": "İçerik fikri bir kampanya kalemine dönüşerek üretilir. Aktif kampanya yoksa üretim hattı hiçbir şey üretmez ve bunu söylemez.",
+        "why_MISSING": "İçerik fikri bir kampanya kalemine dönüşerek üretilir; aktif kampanya yoksa hat hiçbir şey üretmez. Claude kampanyayı taslak olarak hazırlayabilir, yayına almayı bilerek insana bırakıyoruz."
       },
       "content-concepts": {
         "label": "İçerik fikirleri",
@@ -5131,7 +5136,8 @@
       },
       "autonomy": {
         "label": "Otonomi",
-        "why": "En sonda: yukarıdakiler eksikken makineyi çalıştırmak, kimsenin kullanamayacağı işe para harcamaktır."
+        "why": "En sonda: yukarıdakiler eksikken makineyi çalıştırmak, kimsenin kullanamayacağı işe para harcamaktır.",
+        "why_MISSING": "En sonda: yukarıdakiler eksikken makineyi çalıştırmak, kimsenin kullanamayacağı işe para harcamaktır. Bu kolu yalnızca sen çevirebilirsin — onay kapısını kaldırdığı için ajana açtırmıyoruz."
       }
     }
   }

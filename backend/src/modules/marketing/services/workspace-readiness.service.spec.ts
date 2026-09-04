@@ -38,11 +38,19 @@ describe('workspace readiness', () => {
       brandProfile: { findFirst: jest.fn(async () => o.brandProfile) },
       knowledgeDoc: { count: counter('knowledgeDoc') },
       marketingStrategy: { findFirst: jest.fn(async () => o.strategy) },
-      workflow: { count: counter('workflow') },
+      // Two counts share this model: ACTIVE ones, and every one regardless of
+      // status. Keyed apart so a test can say "a draft exists and none is
+      // armed", which is the state the item used to misread.
+      workflow: {
+        count: jest.fn(async (a: any) =>
+          a?.where?.status === 'ACTIVE' ? count('workflow') : count('workflowAny'),
+        ),
+      },
       researchProfile: { count: counter('researchProfile') },
       socialAccount: {
+        // The broken count is the OR-predicate; the plain one is "switched on".
         count: jest.fn(async (a: any) =>
-          a?.where?.lastError ? count('socialBroken') : count('socialAccount'),
+          a?.where?.OR ? count('socialBroken') : count('socialAccount'),
         ),
       },
       sendingDomain: { count: counter('sendingDomain') },
@@ -151,6 +159,64 @@ describe('workspace readiness', () => {
       build({ counts: { socialAccount: 2, socialBroken: 0 } as any });
       expect((await item('social-accounts')).state).toBe('READY');
     });
+
+    it('asks for the accounts whose token RAN OUT, not just the ones with an error string', async () => {
+      // The failure that actually happens, and the one the first version of
+      // this file could not see. A token expires: `tokenExpiresAt` passes,
+      // nothing writes `lastError`, the row stays enabled. The old predicate
+      // (`enabled: true, lastError: { not: null }`) read that as healthy while
+      // every publish through the account failed.
+      //
+      // Asserted on the QUERY rather than a count, because a count mock proves
+      // only that the service believed its own filter.
+      build();
+      await svc.get(WS);
+      const broken = prisma.socialAccount.count.mock.calls
+        .map((c: any[]) => c[0]?.where)
+        .find((w: any) => w?.OR);
+      expect(broken).toBeTruthy();
+      expect(broken.OR).toEqual(
+        expect.arrayContaining([
+          { lastError: 'reauth_required' },
+          { enabled: true, tokenExpiresAt: { lt: expect.any(Date) } },
+        ]),
+      );
+    });
+
+    it('does not report an account somebody retired on purpose', async () => {
+      // `disconnected` and `mistagged_page_superseded` are both written by
+      // deliberate acts — an owner disconnecting, and the Page-repair job. A
+      // checklist that flags those forever is one people stop reading, so the
+      // predicate names `reauth_required` rather than "any error string".
+      build();
+      await svc.get(WS);
+      const broken = prisma.socialAccount.count.mock.calls
+        .map((c: any[]) => c[0]?.where)
+        .find((w: any) => w?.OR);
+      expect(broken.OR).not.toContainEqual({ lastError: { not: null } });
+    });
+  });
+
+  describe('automations, where a draft is not an absence', () => {
+    it('says ATTENTION when one exists and none is armed', async () => {
+      // Measured on the live workspace: a finished lead-routing workflow sat in
+      // DRAFT while this line said MISSING. MISSING reads as "build one" — and
+      // the fix was to switch on the one already there.
+      build({ counts: { workflow: 0, workflowAny: 2 } as any });
+      const i = await item('automations');
+      expect(i.state).toBe('ATTENTION');
+      expect(i.detail).toMatchObject({ active: 0, total: 2 });
+    });
+
+    it('says MISSING only when there is genuinely nothing', async () => {
+      build({ counts: { workflow: 0, workflowAny: 0 } as any });
+      expect((await item('automations')).state).toBe('MISSING');
+    });
+
+    it('says READY once one is running', async () => {
+      build({ counts: { workflow: 1, workflowAny: 3 } as any });
+      expect((await item('automations')).state).toBe('READY');
+    });
   });
 
   describe('a brand profile is not "a row exists"', () => {
@@ -206,7 +272,7 @@ describe('workspace readiness', () => {
     it('names a tool for every gap it can close itself', async () => {
       build();
       const r = await svc.get(WS);
-      for (const id of ['brand-profile', 'strategy', 'automations', 'research', 'products']) {
+      for (const id of ['brand-profile', 'automations', 'research', 'products']) {
         expect({ id, tool: r.items.find((i) => i.id === id)?.mcpTool })
           .toEqual({ id, tool: expect.stringMatching(/^jeeta\./) });
       }
@@ -219,6 +285,33 @@ describe('workspace readiness', () => {
       build();
       const r = await svc.get(WS);
       for (const id of ['payment-provider', 'growth-wallet', 'ai-credits', 'social-accounts']) {
+        expect({ id, tool: r.items.find((i) => i.id === id)?.mcpTool }).toEqual({ id, tool: null });
+      }
+    });
+
+    it('names NO tool where the catalogue has one whose CONTRACT cannot close the gap', async () => {
+      // The mistake this file shipped with, and the reason it looked right:
+      // each of these lines named a real, registered tool whose NAME matched
+      // the gap, and all three refuse the thing the line needs.
+      //
+      //  strategy         jeeta.synthesize_strategy    re-synthesizes an ACTIVE
+      //                                                strategy; returns
+      //                                                `no-active-strategy` in
+      //                                                exactly the MISSING case
+      //  active-campaign  jeeta.create_social_campaign creates a DRAFT; this
+      //                                                line counts ACTIVE, and
+      //                                                activation is withheld
+      //                                                from MCP on purpose
+      //  autonomy         jeeta.set_strategy_autonomy  refuses AUTONOMOUS, the
+      //                                                only value that
+      //                                                satisfies the line
+      //
+      // A wrong name here is worse than a null: the panel prints a robot beside
+      // the row and the agent calls a tool that no-ops, so the gap survives a
+      // fix that reported success.
+      build();
+      const r = await svc.get(WS);
+      for (const id of ['strategy', 'active-campaign', 'autonomy']) {
         expect({ id, tool: r.items.find((i) => i.id === id)?.mcpTool }).toEqual({ id, tool: null });
       }
     });
