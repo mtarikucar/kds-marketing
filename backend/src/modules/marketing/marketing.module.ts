@@ -1372,6 +1372,9 @@ export class MarketingModule {
     // by type so nothing would complain until something was quietly wrong.
     readiness: WorkspaceReadinessService,
     taxRates: TaxRatesService,
+    // For `jeeta.submit_strategy` only — the credit-free writer a connected
+    // Claude uses when the platform's own key cannot produce a strategy.
+    strategySynthesis: StrategySynthesisService,
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
@@ -1412,7 +1415,7 @@ export class MarketingModule {
     registerVoiceTools(registry, { calls: salesCalls, leads, campaigns, principals, entitlements });
     registerConversationWriteTools(registry, { conversations, principals, entitlements });
     // Faz 5 D4 — the brain & automation wave.
-    registerStrategyTools(registry, { strategy, feedback: strategyFeedback });
+    registerStrategyTools(registry, { strategy, feedback: strategyFeedback, synthesis: strategySynthesis });
     registerWorkflowTools(registry, { workflows, leadBulk, principals, entitlements });
     registerResearchTools(registry, {
       research: marketingResearch,

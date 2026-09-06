@@ -28,8 +28,21 @@ describe('readiness mcpTool promises', () => {
   const readinessSrc = readFileSync(join(here, 'workspace-readiness.service.ts'), 'utf8');
   const toolsDir = join(here, '..', 'mcp', 'tools');
 
-  /** Every `name: 'jeeta.x'` the readiness list promises. */
-  const promised = [...readinessSrc.matchAll(/mcpTool:\s*'([^']+)'/g)].map((m) => m[1]);
+  /**
+   * Every `jeeta.x` the readiness list promises, from BOTH shapes the field
+   * takes: the plain literal, and the state-dependent conditional the `strategy`
+   * item needs (see below). The earlier `/mcpTool:\s*'([^']+)'/` saw only the
+   * first — so the moment one item's promise became conditional, this file
+   * would have stopped checking that promise and still reported success, which
+   * is the same class of silent blindness as the guard test above.
+   */
+  const promised = [...readinessSrc.matchAll(/mcpTool:([^\n]*)/g)].flatMap((m) =>
+    [...m[1].matchAll(/'(jeeta\.[a-z_]+)'/g)].map((t) => t[1]),
+  );
+
+  /** The subset promised UNCONDITIONALLY — `mcpTool: 'jeeta.x',` and nothing
+   *  else on the line. Used to pin the one promise that must not be. */
+  const unconditional = [...readinessSrc.matchAll(/mcpTool:\s*'(jeeta\.[a-z_]+)'\s*,/g)].map((m) => m[1]);
 
   /** name -> requiresApproval, read from each `registry.register({...})` block. */
   const registry = new Map<string, boolean>();
@@ -52,6 +65,28 @@ describe('readiness mcpTool promises', () => {
   it('names only tools that are actually registered', () => {
     const missing = promised.filter((n) => !registry.has(n));
     expect({ missing }).toEqual({ missing: [] });
+  });
+
+  /**
+   * A tool may only be promised for the STATES it can serve.
+   *
+   * `mcpTool` is one field on an item that has three states, so a promise made
+   * from a constant is a promise made in all three. `jeeta.submit_strategy`
+   * closes the `strategy` gap in the MISSING state and refuses in the other two
+   * — it creates the workspace's FIRST strategy and rejects any existing row
+   * ("This workspace already has a strategy…", strategy-synthesis.service.ts).
+   * On the ATTENTION branch (a row that exists with a non-ACTIVE status) an
+   * unconditional promise would send an agent to a tool that cannot help: the
+   * robot beside the row, the call, the refusal, the gap still open.
+   *
+   * Checked here as SHAPE — the promise must not be written as a constant — so
+   * that a future edit flattening the conditional fails this file. The three
+   * states themselves are asserted against the real service in
+   * `workspace-readiness.service.spec.ts`.
+   */
+  it('promises submit_strategy conditionally, because it refuses two of that item’s three states', () => {
+    expect(promised).toContain('jeeta.submit_strategy');
+    expect(unconditional).not.toContain('jeeta.submit_strategy');
   });
 
   it('names no tool that would queue for a human instead of closing the gap', () => {

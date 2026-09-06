@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AnthropicService } from '../../ai/anthropic.service';
@@ -20,10 +20,27 @@ export interface StrategySynthesisResult {
   skipped?: string;
 }
 
+/**
+ * What a credit-free submit returns. No `skipped`: a submit either wrote the
+ * strategy or refused with a reason — there is no third state, because there is
+ * no model call to be unable to make.
+ */
+export interface StrategySubmitResult {
+  strategyId: string;
+  /** Actions actually written, all PROPOSED. */
+  actionCount: number;
+  /** Submitted items normalization rejected. Reported so a partial save cannot
+   *  read to the caller as a whole one. */
+  droppedActions: number;
+}
+
 const MAX_ITERS = 10;
 const MAX_TOOL_CALLS = 24;
 const MAX_WALL_MS = Number(process.env.STRATEGY_SYNTH_MAX_MS ?? 180_000);
-const MAX_ACTIONS = 24;
+/** The most ActionPlan items one strategy may carry. Exported so the MCP submit
+ *  tool can REFUSE a longer plan at its schema instead of silently truncating
+ *  it, which is what `normalizeActions` does to a model mid-loop. */
+export const MAX_ACTIONS = 24;
 const ACTION_KINDS: ReadonlySet<string> = new Set<ActionKind>([
   'LEAD_HUNT',
   'CONTENT',
@@ -132,6 +149,164 @@ export class StrategySynthesisService {
     private readonly orchestrator: StrategyOrchestrator,
     private readonly provisioning: StrategyProvisioningService,
   ) {}
+
+  /**
+   * Take a strategy an already-connected Claude wrote ITSELF, and store it
+   * through the same writer synthesis uses.
+   *
+   * ── WHY THIS EXISTS ─────────────────────────────────────────────────────
+   *
+   * Every route to a MarketingStrategy row ran through `synthesize()`, which
+   * needs a StrategyIntakeSession and returns `{skipped:'ai-not-configured'}`
+   * unless `AnthropicService.isEnabled()`. The intake wizard that produces the
+   * session has the same gate. So on a platform whose own Anthropic key is out
+   * of credit, a workspace with no strategy cannot obtain one by any path in
+   * the product — measured live, with the vendor's "credit balance is too low"
+   * coming back out of the nightly research run for over a week.
+   *
+   * The caller here IS the strategist. Asking it to ask the server to ask
+   * another model buys nothing, costs `strategy.synthesize` + a
+   * `strategy.turn` per iteration, and fails exactly when the platform key is
+   * dry. `ContentConceptsService.submitConcepts` established this pair for
+   * content; this is the same trade for the brain.
+   *
+   * ── WHAT IS DELIBERATELY NOT RELAXED ────────────────────────────────────
+   *
+   * The zod brief contract, the action normalization and `persist()` itself —
+   * the same code on the same path, so the row a submit writes is the row a
+   * synthesis writes: ACTIVE, version 1, `autonomyLevel` left to the DB default
+   * of ASSISTED, actions PROPOSED, and the closing touch that keeps the weekly
+   * feedback gate able to tell a fresh plan from a moved one. Every existing
+   * reader (the console, the orchestrator, `WorkspaceReadinessService`) was
+   * written against that row and none of them can tell the two apart.
+   *
+   * Two things are TIGHTER than synthesis, both because a submit is free to
+   * retry while a mid-loop refusal throws away a paid research run:
+   *  - an unrecognised archetype is REFUSED, not coerced to `OTHER` (that
+   *    coercion silently swaps the channel priors the whole engine reads);
+   *  - an ActionPlan that is empty, or whose every item was dropped, is
+   *    REFUSED — the strategist prompt's own rule ("the ActionPlan is
+   *    REQUIRED, never empty: it is what the operator approves and the system
+   *    executes"), which synthesis can only ask for by bouncing the model.
+   *
+   * ── WHAT IT WILL NOT DO ─────────────────────────────────────────────────
+   *
+   * REPLACE. The synthesis writer `persist()` re-seeds the plan with a
+   * `deleteMany` that is not filtered by status, so writing over a live
+   * strategy destroys every StrategyAction of it — the DONE rows and their
+   * `resultRef`s included, which are the only link from an action to the
+   * research run or staged post it produced. So this creates the FIRST strategy
+   * and refuses a second; replacing one stays with
+   * `POST /marketing/strategy/refresh` and `jeeta.synthesize_strategy`.
+   *
+   * WHAT ENFORCES THAT IS THE DATABASE, not the read at the top of this method.
+   * `MarketingStrategy.workspaceId` is `@unique` (schema.prisma) and
+   * `createFirst()` writes with `create`, so a second row is refused by the
+   * constraint even when the pre-check ran against a workspace that had none.
+   * The pre-check is kept only because it can name the version and status of
+   * the row it found; the P2002 it races with raises the same refusal, from
+   * `alreadyHasStrategy()`.
+   *
+   * Nothing about the risk class does this work. What gates a tool at all is
+   * `requiresApproval`, which `jeeta.submit_strategy` sets to false; the risk
+   * class only decides whether `writeMode: 'AUTONOMOUS'` may bypass a gate that
+   * exists, and `ALWAYS_APPROVED_RISKS` (mcp-broker.service.ts) holds
+   * `DESTRUCTIVE` alone — so in that mode even the `SPEND` tools run inline.
+   * There is no class-based protection standing behind this write.
+   *
+   * It also never calls `applyPlan`: a row it just created is ASSISTED, for
+   * which `applyPlan` is a no-op anyway, and an AUTONOMOUS workspace is picked
+   * up by the hourly `strategy-apply-tick` cron. Nothing here executes, so
+   * "this spends nothing" is a fact about the code rather than about a lane
+   * value.
+   *
+   * No credit is reserved, because none is spent: the thinking happened in the
+   * caller's own context, on the caller's own subscription.
+   *
+   * ── WHAT THE CALLER GIVES UP ────────────────────────────────────────────
+   *
+   * A REFRESH. This writes no StrategyIntakeSession, and
+   * `StrategyFeedbackService.refresh` — what `POST /marketing/strategy/refresh`,
+   * `jeeta.synthesize_strategy` and the weekly `StrategyFeedbackCron` all call —
+   * returns `{skipped:'no-intake-session'}` when the workspace has none. So
+   * unless someone has run the panel's strategy interview at some point, a
+   * strategy created here cannot be re-synthesized by any of the three, and no
+   * endpoint edits a stored brief either. Revising it means running that
+   * interview (which needs the platform's Anthropic key — the thing that was
+   * unavailable when this path was wanted). Deliberately not papered over by
+   * writing a session here: a fabricated intake would hand the strategist an
+   * auto-analysis and interview answers nobody gave.
+   *
+   * CONCURRENCY: this takes no advisory lock, and neither do most of the other
+   * writers of this row — `POST /marketing/strategy/intake/finish` calls
+   * `synthesize` directly, and `jeeta.synthesize_strategy` calls
+   * `feedback.refresh` directly. Only `POST /marketing/strategy/refresh` (a
+   * `pg_try_advisory_xact_lock`) and the weekly feedback cron
+   * (`withAdvisoryLock`, which serializes the cron against itself) hold one.
+   * A synthesis run is bounded by MAX_WALL_MS — minutes — so the window in
+   * which this method's pre-check can go stale is minutes, not seconds. That is
+   * survivable only because the check is not what refuses: the loser of any
+   * such race hits the unique index and is told so, with the winner's plan
+   * untouched.
+   */
+  async submitStrategy(
+    workspaceId: string,
+    submission: { archetype?: unknown; brief?: unknown; actions?: unknown },
+  ): Promise<StrategySubmitResult> {
+    // Not the guarantee — the MESSAGE. The guarantee is the unique index that
+    // `createFirst()` writes against; this read exists so the common refusal
+    // can say which strategy is in the way. See the docblock above.
+    const existing = await this.prisma.marketingStrategy.findUnique({ where: { workspaceId } });
+    if (existing) throw this.alreadyHasStrategy(existing as { version?: number; status?: string });
+
+    const check = validateBrief(submission.brief);
+    if (!check.ok) {
+      // The same sentence synthesis raises, so both paths report a bad brief in
+      // one language.
+      throw new BadRequestException(`invalid strategy brief: ${(check as { error: string }).error}`);
+    }
+
+    const archetype = String(submission.archetype ?? '');
+    if (!(archetype in ARCHETYPES)) {
+      throw new BadRequestException(
+        `unknown archetype "${archetype}". Pick the closest of: ${Object.keys(ARCHETYPES).join(', ')}.`,
+      );
+    }
+
+    const submitted = Array.isArray(submission.actions) ? submission.actions.length : 0;
+    const actions = this.normalizeActions(submission.actions);
+    if (!actions.length) {
+      throw new BadRequestException(
+        submitted
+          ? `every one of the ${submitted} submitted actions was rejected. Each needs a kind of ` +
+            `LEAD_HUNT | CONTENT | CHANNEL_SETUP | AD_CAMPAIGN | COMMUNITY_ENGAGE, plus a title and a rationale.`
+          : 'the ActionPlan is required and cannot be empty — it is what the operator approves and the system executes.',
+      );
+    }
+
+    const { strategyId, actionCount } = await this.createFirst(
+      workspaceId,
+      archetype as BusinessArchetype,
+      check.brief,
+      actions,
+    );
+
+    // Same best-effort provisioning synthesis does, for the same reason: by the
+    // time a brief exists the system knows the product, voice and audience
+    // better than a first-run user can type them. Creates ONE agent, only when
+    // the workspace has none, and never fails the submit.
+    await this.provisioning.ensureDefaultAgent(workspaceId, check.brief).catch((e) => {
+      this.logger.warn(`submitStrategy: ensureDefaultAgent failed (ws ${workspaceId}): ${(e as Error)?.message ?? e}`);
+    });
+
+    this.logger.log(
+      `strategy submitted by a connected agent: ${archetype} + ${actionCount} actions (ws ${workspaceId})`,
+    );
+    // `droppedActions` is reported rather than swallowed: normalization is
+    // silent by design, and an agent told "12 actions" that saved 9 has no way
+    // to notice.
+    return { strategyId, actionCount, droppedActions: Math.max(0, submitted - actionCount) };
+  }
 
   /**
    * @param extraContext optional outcome summary from the living feedback loop —
@@ -322,8 +497,120 @@ export class StrategySynthesisService {
     );
   }
 
+  /**
+   * The ONE refusal that keeps a submit from destroying a live plan. Raised
+   * from two places on purpose — `submitStrategy`'s pre-check, which has read
+   * the row and can name it, and `createFirst`'s P2002 handler, which has not —
+   * so the caller sees one behaviour whichever way it is refused.
+   */
+  private alreadyHasStrategy(existing: { version?: number; status?: string } | null): BadRequestException {
+    const which = existing ? ` (v${existing.version ?? '?'}, ${existing.status ?? '?'})` : '';
+    return new BadRequestException(
+      `This workspace already has a strategy${which}. ` +
+        'Submitting over it would delete its whole ActionPlan, including the DONE actions whose resultRefs are ' +
+        'the only link to the research runs and posts they produced. Read it with jeeta.get_strategy. Replacing a ' +
+        'strategy is jeeta.synthesize_strategy, which re-synthesizes FROM the intake session — so it works on a ' +
+        'workspace that ran the panel interview, and answers {skipped:\'no-intake-session\'} on one whose strategy ' +
+        'was submitted through this tool. There, rewriting the brief means running that interview in the panel.',
+    );
+  }
+
+  /**
+   * The unique-constraint violation a second `MarketingStrategy` row raises.
+   *
+   * Matched on `code`, the same shape `meta-leadgen-ingest.service.ts` matches,
+   * rather than `instanceof Prisma.PrismaClientKnownRequestError` — so the
+   * interleaving this guards can be simulated in a spec without constructing a
+   * Prisma error class.
+   *
+   * Not narrowed to a column, unlike `ai-credit-wallet.service.ts`'s
+   * `isRefConflict`: that write touches two unique columns and a blanket catch
+   * there loses money, whereas `MarketingStrategy` declares exactly one unique
+   * index besides its primary key — `workspaceId @unique` (schema.prisma) — and
+   * `createFirst` supplies no id.
+   */
+  private isDuplicateStrategy(e: unknown): boolean {
+    return (e as { code?: string } | null | undefined)?.code === 'P2002';
+  }
+
+  /**
+   * The SUBMIT writer: create the workspace's FIRST strategy and seed its plan.
+   *
+   * Split from `persist()` for one reason — it CREATES where persist upserts,
+   * which is what makes "a submit never overwrites an existing strategy" a
+   * database guarantee instead of a promise made by a read that ran earlier.
+   * Everything else is held identical to persist deliberately, because every
+   * reader (the console, the orchestrator, the weekly feedback gate, the
+   * readiness list) was written against the row synthesis produces: the same
+   * ACTIVE/version-1/archetype/brief fields, `autonomyLevel` left to the DB
+   * default of ASSISTED, the same `actionRows()` at status PROPOSED, and the
+   * same closing touch so the row ends up strictly newer than its actions.
+   *
+   * The row and its actions go in ONE transaction here, where persist brackets
+   * them (there, the strategy is upserted before the actions and touched after,
+   * so its `updatedAt` brackets them instead of sharing their commit — see
+   * persist()'s own note on the lock its callers must hold for that to hold).
+   * A submit has no previous plan to protect and exactly one shot at the row:
+   * if seeding the actions failed after the row had landed, the create-only
+   * refusal above would then lock the workspace into a strategy with no plan
+   * and no way back through this tool. Wrapped, a failed submit leaves nothing
+   * behind and can simply be retried.
+   */
+  private async createFirst(
+    workspaceId: string,
+    archetype: BusinessArchetype,
+    brief: object,
+    actions: StrategyActionItem[],
+  ): Promise<{ strategyId: string; actionCount: number }> {
+    const strategyId = await this.prisma
+      .$transaction(async (tx) => {
+        const strategy = await tx.marketingStrategy.create({
+          data: { workspaceId, status: 'ACTIVE', archetype, brief: brief as any, version: 1 },
+        });
+        if (actions.length) {
+          await tx.strategyAction.createMany({ data: this.actionRows(workspaceId, strategy.id, actions) });
+        }
+        return strategy.id;
+      })
+      .catch((e) => {
+        // The race the pre-check cannot win: another submit, or an intake
+        // `finish` / `feedback.refresh` synthesis, wrote the row in the minutes
+        // since. The transaction rolled back, so the winner's plan is untouched
+        // and this caller is told the same thing the pre-check would have said.
+        if (this.isDuplicateStrategy(e)) throw this.alreadyHasStrategy(null);
+        throw e;
+      });
+
+    // Touch the strategy LAST, after its actions exist — the same ordering
+    // persist() documents at length: the weekly feedback cron skips a workspace
+    // unless a StrategyAction has an `updatedAt` GREATER than the strategy's,
+    // so a fresh plan must leave the strategy the newer row. Both writes above
+    // are in one transaction, which is why establishing that is this separate
+    // update's job rather than a side effect of the create.
+    await this.prisma.marketingStrategy.update({ where: { id: strategyId }, data: { status: 'ACTIVE' } });
+
+    return { strategyId, actionCount: actions.length };
+  }
+
+  /** The StrategyAction rows one plan becomes. Shared by both writers so a
+   *  submitted plan and a synthesized one cannot drift apart in shape. */
+  private actionRows(workspaceId: string, strategyId: string, actions: StrategyActionItem[]) {
+    return actions.map((a) => ({
+      workspaceId,
+      strategyId,
+      kind: a.kind,
+      title: a.title,
+      rationale: a.rationale,
+      payload: a.payload as any,
+      priority: a.priority,
+      status: 'PROPOSED',
+    }));
+  }
+
   /** Upsert the workspace's single strategy (ACTIVE, version-bumped on replace)
    *  and re-seed its ActionPlan (drop prior PROPOSED plan, insert the new one).
+   *  This is the SYNTHESIS writer; `jeeta.submit_strategy` goes through
+   *  `createFirst()` instead, which cannot replace anything.
    *
    *  The strategy row is TOUCHED LAST, after its actions exist. The weekly
    *  feedback cron decides whether anything is worth re-synthesizing by asking
@@ -371,18 +658,7 @@ export class StrategySynthesisService {
     await this.prisma.$transaction(async (tx) => {
       await tx.strategyAction.deleteMany({ where: { workspaceId, strategyId: strategy.id } });
       if (actions.length) {
-        await tx.strategyAction.createMany({
-          data: actions.map((a) => ({
-            workspaceId,
-            strategyId: strategy.id,
-            kind: a.kind,
-            title: a.title,
-            rationale: a.rationale,
-            payload: a.payload as any,
-            priority: a.priority,
-            status: 'PROPOSED',
-          })),
-        });
+        await tx.strategyAction.createMany({ data: this.actionRows(workspaceId, strategy.id, actions) });
       }
     });
 

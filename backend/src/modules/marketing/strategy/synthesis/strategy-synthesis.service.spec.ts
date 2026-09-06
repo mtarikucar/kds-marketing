@@ -29,7 +29,18 @@ const GOOD_ACTIONS = [
 const toolUse = (id: string, name: string, input: unknown) => ({ id, name, input });
 const completion = (toolUses: any[]) => ({ text: '', toolUses, stopReason: 'tool_use', usage: { input: 10, output: 10 } });
 
-function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?: any[]; session?: any } = {}) {
+function deps(
+  overrides: {
+    enabled?: boolean;
+    aiEnabled?: boolean;
+    completions?: any[];
+    session?: any;
+    /** The row `marketingStrategy.findUnique` returns — null (the default) is a
+     *  workspace that has never had a strategy, which is the only state
+     *  `submitStrategy` accepts. */
+    existingStrategy?: any;
+  } = {},
+) {
   const complete = jest.fn();
   (overrides.completions ?? []).forEach((c) => complete.mockResolvedValueOnce(c));
   const anthropic = { isEnabled: () => overrides.aiEnabled ?? true, complete };
@@ -50,12 +61,24 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
     strategyIntakeSession: {
       findFirst: jest.fn().mockResolvedValue(session),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      // Never called by anything today. Present so a test can assert that
+      // `submitStrategy` does NOT invent one — see its own describe block.
+      create: jest.fn().mockResolvedValue({ id: 'sess-new' }),
     },
     marketingStrategy: {
+      // The SYNTHESIS writer. `submitStrategy` must never reach it: an upsert
+      // is what can replace a live strategy, and its UPDATE branch is what
+      // version-bumps and re-seeds the plan.
       upsert: jest.fn().mockResolvedValue({ id: 'strat1' }),
-      // persist() touches the strategy AFTER seeding its actions so the weekly
+      // The SUBMIT writer. `workspaceId` is `@unique`, so this is the call the
+      // database refuses when the workspace already has a strategy — which is
+      // what makes "a submit never overwrites one" atomic rather than a promise
+      // made by the findUnique above it.
+      create: jest.fn().mockResolvedValue({ id: 'strat1' }),
+      // Both writers touch the strategy AFTER seeding its actions so the weekly
       // feedback gate can tell "nothing moved" from "a fresh plan".
       update: jest.fn().mockResolvedValue({ id: 'strat1' }),
+      findUnique: jest.fn().mockResolvedValue(overrides.existingStrategy ?? null),
     },
     strategyAction: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
     // No brand profile by default — tests that want grounding override this.
@@ -368,5 +391,271 @@ describe('StrategySynthesisService — all-dropped bounce names the real problem
     expect(bounce).toContain('EVERY one was rejected');
     expect(bounce).toContain('LEAD_HUNT | CONTENT | CHANNEL_SETUP | AD_CAMPAIGN | COMMUNITY_ENGAGE');
     expect(bounce).not.toContain('ActionPlan is empty');
+  });
+});
+
+/**
+ * `submitStrategy` — the credit-free half of the pair, mirroring
+ * `ContentConceptsService.submitConcepts`.
+ *
+ * The measured failure it exists for: a live workspace with no
+ * MarketingStrategy row at all, on a platform whose Anthropic key is out of
+ * credit, so `synthesize()` returns `{skipped:'ai-not-configured'}` and there
+ * is no route to a first strategy by any path in the product.
+ *
+ * What these tests pin is that the SHORTCUT IS ONLY THE MODEL CALL: the row a
+ * submit writes has to be the row synthesis writes, field for field, because
+ * every reader (the console, the orchestrator, the weekly feedback gate, the
+ * readiness list) was written against that one.
+ */
+describe('StrategySynthesisService.submitStrategy', () => {
+  const SUBMIT = { archetype: 'B2C_COMMUNITY_NICHE', brief: GOOD_BRIEF, actions: GOOD_ACTIONS };
+
+  it('writes the same row persist() writes: ACTIVE, version 1, no autonomyLevel, actions PROPOSED', async () => {
+    const { svc, prisma } = deps();
+
+    const r = await svc.submitStrategy('ws1', SUBMIT);
+
+    expect(r).toEqual({ strategyId: 'strat1', actionCount: 2, droppedActions: 1 });
+    expect(prisma.marketingStrategy.create).toHaveBeenCalledWith({
+      data: { workspaceId: 'ws1', status: 'ACTIVE', archetype: 'B2C_COMMUNITY_NICHE', brief: GOOD_BRIEF, version: 1 },
+    });
+    // autonomyLevel is NOT an input and not a write: the row is born ASSISTED
+    // from the DB default, which is what keeps a submitted plan approval-gated.
+    const create = (prisma.marketingStrategy.create as jest.Mock).mock.calls[0][0].data;
+    expect(Object.keys(create).sort()).toEqual(['archetype', 'brief', 'status', 'version', 'workspaceId']);
+    expect(prisma.strategyAction.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          workspaceId: 'ws1',
+          strategyId: 'strat1',
+          kind: 'COMMUNITY_ENGAGE',
+          title: 'Post in r/Metin2',
+          rationale: 'Where the audience is',
+          payload: { subreddit: 'Metin2' },
+          priority: 'HIGH',
+          status: 'PROPOSED',
+        },
+        {
+          workspaceId: 'ws1',
+          strategyId: 'strat1',
+          kind: 'CONTENT',
+          title: 'Weekly nostalgia clips',
+          rationale: 'Resonates',
+          payload: { pillar: 'Classic-era clips' },
+          priority: 'MEDIUM',
+          status: 'PROPOSED',
+        },
+      ],
+    });
+  });
+
+  /**
+   * The ordering persist() exists to protect. The weekly feedback cron skips a
+   * workspace unless a StrategyAction moved since the strategy was written, so
+   * the closing touch has to land AFTER the actions — a submit that skipped it
+   * would put a full re-synthesis on this workspace every week.
+   */
+  it('touches the strategy last, after the actions are seeded', async () => {
+    const { svc, prisma } = deps();
+    await svc.submitStrategy('ws1', SUBMIT);
+    const seeded = (prisma.strategyAction.createMany as jest.Mock).mock.invocationCallOrder[0];
+    const touched = (prisma.marketingStrategy.update as jest.Mock).mock.invocationCallOrder[0];
+    expect(prisma.marketingStrategy.update).toHaveBeenCalledWith({ where: { id: 'strat1' }, data: { status: 'ACTIVE' } });
+    expect(touched).toBeGreaterThan(seeded);
+  });
+
+  it('spends nothing: no model call, no credit reserve, no AgentRun of its own', async () => {
+    const { svc, complete, credits, runs } = deps();
+    await svc.submitStrategy('ws1', SUBMIT);
+    expect(complete).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(runs.track).not.toHaveBeenCalled();
+  });
+
+  it('works with the platform AI key dry — the whole point of the tool', async () => {
+    const { svc, prisma } = deps({ aiEnabled: false, enabled: false });
+    await expect(svc.submitStrategy('ws1', SUBMIT)).resolves.toMatchObject({ strategyId: 'strat1' });
+    expect(prisma.marketingStrategy.create).toHaveBeenCalled();
+  });
+
+  /**
+   * A fresh row is ASSISTED (the DB default), so `applyPlan` would return idle
+   * anyway — but calling it at all would make "this spends nothing" a promise
+   * about a lane value rather than about the code. Approving is
+   * `jeeta.approve_strategy_action`, which is SPEND and gated.
+   */
+  it('executes nothing — the plan is left PROPOSED for a human', async () => {
+    const { svc, orchestrator } = deps();
+    await svc.submitStrategy('ws1', SUBMIT);
+    expect(orchestrator.applyPlan).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The limitation, pinned rather than papered over.
+   *
+   * `StrategyFeedbackService.refresh` — what `POST /marketing/strategy/refresh`,
+   * `jeeta.synthesize_strategy` and the weekly `StrategyFeedbackCron` all call —
+   * reads the workspace's most recent StrategyIntakeSession and returns
+   * `{skipped:'no-intake-session'}` when there is none. A submit writes none, so
+   * a strategy created this way cannot be refreshed unless the workspace ran the
+   * panel's interview at some point.
+   *
+   * Writing a session here would fix that by fabricating one: the strategist
+   * re-synthesizes FROM the session's auto-analysis and interview answers, and
+   * a manufactured session means answers nobody gave. The tool description says
+   * what the caller gives up instead.
+   */
+  it('writes no intake session, which is why a submitted strategy cannot be refreshed', async () => {
+    const { svc, prisma } = deps();
+    await svc.submitStrategy('ws1', SUBMIT);
+    expect(prisma.strategyIntakeSession.create).not.toHaveBeenCalled();
+    expect(prisma.strategyIntakeSession.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('provisions the default agent from the submitted brief, and survives it failing', async () => {
+    const { svc, provisioning } = deps();
+    await svc.submitStrategy('ws1', SUBMIT);
+    expect(provisioning.ensureDefaultAgent).toHaveBeenCalledWith('ws1', GOOD_BRIEF);
+
+    const second = deps();
+    second.provisioning.ensureDefaultAgent.mockRejectedValue(new Error('agent limit reached'));
+    await expect(second.svc.submitStrategy('ws1', SUBMIT)).resolves.toMatchObject({ strategyId: 'strat1' });
+  });
+
+  /**
+   * THE GUARANTEE, and where it actually lives.
+   *
+   * "A submit never overwrites an existing strategy" cannot be enforced by the
+   * `findUnique` at the top of `submitStrategy`: nothing holds a lock between
+   * that read and the write. The writers it races are lock-free —
+   * `POST /marketing/strategy/intake/finish` calls `synthesize` directly, and
+   * `jeeta.synthesize_strategy` calls `feedback.refresh` directly — and a
+   * synthesis run is bounded by MAX_WALL_MS, so the window is minutes wide.
+   *
+   * So the write is a `create` against `MarketingStrategy.workspaceId @unique`,
+   * and the constraint refuses what the read could not see.
+   */
+  describe('the refusal is atomic, not check-then-act', () => {
+    it('never reaches the upsert — the replacing write is not on this path at all', async () => {
+      const { svc, prisma } = deps();
+      await svc.submitStrategy('ws1', SUBMIT);
+      expect(prisma.marketingStrategy.upsert).not.toHaveBeenCalled();
+      // persist()'s unfiltered `deleteMany` is the destruction this refuses to
+      // be capable of. The submit writer does not contain one.
+      expect(prisma.strategyAction.deleteMany).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The interleaving itself: the pre-check sees no row (findUnique → null),
+     * and the write finds one. Against the check-then-act version this passed
+     * the check, upserted into the UPDATE branch, version-bumped, and ran an
+     * unfiltered `deleteMany` — destroying the plan the refusal promised to
+     * protect, DONE rows and their `resultRef`s included.
+     */
+    it('refuses when the row appears between the pre-check and the write, leaving the plan alone', async () => {
+      const { svc, prisma } = deps({ existingStrategy: null });
+      // What Prisma raises for the unique violation. Matched by `code`, so the
+      // interleaving can be simulated without constructing the error class.
+      (prisma.marketingStrategy.create as jest.Mock).mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002', meta: { target: ['workspaceId'] } }),
+      );
+
+      await expect(svc.submitStrategy('ws1', SUBMIT)).rejects.toThrow(/already has a strategy/i);
+
+      // The winner's plan is untouched: this path issues no delete and no
+      // upsert, and in the database the create's transaction rolled back.
+      expect(prisma.strategyAction.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.marketingStrategy.upsert).not.toHaveBeenCalled();
+      // And no closing touch on a row this call does not own.
+      expect(prisma.marketingStrategy.update).not.toHaveBeenCalled();
+    });
+
+    it('says the same thing whichever way it refuses', async () => {
+      const raced = deps({ existingStrategy: null });
+      (raced.prisma.marketingStrategy.create as jest.Mock).mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+      );
+      const precheck = deps({ existingStrategy: { id: 'strat1', version: 3, status: 'ACTIVE' } });
+
+      const fromRace = await raced.svc.submitStrategy('ws1', SUBMIT).catch((e) => e as Error);
+      const fromCheck = await precheck.svc.submitStrategy('ws1', SUBMIT).catch((e) => e as Error);
+
+      // Same class, same guidance. The pre-check adds the version and status of
+      // the row it read — the only thing the race cannot know.
+      expect(fromRace.constructor).toBe(fromCheck.constructor);
+      for (const m of [fromRace.message, fromCheck.message]) {
+        expect(m).toMatch(/already has a strategy/i);
+        expect(m).toMatch(/jeeta\.synthesize_strategy/);
+        expect(m).toMatch(/resultRefs/);
+      }
+      expect(fromCheck.message).toContain('(v3, ACTIVE)');
+    });
+
+    /**
+     * A submit has one shot at the row: once it exists, this tool refuses
+     * forever. So a create that landed and a seed that failed would strand the
+     * workspace with a strategy and no plan, unreachable by the only tool that
+     * could have written one. Both go in one transaction for that reason.
+     *
+     * The harness's `$transaction` hands the callback the same client, so what
+     * this pins is the ORDERING — both writes issued inside the callback — and
+     * not atomicity, which is the database's.
+     */
+    it('writes the row and its plan inside one transaction', async () => {
+      const { svc, prisma } = deps();
+      await svc.submitStrategy('ws1', SUBMIT);
+      const tx = (prisma.$transaction as jest.Mock).mock.invocationCallOrder[0];
+      expect((prisma.marketingStrategy.create as jest.Mock).mock.invocationCallOrder[0]).toBeGreaterThan(tx);
+      expect((prisma.strategyAction.createMany as jest.Mock).mock.invocationCallOrder[0]).toBeGreaterThan(tx);
+    });
+  });
+
+  describe('what it refuses', () => {
+    it('refuses to overwrite an existing strategy, naming what a replace would destroy', async () => {
+      const { svc, prisma } = deps({ existingStrategy: { id: 'strat1', version: 3, status: 'ACTIVE' } });
+      await expect(svc.submitStrategy('ws1', SUBMIT)).rejects.toThrow(/already has a strategy/i);
+      expect(prisma.marketingStrategy.create).not.toHaveBeenCalled();
+      expect(prisma.marketingStrategy.upsert).not.toHaveBeenCalled();
+      expect(prisma.strategyAction.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses a brief that fails the zod contract, in the same words synthesis uses', async () => {
+      const { svc, prisma } = deps();
+      const noChannels = { ...GOOD_BRIEF, channels: [] };
+      await expect(svc.submitStrategy('ws1', { ...SUBMIT, brief: noChannels })).rejects.toThrow(
+        /invalid strategy brief: channels/,
+      );
+      expect(prisma.marketingStrategy.create).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Synthesis COERCES an unrecognised archetype to OTHER, because a refusal
+     * mid-loop throws away a paid research run. A submit costs nothing to
+     * retry, and OTHER silently changes the channel priors the whole engine
+     * reads — so here the caller is told instead.
+     */
+    it('refuses an unknown archetype instead of silently coercing it to OTHER', async () => {
+      const { svc, prisma } = deps();
+      await expect(svc.submitStrategy('ws1', { ...SUBMIT, archetype: 'B2C_VIBES' })).rejects.toThrow(
+        /B2C_VIBES[\s\S]*B2B_LOCAL_SERVICE/,
+      );
+      expect(prisma.marketingStrategy.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ActionPlan that is empty, or whose every item was dropped', async () => {
+      const { svc } = deps();
+      await expect(svc.submitStrategy('ws1', { ...SUBMIT, actions: [] })).rejects.toThrow(/ActionPlan/);
+      await expect(
+        svc.submitStrategy('ws1', { ...SUBMIT, actions: [{ kind: 'SEO', title: 'x', rationale: 'y' }] }),
+      ).rejects.toThrow(/LEAD_HUNT/);
+    });
+
+    it('reports dropped actions rather than swallowing them', async () => {
+      const { svc } = deps();
+      const r = await svc.submitStrategy('ws1', SUBMIT);
+      // GOOD_ACTIONS carries one item with an invalid kind.
+      expect(r.droppedActions).toBe(1);
+    });
   });
 });
