@@ -656,7 +656,7 @@ describe('workspace readiness', () => {
     it('names NO tool where the catalogue has one whose CONTRACT cannot close the gap', async () => {
       // The mistake this file shipped with, and the reason it looked right:
       // each of these lines named a real, registered tool whose NAME matched
-      // the gap, and all three refuse the thing the line needs.
+      // the gap, and every one refused the thing the line needs.
       //
       //  strategy         jeeta.synthesize_strategy    re-synthesizes an ACTIVE
       //                                                strategy; returns
@@ -673,10 +673,53 @@ describe('workspace readiness', () => {
       // A wrong name here is worse than a null: the panel prints a robot beside
       // the row and the agent calls a tool that no-ops, so the gap survives a
       // fix that reported success.
+      //
+      // `strategy` has since left this list — not because the reasoning above
+      // changed, but because a tool that CAN close it was built (see below).
       build();
       const r = await svc.get(WS);
-      for (const id of ['strategy', 'active-campaign', 'autonomy']) {
+      for (const id of ['active-campaign', 'autonomy']) {
         expect({ id, tool: r.items.find((i) => i.id === id)?.mcpTool }).toEqual({ id, tool: null });
+      }
+    });
+
+    /**
+     * The one gap on this list an agent closes by WRITING the missing thing
+     * rather than by asking the platform to produce it.
+     *
+     * `jeeta.submit_strategy` takes a brief the connected Claude wrote itself
+     * and persists it through the same writer synthesis uses, so the row this
+     * item reads exists and is ACTIVE afterwards. It is ungated, spends no
+     * credit and makes no model call — which is what makes it a fix for the
+     * state this workspace was actually in: a dry platform Anthropic key, with
+     * both the intake wizard and synthesis returning `ai-not-configured`.
+     */
+    it('names submit_strategy for the strategy gap — the tool that actually creates the row', async () => {
+      build();
+      const r = await svc.get(WS);
+      const item = r.items.find((i) => i.id === 'strategy');
+      expect({ state: item?.state, tool: item?.mcpTool }).toEqual({
+        state: 'MISSING',
+        tool: 'jeeta.submit_strategy',
+      });
+    });
+
+    /**
+     * …and only there. `submit_strategy` creates the workspace's FIRST strategy
+     * and refuses any existing row, so promising it beside a row that exists is
+     * the same wrong-promise failure this block is about — an agent sent to a
+     * tool whose answer is "This workspace already has a strategy". The
+     * ATTENTION case is the one that bites: the item is still a gap, so the
+     * panel still prints the robot.
+     *
+     * The shape of the fix (a conditional field, not a constant) is pinned in
+     * `readiness-tool-promises.spec.ts`; this pins the behaviour.
+     */
+    it('promises NO tool once a strategy row exists — submit refuses every one of those states', async () => {
+      for (const status of ['DRAFT', 'ARCHIVED', 'ACTIVE']) {
+        build({ strategy: { id: 's1', status, autonomyLevel: 'ASSISTED' } });
+        const item = (await svc.get(WS)).items.find((i) => i.id === 'strategy');
+        expect({ status, tool: item?.mcpTool }).toEqual({ status, tool: null });
       }
     });
   });

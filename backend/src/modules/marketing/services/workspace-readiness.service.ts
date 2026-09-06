@@ -473,9 +473,28 @@ export class WorkspaceReadinessService {
         // existing ACTIVE strategy from the workspace's intake session, and
         // returns `{ skipped: 'no-active-strategy' }` when there is none —
         // precisely the MISSING case this line describes. The first strategy
-        // comes out of the intake interview, whose session id an agent has no
-        // way to obtain. Naming it here promised a fix that silently no-ops.
-        mcpTool: null,
+        // used to come only out of the intake interview, whose session id an
+        // agent has no way to obtain, and whose own gate is the platform's
+        // Anthropic key: naming it here promised a fix that silently no-ops.
+        //
+        // `jeeta.submit_strategy` is the tool that does close this line. It
+        // takes a brief the connected Claude wrote itself and runs it through
+        // the same writer synthesis uses, so the row this item then reads is
+        // ACTIVE and this state turns READY on the next call — with no model
+        // call and no credit, which matters because the platform key being dry
+        // is how a workspace ends up here.
+        //
+        // PROMISED IN THE MISSING STATE ONLY, which is why this field is a
+        // conditional where every other one on this list is a constant. The
+        // item has three states and `submit_strategy` serves exactly one of
+        // them: it refuses ANY existing row (`This workspace already has a
+        // strategy…`), so on the ATTENTION branch — a row that exists with a
+        // non-ACTIVE status — naming it would send an agent to a tool that
+        // cannot help, which is the failure this whole field was audited for.
+        // That branch needs a human either way, and nothing in the backend
+        // writes a status other than ACTIVE today, so it is reachable only by a
+        // hand-edited row. READY needs no tool at all.
+        mcpTool: !strategy ? 'jeeta.submit_strategy' : null,
         detail: strategy ? { status: strategy.status } : undefined,
       },
       {

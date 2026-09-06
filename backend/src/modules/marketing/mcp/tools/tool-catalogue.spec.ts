@@ -190,6 +190,7 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
       setAutonomy: jest.fn(),
     } as any,
     feedback: { refresh: jest.fn() } as any,
+    synthesis: { submitStrategy: jest.fn() } as any,
   });
   registerWorkflowTools(registry, {
     workflows: { list: jest.fn(), get: jest.fn(), create: jest.fn(), setStatus: jest.fn() } as any,
@@ -417,6 +418,11 @@ describe('MCP tool catalogue', () => {
         'jeeta.dismiss_strategy_action',
         'jeeta.synthesize_strategy',
         'jeeta.set_strategy_autonomy',
+        // The generation-free twin of synthesize_strategy, and the only route
+        // to a FIRST strategy that does not need the platform's own Anthropic
+        // key: a connected Claude writes the brief itself and submits it.
+        // Deferred, like everything added since the ceiling.
+        'jeeta.submit_strategy',
         'jeeta.list_workflows',
         'jeeta.get_workflow',
         'jeeta.create_workflow',
@@ -493,7 +499,17 @@ describe('MCP tool catalogue', () => {
     // 123 -> 124: jeeta.produce_content_concept, also deferred.
     // 124 -> 126: the two distribution tools, also deferred. There is no third
     // one that sends, on purpose — see the comment beside them above.
-    // 126 -> 127: jeeta.storyboard_content_concept, also deferred.
+    // 127 -> 128: jeeta.storyboard_content_concept, also deferred.
+    // 128 -> 129: jeeta.submit_strategy, also deferred — the credit-free way
+    // to a first MarketingStrategy row.
+    //
+    // Those two waves ran in PARALLEL and each appended its own line here, each
+    // starting from the number it saw before the other landed — so both were
+    // written as one less than the truth, and the merge that brought them
+    // together is what exposed it. The figures above are the ones the built
+    // registry actually returned when the two were resolved, not the ones
+    // either branch predicted. This is the failure mode the note below warns
+    // about: trust the assertion, which counts a real registry.
     //
     // MEASURED, not counted by grep. `grep -c 'registry.register('` over the
     // non-spec tool files is a legitimate cross-check and currently agrees:
@@ -503,7 +519,7 @@ describe('MCP tool catalogue', () => {
     // over-counts; re-measured, grep did not — the counts have always matched,
     // and the figure to trust is the one this assertion takes from a built
     // registry.
-    expect(names).toHaveLength(128);
+    expect(names).toHaveLength(129);
   });
 
   /**
@@ -589,14 +605,14 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 127 total, 45 advertised (+2 discovery) and 80 deferred: everything a
+    // 128 total, 45 advertised (+2 discovery) and 81 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
-    // hundred. `jeeta.submit_content_concepts` is the newest, and deferred for
-    // that reason. The number in this comment said 120 while the assertion
+    // hundred. `jeeta.submit_strategy` is the newest, and deferred for that
+    // reason — like `jeeta.submit_content_concepts` before it. The number in this comment said 120 while the assertion
     // below said 123; a comment that disagrees with its own assertion is how a
     // measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(128);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(129);
   });
 });
 

@@ -624,6 +624,7 @@ campaign's recent calendar slots.
 | `jeeta.dismiss_strategy_action` | Drop a proposed action | `settings.manage` | WRITE | — | no |
 | `jeeta.synthesize_strategy` | Re-synthesise the strategy — **burns AI credits + live scraping money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
 | `jeeta.set_strategy_autonomy` | Change the strategy lane (cannot select `AUTONOMOUS`) | `settings.manage` | WRITE | `TARGET_CHANGE` | no |
+| `jeeta.submit_strategy` | Save a strategy **you wrote yourself** — same brief contract, same row (ACTIVE, v1, ASSISTED, actions PROPOSED), **no credits and no platform model call**. Creates the FIRST strategy only; refuses to overwrite an existing one | `settings.manage` | WRITE | — | no |
 | `jeeta.list_workflows` | List automations and their status | `automations.manage` | READ | — | yes |
 | `jeeta.get_workflow` | One automation's trigger and steps | `automations.manage` | READ | — | no |
 | `jeeta.create_workflow` | Author an automation as a DRAFT (it does not run) | `automations.manage` | WRITE | — | no |
@@ -638,6 +639,48 @@ campaign's recent calendar slots.
 | `jeeta.reject_research_candidates` | Dismiss staged prospects that are not a fit, removing them from the review queue without creating leads | `leads.write` | WRITE | yes | no |
 
 Workflows gate on `workflows`; research on `research`.
+
+##### Why there are two ways to get a strategy
+
+`jeeta.synthesize_strategy` asks the PLATFORM's model to research the market and
+write the brief. It needs an intake session, it reserves `strategy.synthesize` plus a
+`strategy.turn` per iteration, and it returns `{skipped: "ai-not-configured"}` when
+the platform key is unusable — as does the intake wizard that would create the
+session. A workspace with no strategy on a platform whose key is dry therefore
+has no route to one at all.
+
+`jeeta.submit_strategy` removes the model call and nothing else. You already
+hold the brand context, so write the brief in your own turn and submit it: the
+server runs the same zod brief contract, the same action normalisation and the
+same writer, producing the same row (ACTIVE, version 1, the ASSISTED lane,
+actions PROPOSED, the strategy touched last so the weekly feedback gate still
+works). No credit is reserved because none is spent.
+
+Two refusals are stricter than synthesis, because a submit is free to retry:
+an unknown archetype is rejected rather than coerced to `OTHER`, and an empty
+ActionPlan is rejected outright. One is stricter still: it creates the FIRST
+strategy only. Replacing one re-seeds the plan with an unfiltered delete, which
+takes the DONE actions and the `resultRef`s that are the only link to what they
+produced — so replacing stays with `jeeta.synthesize_strategy`.
+
+That refusal is enforced by the unique index on
+`MarketingStrategy.workspaceId`, not by the read that precedes it: the submit
+path writes with `create`, and the P2002 a lost race raises is translated into
+the same refusal. It has to be, because the writers it races are lock-free —
+`POST /marketing/strategy/intake/finish` and `jeeta.synthesize_strategy` both
+call synthesis directly, and a synthesis run is minutes long. (Nothing about
+the risk class protects the row. `submit_strategy` is `WRITE`, and the broker's
+`ALWAYS_APPROVED_RISKS` covers `DESTRUCTIVE` alone — in `AUTONOMOUS` write mode
+even the `SPEND` tools run inline.)
+
+What a submit gives up: it writes no intake session, and re-synthesis reads
+one. On a workspace whose strategy came from here and that never ran the
+panel's strategy interview, `jeeta.synthesize_strategy`, `POST
+/marketing/strategy/refresh` and the weekly feedback cron all answer
+`{skipped: "no-intake-session"}`, and no endpoint edits a stored brief.
+Rewriting a submitted strategy means running that interview in the panel — the
+platform-model path this tool exists to do without. Stale plan items can still
+be dropped with `jeeta.dismiss_strategy_action`.
 
 ##### The MCP research lane
 

@@ -42,6 +42,9 @@ function build() {
     setAutonomy: jest.fn().mockResolvedValue({ id: 's1', autonomyLevel: 'SHADOW' }),
   };
   const feedback = { refresh: jest.fn().mockResolvedValue({ strategyId: 's1', actionCount: 3 }) };
+  const synthesis = {
+    submitStrategy: jest.fn().mockResolvedValue({ strategyId: 's1', actionCount: 1, droppedActions: 0 }),
+  };
   const workflows = {
     list: jest.fn().mockResolvedValue([]),
     get: jest.fn().mockResolvedValue({ id: 'w1', status: 'ACTIVE' }),
@@ -59,7 +62,7 @@ function build() {
     getEffective: jest.fn().mockResolvedValue({ features: { workflows: true, research: true } }),
   };
 
-  registerStrategyTools(registry, { strategy, feedback } as never);
+  registerStrategyTools(registry, { strategy, feedback, synthesis } as never);
   registerWorkflowTools(registry, { workflows, leadBulk, principals: { resolve: jest.fn().mockResolvedValue({ id: 'sys-1' }) }, entitlements } as never);
   registerResearchTools(registry, { research, runner, entitlements } as never);
 
@@ -70,8 +73,32 @@ function build() {
     { enqueue, supersedePending } as never,
     { recordTool: jest.fn() } as never,
   );
-  return { broker, strategy, feedback, workflows, leadBulk, runner, enqueue, supersedePending };
+  return { broker, strategy, feedback, synthesis, workflows, leadBulk, runner, enqueue, supersedePending };
 }
+
+/** A submission the tool's own schema accepts — the broker `safeParse`s before
+ *  it reaches the handler, so an invalid fixture would fail these tests for the
+ *  wrong reason. */
+const SUBMISSION = {
+  archetype: 'B2C_COMMUNITY_NICHE',
+  brief: {
+    identity: {
+      product: 'Private Metin2 server',
+      voice: 'playful, nostalgic',
+      positioning: 'The classic-era server',
+      usp: 'Pre-2010 mechanics',
+    },
+    audience: 'Nostalgic Metin2 veterans, 20-35, EU',
+    channels: [{ key: 'reddit', fitScore: 0.9, rationale: 'r/Metin2 is where they gather' }],
+    contentPillars: [{ title: 'Classic-era clips', angle: 'nostalgia', formats: ['reel'], tone: 'playful' }],
+    goals: { objective: 'Grow active players to 2k', kpis: ['DAU'] },
+    budget: 'Bootstrap: organic + $200/mo ads',
+    competitors: ['OtherServer.gg'],
+  },
+  actions: [
+    { kind: 'COMMUNITY_ENGAGE', title: 'Post in r/Metin2', rationale: 'Where the audience is', priority: 'HIGH' },
+  ],
+};
 
 describe("Faz 5 D4 — the brain's SPEND tools: queued in APPROVAL, inline in AUTONOMOUS", () => {
   it('jeeta.approve_strategy_action is QUEUED under APPROVAL — the action is not executed', async () => {
@@ -189,6 +216,77 @@ describe("Faz 5 D4 — the brain's SPEND tools: queued in APPROVAL, inline in AU
       ).toBe('OK');
       expect(workflows.create).toHaveBeenCalled();
     }
+  });
+
+  /**
+   * `jeeta.submit_strategy` — a WRITE-classified, ungated tool in the SPEND
+   * domain this file guards, which makes it exactly the subject of the note at
+   * the top: "a tool that was registered `risk: 'WRITE'` by a copy-paste".
+   *
+   * Here the classification is deliberate, so these assert what IS true of it
+   * rather than that it is gated. It runs inline in BOTH write modes, on
+   * purpose — a gated one could not close the readiness gap that names it — and
+   * the guarantee that makes that acceptable is not a broker gate at all: it
+   * writes a plan of PROPOSED actions and dispatches none of them. Moving one
+   * is the SEPARATE, SPEND-classified `approve_strategy_action` tested above.
+   */
+  describe('jeeta.submit_strategy — WRITE and ungated, deliberately', () => {
+    it('runs inline in BOTH write modes and queues nothing', async () => {
+      for (const writeMode of ['APPROVAL', 'AUTONOMOUS'] as const) {
+        const { broker, synthesis, enqueue } = build();
+        const res = await broker.invoke({ ...AUTONOMOUS, writeMode }, 'jeeta.submit_strategy', SUBMISSION);
+        expect({ writeMode, status: res.status }).toEqual({ writeMode, status: 'OK' });
+        expect(synthesis.submitStrategy).toHaveBeenCalledWith('ws1', {
+          archetype: SUBMISSION.archetype,
+          brief: SUBMISSION.brief,
+          actions: SUBMISSION.actions,
+        });
+        expect(enqueue).not.toHaveBeenCalled();
+      }
+    });
+
+    /**
+     * The reason it is allowed to be ungated. Writing a strategy dispatches
+     * nothing: no action is approved, no research job queued, nothing published
+     * — which is the same assertion this file makes about the gated tools,
+     * here made about an UNgated one.
+     */
+    it('executes no action of the plan it just wrote, in either mode', async () => {
+      for (const writeMode of ['APPROVAL', 'AUTONOMOUS'] as const) {
+        const { broker, strategy, feedback, runner, leadBulk } = build();
+        await broker.invoke({ ...AUTONOMOUS, writeMode }, 'jeeta.submit_strategy', SUBMISSION);
+        expect(strategy.approveAction).not.toHaveBeenCalled();
+        expect(strategy.setAutonomy).not.toHaveBeenCalled();
+        expect(feedback.refresh).not.toHaveBeenCalled();
+        expect(runner.enqueueNow).not.toHaveBeenCalled();
+        expect(leadBulk.bulkEnroll).not.toHaveBeenCalled();
+      }
+    });
+
+    /**
+     * And the corollary worth stating out loud: because nothing in the broker
+     * gates a WRITE tool, NOTHING IN THE BROKER protects an existing strategy
+     * from being overwritten either. That protection is the service's — a
+     * `create` against `MarketingStrategy.workspaceId @unique` — and what
+     * arrives here is its refusal, propagated as an error rather than softened
+     * into a PENDING_APPROVAL card.
+     */
+    it('propagates the service refusal — the broker is not what protects an existing strategy', async () => {
+      const { broker, synthesis, enqueue } = build();
+      synthesis.submitStrategy.mockRejectedValue(new Error('This workspace already has a strategy (v3, ACTIVE).'));
+      await expect(broker.invoke(AUTONOMOUS, 'jeeta.submit_strategy', SUBMISSION)).rejects.toThrow(
+        /already has a strategy/,
+      );
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('is reachable only with settings.manage, like the rest of the strategy writes', async () => {
+      const { broker, synthesis } = build();
+      await expect(
+        broker.invoke({ ...AUTONOMOUS, grantedScopes: ['reports.read'] }, 'jeeta.submit_strategy', SUBMISSION),
+      ).rejects.toThrow();
+      expect(synthesis.submitStrategy).not.toHaveBeenCalled();
+    });
   });
 
   /**
