@@ -12,7 +12,8 @@ import { BrandSafetyService } from '../ai/brand-safety.service';
 import { MediaGenService } from '../ai/media/media-gen.service'; // Milestone 1
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { assertCataloguedModel, assertModelOffersAspect } from '../ai/media/media-models.config';
-import { DEFAULT_SHOT_ASPECT } from '../video/video-pipeline.service';
+import { DEFAULT_SHOT_ASPECT, type ShotPlan } from '../video/video-pipeline.service';
+import { resetExhaustedFrames, supportsStoryboard } from '../content-concepts/storyboard-frames';
 import { VideoAssemblyService } from '../ai/media/video-assembly.service';
 import { R2StorageService } from '../../../common/storage/r2-storage.service';
 import { readFile, unlink } from 'node:fs/promises';
@@ -452,6 +453,20 @@ export class SocialCampaignsService implements OnModuleInit {
           ...(resume ? {} : { generatedAssetIds: [] }),
         },
       });
+      // A storyboard frame that failed for good is the one thing `produce`
+      // cannot retry on its own (MAX_FRAME_ATTEMPTS), and the concept's own
+      // storyboard endpoints refuse a promoted concept. A human pressing
+      // Regenerate is exactly the renewed intent that cap waits for: the
+      // exhausted beats get a fresh seed and a fresh count, and the producer
+      // draws them again before it animates anything.
+      const source = await this.prisma.contentConcept.findFirst({
+        where: { id: item.contentConceptId, workspaceId },
+        select: { id: true, shotPlan: true },
+      });
+      const plan = (source?.shotPlan ?? null) as unknown as ShotPlan | null;
+      if (source && supportsStoryboard(plan)) {
+        await resetExhaustedFrames({ prisma: this.prisma }, workspaceId, source.id, plan);
+      }
       await this.scheduledJobs.schedule({
         workspaceId, kind: CONCEPT_PRODUCE_KIND, runAt: new Date(),
         payload: { itemId, workspaceId, waits: 0 }, dedupKey: produceDedup(itemId),

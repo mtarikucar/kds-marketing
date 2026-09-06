@@ -14,17 +14,45 @@ import {
   type Shot,
 } from '../../../features/marketing/api/contentLine.service';
 
-/** A frame the vendor is still drawing — the reason the detail keeps polling. */
-const isPending = (sh: Shot) => sh.keyframe?.status === 'QUEUED' || sh.keyframe?.status === 'GENERATING';
+/** Automatic redraws a beat gets before it waits for a human — mirrors the
+ *  backend's MAX_FRAME_ATTEMPTS. */
+const MAX_FRAME_ATTEMPTS = 2;
+
+/** A frame the vendor is still drawing — or one merely requested, which the
+ *  backend marks QUEUED with no asset the moment someone asks. Either way the
+ *  picture is coming, and the detail keeps polling for it. */
+export const isPending = (sh: Shot) => sh.keyframe?.status === 'QUEUED' || sh.keyframe?.status === 'GENERATING';
 const isFailed = (sh: Shot) => sh.keyframe?.status === 'FAILED' || sh.keyframe?.status === 'BLOCKED';
+
+/** A beat "Storyboard oluştur" would draw: no frame yet, or one refused fewer
+ *  times than the cap. Mirrors the backend's `frameWanted`; an exhausted beat
+ *  is redrawn only through its own button. */
+export const needsFrame = (sh: Shot) =>
+  !sh.keyframe || (isFailed(sh) && sh.keyframe.attempts < MAX_FRAME_ATTEMPTS);
 
 /** Only a PROPOSED concept, or an approved one not yet handed to production,
  *  may still have frames drawn or redrawn here; after that the campaign item
  *  owns them. Mirrors `StoryboardService.eligible`. */
-const canStoryboard = (c: ConceptRow) =>
+export const canStoryboard = (c: ConceptRow) =>
   c.status === 'PROPOSED' || (c.status === 'APPROVED' && !c.promotedItemId);
 
-const POLL_MS = 10_000;
+export const POLL_MS = 10_000;
+
+/**
+ * How often to re-read the batch: while any frame of a concept somebody may
+ * still act on is in flight. A DISCARDED concept's frames are nobody's — the
+ * job stops drawing them — so they never keep the detail polling.
+ */
+export const batchPollMs = (rows: ConceptRow[] | undefined): number | false =>
+  (rows ?? []).some((c) => c.status !== 'DISCARDED' && c.shotPlan?.shots?.some(isPending)) ? POLL_MS : false;
+
+const errorMessage = (e: unknown, fallback: string): string => {
+  const err = e as { response?: { data?: { message?: unknown } }; message?: unknown };
+  const fromApi = err?.response?.data?.message;
+  if (typeof fromApi === 'string' && fromApi) return fromApi;
+  if (Array.isArray(fromApi) && fromApi.length) return fromApi.map(String).join(' ');
+  return fallback;
+};
 
 /**
  * ONE BATCH, opened: the concepts that came out of a single idea, each with the
@@ -49,26 +77,28 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
   const q = useQuery({
     queryKey: key,
     queryFn: () => getBatch(batchId),
-    meta: { skipErrorToast: true },
+    // The boundary below owns the error state; the global toast would
+    // double-report, and re-toast on every poll.
+    meta: { silent: true },
     // Frames render in the background; while any is in flight the row is
     // re-read so the picture lands without a reload.
-    refetchInterval: (query) =>
-      (query.state.data ?? []).some((c) => c.shotPlan?.shots?.some(isPending)) ? POLL_MS : false,
+    refetchInterval: (query) => batchPollMs(query.state.data),
   });
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: key });
     void qc.invalidateQueries({ queryKey: ['marketing', 'content-line', 'batches'] });
   };
+  const fallback = t('contentLine.detail.actionError', 'Storyboard isteği başarısız oldu.');
   const storyboard = useMutation({
     mutationFn: (conceptId: string) => requestStoryboard(conceptId),
     onSuccess: invalidate,
-    onError: () => toast.error(t('contentLine.detail.actionError', 'Storyboard isteği başarısız oldu.')),
+    onError: (e) => toast.error(errorMessage(e, fallback)),
   });
   const redraw = useMutation({
     mutationFn: ({ conceptId, ord }: { conceptId: string; ord: number }) => regenerateKeyframe(conceptId, ord),
     onSuccess: invalidate,
-    onError: () => toast.error(t('contentLine.detail.actionError', 'Storyboard isteği başarısız oldu.')),
+    onError: (e) => toast.error(errorMessage(e, fallback)),
   });
 
   return (
@@ -94,8 +124,8 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
               const plan = c.shotPlan;
               const shots = plan?.shots ?? [];
               const production = plan?.production;
-              const hasFrames = shots.some((sh) => sh.keyframe);
               const pending = shots.some(isPending);
+              const wanted = shots.some(needsFrame);
               const busy = storyboard.isPending && storyboard.variables === c.id;
               return (
                 <li key={c.id} className="rounded-lg border p-3">
@@ -137,7 +167,7 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
                         <Film className="h-3.5 w-3.5" aria-hidden="true" />
                         {t('contentLine.detail.storyboardTitle', 'Storyboard')}
                       </span>
-                      {plan?.storyboard && canStoryboard(c) && !hasFrames && (
+                      {plan?.storyboard && canStoryboard(c) && wanted && !pending && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -163,17 +193,18 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
                           <li key={sh.ord} className="w-28 shrink-0" data-testid={`frame-${sh.ord}`}>
                             <div className="flex aspect-[9/16] items-center justify-center overflow-hidden rounded-md border bg-muted">
                               {sh.keyframe?.status === 'READY' && sh.keyframe.url ? (
-                                <img src={sh.keyframe.url} alt={sh.scene} className="h-full w-full object-cover" />
+                                <img
+                                  src={sh.keyframe.url}
+                                  alt={sh.description ?? sh.scene}
+                                  className="h-full w-full object-cover"
+                                />
                               ) : isPending(sh) ? (
                                 <span className="flex flex-col items-center gap-1 text-[11px] text-muted-foreground">
                                   <Spinner className="h-4 w-4" />
                                   {t('contentLine.detail.framePending', 'çiziliyor')}
                                 </span>
                               ) : isFailed(sh) ? (
-                                <span
-                                  className="flex flex-col items-center gap-1 px-1 text-center text-[11px] text-destructive"
-                                  title={sh.keyframe?.error}
-                                >
+                                <span className="flex flex-col items-center gap-1 px-1 text-center text-[11px] text-destructive">
                                   <AlertTriangle className="h-4 w-4" aria-hidden="true" />
                                   {t('contentLine.detail.frameFailed', 'çizilemedi')}
                                 </span>
@@ -189,6 +220,15 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
                             {sh.onScreenText && (
                               <p className="truncate text-[11px] text-muted-foreground" title={sh.onScreenText}>
                                 {sh.onScreenText}
+                              </p>
+                            )}
+                            {/* The vendor's reason is the one thing that tells a
+                                reviewer what to change before redrawing — as
+                                text, not a tooltip, so it reads on a keyboard
+                                and a screen reader too. */}
+                            {isFailed(sh) && sh.keyframe?.error && (
+                              <p className="line-clamp-2 text-[11px] text-destructive" title={sh.keyframe.error}>
+                                {sh.keyframe.error}
                               </p>
                             )}
                             {canStoryboard(c) && sh.keyframe && !isPending(sh) && (
@@ -212,7 +252,9 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
                         {t('contentLine.detail.inProduction', 'Üretimde — kareler ve klipler kampanya öğesinde.')}
                       </p>
                     )}
-                    {pending && <span className="sr-only">{t('contentLine.detail.making', 'Kareler çiziliyor…')}</span>}
+                    <span className="sr-only" aria-live="polite">
+                      {pending ? t('contentLine.detail.making', 'Kareler çiziliyor…') : ''}
+                    </span>
                   </div>
                 </li>
               );

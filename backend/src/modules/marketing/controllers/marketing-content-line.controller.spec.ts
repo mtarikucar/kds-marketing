@@ -1,5 +1,8 @@
+import 'reflect-metadata';
 import { NotFoundException } from '@nestjs/common';
 import { MarketingContentLineController } from './marketing-content-line.controller';
+import { REQUIRE_PERMISSION_KEY } from '../roles/require-permission.decorator';
+import { AUDIT_METADATA } from '../../audit/audit.decorator';
 
 const user = { id: 'u-1', workspaceId: 'ws-1' } as never;
 
@@ -28,6 +31,16 @@ describe('MarketingContentLineController — storyboard routes', () => {
     const { ctrl, storyboard, row } = build();
     await expect(ctrl.regenerateFrame(user, 'c-1', 2)).resolves.toBe(row);
     expect(storyboard.regenerateFrame).toHaveBeenCalledWith('ws-1', 'c-1', 2, 'u-1');
+  });
+
+  it('both routes spend image credits, so both need campaigns.write — and both audit the concept they act on', () => {
+    for (const name of ['storyboardConcept', 'regenerateFrame'] as const) {
+      const handler = MarketingContentLineController.prototype[name];
+      expect(Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler)).toBe('campaigns.write');
+      expect(Reflect.getMetadata(AUDIT_METADATA, handler)).toMatchObject({ resourceType: 'content_concept', resourceIdParam: 'conceptId' });
+    }
+    expect(Reflect.getMetadata(AUDIT_METADATA, MarketingContentLineController.prototype.storyboardConcept).action).toBe('content.line.storyboard');
+    expect(Reflect.getMetadata(AUDIT_METADATA, MarketingContentLineController.prototype.regenerateFrame).action).toBe('content.line.storyboard.regenerate');
   });
 
   it('a row that vanished between the write and the read is a 404, not an empty body', async () => {

@@ -34,9 +34,10 @@ import {
 } from '../video/video-pipeline.service';
 import { quoteProduction, type VideoModelChoice } from './shot-production';
 import {
+  STORYBOARD_MAX_WAITS,
   STORYBOARD_WAIT_MS,
   framesReady,
-  savePlan,
+  resetExhaustedFrames,
   submitMissingFrames,
   supportsStoryboard,
   syncFrames,
@@ -296,7 +297,12 @@ export class ConceptPromotionService implements OnModuleInit {
     this.runner.registerHandler(
       CONCEPT_PRODUCE_KIND,
       (job: ClaimedJob) =>
-        this.produce(job.payload.itemId, job.payload.workspaceId, Number(job.payload.waits ?? 0)),
+        this.produce(
+          job.payload.itemId,
+          job.payload.workspaceId,
+          Number(job.payload.waits ?? 0),
+          Number(job.payload.frameWaits ?? 0),
+        ),
       // The DLQ hook. `produce` swallows GENERATION errors on purpose, but a DB
       // error anywhere else in it — the opening findFirst, the socialPost.create,
       // the closing update — escapes, and the runner then retries five times and
@@ -433,6 +439,9 @@ export class ConceptPromotionService implements OnModuleInit {
       throw e;
     }
 
+    await this.adoptFrames(workspaceId, concept, campaign.id).catch((e) =>
+      this.logger.warn(`concept ${conceptId}: frames were not adopted at promotion: ${(e as Error)?.message ?? e}`),
+    );
     await this.enqueueProduction(workspaceId, item.id, 0);
     return { item, created: true };
   }
@@ -533,10 +542,13 @@ export class ConceptPromotionService implements OnModuleInit {
     // workspace default changed under it" are different mistakes with different
     // fixes, and a message that says "campaign" about a workspace setting sends
     // the reader to the wrong screen.
-    const source =
-      choice.modelSource === 'campaign'
-        ? `Campaign "${campaign.name}" runs ${choice.model}`
-        : `This workspace now produces on ${choice.model}`;
+    //
+    // Decided by the campaign row itself rather than by `choice.modelSource`:
+    // a storyboarded (or persona) quote reports the SWAP as its source, and the
+    // question here is where the model being swapped came from.
+    const source = campaign.defaultVideoModel
+      ? `Campaign "${campaign.name}" runs ${choice.model}`
+      : `This workspace now produces on ${choice.model}`;
     throw new BadRequestException(
       `This concept was planned and quoted on ${quoted.model}: ${quoted.credits} credits ` +
         `($${quoted.usd.toFixed(2)}) for ${quoted.billedSecPerBeat.length} clips. ` +
@@ -784,7 +796,7 @@ export class ConceptPromotionService implements OnModuleInit {
    * Returns a reschedule directive while the workspace's generation queue is
    * full, and nothing otherwise — the item's own status is the outcome.
    */
-  async produce(itemId: string, workspaceId: string, waits = 0): Promise<JobHandlerResult> {
+  async produce(itemId: string, workspaceId: string, waits = 0, frameWaits = 0): Promise<JobHandlerResult> {
     const item = await this.prisma.socialCampaignItem.findFirst({
       where: { id: itemId, workspaceId },
       include: { campaign: true },
@@ -860,15 +872,30 @@ export class ConceptPromotionService implements OnModuleInit {
     // which would buy a clip nobody quoted from a model nobody approved.
     let storyboarded: StoryboardedPlan | null = supportsStoryboard(plan) ? plan : null;
     if (storyboarded) {
-      const sub = await submitMissingFrames({ mediaGen: this.mediaGen }, workspaceId, storyboarded, {
-        socialCampaignId: item.socialCampaignId,
-        campaignItemId: item.id,
-        createdById: item.campaign.createdById,
-      });
-      const sync = await syncFrames({ prisma: this.prisma }, workspaceId, sub.plan);
-      if (sub.submitted > 0 || sync.changed) {
-        // Best-effort like recordProduction: the frames are bought either way.
-        await savePlan({ prisma: this.prisma }, workspaceId, item.contentConceptId, sync.plan).catch(() => undefined);
+      const sub = await submitMissingFrames(
+        { mediaGen: this.mediaGen, prisma: this.prisma },
+        workspaceId,
+        item.contentConceptId,
+        storyboarded,
+        {
+          socialCampaignId: item.socialCampaignId,
+          campaignItemId: item.id,
+          createdById: item.campaign.createdById,
+          since: concept.createdAt,
+        },
+      );
+      const sync = await syncFrames({ prisma: this.prisma }, workspaceId, item.contentConceptId, sub.plan);
+      // Every keyframe above was written onto the row as it happened (see
+      // `storyboard-frames.ts`): a crash here loses nothing that was bought.
+      if (sub.halted) {
+        // Not the prompt's fault — the provider, the configuration, the
+        // database — so no attempt was spent: regenerating the item retries
+        // the same beats once the weather clears.
+        await this.fail(
+          itemId,
+          `frame ${sub.halted.ord + 1}/${shots.length} could not be requested: ${sub.halted.why}`,
+        );
+        return;
       }
       if (sync.failed.length) {
         const f = sync.failed[0];
@@ -878,18 +905,20 @@ export class ConceptPromotionService implements OnModuleInit {
         );
         return;
       }
-      if (sub.queueFull || sync.pending > 0 || !framesReady(sync.plan)) {
-        if (waits >= PRODUCE_MAX_WAITS) {
+      if (sub.queueFull || sub.conflicted || sync.pending > 0 || !framesReady(sync.plan)) {
+        // The frames' own wait budget, separate from the clip phase's: a slow
+        // storyboard must not eat the hour a full clip queue was given.
+        if (frameWaits >= STORYBOARD_MAX_WAITS) {
           await this.fail(
             itemId,
-            `the storyboard frames were still not ready after ${Math.round((PRODUCE_MAX_WAITS * STORYBOARD_WAIT_MS) / 60000)} minutes, so no clip was bought`,
+            `the storyboard frames were still not ready after ${Math.round((frameWaits * STORYBOARD_WAIT_MS) / 60000)} minutes, so no clip was bought`,
           );
           return;
         }
         return {
           reschedule: {
             runAt: new Date(Date.now() + STORYBOARD_WAIT_MS),
-            payload: { itemId, workspaceId, waits: waits + 1 },
+            payload: { itemId, workspaceId, waits, frameWaits: frameWaits + 1 },
           },
         };
       }
@@ -1018,6 +1047,41 @@ export class ConceptPromotionService implements OnModuleInit {
       data: { socialPostId: postId, generatedAssetIds: assetIds, error: null },
     });
     await this.bumpStats(item.socialCampaignId, { generated: 1 });
+  }
+
+  /**
+   * THE FRAMES A REVIEWER DREW BECOME THE CAMPAIGN'S at promotion.
+   *
+   * Two things, both about a storyboard drawn while the concept was PROPOSED:
+   *
+   *  - Its asset rows were made under the concept's campaign, which for an
+   *    unscoped idea is NONE — and a READY image with no campaign is on
+   *    `sweepOrphanAssets`' 30-day delete list. Linking them to the campaign
+   *    the concept was approved into is what keeps a storyboard drawn on day
+   *    one from being animated off a dead URL on day thirty-two.
+   *  - A frame that failed for good (`MAX_FRAME_ATTEMPTS`) is given a fresh
+   *    start. Approval is a human's renewed intent — the same act that a
+   *    per-beat regenerate is — and without this the item would fail on its
+   *    first pass with nothing left to press.
+   *
+   * Best-effort by the caller: the item exists and production is enqueued
+   * either way; `produce` re-draws what it finds wanting.
+   */
+  private async adoptFrames(
+    workspaceId: string,
+    concept: { id: string; shotPlan: Prisma.JsonValue },
+    campaignId: string,
+  ): Promise<void> {
+    const plan = concept.shotPlan as unknown as ShotPlan | null;
+    if (!supportsStoryboard(plan)) return;
+    const ids = plan.shots.map((sh) => sh.keyframe?.assetId).filter((id): id is string => Boolean(id));
+    if (ids.length) {
+      await this.prisma.generatedAsset.updateMany({
+        where: { id: { in: ids }, workspaceId, socialCampaignId: null },
+        data: { socialCampaignId: campaignId },
+      });
+    }
+    await resetExhaustedFrames({ prisma: this.prisma }, workspaceId, concept.id, plan);
   }
 
   /** FAILED, with the reason ON the row. A caller reading this item must never

@@ -1,10 +1,11 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ServiceUnavailableException, BadRequestException, NotFoundException } from '@nestjs/common';
 import {
   DEFAULT_VIDEO_MODEL, DEFAULT_VIDEO_ANIMATE_MODEL, DEFAULT_VIDEO_REFERENCE_MODEL,
   DEFAULT_KEYFRAME_MODEL, DEFAULT_KEYFRAME_REFERENCE_MODEL,
 } from '../ai/media/media-models.config';
 import { Prisma } from '@prisma/client';
 import { ConceptPromotionService, PRODUCE_MAX_WAITS } from './concept-promotion.service';
+import { MAX_FRAME_ATTEMPTS, STORYBOARD_MAX_WAITS } from './storyboard-frames';
 import {
   CampaignItemArmingService,
   SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND,
@@ -45,6 +46,7 @@ const concept = (over: Record<string, unknown> = {}) => ({
   socialCampaignId: CAMPAIGN_ID,
   promotedItemId: null,
   createdById: 'user-1',
+  createdAt: new Date('2026-09-01T00:00:00Z'),
   ...over,
 });
 
@@ -80,6 +82,8 @@ function harness(
       Promise.resolve({ ...data, id: ITEM_ID }),
     );
   const prisma: Record<string, any> = {
+    // Every keyframe write is one raw jsonb_set UPDATE (storyboard-frames.ts).
+    $executeRaw: jest.fn().mockResolvedValue(1),
     contentConcept: {
       findFirst: jest.fn().mockResolvedValue(over.conceptRow === undefined ? concept() : over.conceptRow),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -1239,14 +1243,19 @@ describe('ConceptPromotionService.produce — a storyboarded plan animates its f
   });
   const READY = (i: number) => ({ assetId: `f${i}`, status: 'READY', url: `https://r2/f${i}.png`, model: DEFAULT_KEYFRAME_MODEL, attempts: 1 });
 
-  function prodHarness(plan: unknown, assetRows: unknown[] = []) {
+  function prodHarness(plan: { shots: Array<{ keyframe?: Record<string, unknown> }> }, assetRows: unknown[] = []) {
     const h = harness({ conceptRow: concept({ shotPlan: plan }) });
+    // `syncFrames` re-reads READY frames too (a swept row must be noticed), so
+    // every READY keyframe on the fixture has its row unless a test says otherwise.
+    const readyRows = plan.shots.flatMap((sh) =>
+      sh.keyframe?.status === 'READY' ? [{ id: sh.keyframe.assetId, status: 'READY', url: sh.keyframe.url, error: null }] : [],
+    );
     h.prisma.socialCampaignItem.findFirst = jest.fn().mockResolvedValue({
       id: ITEM_ID, workspaceId: WS, socialCampaignId: CAMPAIGN_ID, contentConceptId: CONCEPT_ID, status: 'GENERATING',
       generatedAssetIds: [], socialPostId: null, scheduledFor: new Date('2026-09-02T09:00:00Z'), topic: 'x',
       campaign: campaign({ defaultVideoModel: null }),
     });
-    h.prisma.generatedAsset = { findMany: jest.fn().mockResolvedValue(assetRows) };
+    h.prisma.generatedAsset = { findMany: jest.fn().mockResolvedValue([...readyRows, ...assetRows]) };
     let n = 0;
     h.mediaGen.requestGeneration = jest.fn().mockImplementation(async () => ({ assetId: `gen-${++n}` }));
     return h;
@@ -1264,11 +1273,16 @@ describe('ConceptPromotionService.produce — a storyboarded plan animates its f
     expect(calls).toHaveLength(3);
     expect(calls.every((c) => c.type === 'IMAGE' && c.model === DEFAULT_KEYFRAME_MODEL && c.campaignItemId === ITEM_ID && c.seed === 11)).toBe(true);
     expect(calls.map((c) => c.prompt)).toEqual(['still 0, single still frame, vertical 9:16', 'still 1, single still frame, vertical 9:16', 'still 2, single still frame, vertical 9:16']);
-    // The frames are on the PLAN, not on the item's clip list.
-    const written = prisma.contentConcept.updateMany.mock.calls.at(-1)[0];
-    expect(written.data.shotPlan.shots.map((sh: any) => sh.keyframe.assetId)).toEqual(['gen-1', 'gen-2', 'gen-3']);
+    // The frames are on the PLAN — written one beat at a time, as each is
+    // bought — not on the item's clip list.
+    // …three buys, then the sync pass moving the one already rendering.
+    expect(kfWrites(prisma).map((w) => [w.idx, w.keyframe.assetId, w.keyframe.status])).toEqual([
+      [0, 'gen-1', 'QUEUED'], [1, 'gen-2', 'QUEUED'], [2, 'gen-3', 'QUEUED'], [2, 'gen-3', 'GENERATING'],
+    ]);
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
     expect(prisma.socialCampaignItem.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ generatedAssetIds: expect.anything() }) }));
-    expect(res).toEqual({ reschedule: expect.objectContaining({ payload: { itemId: ITEM_ID, workspaceId: WS, waits: 1 } }) });
+    // The frames' wait counter is their own; the clip phase's is untouched.
+    expect(res).toEqual({ reschedule: expect.objectContaining({ payload: { itemId: ITEM_ID, workspaceId: WS, waits: 0, frameWaits: 1 } }) });
   });
 
   it('animates each beat FROM its READY frame on the quoted animator, and the clip list holds only clips', async () => {
@@ -1311,5 +1325,95 @@ describe('ConceptPromotionService.produce — a storyboarded plan animates its f
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ type: 'IMAGE', prompt: 'still 1, single still frame, vertical 9:16' });
     expect(res).toEqual({ reschedule: expect.anything() });
+  });
+
+  it('frames still not ready at the storyboard bound FAIL the item with the minutes actually waited — its own bound, not the clip queue', async () => {
+    const { svc, prisma, mediaGen } = prodHarness(storyboardedPlan([READY(0), { assetId: 'slow', status: 'GENERATING', model: DEFAULT_KEYFRAME_MODEL, attempts: 1 }, READY(2)]), [
+      { id: 'slow', status: 'GENERATING', url: null, error: null },
+    ]);
+    const res = await svc.produce(ITEM_ID, WS, 0, STORYBOARD_MAX_WAITS);
+    expect(res).toBeUndefined();
+    expect(mediaGen.requestGeneration).not.toHaveBeenCalled();
+    const final = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
+    expect(final.data.status).toBe('FAILED');
+    expect(final.data.error).toMatch(/storyboard frames were still not ready after 60 minutes, so no clip was bought/);
+    // Below the bound the same state merely waits again.
+    const again = prodHarness(storyboardedPlan([READY(0), { assetId: 'slow', status: 'GENERATING', model: DEFAULT_KEYFRAME_MODEL, attempts: 1 }, READY(2)]), [{ id: 'slow', status: 'GENERATING', url: null, error: null }]);
+    await expect(again.svc.produce(ITEM_ID, WS, 3, STORYBOARD_MAX_WAITS - 1)).resolves.toEqual({
+      reschedule: expect.objectContaining({ payload: { itemId: ITEM_ID, workspaceId: WS, waits: 3, frameWaits: STORYBOARD_MAX_WAITS } }),
+    });
+  });
+
+  it('a READY frame whose asset row is GONE (swept, deleted) is redrawn — never animated from a dead URL', async () => {
+    const h = harness({ conceptRow: concept({ shotPlan: storyboardedPlan([READY(0), READY(1), READY(2)]) }) });
+    h.prisma.socialCampaignItem.findFirst = jest.fn().mockResolvedValue({
+      id: ITEM_ID, workspaceId: WS, socialCampaignId: CAMPAIGN_ID, contentConceptId: CONCEPT_ID, status: 'GENERATING',
+      generatedAssetIds: [], socialPostId: null, scheduledFor: new Date('2026-09-02T09:00:00Z'), topic: 'x',
+      campaign: campaign({ defaultVideoModel: null }),
+    });
+    // Rows for f0 and f2 only: f1 was swept.
+    h.prisma.generatedAsset = { findMany: jest.fn().mockResolvedValue([{ id: 'f0', status: 'READY', url: 'https://r2/f0.png', error: null }, { id: 'f2', status: 'READY', url: 'https://r2/f2.png', error: null }]) };
+    h.mediaGen.requestGeneration = jest.fn().mockResolvedValue({ assetId: 'gen-1' });
+    const res = await h.svc.produce(ITEM_ID, WS);
+    const calls = h.mediaGen.requestGeneration.mock.calls.map((c: unknown[]) => c[1] as Record<string, unknown>);
+    expect(calls.map((c) => c.type)).toEqual([]);
+    expect(kfWrites(h.prisma)).toEqual([{ idx: 1, keyframe: expect.objectContaining({ status: 'FAILED', attempts: 0, error: expect.stringMatching(/no longer exists/) }) }]);
+    expect(res).toEqual({ reschedule: expect.anything() });
+  });
+
+  it('the weather (an outage while requesting a frame) fails the item by beat WITHOUT spending the beat attempt', async () => {
+    const { svc, prisma, mediaGen } = prodHarness(storyboardedPlan([READY(0), undefined, READY(2)]));
+    mediaGen.requestGeneration.mockRejectedValueOnce(new ServiceUnavailableException('Media generation is not configured'));
+    await svc.produce(ITEM_ID, WS);
+    const final = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
+    expect(final.data).toMatchObject({ status: 'FAILED', error: 'frame 2/3 could not be requested: Media generation is not configured' });
+    expect(kfWrites(prisma)).toEqual([{ idx: 1, keyframe: expect.objectContaining({ assetId: '', status: 'FAILED', attempts: 0 }) }]);
+  });
+});
+
+/** Keyframe writes decoded off the raw UPDATE's tagged template. */
+function kfWrites(prisma: { $executeRaw: jest.Mock }) {
+  return prisma.$executeRaw.mock.calls
+    .filter((c: unknown[]) => /^\d+$/.test(String(c[1])))
+    .map((c: unknown[]) => ({ idx: Number(c[1]), keyframe: JSON.parse(String(c[2])) as Record<string, unknown> }));
+}
+
+describe('ConceptPromotionService.promote — the reviewer\'s storyboard becomes the campaign\'s', () => {
+  const storyboarded = (keyframes: Array<Record<string, unknown> | undefined>) => ({
+    ...SHOT_PLAN,
+    storyboard: { imageModel: DEFAULT_KEYFRAME_MODEL, seed: 5 },
+    shots: SHOT_PLAN.shots.map((sh, i) => ({ ...sh, keyframePrompt: `still ${i}`, ...(keyframes[i] ? { keyframe: keyframes[i] } : {}) })),
+  });
+
+  it('links the frames drawn on an unscoped concept to the campaign it was approved into, and gives a frame that failed for good a fresh start', async () => {
+    const dead = { assetId: 'f1', status: 'BLOCKED', model: DEFAULT_KEYFRAME_MODEL, attempts: MAX_FRAME_ATTEMPTS, error: 'policy' };
+    const plan = storyboarded([{ assetId: 'f0', status: 'READY', url: 'u', model: DEFAULT_KEYFRAME_MODEL, attempts: 1 }, dead, undefined]);
+    const h = harness({ conceptRow: concept({ shotPlan: plan, socialCampaignId: null }) });
+    h.prisma.generatedAsset = { updateMany: jest.fn().mockResolvedValue({ count: 2 }) };
+    await h.svc.promote(WS, CONCEPT_ID, { socialCampaignId: CAMPAIGN_ID });
+
+    expect(h.prisma.generatedAsset.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['f0', 'f1'] }, workspaceId: WS, socialCampaignId: null },
+      data: { socialCampaignId: CAMPAIGN_ID },
+    });
+    expect(kfWrites(h.prisma)).toEqual([{ idx: 1, keyframe: expect.objectContaining({ assetId: '', status: 'QUEUED', attempts: 0 }) }]);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('a legacy plan is promoted exactly as before — nothing to link, nothing to reset', async () => {
+    const h = harness();
+    h.prisma.generatedAsset = { updateMany: jest.fn() };
+    await h.svc.promote(WS, CONCEPT_ID);
+    expect(h.prisma.generatedAsset.updateMany).not.toHaveBeenCalled();
+    expect(h.prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('a failed adoption is logged, not fatal: the item exists and production is enqueued either way', async () => {
+    const plan = storyboarded([{ assetId: 'f0', status: 'READY', url: 'u', model: DEFAULT_KEYFRAME_MODEL, attempts: 1 }, undefined, undefined]);
+    const h = harness({ conceptRow: concept({ shotPlan: plan }) });
+    h.prisma.generatedAsset = { updateMany: jest.fn().mockRejectedValue(new Error('db down')) };
+    const { created } = await h.svc.promote(WS, CONCEPT_ID);
+    expect(created).toBe(true);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledTimes(1);
   });
 });

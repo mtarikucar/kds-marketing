@@ -33,6 +33,7 @@ function build() {
     socialPost: { findFirst: jest.fn().mockResolvedValue({ id: 'post-1', content: 'Nice copy' }), update: jest.fn() },
     generatedAsset: { findMany: jest.fn().mockResolvedValue([]) },
     contentConcept: { findFirst: jest.fn().mockResolvedValue(null) },
+    $executeRaw: jest.fn().mockResolvedValue(1),
   };
   const scheduledJobs = { schedule: jest.fn(), cancel: jest.fn() };
   const runner = { registerHandler: jest.fn() };
@@ -530,6 +531,32 @@ describe('item approve / reject / regenerate', () => {
     const { data } = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
     expect(data.status).toBe('GENERATING');
     expect(data.generatedAssetIds).toEqual([]);
+  });
+
+  it('regenerating a promoted item gives every storyboard frame that failed for good a fresh start — the producer redraws it before animating', async () => {
+    // MAX_FRAME_ATTEMPTS stops `produce` from retrying a twice-refused frame
+    // on its own, and the concept's storyboard endpoints refuse a promoted
+    // concept; without this the FAILED item could only ever fail again.
+    const { svc, prisma } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(makeItem({ status: 'FAILED', contentConceptId: 'concept-1', generatedAssetIds: [] }));
+    prisma.contentConcept.findFirst.mockResolvedValueOnce({
+      id: 'concept-1',
+      shotPlan: {
+        storyboard: { imageModel: 'img', seed: 1 },
+        shots: [
+          { ord: 0, keyframePrompt: 'a', keyframe: { assetId: 'ok', status: 'READY', url: 'u', model: 'img', attempts: 1 } },
+          { ord: 1, keyframePrompt: 'b', keyframe: { assetId: 'x', status: 'BLOCKED', model: 'img', attempts: 2, error: 'policy' } },
+        ],
+      },
+    });
+
+    await svc.regenerateItem(WS, 'i-1');
+
+    expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'concept-1', workspaceId: WS } }));
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const [, idx, keyframe] = prisma.$executeRaw.mock.calls[0];
+    expect(idx).toBe('1');
+    expect(JSON.parse(keyframe)).toMatchObject({ assetId: '', status: 'QUEUED', attempts: 0 });
   });
 
   it('regenerateItem rejects a PUBLISHED item (no re-charge / re-publish)', async () => {

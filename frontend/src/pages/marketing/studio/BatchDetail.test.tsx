@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BatchDetail } from './BatchDetail';
+import { toast } from 'sonner';
+import { BatchDetail, POLL_MS, batchPollMs, needsFrame } from './BatchDetail';
 import * as contentLine from '../../../features/marketing/api/contentLine.service';
 import type { ConceptRow, Shot } from '../../../features/marketing/api/contentLine.service';
 
@@ -101,9 +102,9 @@ describe('BatchDetail — the storyboard a reviewer looks at', () => {
     await waitFor(() => expect(getBatch).toHaveBeenCalledTimes(2));
   });
 
-  it('renders a READY frame as the picture, a rendering one as pending, a failed one with its reason — and offers a redraw', async () => {
+  it('renders a READY frame as the picture, a rendering one as pending, a failed one with its reason AS TEXT — and offers a redraw', async () => {
     const shots = [
-      shot(0, { keyframe: { assetId: 'a', status: 'READY', url: 'https://r2/f0.png', model: 'm', attempts: 1 } }),
+      shot(0, { description: 'the beest on the beach', keyframe: { assetId: 'a', status: 'READY', url: 'https://r2/f0.png', model: 'm', attempts: 1 } }),
       shot(1, { keyframe: { assetId: 'b', status: 'GENERATING', model: 'm', attempts: 1 } }),
       shot(2, { keyframe: { assetId: 'c', status: 'BLOCKED', model: 'm', attempts: 2, error: 'content policy' } }),
     ];
@@ -112,16 +113,49 @@ describe('BatchDetail — the storyboard a reviewer looks at', () => {
     wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
 
     const strip = await screen.findByRole('list', { name: 'Storyboard' });
-    expect(within(strip).getByRole('img', { name: '0-2s' })).toHaveAttribute('src', 'https://r2/f0.png');
+    // The picture is described by what it shows, not by the beat's timing.
+    expect(within(strip).getByRole('img', { name: 'the beest on the beach' })).toHaveAttribute('src', 'https://r2/f0.png');
     expect(within(screen.getByTestId('frame-1')).getByText('çiziliyor')).toBeInTheDocument();
-    expect(within(screen.getByTestId('frame-2')).getByText('çizilemedi')).toHaveAttribute('title', 'content policy');
-    // The whole-storyboard button is gone once frames exist; redraw is per beat,
-    // and not offered while a frame is still rendering.
+    expect(within(screen.getByTestId('frame-2')).getByText('çizilemedi')).toBeInTheDocument();
+    // The vendor's reason is readable, not hidden in a tooltip.
+    expect(within(screen.getByTestId('frame-2')).getByText('content policy')).toBeInTheDocument();
+    // The whole-storyboard button is gone while a frame is rendering and no
+    // beat is wanted (beat 2 is exhausted — its own button only); redraw is
+    // per beat, and not offered while a frame is still rendering.
     expect(screen.queryByRole('button', { name: 'Storyboard oluştur' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Yeniden üret 2-4s/ })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /Yeniden üret 4-6s/ }));
     await waitFor(() => expect(regenerateKeyframe).toHaveBeenCalledWith('c1', 2));
+  });
+
+  it('a frame refused once (under the cap) still lets the whole storyboard be asked for again; an exhausted one does not', () => {
+    expect(needsFrame(shot(0))).toBe(true);
+    expect(needsFrame(shot(0, { keyframe: { assetId: 'x', status: 'FAILED', model: 'm', attempts: 1 } }))).toBe(true);
+    expect(needsFrame(shot(0, { keyframe: { assetId: 'x', status: 'FAILED', model: 'm', attempts: 2 } }))).toBe(false);
+    expect(needsFrame(shot(0, { keyframe: { assetId: 'x', status: 'READY', url: 'u', model: 'm', attempts: 1 } }))).toBe(false);
+    expect(needsFrame(shot(0, { keyframe: { assetId: '', status: 'QUEUED', model: 'm', attempts: 0 } }))).toBe(false);
+  });
+
+  it('polls while a frame of a concept somebody may still act on is in flight — a merely requested frame counts, a DISCARDED concept never does', () => {
+    const requested = shot(0, { keyframe: { assetId: '', status: 'QUEUED', model: 'm', attempts: 0 } });
+    const rendering = shot(1, { keyframe: { assetId: 'b', status: 'GENERATING', model: 'm', attempts: 1 } });
+    expect(batchPollMs(undefined)).toBe(false);
+    expect(batchPollMs([concept()])).toBe(false);
+    expect(batchPollMs([concept({ shotPlan: { ...concept().shotPlan, shots: [requested] } })])).toBe(POLL_MS);
+    expect(batchPollMs([concept({ shotPlan: { ...concept().shotPlan, shots: [rendering] } })])).toBe(POLL_MS);
+    expect(batchPollMs([concept({ status: 'DISCARDED', shotPlan: { ...concept().shotPlan, shots: [rendering] } })])).toBe(false);
+  });
+
+  it('a refused action shows the backend\'s own reason, not a generic line', async () => {
+    getBatch.mockResolvedValue([concept()]);
+    requestStoryboard.mockRejectedValue({ response: { data: { message: 'This concept is already in production, which draws its own frames.' } } });
+    wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Storyboard oluştur' }));
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('This concept is already in production, which draws its own frames.'),
+    );
   });
 
   it('a concept planned before storyboards says so instead of showing an empty strip', async () => {

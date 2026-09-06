@@ -470,6 +470,12 @@ describe('ContentConceptsService.list', () => {
     expect(CONCEPT_LIST_LIMIT % MAX_CONCEPT_COUNT).toBe(0);
   });
 
+  it('reads ONE concept by id — still inside the workspace, so a neighbour cannot be fetched by guessing an id', async () => {
+    const { svc, prisma } = deps();
+    await svc.list('ws1', { conceptId: 'c-9' });
+    expect(prisma.contentConcept.findMany.mock.calls[0][0].where).toEqual({ workspaceId: 'ws1', id: 'c-9' });
+  });
+
   it('keeps the cap when a filter narrows the read', async () => {
     const { svc, prisma } = deps();
     await svc.list('ws1', { batchId: 'b1' });

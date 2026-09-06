@@ -153,7 +153,7 @@ export function registerContentConceptTools(
         .string()
         .max(64)
         .optional()
-        .describe('A VideoPersona whose reference images lock ONE face or product across every shot of every concept, so the clips read as one campaign rather than unrelated videos. The persona must have at least one reference image; validated before any credits are spent. It also CHANGES THE MODEL and the price: reference frames only work on the reference-to-video endpoint (48 credits/second against the default 3, with a 4-second minimum beat), and the returned plan quotes exactly that.'),
+        .describe('A VideoPersona whose reference images lock ONE face or product across every shot of every concept, so the clips read as one campaign rather than unrelated videos. The persona must have at least one reference image; validated before any credits are spent. It CHANGES THE PRICE: its photos are drawn into each storyboard frame by the reference image model (15 credits a frame instead of 3), and the clips are then animated from those frames on the ordinary animator — the returned plan quotes exactly that, frames and clips together.'),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
@@ -311,7 +311,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.storyboard_content_concept',
     description:
-      'Draw the STORYBOARD of one proposed video concept — one still frame per beat — so a person can look before approving. Frames render in the background (tens of seconds each); read them back with jeeta.list_content_concepts (shots[].keyframe.url when READY, or its status/error). Pass regenerateShot with a beat number (0-based ord) to redraw just that frame with a fresh seed. SPENDS image credits (a few per frame; more with a persona) — approving the concept later animates exactly these frames and buys nothing twice. Works on PROPOSED concepts and on APPROVED ones not yet in production; a concept planned before storyboards existed is refused and must be re-planned. Discarding a concept nobody storyboarded still costs nothing.',
+      'Draw the STORYBOARD of one proposed video concept — one still frame per beat — so a person can look before approving. Frames render in the background (tens of seconds each); read them back with jeeta.list_content_concepts (shots[].keyframe.url when READY, or its status/error). Pass regenerateShot with a beat number (0-based ord) to redraw just that frame with a fresh seed. SPENDS image credits (a few per frame; more with a persona) — approving the concept later animates exactly these frames and buys nothing twice — a frame still rendering is refused a redraw until it lands, and a frame the vendor refused twice waits for regenerateShot (or, once the concept is in production, for the campaign item to be regenerated). Works on PROPOSED concepts and on APPROVED ones not yet in production; a concept planned before storyboards existed is refused and must be re-planned. Discarding a concept nobody storyboarded still costs nothing.',
     domain: 'content',
     defer: true,
     scopes: ['campaigns.write'],
@@ -399,7 +399,7 @@ export function registerContentConceptTools(
         .string()
         .max(64)
         .optional()
-        .describe('A VideoPersona locking one face or product across every shot. CHANGES THE PRICE of producing the batch — reference frames only run on the reference-to-video endpoint; the returned plan quotes it.'),
+        .describe('A VideoPersona locking one face or product across every shot. CHANGES THE PRICE of producing the batch: the persona\'s photos are drawn into each storyboard frame by the reference image model (15 credits a frame instead of 3) and the clips are animated from those frames on the ordinary animator; the returned production quote says exactly that.'),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');

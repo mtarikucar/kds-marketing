@@ -5,7 +5,6 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { randomInt } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MediaGenService } from '../ai/media/media-gen.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
@@ -17,15 +16,20 @@ import {
 import type { Keyframe, ShotPlan } from '../video/video-pipeline.service';
 import {
   CONCEPT_STORYBOARD_KIND,
+  STORYBOARD_MAX_WAITS,
   STORYBOARD_WAIT_MS,
-  savePlan,
+  abandonRequested,
+  freshSeed,
+  isRequested,
+  markRequested,
+  stampStoryboard,
   storyboardDedup,
   submitMissingFrames,
   supportsStoryboard,
   syncFrames,
+  writeKeyframe,
   type StoryboardedPlan,
 } from './storyboard-frames';
-import { PRODUCE_MAX_WAITS } from './concept-promotion.service';
 
 /**
  * THE STORYBOARD A HUMAN CAN LOOK AT — before they approve.
@@ -47,7 +51,12 @@ import { PRODUCE_MAX_WAITS } from './concept-promotion.service';
  * missing, then comes back every {@link STORYBOARD_WAIT_MS} to copy each
  * frame's outcome onto the plan until nothing is in flight. It stops the moment
  * the concept is decided — an APPROVED-and-promoted concept belongs to
- * `produce`, which finishes the frames itself, and a DISCARDED one is done.
+ * `produce`, which draws whatever frames are still missing as its own first
+ * phase, and a DISCARDED one only has what was already in flight settled.
+ *
+ * Every write here is per beat (see `storyboard-frames.ts`): a request that
+ * lands while the job is mid-pass, or two reviewers on one batch, cannot erase
+ * a frame the other just bought.
  */
 @Injectable()
 export class StoryboardService implements OnModuleInit {
@@ -66,23 +75,26 @@ export class StoryboardService implements OnModuleInit {
     );
   }
 
-  /** Draw the frames of one concept. Idempotent: beats that already have a
-   *  frame (or one in flight) are left alone. */
+  /**
+   * Draw the frames of one concept. Idempotent: beats that already have a
+   * frame (or one in flight) are left alone; the ones that will be drawn are
+   * stamped REQUESTED at once, so the hub sees them coming before the job runs.
+   */
   async request(workspaceId: string, conceptId: string, requestedById: string) {
     const { concept, plan } = await this.eligible(workspaceId, conceptId);
-    const next: StoryboardedPlan = {
-      ...plan,
-      storyboard: { ...plan.storyboard, requestedAt: new Date().toISOString(), requestedById },
-    };
-    await savePlan({ prisma: this.prisma }, workspaceId, conceptId, next);
+    const storyboard = { ...plan.storyboard, requestedAt: new Date().toISOString(), requestedById };
+    await stampStoryboard({ prisma: this.prisma }, workspaceId, conceptId, storyboard);
+    const requested = await markRequested({ prisma: this.prisma }, workspaceId, conceptId, plan);
     await this.enqueue(workspaceId, conceptId);
-    return { conceptId: concept.id, shots: next.shots.length, storyboard: next.storyboard };
+    return { conceptId: concept.id, shots: plan.shots.length, requested, storyboard };
   }
 
   /**
    * Redraw ONE beat's frame. The old frame is dropped from the plan (the asset
    * row stays; the sweep reaps it if unattached) and the beat gets a fresh seed
-   * so the new picture is genuinely another take rather than the same one.
+   * so the new picture is genuinely another take rather than the same one. A
+   * frame still rendering is refused: a second request now would buy the same
+   * frame twice, and the reviewer has not seen the first yet.
    */
   async regenerateFrame(workspaceId: string, conceptId: string, ord: number, requestedById: string) {
     const { plan } = await this.eligible(workspaceId, conceptId);
@@ -93,64 +105,100 @@ export class StoryboardService implements OnModuleInit {
       );
     }
     const prev = plan.shots[idx].keyframe;
-    // FAILED with zero attempts is "wanted again" to `submitMissingFrames`, and
-    // the keyframe's own seed wins over the plan's — see `frameSeed`.
+    if (prev?.assetId && (prev.status === 'QUEUED' || prev.status === 'GENERATING')) {
+      throw new BadRequestException(
+        `Beat ${ord}'s frame is still rendering; wait for it to land (or fail) before asking for another — a second request now would buy the same frame twice.`,
+      );
+    }
+    if (isRequested(prev)) {
+      throw new BadRequestException(`Beat ${ord}'s frame is already requested and will be drawn shortly.`);
+    }
     const reset: Keyframe = {
       assetId: '',
-      status: 'FAILED',
+      status: 'QUEUED',
       model: plan.storyboard.imageModel,
-      seed: randomInt(1, 2 ** 31 - 1),
+      seed: freshSeed(),
       attempts: 0,
-      error: prev ? 'redrawn at the reviewer\'s request' : undefined,
     };
-    const shots = plan.shots.map((sh, i) => (i === idx ? { ...sh, keyframe: reset } : sh));
-    const next: StoryboardedPlan = {
-      ...plan,
-      shots,
-      storyboard: { ...plan.storyboard, requestedAt: new Date().toISOString(), requestedById },
-    };
-    await savePlan({ prisma: this.prisma }, workspaceId, conceptId, next);
+    const landed = await writeKeyframe({ prisma: this.prisma }, workspaceId, conceptId, idx, ord, reset, prev ?? null);
+    if (!landed) {
+      throw new BadRequestException(
+        `Beat ${ord}'s frame changed while you were looking at it; read the concept again before redrawing.`,
+      );
+    }
+    await stampStoryboard({ prisma: this.prisma }, workspaceId, conceptId, {
+      ...plan.storyboard,
+      requestedAt: new Date().toISOString(),
+      requestedById,
+    });
     await this.enqueue(workspaceId, conceptId);
     return { conceptId, ord, seed: reset.seed };
   }
 
   /**
    * The job. Requests what is missing, copies outcomes onto the plan, and
-   * comes back while anything is in flight. Bounded like the producer's wait
-   * chain; when the bound is hit the frames simply stay as they are — the plan
-   * says QUEUED, the hub shows it, and a later request or the producer itself
-   * picks them up.
+   * comes back while anything is in flight — bounded by
+   * {@link STORYBOARD_MAX_WAITS}. When the bound is hit, beats merely requested
+   * are told why (FAILED, attempts untouched) so the hub stops waiting; frames
+   * genuinely rendering are left to the media poll, and the next request or
+   * the producer itself picks them up.
    */
   async run(conceptId: string, workspaceId: string, waits = 0): Promise<JobHandlerResult> {
     const concept = await this.prisma.contentConcept.findFirst({ where: { id: conceptId, workspaceId } });
     if (!concept) return;
-    // Decided concepts are not this job's: DISCARDED is finished, and an
-    // APPROVED one that has been promoted is finished by `produce`, which draws
-    // whatever frames are still missing as its own first phase.
-    if (concept.status === 'DISCARDED' || (concept.status === 'APPROVED' && concept.promotedItemId)) return;
     const plan = concept.shotPlan as unknown as ShotPlan | null;
     if (!supportsStoryboard(plan)) return;
+    // An APPROVED concept that has been promoted is `produce`'s: it draws
+    // whatever frames are still missing as its own first phase.
+    if (concept.status === 'APPROVED' && concept.promotedItemId) return;
+    // DISCARDED is finished: nothing more is drawn, but what was already in
+    // flight is settled onto the plan so it does not read as rendering forever.
+    if (concept.status === 'DISCARDED') {
+      const settled = await syncFrames({ prisma: this.prisma }, workspaceId, conceptId, plan);
+      await abandonRequested(
+        { prisma: this.prisma },
+        workspaceId,
+        conceptId,
+        settled.plan,
+        'the concept was discarded before this frame was drawn',
+      );
+      return;
+    }
 
-    const sub = await submitMissingFrames({ mediaGen: this.mediaGen }, workspaceId, plan, {
+    const sub = await submitMissingFrames({ mediaGen: this.mediaGen, prisma: this.prisma }, workspaceId, conceptId, plan, {
       socialCampaignId: concept.socialCampaignId,
       createdById: concept.createdById,
+      since: concept.createdAt,
     });
-    const sync = await syncFrames({ prisma: this.prisma }, workspaceId, sub.plan);
-    if (sub.submitted > 0 || sync.changed) {
-      await savePlan({ prisma: this.prisma }, workspaceId, conceptId, sync.plan);
-    }
+    const sync = await syncFrames({ prisma: this.prisma }, workspaceId, conceptId, sub.plan);
     if (sync.failed.length) {
       this.logger.warn(
         `storyboard for concept ${conceptId}: frame ${sync.failed.map((f) => f.ord + 1).join(', ')} failed for good`,
       );
     }
-    if ((sub.queueFull || sync.pending > 0) && waits < PRODUCE_MAX_WAITS) {
-      return {
-        reschedule: {
-          runAt: new Date(Date.now() + STORYBOARD_WAIT_MS),
-          payload: { conceptId, workspaceId, waits: waits + 1 },
-        },
-      };
+    if (sub.halted) {
+      // Not the prompts' fault and not waited out: the reason is on every
+      // beat it stopped, and the next request retries from where it was.
+      this.logger.warn(`storyboard for concept ${conceptId} halted at beat ${sub.halted.ord + 1}: ${sub.halted.why}`);
+      return;
+    }
+    if (sub.queueFull || sub.conflicted || sync.pending > 0) {
+      if (waits < STORYBOARD_MAX_WAITS) {
+        return {
+          reschedule: {
+            runAt: new Date(Date.now() + STORYBOARD_WAIT_MS),
+            payload: { conceptId, workspaceId, waits: waits + 1 },
+          },
+        };
+      }
+      const minutes = Math.round((STORYBOARD_MAX_WAITS * STORYBOARD_WAIT_MS) / 60000);
+      await abandonRequested(
+        { prisma: this.prisma },
+        workspaceId,
+        conceptId,
+        sync.plan,
+        `the workspace generation queue stayed full for ${minutes} minutes, so this frame was never requested`,
+      );
     }
     return;
   }
@@ -167,7 +215,7 @@ export class StoryboardService implements OnModuleInit {
     }
     if (concept.status === 'APPROVED' && concept.promotedItemId) {
       throw new BadRequestException(
-        'This concept is already in production, which draws its own frames; watch the campaign item instead.',
+        'This concept is already in production, which draws its own frames; watch the campaign item instead, and regenerate the item if a frame failed for good.',
       );
     }
     const plan = concept.shotPlan as unknown as ShotPlan | null;
@@ -176,7 +224,7 @@ export class StoryboardService implements OnModuleInit {
         'This concept was planned before storyboards existed, so its beats carry no frame prompts. Plan the idea again to get a storyboarded batch.',
       );
     }
-    return { concept, plan };
+    return { concept, plan: plan as StoryboardedPlan };
   }
 
   private async enqueue(workspaceId: string, conceptId: string): Promise<void> {

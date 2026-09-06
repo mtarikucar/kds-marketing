@@ -126,7 +126,7 @@ export class MarketingContentLineController {
    */
   @Post('concepts/:conceptId/storyboard')
   @RequirePermission('campaigns.write')
-  @Audit({ action: 'content.line.storyboard', resourceType: 'content_concept' })
+  @Audit({ action: 'content.line.storyboard', resourceType: 'content_concept', resourceIdParam: 'conceptId' })
   async storyboardConcept(
     @CurrentMarketingUser() user: MarketingUserPayload,
     @Param('conceptId') conceptId: string,
@@ -138,7 +138,7 @@ export class MarketingContentLineController {
   /** Redraw ONE beat's frame, with a fresh seed. Same gate, same audit. */
   @Post('concepts/:conceptId/storyboard/:ord/regenerate')
   @RequirePermission('campaigns.write')
-  @Audit({ action: 'content.line.storyboard.regenerate', resourceType: 'content_concept' })
+  @Audit({ action: 'content.line.storyboard.regenerate', resourceType: 'content_concept', resourceIdParam: 'conceptId' })
   async regenerateFrame(
     @CurrentMarketingUser() user: MarketingUserPayload,
     @Param('conceptId') conceptId: string,
