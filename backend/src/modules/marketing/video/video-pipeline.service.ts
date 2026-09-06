@@ -64,6 +64,30 @@ export interface PersonaLock {
   lockedSeed?: number | null;
 }
 
+/**
+ * ONE STILL PER BEAT — the storyboard frame a beat is animated from.
+ *
+ * A text-to-video model asked for a whole beat invents the scene each time, so
+ * five beats from one concept are five unrelated inventions. A still is cheap,
+ * reviewable, regenerable one at a time, and — animated as the FIRST FRAME of
+ * its beat — it is what makes the clip open on the picture a human looked at.
+ * The asset is a GeneratedAsset of type IMAGE; its id and terminal status live
+ * here, on the plan, never in `SocialCampaignItem.generatedAssetIds` (that
+ * array is the beat-ordered list of CLIPS and the producer's resume cursor).
+ */
+export interface Keyframe {
+  assetId: string;
+  status: 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED' | 'BLOCKED';
+  /** Set when READY — the first frame the animator is handed. */
+  url?: string;
+  model: string;
+  seed?: number;
+  /** How many times this beat's frame has been requested; bounded by the
+   *  storyboard service so a frame the vendor keeps refusing fails by name. */
+  attempts: number;
+  error?: string;
+}
+
 export interface Shot {
   ord: number;
   scene: string;
@@ -83,6 +107,22 @@ export interface Shot {
   durationSec: number;
   cameraNote: string;
   reference?: { images: string[]; seed?: number };
+  /** What is IN frame, as the planner said it — the raw scene description the
+   *  keyframe prompt is built from. Present on plans made since storyboards. */
+  description?: string;
+  /** The prompt the STILL is generated from: what is in frame, the camera, the
+   *  ratio — no motion, no audio. `prompt` stays the animation's. */
+  keyframePrompt?: string;
+  keyframe?: Keyframe;
+}
+
+/** The plan-level storyboard record: which image model draws the frames and
+ *  the one seed every frame shares, so a batch of stills reads as one look. */
+export interface Storyboard {
+  imageModel: string;
+  seed: number;
+  requestedAt?: string;
+  requestedById?: string;
 }
 
 /**
@@ -108,8 +148,10 @@ export interface Shot {
 export interface ShotProduction {
   /** The catalogued model id that will actually run. */
   model: string;
-  /** Why this one. `persona` means the reference frames forced it. */
-  modelSource: 'campaign' | 'workspace' | 'platform' | 'persona';
+  /** Why this one. `persona` means the reference frames forced it; `storyboard`
+   *  means the plan animates keyframes and the chosen text-to-video model was
+   *  swapped for its image-to-video counterpart (see `animateModelFor`). */
+  modelSource: 'campaign' | 'workspace' | 'platform' | 'persona' | 'storyboard';
   /** The model that WOULD have run, when `persona` replaced it. */
   replacedModel?: string;
   /**
@@ -127,6 +169,10 @@ export interface ShotProduction {
   billedSecPerBeat: number[];
   /** The whole plan's billed length. */
   billedSec: number;
+  /** The stills, when the plan is storyboarded: one IMAGE generation per beat,
+   *  priced here and INCLUDED in `credits`/`usd` below — the reviewer approves
+   *  the frames and the clips as one price. */
+  keyframes?: { model: string; perFrameCredits: number; credits: number; usd: number };
   /** The quote, at the rate that will be charged. `credits` is the customer's
    *  meter; `usd` is the vendor cost the engine path pre-debits in real cash. */
   credits: number;
@@ -144,6 +190,9 @@ export interface ShotPlan {
    *  before it existed; the producer records one on those the first time it
    *  runs them, so no plan stays silent about what it bought. */
   production?: ShotProduction;
+  /** Present on plans made since storyboards: the frames are part of what is
+   *  produced, and the producer reads THIS to know the plan animates stills. */
+  storyboard?: Storyboard;
   durationSec: number;
   shots: Shot[];
   captionSuggestion: string;
@@ -202,6 +251,7 @@ export class VideoPipelineService {
     persona?: PersonaLock,
     scenes?: ConceptScene[],
     aspectRatio: ShotAspectRatio = DEFAULT_SHOT_ASPECT,
+    opts: { storyboard?: Storyboard } = {},
   ): ShotPlan {
     const target = brief.durationSec ?? 15;
     // An explicitly-supplied empty list is a caller that produced nothing, and
@@ -225,6 +275,10 @@ export class VideoPipelineService {
         cameraNote: custom ? custom.cameraNote : (s as SceneSpec).camera,
       };
       if (custom?.onScreenText !== undefined) shot.onScreenText = custom.onScreenText;
+      if (opts.storyboard && custom) {
+        shot.description = desc;
+        shot.keyframePrompt = this.buildKeyframePrompt(desc, shot.cameraNote, persona, aspectRatio);
+      }
       if (persona && persona.referenceImageUrls.length) {
         shot.reference = { images: persona.referenceImageUrls, seed: persona.lockedSeed ?? undefined };
       }
@@ -242,7 +296,28 @@ export class VideoPipelineService {
       shots,
       captionSuggestion: this.caption(brief),
       qcChecklist: this.qcChecklist(persona, aspectRatio),
+      ...(opts.storyboard ? { storyboard: opts.storyboard } : {}),
     };
+  }
+
+  /**
+   * The STILL's prompt: what is in frame, how it is framed, and the ratio — and
+   * nothing about time. The animation prompt (`buildModelPrompt`) ends in
+   * "native synchronized audio" or "subtle camera motion"; handed to an image
+   * model those words are noise at best and a wrong composition at worst. The
+   * identity clause is kept (a persona's face is a property of the frame), the
+   * seed words are not: the seed is a parameter here, sent to the image model,
+   * not prose.
+   */
+  buildKeyframePrompt(
+    sceneDesc: string,
+    cameraNote: string,
+    persona?: PersonaLock,
+    aspectRatio: ShotAspectRatio = DEFAULT_SHOT_ASPECT,
+  ): string {
+    const identity = persona ? 'consistent identity (same face, hair, outfit as reference), ' : '';
+    const camera = cameraNote.trim() ? `, ${cameraNote.trim()}` : '';
+    return `${identity}${sceneDesc}${camera}, single still frame, ${aspectOrientation(aspectRatio)} ${aspectRatio}, photorealistic, sharp focus, cinematic lighting`;
   }
 
   /**
