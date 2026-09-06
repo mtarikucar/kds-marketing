@@ -22,6 +22,9 @@ import {
   DEFAULT_VIDEO_MODEL,
   resolveMediaModelId,
   DEFAULT_VIDEO_REFERENCE_MODEL,
+  DEFAULT_KEYFRAME_MODEL,
+  DEFAULT_KEYFRAME_REFERENCE_MODEL,
+  animateModelFor,
   mediaModelAcceptsReferenceImages,
   mediaModelTakesSeed,
 } from '../ai/media/media-models.config';
@@ -506,12 +509,15 @@ export class ConceptPromotionService implements OnModuleInit {
     if (!quoted) return;
 
     const wantsReference = (plan?.shots ?? []).some((sh) => (sh.reference?.images?.length ?? 0) > 0);
-    const choice = await this.resolveVideoModel(
-      workspaceId,
-      campaign.defaultVideoModel,
+    const choice = await this.resolveVideoModel(workspaceId, campaign.defaultVideoModel, {
       wantsReference,
-    );
-    if (choice.model === quoted.model) return;
+      storyboard: Boolean(plan?.storyboard),
+    });
+    // Both halves of a storyboarded quote must hold: the animator AND the frame
+    // model. A frame drawn by a dearer model than the one on the quote is the
+    // same unapproved price as a clip bought elsewhere.
+    const framesHold = !quoted.keyframes || choice.keyframeModel === quoted.keyframes.model;
+    if (choice.model === quoted.model && framesHold) return;
 
     const now = quoteProduction(plan as ShotPlan, choice);
     // Name WHERE the other model comes from: "the campaign chose it" and "the
@@ -627,8 +633,13 @@ export class ConceptPromotionService implements OnModuleInit {
   async resolveVideoModel(
     workspaceId: string,
     campaignVideoModel: string | null | undefined,
-    wantsReference: boolean,
+    opts: boolean | { wantsReference: boolean; storyboard: boolean },
   ): Promise<VideoModelChoice> {
+    // The boolean form is the pre-storyboard signature: "does the plan carry
+    // persona frames". Kept so a plan made before storyboards resolves exactly
+    // as it did.
+    const { wantsReference, storyboard } =
+      typeof opts === 'boolean' ? { wantsReference: opts, storyboard: false } : opts;
     const chosen = campaignVideoModel ?? null;
     const model = chosen ?? (await this.mediaGen.workspaceDefaultModel(workspaceId, 'VIDEO'));
     // 'platform' vs 'workspace' is decided by comparing with the constant: a
@@ -640,6 +651,22 @@ export class ConceptPromotionService implements OnModuleInit {
       : resolveMediaModelId(model) === DEFAULT_VIDEO_MODEL
         ? 'platform'
         : 'workspace';
+
+    // A STORYBOARDED PLAN ANIMATES. Each beat opens on the still a human could
+    // look at, so the clip is bought from an image-to-video endpoint: the chosen
+    // model's own family twin when the catalogue names one (a premium choice
+    // stays premium), else the platform animator at the platform default's
+    // price. The persona rides in the FRAME — drawn by the reference image
+    // model with the persona's photos — so the dear reference-to-video route is
+    // no longer what identity costs.
+    if (storyboard) {
+      const animate = animateModelFor(model);
+      const keyframeModel = wantsReference ? DEFAULT_KEYFRAME_REFERENCE_MODEL : DEFAULT_KEYFRAME_MODEL;
+      if (resolveMediaModelId(animate) === resolveMediaModelId(model)) {
+        return { model: animate, modelSource, keyframeModel };
+      }
+      return { model: animate, modelSource: 'storyboard', replacedModel: model, keyframeModel };
+    }
 
     if (wantsReference && !mediaModelAcceptsReferenceImages(model)) {
       return {
@@ -791,11 +818,10 @@ export class ConceptPromotionService implements OnModuleInit {
     // it bought.
     let production = plan?.production;
     if (!production) {
-      const choice = await this.resolveVideoModel(
-        workspaceId,
-        item.campaign.defaultVideoModel,
-        shots.some((sh) => (sh.reference?.images?.length ?? 0) > 0),
-      );
+      const choice = await this.resolveVideoModel(workspaceId, item.campaign.defaultVideoModel, {
+        wantsReference: shots.some((sh) => (sh.reference?.images?.length ?? 0) > 0),
+        storyboard: Boolean(plan?.storyboard),
+      });
       production = quoteProduction(plan as ShotPlan, choice);
       await this.recordProduction(workspaceId, item.contentConceptId, plan as ShotPlan, production);
     }

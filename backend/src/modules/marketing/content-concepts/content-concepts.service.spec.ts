@@ -10,7 +10,9 @@ import { ConceptPromotionService } from './concept-promotion.service';
 import { DEFAULT_SHOT_ASPECT, VideoPipelineService } from '../video/video-pipeline.service';
 import {
   DEFAULT_VIDEO_MODEL,
-  DEFAULT_VIDEO_REFERENCE_MODEL,
+  DEFAULT_VIDEO_ANIMATE_MODEL,
+  DEFAULT_KEYFRAME_MODEL,
+  DEFAULT_KEYFRAME_REFERENCE_MODEL,
 } from '../ai/media/media-models.config';
 
 const IDEA =
@@ -790,38 +792,47 @@ describe('ContentConceptsService.planConcepts — every plan carries its frame',
 describe('ContentConceptsService.planConcepts — the plan is quoted before it is approved', () => {
   const firstPlan = (prisma: any) => prisma.contentConcept.createMany.mock.calls[0][0].data[0].shotPlan;
 
-  it('quotes the platform default when nothing else is chosen', async () => {
+  it('quotes the storyboard path on the platform animator when nothing else is chosen', async () => {
     const { svc, prisma } = deps();
     await plan(svc);
 
     const p = firstPlan(prisma);
-    expect(p.production.model).toBe(DEFAULT_VIDEO_MODEL);
-    expect(p.production.modelSource).toBe('platform');
-    // Seedance v1 lite: 3 credits/s, 1-10s, so the beats are untouched and the
-    // quote is 3x(2+3+4).
+    // Every new plan is storyboarded: one still per beat, then each beat is
+    // animated from its still. The platform default text-to-video model is
+    // swapped for its image-to-video twin at the SAME per-second price, and the
+    // swap is a fact on the plan.
+    expect(p.production.model).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(p.production.modelSource).toBe('storyboard');
+    expect(p.production.replacedModel).toBe(DEFAULT_VIDEO_MODEL);
     expect(p.production.billedSecPerBeat).toEqual([2, 3, 4]);
-    expect(p.production.credits).toBe(27);
+    // 3 frames at 3 credits + 9 seconds at 3 credits/s.
+    expect(p.production.keyframes).toEqual({ model: DEFAULT_KEYFRAME_MODEL, perFrameCredits: 3, credits: 9, usd: expect.closeTo(0.09, 6) });
+    expect(p.production.credits).toBe(36);
     expect(p.production.aspectRatio).toBe(DEFAULT_SHOT_ASPECT);
+    expect(p.storyboard).toEqual({ imageModel: DEFAULT_KEYFRAME_MODEL, seed: expect.any(Number) });
+    expect(p.shots[0].keyframePrompt).toMatch(/single still frame, vertical 9:16/);
+    expect(p.shots[0].keyframe).toBeUndefined();
   });
 
-  it('a persona plan is quoted on the model the persona FORCES, at its rate and its floor', async () => {
+  it('a persona plan carries the identity through its FRAMES, priced on the reference image model', async () => {
     const { svc, prisma } = deps();
     await plan(svc, { personaId: 'persona-1' });
 
     const p = firstPlan(prisma);
-    // The substitution is a FACT ON THE PLAN, naming what it replaced — not a
-    // logger.log written after the human decided.
-    expect(p.production.model).toBe(DEFAULT_VIDEO_REFERENCE_MODEL);
-    expect(p.production.modelSource).toBe('persona');
-    expect(p.production.replacedModel).toBe(DEFAULT_VIDEO_MODEL);
-    // Its contract floor is 4 seconds, so beats approved at 2 and 3 render — and
-    // bill — 4. The plan says 4, because that is what will be bought.
-    expect(p.production.billedSecPerBeat).toEqual([4, 4, 4]);
-    expect(p.shots.map((sh: any) => sh.durationSec)).toEqual([4, 4, 4]);
-    expect(p.durationSec).toBe(12);
-    // 48 credits/s x 4s x 3 beats. Twenty-one times the platform default's 27.
-    expect(p.production.credits).toBe(576);
-    expect(p.production.usd).toBeCloseTo(5.676, 3);
+    // The persona used to force reference-to-video at 48 credits/s with a
+    // 4-second floor (576 credits for this plan). With a storyboard the face is
+    // a property of the still: the frames are drawn by the reference image
+    // model with the persona's photos, and the clips are animated from those
+    // frames on the ordinary animator.
+    expect(p.production.model).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(p.production.modelSource).toBe('storyboard');
+    expect(p.production.keyframes).toMatchObject({ model: DEFAULT_KEYFRAME_REFERENCE_MODEL, perFrameCredits: 15, credits: 45 });
+    expect(p.production.billedSecPerBeat).toEqual([2, 3, 4]);
+    expect(p.production.credits).toBe(45 + 27);
+    expect(p.storyboard).toEqual({ imageModel: DEFAULT_KEYFRAME_REFERENCE_MODEL, seed: 4242 });
+    expect(p.shots[0].keyframePrompt).toMatch(/^consistent identity/);
+    // The persona's frames still ride on every shot, for the FRAME generator.
+    expect(p.shots.every((sh: any) => sh.reference?.images.length === 2)).toBe(true);
   });
 
   it('a campaign that chose its own model is quoted on THAT model', async () => {
@@ -831,12 +842,15 @@ describe('ContentConceptsService.planConcepts — the plan is quoted before it i
     await plan(svc, { socialCampaignId: 'camp-1' });
 
     const p = firstPlan(prisma);
-    expect(p.production.model).toBe('fal-ai/veo3.1/fast');
-    expect(p.production.modelSource).toBe('campaign');
+    // The campaign chose Veo 3.1 Fast; its keyframes are animated on Veo 3.1
+    // Fast image-to-video — same family, same 15 credits/s — and the plan says so.
+    expect(p.production.model).toBe('fal-ai/veo3.1/fast/image-to-video');
+    expect(p.production.modelSource).toBe('storyboard');
+    expect(p.production.replacedModel).toBe('fal-ai/veo3.1/fast');
     // Veo 3.1 takes 4, 6 or 8 seconds only, so 2 and 3 second beats are bought
-    // as 4-second ones at 15 credits/s.
+    // as 4-second ones at 15 credits/s — plus 3 frames at 3.
     expect(p.production.billedSecPerBeat).toEqual([4, 4, 4]);
-    expect(p.production.credits).toBe(180);
+    expect(p.production.credits).toBe(180 + 9);
   });
 
   it('quotes the WORKSPACE default when that is what will run', async () => {
@@ -844,8 +858,9 @@ describe('ContentConceptsService.planConcepts — the plan is quoted before it i
     await plan(svc);
 
     const p = firstPlan(prisma);
-    expect(p.production.model).toBe('bytedance/seedance-2.5/text-to-video');
-    expect(p.production.modelSource).toBe('workspace');
+    expect(p.production.model).toBe('bytedance/seedance-2.5/image-to-video');
+    expect(p.production.modelSource).toBe('storyboard');
+    expect(p.production.replacedModel).toBe('bytedance/seedance-2.5/text-to-video');
   });
 });
 

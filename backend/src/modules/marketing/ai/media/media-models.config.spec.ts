@@ -444,7 +444,9 @@ describe('storyboard animation', () => {
     expect(animateModelFor(DEFAULT_VIDEO_MODEL)).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
     expect(animateModelFor('bytedance/seedance-2.5/text-to-video')).toBe('bytedance/seedance-2.5/image-to-video');
     expect(animateModelFor('fal-ai/veo3.1')).toBe('fal-ai/veo3.1/image-to-video');
-    expect(animateModelFor('fal-ai/veo3.1/fast')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('fal-ai/veo3.1/fast')).toBe('fal-ai/veo3.1/fast/image-to-video');
+    expect(MEDIA_MODELS['fal-ai/veo3.1/fast/image-to-video']).toMatchObject({ technique: 'VIDEO_ANIMATE', creditsPerSec: 15, tiers: { '4k': { creditsPerSec: 35 } } });
+    expect(animateModelFor('fal-ai/bytedance/seedance/v1/pro/text-to-video')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
     expect(animateModelFor('bytedance/seedance-2.5/image-to-video')).toBe('bytedance/seedance-2.5/image-to-video');
     expect(animateModelFor(RETIRED_SEEDANCE_LITE_MODEL)).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
     expect(animateModelFor('not-a-model')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);

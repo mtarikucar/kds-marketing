@@ -307,6 +307,12 @@ export const DEFAULT_VIDEO_MODEL = 'fal-ai/bytedance/seedance/v1/pro/fast/text-t
  *  same per-second price — so producing from keyframes costs what producing
  *  from text did. */
 export const DEFAULT_VIDEO_ANIMATE_MODEL = 'fal-ai/bytedance/seedance/v1/pro/fast/image-to-video';
+/** The storyboard's frame generator, and the one used when the plan carries a
+ *  persona: the frame IS where the identity lives, so it is drawn by the edit
+ *  model that takes the persona's reference photos (≤14), and the clip is then
+ *  animated from that frame on the ordinary animator. */
+export const DEFAULT_KEYFRAME_MODEL = DEFAULT_IMAGE_MODEL;
+export const DEFAULT_KEYFRAME_REFERENCE_MODEL = 'fal-ai/nano-banana-pro/edit';
 /** fal retired this in 2026-09 and silently re-routes it to Pro Fast at 1080p. */
 export const RETIRED_SEEDANCE_LITE_MODEL = 'fal-ai/bytedance/seedance/v1/lite/text-to-video';
 export const DEFAULT_AUDIO_MODEL = 'fal-ai/elevenlabs/tts/multilingual-v2';
@@ -790,6 +796,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Veo 3.1 Fast — draft tier',
     pricePerSecUsd: 0.15, creditsPerSec: 15,
     tiers: { '4k': { pricePerSecUsd: 0.35, creditsPerSec: 35 } },
+    animateSibling: 'fal-ai/veo3.1/fast/image-to-video',
     note: 'Identical schema and output shape to Veo 3.1 at ~1/2.7 the cost with '
       + 'audio at 1080p. The 4k discount is much smaller, which is why 4k carries '
       + 'its own rate instead of a scaled-down average.',
@@ -826,6 +833,25 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     technique: 'VIDEO_ANIMATE', type: 'VIDEO', label: 'Veo 3.1 — animate a still, up to 4K',
     pricePerSecUsd: 0.40, creditsPerSec: 40,
     tiers: { '4k': { pricePerSecUsd: 0.60, creditsPerSec: 60 } },
+    contract: {
+      promptParam: 'prompt', negativePrompt: true, seedInput: true,
+      duration: VEO_31_DURATION, resolution: VEO_31_RESOLUTION,
+      aspect: { param: 'aspect_ratio', values: { '16:9': '16:9', '9:16': '9:16' } },
+      audio: { param: 'generate_audio', default: true },
+      sources: [{ slot: 'firstImage', param: 'image_url', arity: 'single', required: true }],
+      fixed: { safety_tolerance: '4' },
+    },
+  },
+
+  'fal-ai/veo3.1/fast/image-to-video': {
+    id: 'fal-ai/veo3.1/fast/image-to-video',
+    technique: 'VIDEO_ANIMATE', type: 'VIDEO', label: 'Veo 3.1 Fast — animate a still',
+    pricePerSecUsd: 0.15, creditsPerSec: 15,
+    tiers: { '4k': { pricePerSecUsd: 0.35, creditsPerSec: 35 } },
+    note: 'The image-to-video twin of Veo 3.1 Fast, at its price ($0.15/s with audio, '
+      + '$0.35/s at 4k) — schema-read 2026-09-06: image_url required, duration "4s"|"6s"|"8s" '
+      + 'default "8s", resolution default 720p, aspect "auto"|16:9|9:16. A storyboarded plan '
+      + 'whose campaign chose Veo 3.1 Fast animates here rather than dropping tiers.',
     contract: {
       promptParam: 'prompt', negativePrompt: true, seedInput: true,
       duration: VEO_31_DURATION, resolution: VEO_31_RESOLUTION,

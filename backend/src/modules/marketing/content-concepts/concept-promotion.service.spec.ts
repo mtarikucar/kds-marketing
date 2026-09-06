@@ -1,5 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { DEFAULT_VIDEO_MODEL } from '../ai/media/media-models.config';
+import {
+  DEFAULT_VIDEO_MODEL, DEFAULT_VIDEO_ANIMATE_MODEL, DEFAULT_VIDEO_REFERENCE_MODEL,
+  DEFAULT_KEYFRAME_MODEL, DEFAULT_KEYFRAME_REFERENCE_MODEL,
+} from '../ai/media/media-models.config';
 import { Prisma } from '@prisma/client';
 import { ConceptPromotionService, PRODUCE_MAX_WAITS } from './concept-promotion.service';
 import {
@@ -1171,5 +1174,46 @@ describe('ConceptPromotionService.requireCampaign — the approved price is the 
     await expect(
       svc.requireCampaign(WS, CAMPAIGN_ID, { plan: planQuoted as never }),
     ).rejects.toThrow(/a price nobody approved/);
+  });
+});
+
+describe('ConceptPromotionService.resolveVideoModel — a storyboarded plan animates', () => {
+  function svcWith(workspaceVideoModel: string = DEFAULT_VIDEO_MODEL) {
+    return new ConceptPromotionService(
+      {} as any,
+      { workspaceDefaultModel: jest.fn().mockResolvedValue(workspaceVideoModel) } as any,
+      { schedule: jest.fn() } as any,
+      { registerHandler: jest.fn() } as any,
+      { arm: jest.fn() } as any,
+    );
+  }
+
+  it('swaps the platform text-to-video default for its image-to-video twin and names the frame model', async () => {
+    await expect(svcWith().resolveVideoModel(WS, null, { wantsReference: false, storyboard: true })).resolves.toEqual({
+      model: DEFAULT_VIDEO_ANIMATE_MODEL, modelSource: 'storyboard', replacedModel: DEFAULT_VIDEO_MODEL, keyframeModel: DEFAULT_KEYFRAME_MODEL,
+    });
+  });
+
+  it('keeps a premium campaign choice in its own family', async () => {
+    await expect(svcWith().resolveVideoModel(WS, 'bytedance/seedance-2.5/text-to-video', { wantsReference: false, storyboard: true })).resolves.toEqual({
+      model: 'bytedance/seedance-2.5/image-to-video', modelSource: 'storyboard', replacedModel: 'bytedance/seedance-2.5/text-to-video', keyframeModel: DEFAULT_KEYFRAME_MODEL,
+    });
+    // A campaign that already chose an animator keeps it, and stays "campaign".
+    await expect(svcWith().resolveVideoModel(WS, 'bytedance/seedance-2.5/image-to-video', { wantsReference: false, storyboard: true })).resolves.toEqual({
+      model: 'bytedance/seedance-2.5/image-to-video', modelSource: 'campaign', keyframeModel: DEFAULT_KEYFRAME_MODEL,
+    });
+  });
+
+  it('carries a persona through the FRAMES, not through reference-to-video', async () => {
+    await expect(svcWith().resolveVideoModel(WS, null, { wantsReference: true, storyboard: true })).resolves.toEqual({
+      model: DEFAULT_VIDEO_ANIMATE_MODEL, modelSource: 'storyboard', replacedModel: DEFAULT_VIDEO_MODEL, keyframeModel: DEFAULT_KEYFRAME_REFERENCE_MODEL,
+    });
+  });
+
+  it('leaves the legacy answers exactly as they were', async () => {
+    await expect(svcWith().resolveVideoModel(WS, null, { wantsReference: true, storyboard: false })).resolves.toEqual({
+      model: DEFAULT_VIDEO_REFERENCE_MODEL, modelSource: 'persona', replacedModel: DEFAULT_VIDEO_MODEL,
+    });
+    await expect(svcWith().resolveVideoModel(WS, null, false)).resolves.toEqual({ model: DEFAULT_VIDEO_MODEL, modelSource: 'platform' });
   });
 });
