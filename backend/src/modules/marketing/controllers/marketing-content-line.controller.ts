@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import {
   IsInt,
   IsObject,
@@ -21,6 +21,7 @@ import { MarketingUserPayload } from '../types';
 import { ContentLineService, MAX_BATCH_LIMIT } from '../content-concepts/content-line.service';
 import { AnglePerformanceService } from '../content-concepts/angle-performance.service';
 import { ContentConceptsService } from '../content-concepts/content-concepts.service';
+import { StoryboardService } from '../content-concepts/storyboard.service';
 
 class ListBatchesDto {
   @IsOptional()
@@ -82,6 +83,7 @@ export class MarketingContentLineController {
     private readonly line: ContentLineService,
     private readonly anglePerformance: AnglePerformanceService,
     private readonly concepts: ContentConceptsService,
+    private readonly storyboard: StoryboardService,
   ) {}
 
   /** One card per idea: what was proposed, made, published, and earned. */
@@ -113,6 +115,43 @@ export class MarketingContentLineController {
   @RequirePermission('campaigns.read')
   batch(@CurrentMarketingUser() user: MarketingUserPayload, @Param('batchId') batchId: string) {
     return this.concepts.list(user.workspaceId, { batchId });
+  }
+
+  /**
+   * THE STORYBOARD, ON REQUEST. Draws one still per beat of a PROPOSED concept so
+   * the reviewer can look before approving; approval then animates those very
+   * frames. Spends image credits (a few per beat), so it is campaign work and
+   * audited like planning. Returns the concept row — the frames land on its
+   * plan as they finish, so the hub re-reads the same row to show them.
+   */
+  @Post('concepts/:conceptId/storyboard')
+  @RequirePermission('campaigns.write')
+  @Audit({ action: 'content.line.storyboard', resourceType: 'content_concept' })
+  async storyboardConcept(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Param('conceptId') conceptId: string,
+  ) {
+    await this.storyboard.request(user.workspaceId, conceptId, user.id);
+    return this.conceptRow(user.workspaceId, conceptId);
+  }
+
+  /** Redraw ONE beat's frame, with a fresh seed. Same gate, same audit. */
+  @Post('concepts/:conceptId/storyboard/:ord/regenerate')
+  @RequirePermission('campaigns.write')
+  @Audit({ action: 'content.line.storyboard.regenerate', resourceType: 'content_concept' })
+  async regenerateFrame(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Param('conceptId') conceptId: string,
+    @Param('ord', ParseIntPipe) ord: number,
+  ) {
+    await this.storyboard.regenerateFrame(user.workspaceId, conceptId, ord, user.id);
+    return this.conceptRow(user.workspaceId, conceptId);
+  }
+
+  private async conceptRow(workspaceId: string, conceptId: string) {
+    const [row] = await this.concepts.list(workspaceId, { conceptId });
+    if (!row) throw new NotFoundException('Concept not found');
+    return row;
   }
 
   @Post('plan')

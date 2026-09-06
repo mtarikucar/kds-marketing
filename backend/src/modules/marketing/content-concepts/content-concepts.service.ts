@@ -719,7 +719,7 @@ export class ContentConceptsService {
    * string from any other caller straight to the Prisma enum, where it is a
    * driver-level error instead of a stated refusal.
    */
-  async list(workspaceId: string, filter: { status?: string; batchId?: string }) {
+  async list(workspaceId: string, filter: { status?: string; batchId?: string; conceptId?: string }) {
     if (filter.status && !isConceptStatus(filter.status)) {
       throw new BadRequestException(
         `Unknown concept status "${filter.status}". Use one of: ${CONCEPT_STATUSES.join(', ')}.`,
@@ -730,6 +730,7 @@ export class ContentConceptsService {
         workspaceId,
         ...(filter.status ? { status: filter.status as ContentConceptStatus } : {}),
         ...(filter.batchId ? { batchId: filter.batchId } : {}),
+        ...(filter.conceptId ? { id: filter.conceptId } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { ordinal: 'asc' }],
       take: CONCEPT_LIST_LIMIT,

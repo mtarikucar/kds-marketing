@@ -1350,6 +1350,8 @@ export class MarketingModule {
     mediaGen: MediaGenService,
     socialCampaigns: SocialCampaignsService,
     contentConcepts: ContentConceptsService,
+    // The storyboard a reviewer can draw before approving a concept.
+    storyboard: StoryboardService,
     contentDistribution: ContentDistributionService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
@@ -1412,7 +1414,7 @@ export class MarketingModule {
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
-    registerContentConceptTools(registry, { concepts: contentConcepts, principals, entitlements });
+    registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
     registerContentDistributionTools(registry, {
       distribution: contentDistribution,
       principals,

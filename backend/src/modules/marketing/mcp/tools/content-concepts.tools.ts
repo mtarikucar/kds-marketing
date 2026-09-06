@@ -12,6 +12,7 @@ import {
   MAX_SHOT_SEC,
   type SubmittedConcept,
 } from '../../content-concepts/content-concepts.service';
+import { StoryboardService } from '../../content-concepts/storyboard.service';
 import { MIN_SHOTS_PER_CONCEPT } from '../../content-concepts/concept-distinctness';
 import { assertFeature } from '../mcp-feature-gate';
 import { McpPrincipalService } from '../mcp-principal.service';
@@ -19,6 +20,7 @@ import { McpToolRegistry } from '../mcp-tool-registry';
 
 export interface ContentConceptToolDeps {
   concepts: ContentConceptsService;
+  storyboard: StoryboardService;
   principals: McpPrincipalService;
   entitlements: EntitlementsService;
 }
@@ -115,7 +117,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.plan_content_concepts',
     description:
-      `Turn ONE idea (pasted text, notes, a link) into several genuinely DIFFERENT video concepts — different angles, not rewordings — each planned shot by shot with its own on-screen text, voiceover, camera note and duration. Defaults to ${DEFAULT_CONCEPT_COUNT} concepts. This SPENDS AI credits (one Opus call). The concepts are saved as PROPOSED for a human to approve or discard with jeeta.review_content_concept; nothing is generated or published here. APPROVING one later REQUIRES a social campaign to produce it into, and that campaign must be ACTIVE or PAUSED — a DRAFT campaign is refused, because the publish gate would never release what approving it would pay to generate. Pass socialCampaignId now to have that checked BEFORE this call spends anything, or leave it off and let the reviewer name one. If the concepts come back as variations of one another the whole batch is refused and nothing is saved — that is a generation failure, not a verdict on the idea. Each returned plan carries a "production" block: the model that will actually run it, the seconds each beat will be BILLED at (a model's own contract floor can raise a 3-second beat to 4), and what producing it costs in credits and dollars. That is the price approving it will charge — show it before approving, and note that a persona forces the reference-to-video model, which is many times dearer per second than the default. When socialCampaignId is given, each concept also carries "destinations": one line per target account saying what that network will ACTUALLY publish (all clips as a carousel, the first beat only, or nothing at all on a network that cannot carry video) — show those lines before approving, because nothing is refused over capacity.`,
+      `Turn ONE idea (pasted text, notes, a link) into several genuinely DIFFERENT video concepts — different angles, not rewordings — each planned shot by shot with its own on-screen text, voiceover, camera note and duration. Defaults to ${DEFAULT_CONCEPT_COUNT} concepts. This SPENDS AI credits (one Opus call). The concepts are saved as PROPOSED for a human to approve or discard with jeeta.review_content_concept; nothing is generated or published here. APPROVING one later REQUIRES a social campaign to produce it into, and that campaign must be ACTIVE or PAUSED — a DRAFT campaign is refused, because the publish gate would never release what approving it would pay to generate. Pass socialCampaignId now to have that checked BEFORE this call spends anything, or leave it off and let the reviewer name one. If the concepts come back as variations of one another the whole batch is refused and nothing is saved — that is a generation failure, not a verdict on the idea. Every concept is produced FROM A STORYBOARD: one still frame per beat is drawn first, then each beat is animated from its frame (image-to-video), so the clips open on a picture rather than on a model's guess. Each returned plan carries a "production" block: the animation model that will run it, the seconds each beat will be BILLED at (a model's own contract floor can raise a 3-second beat to 4), a "keyframes" line for the frames, and what producing it costs in credits and dollars ALL IN. That is the price approving it will charge — show it before approving. A persona no longer forces the dear reference-to-video model: its face is drawn into the frames by the reference image model (15 credits a frame) and the clips are animated from those. To see the frames before approving, call jeeta.storyboard_content_concept on a concept and read them back with jeeta.list_content_concepts. When socialCampaignId is given, each concept also carries "destinations": one line per target account saying what that network will ACTUALLY publish (all clips as a carousel, the first beat only, or nothing at all on a network that cannot carry video) — show those lines before approving, because nothing is refused over capacity.`,
     domain: 'content',
     // Deferred (spec §3): the advertised surface is at its 45-tool ceiling, and
     // a wave that wants room must defer rather than raise the number. Reachable
@@ -174,7 +176,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.list_content_concepts',
     description:
-      `List the video concepts in this workspace with their angle, hook and full shot plan, newest batch first. Returns at most the ${CONCEPT_LIST_LIMIT} newest concepts (about five batches); older ones are reachable only by narrowing. Filter by status (PROPOSED = waiting on a human, APPROVED = kept, DISCARDED = rejected) or by batchId, which always returns that batch whole. Every concept scoped to a campaign carries "destinations": one line per target account saying what that network will ACTUALLY publish if it is approved — the whole set of clips as a carousel, the first beat only, nothing at all on a network that cannot carry video, or nothing because the account is disconnected. Show those lines to the human before they approve. Read-only.`,
+      `List the video concepts in this workspace with their angle, hook and full shot plan — including each beat's storyboard frame (shots[].keyframe: status QUEUED/GENERATING/READY/FAILED and, when READY, the image url) once one was requested — newest batch first. Returns at most the ${CONCEPT_LIST_LIMIT} newest concepts (about five batches); older ones are reachable only by narrowing. Filter by status (PROPOSED = waiting on a human, APPROVED = kept, DISCARDED = rejected) or by batchId, which always returns that batch whole. Every concept scoped to a campaign carries "destinations": one line per target account saying what that network will ACTUALLY publish if it is approved — the whole set of clips as a carousel, the first beat only, nothing at all on a network that cannot carry video, or nothing because the account is disconnected. Show those lines to the human before they approve. Read-only.`,
     domain: 'content',
     // Deferred (spec §3): a review-queue browse, not a per-turn action.
     defer: true,
@@ -233,7 +235,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.review_content_concept',
     description:
-      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item and one video clip is generated per beat of its shot plan, which SPENDS the workspace credits (video is the most expensive action in the product) — this single decision is the whole human gate, there is no second approval per clip. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into — the one the idea was scoped to, or socialCampaignId — and that campaign must be ACTIVE or PAUSED; a DRAFT campaign is refused BEFORE the verdict is recorded, so the concept stays PROPOSED and can be approved again once someone activates the campaign in the panel. Approval is NOT refused because a destination cannot carry every clip — each network takes what it can (the Instagram feed carousel holds ten, TikTok and Facebook take one, X and Pinterest take no video at all) and the rest is recorded; read the "destinations" lines from jeeta.list_content_concepts to the person first, so they approve knowing what each account will receive. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
+      'Approve or discard one proposed video concept on behalf of the signed-in person. APPROVING STARTS PRODUCTION: the concept becomes a social-campaign item, any storyboard frame not yet drawn is drawn (one still per beat), and one video clip is animated from each frame, which SPENDS the workspace credits at the price quoted on the plan (frames and clips together) — this single decision is the whole human gate, there is no second approval per clip or per frame. Want to look at the frames first? Call jeeta.storyboard_content_concept before approving; regenerate any frame you dislike; approve when they read right. Discarding takes it out of the queue and costs nothing. A concept can only be decided once. Approval needs a social campaign to produce into — the one the idea was scoped to, or socialCampaignId — and that campaign must be ACTIVE or PAUSED; a DRAFT campaign is refused BEFORE the verdict is recorded, so the concept stays PROPOSED and can be approved again once someone activates the campaign in the panel. Approval is NOT refused because a destination cannot carry every clip — each network takes what it can (the Instagram feed carousel holds ten, TikTok and Facebook take one, X and Pinterest take no video at all) and the rest is recorded; read the "destinations" lines from jeeta.list_content_concepts to the person first, so they approve knowing what each account will receive. Requires a signed-in human — an unattended API-key session cannot sign off its own concepts.',
     domain: 'content',
     // Deferred (spec §3): follows list_content_concepts, which is itself
     // deferred; a model that has found one has found both.
@@ -307,9 +309,38 @@ export function registerContentConceptTools(
   });
 
   registry.register({
+    name: 'jeeta.storyboard_content_concept',
+    description:
+      'Draw the STORYBOARD of one proposed video concept — one still frame per beat — so a person can look before approving. Frames render in the background (tens of seconds each); read them back with jeeta.list_content_concepts (shots[].keyframe.url when READY, or its status/error). Pass regenerateShot with a beat number (0-based ord) to redraw just that frame with a fresh seed. SPENDS image credits (a few per frame; more with a persona) — approving the concept later animates exactly these frames and buys nothing twice. Works on PROPOSED concepts and on APPROVED ones not yet in production; a concept planned before storyboards existed is refused and must be re-planned. Discarding a concept nobody storyboarded still costs nothing.',
+    domain: 'content',
+    defer: true,
+    scopes: ['campaigns.write'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      conceptId: z.string().min(1).max(64).describe('The concept to storyboard (see jeeta.list_content_concepts).'),
+      regenerateShot: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Redraw only this beat (its 0-based `ord` in shots[]) with a fresh seed, leaving the others as they are.'),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
+      const requestedById = ctx.userId ?? (await deps.principals.resolve(ctx)).id;
+      const conceptId = String(args.conceptId);
+      if (typeof args.regenerateShot === 'number') {
+        return deps.storyboard.regenerateFrame(ctx.workspaceId, conceptId, args.regenerateShot, requestedById);
+      }
+      return deps.storyboard.request(ctx.workspaceId, conceptId, requestedById);
+    },
+  });
+
+  registry.register({
     name: 'jeeta.submit_content_concepts',
     description:
-      `Save video concepts YOU planned yourself, instead of paying the platform's model to plan them for you. This is the preferred way to create concepts when you are a connected Claude: you already have the brand context, and jeeta.plan_content_concepts would only be you asking the server to ask another model — a round trip that costs the workspace AI credits and stops working entirely whenever the platform's own key is dry. This call spends NO credits. Everything else is identical: the same distinctness contract, the same beat-length clamp, the same campaign and persona locks, the same production quote and destination lines come back on the result. Read jeeta.get_brand_profile first and write in that voice. The batch is REFUSED WHOLE if the concepts are variations of one another — each needs a genuinely different angle (not a reworded hook), a distinct hook, and at least ${MIN_SHOTS_PER_CONCEPT} shots each with a visual description. Beats outside ${MIN_SHOT_SEC}-${MAX_SHOT_SEC}s are clamped to what the generator accepts. Concepts are saved as PROPOSED for a human to approve with jeeta.review_content_concept; nothing is generated or published here.`,
+      `Save video concepts YOU planned yourself, instead of paying the platform's model to plan them for you. This is the preferred way to create concepts when you are a connected Claude: you already have the brand context, and jeeta.plan_content_concepts would only be you asking the server to ask another model — a round trip that costs the workspace AI credits and stops working entirely whenever the platform's own key is dry. This call spends NO credits. Everything else is identical: the same distinctness contract, the same beat-length clamp, the same campaign and persona locks, the same storyboard (one frame per beat, then image-to-video), the same production quote and destination lines come back on the result. Write each shot's description as what a SINGLE STILL FRAME shows — it becomes the frame's prompt — and put the motion in the camera note. Read jeeta.get_brand_profile first and write in that voice. The batch is REFUSED WHOLE if the concepts are variations of one another — each needs a genuinely different angle (not a reworded hook), a distinct hook, and at least ${MIN_SHOTS_PER_CONCEPT} shots each with a visual description. Beats outside ${MIN_SHOT_SEC}-${MAX_SHOT_SEC}s are clamped to what the generator accepts. Concepts are saved as PROPOSED for a human to approve with jeeta.review_content_concept; nothing is generated or published here.`,
     domain: 'content',
     defer: true,
     scopes: ['campaigns.write'],
