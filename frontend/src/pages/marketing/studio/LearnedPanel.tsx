@@ -31,7 +31,7 @@ export function LearnedPanel() {
   const q = useQuery({
     queryKey: ['marketing', 'content-line', 'angles'],
     queryFn: getAnglePerformance,
-    meta: { skipErrorToast: true },
+    meta: { silent: true },
   });
 
   return (

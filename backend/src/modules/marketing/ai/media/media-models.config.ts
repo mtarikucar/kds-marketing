@@ -286,6 +286,13 @@ export interface MediaModel extends MediaRate {
   withheld?: string;
   runware?: RunwareBinding;
   /**
+   * The image-to-video endpoint of the same family, for a text-to-video model
+   * a campaign or workspace chose: a storyboarded plan animates its keyframes
+   * on THIS rather than dropping to the platform animator, so a premium choice
+   * stays premium. See `animateModelFor`.
+   */
+  animateSibling?: string;
+  /**
    * fal retired this endpoint. The entry stays — old rows, stored workspace
    * defaults and campaign overrides all reference it — but a generation naming
    * it runs on the successor (`resolveMediaModelId`), the menu hides it, and the
@@ -296,6 +303,16 @@ export interface MediaModel extends MediaRate {
 
 export const DEFAULT_IMAGE_MODEL = 'fal-ai/bytedance/seedream/v4/text-to-image';
 export const DEFAULT_VIDEO_MODEL = 'fal-ai/bytedance/seedance/v1/pro/fast/text-to-video';
+/** The storyboard animator: the same Pro Fast family, image-to-video, at the
+ *  same per-second price — so producing from keyframes costs what producing
+ *  from text did. */
+export const DEFAULT_VIDEO_ANIMATE_MODEL = 'fal-ai/bytedance/seedance/v1/pro/fast/image-to-video';
+/** The storyboard's frame generator, and the one used when the plan carries a
+ *  persona: the frame IS where the identity lives, so it is drawn by the edit
+ *  model that takes the persona's reference photos (≤14), and the clip is then
+ *  animated from that frame on the ordinary animator. */
+export const DEFAULT_KEYFRAME_MODEL = DEFAULT_IMAGE_MODEL;
+export const DEFAULT_KEYFRAME_REFERENCE_MODEL = 'fal-ai/nano-banana-pro/edit';
 /** fal retired this in 2026-09 and silently re-routes it to Pro Fast at 1080p. */
 export const RETIRED_SEEDANCE_LITE_MODEL = 'fal-ai/bytedance/seedance/v1/lite/text-to-video';
 export const DEFAULT_AUDIO_MODEL = 'fal-ai/elevenlabs/tts/multilingual-v2';
@@ -678,6 +695,26 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
       aspect: SEEDANCE_1_FAST_ASPECT,
     },
   },
+  [DEFAULT_VIDEO_ANIMATE_MODEL]: {
+    id: DEFAULT_VIDEO_ANIMATE_MODEL,
+    technique: 'VIDEO_ANIMATE', type: 'VIDEO', label: 'Short video from a keyframe',
+    pricePerSecUsd: 0.0216, creditsPerSec: 3, tiers: SEEDANCE_1_FAST_TIERS,
+    runware: {
+      model: 'bytedance:2@2', pricePerSecUsd: 0.01336,
+      tiers: { '480p': { pricePerSecUsd: 0.00629 }, '1080p': { pricePerSecUsd: 0.03177 } },
+    },
+    note: 'The storyboard animator: the same $1/M-token Pro Fast family as the '
+      + 'platform default, so animating a keyframe costs what a text-to-video beat '
+      + 'did. DEFAULTS TO 1080p on fal, so resolution is always sent. fal also offers '
+      + 'aspect_ratio "auto" (follow the still); the plan\'s own ratio is sent instead '
+      + 'so the words, the still and the wire agree. Schema-read 2026-09-06.',
+    contract: {
+      promptParam: 'prompt', negativePrompt: false, seedInput: true,
+      duration: SEEDANCE_1_FAST_DURATION, resolution: SEEDANCE_1_FAST_RESOLUTION,
+      aspect: SEEDANCE_1_FAST_ASPECT,
+      sources: [{ slot: 'firstImage', param: 'image_url', arity: 'single', required: true }],
+    },
+  },
   [RETIRED_SEEDANCE_LITE_MODEL]: {
     id: RETIRED_SEEDANCE_LITE_MODEL,
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Short video (retired)',
@@ -725,6 +762,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Seedance 2.5 — 30s single shot + audio',
     pricePerSecUsd: 0.4730, creditsPerSec: 48, tiers: SEEDANCE_25_TIERS,
     runware: SEEDANCE_25_RUNWARE,
+    animateSibling: 'bytedance/seedance-2.5/image-to-video',
     note: 'NO fal-ai/ prefix. The only model here that holds one coherent shot to '
       + '30s, with native synchronised audio at no premium — and by far the most '
       + 'expensive per second (a 5s 720p clip is ~240 credits), so the estimate '
@@ -741,6 +779,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Veo 3.1 — hero shot, up to 4K',
     pricePerSecUsd: 0.40, creditsPerSec: 40,
     tiers: { '4k': { pricePerSecUsd: 0.60, creditsPerSec: 60 } },
+    animateSibling: 'fal-ai/veo3.1/image-to-video',
     note: 'Bare id — appending /text-to-video is a 404. $0.20/s without audio vs '
       + '$0.40/s with, and we default audio ON, so the with-audio rate is the one '
       + 'metered. 16:9 and 9:16 only; no 1:1. Ceiling is 8s.',
@@ -757,6 +796,7 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     technique: 'VIDEO_CREATE', type: 'VIDEO', label: 'Veo 3.1 Fast — draft tier',
     pricePerSecUsd: 0.15, creditsPerSec: 15,
     tiers: { '4k': { pricePerSecUsd: 0.35, creditsPerSec: 35 } },
+    animateSibling: 'fal-ai/veo3.1/fast/image-to-video',
     note: 'Identical schema and output shape to Veo 3.1 at ~1/2.7 the cost with '
       + 'audio at 1080p. The 4k discount is much smaller, which is why 4k carries '
       + 'its own rate instead of a scaled-down average.',
@@ -793,6 +833,25 @@ export const MEDIA_MODELS: Record<string, MediaModel> = {
     technique: 'VIDEO_ANIMATE', type: 'VIDEO', label: 'Veo 3.1 — animate a still, up to 4K',
     pricePerSecUsd: 0.40, creditsPerSec: 40,
     tiers: { '4k': { pricePerSecUsd: 0.60, creditsPerSec: 60 } },
+    contract: {
+      promptParam: 'prompt', negativePrompt: true, seedInput: true,
+      duration: VEO_31_DURATION, resolution: VEO_31_RESOLUTION,
+      aspect: { param: 'aspect_ratio', values: { '16:9': '16:9', '9:16': '9:16' } },
+      audio: { param: 'generate_audio', default: true },
+      sources: [{ slot: 'firstImage', param: 'image_url', arity: 'single', required: true }],
+      fixed: { safety_tolerance: '4' },
+    },
+  },
+
+  'fal-ai/veo3.1/fast/image-to-video': {
+    id: 'fal-ai/veo3.1/fast/image-to-video',
+    technique: 'VIDEO_ANIMATE', type: 'VIDEO', label: 'Veo 3.1 Fast — animate a still',
+    pricePerSecUsd: 0.15, creditsPerSec: 15,
+    tiers: { '4k': { pricePerSecUsd: 0.35, creditsPerSec: 35 } },
+    note: 'The image-to-video twin of Veo 3.1 Fast, at its price ($0.15/s with audio, '
+      + '$0.35/s at 4k) — schema-read 2026-09-06: image_url required, duration "4s"|"6s"|"8s" '
+      + 'default "8s", resolution default 720p, aspect "auto"|16:9|9:16. A storyboarded plan '
+      + 'whose campaign chose Veo 3.1 Fast animates here rather than dropping tiers.',
     contract: {
       promptParam: 'prompt', negativePrompt: true, seedInput: true,
       duration: VEO_31_DURATION, resolution: VEO_31_RESOLUTION,
@@ -1354,6 +1413,27 @@ export function mediaModelAcceptsReferenceImages(id: string): boolean {
  *  an unsupported param, not a stronger identity lock. */
 export function mediaModelTakesSeed(id: string): boolean {
   return Boolean(MEDIA_MODELS[id]?.contract.seedInput);
+}
+
+/** Does this model open on a caller-supplied still — the single `firstImage`
+ *  slot an image-to-video endpoint takes? Asked of the model that will run. */
+export function mediaModelAcceptsFirstImage(id: string): boolean {
+  return Boolean(
+    MEDIA_MODELS[resolveMediaModelId(id)]?.contract.sources?.some((s) => s.slot === 'firstImage'),
+  );
+}
+
+/**
+ * The endpoint that animates a keyframe for a plan whose chosen model is `id`:
+ * itself when it already opens on a still, its own family's image-to-video
+ * sibling when the catalogue names one (a premium choice stays premium), and
+ * the platform animator otherwise. Never a retired id.
+ */
+export function animateModelFor(id: string): string {
+  const live = resolveMediaModelId(id);
+  if (mediaModelAcceptsFirstImage(live)) return live;
+  const sibling = MEDIA_MODELS[live]?.animateSibling;
+  return sibling && MEDIA_MODELS[sibling] ? sibling : DEFAULT_VIDEO_ANIMATE_MODEL;
 }
 
 /**

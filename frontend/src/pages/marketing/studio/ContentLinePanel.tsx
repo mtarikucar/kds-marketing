@@ -36,7 +36,7 @@ export function ContentLinePanel({ onOpenBatch }: { onOpenBatch: (batchId: strin
   const batches = useQuery({
     queryKey: ['marketing', 'content-line', 'batches'],
     queryFn: () => listBatches(),
-    meta: { skipErrorToast: true },
+    meta: { silent: true },
   });
 
   // Read from the same key `LearnedPanel` uses, so this is served from its cache
@@ -45,7 +45,7 @@ export function ContentLinePanel({ onOpenBatch }: { onOpenBatch: (batchId: strin
   const angles = useQuery({
     queryKey: ['marketing', 'content-line', 'angles'],
     queryFn: getAnglePerformance,
-    meta: { skipErrorToast: true },
+    meta: { silent: true },
   });
 
   const plan = useMutation({

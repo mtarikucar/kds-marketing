@@ -136,7 +136,28 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     requestGeneration: jest.fn(async (ws: string, dto: Record<string, unknown>) => {
       requests.push({ workspaceId: ws, dto });
       if (generationFails) throw generationFails;
-      return { assetId: `asset-${requests.length}-${randomUUID().slice(0, 6)}` };
+      const assetId = `asset-${requests.length}-${randomUUID().slice(0, 6)}`;
+      // A storyboard FRAME is an asset the producer reads back off its row
+      // before it animates the beat, so the fake finishes one instantly — READY,
+      // with a URL — the way finalize would minutes later. Clips stay ids only:
+      // nothing downstream of produce reads them in this suite.
+      if (dto.type === 'IMAGE') {
+        await prisma.generatedAsset.create({
+          data: {
+            id: assetId,
+            workspaceId: ws,
+            type: 'IMAGE',
+            status: 'READY',
+            provider: 'fal',
+            model: String(dto.model),
+            prompt: String(dto.prompt ?? ''),
+            url: `https://r2.test/${assetId}.png`,
+            createdById: String(dto.createdById),
+            socialCampaignId: (dto.socialCampaignId as string | undefined) ?? null,
+          },
+        });
+      }
+      return { assetId };
     }),
     // See the note in content-concepts.realdb: the promotion service resolves
     // `campaign ?? workspace ?? platform` through this one call.
@@ -656,7 +677,31 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     const { item } = await svc.promote(workspaceId, conceptId);
     await svc.produce(item.id, workspaceId);
 
-    const durations = requests.map((r) => r.dto.durationSec as number);
+    // A plan made by the planner is STORYBOARDED: one frame per beat is drawn
+    // first (the fake finishes them instantly), then each beat is animated from
+    // its frame. The clips are what the beat-length contract is about.
+    const frames = requests.filter((r) => r.dto.type === 'IMAGE');
+    const clips = requests.filter((r) => r.dto.type === 'VIDEO');
+    expect(frames).toHaveLength(3);
+    expect(clips).toHaveLength(3);
+    expect(clips.map((r) => (r.dto.referenceImageUrls as string[])[0])).toEqual(
+      frames.map((_r, i) => expect.stringContaining(`asset-${i + 1}-`)),
+    );
+    // The frames round-tripped through the JSONB column one beat at a time
+    // (jsonb_set per keyframe), and the clip list holds ONLY clips — a frame
+    // id in it would shift every beat of the carousel by one.
+    const produced = await prisma.contentConcept.findUniqueOrThrow({ where: { id: conceptId } });
+    const keyframes = (produced.shotPlan as { shots: Array<{ ord: number; keyframe?: { assetId: string; status: string; url?: string } }> }).shots.map(
+      (sh) => sh.keyframe,
+    );
+    expect(keyframes.map((kf) => kf?.status)).toEqual(['READY', 'READY', 'READY']);
+    expect(keyframes.map((kf) => kf?.url)).toEqual(frames.map((_r, i) => expect.stringContaining(`asset-${i + 1}-`)));
+    const frameIds = new Set(keyframes.map((kf) => kf?.assetId));
+    const itemRow = await prisma.socialCampaignItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(itemRow.generatedAssetIds).toHaveLength(3);
+    expect(itemRow.generatedAssetIds.every((id) => id.startsWith('asset-') && !frameIds.has(id))).toBe(true);
+    expect(itemRow.generatedAssetIds).toEqual(clips.map((_r, i) => expect.stringContaining(`asset-${i + 4}-`)));
+    const durations = clips.map((r) => r.dto.durationSec as number);
     // The floor is the default video model's own contract floor (Seedance 1.0
     // Pro Fast: 2s), read off the catalogue rather than restated here.
     expect(durations).toEqual([MAX_SHOT_SEC, MIN_SHOT_SEC, MAX_SHOT_SEC]);

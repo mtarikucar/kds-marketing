@@ -255,3 +255,41 @@ describe('VideoPipelineService — a persona reaches EVERY shot', () => {
     expect(plan.shots[0].reference).toBeUndefined();
   });
 });
+
+describe('VideoPipelineService — storyboard: a still per beat, planned beside the clip', () => {
+  const SCENES = [
+    { scene: '0-2s', cameraNote: 'wide, low angle', voiceover: '', description: 'a strandbeest walking on a windy beach', durationSec: 2 },
+    { scene: '2-5s', cameraNote: 'macro', voiceover: 'no motor', description: 'the crank shaft turning', durationSec: 3 },
+  ];
+  const STORYBOARD = { imageModel: 'fal-ai/bytedance/seedream/v4/text-to-image', seed: 42 };
+
+  it('writes the raw description, a still-frame prompt without motion or audio, and the storyboard seed', () => {
+    const plan = svc.planShots({ product: 'X', hook: 'H' }, 'seedance', undefined, SCENES, '9:16', { storyboard: STORYBOARD });
+    expect(plan.storyboard).toEqual(STORYBOARD);
+    expect(plan.shots[0].description).toBe('a strandbeest walking on a windy beach');
+    expect(plan.shots[0].keyframePrompt).toMatch(/^a strandbeest walking on a windy beach, wide, low angle, single still frame, vertical 9:16/);
+    expect(plan.shots[0].keyframePrompt).not.toMatch(/audio|reference-to-video|motion/);
+    // The animation prompt is untouched: the clip still gets its per-model suffix.
+    expect(plan.shots[0].prompt).toMatch(/native synchronized audio/);
+    expect(plan.shots[1].keyframePrompt).toMatch(/^the crank shaft turning, macro, single still frame/);
+  });
+
+  it('puts the persona identity clause on the keyframe prompt too, without the seed words', () => {
+    const plan = svc.planShots({ product: 'X' }, 'seedance',
+      { name: 'Deniz', referenceImageUrls: ['r1.png'], lockedSeed: 7 }, SCENES, '9:16', { storyboard: { ...STORYBOARD, seed: 7 } });
+    expect(plan.shots[0].keyframePrompt).toMatch(/^consistent identity \(same face, hair, outfit as reference\), a strandbeest/);
+    expect(plan.shots[0].keyframePrompt).not.toMatch(/seed 7/);
+  });
+
+  it('leaves a plan made without the storyboard option exactly as before', () => {
+    const plan = svc.planShots({ product: 'X' }, 'seedance', undefined, SCENES);
+    expect(plan.storyboard).toBeUndefined();
+    expect(plan.shots[0]).not.toHaveProperty('keyframePrompt');
+    expect(plan.shots[0]).not.toHaveProperty('description');
+  });
+
+  it('buildKeyframePrompt tolerates an empty camera note', () => {
+    expect(svc.buildKeyframePrompt('a cup on a table', '', undefined, '1:1'))
+      .toBe('a cup on a table, single still frame, square 1:1, photorealistic, sharp focus, cinematic lighting');
+  });
+});

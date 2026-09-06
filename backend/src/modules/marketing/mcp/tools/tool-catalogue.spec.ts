@@ -468,6 +468,9 @@ describe('MCP tool catalogue', () => {
         // Claude plans the batch itself and submits it, so the platform
         // makes no model call and the workspace spends no credit.
         'jeeta.submit_content_concepts',
+        // The storyboard a reviewer can draw before approving: one still per
+        // beat, redrawable one at a time. Deferred like the rest of the line.
+        'jeeta.storyboard_content_concept',
         // İçerik üretim hattı, aşama 4. Two tools, both deferred, and note
         // which verb is NOT among them: there is no send. Sending a prepared
         // message is a REST route behind an authenticated human, because
@@ -490,6 +493,7 @@ describe('MCP tool catalogue', () => {
     // 123 -> 124: jeeta.produce_content_concept, also deferred.
     // 124 -> 126: the two distribution tools, also deferred. There is no third
     // one that sends, on purpose — see the comment beside them above.
+    // 126 -> 127: jeeta.storyboard_content_concept, also deferred.
     //
     // MEASURED, not counted by grep. `grep -c 'registry.register('` over the
     // non-spec tool files is a legitimate cross-check and currently agrees:
@@ -499,7 +503,7 @@ describe('MCP tool catalogue', () => {
     // over-counts; re-measured, grep did not — the counts have always matched,
     // and the figure to trust is the one this assertion takes from a built
     // registry.
-    expect(names).toHaveLength(127);
+    expect(names).toHaveLength(128);
   });
 
   /**
@@ -592,7 +596,7 @@ describe('MCP tool catalogue', () => {
     // that reason. The number in this comment said 120 while the assertion
     // below said 123; a comment that disagrees with its own assertion is how a
     // measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(127);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(128);
   });
 });
 

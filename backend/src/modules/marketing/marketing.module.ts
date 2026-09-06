@@ -269,6 +269,7 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
+import { StoryboardService } from './content-concepts/storyboard.service';
 import { AnglePerformanceService } from './content-concepts/angle-performance.service';
 import { ContentLineService } from './content-concepts/content-line.service';
 import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
@@ -1038,6 +1039,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // rather than through jeeta.generate_video — see its class docblock for the
     // three measured reasons the MCP route cannot carry this.
     ConceptPromotionService,
+    // The storyboard a human can look at before approving: one still per beat,
+    // drawn on request while the concept is PROPOSED, and the job that copies
+    // each frame's outcome onto the plan. `produce` draws missing frames itself.
+    StoryboardService,
     AnglePerformanceService,
     ContentLineService,
     ContentDistributionService,
@@ -1345,6 +1350,8 @@ export class MarketingModule {
     mediaGen: MediaGenService,
     socialCampaigns: SocialCampaignsService,
     contentConcepts: ContentConceptsService,
+    // The storyboard a reviewer can draw before approving a concept.
+    storyboard: StoryboardService,
     contentDistribution: ContentDistributionService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
@@ -1407,7 +1414,7 @@ export class MarketingModule {
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
-    registerContentConceptTools(registry, { concepts: contentConcepts, principals, entitlements });
+    registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
     registerContentDistributionTools(registry, {
       distribution: contentDistribution,
       principals,

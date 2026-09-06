@@ -12,6 +12,10 @@ function build(over: { features?: Record<string, boolean> } = {}) {
     review: jest.fn().mockResolvedValue({ id: 'c1', status: 'APPROVED' }),
     produce: jest.fn().mockResolvedValue({ conceptId: 'c1', itemId: 'i1', created: true }),
   };
+  const storyboard = {
+    request: jest.fn().mockResolvedValue({ conceptId: 'c1', shots: 3, storyboard: { imageModel: 'm', seed: 1 } }),
+    regenerateFrame: jest.fn().mockResolvedValue({ conceptId: 'c1', ord: 1, seed: 99 }),
+  };
   const principals = {
     resolve: jest.fn().mockResolvedValue({ id: 'sys-1', workspaceId: 'ws1', role: 'SYSTEM' }),
     assertActiveMember: jest.fn(),
@@ -21,10 +25,11 @@ function build(over: { features?: Record<string, boolean> } = {}) {
   };
   registerContentConceptTools(registry, {
     concepts: concepts as never,
+    storyboard: storyboard as never,
     principals: principals as never,
     entitlements: entitlements as never,
   });
-  return { registry, concepts, principals, entitlements };
+  return { registry, concepts, storyboard, principals, entitlements };
 }
 
 const ctx = (extra: Record<string, unknown> = {}) => ({
@@ -299,5 +304,48 @@ describe('jeeta.produce_content_concept', () => {
       registry.get('jeeta.produce_content_concept')!.handler(ctx(), { conceptId: 'c1' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(concepts.produce).not.toHaveBeenCalled();
+  });
+});
+
+describe('jeeta.storyboard_content_concept', () => {
+  it('is a deferred, ungated campaigns.write tool — a few image credits, no approval card', () => {
+    const tool = build().registry.get('jeeta.storyboard_content_concept')!;
+    expect(tool).toBeDefined();
+    expect(tool.requiresApproval).toBe(false);
+    expect(tool.scopes).toEqual(['campaigns.write']);
+    expect(tool.defer).toBe(true);
+    expect(tool.description).toMatch(/one still frame per beat/);
+  });
+
+  it('draws the whole storyboard on behalf of the signed-in person, or the service principal', async () => {
+    const { registry, storyboard } = build();
+    const tool = registry.get('jeeta.storyboard_content_concept')!;
+    await tool.handler(ctx({ userId: 'u9' }), { conceptId: 'c1' });
+    expect(storyboard.request).toHaveBeenCalledWith('ws1', 'c1', 'u9');
+    await tool.handler(ctx(), { conceptId: 'c1' });
+    expect(storyboard.request).toHaveBeenLastCalledWith('ws1', 'c1', 'sys-1');
+    expect(storyboard.regenerateFrame).not.toHaveBeenCalled();
+  });
+
+  it('redraws exactly one beat when regenerateShot names it', async () => {
+    const { registry, storyboard } = build();
+    const tool = registry.get('jeeta.storyboard_content_concept')!;
+    const res = await tool.handler(ctx({ userId: 'u9' }), { conceptId: 'c1', regenerateShot: 1 });
+    expect(storyboard.regenerateFrame).toHaveBeenCalledWith('ws1', 'c1', 1, 'u9');
+    expect(storyboard.request).not.toHaveBeenCalled();
+    expect(res).toEqual({ conceptId: 'c1', ord: 1, seed: 99 });
+    expect(tool.inputSchema.safeParse({ conceptId: 'c1', regenerateShot: -1 }).success).toBe(false);
+  });
+
+  it('is gated on the socialCampaigns feature like the rest of the line', async () => {
+    const { registry } = build({ features: { socialCampaigns: false } });
+    await expect(registry.get('jeeta.storyboard_content_concept')!.handler(ctx({ userId: 'u9' }), { conceptId: 'c1' })).rejects.toThrow();
+  });
+
+  it('the plan/review tool descriptions now say frames come first and are quoted', () => {
+    const { registry } = build();
+    expect(registry.get('jeeta.plan_content_concepts')!.description).toMatch(/STORYBOARD/);
+    expect(registry.get('jeeta.review_content_concept')!.description).toMatch(/storyboard frame not yet drawn/);
+    expect(registry.get('jeeta.list_content_concepts')!.description).toMatch(/keyframe/);
   });
 });

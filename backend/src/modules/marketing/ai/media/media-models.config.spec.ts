@@ -12,6 +12,9 @@ import {
   estimateMediaCredits,
   estimateMediaUsd,
   RETIRED_SEEDANCE_LITE_MODEL,
+  DEFAULT_VIDEO_ANIMATE_MODEL,
+  mediaModelAcceptsFirstImage,
+  animateModelFor,
   resolveMediaModelId,
   isMediaModelReplaced,
   assertCataloguedModel,
@@ -349,11 +352,12 @@ describe('runware bindings', () => {
     ['bytedance/seedance-2.5/text-to-video', 'bytedance:seedance@2.5'],
     ['bytedance/seedance-2.5/image-to-video', 'bytedance:seedance@2.5'],
     [DEFAULT_VIDEO_MODEL, 'bytedance:2@2'],
+    [DEFAULT_VIDEO_ANIMATE_MODEL, 'bytedance:2@2'],
     ['fal-ai/qwen-image', 'runware:108@1'],
     ['fal-ai/birefnet/v2', 'runware:112@5'],
   ];
 
-  it('binds exactly the five v1 models', () => {
+  it('binds exactly the six v1 models', () => {
     const bound = allMediaModels().filter((m) => m.runware).map((m) => [m.id, m.runware!.model]);
     expect(bound.sort()).toEqual([...BOUND].sort());
   });
@@ -414,5 +418,37 @@ describe('assertModelOffersAspect — the refusal belongs where the model is cho
     // the plan instead.
     expect(mediaModelAspectOptions('veed/avatars/text-to-video')).toEqual([]);
     expect(() => assertModelOffersAspect('veed/avatars/text-to-video', '9:16')).not.toThrow();
+  });
+});
+
+describe('storyboard animation', () => {
+  it('serves the Pro Fast image-to-video endpoint at the text-to-video price, pinned to 720p', () => {
+    const m = MEDIA_MODELS[DEFAULT_VIDEO_ANIMATE_MODEL];
+    expect(m.technique).toBe('VIDEO_ANIMATE');
+    expect(m.creditsPerSec).toBe(3);
+    expect(m.contract.resolution?.default).toBe('720p');
+    expect(m.contract.duration?.encoding).toBe('digitStringSeconds');
+    expect(m.contract.sources).toEqual([{ slot: 'firstImage', param: 'image_url', arity: 'single', required: true }]);
+    expect(m.contract.aspect?.values['9:16']).toBe('9:16');
+    expect(m.runware?.model).toBe('bytedance:2@2');
+    expect(listMediaModels('VIDEO_ANIMATE').map((x) => x.id)).toContain(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(buildFalInput({
+      type: 'VIDEO', model: DEFAULT_VIDEO_ANIMATE_MODEL, prompt: 'x', durationSec: 5, aspectRatio: '9:16',
+      sources: { images: ['https://cdn/k.png'] },
+    })).toMatchObject({ image_url: 'https://cdn/k.png', resolution: '720p', duration: '5', aspect_ratio: '9:16' });
+  });
+
+  it('maps a text-to-video choice to the model that animates a keyframe', () => {
+    expect(mediaModelAcceptsFirstImage(DEFAULT_VIDEO_ANIMATE_MODEL)).toBe(true);
+    expect(mediaModelAcceptsFirstImage(DEFAULT_VIDEO_MODEL)).toBe(false);
+    expect(animateModelFor(DEFAULT_VIDEO_MODEL)).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('bytedance/seedance-2.5/text-to-video')).toBe('bytedance/seedance-2.5/image-to-video');
+    expect(animateModelFor('fal-ai/veo3.1')).toBe('fal-ai/veo3.1/image-to-video');
+    expect(animateModelFor('fal-ai/veo3.1/fast')).toBe('fal-ai/veo3.1/fast/image-to-video');
+    expect(MEDIA_MODELS['fal-ai/veo3.1/fast/image-to-video']).toMatchObject({ technique: 'VIDEO_ANIMATE', creditsPerSec: 15, tiers: { '4k': { creditsPerSec: 35 } } });
+    expect(animateModelFor('fal-ai/bytedance/seedance/v1/pro/text-to-video')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('bytedance/seedance-2.5/image-to-video')).toBe('bytedance/seedance-2.5/image-to-video');
+    expect(animateModelFor(RETIRED_SEEDANCE_LITE_MODEL)).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('not-a-model')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
   });
 });
