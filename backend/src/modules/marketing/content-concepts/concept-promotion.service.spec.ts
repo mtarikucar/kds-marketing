@@ -1217,3 +1217,99 @@ describe('ConceptPromotionService.resolveVideoModel — a storyboarded plan anim
     await expect(svcWith().resolveVideoModel(WS, null, false)).resolves.toEqual({ model: DEFAULT_VIDEO_MODEL, modelSource: 'platform' });
   });
 });
+
+describe('ConceptPromotionService.produce — a storyboarded plan animates its frames', () => {
+  const FRAMES_QUOTE = {
+    model: DEFAULT_VIDEO_ANIMATE_MODEL, modelSource: 'storyboard' as const, replacedModel: DEFAULT_VIDEO_MODEL,
+    aspectRatio: '9:16', billedSecPerBeat: [2, 3, 4], billedSec: 9,
+    keyframes: { model: DEFAULT_KEYFRAME_MODEL, perFrameCredits: 3, credits: 9, usd: 0.09 },
+    credits: 36, usd: 0.2844,
+  };
+  const storyboardedPlan = (keyframes?: Array<Record<string, unknown> | undefined>) => ({
+    ...SHOT_PLAN,
+    aspectRatio: '9:16',
+    storyboard: { imageModel: DEFAULT_KEYFRAME_MODEL, seed: 11 },
+    production: FRAMES_QUOTE,
+    shots: SHOT_PLAN.shots.map((sh, i) => ({
+      ...sh,
+      description: `scene ${i}`,
+      keyframePrompt: `still ${i}, single still frame, vertical 9:16`,
+      ...(keyframes?.[i] ? { keyframe: keyframes[i] } : {}),
+    })),
+  });
+  const READY = (i: number) => ({ assetId: `f${i}`, status: 'READY', url: `https://r2/f${i}.png`, model: DEFAULT_KEYFRAME_MODEL, attempts: 1 });
+
+  function prodHarness(plan: unknown, assetRows: unknown[] = []) {
+    const h = harness({ conceptRow: concept({ shotPlan: plan }) });
+    h.prisma.socialCampaignItem.findFirst = jest.fn().mockResolvedValue({
+      id: ITEM_ID, workspaceId: WS, socialCampaignId: CAMPAIGN_ID, contentConceptId: CONCEPT_ID, status: 'GENERATING',
+      generatedAssetIds: [], socialPostId: null, scheduledFor: new Date('2026-09-02T09:00:00Z'), topic: 'x',
+      campaign: campaign({ defaultVideoModel: null }),
+    });
+    h.prisma.generatedAsset = { findMany: jest.fn().mockResolvedValue(assetRows) };
+    let n = 0;
+    h.mediaGen.requestGeneration = jest.fn().mockImplementation(async () => ({ assetId: `gen-${++n}` }));
+    return h;
+  }
+
+  it('draws the missing frames FIRST, on the item, and waits — no clip is bought yet', async () => {
+    const { svc, prisma, mediaGen } = prodHarness(storyboardedPlan(), [
+      { id: 'gen-1', status: 'QUEUED', url: null, error: null },
+      { id: 'gen-2', status: 'QUEUED', url: null, error: null },
+      { id: 'gen-3', status: 'GENERATING', url: null, error: null },
+    ]);
+    const res = await svc.produce(ITEM_ID, WS);
+
+    const calls = mediaGen.requestGeneration.mock.calls.map((c: unknown[]) => c[1] as Record<string, unknown>);
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c.type === 'IMAGE' && c.model === DEFAULT_KEYFRAME_MODEL && c.campaignItemId === ITEM_ID && c.seed === 11)).toBe(true);
+    expect(calls.map((c) => c.prompt)).toEqual(['still 0, single still frame, vertical 9:16', 'still 1, single still frame, vertical 9:16', 'still 2, single still frame, vertical 9:16']);
+    // The frames are on the PLAN, not on the item's clip list.
+    const written = prisma.contentConcept.updateMany.mock.calls.at(-1)[0];
+    expect(written.data.shotPlan.shots.map((sh: any) => sh.keyframe.assetId)).toEqual(['gen-1', 'gen-2', 'gen-3']);
+    expect(prisma.socialCampaignItem.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ generatedAssetIds: expect.anything() }) }));
+    expect(res).toEqual({ reschedule: expect.objectContaining({ payload: { itemId: ITEM_ID, workspaceId: WS, waits: 1 } }) });
+  });
+
+  it('animates each beat FROM its READY frame on the quoted animator, and the clip list holds only clips', async () => {
+    const { svc, prisma, mediaGen, scheduledJobs } = prodHarness(storyboardedPlan([READY(0), READY(1), READY(2)]));
+    await svc.produce(ITEM_ID, WS);
+
+    const calls = mediaGen.requestGeneration.mock.calls.map((c: unknown[]) => c[1] as Record<string, unknown>);
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c.type === 'VIDEO' && c.model === DEFAULT_VIDEO_ANIMATE_MODEL && c.seed === 11)).toBe(true);
+    expect(calls.map((c) => c.referenceImageUrls)).toEqual([['https://r2/f0.png'], ['https://r2/f1.png'], ['https://r2/f2.png']]);
+    expect(calls.map((c) => c.durationSec)).toEqual([2, 3, 4]);
+    expect(calls.map((c) => c.prompt)).toEqual(SHOT_PLAN.shots.map((sh) => sh.prompt));
+    const last = prisma.socialCampaignItem.update.mock.calls.at(-1)[0];
+    expect(last.data.generatedAssetIds).toEqual(['gen-1', 'gen-2', 'gen-3']);
+    // Handed to the lifecycle: the post exists and the item left GENERATING
+    // under the campaign's own autonomy rule (APPROVAL here → NEEDS_APPROVAL).
+    expect(prisma.socialPost.create).toHaveBeenCalledTimes(1);
+    expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'NEEDS_APPROVAL', generatedAssetIds: ['gen-1', 'gen-2', 'gen-3'] }),
+    }));
+    expect(scheduledJobs).toBeDefined();
+  });
+
+  it('fails the item BY BEAT when a frame was refused for good — no clip is bought, nothing falls back to text', async () => {
+    const dead = { assetId: 'f1x', status: 'FAILED', model: DEFAULT_KEYFRAME_MODEL, attempts: 2, error: 'content policy' };
+    const { svc, prisma, mediaGen } = prodHarness(storyboardedPlan([READY(0), dead, READY(2)]));
+    await svc.produce(ITEM_ID, WS);
+
+    expect(mediaGen.requestGeneration).not.toHaveBeenCalled();
+    expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'FAILED', error: expect.stringMatching(/^frame 2\/3 could not be generated: content policy/) }),
+    }));
+  });
+
+  it('a refused frame with an attempt left is redrawn, not fatal', async () => {
+    const retry = { assetId: 'f1x', status: 'FAILED', model: DEFAULT_KEYFRAME_MODEL, attempts: 1, error: 'hiccup' };
+    const { svc, mediaGen } = prodHarness(storyboardedPlan([READY(0), retry, READY(2)]), [{ id: 'gen-1', status: 'QUEUED', url: null, error: null }]);
+    const res = await svc.produce(ITEM_ID, WS);
+    const calls = mediaGen.requestGeneration.mock.calls.map((c: unknown[]) => c[1] as Record<string, unknown>);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ type: 'IMAGE', prompt: 'still 1, single still frame, vertical 9:16' });
+    expect(res).toEqual({ reschedule: expect.anything() });
+  });
+});

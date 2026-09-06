@@ -33,6 +33,15 @@ import {
   type ShotProduction,
 } from '../video/video-pipeline.service';
 import { quoteProduction, type VideoModelChoice } from './shot-production';
+import {
+  STORYBOARD_WAIT_MS,
+  framesReady,
+  savePlan,
+  submitMissingFrames,
+  supportsStoryboard,
+  syncFrames,
+  type StoryboardedPlan,
+} from './storyboard-frames';
 
 export const CONCEPT_PRODUCE_KIND = 'content.concept.produce';
 export const produceDedup = (itemId: string) => `content-concept-produce-${itemId}`;
@@ -841,13 +850,66 @@ export class ConceptPromotionService implements OnModuleInit {
     }
     const seedable = mediaModelTakesSeed(model);
 
+    // PHASE ONE — THE FRAMES. A storyboarded plan animates each beat from its
+    // still, so every beat needs a READY frame before a single clip is bought.
+    // Whatever frames a human did not already draw (or redraw) while the concept
+    // was PROPOSED are drawn now, on the item's own linkage so they ride the
+    // engine budget like the clips; then the job comes back every
+    // STORYBOARD_WAIT_MS until nothing is in flight. A frame the vendor refuses
+    // twice fails the item BY BEAT — never a silent fall-back to text-to-video,
+    // which would buy a clip nobody quoted from a model nobody approved.
+    let storyboarded: StoryboardedPlan | null = supportsStoryboard(plan) ? plan : null;
+    if (storyboarded) {
+      const sub = await submitMissingFrames({ mediaGen: this.mediaGen }, workspaceId, storyboarded, {
+        socialCampaignId: item.socialCampaignId,
+        campaignItemId: item.id,
+        createdById: item.campaign.createdById,
+      });
+      const sync = await syncFrames({ prisma: this.prisma }, workspaceId, sub.plan);
+      if (sub.submitted > 0 || sync.changed) {
+        // Best-effort like recordProduction: the frames are bought either way.
+        await savePlan({ prisma: this.prisma }, workspaceId, item.contentConceptId, sync.plan).catch(() => undefined);
+      }
+      if (sync.failed.length) {
+        const f = sync.failed[0];
+        await this.fail(
+          itemId,
+          `frame ${f.ord + 1}/${shots.length} could not be generated: ${f.keyframe.error ?? 'the vendor gave no reason'}`,
+        );
+        return;
+      }
+      if (sub.queueFull || sync.pending > 0 || !framesReady(sync.plan)) {
+        if (waits >= PRODUCE_MAX_WAITS) {
+          await this.fail(
+            itemId,
+            `the storyboard frames were still not ready after ${Math.round((PRODUCE_MAX_WAITS * STORYBOARD_WAIT_MS) / 60000)} minutes, so no clip was bought`,
+          );
+          return;
+        }
+        return {
+          reschedule: {
+            runAt: new Date(Date.now() + STORYBOARD_WAIT_MS),
+            payload: { itemId, workspaceId, waits: waits + 1 },
+          },
+        };
+      }
+      storyboarded = sync.plan;
+    }
+
     const assetIds = [...item.generatedAssetIds];
     // The cursor is what has already been PAID FOR, so a retry never re-buys a
     // clip. It also means a partially produced item is resumable rather than
     // restartable.
     for (let i = assetIds.length; i < shots.length; i++) {
-      const shot = shots[i];
-      const refs = shot.reference?.images ?? [];
+      const shot = storyboarded ? storyboarded.shots[i] : shots[i];
+      // PHASE TWO. A storyboarded beat opens on its own frame — the ONE image
+      // the animator's `firstImage` slot takes — and the persona's photos stay
+      // where they did their work, in the frame. A legacy beat sends the
+      // persona's reference frames as it always did.
+      const refs = storyboarded
+        ? (shot.keyframe?.url ? [shot.keyframe.url] : [])
+        : (shot.reference?.images ?? []);
+      const seed = storyboarded ? storyboarded.storyboard.seed : shot.reference?.seed;
       try {
         const { assetId } = await this.mediaGen.requestGeneration(workspaceId, {
           type: 'VIDEO',
@@ -874,7 +936,7 @@ export class ConceptPromotionService implements OnModuleInit {
           // text-to-video RETURNS a seed and accepts none; its reference-to-video
           // sibling accepts one, and there a locked seed is a real second lever
           // on identity rather than an unsupported parameter.
-          ...(seedable && shot.reference?.seed != null ? { seed: shot.reference.seed } : {}),
+          ...(seedable && seed != null ? { seed } : {}),
           // Both linkage fields. Without socialCampaignId the asset is on
           // `sweepOrphanAssets`' 30-day delete list; without campaignItemId it
           // is off the armed-budget pre-debit path.
