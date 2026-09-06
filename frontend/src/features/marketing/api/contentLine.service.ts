@@ -91,14 +91,93 @@ export interface PlanInput {
   angleWeights?: Record<string, number>;
 }
 
+/**
+ * THE STORYBOARD FRAME of one beat — the still the beat is animated from.
+ *
+ * Mirrors the backend `Keyframe` (video-pipeline.service.ts). It lives on the
+ * concept's plan, so the same GET that lists a batch carries every frame; the
+ * hub polls that GET while any frame is QUEUED/GENERATING.
+ */
+export interface Keyframe {
+  assetId: string;
+  status: 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED' | 'BLOCKED';
+  url?: string;
+  model: string;
+  seed?: number;
+  attempts: number;
+  error?: string;
+}
+
+export interface Shot {
+  ord: number;
+  scene: string;
+  onScreenText?: string;
+  voiceover: string;
+  prompt: string;
+  durationSec: number;
+  cameraNote: string;
+  description?: string;
+  keyframePrompt?: string;
+  keyframe?: Keyframe;
+}
+
+/** What the plan will buy — the reviewer approves this number. */
+export interface ShotProduction {
+  model: string;
+  modelSource: 'campaign' | 'workspace' | 'platform' | 'persona' | 'storyboard';
+  replacedModel?: string;
+  aspectRatio: string | null;
+  frameNote?: string;
+  billedSecPerBeat: number[];
+  billedSec: number;
+  keyframes?: { model: string; perFrameCredits: number; credits: number; usd: number };
+  credits: number;
+  usd: number;
+}
+
+export interface ShotPlan {
+  aspectRatio?: string;
+  durationSec: number;
+  shots: Shot[];
+  production?: ShotProduction;
+  /** Present on plans made since storyboards — the frames are part of the buy. */
+  storyboard?: { imageModel: string; seed: number; requestedAt?: string; requestedById?: string };
+  captionSuggestion?: string;
+}
+
+/** One concept as `GET /content-line/batches/:batchId` returns it. */
+export interface ConceptRow {
+  id: string;
+  batchId: string;
+  ordinal: number;
+  angle: string;
+  hook: string;
+  title: string;
+  rationale: string | null;
+  status: 'PROPOSED' | 'APPROVED' | 'DISCARDED';
+  selectionReason: string | null;
+  promotedItemId: string | null;
+  shotPlan: ShotPlan;
+  destinations?: unknown[];
+}
+
 export const listBatches = (limit?: number): Promise<BatchSummary[]> =>
   marketingApi.get('/content-line/batches', { params: { limit } }).then((r) => r.data);
 
 export const getAnglePerformance = (): Promise<AnglePerformance> =>
   marketingApi.get('/content-line/angles').then((r) => r.data);
 
-export const getBatch = (batchId: string) =>
+export const getBatch = (batchId: string): Promise<ConceptRow[]> =>
   marketingApi.get(`/content-line/batches/${batchId}`).then((r) => r.data);
 
 export const planConcepts = (input: PlanInput): Promise<PlanResult> =>
   marketingApi.post('/content-line/plan', input).then((r) => r.data);
+
+/** Draw one still per beat of a proposed concept. Frames land on the plan as
+ *  they finish; re-read the batch to see them. */
+export const requestStoryboard = (conceptId: string): Promise<ConceptRow> =>
+  marketingApi.post(`/content-line/concepts/${conceptId}/storyboard`).then((r) => r.data);
+
+/** Redraw exactly one beat's frame, with a fresh seed. */
+export const regenerateKeyframe = (conceptId: string, ord: number): Promise<ConceptRow> =>
+  marketingApi.post(`/content-line/concepts/${conceptId}/storyboard/${ord}/regenerate`).then((r) => r.data);
