@@ -1,6 +1,6 @@
 import { buildRunwareTask, mapRunwareItem, RUNWARE_RECIPES } from './runware.provider';
 import { MediaGenSubmit } from './media-provider.interface';
-import { allMediaModels, DEFAULT_VIDEO_MODEL } from '../media/media-models.config';
+import { allMediaModels, DEFAULT_VIDEO_MODEL, DEFAULT_VIDEO_ANIMATE_MODEL } from '../media/media-models.config';
 
 const UUID = '11111111-2222-4333-8444-555555555555';
 function build(over: Partial<MediaGenSubmit> & Pick<MediaGenSubmit, 'model'>) {
@@ -80,6 +80,13 @@ describe('buildRunwareTask — per-model wire shape', () => {
     expect(t).not.toHaveProperty('settings');
     expect(build({ model: DEFAULT_VIDEO_MODEL, aspectRatio: '1:1', resolution: '1080p' }))
       .toMatchObject({ width: 1440, height: 1440 });
+  });
+
+  it('Pro Fast image-to-video: the keyframe rides as the first frame with the tier named, never width/height', () => {
+    const t = build({ model: DEFAULT_VIDEO_ANIMATE_MODEL, resolution: '720p', durationSec: 5, seed: 9, sources: { images: ['https://cdn/k.png'] } });
+    expect(t).toMatchObject({ taskType: 'videoInference', model: 'bytedance:2@2', resolution: '720p', duration: 5, seed: 9, inputs: { frameImages: [{ image: 'https://cdn/k.png', frame: 'first' }] } });
+    expect(t).not.toHaveProperty('width');
+    expect(t).not.toHaveProperty('settings');
   });
 
   it('falls back to 16:9 for a ratio the sizing table does not offer', () => {
