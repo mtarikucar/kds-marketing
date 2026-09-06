@@ -269,6 +269,7 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
+import { StoryboardService } from './content-concepts/storyboard.service';
 import { AnglePerformanceService } from './content-concepts/angle-performance.service';
 import { ContentLineService } from './content-concepts/content-line.service';
 import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
@@ -419,6 +420,8 @@ import { VideoAssemblyService } from './ai/media/video-assembly.service';
 import { MediaModelDefaultsService } from './ai/media/media-model-defaults.service';
 import { BrandKitService } from './ai/media/brand-kit.service';
 import { FalProvider } from './ai/providers/fal.provider';
+import { RunwareProvider } from './ai/providers/runware.provider';
+import { RoutingMediaProvider } from './ai/providers/routing.provider';
 import { MEDIA_PROVIDER } from './ai/providers/media-provider.interface';
 import { SocialCampaignsController } from './social-campaigns/social-campaigns.controller';
 import { SocialCampaignsService } from './social-campaigns/social-campaigns.service';
@@ -1036,6 +1039,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // rather than through jeeta.generate_video — see its class docblock for the
     // three measured reasons the MCP route cannot carry this.
     ConceptPromotionService,
+    // The storyboard a human can look at before approving: one still per beat,
+    // drawn on request while the concept is PROPOSED, and the job that copies
+    // each frame's outcome onto the plan. `produce` draws missing frames itself.
+    StoryboardService,
     AnglePerformanceService,
     ContentLineService,
     ContentDistributionService,
@@ -1185,9 +1192,13 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
     R2StorageService,
-    // AI Social Content Studio — fal.ai media generation behind MediaProvider.
+    // AI Social Content Studio — fal.ai + Runware behind ONE MediaProvider,
+    // dispatched per model (media-models.config `runware` bindings). fal is the
+    // base; Runware takes its bound models only while RUNWARE_API_KEY is set.
     FalProvider,
-    { provide: MEDIA_PROVIDER, useExisting: FalProvider },
+    RunwareProvider,
+    RoutingMediaProvider,
+    { provide: MEDIA_PROVIDER, useExisting: RoutingMediaProvider },
     MediaGenService,
     MediaProbeService,
     VideoAssemblyService,
@@ -1339,6 +1350,8 @@ export class MarketingModule {
     mediaGen: MediaGenService,
     socialCampaigns: SocialCampaignsService,
     contentConcepts: ContentConceptsService,
+    // The storyboard a reviewer can draw before approving a concept.
+    storyboard: StoryboardService,
     contentDistribution: ContentDistributionService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
@@ -1404,7 +1417,7 @@ export class MarketingModule {
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
-    registerContentConceptTools(registry, { concepts: contentConcepts, principals, entitlements });
+    registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
     registerContentDistributionTools(registry, {
       distribution: contentDistribution,
       principals,

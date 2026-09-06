@@ -10,6 +10,7 @@ export type TariffUnitType =
   | 'WA_SERVICE'
   | 'VOICE_MINUTE'
   | 'FAL_CREDIT'
+  | 'RUNWARE_CENT'
   | 'FIRECRAWL_PAGE'
   | 'APIFY_RUN'
   | 'RESEARCH_LEAD';

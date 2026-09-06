@@ -245,16 +245,16 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
      * that is 403'd on mcp-write-mode is admitted here.
      */
     it('PATCH /marketing/workspaces/media-models as MANAGER is ADMITTED (a lower floor than mcp-write-mode, deliberately)', async () => {
-      const mediaModels = { set: jest.fn().mockResolvedValue({ defaultVideoModel: 'fal-ai/veo3/fast' }) };
+      const mediaModels = { set: jest.fn().mockResolvedValue({ defaultVideoModel: 'fal-ai/veo3.1/fast' }) };
       const app = await buildApp('MANAGER', {}, { mediaModels });
       try {
         const res = await request(app.getHttpServer())
           .patch('/marketing/workspaces/media-models')
-          .send({ defaultVideoModel: 'fal-ai/veo3/fast' });
+          .send({ defaultVideoModel: 'fal-ai/veo3.1/fast' });
 
         expect(res.status).toBe(200);
         // Always the CALLER'S workspace, never a body or path param.
-        expect(mediaModels.set).toHaveBeenCalledWith('ws-1', { defaultVideoModel: 'fal-ai/veo3/fast' });
+        expect(mediaModels.set).toHaveBeenCalledWith('ws-1', { defaultVideoModel: 'fal-ai/veo3.1/fast' });
       } finally {
         await app.close();
       }
@@ -266,7 +266,7 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
       try {
         const res = await request(app.getHttpServer())
           .patch('/marketing/workspaces/media-models')
-          .send({ defaultVideoModel: 'fal-ai/veo3/fast' });
+          .send({ defaultVideoModel: 'fal-ai/veo3.1/fast' });
 
         expect(res.status).toBe(403);
         expect(mediaModels.set).not.toHaveBeenCalled();
@@ -303,7 +303,7 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
 
         const write = await request(app.getHttpServer())
           .patch('/marketing/workspaces/media-models')
-          .send({ defaultVideoModel: 'fal-ai/veo3/fast' });
+          .send({ defaultVideoModel: 'fal-ai/veo3.1/fast' });
         expect(write.status).toBe(403);
         expect(mediaModels.set).not.toHaveBeenCalled();
       } finally {

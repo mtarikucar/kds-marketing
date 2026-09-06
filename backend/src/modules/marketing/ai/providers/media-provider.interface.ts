@@ -51,11 +51,17 @@ export interface MediaGenResult {
   status: MediaGenStatus;
   outputs?: MediaGenOutput[];
   error?: string;
+  /** The vendor's OWN reported cost in USD, where it reports one (Runware
+   *  returns `cost` per task; fal never does). Beats any catalogue estimate. */
+  costUsd?: number;
 }
 
 export interface MediaProvider {
   readonly name: string;
   isConfigured(): boolean;
+  /** Which concrete vendor `submit` would use for this model ('fal' | 'runware').
+   *  A single-vendor provider omits it and `name` is the answer. */
+  resolveName?(model: string): string;
   submit(opts: MediaGenSubmit): Promise<{ providerRequestId: string }>;
   getResult(requestId: string, model: string): Promise<MediaGenResult>;
 }

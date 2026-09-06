@@ -22,7 +22,7 @@ function makeSvc(asset: any) {
   return { svc, prisma, credits, provider, r2, mediaSpend };
 }
 
-const QUEUED = { id: 'a1', workspaceId: WS, status: 'GENERATING', model: 'fal-ai/qwen-image', costCreditsReserved: 2, params: {}, type: 'IMAGE' };
+const QUEUED = { id: 'a1', workspaceId: WS, status: 'GENERATING', provider: 'fal', model: 'fal-ai/qwen-image', costCreditsReserved: 2, params: {}, type: 'IMAGE' };
 
 describe('MediaGenService.finalizeAsset', () => {
   it('records what the generation cost US, on the trued-up credit count', async () => {
@@ -31,7 +31,7 @@ describe('MediaGenService.finalizeAsset', () => {
     // on the wiring, deleting the call again would break no test.
     const { svc, mediaSpend } = makeSvc({ ...QUEUED });
     await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png' }] });
-    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, { assetId: 'a1', credits: 2 });
+    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, { assetId: 'a1', credits: 2, vendor: 'fal', vendorUsd: 0.02 });
   });
 
   it('does not bill for a generation that failed', async () => {
@@ -98,5 +98,42 @@ describe('MediaGenService.finalizeAsset', () => {
     await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png' }] });
     expect(r2.deleteKeys).toHaveBeenCalledWith(['social/ws-1/x.png']);
     expect(credits.refund).not.toHaveBeenCalled();
+  });
+});
+
+describe('MediaGenService.finalizeAsset — vendor cost', () => {
+  const OUTPUT = { url: 'https://vm.runware.ai/v.mp4', mime: 'video/mp4' };
+
+  it('settles a Runware asset at the vendor-reported cost and writes it to costUsd', async () => {
+    const { svc, prisma, mediaSpend } = makeSvc({
+      ...QUEUED, type: 'VIDEO', provider: 'runware', model: 'bytedance/seedance-2.5/text-to-video',
+      durationSec: 5, params: { resolution: '720p' }, costCreditsReserved: 240,
+    });
+    await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [OUTPUT], costUsd: 1.17 });
+    const data = prisma.generatedAsset.updateMany.mock.calls[0][0].data;
+    expect(Number(data.costUsd)).toBeCloseTo(1.17, 6);
+    expect(data.costCredits).toBe(240); // the customer meter is the catalogue's, whichever vendor ran
+    expect(mediaSpend.settle).toHaveBeenCalledWith(WS, expect.objectContaining({
+      assetId: 'a1', credits: 240, vendor: 'runware', vendorUsd: 1.17,
+    }));
+  });
+
+  it('estimates the Runware cost from the catalogue binding when the vendor reported none', async () => {
+    const { svc, mediaSpend } = makeSvc({ ...QUEUED, provider: 'runware', model: 'fal-ai/qwen-image', costCreditsReserved: 2 });
+    await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://im/x.png', mime: 'image/png' }] });
+    const call = mediaSpend.settle.mock.calls[0][1];
+    expect(call.vendor).toBe('runware');
+    expect(call.vendorUsd).toBeCloseTo(0.0058, 6);
+  });
+
+  it('settles a fal asset under vendor fal at the catalogue figure, trued up to the rendered length', async () => {
+    const { svc, prisma, mediaSpend } = makeSvc({
+      ...QUEUED, type: 'VIDEO', provider: 'fal', model: 'fal-ai/veo3.1/fast', durationSec: 8, params: {}, costCreditsReserved: 120,
+    });
+    await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ ...OUTPUT, durationSec: 4 }] });
+    const call = mediaSpend.settle.mock.calls[0][1];
+    expect(call.vendor).toBe('fal');
+    expect(call.vendorUsd).toBeCloseTo(0.6, 6); // 4s × $0.15
+    expect(Number(prisma.generatedAsset.updateMany.mock.calls[0][0].data.costUsd)).toBeCloseTo(0.6, 6);
   });
 });

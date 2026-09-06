@@ -26,9 +26,10 @@ const MAX_RANGE_MS = 180 * 86_400_000;
  * The ratios each tool's DEFAULT model actually publishes, read off the catalogue
  * rather than copied. MediaGenService rejects a ratio the chosen model has no
  * contract for — BEFORE the reserve — so one shared union here advertises 400s:
- * the default image model (Seedream v4) takes no 4:5, while the default video
- * model does. Deriving them means a catalogue edit cannot leave the schema
- * offering a value that is now a hard rejection.
+ * neither default publishes 4:5 (Seedream v4 sizes through ImageSize presets;
+ * Seedance 1.0 Pro Fast offers 21:9 down to 9:16), and the two lists differ.
+ * Deriving them means a catalogue edit cannot leave the schema offering a value
+ * that is now a hard rejection.
  */
 function aspectRatiosOf(modelId: string): [string, ...string[]] {
   const keys = Object.keys(getMediaModel(modelId)?.contract.aspect?.values ?? {});

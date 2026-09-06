@@ -64,3 +64,35 @@ describe('MediaSpendService', () => {
     expect(price).not.toHaveBeenCalled();
   });
 });
+
+describe('MediaSpendService — two vendors', () => {
+  it('settles a Runware asset in USD cents under RUNWARE_CENT, not in fal credits', async () => {
+    const { service, price, debitOnce } = make({ unitCost: '0.4000', amount: '46.6080' });
+    await service.settle('ws-1', { assetId: 'a-2', credits: 240, vendor: 'runware', vendorUsd: 1.1652 });
+    expect(price).toHaveBeenCalledWith('ws-1', 'CONTENT', 'RUNWARE_CENT', expect.anything());
+    expect(String(price.mock.calls[0][3])).toBe('116.52');
+    expect(debitOnce).toHaveBeenCalledWith('ws-1', expect.objectContaining({ ref: 'mediagen:a-2' }));
+    expect(String(debitOnce.mock.calls[0][1].quantity)).toBe('116.52');
+  });
+
+  it('still settles fal assets in credits, whether the vendor is named or not', async () => {
+    const { service, price } = make({ unitCost: '0.4000', amount: '1.2000' });
+    await service.settle('ws-1', { assetId: 'a-3', credits: 3 });
+    await service.settle('ws-1', { assetId: 'a-4', credits: 3, vendor: 'fal', vendorUsd: 0.03 });
+    expect(price).toHaveBeenNthCalledWith(1, 'ws-1', 'CONTENT', 'FAL_CREDIT', 3);
+    expect(price).toHaveBeenNthCalledWith(2, 'ws-1', 'CONTENT', 'FAL_CREDIT', 3);
+  });
+
+  it('keeps sub-cent Runware spend as fractional cents rather than dropping it (BiRefNet is $0.0006 a run)', async () => {
+    const { service, price, debitOnce } = make({ unitCost: '0.4000', amount: '0.0240' });
+    await service.settle('ws-1', { assetId: 'a-5', credits: 2, vendor: 'runware', vendorUsd: 0.0006 });
+    expect(String(price.mock.calls[0][3])).toBe('0.06');
+    expect(debitOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('records nothing for a Runware asset the vendor reported as free', async () => {
+    const { service, debitOnce } = make({ unitCost: '0.4000', amount: '0' });
+    expect(await service.settle('ws-1', { assetId: 'a-6', credits: 1, vendor: 'runware', vendorUsd: 0 })).toBeNull();
+    expect(debitOnce).not.toHaveBeenCalled();
+  });
+});

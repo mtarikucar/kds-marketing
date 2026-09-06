@@ -82,18 +82,18 @@ describe('MediaGenService — model resolution order', () => {
   it('uses the workspace default over the code constant', async () => {
     const { svc, prisma, credits } = makeSvc({
       defaultImageModel: 'fal-ai/qwen-image',
-      defaultVideoModel: 'fal-ai/veo3/fast',
+      defaultVideoModel: 'fal-ai/veo3.1/fast',
     });
     await svc.requestGeneration(WS, { type: 'VIDEO', prompt: 'x', durationSec: 4, createdById: 'u1' });
-    expect(modelWritten(prisma)).toBe('fal-ai/veo3/fast');
-    // And it is PRICED as that model, not as the constant: 25 credits/sec x 4.
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 100);
+    expect(modelWritten(prisma)).toBe('fal-ai/veo3.1/fast');
+    // And it is PRICED as that model, not as the constant: 15 credits/sec x 4.
+    expect(credits.reserve).toHaveBeenCalledWith(WS, 60);
   });
 
   it('picks the default belonging to the kind being generated', async () => {
     const { svc, prisma } = makeSvc({
       defaultImageModel: 'fal-ai/qwen-image',
-      defaultVideoModel: 'fal-ai/veo3/fast',
+      defaultVideoModel: 'fal-ai/veo3.1/fast',
     });
     await svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' });
     expect(modelWritten(prisma)).toBe('fal-ai/qwen-image');
@@ -102,7 +102,7 @@ describe('MediaGenService — model resolution order', () => {
   it('lets an explicit model (the campaign override) beat the workspace default', async () => {
     const { svc, prisma } = makeSvc({
       defaultImageModel: null,
-      defaultVideoModel: 'fal-ai/veo3/fast',
+      defaultVideoModel: 'fal-ai/veo3.1/fast',
     });
     await svc.requestGeneration(WS, {
       type: 'VIDEO',

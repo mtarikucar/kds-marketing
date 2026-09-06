@@ -11,8 +11,17 @@ import {
   isMediaModelWithheld,
   estimateMediaCredits,
   estimateMediaUsd,
+  RETIRED_SEEDANCE_LITE_MODEL,
+  DEFAULT_VIDEO_ANIMATE_MODEL,
+  mediaModelAcceptsFirstImage,
+  animateModelFor,
+  resolveMediaModelId,
+  isMediaModelReplaced,
+  assertCataloguedModel,
+  estimateVendorUsd,
   assertModelOffersAspect,
   mediaModelAspectOptions,
+  mediaModelOffersAspect,
 } from './media-models.config';
 import { buildFalInput } from '../providers/fal.provider';
 
@@ -85,10 +94,12 @@ describe('media-models config', () => {
       'fal-ai/kling-video/ai-avatar/v2/standard': 'MEDIA_GEN_MAX_VIDEO_SEC',
     };
 
-    it('serves every catalogued model except the withheld ones', () => {
-      expect(listMediaModels().length).toBe(Object.keys(MEDIA_MODELS).length - WITHHELD.length);
+    it('serves every catalogued model except the withheld and the fal-retired ones', () => {
+      const retired = Object.values(MEDIA_MODELS).filter((m) => m.replacedBy).map((m) => m.id);
+      expect(retired.length).toBeGreaterThan(0);
+      expect(listMediaModels().length).toBe(Object.keys(MEDIA_MODELS).length - WITHHELD.length - retired.length);
       expect(listMediaModels().map((m) => m.id)).toEqual(
-        expect.not.arrayContaining(WITHHELD),
+        expect.not.arrayContaining([...WITHHELD, ...retired]),
       );
     });
 
@@ -282,6 +293,95 @@ describe('media-models config — catalogue membership by KIND', () => {
   });
 });
 
+describe('retired ids (replacedBy)', () => {
+  it('names Seedance 1.0 Pro Fast as the platform default, pinned to 720p', () => {
+    expect(DEFAULT_VIDEO_MODEL).toBe('fal-ai/bytedance/seedance/v1/pro/fast/text-to-video');
+    const m = MEDIA_MODELS[DEFAULT_VIDEO_MODEL];
+    expect(m.contract.resolution).toEqual({ param: 'resolution', values: ['480p', '720p', '1080p'], default: '720p' });
+    expect(m.contract.duration?.encoding).toBe('digitStringSeconds');
+    expect(m.contract.aspect?.values['4:5']).toBeUndefined();
+    expect(m.contract.negativePrompt).toBe(false);
+    // $1/M tokens: 720p 21,600 tok/s → $0.0216/s → 3 credits; 1080p → 5; 480p → 1.
+    expect(m.creditsPerSec).toBe(3);
+    expect(estimateMediaCredits(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '1080p' })).toBe(25);
+    expect(estimateMediaCredits(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '480p' })).toBe(5);
+    expect(buildFalInput({ type: 'VIDEO', model: DEFAULT_VIDEO_MODEL, prompt: 'x', durationSec: 8 }))
+      .toMatchObject({ resolution: '720p', duration: '8' });
+  });
+
+  it('resolves the two fal-retired ids to their successors and stops on a live id', () => {
+    expect(resolveMediaModelId(RETIRED_SEEDANCE_LITE_MODEL)).toBe(DEFAULT_VIDEO_MODEL);
+    expect(resolveMediaModelId('fal-ai/veo3/fast')).toBe('fal-ai/veo3.1/fast');
+    expect(resolveMediaModelId(DEFAULT_VIDEO_MODEL)).toBe(DEFAULT_VIDEO_MODEL);
+    expect(resolveMediaModelId('not-a-model')).toBe('not-a-model');
+    expect(isMediaModelReplaced(RETIRED_SEEDANCE_LITE_MODEL)).toBe(true);
+    expect(isMediaModelReplaced(DEFAULT_VIDEO_MODEL)).toBe(false);
+  });
+
+  it('answers the aspect question for the model that will actually run', () => {
+    // Lite published 4:5; its successor does not. A shot plan asking the stored
+    // (retired) id must hear the successor's answer, or the plan passes here and
+    // 400s at the wire.
+    expect(mediaModelOffersAspect(RETIRED_SEEDANCE_LITE_MODEL, '4:5')).toBe(false);
+    expect(mediaModelOffersAspect(RETIRED_SEEDANCE_LITE_MODEL, '9:16')).toBe(true);
+    expect(mediaModelAspectOptions('fal-ai/veo3/fast')).toEqual(['16:9', '9:16']);
+  });
+
+  it('never chains or cycles: every successor is a live, same-kind model', () => {
+    for (const m of allMediaModels().filter((x) => x.replacedBy)) {
+      const successor = MEDIA_MODELS[m.replacedBy!];
+      expect(successor).toBeDefined();
+      expect(successor.replacedBy).toBeUndefined();
+      expect(successor.withheld).toBeUndefined();
+      expect(successor.type).toBe(m.type);
+    }
+  });
+
+  it('keeps retired ids priced and typed (old rows reference them) but off the menu and off the write gate', () => {
+    expect(isCataloguedModel(RETIRED_SEEDANCE_LITE_MODEL, 'VIDEO')).toBe(true);
+    expect(MEDIA_MODELS[RETIRED_SEEDANCE_LITE_MODEL].creditsPerSec).toBe(3);
+    expect(listMediaModels().map((m) => m.id)).not.toContain(RETIRED_SEEDANCE_LITE_MODEL);
+    expect(listMediaModels().map((m) => m.id)).not.toContain('fal-ai/veo3/fast');
+    expect(() => assertCataloguedModel('fal-ai/veo3/fast', 'VIDEO')).toThrow(/retired.*fal-ai\/veo3\.1\/fast/);
+    expect(assertCataloguedModel('fal-ai/veo3.1/fast', 'VIDEO')).toBe('fal-ai/veo3.1/fast');
+  });
+});
+
+describe('runware bindings', () => {
+  const BOUND: Array<[string, string]> = [
+    ['bytedance/seedance-2.5/text-to-video', 'bytedance:seedance@2.5'],
+    ['bytedance/seedance-2.5/image-to-video', 'bytedance:seedance@2.5'],
+    [DEFAULT_VIDEO_MODEL, 'bytedance:2@2'],
+    [DEFAULT_VIDEO_ANIMATE_MODEL, 'bytedance:2@2'],
+    ['fal-ai/qwen-image', 'runware:108@1'],
+    ['fal-ai/birefnet/v2', 'runware:112@5'],
+  ];
+
+  it('binds exactly the six v1 models', () => {
+    const bound = allMediaModels().filter((m) => m.runware).map((m) => [m.id, m.runware!.model]);
+    expect(bound.sort()).toEqual([...BOUND].sort());
+  });
+
+  it('prices vendor USD from the Runware rate without touching the credit meter', () => {
+    // Seedance 2.5, 5s at 720p: fal $0.473/s, Runware $0.2304/s; credits stay 48/s.
+    const opts = { durationSec: 5, resolution: '720p' };
+    expect(estimateVendorUsd('bytedance/seedance-2.5/text-to-video', opts, 'fal')).toBeCloseTo(2.365, 6);
+    expect(estimateVendorUsd('bytedance/seedance-2.5/text-to-video', opts, 'runware')).toBeCloseTo(1.152, 6);
+    expect(estimateMediaCredits('bytedance/seedance-2.5/text-to-video', opts)).toBe(240);
+    // Tiered Runware rate: 1080p.
+    expect(estimateVendorUsd('bytedance/seedance-2.5/text-to-video', { durationSec: 5, resolution: '1080p' }, 'runware'))
+      .toBeCloseTo(3.0677, 4);
+    // Flat image rate; a model with no binding falls back to the fal figure.
+    expect(estimateVendorUsd('fal-ai/qwen-image', {}, 'runware')).toBeCloseTo(0.0058, 6);
+    expect(estimateVendorUsd('fal-ai/birefnet/v2', {}, 'runware')).toBeCloseTo(0.0006, 6);
+    expect(estimateVendorUsd(DEFAULT_IMAGE_MODEL, {}, 'runware')).toBeCloseTo(0.03, 6);
+    // The default video model's Runware tiers: 5s at 480p / 720p / 1080p.
+    expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '480p' }, 'runware')).toBeCloseTo(0.03145, 6);
+    expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '720p' }, 'runware')).toBeCloseTo(0.0668, 6);
+    expect(estimateVendorUsd(DEFAULT_VIDEO_MODEL, { durationSec: 5, resolution: '1080p' }, 'runware')).toBeCloseTo(0.15885, 6);
+  });
+});
+
 /**
  * THE FRAME, REFUSED AT THE DOOR WHERE THE MODEL IS CHOSEN.
  *
@@ -318,5 +418,37 @@ describe('assertModelOffersAspect — the refusal belongs where the model is cho
     // the plan instead.
     expect(mediaModelAspectOptions('veed/avatars/text-to-video')).toEqual([]);
     expect(() => assertModelOffersAspect('veed/avatars/text-to-video', '9:16')).not.toThrow();
+  });
+});
+
+describe('storyboard animation', () => {
+  it('serves the Pro Fast image-to-video endpoint at the text-to-video price, pinned to 720p', () => {
+    const m = MEDIA_MODELS[DEFAULT_VIDEO_ANIMATE_MODEL];
+    expect(m.technique).toBe('VIDEO_ANIMATE');
+    expect(m.creditsPerSec).toBe(3);
+    expect(m.contract.resolution?.default).toBe('720p');
+    expect(m.contract.duration?.encoding).toBe('digitStringSeconds');
+    expect(m.contract.sources).toEqual([{ slot: 'firstImage', param: 'image_url', arity: 'single', required: true }]);
+    expect(m.contract.aspect?.values['9:16']).toBe('9:16');
+    expect(m.runware?.model).toBe('bytedance:2@2');
+    expect(listMediaModels('VIDEO_ANIMATE').map((x) => x.id)).toContain(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(buildFalInput({
+      type: 'VIDEO', model: DEFAULT_VIDEO_ANIMATE_MODEL, prompt: 'x', durationSec: 5, aspectRatio: '9:16',
+      sources: { images: ['https://cdn/k.png'] },
+    })).toMatchObject({ image_url: 'https://cdn/k.png', resolution: '720p', duration: '5', aspect_ratio: '9:16' });
+  });
+
+  it('maps a text-to-video choice to the model that animates a keyframe', () => {
+    expect(mediaModelAcceptsFirstImage(DEFAULT_VIDEO_ANIMATE_MODEL)).toBe(true);
+    expect(mediaModelAcceptsFirstImage(DEFAULT_VIDEO_MODEL)).toBe(false);
+    expect(animateModelFor(DEFAULT_VIDEO_MODEL)).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('bytedance/seedance-2.5/text-to-video')).toBe('bytedance/seedance-2.5/image-to-video');
+    expect(animateModelFor('fal-ai/veo3.1')).toBe('fal-ai/veo3.1/image-to-video');
+    expect(animateModelFor('fal-ai/veo3.1/fast')).toBe('fal-ai/veo3.1/fast/image-to-video');
+    expect(MEDIA_MODELS['fal-ai/veo3.1/fast/image-to-video']).toMatchObject({ technique: 'VIDEO_ANIMATE', creditsPerSec: 15, tiers: { '4k': { creditsPerSec: 35 } } });
+    expect(animateModelFor('fal-ai/bytedance/seedance/v1/pro/text-to-video')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('bytedance/seedance-2.5/image-to-video')).toBe('bytedance/seedance-2.5/image-to-video');
+    expect(animateModelFor(RETIRED_SEEDANCE_LITE_MODEL)).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
+    expect(animateModelFor('not-a-model')).toBe(DEFAULT_VIDEO_ANIMATE_MODEL);
   });
 });

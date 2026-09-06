@@ -4089,7 +4089,20 @@
     "detail": {
       "title": "Concepts from this idea",
       "error": "Concepts could not be read.",
-      "coldReason": "There was no history to measure — this batch was planned unbiased."
+      "coldReason": "There was no history to measure — this batch was planned unbiased.",
+      "quote": "{{credits}} credits · {{frames}} frames + {{sec}} s of video",
+      "quoteNoFrames": "{{credits}} credits · {{sec}} s of video (no frame plan)",
+      "storyboardTitle": "Storyboard frames",
+      "make": "Make storyboard",
+      "making": "Drawing frames…",
+      "regenerate": "Redraw",
+      "framePending": "drawing",
+      "frameFailed": "failed",
+      "frameNone": "no frame",
+      "legacy": "This concept was planned before storyboards; plan the idea again to get frames.",
+      "inProduction": "In production — frames and clips live on the campaign item.",
+      "seconds": "{{n}} s",
+      "actionError": "The storyboard request failed."
     },
     "planned": {
       "cold": "{{n}} concepts planned. Planned unbiased, because there was no history to measure.",

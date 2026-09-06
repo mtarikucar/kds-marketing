@@ -1,4 +1,5 @@
-import { randomUUID } from 'crypto';
+import { DEFAULT_KEYFRAME_MODEL, DEFAULT_VIDEO_MODEL, getMediaModel } from '../ai/media/media-models.config';
+import { randomInt, randomUUID } from 'crypto';
 import {
   BadRequestException,
   Injectable,
@@ -14,8 +15,10 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import {
   ConceptScene,
+  DEFAULT_SHOT_ASPECT,
   PersonaLock,
   ShotPlan,
+  Storyboard,
   VideoModel,
   VideoPipelineService,
 } from '../video/video-pipeline.service';
@@ -54,7 +57,12 @@ export const MAX_CONCEPT_COUNT = 8;
  * Measured before this existed: a well-formed batch produced beats of 1800s and
  * 0s, and both persisted as approvable rows. Neither can ever be generated.
  */
-export const MIN_SHOT_SEC = 1;
+/** The shortest beat the platform default video model will render — its own
+ *  contract floor (Seedance 1.0 Pro Fast: 2s). Read off the catalogue rather
+ *  than written here, so the planner's floor and the quote's floor cannot
+ *  disagree: a beat clamped to 1s that the model renders (and bills) at 2s is
+ *  a plan that lies about its own length. */
+export const MIN_SHOT_SEC = getMediaModel(DEFAULT_VIDEO_MODEL)?.contract.duration?.minSec ?? 1;
 export const MAX_SHOT_SEC = 10;
 
 /**
@@ -191,6 +199,9 @@ interface FinalizeCtx {
   persona: PersonaLock | undefined;
   videoModel: VideoModel;
   production: Awaited<ReturnType<ConceptPromotionService['resolveVideoModel']>>;
+  /** The frames every beat opens on: which image model draws them and the one
+   *  seed they share. Written onto every plan of the batch. */
+  storyboard: Storyboard;
   guidance: AngleGuidance;
   cold: boolean;
   weights: Record<string, number>;
@@ -406,11 +417,23 @@ export class ContentConceptsService {
     // human has approved a plan that says otherwise, is a bill nobody agreed to.
     // `withProduction` writes the endpoint, the billed seconds and the quote
     // onto the plan itself, so the thing approved is the thing bought.
-    const production = await this.promotion.resolveVideoModel(
-      workspaceId,
-      campaign?.defaultVideoModel,
-      Boolean(persona?.referenceImageUrls?.length),
-    );
+    // EVERY NEW PLAN IS STORYBOARDED: one still per beat, then each beat animated
+    // from its still. A text-to-video model asked for a whole beat invents the
+    // scene each time and five beats come back as five unrelated inventions;
+    // a still is cheap, reviewable one frame at a time, and — animated as the
+    // first frame — is what makes the clip open on the picture a human saw.
+    // The frames and the animator are quoted here, before approval, like the
+    // rest of the purchase.
+    const production = await this.promotion.resolveVideoModel(workspaceId, campaign?.defaultVideoModel, {
+      wantsReference: Boolean(persona?.referenceImageUrls?.length),
+      storyboard: true,
+    });
+    const storyboard: Storyboard = {
+      imageModel: production.keyframeModel ?? DEFAULT_KEYFRAME_MODEL,
+      // One seed for every frame of a plan, so the stills share a look. A
+      // persona's locked seed is that seed; otherwise a fresh one per batch.
+      seed: persona?.lockedSeed ?? randomInt(1, 2 ** 31 - 1),
+    };
     // WHAT HAS WORKED, resolved before the model is asked anything. Supplied
     // weights win outright: the owner steering the line is not a suggestion to
     // be averaged with the measurements. Reading history is best-effort — a
@@ -461,6 +484,7 @@ export class ContentConceptsService {
       persona,
       videoModel,
       production,
+      storyboard,
       guidance,
       cold,
       weights,
@@ -587,6 +611,8 @@ export class ContentConceptsService {
           videoModel,
           persona,
           c.shots as ConceptScene[],
+          DEFAULT_SHOT_ASPECT,
+          { storyboard: ctx.storyboard },
         ),
         production,
       );
@@ -693,7 +719,7 @@ export class ContentConceptsService {
    * string from any other caller straight to the Prisma enum, where it is a
    * driver-level error instead of a stated refusal.
    */
-  async list(workspaceId: string, filter: { status?: string; batchId?: string }) {
+  async list(workspaceId: string, filter: { status?: string; batchId?: string; conceptId?: string }) {
     if (filter.status && !isConceptStatus(filter.status)) {
       throw new BadRequestException(
         `Unknown concept status "${filter.status}". Use one of: ${CONCEPT_STATUSES.join(', ')}.`,
@@ -704,6 +730,7 @@ export class ContentConceptsService {
         workspaceId,
         ...(filter.status ? { status: filter.status as ContentConceptStatus } : {}),
         ...(filter.batchId ? { batchId: filter.batchId } : {}),
+        ...(filter.conceptId ? { id: filter.conceptId } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { ordinal: 'asc' }],
       take: CONCEPT_LIST_LIMIT,

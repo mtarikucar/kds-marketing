@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Jeeta Nasıl Çalışır — Ürün Eğitim Kılavuzu</title>
+<style>
+  :root{
+    --navy:#0f2350; --blue:#2458e6; --blue-700:#1d48c4; --accent:#f5620f;
+    --accent-subtle:#fff2ea; --ink:#1a2338; --muted:#5b6577; --line:#e4e8f0;
+    --bg-soft:#f6f8fc; --ok:#0f9d58;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    color:var(--ink);font-size:11pt;line-height:1.5;background:#fff}
+  @page{size:A4;margin:0}
+  .page{width:210mm;min-height:297mm;padding:15mm 18mm;position:relative;page-break-after:always;overflow:hidden}
+  .page:last-child{page-break-after:auto}
+  h1,h2,h3,h4{line-height:1.2;color:var(--navy)}
+  p{margin:0 0 8px}
+  strong{color:var(--navy)}
+  .muted{color:var(--muted)}.small{font-size:9.5pt}.tiny{font-size:8.5pt}
+
+  .cover{background:linear-gradient(150deg,#0f2350 0%,#123a2e 55%,#0f9d58 120%);color:#fff;
+    display:flex;flex-direction:column;justify-content:space-between;padding:26mm 20mm}
+  .cover h1{color:#fff;font-size:36pt;letter-spacing:-1px;margin:0 0 6px}
+  .cover .wordmark{font-size:22pt;font-weight:800;color:#fff;display:flex;align-items:center;gap:10px}
+  .cover .dot{width:14px;height:14px;border-radius:50%;background:var(--accent);display:inline-block}
+  .cover .kicker{text-transform:uppercase;letter-spacing:3px;font-size:10pt;color:#bfe3cf;font-weight:600}
+  .cover .lead{font-size:14pt;color:#dcefe4;max-width:140mm;line-height:1.45}
+  .cover .foot{font-size:9pt;color:#9fcbb2;border-top:1px solid rgba(255,255,255,.2);padding-top:10px}
+
+  .sec-h{display:flex;align-items:baseline;gap:12px;border-bottom:3px solid var(--blue);padding-bottom:8px;margin-bottom:16px}
+  .sec-n{font-size:13pt;font-weight:800;color:var(--accent)}
+  .sec-h h2{font-size:19pt}
+  .lead-p{font-size:12pt;color:var(--muted);margin-bottom:16px;max-width:150mm}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff;page-break-inside:avoid}
+  .card.soft{background:var(--bg-soft)}
+  .card h3{font-size:12pt;margin-bottom:5px;display:flex;align-items:center;gap:8px}
+  .card .em{font-size:15pt}
+  .card p{font-size:10pt;color:var(--muted);margin:0 0 4px}
+
+  .callout{border-radius:12px;padding:14px 16px;margin:14px 0;page-break-inside:avoid}
+  .callout.blue{background:#eef3ff;border:1px solid #cdddff}
+  .callout.orange{background:var(--accent-subtle);border:1px solid #ffd4b8}
+  .callout.green{background:#eafaf1;border:1px solid #bfe8cf}
+  .callout.navy{background:var(--navy);color:#eaf1ff}
+  .callout.navy h3{color:#fff}
+  .callout h3{font-size:12pt;margin-bottom:5px}
+  .callout p{font-size:10pt;margin:0}
+  .callout.navy p{color:#cdd8f0}
+
+  /* Flow diagram */
+  .flow{display:flex;flex-direction:column;gap:0;margin:6px 0}
+  .flow-step{display:flex;gap:14px;align-items:flex-start;position:relative;padding-bottom:14px}
+  .flow-step:not(:last-child)::after{content:"";position:absolute;left:19px;top:40px;bottom:-2px;width:2px;background:var(--line)}
+  .flow-badge{flex:0 0 40px;height:40px;border-radius:50%;background:var(--blue);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:16pt;z-index:1}
+  .flow-body{padding-top:3px}
+  .flow-body h4{font-size:11.5pt;margin-bottom:2px}
+  .flow-body p{font-size:10pt;color:var(--muted);margin:0}
+
+  /* Module block */
+  .mod{border:1px solid var(--line);border-radius:12px;padding:0;margin-bottom:12px;overflow:hidden;page-break-inside:avoid}
+  .mod .head{background:var(--navy);color:#fff;padding:10px 15px;display:flex;align-items:center;gap:10px}
+  .mod .head .em{font-size:16pt}
+  .mod .head h3{color:#fff;font-size:13pt;margin:0}
+  .mod .head .plan{margin-left:auto;font-size:8pt;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);
+    border-radius:20px;padding:3px 10px;color:#eaf1ff}
+  .mod .body{padding:12px 15px}
+  .mod .body p{font-size:10pt;margin:0 0 6px}
+  .mod .row{display:flex;gap:10px;font-size:9.5pt;margin-top:6px}
+  .mod .row .k{flex:0 0 92px;font-weight:700;color:var(--navy)}
+  .mod .row .v{color:var(--muted)}
+
+  table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-top:6px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--navy);color:#fff;font-size:9pt;text-transform:uppercase;letter-spacing:.5px}
+  th:first-child{border-radius:8px 0 0 0}th:last-child{border-radius:0 8px 0 0}
+  tbody tr:nth-child(even){background:var(--bg-soft)}
+
+  ul.clean{list-style:none;padding:0}
+  ul.clean li{padding:5px 0 5px 22px;position:relative;font-size:10.5pt}
+  ul.clean li::before{content:"→";position:absolute;left:0;color:var(--accent);font-weight:800}
+
+  .role{border-left:4px solid var(--blue);background:var(--bg-soft);border-radius:0 10px 10px 0;padding:11px 14px;margin-bottom:10px}
+  .role h4{font-size:11.5pt;margin-bottom:2px}.role p{font-size:9.5pt;color:var(--muted);margin:0}
+
+  .foot-note{position:absolute;bottom:10mm;left:18mm;right:18mm;font-size:8pt;color:#9aa4b6;
+    border-top:1px solid var(--line);padding-top:6px;display:flex;justify-content:space-between}
+  .badge-live{display:inline-block;font-size:8pt;background:#eafaf1;color:var(--ok);border:1px solid #bfe8cf;border-radius:20px;padding:2px 8px;font-weight:700}
+  .badge-setup{display:inline-block;font-size:8pt;background:var(--accent-subtle);color:var(--accent);border:1px solid #ffd4b8;border-radius:20px;padding:2px 8px;font-weight:700}
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<section class="page cover">
+  <div><div class="wordmark"><span class="dot"></span>Jeeta</div></div>
+  <div>
+    <div class="kicker">Pazarlama Ekibi Eğitim Kılavuzu</div>
+    <h1>Jeeta Nasıl Çalışır?</h1>
+    <p class="lead">Sattığınız ürünü içeriden anlayın: mimari, bir müşteri adayının sistemdeki yolculuğu, modül modül ne işe yaradığı, yapay zekanın nasıl çalıştığı ve canlı demoda ne göstereceğiniz.</p>
+  </div>
+  <div class="foot">jeetagrowth.com · Satış &amp; pazarlama ekibi eğitimi · Sürüm 2026-07</div>
+</section>
+
+<!-- 1. BÜYÜK RESİM -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">01</span><h2>Büyük resim: Jeeta nasıl kurulu?</h2></div>
+  <p class="lead-p">Teknik olmanıza gerek yok. Şu 4 kavramı bilirseniz her müşteri sorusuna cevap verirsiniz.</p>
+
+  <div class="grid2">
+    <div class="card soft"><h3><span class="em">🏠</span>Tek hesap, çok modül</h3><p>Her işletme bir "çalışma alanı" (workspace) açar. CRM, gelen kutusu, kampanyalar, reklamlar, faturalama — hepsi <b>aynı hesabın içinde</b>, aynı müşteri verisini paylaşan modüllerdir. Ayrı ayrı uygulama değil, tek beyin.</p></div>
+    <div class="card soft"><h3><span class="em">🔒</span>Her müşteri izole</h3><p>Bir işletmenin verisi başka bir işletmeninkine <b>asla</b> karışmaz. Bu, geliştirici disiplini değil — build'i kıran otomatik bir güvenlik testiyle garanti altında. Güvenlik odaklı müşteriye gururla söylenir.</p></div>
+    <div class="card soft"><h3><span class="em">👤</span>Roller: sahip / yönetici / temsilci</h3><p>Herkes her şeyi görmez. Patron (OWNER) her şeyi, yönetici (MANAGER) ekibini ve ayarları, satış temsilcisi (REP) yalnızca <b>kendi</b> müşterilerini görür. Karmaşa değil, düzen.</p></div>
+    <div class="card soft"><h3><span class="em">📦</span>Plan neyi açar</h3><p>Özellikler plana göre açılır/kapanır (Starter/Growth/Scale). Sistem bunu tek bir "yetki motoru"yla yönetir; müşteri planını yükseltince ilgili modüller anında görünür olur.</p></div>
+  </div>
+
+  <div class="callout blue">
+    <h3>Zihinsel model: "İşletmenin dijital merkez üssü"</h3>
+    <p>Müşteriye şöyle anlatın: "Düşünün ki işletmenizin bütün dijital işleri için tek bir kontrol kulesi var. Müşteri nereden gelirse gelsin (reklam, WhatsApp, web sitesi, telefon) o kuleye düşer; oradan yapay zeka yanıtlar, ekip takip eder, satış kapanır, fatura kesilir — hepsi aynı ekranda görünür."</p>
+  </div>
+
+  <p class="small muted">Teknik altyapı (meraklı müşteriye): modern bulut mimarisi, banka seviyesi AES-256 şifreli veri saklama, Türkiye/İstanbul saat dilimi ve TRY para birimi varsayılan, 5 dil desteği.</p>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır</span><span>01</span></div>
+</section>
+
+<!-- 2. LEAD YOLCULUĞU -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">02</span><h2>Bir müşteri adayının yolculuğu</h2></div>
+  <p class="lead-p">Jeeta'nın kalbi bu akıştır. Demo yaparken de bu hikâyeyi anlatın — soyut özellik yerine <strong>somut yolculuk</strong> satar.</p>
+
+  <div class="flow">
+    <div class="flow-step"><div class="flow-badge">1</div><div class="flow-body"><h4>Müşteri adayı doğar</h4><p>Kaynak fark etmez: yapay zeka araştırma motorunun bulduğu bir işletme, Instagram reklamına tıklayan biri, web sitesindeki forma yazan, WhatsApp'tan mesaj atan ya da randevu alan biri. Hepsi CRM'e <b>otomatik "lead" olarak</b> düşer — kaynağı ve reklam atfı (fbclid/gclid) etiketlenmiş halde.</p></div></div>
+    <div class="flow-step"><div class="flow-badge">2</div><div class="flow-body"><h4>Anında atanır ve yanıtlanır</h4><p>Otomatik dağıtım (round-robin) lead'i uygun bir temsilciye atar. Aynı anda AI yanıt ajanı — işletmenin kendi bilgi tabanıyla eğitilmiş — gelen mesajı <b>saniyeler içinde</b> yanıtlar. Gece 3'te bile. İş karmaşıklaşınca insana devreder.</p></div></div>
+    <div class="flow-step"><div class="flow-badge">3</div><div class="flow-body"><h4>Otomasyon devreye girer</h4><p>Sürükle-bırak akışlar tetiklenir: karşılama mesajı, takip hatırlatması, etiketleme, görev oluşturma. "Yeni lead geldi → WhatsApp mesajı gönder → 2 gün sonra hatırlat" gibi kurallar elle uğraşmadan çalışır.</p></div></div>
+    <div class="flow-step"><div class="flow-badge">4</div><div class="flow-body"><h4>Satış boru hattında ilerler</h4><p>Lead, kanban panosunda aşamalar arası taşınır (İletişim → Görüşme → Teklif → Kazanıldı). Temsilci teklif/fiyat teklifi gönderir, müşteri online kabul eder, sözleşme e-imzayla imzalanır.</p></div></div>
+    <div class="flow-step"><div class="flow-badge">5</div><div class="flow-body"><h4>Satış kapanır, tahsilat yapılır</h4><p>Fatura kesilir, ödeme linki SMS/WhatsApp ile gönderilir, müşteri Iyzico/PayTR ile kartla ya da havaleyle öder. Tekrarlayan işse abonelik otomatik faturalanır.</p></div></div>
+    <div class="flow-step"><div class="flow-badge">6</div><div class="flow-body"><h4>Sonuç reklamlara geri beslenir</h4><p>Kapanan satış, dönüşüm API'siyle (Meta/Google/TikTok) reklam algoritmasına <b>geri</b> gönderilir. Böylece reklam "tıklayanı" değil "gerçekten satın alanı" bulmayı öğrenir. Bütçe otopilotu parayı en kârlı kanala kaydırır. Döngü baştan başlar.</p></div></div>
+  </div>
+
+  <div class="callout green" style="background:#eafaf1;border:1px solid #bfe8cf">
+    <p class="small"><b>Demo cümlesi:</b> "Bir müşteri adayı sisteme düştüğü andan paranın hesabınıza geçtiği ana kadar — hepsi tek platformda, çoğu otomatik. Sizin işiniz sadece kapanışa odaklanmak."</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır</span><span>02</span></div>
+</section>
+
+<!-- 3. MODÜL MODÜL (A) -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">03</span><h2>Modül modül: ne yapar, müşteri ne görür</h2></div>
+  <p class="lead-p">Her modülün <strong>ne işe yaradığı</strong>, <strong>müşterinin ekranda ne göreceği</strong> ve <strong>hangi planda</strong> açıldığı.</p>
+
+  <div class="mod">
+    <div class="head"><span class="em">🤖</span><h3>AI Araştırma Motoru — "lead motoru"</h3><span class="plan">Tüm planlar · research</span></div>
+    <div class="body">
+      <p>Jeeta'nın en özel parçası. Bir "hedef müşteri profili" tanımlarsınız (ör. "İstanbul'da online sipariş almayan restoranlar"). Motor geceleri web'i canlı tarar (Firecrawl/Apify), her işletmeyi Claude ile <b>kanıta dayalı</b> niteler — kötü yorumlar, eksik dijital varlık, büyüme sinyalleri — ve nitelikli olanları Türkçe bir "neden aramalıyım" notuyla pipeline'a düşürür.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">Her sabah pipeline'da yeni, nitelikli, telefonu +90 formatına normalize edilmiş lead'ler + neden değerli oldukları.</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-setup">Kurulum ister</span> Araştırma modülü + AI anahtarı + Firecrawl/Apify erişimi platform tarafında açık olmalı.</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span class="em">👥</span><h3>CRM &amp; Satış Boru Hattı</h3><span class="plan">Çekirdek · tüm planlar</span></div>
+    <div class="body">
+      <p>Lead, kişi, şirket kayıtları; özel alanlar; sürükle-bırak kanban pipeline; ağırlıklı gelir tahmini; otomatik lead dağıtımı; görevler ve takım takvimi; komisyon takibi; yinelenen kayıt birleştirme.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">Tüm müşterilerinin tek listede; her birinin geçmişi, notları, görevleri; deal'lerin panoda ilerlemesi; "bu ay ne kadar satış bekliyorum" tahmini.</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-live">Hazır</span> Kutudan çıktığı gibi çalışır.</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span class="em">💬</span><h3>Konuşmalar — Omnichannel Gelen Kutusu + AI Ajanlar</h3><span class="plan">Tüm planlar · conversationAi</span></div>
+    <div class="body">
+      <p>9 kanal (WhatsApp, Instagram, Messenger, TikTok DM, LinkedIn, web-chat, e-posta, SMS, sesli) <b>tek gelen kutusunda</b> birleşir. AI yanıt ajanı işletmenin bilgi tabanıyla otomatik cevaplar; hazır yanıtlar, iç notlar, insana devir, proaktif takip mesajları.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">Tüm kanalların mesajları tek ekranda; kimin hangi sohbeti aldığı; AI'ın yazdığı yanıtlar; "AI'ı duraklat, ben devralıyorum" butonu.</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-setup">Kanal bağlama ister</span> AI için platform AI anahtarı; her kanal (WhatsApp/Meta/SMS) kendi sağlayıcı bağlantısını ister.</span></div>
+    </div>
+  </div>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır</span><span>03</span></div>
+</section>
+
+<!-- 3. MODÜL MODÜL (B) -->
+<section class="page">
+  <div class="mod">
+    <div class="head"><span class="em">📣</span><h3>Pazarlama &amp; İçerik</h3><span class="plan">Plana göre</span></div>
+    <div class="body">
+      <p>E-posta/SMS/WhatsApp/sesli kampanyalar (A/B testli); 7 ağda sosyal medya planlayıcı (FB/IG/LinkedIn/TikTok/X/Pinterest/Google Business); AI görsel &amp; video stüdyosu + marka kiti; sürükle-bırak otomasyon; funnel &amp; açılış sayfaları &amp; formlar; üyelik/kurs; affiliate programı; trend remix + birleşik içerik takvimi.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">Kampanya oluşturucu, sosyal gönderi takvimi, yapay zekayla üretilen görsel/video, "yeni lead → mesaj gönder" gibi görsel akış tasarımcısı.</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-live">Çekirdek hazır</span> · <span class="badge-setup">AI medya + sosyal bağlama ister</span> (Growth+ için mediaGen; sosyal OAuth).</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span class="em">🚀</span><h3>Reklam &amp; Growth Engine</h3><span class="plan">Tüm planlar</span></div>
+    <div class="body">
+      <p>Meta/Google/TikTok/LinkedIn reklam raporlama + yönetim; AI görselle tek tıkla reklam yayına alma; kapalı-döngü dönüşüm API'si (CAPI); özel/benzer kitle senkronu; Meta Lead Ads → CRM; ilk-temas atıf; birinci-taraf ROAS; <b>üç kademeli bütçe otopilotu</b> (marjinal-ROAS → bandit → MMM) + PID hız kontrolü; reklam kuralları.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">Tüm reklam platformlarının performansı tek panelde; gerçek ROAS (ciroya göre); "bütçeyi şu kanala kaydırdım" önerileri; kapanan satışın reklama geri beslenmesi.</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-setup">Reklam hesabı bağlama ister</span> Raporlama/otopilot "gölge modda" kredisiz çalışır; canlı bütçe hareketi için Meta vb. bağlantı gerekir.</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span class="em">📞</span><h3>Telefon &amp; NetGSM</h3><span class="plan">Growth+ · telephony</span></div>
+    <div class="body">
+      <p>Gerçek 0850 numarasından iki yönlü SMS; İYS yasal izin uyumu (izinsiz ticari mesaj gitmez); Netsantral bulut santral tıkla-ara (temsilcinin cebini ve müşteriyi köprüler, kişisel numara gizli); canlı çağrı olayları + gelen çağrı ekran açılışı; çağrı kaydı + kuyruk panosu; sesli kampanya + otomatik arama; dinamik IVR; faks; WhatsApp OTP.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">CRM'den tek tıkla arama; gelen çağrıda müşteri kartının açılması; çağrı kayıtları; kuyruk duvar panosu; rehberli NetGSM kurulum kontrol listesi.</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-setup">NetGSM hesabı ister</span> Sistem içindeki "NetGSM Kurulumu" kartı adım adım yönlendirir (SMS → İYS → santral → kayıt → sesli).</span></div>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="head"><span class="em">💳</span><h3>Ticaret &amp; Ödeme</h3><span class="plan">Çekirdek + invoicing (Growth+)</span></div>
+    <div class="body">
+      <p>Ürün kataloğu; teklif/fiyat teklifi (online kabul); fatura (online ödeme sayfası); tekrarlayan abonelik; e-imza sözleşme; sipariş formu; kupon &amp; KDV; müşteri cüzdanı; SMS/WhatsApp ile ödeme linki (Text-to-Pay). Ödeme: <b>Iyzico, PayTR, Stripe, banka havalesi</b> — her biri işletmenin kendi hesabına.</p>
+      <div class="row"><span class="k">Müşteri görür</span><span class="v">Teklif gönder → müşteri kabul et → fatura → kart/havale ile tahsilat; hepsi tek akışta, kuruşu şaşmadan (para birimi güvenlikleriyle).</span></div>
+      <div class="row"><span class="k">Kurulum</span><span class="v"><span class="badge-live">Ürün/teklif/e-imza hazır</span> · <span class="badge-setup">Online tahsilat için PSP</span> (Iyzico/PayTR/Stripe anahtarı ya da IBAN).</span></div>
+    </div>
+  </div>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır</span><span>04</span></div>
+</section>
+
+<!-- 4. AI NASIL ÇALIŞIR -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">04</span><h2>Yapay zeka nasıl çalışıyor?</h2></div>
+  <p class="lead-p">Müşteriler en çok bunu sorar. Sihir değil — <strong>üç ayrı iş</strong> yapan, sınırları belli, güvenli bir sistem.</p>
+
+  <div class="grid2">
+    <div class="card"><h3><span class="em">🔎</span>1) Araştıran AI</h3><p>Web'i canlı tarar, işletmeleri niteler, Türkçe pitch üretir. "Boş pipeline" derdine çözüm. Bulguları bir <b>onay kuyruğuna</b> düşürür — insan onaylamadan pipeline'a girmez, kontrol sizde.</p></div>
+    <div class="card"><h3><span class="em">💬</span>2) Yanıtlayan AI</h3><p>Gelen müşteri mesajlarını, işletmenin <b>kendi yüklediği bilgi tabanıyla</b> yanıtlar (RAG). Uydurmaz — bilgi tabanına dayanır. Emin olmadığında ya da iş büyüdüğünde insana devreder.</p></div>
+    <div class="card"><h3><span class="em">🎨</span>3) Üreten AI</h3><p>Türkçe reklam/sosyal metni, marka kitine uygun görsel ve video üretir. Pazarlamacının içerik üretim süresini dakikalara indirir.</p></div>
+    <div class="card"><h3><span class="em">📊</span>Bonus: Ask AI</h3><p>Verilerin üstünde doğal dille soru sorma: "Bu ay en çok hangi kaynaktan lead geldi?" gibi. Rapor okumadan cevap.</p></div>
+  </div>
+
+  <div class="callout orange">
+    <h3>Önemli: AI bir "anahtar"a bağlıdır — dürüst konuşun</h3>
+    <p>Tüm yapay zeka özellikleri platformun bir <b>AI sağlayıcı anahtarına</b> (ör. Claude) bağlıdır; görsel/video üretimi ayrı bir medya anahtarına. Bunlar platform tarafında açık olduğunda çalışır. Müşteriye "AI her yerde var" derken, kurulumun platform tarafında bir kez yapıldığını bilin — kişisel olarak vaat etmeyin, "aktif edildiğinde" deyin.</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır</span><span>05</span></div>
+</section>
+
+<!-- 5. SHIPS-DARK + ROLLER -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">05</span><h2>Ne hazır, ne kurulum ister? (çok önemli)</h2></div>
+  <p class="lead-p">Pazarlamacının <strong>en kritik bilgisi</strong>: Jeeta'da özellikler koda gömülü ve gerçek — ama bazıları müşterinin kendi sağlayıcı hesabını bağlamasını ister. <strong>Bunu bilmemek yanlış vaat ettirir.</strong></p>
+
+  <table>
+    <thead><tr><th>Kategori</th><th>Durum</th><th>Ne gerekir</th></tr></thead>
+    <tbody>
+      <tr><td>CRM, pipeline, görev, takvim, teklif, e-imza, ürün</td><td><span class="badge-live">Hazır</span></td><td>Hiçbir şey — açar açmaz çalışır</td></tr>
+      <tr><td>Otomasyon, funnel, form, site, üyelik</td><td><span class="badge-live">Hazır</span></td><td>Hiçbir şey</td></tr>
+      <tr><td>Yapay zeka (yanıt, araştırma, içerik, Ask AI)</td><td><span class="badge-setup">Aktivasyon</span></td><td>Platform AI anahtarı (bir kez, platform tarafı)</td></tr>
+      <tr><td>WhatsApp / Instagram / Messenger / e-posta</td><td><span class="badge-setup">Bağlama</span></td><td>Müşterinin kendi Meta/SMTP hesabını bağlaması</td></tr>
+      <tr><td>NetGSM SMS / santral / sesli / faks / İYS</td><td><span class="badge-setup">Bağlama</span></td><td>NetGSM hesabı — rehberli kurulum kartı yönlendirir</td></tr>
+      <tr><td>Online ödeme (Iyzico/PayTR/Stripe)</td><td><span class="badge-setup">Bağlama</span></td><td>Müşterinin kendi PSP hesabı ya da IBAN</td></tr>
+      <tr><td>Reklam yönetimi (Meta/Google/TikTok)</td><td><span class="badge-setup">Bağlama</span></td><td>Müşterinin reklam hesabı bağlantısı</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout blue" style="margin-top:12px">
+    <p><b>Doğru cümle:</b> "Çekirdek özellikler açar açmaz hazır. WhatsApp, ödeme, NetGSM gibi kendi hesaplarınızı bağladığınız yerlerde sistem sizi <b>adım adım yönlendiren bir kurulum kontrol listesi</b> sunuyor — hiçbir teknik bilgi gerekmiyor, isterseniz biz de yanınızdayız."</p>
+  </div>
+
+  <h3 style="font-size:12pt;margin:16px 0 8px">Roller: kim neyi görür (müşteriye anlatın)</h3>
+  <div class="role"><h4>OWNER (Sahip)</h4><p>İşletme sahibi. Her şeyi görür ve yönetir: faturalandırma, plan, tüm veriler, ajans alt-hesapları.</p></div>
+  <div class="role"><h4>MANAGER (Yönetici)</h4><p>Ekip lideri. Tüm müşterileri, ekip performansını ve ayarları yönetir; ama faturalandırma sahibin.</p></div>
+  <div class="role"><h4>REP (Temsilci)</h4><p>Satış çalışanı. Yalnızca <b>kendi</b> müşterilerini, görevlerini ve konuşmalarını görür. Sadelik ve gizlilik.</p></div>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır</span><span>06</span></div>
+</section>
+
+<!-- 6. DEMO AKIŞI + SSS -->
+<section class="page">
+  <div class="sec-h"><span class="sec-n">06</span><h2>Canlı demo akışı &amp; teknik SSS</h2></div>
+  <p class="lead-p">15 dakikalık bir demoda ne göstereceğiniz — ve müşteriden gelecek teknik soruların cevabı.</p>
+
+  <h3 style="font-size:12pt;margin-bottom:6px">Demo adımları (sırayla göster)</h3>
+  <ul class="clean">
+    <li><b>Ana panel:</b> "Tüm işiniz tek ekranda" — lead, gelir, dönüşüm göstergeleri.</li>
+    <li><b>Gelen kutusu:</b> Bir WhatsApp mesajı gelsin, AI ajanın yanıtladığını gösterin.</li>
+    <li><b>Pipeline:</b> Bir deal'i kanbanda sürükleyin — "işte satış süreciniz."</li>
+    <li><b>Otomasyon:</b> "Yeni lead → mesaj gönder" akışını gösterin.</li>
+    <li><b>Reklam paneli:</b> Gerçek ROAS + bütçe otopilotu önerisi.</li>
+    <li><b>Fatura/ödeme:</b> Teklif → online kabul → ödeme linki akışı.</li>
+    <li><b>Kapanış:</b> "Bunların hepsi tek platform, tek fatura, çoğu otomatik."</li>
+  </ul>
+
+  <h3 style="font-size:12pt;margin:16px 0 6px">Müşteriden gelecek teknik sorular</h3>
+  <div class="mod"><div class="body" style="padding:10px 15px">
+    <p><b>S: Verilerimiz nerede, güvenli mi?</b><br><span class="muted small">C: Her işletmenin verisi mimari olarak izole (build'i kıran testle garanti), tokenlar AES-256 ile mühürlü, değiştirilemez denetim kaydı var. KVKK uyumu tasarımın parçası.</span></p>
+    <p style="margin-top:8px"><b>S: Mevcut müşteri listemi aktarabilir miyim?</b><br><span class="muted small">C: Evet — CSV içe aktarma, toplu işlemler ve otomatik yinelenen-kayıt birleştirme var.</span></p>
+    <p style="margin-top:8px"><b>S: WhatsApp'ı nasıl bağlarım?</b><br><span class="muted small">C: Hesap Merkezi'nden tek tıkla (Meta OAuth) ya da rehberli kurulumla. WhatsApp Cloud API üzerinden resmi, şablonlu.</span></p>
+    <p style="margin-top:8px"><b>S: Telefonla arama gerçekten çalışıyor mu?</b><br><span class="muted small">C: Evet, NetGSM Netsantral ile. Sistem sizin cebinizi ve müşteriyi köprüler; müşteri işletme numaranızı görür, sizin kişisel numaranız gizli kalır.</span></p>
+    <p style="margin-top:8px"><b>S: İngilizce bilmem, kullanabilir miyim?</b><br><span class="muted small">C: Arayüz tamamen Türkçe (5 dil desteği), yapay zeka Türkçe-öncelikli. Yerli bir ürün gibi.</span></p>
+    <p style="margin-top:8px"><b>S: Kendi markamla müşterilerime sunabilir miyim? (ajans)</b><br><span class="muted small">C: Evet — white-label, alt-hesaplar, snapshot ile kurulum kopyalama ve kâr koyup yeniden faturalandırma (rebilling) var.</span></p>
+  </div></div>
+
+  <div class="callout navy">
+    <h3>Özetle Jeeta</h3>
+    <p>İşletmenin lead bulmadan satışı kapatıp tahsilat yapmaya kadar tüm dijital işini tek panelde toplayan, her adımda yapay zeka çalıştıran ve Türkiye'ye (NetGSM, İYS, Iyzico/PayTR, Türkçe) özel kurgulanmış bir büyüme platformu. Siz bu gücü <b>müşterinin acısına</b> bağladığınızda satış kendini yapar.</p>
+  </div>
+
+  <div class="foot-note"><span>Jeeta Nasıl Çalışır · jeetagrowth.com</span><span>07</span></div>
+</section>
+
+</body>
+</html>

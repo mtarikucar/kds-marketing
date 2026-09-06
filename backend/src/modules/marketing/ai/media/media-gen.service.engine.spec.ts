@@ -198,12 +198,12 @@ describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
     it('COMPLETED shorter-than-requested video → credits back the unused wallet USD (mediagen-reconcile)', async () => {
       const VIDEO_ASSET = {
         id: 'asset-1', workspaceId: WS, status: 'GENERATING',
-        model: 'fal-ai/veo3/fast', // $0.25/sec
-        costCreditsReserved: 250, params: { campaignItemId: 'ci-1' }, type: 'VIDEO', durationSec: 10,
+        model: 'fal-ai/veo3.1/fast', // $0.15/sec
+        costCreditsReserved: 150, params: { campaignItemId: 'ci-1' }, type: 'VIDEO', durationSec: 10,
       };
       const { svc, prisma, wallet } = makeSvc({
         asset: VIDEO_ASSET,
-        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-2.5') }, // reserved 10s = $2.50
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-1.5') }, // reserved 10s = $1.50
       });
       (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
       (prisma as any).generatedAsset.updateMany.mockResolvedValue({ count: 1 });
@@ -213,24 +213,48 @@ describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
       // Provider returns a 4s clip (< the requested 10s).
       await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/v.mp4', mime: 'video/mp4', durationSec: 4 }] });
 
-      // reserved $2.50 − actual (4s × $0.25 = $1.00) = $1.50 credited back.
+      // reserved $1.50 − actual (4s × $0.15 = $0.60) = $0.90 credited back.
       expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({ ref: 'mediagen-reconcile:asset-1', kind: 'REFUND' }));
-      expect(wallet.credit.mock.calls[0][1].amount.toString()).toBe('1.5');
+      expect(wallet.credit.mock.calls[0][1].amount.toString()).toBe('0.9');
     });
 
-    it('COMPLETED at the EXACT requested duration → no wallet reconcile (nothing unused)', async () => {
+    it('a Runware-rendered engine clip reconciles the wallet at the CATALOGUE rate — the vendor saving is margin, not a refund', async () => {
+      // Seedance 2.5, 5s at 720p: catalogue (fal) $0.473/s = $2.365 pre-debited;
+      // Runware reports $1.152. The wallet is the customer's money at the
+      // catalogue price, so nothing comes back; costUsd records what it cost us.
       const VIDEO_ASSET = {
-        id: 'asset-1', workspaceId: WS, status: 'GENERATING', model: 'fal-ai/veo3/fast',
-        costCreditsReserved: 250, params: { campaignItemId: 'ci-1' }, type: 'VIDEO', durationSec: 10,
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING', provider: 'runware',
+        model: 'bytedance/seedance-2.5/text-to-video', costCreditsReserved: 240,
+        params: { campaignItemId: 'ci-1', resolution: '720p' }, type: 'VIDEO', durationSec: 5,
       };
       const { svc, prisma, wallet } = makeSvc({
         asset: VIDEO_ASSET,
-        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-2.5') },
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-2.365') },
       });
       (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
       (prisma as any).generatedAsset.updateMany.mockResolvedValue({ count: 1 });
       ((svc as any).r2.upload as jest.Mock).mockResolvedValue({ url: 'u', key: 'k', mime: 'video/mp4' });
-      await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'u', mime: 'video/mp4', durationSec: 10 }] });
+      // Runware returns no duration, so the requested length stands.
+      await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'u', mime: 'video/mp4' }], costUsd: 1.152 });
+      expect(wallet.credit).not.toHaveBeenCalled();
+      expect(Number((prisma as any).generatedAsset.updateMany.mock.calls[0][0].data.costUsd)).toBeCloseTo(1.152, 6);
+    });
+
+    it('COMPLETED at the EXACT requested duration → no wallet reconcile (nothing unused)', async () => {
+      const VIDEO_ASSET = {
+        // Veo 3.1 Fast offers 4/6/8s, so 8s is the exact length that can be
+        // both requested and rendered; 10s would snap to 8s and look "shorter".
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING', model: 'fal-ai/veo3.1/fast',
+        costCreditsReserved: 120, params: { campaignItemId: 'ci-1' }, type: 'VIDEO', durationSec: 8,
+      };
+      const { svc, prisma, wallet } = makeSvc({
+        asset: VIDEO_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-1.2') },
+      });
+      (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
+      (prisma as any).generatedAsset.updateMany.mockResolvedValue({ count: 1 });
+      ((svc as any).r2.upload as jest.Mock).mockResolvedValue({ url: 'u', key: 'k', mime: 'video/mp4' });
+      await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'u', mime: 'video/mp4', durationSec: 8 }] });
       expect(wallet.credit).not.toHaveBeenCalled();
     });
   });

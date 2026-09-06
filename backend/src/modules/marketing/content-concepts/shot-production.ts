@@ -1,5 +1,6 @@
 import {
   billableDurationSec,
+  resolveMediaModelId,
   estimateMediaCredits,
   estimateMediaUsd,
   getMediaModel,
@@ -22,6 +23,9 @@ export interface VideoModelChoice {
   model: string;
   modelSource: ShotProduction['modelSource'];
   replacedModel?: string;
+  /** The image model the storyboard's frames are drawn by, when the plan has
+   *  one. Priced into the quote beside the clips. */
+  keyframeModel?: string;
 }
 
 /**
@@ -50,7 +54,9 @@ const SUBMIT_MAX_SEC = 10;
  * bought and the number that is charged.
  */
 export function billedBeatSec(model: string, requestedSec: number | undefined): number {
-  const contract = getMediaModel(model)?.contract.duration;
+  // The model that will RUN: a stored id fal has retired renders on its
+  // successor, whose floor and ceiling are what the invoice will show.
+  const contract = getMediaModel(resolveMediaModelId(model))?.contract.duration;
   const asked = Math.min(Math.max(1, Math.round(requestedSec ?? 5)), SUBMIT_MAX_SEC);
   return contract ? billableDurationSec(contract, asked) : asked;
 }
@@ -94,6 +100,24 @@ export function quoteProduction(plan: ShotPlan, choice: VideoModelChoice): ShotP
     textLength: (shots[i]?.prompt ?? '').length,
   }));
 
+  // THE FRAMES, when the plan is storyboarded: one IMAGE generation per beat,
+  // at the image model's flat rate. Priced here and folded into the total so
+  // the reviewer approves the stills and the clips as ONE number — a frame that
+  // was not on the quote would be the same unapproved price as a model swap.
+  const keyframeModel = plan.storyboard ? (choice.keyframeModel ?? plan.storyboard.imageModel) : undefined;
+  const keyframes = keyframeModel
+    ? (() => {
+        const perFrameCredits = estimateMediaCredits(keyframeModel, {});
+        const perFrameUsd = estimateMediaUsd(keyframeModel, {});
+        return {
+          model: keyframeModel,
+          perFrameCredits,
+          credits: perFrameCredits * shots.length,
+          usd: perFrameUsd * shots.length,
+        };
+      })()
+    : undefined;
+
   return {
     model: choice.model,
     modelSource: choice.modelSource,
@@ -102,8 +126,9 @@ export function quoteProduction(plan: ShotPlan, choice: VideoModelChoice): ShotP
     ...(frameNote ? { frameNote } : {}),
     billedSecPerBeat,
     billedSec: billedSecPerBeat.reduce((n, sec) => n + sec, 0),
-    credits: beatOpts.reduce((n, opts) => n + estimateMediaCredits(choice.model, opts), 0),
-    usd: beatOpts.reduce((n, opts) => n + estimateMediaUsd(choice.model, opts), 0),
+    ...(keyframes ? { keyframes } : {}),
+    credits: (keyframes?.credits ?? 0) + beatOpts.reduce((n, opts) => n + estimateMediaCredits(choice.model, opts), 0),
+    usd: (keyframes?.usd ?? 0) + beatOpts.reduce((n, opts) => n + estimateMediaUsd(choice.model, opts), 0),
   };
 }
 

@@ -53,9 +53,9 @@ describeRealDb('Workspace media model defaults, real DB (e2e)', () => {
   const packageId = randomUUID();
   const ownerId = randomUUID();
 
-  /** The neighbour's choice: the most expensive model in the catalogue, 25
-   *  credits/sec against the platform default's 3. Leaking it is measurable. */
-  const NEIGHBOUR_VIDEO_MODEL = 'fal-ai/veo3/fast';
+  /** The neighbour's choice: a premium model, 15 credits/sec against the
+   *  platform default's 3. Leaking it is measurable. */
+  const NEIGHBOUR_VIDEO_MODEL = 'fal-ai/veo3.1/fast';
   /** Ours: the middle tier, so "ours", "theirs" and "the code constant" are
    *  three distinct answers and no assertion can pass by coincidence. */
   const OUR_VIDEO_MODEL = 'fal-ai/bytedance/seedance/v1/pro/text-to-video';

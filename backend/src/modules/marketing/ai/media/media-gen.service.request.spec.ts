@@ -1,6 +1,6 @@
 import { ServiceUnavailableException, BadRequestException } from '@nestjs/common';
 import { MediaGenService, MEDIA_GEN_POLL_KIND } from './media-gen.service';
-import { DEFAULT_IMAGE_MODEL } from './media-models.config';
+import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, RETIRED_SEEDANCE_LITE_MODEL } from './media-models.config';
 
 const WS = 'ws-1';
 function makeSvc(links: { campaign?: unknown; item?: unknown } = {}) {
@@ -159,5 +159,45 @@ describe('MediaGenService.requestGeneration — the campaign linkage is proven, 
     await svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' });
     expect(prisma.socialCampaign.findFirst).not.toHaveBeenCalled();
     expect(prisma.socialCampaignItem.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('MediaGenService.requestGeneration — vendors and retired ids', () => {
+  it('runs a fal-retired model on its successor and records which vendor took it', async () => {
+    const { svc, prisma, provider } = makeSvc();
+    (provider as any).resolveName = jest.fn().mockReturnValue('runware');
+    await svc.requestGeneration(WS, { type: 'VIDEO', model: RETIRED_SEEDANCE_LITE_MODEL, prompt: 'x', createdById: 'u1' });
+    const data = prisma.generatedAsset.create.mock.calls[0][0].data;
+    expect(data.model).toBe(DEFAULT_VIDEO_MODEL);
+    expect(data.provider).toBe('runware');
+    expect((provider as any).resolveName).toHaveBeenCalledWith(DEFAULT_VIDEO_MODEL);
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({ model: DEFAULT_VIDEO_MODEL }));
+  });
+
+  it('falls back to provider.name when the provider cannot name a vendor per model', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' });
+    expect(prisma.generatedAsset.create.mock.calls[0][0].data.provider).toBe('fal');
+  });
+});
+
+describe('MediaGenService.regenerate — rows on a fal-retired model', () => {
+  const ROW = {
+    id: 'old', workspaceId: WS, type: 'VIDEO', model: RETIRED_SEEDANCE_LITE_MODEL, prompt: 'p', negativePrompt: null,
+    params: { aspectRatio: '4:5' }, durationSec: 5, socialCampaignId: null,
+  };
+
+  it('drops a replayed ratio the successor does not publish instead of 400ing the re-run', async () => {
+    const { svc, prisma, provider } = makeSvc();
+    prisma.generatedAsset.findFirst = jest.fn().mockResolvedValue(ROW);
+    await svc.regenerate(WS, 'old', 'u1');
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({ model: DEFAULT_VIDEO_MODEL, aspectRatio: undefined }));
+  });
+
+  it('keeps a replayed ratio the successor does publish', async () => {
+    const { svc, prisma, provider } = makeSvc();
+    prisma.generatedAsset.findFirst = jest.fn().mockResolvedValue({ ...ROW, params: { aspectRatio: '9:16' } });
+    await svc.regenerate(WS, 'old', 'u1');
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({ model: DEFAULT_VIDEO_MODEL, aspectRatio: '9:16' }));
   });
 });

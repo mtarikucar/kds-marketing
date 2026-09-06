@@ -4944,7 +4944,20 @@
     "detail": {
       "title": "Bu fikirden çıkan konseptler",
       "error": "Konseptler okunamadı.",
-      "coldReason": "Ölçülecek geçmiş yoktu — bu parti tarafsız planlandı."
+      "coldReason": "Ölçülecek geçmiş yoktu — bu parti tarafsız planlandı.",
+      "quote": "{{credits}} kredi · {{frames}} kare + {{sec}} sn video",
+      "quoteNoFrames": "{{credits}} kredi · {{sec}} sn video (kare planı yok)",
+      "storyboardTitle": "Storyboard",
+      "make": "Storyboard oluştur",
+      "making": "Kareler çiziliyor…",
+      "regenerate": "Yeniden üret",
+      "framePending": "çiziliyor",
+      "frameFailed": "çizilemedi",
+      "frameNone": "kare yok",
+      "legacy": "Bu konsept storyboard'dan önce planlandı; kareleri görmek için fikri yeniden planla.",
+      "inProduction": "Üretimde — kareler ve klipler kampanya öğesinde.",
+      "seconds": "{{n}} sn",
+      "actionError": "Storyboard isteği başarısız oldu."
     },
     "planned": {
       "cold": "{{n}} konsept üretildi. Ölçülecek geçmiş olmadığı için tarafsız planlandı.",
