@@ -1,5 +1,4 @@
-import { linkedinRest, LinkedinResult, linkedinApiVersion } from '../../../common/util/linkedin-api.util';
-import { safeFetch } from '../../../common/util/safe-fetch';
+import { linkedinRest, LinkedinResult } from '../../../common/util/linkedin-api.util';
 import { AdMetricRow } from './ads.types';
 
 /**
@@ -89,8 +88,6 @@ function isoFromParts(y: number, m: number, d: number): string {
 
 // ── WRITE (campaign management) ──────────────────────────────────────────────
 
-const LINKEDIN_API_BASE = 'https://api.linkedin.com';
-
 /** WRITE result, mirroring MetaWriteResult { ok, id?, error?, isAuthError? }. */
 export interface LinkedinWriteResult {
   ok: boolean;
@@ -103,17 +100,26 @@ export interface LinkedinWriteResult {
  * Partial-update a LinkedIn ad campaign (status and/or daily budget).
  *
  * LinkedIn's rest.li PARTIAL_UPDATE requires the `X-RestLi-Method: PARTIAL_UPDATE`
- * header, which the shared `linkedinRest` transport does not emit — so, like
- * `linkedinUpload`, this composes the request directly over safeFetch, reusing
- * the same header set linkedinRest builds (Bearer + LinkedIn-Version +
- * X-Restli-Protocol-Version) plus the method override. Without that header
- * LinkedIn treats the POST as a full replace/create, so it is load-bearing.
+ * header (without it LinkedIn treats the POST as a full replace/create, so it is
+ * load-bearing). That header is the ONLY thing this call needs beyond the shared
+ * transport, so it goes through `linkedinRest` with `headers` rather than
+ * hand-rolling safeFetch.
+ *
+ * It used to hand-roll it, and that is exactly what this fixes: a hand-built
+ * request carries the version header but none of the transport's error handling,
+ * so a retired LinkedIn-Version came back here as a bare `LinkedIn campaign
+ * update 426: …` with no hint that the deploy's version — not this campaign, not
+ * this token — was the problem. Routing it through the helper means the retired
+ * -version message (which names the version sent and the env knob) is identical
+ * on the ads-write path and the publish path.
  *
  * `dailyBudget` is a MoneyAmount → `currencyCode` is REQUIRED (from
  * AdAccount.currency); the caller guard-throws when currency is unknown rather
  * than sending an invalid amount. Status enum ACTIVE/PAUSED passes straight
- * through. Success is 204 No Content. Never throws — returns a result: 401 →
- * isAuthError (reauth); 403 → permission/scope, NOT reauth. Legacy equivalent is
+ * through. Success is 204 No Content (linkedinRest's body parse fails softly to
+ * null on an empty body, and `ok` is taken from the status). Never throws —
+ * returns a result: 401 → isAuthError (reauth); 403 → permission/scope, NOT
+ * reauth; a transport throw → status 0, retry-friendly. Legacy equivalent is
  * POST /v2/adCampaignsV2/{id}.
  */
 export async function updateLinkedinCampaign(
@@ -127,33 +133,19 @@ export async function updateLinkedinCampaign(
     $set.dailyBudget = { amount: String(patch.dailyBudgetMajor), currencyCode: patch.currencyCode };
   }
 
-  let res: Response;
-  try {
-    res = await safeFetch(`${LINKEDIN_API_BASE}/rest/adCampaigns/${campaignId}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'LinkedIn-Version': linkedinApiVersion(),
-        'X-Restli-Protocol-Version': '2.0.0',
-        'X-RestLi-Method': 'PARTIAL_UPDATE',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ patch: { $set } }),
-      timeoutMs: 20_000,
-    });
-  } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? 'network error').slice(0, 400), isAuthError: false };
-  }
+  const result = await linkedinRest(`/rest/adCampaigns/${campaignId}`, {
+    accessToken: token,
+    method: 'POST',
+    headers: { 'X-RestLi-Method': 'PARTIAL_UPDATE' },
+    body: { patch: { $set } },
+    timeoutMs: 20_000,
+  });
 
-  // 204 No Content on success — do NOT read the (empty) body.
-  if (res.ok) return { ok: true, id: campaignId };
+  if (result.ok) return { ok: true, id: campaignId };
 
-  // 401 = invalid/expired token → reauth. 403 = permission/scope → NOT reauth.
-  const body: any = await res.json().catch(() => null);
-  const message = String(body?.message ?? `LinkedIn HTTP ${res.status}`).slice(0, 300);
   return {
     ok: false,
-    error: `LinkedIn campaign update ${res.status}: ${message}`,
-    isAuthError: res.status === 401,
+    error: `LinkedIn campaign update ${result.status}: ${String(result.error.message).slice(0, 300)}`,
+    isAuthError: result.error.isAuthError,
   };
 }

@@ -191,6 +191,17 @@ jobs:
           RUNWARE_API_KEY: ${{ secrets.RUNWARE_API_KEY }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
+          # LinkedIn REST API version for EVERY /rest call — publishing, ads
+          # read + write, audiences, insights (optional; empty = the code default
+          # LINKEDIN_DEFAULT_API_VERSION in common/util/linkedin-api.util.ts).
+          # Wired here because the failure message tells the operator to "set
+          # LINKEDIN_API_VERSION", and this file renders the prod env file
+          # wholesale: without this line the knob did not exist in prod and
+          # anything set on the server by hand was erased by the next deploy.
+          # Set this repo Variable to a version LinkedIn still serves to recover
+          # from "Requested version <YYYYMM>01 is not active" without a code
+          # change; leave it unset to track the code default.
+          LINKEDIN_API_VERSION: ${{ vars.LINKEDIN_API_VERSION }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
           TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
           X_CLIENT_ID: ${{ secrets.X_CLIENT_ID }}
@@ -326,6 +337,9 @@ jobs:
           RUNWARE_API_KEY=${RUNWARE_API_KEY}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
+          # Empty unless the repo Variable is set — an unparseable/blank value
+          # falls back to LINKEDIN_DEFAULT_API_VERSION in code, by design.
+          LINKEDIN_API_VERSION=${LINKEDIN_API_VERSION}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
           TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET}
           X_CLIENT_ID=${X_CLIENT_ID}

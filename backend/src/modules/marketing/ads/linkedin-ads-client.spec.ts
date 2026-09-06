@@ -6,6 +6,7 @@ jest.mock('../../../common/util/safe-fetch', () => ({
 }));
 
 import { pullLinkedinInsights } from './linkedin-ads.client';
+import { LINKEDIN_DEFAULT_API_VERSION } from '../../../common/util/linkedin-api.util';
 
 function res(ok: boolean, status: number, body: unknown) {
   return {
@@ -61,12 +62,22 @@ describe('pullLinkedinInsights', () => {
   });
 
   it('sends the LinkedIn-Version header and a Bearer token (via linkedinRest)', async () => {
-    process.env.LINKEDIN_API_VERSION = '202406';
+    // No env pin: reads whatever the single source of truth currently says, so a
+    // version bump stays a one-line change instead of a spec-wide find-and-replace.
+    delete process.env.LINKEDIN_API_VERSION;
     mockSafeFetch.mockResolvedValue(res(true, 200, { elements: [] }));
     await pullLinkedinInsights('tok', '512345', '2026-06-01', '2026-06-02');
     const opts = mockSafeFetch.mock.calls[0][1] as any;
     expect(opts.headers['Authorization']).toBe('Bearer tok');
-    expect(opts.headers['LinkedIn-Version']).toBe('202406');
+    expect(opts.headers['LinkedIn-Version']).toBe(LINKEDIN_DEFAULT_API_VERSION);
+  });
+
+  it('carries the CONFIGURED version when LINKEDIN_API_VERSION overrides the default', async () => {
+    process.env.LINKEDIN_API_VERSION = '202509';
+    mockSafeFetch.mockResolvedValue(res(true, 200, { elements: [] }));
+    await pullLinkedinInsights('tok', '512345', '2026-06-01', '2026-06-02');
+    const opts = mockSafeFetch.mock.calls[0][1] as any;
+    expect(opts.headers['LinkedIn-Version']).toBe('202509');
   });
 
   it('throws with isAuthError true on a 401 (drives TOKEN_EXPIRED)', async () => {
