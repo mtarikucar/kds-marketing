@@ -1,5 +1,57 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
+import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
+
+/**
+ * How far ahead a token expiry is worth complaining about — and why there are
+ * TWO answers rather than one.
+ *
+ * The first version of this line used seven days, copied from
+ * `DailyDigestService`. Seven days is also, exactly,
+ * `SocialTokenRefreshService.REFRESH_WINDOW_MS`: that cron's due query is
+ *
+ *     { connectedVia: 'OAUTH', enabled: true, refreshToken: { not: null },
+ *       tokenExpiresAt: { not: null, lt: now + 7d } }
+ *
+ * run EVERY HOUR, and on failure it deliberately leaves the row untouched so
+ * the next tick tries again. So a seven-day warning on a refreshable account
+ * fired at the exact instant the repair began. Every short-lived-token account
+ * would sit in ATTENTION for its whole last week, every cycle, while the
+ * machinery was working — and a warning that is always on is one a person
+ * learns to scroll past, which costs more than having no warning at all.
+ *
+ * Hence two windows, chosen by whether anything is in fact repairing the
+ * account:
+ *
+ *   SELF_HEALING_EXPIRY_WARNING_MS (48h) — the refresher HAS this account.
+ *     Worth reporting only once auto-refresh has demonstrably had its chances
+ *     and not taken them: the account entered the refresher's queue five days
+ *     earlier, so by the time this fires the hourly cron has had ~120 turns
+ *     without moving `tokenExpiresAt`. "Had its chances" assumes the cron can
+ *     actually act — `SocialTokenRefreshService` returns early when
+ *     MARKETING_SECRET_KEY is unset, and skips any network whose provider
+ *     exposes no `refresh`. In those cases nothing was ever repairing the
+ *     account and 48h of notice is all it gets, which is the trade this
+ *     window accepts.
+ *
+ *   UNATTENDED_EXPIRY_WARNING_MS (7d) — nothing is repairing this account.
+ *     The due query above filters `connectedVia: 'OAUTH'` and
+ *     `refreshToken: { not: null }`, so an account connected by hand, or one
+ *     whose provider handed back no refresh token, is never picked up at all.
+ *     Only a human reconnect saves it, and a human needs the week of notice
+ *     `DailyDigestService` already mails.
+ *
+ * INVARIANT: the self-healing window must stay STRICTLY INSIDE the
+ * refresher's, with days of retries to spare. The spec reads
+ * `REFRESH_WINDOW_MS` out of the refresher's own source and asserts that gap,
+ * so it fails when the two are brought together — the refresher NARROWED
+ * towards 48h, or this window widened towards the refresher's. It does not
+ * fail when the refresher is widened, because that only buys more retries
+ * before this fires, which is the safe direction.
+ */
+const SELF_HEALING_EXPIRY_WARNING_MS = 48 * 60 * 60 * 1000;
+const UNATTENDED_EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * What this workspace still needs before the engine runs at full strength.
@@ -79,7 +131,13 @@ export interface WorkspaceReadiness {
 
 @Injectable()
 export class WorkspaceReadinessService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Not every gap on this list is a row somewhere. The AI-credit line is
+    // answered by the PLAN before it is answered by a wallet, and reading the
+    // wallet alone got the answer backwards on the plan that needs no wallet.
+    private readonly entitlements: EntitlementsService,
+  ) {}
 
   async get(workspaceId: string): Promise<WorkspaceReadiness> {
     // Every `where` below spells `workspaceId` out rather than spreading a
@@ -87,6 +145,25 @@ export class WorkspaceReadinessService {
     // it is right to: a scope hidden behind a one-letter variable is a scope
     // the next person editing this list cannot see either, and this list is
     // exactly the kind of file people add a line to in a hurry.
+
+    // One clock reading for the whole snapshot, because two of the counts below
+    // are now COMPLEMENTS of each other around this instant: `unhealthySocial`
+    // takes `tokenExpiresAt < now` and `expiringSocial` takes `> now`. Read the
+    // clock twice and a token that expires between the two readings satisfies
+    // NEITHER predicate — it is not yet dead to the first and already too old
+    // for the second — so the account that just died is the one the list stops
+    // mentioning. The month key below is derived from the same instant for the
+    // same reason: at a month boundary the allowance period must belong to the
+    // snapshot it is reported in.
+    //
+    // (Before the expiry count existed the two readings were on DIFFERENT
+    // entities — an MCP token's `expiresAt` and a social token's — so they
+    // could not contradict each other about one row. That is no longer true.)
+    const now = new Date();
+    const soonSelfHealing = new Date(now.getTime() + SELF_HEALING_EXPIRY_WARNING_MS);
+    const soonUnattended = new Date(now.getTime() + UNATTENDED_EXPIRY_WARNING_MS);
+    /** UTC month key, exactly as `AiCreditsService` writes it. */
+    const period = monthKey(now);
 
     const [
       liveMcpTokens,
@@ -100,6 +177,7 @@ export class WorkspaceReadinessService {
       researchProfiles,
       socialAccounts,
       unhealthySocial,
+      expiringSocial,
       sendingDomains,
       mailboxChannels,
       smsChannels,
@@ -113,13 +191,15 @@ export class WorkspaceReadinessService {
       activeCampaigns,
       concepts,
       aiWallet,
+      aiCreditsUsedRow,
+      aiCreditsMonthly,
       growthWallet,
     ] = await Promise.all([
       // "Connected" as the console itself defines it: a token that is neither
       // revoked nor expired. A client whose every token is dead is disconnected,
       // however many rows it left behind.
       this.prisma.mcpOAuthToken.count({
-        where: { workspaceId, revokedAt: null, expiresAt: { gt: new Date() } },
+        where: { workspaceId, revokedAt: null, expiresAt: { gt: now } },
       }),
       this.prisma.apiKey.count({ where: { workspaceId, status: 'ACTIVE' } }),
       this.prisma.workspace.findUnique({
@@ -144,8 +224,7 @@ export class WorkspaceReadinessService {
       this.prisma.workflow.count({ where: { workspaceId } }),
       this.prisma.researchProfile.count({ where: { workspaceId, status: 'ACTIVE' } }),
       this.prisma.socialAccount.count({ where: { workspaceId, enabled: true } }),
-      // The SAME predicate `DailyDigestService` uses, deliberately — "something
-      // the owner switched ON has stopped working".
+      // ALREADY BROKEN — "something the owner switched ON has stopped working".
       //
       // What it must not do is what this line used to do: filter on
       // `enabled: true, lastError: { not: null }`. That misses the failure that
@@ -161,7 +240,60 @@ export class WorkspaceReadinessService {
           workspaceId,
           OR: [
             { lastError: 'reauth_required' },
-            { enabled: true, tokenExpiresAt: { lt: new Date() } },
+            { enabled: true, tokenExpiresAt: { lt: now } },
+          ],
+        },
+      }),
+      // ABOUT TO BREAK, AND NOTHING IS FIXING IT — which is the moment worth
+      // reporting, and is narrower than "about to break".
+      //
+      // This count exists because an expiry used to be invisible here until the
+      // day it stopped working, and nobody can reconnect an account
+      // retroactively: by then the posts that did not go out have not gone out.
+      //
+      // But the first cut of it warned at seven days, which is the refresher's
+      // OWN window (see the constants at the top of this file, and read
+      // social-token-refresh.service.ts before touching either) — so it lit up
+      // at the exact moment auto-refresh started retrying hourly and stayed lit
+      // for the whole week it worked. The split below is what makes the signal
+      // mean something:
+      //
+      //   arm 1 — the refresher's due predicate verbatim (OAUTH + a refresh
+      //           token to spend), on a 48h window instead of its 7d, so it
+      //           only fires after ~120 hourly attempts have failed to move
+      //           `tokenExpiresAt`;
+      //   arms 2-3 — the accounts that due predicate SKIPS: no refresh token,
+      //           or connected by hand. The cron never looks at these, so
+      //           nothing is retrying and the full week of human notice is the
+      //           correct amount.
+      //
+      // `enabled: true` so a connection the owner retired is not resurrected as
+      // a warning; `gt: now` and the `lastError` exclusion keep this count
+      // DISJOINT from `unhealthySocial` above, so one row can never be printed
+      // as two separate problems in `detail`. The `lastError` exclusion is
+      // written as an OR over null on purpose: a NULL `lastError` is the normal
+      // case and must stay counted, which a bare `{ not: 'reauth_required' }`
+      // cannot be relied on to do.
+      this.prisma.socialAccount.count({
+        where: {
+          workspaceId,
+          enabled: true,
+          AND: [
+            { OR: [{ lastError: null }, { lastError: { not: 'reauth_required' } }] },
+            {
+              OR: [
+                {
+                  connectedVia: 'OAUTH',
+                  refreshToken: { not: null },
+                  tokenExpiresAt: { gt: now, lte: soonSelfHealing },
+                },
+                { refreshToken: null, tokenExpiresAt: { gt: now, lte: soonUnattended } },
+                {
+                  connectedVia: { not: 'OAUTH' },
+                  tokenExpiresAt: { gt: now, lte: soonUnattended },
+                },
+              ],
+            },
           ],
         },
       }),
@@ -177,7 +309,51 @@ export class WorkspaceReadinessService {
       this.prisma.emailTemplate.count({ where: { workspaceId } }),
       this.prisma.socialCampaign.count({ where: { workspaceId, status: 'ACTIVE' } }),
       this.prisma.contentConcept.count({ where: { workspaceId } }),
-      this.prisma.customerWallet.findFirst({ where: { workspaceId }, select: { balance: true } }),
+      // `AiCreditWallet`, whose `workspaceId` is @unique and whose balance is
+      // whole credits — NOT `CustomerWallet`, which this line used to read.
+      // That is the per-LEAD store-credit wallet: `leadId` is REQUIRED and the
+      // key is `[workspaceId, leadId]`, so a `findFirst` with no `leadId`
+      // handed back an ARBITRARY customer's store credit, in TRY minor units.
+      // Any one customer holding store credit made this line read READY, and a
+      // workspace with real AI credits and no such customer read MISSING — and
+      // the number itself was published verbatim as `detail` to the MCP agent
+      // through `jeeta.get_setup_readiness`, which returns the items untouched.
+      // (The panel is not where it showed: SetupReadinessButton.tsx declares
+      // `detail` on the item type and renders none of it.)
+      this.prisma.aiCreditWallet.findUnique({
+        where: { workspaceId },
+        select: { balance: true },
+      }),
+      // How much of this month's allowance is already spent.
+      //
+      // The SAME ledger `AiCreditsService` charges against — a `UsageCounter`
+      // row under `AI_CREDITS_METRIC`, keyed by the UTC month `monthKey()`
+      // builds — deliberately imported rather than re-derived. A readiness list
+      // that keeps its own tally of consumption would disagree with the meter
+      // that actually refuses the work, and the disagreement would be silent.
+      //
+      // `findFirst` rather than the compound `findUnique`: the
+      // `[workspaceId, metric, periodKey]` unique key makes them equivalent,
+      // and the flat `workspaceId` is what the tenancy fitness test — and the
+      // spec's own scoping sweep — read this source for.
+      this.prisma.usageCounter.findFirst({
+        where: { workspaceId, metric: AI_CREDITS_METRIC, periodKey: period },
+        select: { value: true },
+      }),
+      // The plan's own allowance, because the wallet is only part of the answer.
+      //
+      // `null` — never 0 — when billing cannot be reached. 0 is a REAL answer
+      // here (the plans that include no AI credits at all and run on prepaid
+      // alone), and this value is published verbatim to the MCP agent. Reporting
+      // `monthlyAllowance: 0` when the truth was "we could not ask" told the
+      // agent the plan grants nothing, which is a different instruction from
+      // "unknown" and one it would act on.
+      this.entitlements
+        .getEffective(workspaceId)
+        .then((e) =>
+          typeof e?.limits?.aiCreditsMonthly === 'number' ? e.limits.aiCreditsMonthly : null,
+        )
+        .catch(() => null),
       this.prisma.growthWallet.findUnique({ where: { workspaceId }, select: { balance: true } }),
     ]);
 
@@ -188,6 +364,41 @@ export class WorkspaceReadinessService {
     // showing a warning that might not apply costs a sentence, hiding one that
     // does is indistinguishable from a lane working properly.
     const autonomous = workspaceRow?.mcpWriteMode === 'AUTONOMOUS';
+
+    // ── Can an AI action actually run right now? ────────────────────────────
+    //
+    // Three funding routes, in the order `AiCreditsService.reserve` consults
+    // them, so this line and the code that does the refusing agree:
+    //
+    //   -1 allowance     → reserve() bumps the counter and returns without ever
+    //                      looking at a wallet. Unlimited cannot run out.
+    //   allowance left   → the month's included credits are spent down FIRST
+    //                      ("nobody should burn credits they paid for while
+    //                      free ones are still sitting unused"), so a workspace
+    //                      with 1500 granted and 40 used has fuel on day 1 with
+    //                      an empty wallet — which the previous version of this
+    //                      line called MISSING on every paying plan.
+    //   prepaid wallet   → the overage path, and the only route left once the
+    //                      allowance is exhausted.
+    //
+    // `null` allowance means billing could not be reached: unknown, not zero.
+    const aiUsedThisPeriod = aiCreditsUsedRow?.value ?? 0;
+    const aiUnlimited = aiCreditsMonthly === -1;
+    const aiAllowanceLeft =
+      aiCreditsMonthly === null || aiUnlimited
+        ? null
+        : Math.max(0, aiCreditsMonthly - aiUsedThisPeriod);
+    const aiPrepaid = aiWallet?.balance ?? 0;
+    /** WHICH of the routes is true, so a reader is not left to infer it. */
+    const aiFuel = aiUnlimited
+      ? 'unlimited'
+      : (aiAllowanceLeft ?? 0) > 0
+        ? 'monthly-allowance'
+        : aiPrepaid > 0
+          ? 'prepaid-wallet'
+          : aiCreditsMonthly === null
+            ? 'unknown-plan-unreadable'
+            : 'none';
 
     const items: ReadinessItem[] = [
       // ── connector ───────────────────────────────────────────────────────
@@ -294,11 +505,28 @@ export class WorkspaceReadinessService {
         id: 'social-accounts',
         group: 'reach',
         // A connected account with a live error is the most expensive state in
-        // the product: everything published through it is dropped, quietly.
-        state: socialAccounts === 0 ? 'MISSING' : unhealthySocial > 0 ? 'ATTENTION' : 'READY',
+        // the product: everything published through it is dropped, quietly. An
+        // account near expiry that NOTHING is repairing is the same state with
+        // a date on it, and the only one on this list that can still be fixed
+        // for free — "nothing is repairing it" being the whole difficulty, and
+        // what the two windows at the top of this file are for.
+        state:
+          socialAccounts === 0
+            ? 'MISSING'
+            : unhealthySocial > 0 || expiringSocial > 0
+              ? 'ATTENTION'
+              : 'READY',
         to: '/accounts',
         mcpTool: null,
-        detail: { connected: socialAccounts, broken: unhealthySocial },
+        // Counted apart, because they are different sentences to a reader: one
+        // account has stopped working, the other is still working today. The
+        // two predicates are disjoint by construction (see the queries), so a
+        // single row cannot appear in both numbers and be read as two problems.
+        detail: {
+          connected: socialAccounts,
+          broken: unhealthySocial,
+          expiringSoon: expiringSocial,
+        },
       },
       {
         id: 'email-sending',
@@ -415,10 +643,46 @@ export class WorkspaceReadinessService {
       {
         id: 'ai-credits',
         group: 'fuel',
-        state: yes((aiWallet?.balance ?? 0) > 0),
+        // "Does this workspace have AI fuel left?" — not "is there money in a
+        // wallet?". Note the weaker verb: this cannot promise that a PARTICULAR
+        // action will run, because it does not know what that action costs.
+        // `reserve()` still throws AI_CREDITS_EXHAUSTED when the remainder is
+        // smaller than the call being made, so READY here means "there is some
+        // fuel", not "the next thing you try will succeed".
+        //
+        // Two smaller questions this must NOT be narrowed back to, both of
+        // which get the common case wrong:
+        //   - wallet only: tells an UNLIMITED workspace to buy credits it can
+        //     never need, because `reserve()` returns at `limit === -1`
+        //     without consulting a wallet at all.
+        //   - wallet + the -1 case: still wrong for every PAYING plan. The
+        //     allowance is what `reserve()` spends FIRST, so a plan on day 1
+        //     of the month with its allowance untouched and an empty prepaid
+        //     wallet reads MISSING while AI work would in fact succeed.
+        //     (prisma/seed-packages.ts grants 300, 1500, 2000, 6000 and -1.)
+        //
+        // The honest answer needs the meter as well as the plan, which is why
+        // this reads the same `UsageCounter` row `reserve()` increments rather
+        // than guessing from the wallet. See the derivation above.
+        state: yes(aiFuel !== 'none' && aiFuel !== 'unknown-plan-unreadable'),
         to: '/billing',
         mcpTool: null,
-        detail: { balance: aiWallet?.balance ?? 0 },
+        // Every input to the answer, plus WHICH route is carrying it, so a
+        // human (and the MCP agent, which gets this verbatim) can see why the
+        // state is what it is. `monthlyAllowance` is omitted rather than
+        // faked when the plan could not be read — see the entitlements read.
+        detail: {
+          fuel: aiFuel,
+          period,
+          balance: aiPrepaid,
+          usedThisPeriod: aiUsedThisPeriod,
+          ...(aiCreditsMonthly === null
+            ? { planUnreadable: true }
+            : {
+                monthlyAllowance: aiCreditsMonthly,
+                allowanceRemaining: aiUnlimited ? -1 : (aiAllowanceLeft ?? 0),
+              }),
+        },
       },
       {
         id: 'growth-wallet',

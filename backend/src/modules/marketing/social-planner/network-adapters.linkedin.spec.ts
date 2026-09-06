@@ -1,6 +1,7 @@
 import * as fetchMod from '../../../common/util/safe-fetch';
 import { sealSecret } from '../../../common/crypto/secret-box.helper';
 import { publishToNetwork, AccountRow } from './network-adapters';
+import { LINKEDIN_DEFAULT_API_VERSION } from '../../../common/util/linkedin-api.util';
 
 jest.mock('../../../common/util/safe-fetch');
 const mockFetch = fetchMod.safeFetch as jest.Mock;
@@ -41,7 +42,10 @@ describe('publishLinkedIn — /rest/posts (text + image + multiImage)', () => {
   beforeEach(() => {
     process.env.LINKEDIN_CLIENT_ID = 'a';
     process.env.LINKEDIN_CLIENT_SECRET = 'b';
-    process.env.LINKEDIN_API_VERSION = '202406';
+    // Unpinned: the publish path must send whatever the single source of truth
+    // (LINKEDIN_DEFAULT_API_VERSION / LINKEDIN_API_VERSION) currently holds. Pinning
+    // a literal here is what let a retired version reach production green.
+    delete process.env.LINKEDIN_API_VERSION;
     mockFetch.mockReset();
   });
 
@@ -81,7 +85,7 @@ describe('publishLinkedIn — /rest/posts (text + image + multiImage)', () => {
 
     const [url, opts] = mockFetch.mock.calls.find((c) => String(c[0]).includes('/rest/posts'))!;
     expect(String(url)).toContain('/rest/posts');
-    expect(opts.headers['LinkedIn-Version']).toBe('202406');
+    expect(opts.headers['LinkedIn-Version']).toBe(LINKEDIN_DEFAULT_API_VERSION);
     expect(opts.headers['X-Restli-Protocol-Version']).toBe('2.0.0');
     expect(String(opts.headers.Authorization)).toContain('Bearer ');
     const body = JSON.parse(opts.body);
@@ -183,6 +187,46 @@ describe('publishLinkedIn — /rest/posts (text + image + multiImage)', () => {
       { id: 'urn:li:image:img-2' },
     ]);
     expect(postBody.content.media).toBeUndefined();
+  });
+
+  it('every request in a publish (image init, finalize, posts) carries the CONFIGURED version', async () => {
+    // The production outage was a version header, so assert it on the whole call
+    // set — not just /rest/posts. The upload PUT is the one exception: it goes to
+    // dms-uploads with no LinkedIn headers at all.
+    process.env.LINKEDIN_API_VERSION = '202509';
+    routeImages('urn:li:image:img-1');
+    const r = await publishToNetwork(account('LI_ORG'), 'with image', ['https://cdn.example/a.jpg']);
+    expect(r.ok).toBe(true);
+
+    const versioned = mockFetch.mock.calls.filter((c) => String(c[0]).includes('api.linkedin.com'));
+    expect(versioned.length).toBeGreaterThanOrEqual(2); // /rest/images + /rest/posts
+    for (const [url, opts] of versioned) {
+      expect([String(url), (opts as any).headers['LinkedIn-Version']]).toEqual([
+        String(url),
+        '202509',
+      ]);
+    }
+  });
+
+  it('a retired-version rejection FAILS the publish with an actionable message and is NOT an auth error', async () => {
+    // Exactly the production failure: LinkedIn refuses the version header itself.
+    // It must surface as a failed publish (so the target lands FAILED and someone
+    // sees it), naming the version and the env knob — and must NOT masquerade as a
+    // token problem, which would send healthy accounts around a reconnect loop.
+    process.env.LINKEDIN_API_VERSION = '202406';
+    mockFetch.mockResolvedValue(
+      res({
+        ok: false,
+        status: 426,
+        json: { message: 'Requested version 20240601 is not active', status: 426 },
+      }),
+    );
+    const r = await publishToNetwork(account('LI_ORG'), 'hi', []);
+    expect(r.ok).toBe(false);
+    expect(r.isAuthError).toBeFalsy();
+    expect(r.error).toContain('202406');
+    expect(r.error).toContain('LINKEDIN_API_VERSION');
+    expect(r.error).toContain('is not active');
   });
 
   it('401 on /rest/posts surfaces isAuthError + error string', async () => {
