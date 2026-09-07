@@ -156,9 +156,14 @@ export interface FrameStore {
  * Write ONE beat's keyframe — and nothing else on the plan.
  *
  * `jsonb_set` on that beat's path, compare-and-set on the keyframe the caller
- * read (`expect`; null when the beat had none). Returns false when the beat
- * changed under the caller — a redraw landed, another pass wrote first — in
- * which case the caller's picture of it is stale and must not win. The row is
+ * read (`expect`; null when the beat had none): its asset, its status AND its
+ * seed. The seed is part of it because a human's redraw is a REQUESTED marker
+ * with a fresh seed, and a job that read the beat before the redraw holds the
+ * same marker with the old one — without the seed the two are identical and
+ * the job's frame, drawn from the old words, would land over the human's
+ * request. Returns false when the beat changed under the caller — a redraw
+ * landed, another pass wrote first — in which case the caller's picture of it
+ * is stale and must not win. The row is
  * scoped by workspace like every other write on it, and the beat's `ord` is
  * checked at the index so a plan whose shots were reordered is never written
  * at the wrong position.
@@ -180,6 +185,53 @@ export async function writeKeyframe(
       AND ("shotPlan" -> 'shots' -> ${idx}::int ->> 'ord')::int = ${ord}::int
       AND COALESCE("shotPlan" -> 'shots' -> ${idx}::int -> 'keyframe' ->> 'assetId', '') = ${expect?.assetId ?? ''}
       AND COALESCE("shotPlan" -> 'shots' -> ${idx}::int -> 'keyframe' ->> 'status', '') = ${expect?.status ?? ''}
+      AND COALESCE("shotPlan" -> 'shots' -> ${idx}::int -> 'keyframe' ->> 'seed', '') = ${expect?.seed !== undefined ? String(expect.seed) : ''}
+  `;
+  return count > 0;
+}
+
+/** The most a human may put in one beat's text — frame, motion or
+ *  description. Well above what any image or video model reads, well below
+ *  what a pasted document would do to the plan column. */
+export const MAX_SHOT_TEXT = 2000;
+
+/** The words of one beat a human may rewrite: what the FRAME shows (the raw
+ *  prompt the still is drawn from), what HAPPENS next (the prompt the clip is
+ *  animated from), and the planner's own scene description. */
+export interface ShotTextPatch {
+  keyframePrompt?: string;
+  prompt?: string;
+  description?: string;
+}
+
+/**
+ * Write ONE beat's text — and nothing else on the plan, not even the rest of
+ * that beat.
+ *
+ * A merge (`||`) onto the beat at its index, never a whole-plan write and never
+ * a whole-beat write: the storyboard job may be putting this very beat's
+ * keyframe on the row at the same moment, and a write that carried the beat
+ * the human read a second earlier would erase the frame the job just bought.
+ * The merge reads the beat as it is when the statement runs, so only the keys
+ * in `patch` change hands. The row is scoped by workspace like every other
+ * write on it and the beat's `ord` is checked at the index, so a plan whose
+ * shots were reordered is never written at the wrong position. Returns false
+ * when no row matched — the beat moved, or the concept is not the caller's.
+ */
+export async function writeShotText(
+  deps: FrameStore,
+  workspaceId: string,
+  conceptId: string,
+  idx: number,
+  ord: number,
+  patch: ShotTextPatch,
+): Promise<boolean> {
+  const count = await deps.prisma.$executeRaw`
+    UPDATE "content_concepts"
+    SET "shotPlan" = jsonb_set("shotPlan", ARRAY['shots', ${String(idx)}]::text[], ("shotPlan" -> 'shots' -> ${idx}::int) || ${JSON.stringify(patch)}::jsonb, false),
+        "updatedAt" = NOW()
+    WHERE "id" = ${conceptId} AND "workspaceId" = ${workspaceId}
+      AND ("shotPlan" -> 'shots' -> ${idx}::int ->> 'ord')::int = ${ord}::int
   `;
   return count > 0;
 }
@@ -345,9 +397,18 @@ export async function submitMissingFrames(
   conceptId: string,
   plan: StoryboardedPlan,
   linkage: FrameLinkage,
+  opts: {
+    /** `'all'` (the producer): every beat the plan wants, a never-asked-for
+     *  beat included — the concept is approved and every clip needs its frame.
+     *  `'requested'` (the storyboard job): only beats a human asked for — a
+     *  REQUESTED marker, or a frame that failed under the cap after being
+     *  asked — so redrawing ONE beat draws one frame, not the whole board. */
+    scope?: 'all' | 'requested';
+  } = {},
 ): Promise<SubmitResult> {
   const shots: Shot[] = plan.shots.map((sh) => ({ ...sh }));
   const model = plan.storyboard.imageModel;
+  const scope = opts.scope ?? 'all';
   // Persona photos reach the frame generator only where its contract takes an
   // array of them; on a model with no such slot they would be recorded on the
   // row as sent and dropped on the wire, which is the lie this line exists to
@@ -370,6 +431,7 @@ export async function submitMissingFrames(
     const sh = shots[idx];
     const prev = sh.keyframe;
     if (!frameWanted(prev)) continue;
+    if (scope === 'requested' && !prev) continue;
     const attempts = (prev?.attempts ?? 0) + 1;
     const seed = frameSeed(plan.storyboard, prev);
 

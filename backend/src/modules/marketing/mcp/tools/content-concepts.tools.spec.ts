@@ -15,6 +15,7 @@ function build(over: { features?: Record<string, boolean> } = {}) {
   const storyboard = {
     request: jest.fn().mockResolvedValue({ conceptId: 'c1', shots: 3, storyboard: { imageModel: 'm', seed: 1 } }),
     regenerateFrame: jest.fn().mockResolvedValue({ conceptId: 'c1', ord: 1, seed: 99 }),
+    editShot: jest.fn().mockResolvedValue({ conceptId: 'c1', ord: 1, changed: ['keyframePrompt'], redraw: true, seed: 7 }),
   };
   const principals = {
     resolve: jest.fn().mockResolvedValue({ id: 'sys-1', workspaceId: 'ws1', role: 'SYSTEM' }),
@@ -335,6 +336,32 @@ describe('jeeta.storyboard_content_concept', () => {
     expect(storyboard.request).not.toHaveBeenCalled();
     expect(res).toEqual({ conceptId: 'c1', ord: 1, seed: 99 });
     expect(tool.inputSchema.safeParse({ conceptId: 'c1', regenerateShot: -1 }).success).toBe(false);
+  });
+
+  it('directs one beat by hand when frame or motion words come with regenerateShot — the frame text redraws, the motion text only saves', async () => {
+    const { registry, storyboard } = build();
+    const tool = registry.get('jeeta.storyboard_content_concept')!;
+    const res = await tool.handler(ctx({ userId: 'u9' }), { conceptId: 'c1', regenerateShot: 1, keyframePrompt: 'a red bicycle on a white wall' });
+    expect(storyboard.editShot).toHaveBeenCalledWith('ws1', 'c1', 1, { keyframePrompt: 'a red bicycle on a white wall' }, 'u9');
+    expect(storyboard.editShot.mock.calls[0][3]).not.toHaveProperty('prompt');
+    expect(storyboard.regenerateFrame).not.toHaveBeenCalled();
+    expect(storyboard.request).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ redraw: true, seed: 7 });
+
+    await tool.handler(ctx(), { conceptId: 'c1', regenerateShot: 0, motionPrompt: 'it rolls forward slowly' });
+    expect(storyboard.editShot).toHaveBeenLastCalledWith('ws1', 'c1', 0, { prompt: 'it rolls forward slowly' }, 'sys-1');
+    expect(tool.inputSchema.safeParse({ conceptId: 'c1', regenerateShot: 0, keyframePrompt: '' }).success).toBe(false);
+    expect(tool.inputSchema.safeParse({ conceptId: 'c1', regenerateShot: 0, motionPrompt: 'x'.repeat(2001) }).success).toBe(false);
+    expect(tool.description).toMatch(/keyframePrompt/);
+  });
+
+  it('refuses beat words that name no beat, rather than guessing one or drawing the whole storyboard', async () => {
+    const { registry, storyboard } = build();
+    await expect(
+      registry.get('jeeta.storyboard_content_concept')!.handler(ctx({ userId: 'u9' }), { conceptId: 'c1', motionPrompt: 'it rolls' }),
+    ).rejects.toThrow(/regenerateShot/);
+    expect(storyboard.editShot).not.toHaveBeenCalled();
+    expect(storyboard.request).not.toHaveBeenCalled();
   });
 
   it('is gated on the socialCampaigns feature like the rest of the line', async () => {

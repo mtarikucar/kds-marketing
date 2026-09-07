@@ -4957,7 +4957,19 @@
       "legacy": "Bu konsept storyboard'dan önce planlandı; kareleri görmek için fikri yeniden planla.",
       "inProduction": "Üretimde — kareler ve klipler kampanya öğesinde.",
       "seconds": "{{n}} sn",
-      "actionError": "Storyboard isteği başarısız oldu."
+      "actionError": "Storyboard isteği başarısız oldu.",
+      "edit": "Düzenle",
+      "editTitle": "{{scene}} · düzenle",
+      "frameText": "Bu karede ne var",
+      "frameTextHint": "Karenin çizildiği istem. Değiştirirsen kare yeniden çizilir.",
+      "motionText": "Sonra ne olsun",
+      "motionTextHint": "Bu kareden canlandırılan klibin istemi. Sadece kaydedilir; onayda üretilir.",
+      "cancel": "Vazgeç",
+      "save": "Kaydet",
+      "saveRedraw": "Kaydet ve kareyi yeniden çiz ({{credits}} kredi)",
+      "frameBusy": "Kare hâlâ çiziliyor; bitince yeniden çizebilirsin.",
+      "emptyText": "Metin boş olamaz.",
+      "changedElsewhere": "Bu beat sen bakarken değişti; düzenleyiciyi kapatıp yeniden aç."
     },
     "planned": {
       "cold": "{{n}} konsept üretildi. Ölçülecek geçmiş olmadığı için tarafsız planlandı.",

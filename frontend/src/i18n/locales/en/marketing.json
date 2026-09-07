@@ -4102,7 +4102,19 @@
       "legacy": "This concept was planned before storyboards; plan the idea again to get frames.",
       "inProduction": "In production — frames and clips live on the campaign item.",
       "seconds": "{{n}} s",
-      "actionError": "The storyboard request failed."
+      "actionError": "The storyboard request failed.",
+      "edit": "Edit",
+      "editTitle": "{{scene}} · edit",
+      "frameText": "What is in this frame",
+      "frameTextHint": "The prompt the frame is drawn from. Change it and the frame is redrawn.",
+      "motionText": "What happens next",
+      "motionTextHint": "The prompt the clip is animated from this frame with. Saved only; produced at approval.",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saveRedraw": "Save and redraw the frame ({{credits}} credits)",
+      "frameBusy": "The frame is still being drawn; you can redraw it once it lands.",
+      "emptyText": "The text cannot be empty.",
+      "changedElsewhere": "This beat changed while you were looking; close the editor and open it again."
     },
     "planned": {
       "cold": "{{n}} concepts planned. Planned unbiased, because there was no history to measure.",

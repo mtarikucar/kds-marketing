@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import {
   IsInt,
   IsObject,
@@ -22,6 +22,7 @@ import { ContentLineService, MAX_BATCH_LIMIT } from '../content-concepts/content
 import { AnglePerformanceService } from '../content-concepts/angle-performance.service';
 import { ContentConceptsService } from '../content-concepts/content-concepts.service';
 import { StoryboardService } from '../content-concepts/storyboard.service';
+import { MAX_SHOT_TEXT } from '../content-concepts/storyboard-frames';
 
 class ListBatchesDto {
   @IsOptional()
@@ -61,6 +62,28 @@ class PlanDto {
   @IsOptional()
   @IsObject()
   angleWeights?: Record<string, number>;
+}
+
+/**
+ * One beat's words, any subset. The frame text is the RAW prompt the still is
+ * drawn from, so its ceiling is the service's, not a UI's: a person editing
+ * it is meant to see and keep the whole thing.
+ */
+class EditShotDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_SHOT_TEXT)
+  keyframePrompt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_SHOT_TEXT)
+  prompt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_SHOT_TEXT)
+  description?: string;
 }
 
 /**
@@ -145,6 +168,25 @@ export class MarketingContentLineController {
     @Param('ord', ParseIntPipe) ord: number,
   ) {
     await this.storyboard.regenerateFrame(user.workspaceId, conceptId, ord, user.id);
+    return this.conceptRow(user.workspaceId, conceptId);
+  }
+
+  /**
+   * Direct ONE beat by hand: what the frame shows (`keyframePrompt`, redraws
+   * that frame — image credits) and what happens next (`prompt`, saved only;
+   * the clip is bought at approval). Same gate and audit as a redraw, because
+   * a frame-text change IS one. Returns the concept row like its siblings.
+   */
+  @Patch('concepts/:conceptId/shots/:ord')
+  @RequirePermission('campaigns.write')
+  @Audit({ action: 'content.line.shot.edit', resourceType: 'content_concept', resourceIdParam: 'conceptId' })
+  async editShot(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Param('conceptId') conceptId: string,
+    @Param('ord', ParseIntPipe) ord: number,
+    @Body() body: EditShotDto,
+  ) {
+    await this.storyboard.editShot(user.workspaceId, conceptId, ord, body, user.id);
     return this.conceptRow(user.workspaceId, conceptId);
   }
 

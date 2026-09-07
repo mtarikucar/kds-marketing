@@ -181,3 +181,19 @@ export const requestStoryboard = (conceptId: string): Promise<ConceptRow> =>
 /** Redraw exactly one beat's frame, with a fresh seed. */
 export const regenerateKeyframe = (conceptId: string, ord: number): Promise<ConceptRow> =>
   marketingApi.post(`/content-line/concepts/${conceptId}/storyboard/${ord}/regenerate`).then((r) => r.data);
+
+/** The two texts a human directs a beat with. Send only what changed. */
+export interface ShotTextPatch {
+  /** "What is in this frame" — the raw prompt the still is drawn from. */
+  keyframePrompt?: string;
+  /** "What happens next" — the prompt the clip is animated from the frame with. */
+  prompt?: string;
+}
+
+/**
+ * Rewrite one beat's texts by hand. A changed FRAME text redraws that beat's
+ * frame (one frame's credits, refused while the frame is still rendering); a
+ * changed MOTION text is only saved — the clip is animated at approval.
+ */
+export const editShot = (conceptId: string, ord: number, patch: ShotTextPatch): Promise<ConceptRow> =>
+  marketingApi.patch(`/content-line/concepts/${conceptId}/shots/${ord}`, patch).then((r) => r.data);

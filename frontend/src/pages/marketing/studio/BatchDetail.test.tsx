@@ -26,6 +26,7 @@ vi.mock('react-i18next', () => ({
 const getBatch = vi.mocked(contentLine.getBatch);
 const requestStoryboard = vi.mocked(contentLine.requestStoryboard);
 const regenerateKeyframe = vi.mocked(contentLine.regenerateKeyframe);
+const editShot = vi.mocked(contentLine.editShot);
 
 const shot = (ord: number, over: Partial<Shot> = {}): Shot => ({
   ord,
@@ -172,5 +173,184 @@ describe('BatchDetail — the storyboard a reviewer looks at', () => {
     expect(await screen.findByRole('img', { name: '0-2s' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Yeniden üret/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Üretimde/)).toBeInTheDocument();
+  });
+
+  describe('directing a beat by hand — the frame text and the motion text', () => {
+    const ready = (ord: number) =>
+      shot(ord, { keyframe: { assetId: `a${ord}`, status: 'READY', url: `https://r2/f${ord}.png`, model: 'm', attempts: 1 } });
+
+    it('opens the editor from a tile with both texts prefilled — the raw frame prompt and the clip prompt', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0), ready(1)] } })]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 2-4s' }));
+      expect(screen.getByRole('heading', { name: '2-4s · düzenle' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Bu karede ne var')).toHaveValue('still 1');
+      expect(screen.getByLabelText('Sonra ne olsun')).toHaveValue('clip 1');
+      // Nothing changed yet: a plain save, no credits mentioned.
+      expect(screen.getByRole('button', { name: 'Kaydet' })).toBeInTheDocument();
+    });
+
+    it('changing only the motion text saves it — nothing is bought, so the button is a plain "Kaydet"', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } })]);
+      editShot.mockResolvedValue(concept());
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      const motion = screen.getByLabelText('Sonra ne olsun');
+      await userEvent.clear(motion);
+      await userEvent.type(motion, 'slow push-in, she smiles');
+      const save = screen.getByRole('button', { name: 'Kaydet' });
+      await userEvent.click(save);
+
+      await waitFor(() => expect(editShot).toHaveBeenCalledWith('c1', 0, { prompt: 'slow push-in, she smiles' }));
+      await waitFor(() => expect(screen.queryByLabelText('Sonra ne olsun')).not.toBeInTheDocument());
+      await waitFor(() => expect(getBatch).toHaveBeenCalledTimes(2));
+    });
+
+    it('changing the frame text redraws the frame — the button names the price, and only the frame text is sent', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } })]);
+      editShot.mockResolvedValue(concept());
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      const frame = screen.getByLabelText('Bu karede ne var');
+      await userEvent.clear(frame);
+      await userEvent.type(frame, '  a walking beest on the beach  ');
+      expect(screen.queryByRole('button', { name: 'Kaydet' })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Kaydet ve kareyi yeniden çiz (3 kredi)' }));
+
+      await waitFor(() => expect(editShot).toHaveBeenCalledWith('c1', 0, { keyframePrompt: 'a walking beest on the beach' }));
+    });
+
+    it('saving with nothing changed calls nothing and just closes', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } })]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+      expect(editShot).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText('Bu karede ne var')).not.toBeInTheDocument();
+    });
+
+    it('a frame still rendering cannot be redrawn from the editor — the save waits, and says why', async () => {
+      const rendering = shot(0, { keyframe: { assetId: 'a0', status: 'GENERATING', model: 'm', attempts: 1 } });
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [rendering] } })]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      const frame = screen.getByLabelText('Bu karede ne var');
+      await userEvent.type(frame, ' at dusk');
+      expect(screen.getByRole('button', { name: 'Kaydet ve kareyi yeniden çiz (3 kredi)' })).toBeDisabled();
+      expect(screen.getByText('Kare hâlâ çiziliyor; bitince yeniden çizebilirsin.')).toBeInTheDocument();
+    });
+
+    it('the MOTION text stays savable while the frame renders — only the redraw waits', async () => {
+      const rendering = shot(0, { keyframe: { assetId: 'a0', status: 'GENERATING', model: 'm', attempts: 1 } });
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [rendering] } })]);
+      editShot.mockResolvedValue(concept());
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      const motion = screen.getByLabelText('Sonra ne olsun');
+      await userEvent.clear(motion);
+      await userEvent.type(motion, 'she turns to camera');
+      const save = screen.getByRole('button', { name: 'Kaydet' });
+      expect(save).toBeEnabled();
+      await userEvent.click(save);
+      await waitFor(() => expect(editShot).toHaveBeenCalledWith('c1', 0, { prompt: 'she turns to camera' }));
+    });
+
+    it('a frame merely REQUESTED (asked for, not yet drawn) takes new frame words — the job draws it from them', async () => {
+      const requested = shot(0, { keyframe: { assetId: '', status: 'QUEUED', model: 'm', attempts: 0 } });
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [requested] } })]);
+      editShot.mockResolvedValue(concept());
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      await userEvent.type(screen.getByLabelText('Bu karede ne var'), ' at dusk');
+      const save = screen.getByRole('button', { name: 'Kaydet ve kareyi yeniden çiz (3 kredi)' });
+      expect(save).toBeEnabled();
+      expect(screen.queryByText('Kare hâlâ çiziliyor; bitince yeniden çizebilirsin.')).not.toBeInTheDocument();
+      await userEvent.click(save);
+      await waitFor(() => expect(editShot).toHaveBeenCalledWith('c1', 0, { keyframePrompt: 'still 0 at dusk' }));
+    });
+
+    it('opening another beat starts from THAT beat\'s texts, not the previous one\'s edits', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0), ready(1)] } })]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      await userEvent.type(screen.getByLabelText('Bu karede ne var'), ' with a red bicycle');
+      await userEvent.click(screen.getByRole('button', { name: 'Düzenle 2-4s' }));
+      expect(screen.getByRole('heading', { name: '2-4s · düzenle' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Bu karede ne var')).toHaveValue('still 1');
+      expect(screen.getByLabelText('Sonra ne olsun')).toHaveValue('clip 1');
+      expect(screen.getByRole('button', { name: 'Düzenle 2-4s' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: 'Düzenle 0-2s' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('an emptied text holds the save and says so — the backend would only refuse it', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } })]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      await userEvent.clear(screen.getByLabelText('Bu karede ne var'));
+      expect(screen.getByText('Metin boş olamaz.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Kaydet/ })).toBeDisabled();
+      expect(editShot).not.toHaveBeenCalled();
+    });
+
+    it('a beat that changed underneath (a poll brought a teammate\'s words) holds the save and says why', async () => {
+      const first = concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } });
+      const theirs = concept({ shotPlan: { ...concept().shotPlan, shots: [{ ...ready(0), keyframePrompt: 'their words' }] } });
+      getBatch.mockResolvedValueOnce([first]).mockResolvedValue([theirs]);
+      requestStoryboard.mockResolvedValue(theirs);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      await userEvent.type(screen.getByLabelText('Bu karede ne var'), ' mine');
+      // Something else re-reads the batch (here: the refetch any action triggers).
+      await userEvent.click(screen.getByRole('button', { name: 'Yeniden üret 0-2s' }));
+      await screen.findByText('Bu beat sen bakarken değişti; düzenleyiciyi kapatıp yeniden aç.');
+      expect(screen.getByRole('button', { name: /Kaydet/ })).toBeDisabled();
+      // The typed words are still there for the reviewer to copy.
+      expect(screen.getByLabelText('Bu karede ne var')).toHaveValue('still 0 mine');
+    });
+
+    it('Escape closes the editor without saving', async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } })]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      await userEvent.type(screen.getByLabelText('Bu karede ne var'), ' x');
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByLabelText('Bu karede ne var')).not.toBeInTheDocument();
+      expect(editShot).not.toHaveBeenCalled();
+    });
+
+    it('a concept in production offers no editor, like it offers no redraw', async () => {
+      getBatch.mockResolvedValue([
+        concept({ status: 'APPROVED', promotedItemId: 'item-1', shotPlan: { ...concept().shotPlan, shots: [ready(0)] } }),
+      ]);
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+      expect(await screen.findByRole('img', { name: '0-2s' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Düzenle/ })).not.toBeInTheDocument();
+    });
+
+    it("a backend refusal shows the backend's own reason", async () => {
+      getBatch.mockResolvedValue([concept({ shotPlan: { ...concept().shotPlan, shots: [ready(0)] } })]);
+      editShot.mockRejectedValue({ response: { data: { message: "Beat 0's frame is still rendering; wait for it to land." } } });
+      wrap(<BatchDetail batchId="b1" onClose={vi.fn()} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Düzenle 0-2s' }));
+      const motion = screen.getByLabelText('Sonra ne olsun');
+      await userEvent.type(motion, ', then a cut');
+      await userEvent.click(screen.getByRole('button', { name: 'Kaydet' }));
+      await waitFor(() =>
+        expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Beat 0's frame is still rendering; wait for it to land."),
+      );
+      // The editor stays open so the text is not lost.
+      expect(screen.getByLabelText('Sonra ne olsun')).toHaveValue('clip 0, then a cut');
+    });
   });
 });
