@@ -180,6 +180,7 @@ export class WorkspaceReadinessService {
       expiringSocial,
       sendingDomains,
       mailboxChannels,
+      provenMailboxes,
       smsChannels,
       products,
       taxRates,
@@ -299,6 +300,15 @@ export class WorkspaceReadinessService {
       }),
       this.prisma.sendingDomain.count({ where: { workspaceId, status: 'VERIFIED' } }),
       this.prisma.channel.count({ where: { workspaceId, type: 'EMAIL', status: 'ACTIVE' } }),
+      // The same mailboxes, narrowed to the ones a health check has actually
+      // passed. `ChannelsService.verify` writes `lastVerifiedAt` ONLY when
+      // `health.ok` (channels.service.ts), so a non-null value means the SMTP
+      // login was accepted at least once — not merely that somebody pressed
+      // the button. Counting the two apart is what lets the item below say
+      // "configured" and "working" are different things.
+      this.prisma.channel.count({
+        where: { workspaceId, type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } },
+      }),
       this.prisma.channel.count({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } }),
       this.prisma.product.count({ where: { workspaceId } }),
       this.prisma.taxRate.count({ where: { workspaceId } }),
@@ -553,10 +563,32 @@ export class WorkspaceReadinessService {
         // Either route works: your own mailbox for one-to-one replies, or a
         // verified domain for campaign volume. Neither means campaign mail
         // arrives in spam, which is worse than not sending it.
-        state: yes(sendingDomains > 0 || mailboxChannels > 0),
+        //
+        // But a mailbox row is not a working mailbox. Measured on a live
+        // workspace: a channel saved with the wrong password read READY here
+        // while every send died on `535 Authentication Failed` — the row
+        // existed, so the two-state test was satisfied, and the list said the
+        // reach was covered. That is precisely the "exists but does not work"
+        // case ATTENTION was added for.
+        //
+        // A VERIFIED sending domain still counts on its own: its verification
+        // IS the proof. A mailbox has to have passed a health check.
+        //
+        // Honest about what this can and cannot see: `lastVerifiedAt` latches
+        // on the first success and is never cleared, so ATTENTION here means
+        // "never proved", not "broke since". A mailbox whose password is
+        // rotated away keeps reading READY until somebody re-runs Verify.
+        // Catching that needs a stored check RESULT, which the Channel model
+        // does not have today.
+        state:
+          sendingDomains > 0 || provenMailboxes > 0 ? 'READY' : mailboxChannels > 0 ? 'ATTENTION' : 'MISSING',
         to: '/settings/domains',
         mcpTool: null,
-        detail: { verifiedDomains: sendingDomains, mailboxes: mailboxChannels },
+        detail: {
+          verifiedDomains: sendingDomains,
+          mailboxes: mailboxChannels,
+          provenMailboxes,
+        },
       },
       {
         id: 'sms',

@@ -185,6 +185,15 @@ jobs:
           # public fal completion callback; unset = poll-only fallback path.
           FAL_KEY: ${{ secrets.FAL_KEY }}
           FAL_WEBHOOK_SECRET: ${{ secrets.FAL_WEBHOOK_SECRET }}
+          # HMAC-SHA256 key the inbound-email webhook verifies the raw body
+          # against. Without it /api/public/channels/email/webhook answers 401
+          # to everything, so a connected mailbox can SEND but no customer reply
+          # ever reaches the inbox — and the channel dialog says so in as many
+          # words ("an admin must set EMAIL_INBOUND_SECRET on the server").
+          # It was missing here entirely: setting it on the box by hand worked
+          # until the next release, because the step below rebuilds
+          # .env.production from scratch every deploy.
+          EMAIL_INBOUND_SECRET: ${{ secrets.EMAIL_INBOUND_SECRET }}
           # Runware — second media vendor for the catalogue models that carry a
           # `runware` binding (Seedance 2.5, Seedance 1.0 Pro Fast, Qwen-Image,
           # BiRefNet). OPTIONAL — unset = every model stays on fal.
@@ -333,6 +342,11 @@ jobs:
           # AI media generation (fal.ai); empty = inert.
           FAL_KEY=${FAL_KEY}
           FAL_WEBHOOK_SECRET=${FAL_WEBHOOK_SECRET}
+          # Inbound email (customer replies); empty = the webhook 401s and the
+          # email channel is send-only. Rendered here rather than appended after
+          # .env.shared because core has no such key, so there is nothing to
+          # lose a last-wins race against.
+          EMAIL_INBOUND_SECRET=${EMAIL_INBOUND_SECRET}
           # Runware media vendor (per-model routing); empty = all on fal.
           RUNWARE_API_KEY=${RUNWARE_API_KEY}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
