@@ -140,6 +140,18 @@ describe('CampaignSenderService.batch', () => {
       expect(email.sendCampaignEmail).not.toHaveBeenCalled();
     });
 
+    it('records the provider’s message id, which is what tells the two paths apart', async () => {
+      // The platform mailer answers a bare boolean, so a recipient row with a
+      // messageId was sent from the workspace's own mailbox. Without this the
+      // only way to answer "which address did this leave from" is to open the
+      // mail — which is exactly the position this feature was written in.
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      const ids = prisma.campaignRecipient.update.mock.calls
+        .map((c: any) => c[0].data.messageId)
+        .filter(Boolean);
+      expect(ids).toContain('m1');
+    });
+
     it('carries the campaign’s own subject, not the thread default', async () => {
       // The adapter was built for inbound replies, where the subject is a
       // property of the thread and lives on the channel config. A campaign has

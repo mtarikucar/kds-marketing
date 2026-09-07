@@ -508,6 +508,7 @@ export class CampaignSenderService implements OnModuleInit {
           const own = await this.ownSmtpMailbox(workspaceId);
           let ok: boolean;
           let ownError: string | undefined;
+          let ownMessageId: string | null = null;
           if (own) {
             const r = await this.registry.get('EMAIL').send({
               config: own,
@@ -518,6 +519,7 @@ export class CampaignSenderService implements OnModuleInit {
             });
             ok = r.status === 'SENT';
             ownError = r.error;
+            ownMessageId = r.externalMessageId;
           } else {
             const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
             ok = html
@@ -532,9 +534,16 @@ export class CampaignSenderService implements OnModuleInit {
           // The adapter hands back the provider's line directly; the platform
           // mailer parks it for one read. Same shape either way.
           const why = ok ? undefined : (ownError ?? this.email.consumeLastPlainSendError());
+          // The mailbox path carries the provider's own message id onto the
+          // recipient row, exactly as the SMS/WhatsApp branch does with
+          // `externalMessageId`. It is the only observable that tells the two
+          // email paths apart after the fact: the platform mailer answers a
+          // bare boolean and leaves this null, so a recipient with a messageId
+          // was sent from the workspace's own mailbox. Debugging "which address
+          // did this actually leave from" without it means reading the mail.
           return {
             ok,
-            messageId: null,
+            messageId: ownMessageId,
             error: ok ? undefined : why ?? 'email send failed',
           };
         } catch (e) {
