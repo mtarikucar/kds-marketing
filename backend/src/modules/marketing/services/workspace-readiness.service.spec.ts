@@ -78,9 +78,16 @@ describe('workspace readiness', () => {
       },
       sendingDomain: { count: counter('sendingDomain') },
       channel: {
-        count: jest.fn(async (a: any) =>
-          a?.where?.type === 'SMS' ? count('smsChannel') : count('mailbox'),
-        ),
+        // THREE counts share this model now. The email pair is the point: one
+        // asks "is a mailbox configured", the other "has one ever passed a
+        // health check". Keyed apart so a test can say "configured but never
+        // proved" — the state a row-exists check reads as fine while every
+        // send 535s.
+        count: jest.fn(async (a: any) => {
+          if (a?.where?.type === 'SMS') return count('smsChannel');
+          if (a?.where?.lastVerifiedAt) return count('provenMailbox');
+          return count('mailbox');
+        }),
       },
       product: { count: counter('product') },
       taxRate: { count: counter('taxRate') },
@@ -477,12 +484,53 @@ describe('workspace readiness', () => {
     expect((await item('payment-provider')).state).toBe('READY');
   });
 
-  it('accepts either route to sending mail', async () => {
-    // Your own mailbox for replies, or a verified domain for campaign volume.
-    build({ counts: { mailbox: 1 } as any });
-    expect((await item('email-sending')).state).toBe('READY');
-    build({ counts: { sendingDomain: 1 } as any });
-    expect((await item('email-sending')).state).toBe('READY');
+  describe('sending mail, where a configured mailbox is not a working one', () => {
+    it('accepts a VERIFIED sending domain on its own', async () => {
+      // The domain's verification IS the proof; there is no second check to
+      // wait for. No mailbox needed.
+      build({ counts: { sendingDomain: 1 } as any });
+      expect((await item('email-sending')).state).toBe('READY');
+    });
+
+    it('accepts a mailbox that has PASSED a health check', async () => {
+      build({ counts: { mailbox: 1, provenMailbox: 1 } as any });
+      const i = await item('email-sending');
+      expect(i.state).toBe('READY');
+      expect(i.detail).toMatchObject({ mailboxes: 1, provenMailboxes: 1 });
+    });
+
+    it('calls a mailbox that has never passed one ATTENTION, not READY', async () => {
+      // Measured live: a channel saved with the wrong password. The row
+      // existed, so a two-state test said the reach was covered, while every
+      // send died on `535 Authentication Failed`. Configured is not working.
+      build({ counts: { mailbox: 1, provenMailbox: 0 } as any });
+      const i = await item('email-sending');
+      expect(i.state).toBe('ATTENTION');
+      expect(i.detail).toMatchObject({ mailboxes: 1, provenMailboxes: 0, verifiedDomains: 0 });
+    });
+
+    it('still counts the domain when the mailbox is broken', async () => {
+      // One good route is enough — a failing mailbox must not drag a workspace
+      // that also has a verified domain down to ATTENTION.
+      build({ counts: { mailbox: 1, provenMailbox: 0, sendingDomain: 1 } as any });
+      expect((await item('email-sending')).state).toBe('READY');
+    });
+
+    it('asks for one when there is neither', async () => {
+      build();
+      expect((await item('email-sending')).state).toBe('MISSING');
+    });
+
+    it('narrows the proven count by lastVerifiedAt, not by pressing the button', async () => {
+      // `ChannelsService.verify` writes `lastVerifiedAt` only when health.ok,
+      // so this query is what separates "checked and worked" from "checked".
+      build({ counts: { mailbox: 1, provenMailbox: 1 } as any });
+      await svc.get(WS);
+      const wheres = prisma.channel.count.mock.calls.map((c: any[]) => c[0].where);
+      expect(wheres).toContainEqual(
+        expect.objectContaining({ type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } }),
+      );
+    });
   });
 
   describe('AI credits: "can an action run right now", not "is there a wallet"', () => {
