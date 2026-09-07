@@ -10,6 +10,8 @@ import {
   CONCEPT_PRODUCE_KIND,
   produceDedup,
 } from '../../src/modules/marketing/content-concepts/concept-promotion.service';
+import { StoryboardService } from '../../src/modules/marketing/content-concepts/storyboard.service';
+import { CONCEPT_STORYBOARD_KIND } from '../../src/modules/marketing/content-concepts/storyboard-frames';
 import { McpToolRegistry } from '../../src/modules/marketing/mcp/mcp-tool-registry';
 import { registerContentTools } from '../../src/modules/marketing/mcp/tools/content.tools';
 import { MediaGenService } from '../../src/modules/marketing/ai/media/media-gen.service';
@@ -1031,6 +1033,60 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     const again = await promotionSvc().promote(workspaceId, conceptId);
     expect(again.created).toBe(true);
     expect(again.item.socialCampaignId).toBe(campaignId);
+  });
+
+  // ──────────────────────────────────────────── directing one beat by hand
+
+  it('editShot rewrites ONE beat\'s words in place on real JSONB — the merge keeps the beat\'s neighbours byte for byte and drops only that frame', async () => {
+    // Only Postgres settles this. `writeShotText` is a `jsonb_set` on the beat
+    // with a `||` merge, and the unit tests can only assert the statement's
+    // text: whether the merge actually leaves shots[0] and shots[2] untouched,
+    // whether the ord guard at the index matches, and whether the separate
+    // keyframe write then lands on the SAME beat, are properties of the
+    // database, not of the SQL string.
+    const res = await conceptsSvc().planConcepts(workspaceId, {
+      idea: SHARED_IDEA,
+      count: 3,
+      createdById: ownerId,
+      socialCampaignId: campaignId,
+    });
+    const conceptId = res.concepts[0].id; // curiosity: three beats
+    const before = await prisma.contentConcept.findUniqueOrThrow({ where: { id: conceptId } });
+    const shotsBefore = (before.shotPlan as { shots: Array<Record<string, unknown>> }).shots;
+    expect(shotsBefore).toHaveLength(3);
+    expect(shotsBefore[1].keyframePrompt).not.toBe('a red bicycle leaning on a white wall, single still frame, vertical 9:16');
+
+    const storyboard = new StoryboardService(prisma, fakeMediaGen as never, fakeJobs as never, { registerHandler: jest.fn() } as never);
+    const edited = await storyboard.editShot(
+      workspaceId,
+      conceptId,
+      1,
+      {
+        keyframePrompt: 'a red bicycle leaning on a white wall, single still frame, vertical 9:16',
+        prompt: 'the bicycle rolls forward slowly',
+      },
+      ownerId,
+    );
+    expect(edited).toMatchObject({ conceptId, ord: 1, changed: ['keyframePrompt', 'prompt'], redraw: true, seed: expect.any(Number) });
+
+    const after = await prisma.contentConcept.findUniqueOrThrow({ where: { id: conceptId } });
+    const plan = after.shotPlan as { shots: Array<Record<string, unknown>>; storyboard: Record<string, unknown> };
+    expect(plan.shots[1]).toMatchObject({
+      ord: 1,
+      keyframePrompt: 'a red bicycle leaning on a white wall, single still frame, vertical 9:16',
+      prompt: 'the bicycle rolls forward slowly',
+      keyframe: { assetId: '', status: 'QUEUED', attempts: 0, seed: edited.seed },
+    });
+    // The rest of the beat survived the merge…
+    expect(plan.shots[1].scene).toBe(shotsBefore[1].scene);
+    expect(plan.shots[1].durationSec).toBe(shotsBefore[1].durationSec);
+    // …and the neighbours were never touched at all.
+    expect(plan.shots[0]).toEqual(shotsBefore[0]);
+    expect(plan.shots[2]).toEqual(shotsBefore[2]);
+    expect(plan.storyboard.requestedById).toBe(ownerId);
+    expect(fakeJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ kind: CONCEPT_STORYBOARD_KIND }));
+    // Nothing was bought by the edit itself: the frame is the job's to draw.
+    expect(fakeMediaGen.requestGeneration).not.toHaveBeenCalled();
   });
 });
 

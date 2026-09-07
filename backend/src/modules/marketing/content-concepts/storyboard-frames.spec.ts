@@ -1,6 +1,7 @@
 import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import {
   MAX_FRAME_ATTEMPTS,
+  MAX_SHOT_TEXT,
   abandonRequested,
   frameSeed,
   frameWanted,
@@ -12,6 +13,7 @@ import {
   supportsStoryboard,
   syncFrames,
   writeKeyframe,
+  writeShotText,
 } from './storyboard-frames';
 import { DEFAULT_KEYFRAME_MODEL, DEFAULT_KEYFRAME_REFERENCE_MODEL } from '../ai/media/media-models.config';
 import type { Keyframe, ShotPlan } from '../video/video-pipeline.service';
@@ -45,7 +47,7 @@ function db(rows: unknown[] = []) {
  *  index, the keyframe written, and the compare-and-set the write carried. */
 function kfWrites(prisma: { $executeRaw: jest.Mock }) {
   return prisma.$executeRaw.mock.calls
-    .filter((c: unknown[]) => /^\d+$/.test(String(c[1])))
+    .filter((c: unknown[]) => /^\d+$/.test(String(c[1])) && (c[0] as string[]).join('?').includes("'keyframe'"))
     .map((c: unknown[]) => ({
       idx: Number(c[1]),
       keyframe: JSON.parse(String(c[2])) as Keyframe,
@@ -111,7 +113,19 @@ describe('writeKeyframe — one beat, compare-and-set', () => {
     expect(text).toContain("->> 'ord')::int = ?::int");
     expect(text).toContain("->> 'assetId', '') = ?");
     expect(text).toContain("->> 'status', '') = ?");
+    expect(text).toContain("->> 'seed', '') = ?");
     expect(kfWrites(prisma)).toEqual([{ idx: 1, keyframe: next, expect: { assetId: 'old', status: 'FAILED' } }]);
+    // No seed on what was read: compared against the empty string.
+    expect(prisma.$executeRaw.mock.calls[0][12]).toBe('');
+  });
+
+  it('the SEED is part of the compare-and-set: a redraw marker with a fresh seed is not the marker the job read', async () => {
+    const prisma = db();
+    const readByJob: Keyframe = { assetId: '', status: 'QUEUED', model: 'm', attempts: 0 };
+    const humanReset: Keyframe = { assetId: '', status: 'QUEUED', model: 'm', attempts: 0, seed: 4242 };
+    await writeKeyframe({ prisma: prisma as never }, WS, CONCEPT, 0, 0, { assetId: 'bought', status: 'QUEUED', model: 'm', attempts: 1 }, readByJob);
+    await writeKeyframe({ prisma: prisma as never }, WS, CONCEPT, 0, 0, { assetId: 'bought', status: 'QUEUED', model: 'm', attempts: 1 }, humanReset);
+    expect(prisma.$executeRaw.mock.calls.map((c: unknown[]) => c[12])).toEqual(['', '4242']);
   });
 
   it('a beat that had no keyframe is compared against the empty pair, and a lost race reports false', async () => {
@@ -200,6 +214,20 @@ describe('submitMissingFrames', () => {
     expect(res.plan.shots[0].keyframe).toMatchObject({ assetId: 'f0b', status: 'QUEUED', attempts: 2 });
     // Compared against the refused keyframe it read, not against "nothing".
     expect(kfWrites(prisma)[0].expect).toEqual({ assetId: 'old', status: 'FAILED' });
+  });
+
+  it("scope 'requested' draws only beats a human asked for — a beat nobody asked for is left to the producer", async () => {
+    const p = plan();
+    p.shots[1].keyframe = { assetId: '', status: 'QUEUED', model: DEFAULT_KEYFRAME_MODEL, attempts: 0 };
+    const mediaGen = { requestGeneration: jest.fn().mockResolvedValue({ assetId: 'f1' }) };
+    const res = await submitMissingFrames({ mediaGen, prisma: db() as never }, WS, CONCEPT, p as never, LINK, { scope: 'requested' });
+    expect(mediaGen.requestGeneration.mock.calls.map((c) => c[1].prompt)).toEqual(['still b']);
+    expect(res.submitted).toBe(1);
+    expect(res.plan.shots[0].keyframe).toBeUndefined();
+    // The producer's default scope wants both.
+    mediaGen.requestGeneration.mockClear();
+    await submitMissingFrames({ mediaGen, prisma: db() as never }, WS, CONCEPT, p as never, LINK);
+    expect(mediaGen.requestGeneration.mock.calls.map((c) => c[1].prompt)).toEqual(['still a', 'still b']);
   });
 
   it('ADOPTS a frame this beat already bought but never recorded — same model, prompt, seed, born after the concept, claimed by no other beat — instead of buying again', async () => {
@@ -372,5 +400,53 @@ describe('markRequested / resetExhaustedFrames / abandonRequested', () => {
     expect(kfWrites(prisma)).toEqual([
       { idx: 0, keyframe: { assetId: '', status: 'FAILED', model: 'm', attempts: 1, seed: 3, error: 'queue stayed full' }, expect: { assetId: '', status: 'QUEUED' } },
     ]);
+  });
+});
+
+describe('writeShotText — one beat, merged, never the whole plan', () => {
+  /** The shot-text write, decoded off the tagged template: the beat index, the
+   *  patch merged onto it, and the ord the index is guarded by. */
+  const textWrites = (prisma: { $executeRaw: jest.Mock }) =>
+    prisma.$executeRaw.mock.calls
+      .filter((c: unknown[]) => (c[0] as string[]).join('?').includes('|| ?::jsonb'))
+      .map((c: unknown[]) => ({ idx: Number(c[1]), patch: JSON.parse(String(c[3])), ord: c[7] }));
+
+  it('merges only the given keys onto the beat with ||, guards the ord at the index, and keeps the keyframe out of the statement entirely', async () => {
+    const prisma = db();
+    await expect(
+      writeShotText({ prisma: prisma as never }, WS, CONCEPT, 1, 1, { keyframePrompt: 'still b, redrawn', prompt: 'clip b, slower' }),
+    ).resolves.toBe(true);
+    const text = sql(prisma);
+    expect(text).toContain('jsonb_set("shotPlan", ARRAY[\'shots\', ?]::text[], ("shotPlan" -> \'shots\' -> ?::int) || ?::jsonb, false)');
+    expect(text).toContain("->> 'ord')::int = ?::int");
+    expect(text).not.toContain('keyframe');
+    expect(textWrites(prisma)).toEqual([{ idx: 1, patch: { keyframePrompt: 'still b, redrawn', prompt: 'clip b, slower' }, ord: 1 }]);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    // …and it is not mistaken for a keyframe write by the other decoder.
+    expect(kfWrites(prisma)).toEqual([]);
+  });
+
+  it('guards the ORD at the index, not the index itself — a reordered plan is never written at the wrong beat', async () => {
+    const prisma = db();
+    await writeShotText({ prisma: prisma as never }, WS, CONCEPT, 0, 5, { prompt: 'x' });
+    expect(textWrites(prisma)).toEqual([{ idx: 0, patch: { prompt: 'x' }, ord: 5 }]);
+    // Every bound value, in order: path index, index, patch, id, workspace, index, ord.
+    expect(prisma.$executeRaw.mock.calls[0].slice(1)).toEqual(['0', 0, '{"prompt":"x"}', CONCEPT, WS, 0, 5]);
+  });
+
+  it('a patch never carries a key the caller did not give, so the merge cannot blank a field', async () => {
+    const prisma = db();
+    await writeShotText({ prisma: prisma as never }, WS, CONCEPT, 0, 0, { prompt: 'only the motion' });
+    expect(textWrites(prisma)[0].patch).toEqual({ prompt: 'only the motion' });
+  });
+
+  it('reports false when no row matched — the beat moved, or the concept is not ours', async () => {
+    const prisma = db();
+    prisma.$executeRaw.mockResolvedValueOnce(0);
+    await expect(writeShotText({ prisma: prisma as never }, WS, CONCEPT, 0, 0, { description: 'x' })).resolves.toBe(false);
+  });
+
+  it('pins the ceiling one text may have', () => {
+    expect(MAX_SHOT_TEXT).toBe(2000);
   });
 });

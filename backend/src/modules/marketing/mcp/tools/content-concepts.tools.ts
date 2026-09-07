@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import {
@@ -13,6 +13,7 @@ import {
   type SubmittedConcept,
 } from '../../content-concepts/content-concepts.service';
 import { StoryboardService } from '../../content-concepts/storyboard.service';
+import { MAX_SHOT_TEXT } from '../../content-concepts/storyboard-frames';
 import { MIN_SHOTS_PER_CONCEPT } from '../../content-concepts/concept-distinctness';
 import { assertFeature } from '../mcp-feature-gate';
 import { McpPrincipalService } from '../mcp-principal.service';
@@ -311,7 +312,7 @@ export function registerContentConceptTools(
   registry.register({
     name: 'jeeta.storyboard_content_concept',
     description:
-      'Draw the STORYBOARD of one proposed video concept — one still frame per beat — so a person can look before approving. Frames render in the background (tens of seconds each); read them back with jeeta.list_content_concepts (shots[].keyframe.url when READY, or its status/error). Pass regenerateShot with a beat number (0-based ord) to redraw just that frame with a fresh seed. SPENDS image credits (a few per frame; more with a persona) — approving the concept later animates exactly these frames and buys nothing twice — a frame still rendering is refused a redraw until it lands, and a frame the vendor refused twice waits for regenerateShot (or, once the concept is in production, for the campaign item to be regenerated). Works on PROPOSED concepts and on APPROVED ones not yet in production; a concept planned before storyboards existed is refused and must be re-planned. Discarding a concept nobody storyboarded still costs nothing.',
+      'Draw the STORYBOARD of one proposed video concept — one still frame per beat — so a person can look before approving. Frames render in the background (tens of seconds each); read them back with jeeta.list_content_concepts (shots[].keyframe.url when READY, or its status/error). Pass regenerateShot with a beat number (0-based ord) to redraw just that frame with a fresh seed. SPENDS image credits (a few per frame; more with a persona) — approving the concept later animates exactly these frames and buys nothing twice — a frame still rendering is refused a redraw until it lands, and a frame the vendor refused twice waits for regenerateShot (or, once the concept is in production, for the campaign item to be regenerated). Works on PROPOSED concepts and on APPROVED ones not yet in production; a concept planned before storyboards existed is refused and must be re-planned. Discarding a concept nobody storyboarded still costs nothing. To DIRECT a beat by hand, Runway-style — "this frame shows X, then Y happens" — pass regenerateShot with keyframePrompt (what the frame shows; the frame is redrawn from your exact words — sending the same words again redraws again) and/or motionPrompt (what happens in the clip; saved only, bought at approval). Only the beat you name is drawn; the others are left as they are.',
     domain: 'content',
     defer: true,
     scopes: ['campaigns.write'],
@@ -324,12 +325,41 @@ export function registerContentConceptTools(
         .int()
         .min(0)
         .optional()
-        .describe('Redraw only this beat (its 0-based `ord` in shots[]) with a fresh seed, leaving the others as they are.'),
+        .describe('Redraw only this beat (its 0-based `ord` in shots[]) with a fresh seed, leaving the others as they are. Also names the beat that keyframePrompt / motionPrompt edit.'),
+      keyframePrompt: z
+        .string()
+        .min(1)
+        .max(MAX_SHOT_TEXT)
+        .optional()
+        .describe("What THIS beat's frame should show — the raw prompt the still is drawn from. Requires regenerateShot. The frame is redrawn from your words (spends one frame's credits)."),
+      motionPrompt: z
+        .string()
+        .min(1)
+        .max(MAX_SHOT_TEXT)
+        .optional()
+        .describe("What happens in the clip animated from this beat's frame. Requires regenerateShot. Saved only — nothing is bought until the concept is approved."),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'socialCampaigns');
       const requestedById = ctx.userId ?? (await deps.principals.resolve(ctx)).id;
       const conceptId = String(args.conceptId);
+      if (args.keyframePrompt !== undefined || args.motionPrompt !== undefined) {
+        if (typeof args.regenerateShot !== 'number') {
+          throw new BadRequestException(
+            'keyframePrompt and motionPrompt edit ONE beat: pass regenerateShot with its 0-based ord to say which.',
+          );
+        }
+        return deps.storyboard.editShot(
+          ctx.workspaceId,
+          conceptId,
+          args.regenerateShot,
+          {
+            ...(args.keyframePrompt !== undefined ? { keyframePrompt: String(args.keyframePrompt) } : {}),
+            ...(args.motionPrompt !== undefined ? { prompt: String(args.motionPrompt) } : {}),
+          },
+          requestedById,
+        );
+      }
       if (typeof args.regenerateShot === 'number') {
         return deps.storyboard.regenerateFrame(ctx.workspaceId, conceptId, args.regenerateShot, requestedById);
       }

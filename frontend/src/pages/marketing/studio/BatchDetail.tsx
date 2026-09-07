@@ -1,17 +1,21 @@
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Film, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Film, Pencil, RefreshCw, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
+import { Textarea } from '@/components/ui/Textarea';
 import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import {
+  editShot,
   getBatch,
   regenerateKeyframe,
   requestStoryboard,
   type ConceptRow,
   type Shot,
+  type ShotTextPatch,
 } from '../../../features/marketing/api/contentLine.service';
 
 /** Automatic redraws a beat gets before it waits for a human — mirrors the
@@ -53,6 +57,144 @@ const errorMessage = (e: unknown, fallback: string): string => {
   if (Array.isArray(fromApi) && fromApi.length) return fromApi.map(String).join(' ');
   return fallback;
 };
+
+/**
+ * What of the two texts actually changed, trimmed — the backend trims too, so
+ * a whitespace-only edit is not a change and buys nothing. Empty means "close,
+ * nothing to send".
+ */
+export const shotTextPatch = (
+  base: { keyframePrompt?: string; prompt: string },
+  frame: string,
+  motion: string,
+): ShotTextPatch => {
+  const patch: ShotTextPatch = {};
+  if (frame.trim() !== (base.keyframePrompt ?? '').trim()) patch.keyframePrompt = frame.trim();
+  if (motion.trim() !== base.prompt.trim()) patch.prompt = motion.trim();
+  return patch;
+};
+
+/**
+ * DIRECTING ONE BEAT, Runway-style: two texts, edited raw. The FRAME text is
+ * exactly what the image model gets, so what a person reads here is what the
+ * still is drawn from — no hidden rewrite between them and the picture. The
+ * MOTION text is what the clip is animated from once the concept is approved.
+ *
+ * The two are priced differently and the button says so: a changed frame text
+ * redraws that one frame now (one frame's credits, named on the button); a
+ * changed motion text only saves, because nothing is animated before approval.
+ * While the frame is still RENDERING the redraw waits — the backend would
+ * refuse it anyway (it would buy the same frame twice), and saying so here is
+ * kinder than a toast after the click. A frame merely requested (asked for,
+ * not yet drawn) takes new words: the job draws it from them.
+ *
+ * The texts are diffed against what the beat said WHEN THE EDITOR OPENED, not
+ * against the row the poll keeps refreshing underneath: if a teammate's edit
+ * lands meanwhile, the save is held and the reason shown, rather than their
+ * words (and their paid frame) being overwritten by a form that never saw them.
+ */
+function BeatEditor({
+  shot: sh,
+  perFrameCredits,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  shot: Shot;
+  perFrameCredits: number | undefined;
+  saving: boolean;
+  onSave: (patch: ShotTextPatch) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation('marketing');
+  const id = useId();
+  const [base] = useState({ keyframePrompt: sh.keyframePrompt ?? '', prompt: sh.prompt });
+  const [frame, setFrame] = useState(base.keyframePrompt);
+  const [motion, setMotion] = useState(base.prompt);
+  const patch = shotTextPatch(base, frame, motion);
+  const redraws = patch.keyframePrompt !== undefined;
+  // Rendering, not merely requested: a request marker has no asset yet.
+  const frameBusy = isPending(sh) && Boolean(sh.keyframe?.assetId);
+  const empty = !frame.trim() || !motion.trim();
+  const changedElsewhere = (sh.keyframePrompt ?? '') !== base.keyframePrompt || sh.prompt !== base.prompt;
+  const held = empty || changedElsewhere || (redraws && frameBusy);
+
+  return (
+    <form
+      className="mt-3 space-y-2 rounded-md border bg-muted/30 p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!held) onSave(patch);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    >
+      <h4 className="text-xs font-semibold">
+        {t('contentLine.detail.editTitle', '{{scene}} · düzenle', { scene: sh.scene })}
+      </h4>
+      <div>
+        <label htmlFor={`${id}-frame`} className="text-xs font-medium">
+          {t('contentLine.detail.frameText', 'Bu karede ne var')}
+        </label>
+        <Textarea
+          id={`${id}-frame`}
+          value={frame}
+          onChange={(e) => setFrame(e.target.value)}
+          maxLength={2000}
+          className="mt-1"
+          autoFocus
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {t('contentLine.detail.frameTextHint', 'Karenin çizildiği istem. Değiştirirsen kare yeniden çizilir.')}
+        </p>
+        {frameBusy && (
+          <p className="text-[11px] text-muted-foreground">
+            {t('contentLine.detail.frameBusy', 'Kare hâlâ çiziliyor; bitince yeniden çizebilirsin.')}
+          </p>
+        )}
+      </div>
+      <div>
+        <label htmlFor={`${id}-motion`} className="text-xs font-medium">
+          {t('contentLine.detail.motionText', 'Sonra ne olsun')}
+        </label>
+        <Textarea
+          id={`${id}-motion`}
+          value={motion}
+          onChange={(e) => setMotion(e.target.value)}
+          maxLength={2000}
+          className="mt-1"
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {t('contentLine.detail.motionTextHint', 'Bu kareden canlandırılan klibin istemi. Sadece kaydedilir; onayda üretilir.')}
+        </p>
+      </div>
+      {empty && (
+        <p className="text-[11px] text-destructive">{t('contentLine.detail.emptyText', 'Metin boş olamaz.')}</p>
+      )}
+      {changedElsewhere && (
+        <p className="text-[11px] text-destructive">
+          {t('contentLine.detail.changedElsewhere', 'Bu beat sen bakarken değişti; düzenleyiciyi kapatıp yeniden aç.')}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          {t('contentLine.detail.cancel', 'Vazgeç')}
+        </Button>
+        <Button type="submit" size="sm" disabled={saving || held}>
+          {redraws
+            ? t('contentLine.detail.saveRedraw', 'Kaydet ve kareyi yeniden çiz ({{credits}} kredi)', {
+                credits: perFrameCredits ?? '',
+              })
+            : t('contentLine.detail.save', 'Kaydet')}
+        </Button>
+      </div>
+    </form>
+  );
+}
 
 /**
  * ONE BATCH, opened: the concepts that came out of a single idea, each with the
@@ -98,6 +240,20 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
   const redraw = useMutation({
     mutationFn: ({ conceptId, ord }: { conceptId: string; ord: number }) => regenerateKeyframe(conceptId, ord),
     onSuccess: invalidate,
+    onError: (e) => toast.error(errorMessage(e, fallback)),
+  });
+  // One beat under direction at a time: opening another replaces it, so two
+  // half-typed edits never race for the same save button.
+  const [editing, setEditing] = useState<{ conceptId: string; ord: number } | null>(null);
+  const edit = useMutation({
+    mutationFn: ({ conceptId, ord, patch }: { conceptId: string; ord: number; patch: ShotTextPatch }) =>
+      editShot(conceptId, ord, patch),
+    onSuccess: (_row, vars) => {
+      invalidate();
+      // Close the editor that was saved — not whichever beat the reviewer has
+      // opened since, whose half-typed words would be lost.
+      setEditing((cur) => (cur && cur.conceptId === vars.conceptId && cur.ord === vars.ord ? null : cur));
+    },
     onError: (e) => toast.error(errorMessage(e, fallback)),
   });
 
@@ -231,22 +387,58 @@ export function BatchDetail({ batchId, onClose }: { batchId: string; onClose: ()
                                 {sh.keyframe.error}
                               </p>
                             )}
-                            {canStoryboard(c) && sh.keyframe && !isPending(sh) && (
-                              <button
-                                type="button"
-                                className="mt-1 flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50"
-                                disabled={redraw.isPending}
-                                onClick={() => redraw.mutate({ conceptId: c.id, ord: sh.ord })}
-                                aria-label={`${t('contentLine.detail.regenerate', 'Yeniden üret')} ${sh.scene}`}
-                              >
-                                <RefreshCw className="h-3 w-3" aria-hidden="true" />
-                                {t('contentLine.detail.regenerate', 'Yeniden üret')}
-                              </button>
+                            {canStoryboard(c) && (
+                              <div className="mt-1 flex flex-wrap gap-x-2">
+                                {sh.keyframe && !isPending(sh) && (
+                                  <button
+                                    type="button"
+                                    className="flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50"
+                                    disabled={redraw.isPending}
+                                    onClick={() => redraw.mutate({ conceptId: c.id, ord: sh.ord })}
+                                    aria-label={`${t('contentLine.detail.regenerate', 'Yeniden üret')} ${sh.scene}`}
+                                  >
+                                    <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                                    {t('contentLine.detail.regenerate', 'Yeniden üret')}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+                                  onClick={() => setEditing({ conceptId: c.id, ord: sh.ord })}
+                                  aria-label={`${t('contentLine.detail.edit', 'Düzenle')} ${sh.scene}`}
+                                  aria-expanded={editing?.conceptId === c.id && editing.ord === sh.ord}
+                                >
+                                  <Pencil className="h-3 w-3" aria-hidden="true" />
+                                  {t('contentLine.detail.edit', 'Düzenle')}
+                                </button>
+                              </div>
                             )}
                           </li>
                         ))}
                       </ol>
                     )}
+                    {/* Below the strip, full width — a textarea has no place in
+                        a 7rem tile. Keyed per beat so switching beats starts
+                        from THAT beat's texts, not the previous one's edits. */}
+                    {editing?.conceptId === c.id &&
+                      canStoryboard(c) &&
+                      (() => {
+                        const sh = shots.find((x) => x.ord === editing.ord);
+                        return sh ? (
+                          <BeatEditor
+                            key={`${c.id}-${sh.ord}`}
+                            shot={sh}
+                            perFrameCredits={production?.keyframes?.perFrameCredits}
+                            saving={edit.isPending}
+                            onSave={(patch) =>
+                              Object.keys(patch).length
+                                ? edit.mutate({ conceptId: c.id, ord: sh.ord, patch })
+                                : setEditing(null)
+                            }
+                            onCancel={() => setEditing(null)}
+                          />
+                        ) : null;
+                      })()}
                     {plan?.storyboard && !canStoryboard(c) && c.promotedItemId && (
                       <p className="mt-1 text-xs text-muted-foreground">
                         {t('contentLine.detail.inProduction', 'Üretimde — kareler ve klipler kampanya öğesinde.')}
