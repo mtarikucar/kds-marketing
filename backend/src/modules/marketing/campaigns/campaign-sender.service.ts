@@ -441,6 +441,36 @@ export class CampaignSenderService implements OnModuleInit {
     return null;
   }
 
+  /**
+   * The workspace's own mailbox, resolved for sending — or null to fall through
+   * to the platform transport.
+   *
+   * Two conditions, both deliberate:
+   *
+   * `lastVerifiedAt: { not: null }` — ChannelsService.verify writes it ONLY on
+   * `health.ok`, so this is a mailbox whose SMTP login has actually been
+   * accepted. Sending a whole campaign through credentials nobody has proved is
+   * how you get a run of `535 Authentication Failed` with the campaign already
+   * marked SENDING.
+   *
+   * SMTP only — a consent-connected (OAuth) mailbox falls through on purpose.
+   * `email-oauth.sender.ts` pins Microsoft to `contentType: 'Text'` and builds
+   * Gmail's RFC822 without an HTML part, so routing a campaign there would
+   * silently drop the HTML body. Arriving as plain text from the right address
+   * is worse than arriving formatted from the platform's, so that case keeps
+   * the old path until the OAuth sender learns multipart.
+   */
+  private async ownSmtpMailbox(workspaceId: string): Promise<ResolvedChannelConfig | null> {
+    const ch = await this.prisma.channel.findFirst({
+      where: { workspaceId, type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } },
+    });
+    if (!ch) return null;
+    const resolved = this.registry.resolveConfig(ch);
+    const s = (resolved.secrets ?? {}) as Record<string, string | undefined>;
+    if (s.oauthProvider) return null;
+    return s.smtpHost?.trim() && s.smtpUser?.trim() && s.smtpPass ? resolved : null;
+  }
+
   private async send(
     workspaceId: string, channel: string, to: string, subject: string | null, body: string, html?: string,
   ): Promise<{ ok: boolean; messageId?: string | null; error?: string }> {
@@ -452,9 +482,20 @@ export class CampaignSenderService implements OnModuleInit {
         return { ok: false, error: 'PUBLIC_BASE_URL not configured (unsubscribe link required)' };
       }
       if (channel === 'EMAIL') {
-        // Per-workspace From from a VERIFIED sending domain — null (platform
-        // default) unless an ESP transport is configured, so this is inert today.
-        const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
+        // The workspace's OWN mailbox, when it has one that has proved it works.
+        //
+        // Connecting a mailbox used to change NOTHING about campaign mail. This
+        // branch went straight to the platform transport, so a workspace that
+        // had just connected admin@its-own-domain.com watched its campaign
+        // arrive from the platform's address instead — the channel was read
+        // only by the inbound webhook, never by a sender. Found the plain way:
+        // a real workspace connected its mailbox, sent, and asked why the mail
+        // came from us.
+        //
+        // The VERIFIED-sending-domain override below stays the route for
+        // volume, and stays inert until an operator sets SENDING_DOMAIN_ESP —
+        // but a connected mailbox is a From address the workspace has already
+        // proved it owns, and it is available today.
         // Campaign email was the one outbound channel with NO meter at all:
         // this branch returned before the reserve below, and MessageQuotaService
         // — which already counts EMAIL as metered — was never called for it.
@@ -464,15 +505,33 @@ export class CampaignSenderService implements OnModuleInit {
         // the other channels now, refund on failure included.
         await this.quota.reserve(workspaceId, 'EMAIL');
         try {
-          const ok = html
-            ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
-            : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
+          const own = await this.ownSmtpMailbox(workspaceId);
+          let ok: boolean;
+          let ownError: string | undefined;
+          if (own) {
+            const r = await this.registry.get('EMAIL').send({
+              config: own,
+              to,
+              text: body,
+              subject: subject ?? 'Update',
+              html,
+            });
+            ok = r.status === 'SENT';
+            ownError = r.error;
+          } else {
+            const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
+            ok = html
+              ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
+              : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
+          }
           if (!ok) await this.quota.refund(workspaceId, 'EMAIL');
           // A campaign writes its error onto EVERY recipient row. "email send
           // failed" repeated three hundred times says only that something is
           // wrong; the provider's own line says WHICH thing — and when the
           // mailer itself is down, all three hundred share one cause.
-          const why = ok ? undefined : this.email.consumeLastPlainSendError();
+          // The adapter hands back the provider's line directly; the platform
+          // mailer parks it for one read. Same shape either way.
+          const why = ok ? undefined : (ownError ?? this.email.consumeLastPlainSendError());
           return {
             ok,
             messageId: null,
