@@ -50,6 +50,46 @@ describe('EmailChannelAdapter', () => {
     expect(mail).toMatchObject({ from: 'bot@acme.test', to: 'Lead <lead@x.test>', subject: 'Re: hello', text: 'thanks!' });
   });
 
+  it('send prefers a per-call subject over the thread default', async () => {
+    // This adapter was written for inbound replies, where the subject belongs
+    // to the thread and sits on the channel config. A campaign has a different
+    // subject per send; without this the whole campaign went out as
+    // "Re: your message".
+    sendMail.mockResolvedValue({ messageId: '<x@acme.test>' });
+    await adapter.send({
+      config: { secrets: SMTP, public: { subject: 'Re: hello' } } as any,
+      to: 'lead@x.test',
+      text: 'body',
+      subject: 'Kâğıt adisyon yerine mutfak ekranı',
+    });
+    expect(sendMail.mock.calls[0][0].subject).toBe('Kâğıt adisyon yerine mutfak ekranı');
+  });
+
+  it('send carries an HTML body ALONGSIDE the text one', async () => {
+    // Multipart, never HTML-only: that is what clients and spam filters expect,
+    // and an HTML-only mail from a new sending identity is a reputation problem
+    // by itself.
+    sendMail.mockResolvedValue({ messageId: '<y@acme.test>' });
+    await adapter.send({
+      config: { secrets: SMTP, public: {} } as any,
+      to: 'lead@x.test',
+      text: 'plain',
+      subject: 'S',
+      html: '<p>rich</p>',
+    });
+    expect(sendMail.mock.calls[0][0]).toMatchObject({ text: 'plain', html: '<p>rich</p>' });
+  });
+
+  it('send omits html entirely when none is given', async () => {
+    sendMail.mockResolvedValue({ messageId: '<z@acme.test>' });
+    await adapter.send({
+      config: { secrets: SMTP, public: {} } as any,
+      to: 'lead@x.test',
+      text: 'plain',
+    });
+    expect(sendMail.mock.calls[0][0]).not.toHaveProperty('html');
+  });
+
   it('send returns FAILED (not throw) on an SMTP error', async () => {
     sendMail.mockRejectedValue(new Error('535 auth failed'));
     const res = await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'hi' });

@@ -70,13 +70,17 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     return { host, port, secure: s.smtpSecure === 'true' || port === 465, user, pass, from };
   }
 
-  async send({ config, to, text }: OutboundSend): Promise<SendResult> {
+  async send({ config, to, text, subject: subjectArg, html }: OutboundSend): Promise<SendResult> {
     const recipient = (to || '').trim();
     if (!recipient) {
       return { externalMessageId: null, status: 'FAILED', error: 'recipient email missing' };
     }
+    // Per-send subject wins over the thread's. A reply carries no subject
+    // argument and keeps reading it off the channel config, exactly as before.
     const subject =
-      (typeof config.public?.subject === 'string' && config.public.subject) || 'Re: your message';
+      subjectArg?.trim() ||
+      (typeof config.public?.subject === 'string' && config.public.subject) ||
+      'Re: your message';
 
     /**
      * A mailbox connected by CONSENT rather than by password takes the HTTP
@@ -128,7 +132,16 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
         socketTimeout: SEND_TIMEOUT_MS,
         dnsTimeout: SEND_TIMEOUT_MS,
       });
-      const info = await transport.sendMail({ from: smtp.from, to: recipient, subject, text });
+      // `text` is always sent alongside `html`: a multipart message is what
+      // every client and every spam filter expects, and an HTML-only mail from
+      // a brand-new sending identity is a reputation problem on its own.
+      const info = await transport.sendMail({
+        from: smtp.from,
+        to: recipient,
+        subject,
+        text,
+        ...(html ? { html } : {}),
+      });
       transport.close();
       return { externalMessageId: info?.messageId ?? null, status: 'SENT' };
     } catch (e: any) {

@@ -16,6 +16,7 @@ describe('CampaignSenderService.batch', () => {
   let quota: { reserve: jest.Mock; refund: jest.Mock };
   let scheduledJobs: { schedule: jest.Mock };
   let conversationSpend: { settleCampaignSms: jest.Mock };
+  let registry: { get: jest.Mock; resolveConfig: jest.Mock };
   let svc: CampaignSenderService;
 
   beforeEach(() => {
@@ -46,6 +47,9 @@ describe('CampaignSenderService.batch', () => {
             : { id: 'l2', email: 'ok@lead.com', emailOptOut: false },
         ),
       },
+      // No connected mailbox by default, so these tests keep exercising the
+      // PLATFORM transport. The workspace-mailbox route has its own block.
+      channel: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     email = {
       sendPlainEmail: jest.fn().mockResolvedValue(true),
@@ -57,7 +61,7 @@ describe('CampaignSenderService.batch', () => {
     const config = { get: jest.fn().mockReturnValue('https://m.test') };
     scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
-    const registry = { get: jest.fn(), resolveConfig: jest.fn() };
+    registry = { get: jest.fn(), resolveConfig: jest.fn() };
     quota = { reserve: jest.fn(), refund: jest.fn() };
     // Inert by default: no ESP transport → platform-default From (null).
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
@@ -104,6 +108,97 @@ describe('CampaignSenderService.batch', () => {
    * provider's own line is what turns a wall of identical rows into a single
    * fixable fact.
    */
+  /**
+   * Connecting a mailbox used to change NOTHING about campaign mail: this
+   * branch went straight to the platform transport, so a workspace that had
+   * just connected its own address watched the campaign arrive from ours. The
+   * channel was read only by the inbound webhook.
+   */
+  describe('the workspace’s own mailbox', () => {
+    const SMTP = {
+      secrets: {
+        smtpHost: 'smtpout.secureserver.net',
+        smtpUser: 'admin@own.com',
+        smtpPass: 'x',
+        fromEmail: 'admin@own.com',
+      },
+      public: {},
+    };
+    let send: jest.Mock;
+
+    beforeEach(() => {
+      send = jest.fn().mockResolvedValue({ externalMessageId: 'm1', status: 'SENT' });
+      registry.get.mockReturnValue({ send });
+      registry.resolveConfig.mockReturnValue(SMTP);
+      prisma.channel.findFirst.mockResolvedValue({ id: 'ch-email', type: 'EMAIL' });
+    });
+
+    it('sends through it instead of the platform transport', async () => {
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(email.sendPlainEmail).not.toHaveBeenCalled();
+      expect(email.sendCampaignEmail).not.toHaveBeenCalled();
+    });
+
+    it('carries the campaign’s own subject, not the thread default', async () => {
+      // The adapter was built for inbound replies, where the subject is a
+      // property of the thread and lives on the channel config. A campaign has
+      // a different one per send, which that shape could not express.
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(send.mock.calls[0][0]).toMatchObject({ subject: 'S', to: 'ok@lead.com' });
+    });
+
+    it('asks only for a mailbox that has PASSED a health check', async () => {
+      // Sending a whole campaign through credentials nobody has proved is how
+      // you get a run of 535s with the campaign already marked SENDING.
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(prisma.channel.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            type: 'EMAIL',
+            status: 'ACTIVE',
+            lastVerifiedAt: { not: null },
+          }),
+        }),
+      );
+    });
+
+    it('falls back to the platform for an OAuth-connected mailbox', async () => {
+      // email-oauth.sender.ts pins Microsoft to contentType:'Text' and builds
+      // Gmail's RFC822 with no HTML part, so routing a campaign there would
+      // silently drop the HTML body. Plain text from the right address is
+      // worse than formatted from ours.
+      registry.resolveConfig.mockReturnValue({
+        secrets: { oauthProvider: 'GOOGLE', oauthAccessToken: 't', fromEmail: 'a@b.com' },
+        public: {},
+      });
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(send).not.toHaveBeenCalled();
+      expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to the platform when the SMTP credentials are incomplete', async () => {
+      registry.resolveConfig.mockReturnValue({ secrets: { smtpHost: 'h' }, public: {} });
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(send).not.toHaveBeenCalled();
+      expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('records the mailbox’s own refusal, not a generic string', async () => {
+      send.mockResolvedValue({
+        externalMessageId: null,
+        status: 'FAILED',
+        error: '535 Authentication Failed for admin@own.com',
+      });
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(quota.refund).toHaveBeenCalledWith(WS, 'EMAIL');
+      const errors = prisma.campaignRecipient.update.mock.calls
+        .map((c: any) => c[0].data.error)
+        .filter(Boolean);
+      expect(errors.join(' ')).toContain('535 Authentication Failed');
+    });
+  });
+
   it('records the provider reason on the recipient, not a generic string', async () => {
     email.sendPlainEmail.mockResolvedValue(false);
     email.consumeLastPlainSendError.mockReturnValue(
