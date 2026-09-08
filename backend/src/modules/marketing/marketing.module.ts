@@ -56,6 +56,8 @@ import {
 } from './services';
 
 // Guards
+import { MarketingDevicesController, DeviceBridgeController } from './devices/devices.controller';
+import { DevicesService } from './devices/devices.service';
 import { MarketingGuard } from './guards/marketing.guard';
 import { MarketingRolesGuard } from './guards/marketing-roles.guard';
 import { IngestTokenGuard } from './guards/ingest-token.guard';
@@ -662,6 +664,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MarketingSegmentsController,
     MarketingImportsController,
     MarketingApiKeysController,
+    MarketingDevicesController,
+    DeviceBridgeController,
     MarketingWebhooksController,
     PublicApiV1Controller,
     MarketingOffersController,
@@ -818,6 +822,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     LeadDedupeService,
     ImportService,
     ApiKeysService,
+    DevicesService,
     WebhookOutboundService,
     MarketingOffersService,
     MarketingDashboardService,
