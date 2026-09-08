@@ -396,6 +396,7 @@ Gated on the `conversationAi` package feature, matching the REST controller.
 | `jeeta.list_channels` | List every messaging channel this workspace has — type, name, status, and which provider identity it is bound to | `settings.manage` | READ | — | no |
 | `jeeta.message_lead` | Start a conversation with a chosen lead on SMS, WhatsApp or email | `contacts.write` | WRITE | SEND | no |
 | `jeeta.set_channel_status` | Enable or disable a channel | `settings.manage` | WRITE | — | no |
+| `jeeta.set_channel_agent` | Choose which AI agent auto-replies on a channel (null = manual only) | `settings.manage` | WRITE | — | no |
 | `jeeta.update_agent` | Refine an AI agent's persona, tone, goals or guardrails | `settings.manage` | WRITE | — | no |
 | `jeeta.verify_channel` | Run a live health check against a channel and report whether it can actually send AND receive | `reports.read` | READ | — | no |
 
@@ -462,8 +463,29 @@ there will not be one.
 | Tool | What it does | Scope | Risk | Approval | Listed |
 |---|---|---|---|---|---|
 | `jeeta.list_devices` | Paired phones with their mode (MANUAL = a person approves every command), status, and whether the desktop bridge is online | `reports.read` | READ | — | no |
-| `jeeta.device_command` | QUEUE one command: `OPEN_URL` (https/tel — how a WhatsApp click-to-chat draft gets on screen), `LAUNCH_APP`, `TAP`, `SWIPE`, `TEXT`, `KEY`, `SCREENSHOT`, `UI_DUMP`. Waits ~25s for an outcome, then reports honestly that it is still queued | `campaigns.send` | WRITE | PUBLISH | no |
+| `jeeta.device_command` | QUEUE one command: `OPEN_URL` (https/tel — how a WhatsApp click-to-chat draft gets on screen), `LAUNCH_APP`, `TAP_ON` (press a named element), `TAP`, `SWIPE`, `TEXT`, `KEY`, `SCREENSHOT`, `UI_DUMP`. Waits ~25s for an outcome, then reports honestly that it is still queued — and does not wait at all when the bridge is offline | `campaigns.send` | WRITE | PUBLISH | no |
 | `jeeta.device_command_result` | What became of a queued command — DONE / FAILED / REFUSED / EXPIRED / QUEUED | `reports.read` | READ | — | no |
+
+**Driving a phone is a loop, not a script.** `UI_DUMP` does not return XML: it
+returns the distilled list of things on screen — text, id, description, class,
+and the point that presses each one — a few kilobytes rather than a few hundred.
+Read it, then press what you saw with `TAP_ON`:
+
+```
+UI_DUMP                       → { elements: [{ i:3, text:"Ayşe Yılmaz", cls:"TextView", tap:[540,470] }, …], size:{w,h} }
+TAP_ON element:"Ayşe Yılmaz"  → { tapped: { text:"Ayşe Yılmaz", tap:[540,470] } }
+```
+
+`TAP_ON` re-reads the screen and presses in the same command, so it cannot be
+made stale by a list that settles or a banner that lands between your reading
+and your tap. `TAP` with raw coordinates still exists, for the places with no
+label at all. An exact label wins over a partial one — "Sil" will not press
+"Silinenler" — and `occurrence` picks among rows that read alike.
+
+`SCREENSHOT` returns `screenshotUrl`, never image bytes: the picture is uploaded
+server-side and the result carries a link. With no object store configured the
+result says `screenshotUnavailable` and why, rather than quietly returning
+nothing.
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 

@@ -688,3 +688,70 @@ describe('ChannelsService — VOICE channels', () => {
     expect(prisma.channel.create).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Which agent answers on a channel.
+ *
+ * `agentProfileId` is the single field `ConversationAiEngineService` gates on —
+ * null and it declines every inbound message — so this is the switch between a
+ * connected inbox that answers and one that only looks like it does. The
+ * endpoint took the id raw, and the panel's list happens to be workspace-scoped
+ * only in the UI, which is exactly the shape a cross-tenant hole hides in.
+ */
+describe('ChannelsService.update — binding an answering agent', () => {
+  const WS = 'ws-1';
+  const CH = { id: 'ch-1', workspaceId: WS, type: 'EMAIL', status: 'ACTIVE' };
+
+  function makeService(agentRow: any) {
+    const prisma = {
+      channel: {
+        findFirst: jest.fn().mockResolvedValue(CH),
+        update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...CH, ...data })),
+      },
+      agentProfile: { findFirst: jest.fn().mockResolvedValue(agentRow) },
+    } as any;
+    const svc = new ChannelsService(prisma, {} as any, {} as any, makeEntitlements(), {} as any);
+    return { svc, prisma };
+  }
+
+  it('attaches an agent that belongs to this workspace', async () => {
+    const { svc, prisma } = makeService({ id: 'agent-1' });
+    await svc.update(WS, 'ch-1', { agentProfileId: 'agent-1' } as any);
+    expect(prisma.channel.update.mock.calls[0][0].data.agentProfileId).toBe('agent-1');
+  });
+
+  it('looks the agent up SCOPED to the workspace', async () => {
+    // The whole point. An unscoped read would let a channel answer with another
+    // tenant's agent — their persona, their guardrails, their knowledge base —
+    // replying to this workspace's customers.
+    const { svc, prisma } = makeService({ id: 'agent-1' });
+    await svc.update(WS, 'ch-1', { agentProfileId: 'agent-1' } as any);
+    expect(prisma.agentProfile.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'agent-1', workspaceId: WS } }),
+    );
+  });
+
+  it('refuses an agent id that is not this workspace', async () => {
+    const { svc, prisma } = makeService(null);
+    await expect(
+      svc.update(WS, 'ch-1', { agentProfileId: 'foreign-agent' } as any),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.channel.update).not.toHaveBeenCalled();
+  });
+
+  it('detaches with null WITHOUT looking anything up', async () => {
+    // Handing a channel back to humans must not be blocked by an agent row that
+    // has since been deleted — the whole reason you would be detaching.
+    const { svc, prisma } = makeService(null);
+    await svc.update(WS, 'ch-1', { agentProfileId: null } as any);
+    expect(prisma.agentProfile.findFirst).not.toHaveBeenCalled();
+    expect(prisma.channel.update.mock.calls[0][0].data.agentProfileId).toBeNull();
+  });
+
+  it('leaves the binding untouched when the field is not passed', async () => {
+    const { svc, prisma } = makeService(null);
+    await svc.update(WS, 'ch-1', { name: 'yeni ad' } as any);
+    expect(prisma.agentProfile.findFirst).not.toHaveBeenCalled();
+    expect('agentProfileId' in prisma.channel.update.mock.calls[0][0].data).toBe(false);
+  });
+});

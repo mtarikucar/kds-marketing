@@ -126,7 +126,13 @@ describe('workspace readiness', () => {
         limits: { aiCreditsMonthly: o.aiCreditsMonthly },
       })),
     };
-    svc = new WorkspaceReadinessService(prisma as any, entitlements as any);
+    // The PLATFORM's own vendor key. Null means fine — the breaker only ever
+    // reports a refusal the vendor has already returned, so "no news" is the
+    // honest default rather than an optimistic one.
+    const anthropic = {
+      platformAiUnavailable: jest.fn(() => o.platformAiUnavailable ?? null),
+    };
+    svc = new WorkspaceReadinessService(prisma as any, entitlements as any, anthropic as any);
   }
 
   const item = async (id: string) => {
@@ -669,6 +675,54 @@ describe('workspace readiness', () => {
       expect(i.state).toBe('READY');
       expect(i.detail).toMatchObject({ fuel: 'prepaid-wallet', planUnreadable: true });
     });
+
+  /**
+   * The gap that is not the workspace's.
+   *
+   * `AnthropicService.platformAiUnavailable()` says WHICH failure a refused
+   * platform key is — its own docstring says it exists "so a panel or a health
+   * check can say" — and nothing read it. So a workspace with plenty of credit
+   * saw a healthy fuel line while every AI path in the product declined,
+   * including the auto-reply that was the whole reason its inbox was connected.
+   */
+  describe('the PLATFORM key, which no amount of workspace credit fixes', () => {
+    const REFUSED = { reason: 'credit balance is too low', until: new Date('2026-09-08T18:00:00Z') };
+
+    it('calls a refused platform key ATTENTION, not MISSING', async () => {
+      // MISSING points at /billing and reads as "buy credits". Buying is
+      // exactly the wrong move here — the workspace's own fuel is fine.
+      build({ aiCreditsMonthly: 1500, aiCreditsUsed: 10, platformAiUnavailable: REFUSED });
+      expect((await item('ai-credits')).state).toBe('ATTENTION');
+    });
+
+    it('names the vendor reason and when it will retry', async () => {
+      // "Out of credit" and "key rejected" have different fixes, and a reader
+      // who only sees a red dot cannot tell either from "never set up".
+      build({ aiCreditsMonthly: 1500, aiCreditsUsed: 10, platformAiUnavailable: REFUSED });
+      expect((await item('ai-credits')).detail).toMatchObject({
+        platformKeyRefused: 'credit balance is too low',
+        retryAfter: REFUSED.until.toISOString(),
+      });
+    });
+
+    it('outranks the workspace fuel answer even when there is none', async () => {
+      // Both are true, but only one of them is actionable by the operator, and
+      // it is not the one that says "top up".
+      build({ aiCreditsMonthly: 0, aiCreditsUsed: 0, platformAiUnavailable: REFUSED });
+      expect((await item('ai-credits')).state).toBe('ATTENTION');
+    });
+
+    it('says nothing at all when the vendor has not refused anything', async () => {
+      // The breaker is per-process and in-memory: it reports a failure that has
+      // ALREADY happened, never a prediction. A freshly restarted API knows
+      // nothing, and inventing a warning there would be the checklist lying in
+      // the other direction.
+      build({ aiCreditsMonthly: 1500, aiCreditsUsed: 10 });
+      const i = await item('ai-credits');
+      expect(i.state).toBe('READY');
+      expect(i.detail).not.toHaveProperty('platformKeyRefused');
+    });
+  });
   });
 
   it('does not call an empty growth wallet ready', async () => {

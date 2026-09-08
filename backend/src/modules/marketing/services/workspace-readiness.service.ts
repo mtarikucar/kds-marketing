@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
+import { AnthropicService } from '../ai/anthropic.service';
 
 /**
  * How far ahead a token expiry is worth complaining about — and why there are
@@ -137,6 +138,10 @@ export class WorkspaceReadinessService {
     // answered by the PLAN before it is answered by a wallet, and reading the
     // wallet alone got the answer backwards on the plan that needs no wallet.
     private readonly entitlements: EntitlementsService,
+    // Nor is every gap the workspace's. A workspace can hold plenty of credit
+    // and still get nothing, because the PLATFORM's own vendor key is being
+    // refused — and no amount of buying fixes that one.
+    private readonly anthropic: AnthropicService,
   ) {}
 
   async get(workspaceId: string): Promise<WorkspaceReadiness> {
@@ -368,6 +373,7 @@ export class WorkspaceReadinessService {
     ]);
 
     const yes = (ok: boolean): ReadinessState => (ok ? 'READY' : 'MISSING');
+    const platformAi = this.anthropic.platformAiUnavailable();
 
     const connected = liveMcpTokens > 0 || mcpApiKeys > 0;
     // Fails towards APPROVAL, the same direction `McpInvokerService` does:
@@ -715,7 +721,23 @@ export class WorkspaceReadinessService {
         // The honest answer needs the meter as well as the plan, which is why
         // this reads the same `UsageCounter` row `reserve()` increments rather
         // than guessing from the wallet. See the derivation above.
-        state: yes(aiFuel !== 'none' && aiFuel !== 'unknown-plan-unreadable'),
+        //
+        // THIRD question, and the one that outranks both: is the platform's own
+        // vendor key working? `AnthropicService.platformAiUnavailable()` was
+        // written so "a panel or a health check can say WHICH failure this is"
+        // — and until now nothing read it, so a refused key showed here as a
+        // healthy workspace with fuel while every AI path silently declined.
+        // ATTENTION, not MISSING: the workspace's own fuel is fine and buying
+        // more would be the wrong move.
+        //
+        // What this can and cannot see: the breaker is per-process and
+        // in-memory by design, so this reports a failure the vendor has ALREADY
+        // returned, not a prediction. A freshly restarted API says nothing is
+        // wrong until the next call fails — which is the honest answer, since
+        // at that point nobody knows.
+        state: platformAi
+          ? 'ATTENTION'
+          : yes(aiFuel !== 'none' && aiFuel !== 'unknown-plan-unreadable'),
         to: '/billing',
         mcpTool: null,
         // Every input to the answer, plus WHICH route is carrying it, so a
@@ -727,6 +749,11 @@ export class WorkspaceReadinessService {
           period,
           balance: aiPrepaid,
           usedThisPeriod: aiUsedThisPeriod,
+          // Named, because "out of credit" and "key rejected" have different
+          // fixes and neither of them is the workspace's wallet.
+          ...(platformAi
+            ? { platformKeyRefused: platformAi.reason, retryAfter: platformAi.until.toISOString() }
+            : {}),
           ...(aiCreditsMonthly === null
             ? { planUnreadable: true }
             : {
