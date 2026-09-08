@@ -5,16 +5,38 @@
   "description": "Jeeta Masaüstü — bir telefonu çalışma alanına bağlayan köprü",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-renderer.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest",
-    "start": "electron ."
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",
     "@types/node": "^20.12.7",
     "jest": "^29.7.0",
     "ts-jest": "^29.1.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.jeetagrowth.desktop",
+    "productName": "Jeeta Masaustu",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.business"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office"
+    }
   }
 }
