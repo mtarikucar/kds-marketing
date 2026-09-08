@@ -327,6 +327,47 @@ describe('EmailImapPollService — what reaches the conversation', () => {
     expect(ingress.ingest).not.toHaveBeenCalled();
   });
 
+  it('skips OUR OWN product mail, which no header marks as machine mail', async () => {
+    // The daily digest is addressed to the workspace owner and leaves from the
+    // platform's EMAIL_FROM, so it lands in the very mailbox this poller reads.
+    // On the first live run it became a lead named after the platform, with the
+    // digest as its opening message. The adapter's echo guard does not help: it
+    // drops the WORKSPACE's own address, not the platform's.
+    const prev = process.env.EMAIL_FROM;
+    process.env.EMAIL_FROM = 'Jeeta <admin@jeetagrowth.com>';
+    try {
+      const { svc, ingress } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(rfc822({ From: 'Jeeta <admin@jeetagrowth.com>' }));
+      await svc.poll();
+      expect(ingress.ingest).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.EMAIL_FROM;
+      else process.env.EMAIL_FROM = prev;
+    }
+  });
+
+  it.each(['notifications@canny.io', 'no-reply@stripe.com', 'noreply@github.com'])(
+    'skips %s, an address that cannot receive an answer',
+    async (address) => {
+      const { svc, ingress } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(rfc822({ From: `Service <${address}>` }));
+      await svc.poll();
+      expect(ingress.ingest).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still ingests an ordinary person whose address merely looks businesslike', async () => {
+    // The guard must not swallow real replies: info@ and admin@ are how a great
+    // many small businesses actually write to you.
+    const { svc, ingress } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+    mockImap.search.mockResolvedValue([91]);
+    serveOne(rfc822({ From: 'Lezzet Restoran <info@lezzetrestoran.com>' }));
+    await svc.poll();
+    expect(ingress.ingest).toHaveBeenCalledTimes(1);
+  });
+
   it('skips a bounce from the mail daemon', async () => {
     const { svc, ingress } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
     mockImap.search.mockResolvedValue([91]);
