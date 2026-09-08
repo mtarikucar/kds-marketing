@@ -233,6 +233,18 @@ describe('DevicesPage', () => {
     expect(screen.getByText(/Claude connector tab/i)).toBeInTheDocument();
   });
 
+  it('names BOTH scope families the one key has to carry', async () => {
+    // Found on a real emulator: the bridge endpoint is gated on the legacy
+    // "write" scope and the MCP tool on "campaigns.send", so a default
+    // read/write key runs the bridge and leaves Claude with "tool not found".
+    // Nothing said so anywhere.
+    respond([]);
+    renderPage();
+    const step = await screen.findByText(/campaigns\.send/);
+    expect(step).toHaveTextContent('reports.read');
+    expect(step).toHaveTextContent('write');
+  });
+
   it('reads a phone command history only when the section is opened', async () => {
     const user = userEvent.setup();
     respond([device()], [

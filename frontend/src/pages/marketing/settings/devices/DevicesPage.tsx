@@ -314,7 +314,8 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
           </li>
           <li>
             {t('devices.how2', {
-              defaultValue: 'An API key from the API keys tab — the desktop app signs in with it.',
+              defaultValue:
+                'An API key from the API keys tab — the desktop app signs in with it. Give it TWO things, because two different callers use it: the plain "write" scope, which is what the desktop app itself needs, AND the granular "campaigns.send" + "reports.read" scopes, which are what Claude needs to command the phone. A key with only read/write runs the bridge and leaves Claude unable to see the phone at all.',
             })}
           </li>
           <li>
