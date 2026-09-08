@@ -78,8 +78,10 @@ export class MessageSenderService {
     try {
       const adapter = this.registry.get(channel.type);
       const config = this.registry.resolveConfig(channel);
+      const subject =
+        channel.type === 'EMAIL' ? await this.emailSubjectFor(workspaceId, conversationId) : undefined;
       result = to
-        ? await adapter.send({ config, to, text, template: input.template, media: input.media })
+        ? await adapter.send({ config, to, text, subject, template: input.template, media: input.media })
         : { externalMessageId: null, status: 'FAILED', error: 'no recipient identity on conversation' };
     } catch (e: any) {
       result = { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };
@@ -195,6 +197,39 @@ export class MessageSenderService {
 
     return message;
   }
+
+  /**
+   * The subject line an EMAIL reply should carry.
+   *
+   * Nothing used to pass one, so every reply — the AI's included — went out on
+   * `EmailChannelAdapter`'s last-resort fallback, "Re: your message". In a mail
+   * client that is a new thread with an English placeholder for a subject, sent
+   * to a Turkish customer who wrote in about something specific. The thread the
+   * conversation view showed was not the thread the recipient saw.
+   *
+   * The subject is read back off the most recent INBOUND message, where the
+   * ingress path stores the parsed mail under `meta.raw` — the same shape for
+   * an inbound-parse webhook and for the IMAP poller, so this works whichever
+   * one delivered it. Undefined when there is nothing to reply to (an outbound
+   * thread the customer has not answered yet), which leaves the adapter's own
+   * fallback in place rather than inventing a subject here.
+   */
+  private async emailSubjectFor(
+    workspaceId: string,
+    conversationId: string,
+  ): Promise<string | undefined> {
+    const last = await this.prisma.message.findFirst({
+      where: { workspaceId, conversationId, direction: 'INBOUND' },
+      orderBy: { createdAt: 'desc' },
+      select: { meta: true },
+    });
+    const raw = (last?.meta as any)?.raw;
+    const subject = typeof raw?.subject === 'string' ? raw.subject.trim() : '';
+    if (!subject) return undefined;
+    // Mail clients thread on the subject, so an already-prefixed one must not
+    // grow a second "Re:" with every round.
+    return (/^re\s*:/i.test(subject) ? subject : `Re: ${subject}`).slice(0, 200);
+  }
 }
 
 /**
@@ -211,4 +246,5 @@ function templateBody(template: OutboundTemplate, text: string): string {
   const head = `[template: ${template.name} (${template.languageCode})]`;
   const note = text.trim();
   return note ? `${head} ${note}` : head;
+
 }

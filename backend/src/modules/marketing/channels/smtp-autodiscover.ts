@@ -30,6 +30,21 @@ export interface SmtpSuggestion {
    * password into our form is the whole point of recognising the domain.
    */
   oauth?: 'GOOGLE' | 'MICROSOFT';
+  /**
+   * The INCOMING (IMAP) server for the same provider, where one exists.
+   *
+   * It lives in THIS table rather than in a second one because "who runs this
+   * domain's mail" is a single fact, and two tables answering it would drift
+   * the moment one of them gained a provider. Absent means we do not know —
+   * pure-outbound relays (Mailgun) have no IMAP at all, and inventing
+   * `imap.<whatever>` by string surgery on the SMTP host is exactly the
+   * guessing this file refuses to do.
+   *
+   * Every entry is implicit TLS on 993; STARTTLS on 143 is not offered,
+   * because a mailbox password is the payload and there is no provider here
+   * that requires the downgrade.
+   */
+  imap?: { host: string; port: number };
 }
 
 /**
@@ -43,34 +58,34 @@ export interface SmtpSuggestion {
 const BY_MX_SUFFIX: ReadonlyArray<{ suffix: string; smtp: SmtpSuggestion }> = [
   {
     suffix: 'google.com',
-    smtp: { host: 'smtp.gmail.com', port: 587, secure: false, provider: 'Google', oauth: 'GOOGLE' },
+    smtp: { host: 'smtp.gmail.com', port: 587, secure: false, provider: 'Google', oauth: 'GOOGLE', imap: { host: 'imap.gmail.com', port: 993 } },
   },
   {
     suffix: 'googlemail.com',
-    smtp: { host: 'smtp.gmail.com', port: 587, secure: false, provider: 'Google', oauth: 'GOOGLE' },
+    smtp: { host: 'smtp.gmail.com', port: 587, secure: false, provider: 'Google', oauth: 'GOOGLE', imap: { host: 'imap.gmail.com', port: 993 } },
   },
   {
     suffix: 'protection.outlook.com',
-    smtp: { host: 'smtp.office365.com', port: 587, secure: false, provider: 'Microsoft 365', oauth: 'MICROSOFT' },
+    smtp: { host: 'smtp.office365.com', port: 587, secure: false, provider: 'Microsoft 365', oauth: 'MICROSOFT', imap: { host: 'outlook.office365.com', port: 993 } },
   },
   {
     suffix: 'outlook.com',
-    smtp: { host: 'smtp-mail.outlook.com', port: 587, secure: false, provider: 'Outlook', oauth: 'MICROSOFT' },
+    smtp: { host: 'smtp-mail.outlook.com', port: 587, secure: false, provider: 'Outlook', oauth: 'MICROSOFT', imap: { host: 'outlook.office365.com', port: 993 } },
   },
   // GoDaddy's own mail product. Note the outgoing host is NOT the MX host:
   // mail arrives at smtp.secureserver.net and leaves through smtpout — a
   // difference that has cost people an afternoon more than once.
   {
     suffix: 'secureserver.net',
-    smtp: { host: 'smtpout.secureserver.net', port: 587, secure: false, provider: 'GoDaddy' },
+    smtp: { host: 'smtpout.secureserver.net', port: 587, secure: false, provider: 'GoDaddy', imap: { host: 'imap.secureserver.net', port: 993 } },
   },
-  { suffix: 'yandex.net', smtp: { host: 'smtp.yandex.com', port: 465, secure: true, provider: 'Yandex' } },
-  { suffix: 'yandex.ru', smtp: { host: 'smtp.yandex.com', port: 465, secure: true, provider: 'Yandex' } },
-  { suffix: 'zoho.com', smtp: { host: 'smtp.zoho.com', port: 587, secure: false, provider: 'Zoho' } },
-  { suffix: 'zoho.eu', smtp: { host: 'smtp.zoho.eu', port: 587, secure: false, provider: 'Zoho' } },
-  { suffix: 'mail.ru', smtp: { host: 'smtp.mail.ru', port: 465, secure: true, provider: 'Mail.ru' } },
-  { suffix: 'yahoodns.net', smtp: { host: 'smtp.mail.yahoo.com', port: 465, secure: true, provider: 'Yahoo' } },
-  { suffix: 'icloud.com', smtp: { host: 'smtp.mail.me.com', port: 587, secure: false, provider: 'iCloud' } },
+  { suffix: 'yandex.net', smtp: { host: 'smtp.yandex.com', port: 465, secure: true, provider: 'Yandex', imap: { host: 'imap.yandex.com', port: 993 } } },
+  { suffix: 'yandex.ru', smtp: { host: 'smtp.yandex.com', port: 465, secure: true, provider: 'Yandex', imap: { host: 'imap.yandex.com', port: 993 } } },
+  { suffix: 'zoho.com', smtp: { host: 'smtp.zoho.com', port: 587, secure: false, provider: 'Zoho', imap: { host: 'imap.zoho.com', port: 993 } } },
+  { suffix: 'zoho.eu', smtp: { host: 'smtp.zoho.eu', port: 587, secure: false, provider: 'Zoho', imap: { host: 'imap.zoho.eu', port: 993 } } },
+  { suffix: 'mail.ru', smtp: { host: 'smtp.mail.ru', port: 465, secure: true, provider: 'Mail.ru', imap: { host: 'imap.mail.ru', port: 993 } } },
+  { suffix: 'yahoodns.net', smtp: { host: 'smtp.mail.yahoo.com', port: 465, secure: true, provider: 'Yahoo', imap: { host: 'imap.mail.yahoo.com', port: 993 } } },
+  { suffix: 'icloud.com', smtp: { host: 'smtp.mail.me.com', port: 587, secure: false, provider: 'iCloud', imap: { host: 'imap.mail.me.com', port: 993 } } },
   { suffix: 'mailgun.org', smtp: { host: 'smtp.mailgun.org', port: 587, secure: false, provider: 'Mailgun' } },
 ];
 
@@ -115,4 +130,28 @@ export async function suggestSmtp(
     // fill in themselves.
     return null;
   }
+}
+
+/**
+ * The incoming (IMAP) server for a mailbox we already know the OUTGOING server
+ * of — null when the provider is unrecognised or has no IMAP.
+ *
+ * The inbound poller needs a host and holds an already-configured channel, so
+ * it asks by SMTP host rather than by address: that answer is exact, needs no
+ * DNS round trip on every tick, and stays correct for a mailbox whose host was
+ * typed by hand instead of discovered. `suggestSmtp` remains the entry point
+ * when all you have is an address.
+ *
+ * Note Microsoft: the host is right, but basic-auth IMAP is switched off on
+ * Microsoft 365, so a password connection there fails at LOGIN. It is listed
+ * anyway — the server's own refusal names the problem, while returning null
+ * would report the far more misleading "provider not recognised".
+ */
+export function imapForSmtpHost(smtpHost: string): { host: string; port: number } | null {
+  const host = String(smtpHost ?? '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return null;
+  for (const { smtp } of BY_MX_SUFFIX) {
+    if (smtp.host === host && smtp.imap) return { ...smtp.imap };
+  }
+  return null;
 }
