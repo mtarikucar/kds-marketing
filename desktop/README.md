@@ -20,7 +20,11 @@ Dizüstü kapalı olabilir, kablo çıkmış olabilir, siz "hayır" demiş olabi
    uyarısını onaylayın. (Onaylamazsanız uygulama telefonu "yetkisiz" olarak
    gösterir — liste boş görünmez, ne yapmanız gerektiğini söyler.)
 4. Jeeta'da **Ayarlar → API ve bağlayıcı → API anahtarları**'ndan bir anahtar
-   üretin. Anahtar yalnızca bir kez gösterilir.
+   üretin. Anahtar yalnızca bir kez gösterilir. **İki kapsam ailesini birden
+   verin:** kaba `write` (bu uygulamanın kendisi için) ve ayrıntılı
+   `campaigns.send` + `reports.read` (Claude'un telefona komut verebilmesi
+   için). Yalnızca read/write olan bir anahtar köprüyü sorunsuz çalıştırır ama
+   Claude telefonu hiç göremez — emülatörde tam olarak bu yaşandı.
 5. Aynı sayfanın **Eşleşmiş telefonlar** sekmesinde telefonu ekleyin ve çıkan
    **cihaz kimliğini** kopyalayın. Telefon önce orada var olmalı: kimliği üreten
    şey o kayıttır.
