@@ -34,7 +34,14 @@ interface DeviceRow {
   lastSeenAt?: string | null;
   pairedAt?: string | null;
   /** What the bridge found on the cable, reported on every heartbeat. */
-  properties?: { serial?: string; model?: string; androidVersion?: string; screen?: string } | null;
+  properties?: {
+    serial?: string;
+    model?: string;
+    androidVersion?: string;
+    screen?: string;
+    /** The desktop app's own version, reported on every heartbeat. */
+    bridgeVersion?: string;
+  } | null;
 }
 
 interface CommandRow {
@@ -53,6 +60,27 @@ interface CommandRow {
 const ONLINE_MS = 90_000;
 const isOnline = (d: DeviceRow) =>
   Boolean(d.lastSeenAt && Date.now() - new Date(d.lastSeenAt).getTime() < ONLINE_MS);
+
+/**
+ * The oldest desktop app that understands everything the server can now send.
+ *
+ * Duplicated from the server's MIN_BRIDGE_VERSION rather than fetched, because
+ * this is a hint on a settings page and a round trip to learn it would be a
+ * round trip nobody is waiting for. The server's copy is the one that governs
+ * `jeeta.list_devices`; if they drift, this badge is early or late by one
+ * release and nothing breaks.
+ */
+const MIN_BRIDGE = [0, 2, 0];
+const isOutdated = (d: DeviceRow): boolean => {
+  const v = d.properties?.bridgeVersion;
+  // No version at all means an app built before it reported one.
+  if (!v || !/^\d+\.\d+\.\d+/.test(v)) return true;
+  const parts = v.split('.').slice(0, 3).map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== MIN_BRIDGE[i]) return parts[i] < MIN_BRIDGE[i];
+  }
+  return false;
+};
 
 function History({ deviceId }: { deviceId: string }) {
   const { t } = useTranslation('marketing');
@@ -359,6 +387,15 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
                         {t('devices.paused', { defaultValue: 'Paused' })}
                       </Badge>
                     )}
+                    {/* An old desktop app is ONLINE and healthy and will refuse
+                        every command added since it shipped. Without this the
+                        only signal is that refusal, which arrives at the worst
+                        moment — when somebody finally used the new thing. */}
+                    {isOnline(d) && isOutdated(d) && (
+                      <Badge size="sm" tone="warning">
+                        {t('devices.outdated', { defaultValue: 'Desktop app is out of date' })}
+                      </Badge>
+                    )}
                   </div>
                   {/* Which handset is on the cable. A workspace with two
                       phones cannot otherwise tell one row from the other, and
@@ -366,9 +403,22 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
                       anybody wants to make twice. */}
                   {d.properties?.model && (
                     <p className="mt-1 text-micro text-muted-foreground">
-                      {[d.properties.model, d.properties.androidVersion && `Android ${d.properties.androidVersion}`, d.properties.serial]
+                      {[
+                        d.properties.model,
+                        d.properties.androidVersion && `Android ${d.properties.androidVersion}`,
+                        d.properties.serial,
+                        d.properties.bridgeVersion && `Jeeta Masaüstü ${d.properties.bridgeVersion}`,
+                      ]
                         .filter(Boolean)
                         .join(' · ')}
+                    </p>
+                  )}
+                  {isOnline(d) && isOutdated(d) && (
+                    <p className="mt-1 text-micro text-warning">
+                      {t('devices.outdatedHint', {
+                        defaultValue:
+                          'This desktop app is older than the commands Jeeta can now send. It will refuse the newer ones — update it before relying on this phone.',
+                      })}
                     </p>
                   )}
                   <p className="mt-1 text-micro text-muted-foreground">

@@ -4,6 +4,8 @@ import {
   validateDeviceCommand,
   describeDeviceCommand,
   DEVICE_COMMAND_KINDS,
+  MIN_BRIDGE_VERSION,
+  bridgeIsOutdated,
 } from './device-commands';
 
 const WS = 'ws-1';
@@ -107,6 +109,27 @@ describe('device commands — what a phone may be asked to do', () => {
     expect(() => validateDeviceCommand('TAP', { x: -5, y: 10 })).toThrow(/outside the screen/i);
     expect(() => validateDeviceCommand('TAP', { x: 10 })).toThrow(/y must be a number/i);
     expect(validateDeviceCommand('TAP', { x: 10.6, y: 20.2 })).toEqual({ x: 11, y: 20 });
+  });
+
+  it('treats a bridge that predates the current instruction set as outdated', () => {
+    // The whole reason this exists: an old bridge is ONLINE and healthy and
+    // will refuse every command added since it shipped. Without a version it
+    // looks identical to a current one right up to the refusal.
+    expect(bridgeIsOutdated('0.1.0')).toBe(true);
+    expect(bridgeIsOutdated(MIN_BRIDGE_VERSION)).toBe(false);
+    expect(bridgeIsOutdated('9.0.0')).toBe(false);
+    // Silence is not "probably fine": a bridge that reports no version is one
+    // built before reporting existed, which is older than the first version
+    // that reports.
+    expect(bridgeIsOutdated(undefined)).toBe(true);
+    expect(bridgeIsOutdated('')).toBe(true);
+    expect(bridgeIsOutdated('nightly')).toBe(true);
+  });
+
+  it('compares each part as a NUMBER, not as text', () => {
+    // "0.10.0" < "0.9.0" is true as strings and false as versions, and the
+    // first release past 0.9 is exactly when that would have bitten.
+    expect(bridgeIsOutdated('0.10.0')).toBe(false);
   });
 
   it('gives EVERY kind a sentence, because a blank approval card cannot be consented to', () => {

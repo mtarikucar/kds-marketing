@@ -112,6 +112,31 @@ describe('jeeta.list_devices', () => {
   });
 });
 
+describe('an out-of-date bridge', () => {
+  it('is reported as such, instead of being discovered by a refused command', async () => {
+    const { registry } = build({
+      devices: [
+        { ...ONLINE_DEVICE, id: 'old', properties: { bridgeVersion: '0.1.0' } },
+        { ...ONLINE_DEVICE, id: 'new', properties: { bridgeVersion: '9.9.9' } },
+        // Predates version reporting entirely.
+        { ...ONLINE_DEVICE, id: 'silent', properties: {} },
+      ],
+    });
+    const out = (await registry.get('jeeta.list_devices')!.handler(ctx as never, {})) as {
+      id: string;
+      bridgeVersion: string | null;
+      bridgeOutdated?: string;
+    }[];
+
+    expect(out.find((d) => d.id === 'old')!.bridgeOutdated).toMatch(/needs updating/i);
+    expect(out.find((d) => d.id === 'silent')!.bridgeOutdated).toBeTruthy();
+    // A current bridge says nothing — a field that is always present is a field
+    // a model learns to ignore.
+    expect(out.find((d) => d.id === 'new')!.bridgeOutdated).toBeUndefined();
+    expect(out.find((d) => d.id === 'new')!.bridgeVersion).toBe('9.9.9');
+  });
+});
+
 describe('jeeta.device_command', () => {
   it('queues under the CALLER workspace even when a foreign one is smuggled into a free-text field', async () => {
     const { registry, devices } = build();

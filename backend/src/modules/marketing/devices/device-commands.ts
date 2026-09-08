@@ -34,6 +34,38 @@ export const DEVICE_COMMAND_KINDS = [
 ] as const;
 export type DeviceCommandKind = (typeof DEVICE_COMMAND_KINDS)[number];
 
+/**
+ * The oldest desktop bridge that understands everything above.
+ *
+ * It lives HERE, beside the instruction set, because the instruction set is the
+ * only thing that obsoletes a bridge: a command kind added to the list is a
+ * command every older bridge will refuse with "this bridge does not know X".
+ * That refusal is honest but it arrives at the worst moment — when somebody
+ * finally used the new thing, on a desk nobody is watching. Bump this in the
+ * same commit that adds a kind, and the console can say so before anyone
+ * depends on it.
+ *
+ * 0.2.0 is the first version carrying TAP_ON.
+ */
+export const MIN_BRIDGE_VERSION = '0.2.0';
+
+/** Semver compare, enough for `major.minor.patch` and nothing more exotic —
+ *  this is our own version string, not an ecosystem's. */
+export function bridgeIsOutdated(reported: unknown): boolean {
+  if (typeof reported !== 'string' || !/^\d+\.\d+\.\d+/.test(reported)) {
+    // A bridge that reports nothing is one that predates reporting, which is
+    // by definition older than the first version that reports.
+    return true;
+  }
+  const [a, b] = [reported, MIN_BRIDGE_VERSION].map((v) =>
+    v.split('.').slice(0, 3).map((n) => parseInt(n, 10) || 0),
+  );
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i];
+  }
+  return false;
+}
+
 export const DEVICE_COMMAND_STATUSES = [
   'QUEUED',
   'CLAIMED',

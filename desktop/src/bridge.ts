@@ -10,6 +10,20 @@ import { AdbError, describeDevice, execute, listDevices } from './adb';
  * the naive thing.
  */
 
+/**
+ * What this bridge understands, sent on every heartbeat.
+ *
+ * The server's instruction set grows; a bridge on somebody's desk does not. Its
+ * only current signal for that is a refused command reading "this bridge does
+ * not know X — update Jeeta Masaüstü", which arrives at the WORST time: the
+ * moment somebody tried to use the new thing, in a place nobody is watching.
+ * Reporting the version turns that into something the console can say BEFORE
+ * anyone depends on it. Read from package.json so it cannot drift from what
+ * was actually shipped.
+ */
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const BRIDGE_VERSION: string = (require('../package.json') as { version: string }).version;
+
 export interface BridgeConfig {
   /** e.g. https://jeetagrowth.com */
   baseUrl: string;
@@ -131,7 +145,9 @@ export class Bridge {
   private async beatIfDue(): Promise<void> {
     if (Date.now() - this.lastBeat < HEARTBEAT_EVERY_MS) return;
     const info = await describeDevice(this.cfg.serial).catch(() => ({ serial: this.cfg.serial }));
-    await this.post(`/api/marketing/device-bridge/${this.cfg.deviceId}/heartbeat`, { properties: info });
+    await this.post(`/api/marketing/device-bridge/${this.cfg.deviceId}/heartbeat`, {
+      properties: { ...info, bridgeVersion: BRIDGE_VERSION },
+    });
     this.lastBeat = Date.now();
     this.events.onStatus?.('Bağlı — komut bekleniyor');
   }
