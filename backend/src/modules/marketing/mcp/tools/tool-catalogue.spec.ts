@@ -20,6 +20,7 @@ import { registerWorkspaceTools } from './workspace.tools';
 import { registerContentTools } from './content.tools';
 import { registerSocialCampaignTools } from './social-campaigns.tools';
 import { registerContentConceptTools } from './content-concepts.tools';
+import { registerContentProgrammeTools } from './content-programme.tools';
 import { registerContentDistributionTools } from './content-distribution.tools';
 import { registerEmailTools } from './email.tools';
 import { registerVoiceTools } from './voice.tools';
@@ -146,6 +147,13 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   });
   registerContentConceptTools(registry, {
     concepts: { planConcepts: jest.fn(), list: jest.fn(), review: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerContentProgrammeTools(registry, {
+    programmes: { get: jest.fn(), getOrThrow: jest.fn(), update: jest.fn(), pause: jest.fn(), resume: jest.fn() } as any,
+    dashboard: { dashboard: jest.fn(), slotView: jest.fn() } as any,
+    editor: { updateSlot: jest.fn(), skipSlot: jest.fn(), regenerateSlot: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
@@ -486,6 +494,14 @@ describe('MCP tool catalogue', () => {
         // distribution-send.boundary.spec.ts.
         'jeeta.plan_content_distribution',
         'jeeta.list_distribution_drafts',
+        // İçerik Programı — the autonomous typed-content loop. Three tools,
+        // all deferred. Read the dashboard, steer the settings / pause /
+        // resume, rewrite one slot. Deliberately NO create and NO kill: the
+        // moment autonomous credit spend starts, and the terminal switch that
+        // sweeps the calendar, are a person's decisions at the Studio panel.
+        'jeeta.get_content_programme',
+        'jeeta.update_content_programme',
+        'jeeta.edit_content_slot',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -502,6 +518,8 @@ describe('MCP tool catalogue', () => {
     // 127 -> 128: jeeta.storyboard_content_concept, also deferred.
     // 128 -> 129: jeeta.submit_strategy, also deferred — the credit-free way
     // to a first MarketingStrategy row.
+    // 129 -> 132: the three content-programme tools, every one of them
+    // deferred; no create, no kill (see the comment beside them above).
     //
     // Those two waves ran in PARALLEL and each appended its own line here, each
     // starting from the number it saw before the other landed — so both were
@@ -519,7 +537,7 @@ describe('MCP tool catalogue', () => {
     // over-counts; re-measured, grep did not — the counts have always matched,
     // and the figure to trust is the one this assertion takes from a built
     // registry.
-    expect(names).toHaveLength(129);
+    expect(names).toHaveLength(132);
   });
 
   /**
@@ -605,14 +623,14 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 128 total, 45 advertised (+2 discovery) and 81 deferred: everything a
+    // 132 total, 45 advertised (+2 discovery) and 85 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
-    // hundred. `jeeta.submit_strategy` is the newest, and deferred for that
-    // reason — like `jeeta.submit_content_concepts` before it. The number in this comment said 120 while the assertion
+    // hundred. The three content-programme tools are the newest, and deferred
+    // for that reason — like `jeeta.submit_strategy` before them. The number in this comment said 120 while the assertion
     // below said 123; a comment that disagrees with its own assertion is how a
     // measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(129);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(132);
   });
 });
 
@@ -685,6 +703,11 @@ const ID_SOURCES: Record<string, string> = {
   courseId: 'jeeta.list_courses',
   budgetId: 'jeeta.get_budget',
   conceptId: 'jeeta.list_content_concepts',
+  // The programme and its calendar slots both come off ONE read: the
+  // dashboard carries `slots[].id`, so a second listing tool would be a
+  // duplicate of it.
+  programmeId: 'jeeta.get_content_programme',
+  slotId: 'jeeta.get_content_programme',
 };
 
 describe('MCP catalogue — every required id must be discoverable', () => {

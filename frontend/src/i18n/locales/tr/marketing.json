@@ -4154,6 +4154,192 @@
     }
   },
   "studio": {
+    "programme": {
+      "editor": {
+        "frozen": "Düzenleme penceresi kapandı; slot olduğu gibi yayınlanır.",
+        "idea": "Fikir",
+        "metrics": "Metrikler",
+        "noApproval": "Her şey düzenlenebilir; hiçbir adım onay beklemez.",
+        "readyHint": "Klipler hazır: yalnızca saat değişebilir.",
+        "regenerate": "Yeniden üret",
+        "regenerateFailed": "Slot yeniden üretilemedi.",
+        "regenerated": "Slot yeniden planlanıyor.",
+        "save": "Kaydet",
+        "saveFailed": "Slot kaydedilemedi.",
+        "saved": "Slot güncellendi.",
+        "skip": "Atla",
+        "skipFailed": "Slot atlanamadı.",
+        "storyboard": "Storyboard'u aç",
+        "title": "Slot düzenleyici",
+        "trend": "Trend kancası",
+        "type": "Tür",
+        "when": "Yayın zamanı",
+        "window": "Düzenleme penceresi: {{hours}} saat kaldı"
+      },
+      "error": "İçerik programı okunamadı.",
+      "events": {
+        "empty": "Henüz olay yok."
+      },
+      "goal": {
+        "COMPOSITE": "Bileşik — etkileşim, kaydet-paylaş ve izlenmenin karışımı",
+        "ENGAGEMENT": "Etkileşim — beğeni, yorum, paylaşım oranı",
+        "LEADS": "Müşteri adayı — formdan gelen kişiler",
+        "SAVES_SHARES": "Kaydet & paylaş — saklanan ve iletilen içerik",
+        "VIEWS": "İzlenme — video izlenmesi ve gösterim"
+      },
+      "kill": {
+        "confirm": "Evet, durdur",
+        "description": "Geri alınamaz: açık slotlar iptal edilir, kampanya duraklatılır, geçmiş ve öğrenilenler kalır. Yeni bir program açmak için baştan kurmanız gerekir.",
+        "title": "Programı durdur (kill)?"
+      },
+      "learning": {
+        "allNetworks": "Tümü",
+        "computedAt": "Tarih",
+        "historyTitle": "Tür ağırlıkları, son 12 yeniden ağırlıklandırma",
+        "lastReweighted": "Son yeniden ağırlıklandırma: {{when}}",
+        "meanReward": "Ort. ödül",
+        "network": "Ağ",
+        "neverReweighted": "Henüz yeniden ağırlıklandırılmadı.",
+        "noHistory": "Henüz yeniden ağırlıklandırma yok — ilk hafta dolunca burada çizilir.",
+        "noRows": "Ölçülmüş slot yok; ilk yayınlar olgunlaşınca tablo dolar.",
+        "samples": "Örnek",
+        "type": "Tür",
+        "weight": "Ağırlık"
+      },
+      "metrics": {
+        "beats": "{{beats}} kare · {{seconds}} sn",
+        "comments": "Yorum",
+        "engagements": "Etkileşim",
+        "error": "Metrikler okunamadı.",
+        "impressions": "Gösterim",
+        "item": "Kampanya öğesi: {{status}}",
+        "leads": "Aday",
+        "likes": "Beğeni",
+        "network": "Ağ",
+        "noTargets": "Hedef yok — slot henüz yayınlanmadı.",
+        "notPublished": "Henüz yayınlanmadı.",
+        "publishedAt": "Yayınlandı: {{when}}",
+        "reach": "Erişim",
+        "reward": "Ödül",
+        "saves": "Kaydetme",
+        "shares": "Paylaşım",
+        "status": "Durum",
+        "videoViews": "Video izlenme"
+      },
+      "none": "Henüz program yok: türlere göre üretip yayınlayan ve tutan türlere kayan döngü burada başlar.",
+      "phase": {
+        "EXPLOIT": "Kazananlara",
+        "LEARN": "Öğreniyor",
+        "SEED": "Tohum"
+      },
+      "phaseHint": {
+        "EXPLOIT": "Kazananlara: en iyi tür açık ara önde; ağırlık ona kayar, keşif hiç sıfırlanmaz.",
+        "LEARN": "Öğreniyor: türler ödüle göre örneklenir (Thompson); keşif payı korunur.",
+        "SEED": "Tohum: her tür sırayla denenir, ağırlık yok. Yeterli ölçüm birikince öğrenmeye geçer."
+      },
+      "row": {
+        "burn": "{{spent}}/{{cap}} kredi bu hafta",
+        "detail": "Ayrıntı",
+        "kill": "Durdur (kill)",
+        "killFailed": "Program durdurulamadı.",
+        "killed": "Program durduruldu; açık slotlar iptal edildi.",
+        "running": "Çalışıyor",
+        "toggleFailed": "Program durumu değiştirilemedi."
+      },
+      "setup": {
+        "accounts": "Hesaplar",
+        "accountsError": "Hesaplar okunamadı.",
+        "brief": "Konu / ürün / ton",
+        "cap": "Haftalık kredi tavanı",
+        "created": "Program başladı; ilk slotlar birkaç dakika içinde planlanır.",
+        "description": "Türlere göre üretir, yayınlar, ölçer ve tutan türlere kayar. Onay kapısı yok; her slot yayına 2 saat kalana kadar düzenlenebilir.",
+        "failed": "Program kurulamadı.",
+        "goal": "Neyi \"tutan\" sayalım?",
+        "name": "Ad",
+        "needAccounts": "En az bir hesap seçin.",
+        "needBrief": "Program neyle ilgili? Kısaca yazın.",
+        "needCap": "Haftalık kredi tavanı en az 50 olmalı.",
+        "needName": "Programa bir ad verin.",
+        "needTime": "Saat SS:DD biçiminde olmalı.",
+        "noAccounts": "Bağlı hesap yok — önce bir hesap bağlayın.",
+        "perWeek": "Haftalık gönderi (hesap başına)",
+        "submit": "Başlat",
+        "time": "Yayın saati (SS:DD)",
+        "title": "İçerik programını başlat"
+      },
+      "slotStatus": {
+        "FAILED": "Başarısız",
+        "IDEATED": "Fikir hazır",
+        "MEASURED": "Ölçüldü",
+        "PLANNED": "Planlandı",
+        "PRODUCING": "Üretiliyor",
+        "PUBLISHED": "Yayınlandı",
+        "READY": "Hazır",
+        "SKIPPED": "Atlandı"
+      },
+      "slots": {
+        "actions": "İşlemler",
+        "credits": "Teklif (kredi)",
+        "editableFor": "{{hours}} sa düzenlenebilir",
+        "empty": "Bu pencerede slot yok.",
+        "reward": "Ödül",
+        "status": "Durum",
+        "type": "Tür",
+        "when": "Zaman",
+        "why": "Neden bu tür?"
+      },
+      "stale": "durum güncellenemedi",
+      "start": "Programı başlat",
+      "status": {
+        "ACTIVE": "Çalışıyor",
+        "KILLED": "Durduruldu",
+        "PAUSED": "Duraklatıldı"
+      },
+      "strip": {
+        "empty": "Önümüzdeki 14 gün için slot yok — planlayıcı 6 saatte bir doldurur.",
+        "label": "Önümüzdeki 14 günün slotları"
+      },
+      "tabs": {
+        "events": "Günlük",
+        "learning": "Öğrenme",
+        "slots": "Slotlar",
+        "trends": "Trendler",
+        "types": "Türler"
+      },
+      "title": "İçerik programı",
+      "trends": {
+        "decayed": "Sönümlenmiş skor",
+        "decayedShort": "skor",
+        "empty": "Trend sinyali yok — sağlayıcılar 12 saatte bir tazeler; kapalıysa bu liste boş kalır.",
+        "relevance": "Marka uygunluğu",
+        "relevanceShort": "uygunluk",
+        "suggestion": "Öneri"
+      },
+      "types": {
+        "active": "Aktif",
+        "activeFor": "{{name}} aktif",
+        "add": "Tür ekle",
+        "addDescription": "Yeni tür tohum evresinde sıraya girer; pay sınırları varsayılan %5–%40 ile başlar.",
+        "addFailed": "Tür eklenemedi.",
+        "addTitle": "Yeni içerik türü",
+        "description": "Açıklama",
+        "duration": "Süre (saniye)",
+        "hint": "Taban ve tavan, öğrenme başladıktan sonra bir türün takvimden alabileceği payı sınırlar. Kaydetmek için alandan çıkın.",
+        "key": "Anahtar (slug)",
+        "learned": "Öğrenilen",
+        "maxShare": "Tavan",
+        "maxShareFor": "{{name}} tavan payı",
+        "meanReward": "Ort. ödül",
+        "minShare": "Taban",
+        "minShareFor": "{{name}} taban payı",
+        "name": "Tür",
+        "needKeyName": "Anahtar ve ad zorunlu.",
+        "planned": "Planlanan",
+        "samples": "Örnek",
+        "saveFailed": "Tür kaydedilemedi.",
+        "share": "Pay: planlanan / öğrenilen"
+      }
+    },
     "tab": {
       "autopilot": "Otopilot",
       "create": "Üret",

@@ -273,6 +273,10 @@ import { StoryboardService } from './content-concepts/storyboard.service';
 import { ContentTypesService } from './content-programme/content-types.service';
 import { ContentProgrammeService } from './content-programme/content-programme.service';
 import { ProgrammeLearningService } from './content-programme/programme-learning.service';
+import { ProgrammePlannerService } from './content-programme/programme-planner.service';
+import { SlotProducerService } from './content-programme/slot-producer.service';
+import { SlotEditorService } from './content-programme/slot-editor.service';
+import { ProgrammeDashboardService } from './content-programme/programme-dashboard.service';
 import { TrendSignalService, TREND_PROVIDERS_FACTORY } from './trends/trend-signal.service';
 import { GoogleTrendsRssProvider } from './trends/providers/google-trends-rss.provider';
 import { ApifyTiktokTrendsProvider } from './trends/providers/apify-tiktok-trends.provider';
@@ -311,11 +315,13 @@ import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
 import { registerContentConceptTools } from './mcp/tools/content-concepts.tools';
+import { registerContentProgrammeTools } from './mcp/tools/content-programme.tools';
 import { registerContentDistributionTools } from './mcp/tools/content-distribution.tools';
 import { ContentDistributionService } from './distribution/content-distribution.service';
 import { DistributionSendService } from './distribution/distribution-send.service';
 import { MarketingContentDistributionController } from './controllers/marketing-content-distribution.controller';
 import { MarketingContentLineController } from './controllers/marketing-content-line.controller';
+import { MarketingContentProgrammeController } from './controllers/marketing-content-programme.controller';
 import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
@@ -701,6 +707,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MarketingConversationsController,
     MarketingContentDistributionController,
     MarketingContentLineController,
+    MarketingContentProgrammeController,
     MarketingChannelsController,
     WebchatPublicController,
     MetaWebhookController,
@@ -1055,6 +1062,12 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ContentTypesService,
     ContentProgrammeService,
     ProgrammeLearningService,
+    // The planning half of the loop (calendar fill + per-slot plan/produce
+    // jobs), the owner's slot editor, and the panel's read model.
+    ProgrammePlannerService,
+    SlotProducerService,
+    SlotEditorService,
+    ProgrammeDashboardService,
     GoogleTrendsRssProvider,
     ApifyTiktokTrendsProvider,
     YoutubeTrendingProvider,
@@ -1405,6 +1418,11 @@ export class MarketingModule {
     // For `jeeta.submit_strategy` only — the credit-free writer a connected
     // Claude uses when the platform's own key cannot produce a strategy.
     strategySynthesis: StrategySynthesisService,
+    // İçerik Programı over MCP: read the dashboard, steer the settings, rewrite
+    // one slot. Create and kill stay hub-only (see content-programme.tools.ts).
+    contentProgrammes: ContentProgrammeService,
+    programmeDashboard: ProgrammeDashboardService,
+    slotEditor: SlotEditorService,
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
@@ -1435,6 +1453,13 @@ export class MarketingModule {
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
+    registerContentProgrammeTools(registry, {
+      programmes: contentProgrammes,
+      dashboard: programmeDashboard,
+      editor: slotEditor,
+      principals,
+      entitlements,
+    });
     registerContentDistributionTools(registry, {
       distribution: contentDistribution,
       principals,

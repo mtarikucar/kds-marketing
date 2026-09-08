@@ -49,6 +49,7 @@ vi.mock('./StudioToolsDrawer', () => ({
   StudioToolsDrawer: ({ open, tool }: { open: boolean; tool: string | null }) =>
     open ? <div>drawer:{tool}</div> : null,
 }));
+vi.mock('./ProgrammePanel', () => ({ default: () => <div>programme-panel</div> }));
 
 function LocationProbe() {
   const loc = useLocation();
@@ -185,6 +186,29 @@ describe('StudioOneScreen', () => {
     expect(list).toBe(`accounts-list|${from}|${to}`);
   });
 
+  /**
+   * The programme row sits directly under the top strip and above the work
+   * area, full width, and is never folded into either: it renders from its own
+   * query and has its own collapse, so a failed budget poll cannot take the
+   * kill switch off the screen and a failed programme read cannot take the
+   * console off it.
+   */
+  it('mounts the programme panel between the top strip and the work area', async () => {
+    renderAt('/studio');
+    await screen.findByText(/^today-panel/);
+
+    const panel = await screen.findByText('programme-panel');
+    const section = screen.getByTestId('studio-programme');
+    expect(section).toContainElement(panel);
+    expect(section.className).toMatch(/shrink-0/);
+
+    const strip = screen.getByRole('button', { name: 'autopilot-bar' }).parentElement!;
+    const work = screen.getByTestId('studio-work');
+    expect(strip.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(section.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(work).not.toContainElement(panel);
+  });
+
   it('keeps the drawer closed until the URL asks for a tool', async () => {
     renderAt('/studio');
     await screen.findByText(/^today-panel/);
@@ -204,7 +228,7 @@ describe('StudioOneScreen', () => {
    * console. So a tool added to the drawer's union but forgotten here is a link
    * that silently opens the wrong thing, with no type error anywhere.
    */
-  it.each(['money', 'ops', 'audience'])('resolves ?tool=%s to that tool, not the fallback', async (tool) => {
+  it.each(['money', 'ops', 'audience', 'line'])('resolves ?tool=%s to that tool, not the fallback', async (tool) => {
     renderAt(`/studio?tool=${tool}`);
     expect(await screen.findByText(`drawer:${tool}`)).toBeInTheDocument();
   });
