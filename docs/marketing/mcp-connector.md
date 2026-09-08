@@ -479,7 +479,7 @@ there will not be one.
 
 | Tool | What it does | Scope | Risk | Approval | Listed |
 |---|---|---|---|---|---|
-| `jeeta.list_devices` | Paired phones with their mode (MANUAL = a person approves every command), status, and whether the desktop bridge is online | `reports.read` | READ | — | no |
+| `jeeta.list_devices` | Paired phones with their mode (MANUAL = a person approves every command), status, whether the desktop bridge is online, its version, and `bridgeOutdated` when that version predates the current instruction set | `reports.read` | READ | — | no |
 | `jeeta.device_command` | QUEUE one command: `OPEN_URL` (https/tel — how a WhatsApp click-to-chat draft gets on screen), `LAUNCH_APP`, `TAP_ON` (press a named element), `TAP`, `SWIPE`, `TEXT`, `KEY`, `SCREENSHOT`, `UI_DUMP`. Waits ~25s for an outcome, then reports honestly that it is still queued — and does not wait at all when the bridge is offline | `campaigns.send` | WRITE | PUBLISH | no |
 | `jeeta.device_command_result` | What became of a queued command — DONE / FAILED / REFUSED / EXPIRED / QUEUED | `reports.read` | READ | — | no |
 
@@ -498,6 +498,12 @@ made stale by a list that settles or a banner that lands between your reading
 and your tap. `TAP` with raw coordinates still exists, for the places with no
 label at all. An exact label wins over a partial one — "Sil" will not press
 "Silinenler" — and `occurrence` picks among rows that read alike.
+
+A bridge reports its own version on every heartbeat. When it is older than the
+commands the server can now send, `jeeta.list_devices` says so in
+`bridgeOutdated` — an old bridge is online and healthy and will refuse anything
+added since it shipped, so check that field before planning a sequence around a
+newer command. The field is absent when the bridge is current.
 
 `SCREENSHOT` returns `screenshotUrl`, never image bytes: the picture is uploaded
 server-side and the result carries a link. With no object store configured the

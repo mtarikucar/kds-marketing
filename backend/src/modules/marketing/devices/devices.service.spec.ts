@@ -283,6 +283,42 @@ describe('DevicesService — the rendezvous', () => {
     expect(await svc.claimNext(WS, DEV)).toBeNull();
   });
 
+  it('does not forget the phone because one heartbeat came back thin', async () => {
+    // The bridge falls back to just the serial whenever adb hiccups — a
+    // sleeping phone, a busy cable. Replacing the blob with that erased the
+    // model, the Android version and the screen size from a console that had
+    // been showing them, for as long as the hiccup lasted.
+    const known = {
+      id: DEV,
+      workspaceId: WS,
+      label: 'T',
+      status: 'ACTIVE',
+      mode: 'MANUAL',
+      properties: { model: 'Pixel 5', androidVersion: '13', serial: 'abc', bridgeVersion: '0.2.0' },
+    };
+    const { svc, prisma } = deps(known);
+    await svc.heartbeat(WS, DEV, { serial: 'abc' });
+    const written = (prisma.device.update as jest.Mock).mock.calls.at(-1)[0].data.properties;
+    expect(written.model).toBe('Pixel 5');
+    expect(written.androidVersion).toBe('13');
+  });
+
+  it('lets a newly reported value win over the remembered one', async () => {
+    // Merging must not turn into remembering forever: a phone that reports a
+    // new Android version has upgraded, and the console should say so.
+    const { svc, prisma } = deps({
+      id: DEV,
+      workspaceId: WS,
+      label: 'T',
+      status: 'ACTIVE',
+      mode: 'MANUAL',
+      properties: { model: 'Pixel 5', androidVersion: '13' },
+    });
+    await svc.heartbeat(WS, DEV, { model: 'Pixel 5', androidVersion: '14' });
+    const written = (prisma.device.update as jest.Mock).mock.calls.at(-1)[0].data.properties;
+    expect(written.androidVersion).toBe('14');
+  });
+
   it('never lets a screenshot reach the database as text', async () => {
     // Base64 in a JSONB column is megabytes per tap, and the same string is
     // what an MCP caller would then be handed. It must not survive this method

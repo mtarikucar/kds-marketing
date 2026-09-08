@@ -183,7 +183,21 @@ export class DevicesService {
       data: {
         lastSeenAt: new Date(),
         pairedAt: device.pairedAt ?? new Date(),
-        ...(properties ? { properties: properties as never } : {}),
+        // MERGED, not replaced. `describeDevice` on the bridge falls back to
+        // just the serial whenever adb hiccups — a sleeping phone, a busy
+        // cable — and this used to overwrite the whole blob with it, so one
+        // slow moment erased the model, the Android version and the screen
+        // size from a console that had been showing them. A newly reported
+        // value still wins; only the fields this beat had nothing to say about
+        // survive.
+        ...(properties
+          ? {
+              properties: {
+                ...((device.properties as Record<string, unknown>) ?? {}),
+                ...properties,
+              } as never,
+            }
+          : {}),
       },
     });
   }
