@@ -33,6 +33,9 @@ import { registerCommerceTools } from './commerce.tools';
 import { registerCourseTools } from './courses.tools';
 import { registerReviewTools } from './reviews.tools';
 import { registerDeviceTools } from './device.tools';
+import { registerReadinessTools } from './readiness.tools';
+import { registerSetupWriteTools } from './setup-write.tools';
+import { registerOperationsTools } from './operations.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -232,6 +235,27 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     // The catalogue tests never dispatch; they only assert the surface.
     dispatch: async () => ({ status: 'OK' as const, result: null }),
   });
+  // These three were LIVE in marketing.module.ts and outside this guard.
+  // `registerReadinessTools` and `registerSetupWriteTools` shipped four tools
+  // that never appeared in the list below, the counts, or
+  // docs/marketing/mcp-connector.md — and that is the whole of the
+  // 137-calls-versus-133-names gap this file used to record as unexplained.
+  // A guard that builds its own registry by hand only guards what somebody
+  // remembered to add to it.
+  registerReadinessTools(registry, { readiness: { compute: jest.fn() } as any });
+  registerSetupWriteTools(registry, {
+    taxRates: { create: jest.fn() } as any,
+    orderForms: { create: jest.fn() } as any,
+    emailTemplates: { create: jest.fn() } as any,
+  });
+  registerOperationsTools(registry, {
+    distribution: { update: jest.fn() } as any,
+    approvals: { listPending: jest.fn() } as any,
+    customFields: { list: jest.fn(), create: jest.fn() } as any,
+    segments: { preview: jest.fn(), create: jest.fn() } as any,
+    offers: { findAll: jest.fn() } as any,
+    principals: { resolve: jest.fn() } as any,
+  });
 }
 
 const ALL_SCOPES = [
@@ -259,8 +283,11 @@ const ALL_SCOPES = [
  *
  * The cap that matters is therefore no longer the TOTAL — that is free to grow
  * — but the ADVERTISED set: what every model actually loads on every session.
- * 45 is the working ceiling; a wave that pushes past it must defer something,
- * not raise the number.
+ * 46 is the working ceiling; a wave that pushes past it must defer something,
+ * not raise the number. It read 45 until the guard below was widened and
+ * revealed that production had been advertising 49 through two registrars this
+ * spec never built — see the note beside the assertion for why exactly one of
+ * those four kept its slot and the other three were deferred.
  *
  * The ceiling governs the DOMAIN surface — the tools that do workspace work.
  * The two discovery tools are not part of it: they are the mechanism the
@@ -271,7 +298,7 @@ const ALL_SCOPES = [
  * they create would mean deferring a real tool to pay for the ability to reach
  * deferred tools — which is why they are listed here by name and exempted.
  */
-const ADVERTISED_CEILING = 45;
+const ADVERTISED_CEILING = 46;
 const DISCOVERY_TOOLS = ['jeeta.find_tools', 'jeeta.call_tool'];
 
 describe('MCP tool catalogue', () => {
@@ -498,6 +525,20 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_devices',
         'jeeta.device_command',
         'jeeta.device_command_result',
+        // Brought INSIDE the guard rather than added: these four were already
+        // live and simply invisible here.
+        'jeeta.get_setup_readiness',
+        'jeeta.create_tax_rate',
+        'jeeta.create_order_form',
+        'jeeta.create_email_template',
+        // Wave 1 of closing the API-vs-connector gap. All deferred.
+        'jeeta.set_distribution_config',
+        'jeeta.list_pending_approvals',
+        'jeeta.list_custom_fields',
+        'jeeta.create_custom_field',
+        'jeeta.preview_segment',
+        'jeeta.create_segment',
+        'jeeta.list_offers',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -524,16 +565,17 @@ describe('MCP tool catalogue', () => {
     // either branch predicted. This is the failure mode the note below warns
     // about: trust the assertion, which counts a real registry.
     //
-    // MEASURED from a built registry, and that is now the ONLY figure worth
-    // quoting. `grep -c 'registry.register('` over the non-spec tool files used
-    // to agree exactly (123/123, then 124/124, then 126/126) and no longer
-    // does: at 133 registered names the same grep reports 137 register calls,
-    // and `name: 'jeeta.` reports 141. Both greps count text; the registry
-    // counts what a client can actually reach, and only the second one is the
-    // catalogue. The gap has NOT been chased down to a cause here — saying so
-    // is the point, because the previous version of this comment asserted an
-    // agreement that had quietly stopped being true.
-    expect(names).toHaveLength(133);
+    // MEASURED from a built registry — and the grep cross-check agrees again,
+    // now that the reason it stopped is known. An earlier note here recorded
+    // 133 names against 137 register calls and left the difference
+    // unexplained. The difference WAS the bug: two registrars were live in
+    // marketing.module.ts and missing from the registry this file builds by
+    // hand, so four real tools sat outside every assertion in it. 133 + those
+    // 4 + this wave's 7 = 144, which is what the grep had been counting all
+    // along. The lesson is in the guard, not the arithmetic — which is why the
+    // registrar-parity test below now pins the SET of registrars against the
+    // module, so the next one cannot ship unguarded.
+    expect(names).toHaveLength(144);
   });
 
   /**
@@ -620,14 +662,30 @@ describe('MCP tool catalogue', () => {
     // reach deferred tools; adding the dispatcher costs no domain tool its slot.
     //
     // The number below is the ceiling, and the rule it carries is that a wave
-    // which wants more must DEFER something rather than raise it. This prose
+    // which wants more must DEFER something rather than raise it.
+    //
+    // 45 -> 46, DELIBERATELY. The ceiling had in fact been exceeded for some
+    // time without anyone deciding to: the two registrars named above were
+    // wired in the module and never added to the registry this file builds, so
+    // their four ADVERTISED tools were invisible to this assertion and
+    // production actually advertised 49. Bringing them inside, the three
+    // setup-write tools took `defer: true` — occasional actions, perfectly
+    // reachable through discovery — which pays for three of the four in
+    // exactly the way the rule demands.
+    //
+    // `jeeta.get_setup_readiness` keeps its slot and the ceiling moves by one
+    // to hold it. It is the tool an agent is TOLD to call first when asked to
+    // finish setting a workspace up, and the one thing that explains what is
+    // broken; making the diagnostic itself hard to find is the wrong trade at
+    // any budget. A raise with a written reason is a decision. Four tools
+    // drifting past an assertion that could not see them was not. This prose
     // said 44 while the assertion said 45 — the drift is worth naming, because
     // a comment that disagrees with its own assertion is how the rule quietly
     // stops being one.
     expect(
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
-    ).toHaveLength(45);
-    expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
+    ).toHaveLength(46);
+    expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(46 + DISCOVERY_TOOLS.length);
     // 133 total, 45 advertised (+2 discovery) and 88 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
@@ -637,7 +695,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(133);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(144);
   });
 });
 
@@ -785,5 +843,60 @@ describe('mcp-connector.md keeps up with the registry', () => {
     // find_tools only FINDS. Without call_tool an integrator can see the other
     // two thirds of the catalogue and reach none of it.
     expect(readFileSync(docPath, 'utf8')).toContain('jeeta.call_tool');
+  });
+});
+
+/**
+ * The guard on the guard.
+ *
+ * Every assertion in this file measures a registry that the file itself builds,
+ * by hand, one `register*Tools` call at a time. That is fine until somebody
+ * wires a new registrar into `marketing.module.ts` and does not add it here —
+ * at which point the tool ships, is callable in production, and is absent from
+ * the pinned list, the counts, the advertised ceiling and the integrator doc,
+ * with every test still green.
+ *
+ * That is not hypothetical. `registerReadinessTools` and
+ * `registerSetupWriteTools` were live and unguarded for several waves: four
+ * tools, all ADVERTISED, which is how the advertised surface reached 49 against
+ * a ceiling of 45 that nothing could see it had passed. It also accounts
+ * exactly for the register-call-versus-registered-name gap the count note above
+ * once recorded as unexplained.
+ *
+ * So the SET is pinned, not just the contents. A new registrar now fails here
+ * until it is built into `registerFullCatalogue` — which is the one step that
+ * makes every other assertion in this file apply to it.
+ */
+describe('the catalogue guard covers every registrar the module wires', () => {
+  const REGISTRAR = /(register[A-Za-z]+Tools)\s*\(\s*registry/g;
+
+  const names = (file: string): Set<string> => {
+    const src = readFileSync(join(process.cwd(), 'src', 'modules', 'marketing', file), 'utf8');
+    // Comment lines are dropped BEFORE matching. Without this the check passes
+    // on a registrar that has been commented out — which is not a hypothetical
+    // weakness: it is what a mutation of this very test did, and the two count
+    // assertions caught it while this one did not.
+    const code = src
+      .split('\n')
+      .filter((line) => {
+        const t = line.trim();
+        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+      })
+      .join('\n');
+    return new Set(Array.from(code.matchAll(REGISTRAR), (m) => m[1]));
+  };
+
+  it('builds the same registrar set marketing.module.ts does', () => {
+    const inModule = names('marketing.module.ts');
+    const inSpec = names(join('mcp', 'tools', 'tool-catalogue.spec.ts'));
+    // Direction matters: a registrar in the module and not here is a tool
+    // shipping unguarded. The reverse is only dead test scaffolding.
+    expect([...inModule].filter((r) => !inSpec.has(r)).sort()).toEqual([]);
+  });
+
+  it('finds a real number of registrars, so a broken regex cannot pass it vacuously', () => {
+    // An assertion that compares two empty sets is an assertion that never
+    // fails. If the match pattern ever stops matching, this is what says so.
+    expect(names('marketing.module.ts').size).toBeGreaterThan(25);
   });
 });
