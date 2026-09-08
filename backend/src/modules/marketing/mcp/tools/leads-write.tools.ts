@@ -106,6 +106,69 @@ const leadBodyShape = {
  * deliberately out of scope.
  */
 export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWriteToolDeps): void {
+  /**
+   * The advisory score a routine was always meant to write — reachable at last.
+   *
+   * `MarketingLeadsService.applyAiScore` has existed for exactly this since the
+   * lead-scoring routine shipped, and the only caller was ever going to be a
+   * claude.ai agent reaching back over HTTP after the platform PUSHED it a
+   * trigger. That push needs a `triggerUrl` on RoutineConfig, which has never
+   * been set on any workspace, so no lead in this product has ever carried a
+   * score. Nothing was broken; the lane simply had no reachable end.
+   *
+   * Pulling instead of pushing removes the configuration entirely: a connector
+   * finds its work with `jeeta.search_leads({ scored: 'no' })` and writes the
+   * result here. That is the whole shape of the MCP-first direction in one
+   * pair of calls.
+   *
+   * The guard lives in the service and is worth naming: it stamps only a lead
+   * that is UNSCORED and in this workspace, so a re-run is a no-op rather than
+   * a re-score, and `written: 0` is a truthful answer rather than a failure.
+   */
+  registry.register({
+    name: 'jeeta.score_lead',
+    description:
+      'Write the advisory AI score for one lead: 0-100 plus the reasoning behind it. Find the work ' +
+      "with jeeta.search_leads({ scored: 'no' }). This is ADVISORY — it ranks attention, it does not " +
+      'move the lead through the pipeline (use jeeta.set_lead_status for that) and it does not assign ' +
+      'anyone. Scoring is ONE-SHOT per lead: a lead that already carries a score is left exactly as it ' +
+      'is and the call reports written: 0, so re-running a scoring pass is safe and cheap. Say WHY in ' +
+      'the reason — it is shown to the rep who picks the lead up, and a score with no reasoning is a ' +
+      'number nobody trusts.',
+    domain: 'leads',
+    defer: true,
+    scopes: ['leads.write'],
+    risk: 'WRITE',
+    // Writes an advisory field on one record. Nothing is sent, nothing moves.
+    requiresApproval: false,
+    inputSchema: z.object({
+      leadId: z.string().min(1).describe('Lead to score.'),
+      score: z
+        .number()
+        .int()
+        .min(0)
+        .max(100)
+        .describe('0-100. Higher means more worth a sales rep looking at right now.'),
+      reason: z
+        .string()
+        .min(1)
+        .max(2000)
+        .describe('Why this score, in the words a rep should read before calling.'),
+    }),
+    handler: async (ctx, args) => {
+      const written = await deps.leads.applyAiScore(
+        ctx.workspaceId,
+        String(args.leadId),
+        Number(args.score),
+        String(args.reason),
+      );
+      return {
+        written,
+        skipped: written === 0 ? 'already-scored-or-not-in-this-workspace' : null,
+      };
+    },
+  });
+
   registry.register({
     name: 'jeeta.create_lead',
     description:
