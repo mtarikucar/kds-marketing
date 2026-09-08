@@ -270,6 +270,13 @@ import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
 import { StoryboardService } from './content-concepts/storyboard.service';
+import { ContentTypesService } from './content-programme/content-types.service';
+import { ContentProgrammeService } from './content-programme/content-programme.service';
+import { ProgrammeLearningService } from './content-programme/programme-learning.service';
+import { TrendSignalService, TREND_PROVIDERS_FACTORY } from './trends/trend-signal.service';
+import { GoogleTrendsRssProvider } from './trends/providers/google-trends-rss.provider';
+import { ApifyTiktokTrendsProvider } from './trends/providers/apify-tiktok-trends.provider';
+import { YoutubeTrendingProvider } from './trends/providers/youtube-trending.provider';
 import { AnglePerformanceService } from './content-concepts/angle-performance.service';
 import { ContentLineService } from './content-concepts/content-line.service';
 import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
@@ -1043,6 +1050,16 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // drawn on request while the concept is PROPOSED, and the job that copies
     // each frame's outcome onto the plan. `produce` draws missing frames itself.
     StoryboardService,
+    // İçerik Programı — the typed, learning, autonomous content loop
+    // (docs/superpowers/specs/2026-09-08-icerik-programi-otonom-dongu-design.md).
+    ContentTypesService,
+    ContentProgrammeService,
+    ProgrammeLearningService,
+    GoogleTrendsRssProvider,
+    ApifyTiktokTrendsProvider,
+    YoutubeTrendingProvider,
+    TREND_PROVIDERS_FACTORY,
+    TrendSignalService,
     AnglePerformanceService,
     ContentLineService,
     ContentDistributionService,
