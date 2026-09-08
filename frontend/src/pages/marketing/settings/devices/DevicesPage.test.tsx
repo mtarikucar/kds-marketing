@@ -245,6 +245,38 @@ describe('DevicesPage', () => {
     expect(step).toHaveTextContent('write');
   });
 
+  it('warns that an ONLINE bridge is too old, before a command refuses', async () => {
+    // The failure this replaces: an old desktop app is online and healthy and
+    // refuses every command added since it shipped — discovered at the worst
+    // moment, on a desk nobody is watching.
+    respond([device({ properties: { model: 'Pixel', bridgeVersion: '0.1.0' } })]);
+    renderPage();
+    expect(await screen.findByText('Desktop app is out of date')).toBeInTheDocument();
+    expect(screen.getByText(/older than the commands Jeeta can now send/i)).toBeInTheDocument();
+  });
+
+  it('says nothing when the bridge is current', async () => {
+    // A warning that is always on is a warning nobody reads.
+    respond([device({ properties: { model: 'Pixel', bridgeVersion: '0.2.0' } })]);
+    renderPage();
+    await screen.findByText('Office phone');
+    expect(screen.queryByText('Desktop app is out of date')).not.toBeInTheDocument();
+  });
+
+  it('does not nag about the version of a bridge that is not even connected', async () => {
+    // Offline is the bigger problem and the actionable one; two warnings on one
+    // row send somebody to fix the wrong thing.
+    respond([
+      device({
+        lastSeenAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        properties: { model: 'Pixel', bridgeVersion: '0.1.0' },
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText('Bridge offline')).toBeInTheDocument();
+    expect(screen.queryByText('Desktop app is out of date')).not.toBeInTheDocument();
+  });
+
   it('reads a phone command history only when the section is opened', async () => {
     const user = userEvent.setup();
     respond([device()], [

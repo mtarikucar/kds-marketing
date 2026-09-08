@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { DevicesService } from '../../devices/devices.service';
-import { DEVICE_COMMAND_KINDS, ALLOWED_KEYS } from '../../devices/device-commands';
+import {
+  DEVICE_COMMAND_KINDS,
+  ALLOWED_KEYS,
+  MIN_BRIDGE_VERSION,
+  bridgeIsOutdated,
+} from '../../devices/device-commands';
 import { McpPrincipalService } from '../mcp-principal.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
@@ -56,6 +61,15 @@ export function registerDeviceTools(registry: McpToolRegistry, deps: DeviceToolD
         // Stated rather than left to the caller's arithmetic: "online" is the
         // question every use of this list is really asking.
         bridgeOnline: Boolean(d.lastSeenAt && now - new Date(d.lastSeenAt).getTime() < 90_000),
+        // The second question, and the one whose absence used to be discovered
+        // by a refused command: an old bridge is online, healthy, and will
+        // refuse anything added since it shipped.
+        bridgeVersion: (d.properties as { bridgeVersion?: string } | null)?.bridgeVersion ?? null,
+        ...(bridgeIsOutdated((d.properties as { bridgeVersion?: string } | null)?.bridgeVersion)
+          ? {
+              bridgeOutdated: `this desktop app is older than ${MIN_BRIDGE_VERSION} and will refuse the commands added since it shipped — it needs updating before you rely on it`,
+            }
+          : {}),
       }));
     },
   });

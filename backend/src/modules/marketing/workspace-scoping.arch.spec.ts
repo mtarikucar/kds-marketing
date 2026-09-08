@@ -469,6 +469,13 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // scoped to it, and the cursor write re-reads the row by { id, workspaceId }.
   'channels/email-imap-poll.service.ts:channel.findMany':
     'inbound-email (IMAP) poller enumerates verified ACTIVE EMAIL channels across all workspaces (system cron); ingest and cursor write are scoped by each row workspaceId',
+  // Its fast twin. The IDLE service holds one connection per mailbox so a
+  // reply arrives in about a second instead of within five minutes, and
+  // reconciling which mailboxes should have one means asking across
+  // workspaces. It fetches nothing itself — an announcement calls
+  // EmailImapPollService.pollOne, which re-reads the row by id.
+  'channels/email-imap-idle.service.ts:channel.findMany':
+    'inbound-email IDLE holder enumerates verified ACTIVE EMAIL channels across all workspaces to decide which need a held connection (system cron); it performs no ingest of its own',
   // The reply-backfill sweep. A conversation that was already waiting when the
   // reply lane was switched on is invisible to it — onInbound only sees
   // messages that ARRIVE — so an hourly system cron has to find them, and

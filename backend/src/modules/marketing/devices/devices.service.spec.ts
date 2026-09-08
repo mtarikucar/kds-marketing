@@ -4,6 +4,8 @@ import {
   validateDeviceCommand,
   describeDeviceCommand,
   DEVICE_COMMAND_KINDS,
+  MIN_BRIDGE_VERSION,
+  bridgeIsOutdated,
 } from './device-commands';
 
 const WS = 'ws-1';
@@ -107,6 +109,27 @@ describe('device commands — what a phone may be asked to do', () => {
     expect(() => validateDeviceCommand('TAP', { x: -5, y: 10 })).toThrow(/outside the screen/i);
     expect(() => validateDeviceCommand('TAP', { x: 10 })).toThrow(/y must be a number/i);
     expect(validateDeviceCommand('TAP', { x: 10.6, y: 20.2 })).toEqual({ x: 11, y: 20 });
+  });
+
+  it('treats a bridge that predates the current instruction set as outdated', () => {
+    // The whole reason this exists: an old bridge is ONLINE and healthy and
+    // will refuse every command added since it shipped. Without a version it
+    // looks identical to a current one right up to the refusal.
+    expect(bridgeIsOutdated('0.1.0')).toBe(true);
+    expect(bridgeIsOutdated(MIN_BRIDGE_VERSION)).toBe(false);
+    expect(bridgeIsOutdated('9.0.0')).toBe(false);
+    // Silence is not "probably fine": a bridge that reports no version is one
+    // built before reporting existed, which is older than the first version
+    // that reports.
+    expect(bridgeIsOutdated(undefined)).toBe(true);
+    expect(bridgeIsOutdated('')).toBe(true);
+    expect(bridgeIsOutdated('nightly')).toBe(true);
+  });
+
+  it('compares each part as a NUMBER, not as text', () => {
+    // "0.10.0" < "0.9.0" is true as strings and false as versions, and the
+    // first release past 0.9 is exactly when that would have bitten.
+    expect(bridgeIsOutdated('0.10.0')).toBe(false);
   });
 
   it('gives EVERY kind a sentence, because a blank approval card cannot be consented to', () => {
@@ -258,6 +281,42 @@ describe('DevicesService — the rendezvous', () => {
     // A phone plugged back in after a week must not replay a day of taps: the
     // screen those commands were written for is gone.
     expect(await svc.claimNext(WS, DEV)).toBeNull();
+  });
+
+  it('does not forget the phone because one heartbeat came back thin', async () => {
+    // The bridge falls back to just the serial whenever adb hiccups — a
+    // sleeping phone, a busy cable. Replacing the blob with that erased the
+    // model, the Android version and the screen size from a console that had
+    // been showing them, for as long as the hiccup lasted.
+    const known = {
+      id: DEV,
+      workspaceId: WS,
+      label: 'T',
+      status: 'ACTIVE',
+      mode: 'MANUAL',
+      properties: { model: 'Pixel 5', androidVersion: '13', serial: 'abc', bridgeVersion: '0.2.0' },
+    };
+    const { svc, prisma } = deps(known);
+    await svc.heartbeat(WS, DEV, { serial: 'abc' });
+    const written = (prisma.device.update as jest.Mock).mock.calls.at(-1)[0].data.properties;
+    expect(written.model).toBe('Pixel 5');
+    expect(written.androidVersion).toBe('13');
+  });
+
+  it('lets a newly reported value win over the remembered one', async () => {
+    // Merging must not turn into remembering forever: a phone that reports a
+    // new Android version has upgraded, and the console should say so.
+    const { svc, prisma } = deps({
+      id: DEV,
+      workspaceId: WS,
+      label: 'T',
+      status: 'ACTIVE',
+      mode: 'MANUAL',
+      properties: { model: 'Pixel 5', androidVersion: '13' },
+    });
+    await svc.heartbeat(WS, DEV, { model: 'Pixel 5', androidVersion: '14' });
+    const written = (prisma.device.update as jest.Mock).mock.calls.at(-1)[0].data.properties;
+    expect(written.androidVersion).toBe('14');
   });
 
   it('never lets a screenshot reach the database as text', async () => {

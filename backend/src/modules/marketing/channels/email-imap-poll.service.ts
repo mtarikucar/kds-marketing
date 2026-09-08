@@ -134,6 +134,13 @@ export class EmailImapPollService {
     private readonly ingress: ConversationIngressService,
   ) {}
 
+  /**
+   * The SAFETY NET, not the primary path. `EmailImapIdleService` delivers mail
+   * within a second of it arriving; this catches what a dropped IDLE
+   * connection, an unsupported server or a restarted process missed. Five
+   * minutes is chosen for that job — often enough that a gap is a gap and not
+   * an outage, cheap enough to run against every mailbox on the platform.
+   */
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'email-imap-poll' })
   async pollDue(): Promise<void> {
     await withAdvisoryLock(
@@ -180,6 +187,47 @@ export class EmailImapPollService {
       }
     }
     return { ingested, mailboxes };
+  }
+
+  /**
+   * Fetch one mailbox NOW, by id.
+   *
+   * The tick is every five minutes, which is the wrong latency for a customer
+   * waiting on a reply and the right cost for a safety net. `EmailImapIdleService`
+   * holds an IDLE connection and calls this the moment the mail server says a
+   * message landed, so the poll stops being the thing that finds mail and
+   * becomes the thing that catches what IDLE missed.
+   *
+   * Deliberately a second, short-lived connection rather than draining on the
+   * idling one: an IDLE client that starts fetching stops idling, and getting
+   * it back into that state correctly on every path — including the ones that
+   * throw — is a lifecycle bug waiting to happen. One extra connection for a
+   * few seconds is the cheaper mistake.
+   */
+  async pollOne(workspaceId: string, channelId: string): Promise<number | null> {
+    const channel = (await this.prisma.channel.findFirst({
+      // Scoped by workspace even though the caller holds a primary key. The id
+      // came from another service's enumeration, and a read that carries the
+      // tenant is one fewer place where a wrong id becomes a cross-tenant one.
+      where: { id: channelId, workspaceId, type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } },
+      select: {
+        id: true,
+        workspaceId: true,
+        type: true,
+        externalId: true,
+        configSealed: true,
+        configPublic: true,
+      },
+    })) as ChannelRow | null;
+    if (!channel) return null;
+    try {
+      return await this.pollChannel(channel);
+    } catch (e: any) {
+      this.logger.warn(
+        `email-imap-poll: on-demand fetch failed for channel=${channelId}: ${String(e?.message ?? e).slice(0, 300)}`,
+      );
+      return null;
+    }
   }
 
   /** Poll one mailbox. Null means "not an IMAP-pollable channel" (no host, or
