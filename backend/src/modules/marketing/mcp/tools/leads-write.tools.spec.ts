@@ -13,6 +13,7 @@ function setup() {
     updateStatus: jest.fn().mockResolvedValue({ id: 'l1' }),
     reopen: jest.fn().mockResolvedValue({ id: 'l1', status: 'NEW' }),
     assign: jest.fn().mockResolvedValue({ id: 'l1' }),
+    applyAiScore: jest.fn().mockResolvedValue(1),
   };
   const activities = { create: jest.fn().mockResolvedValue({ id: 'a1' }) };
   const principals = {
@@ -342,3 +343,61 @@ describe('lead deduplication', () => {
     expect(list.scopes).toEqual(['leads.read']);
   });
 });
+
+/**
+ * The advisory score the lead-scoring routine was always meant to write.
+ *
+ * `applyAiScore` shipped with that routine and its only caller was ever going
+ * to be a claude.ai agent reaching back over HTTP after the platform PUSHED it
+ * a trigger — a push that needs a `triggerUrl` nobody has ever set. So no lead
+ * in this product has ever carried a score. Nothing was broken; the lane had no
+ * reachable end. Pulling gives it one.
+ */
+describe('jeeta.score_lead', () => {
+  const ctx = { workspaceId: 'ws-a' } as any;
+
+  it('writes the score and the reasoning for one lead', async () => {
+    const { registry, leads } = setup();
+    const out = await registry.get('jeeta.score_lead')!.handler(ctx, {
+      leadId: 'l1',
+      score: 82,
+      reason: 'Antalya, 40 masa, halen kagit adisyon',
+    });
+    expect(leads.applyAiScore).toHaveBeenCalledWith('ws-a', 'l1', 82, 'Antalya, 40 masa, halen kagit adisyon');
+    expect(out).toMatchObject({ written: 1, skipped: null });
+  });
+
+  it('reports a no-op truthfully instead of as a failure', async () => {
+    // The service stamps only an UNSCORED lead in this workspace, so re-running
+    // a scoring pass is safe and cheap — and written: 0 is the honest answer,
+    // not an error to retry.
+    const { registry, leads } = setup();
+    leads.applyAiScore.mockResolvedValue(0);
+    const out = await registry.get('jeeta.score_lead')!.handler(ctx, {
+      leadId: 'l1',
+      score: 10,
+      reason: 'x',
+    });
+    expect(out).toMatchObject({ written: 0, skipped: 'already-scored-or-not-in-this-workspace' });
+  });
+
+  it('refuses a score outside 0-100 and an empty reason', async () => {
+    // A number with no reasoning is a number nobody trusts, and it is shown to
+    // the rep who picks the lead up.
+    const { registry } = setup();
+    const schema = registry.get('jeeta.score_lead')!.inputSchema;
+    expect(schema.safeParse({ leadId: 'l1', score: 101, reason: 'x' }).success).toBe(false);
+    expect(schema.safeParse({ leadId: 'l1', score: -1, reason: 'x' }).success).toBe(false);
+    expect(schema.safeParse({ leadId: 'l1', score: 50, reason: '' }).success).toBe(false);
+    expect(schema.safeParse({ leadId: 'l1', score: 0, reason: 'dusuk' }).success).toBe(true);
+  });
+
+  it('is a plain WRITE — it ranks attention, it does not move anything', async () => {
+    const { registry } = setup();
+    const tool = registry.get('jeeta.score_lead')!;
+    expect(tool.risk).toBe('WRITE');
+    expect(tool.requiresApproval).toBe(false);
+    expect(tool.scopes).toEqual(['leads.write']);
+  });
+});
+

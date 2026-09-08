@@ -412,6 +412,7 @@ Gated on the `conversationAi` package feature, matching the REST controller.
 | `jeeta.complete_reply_job` | Close a claimed reply, or return it to the queue | `contacts.write` | WRITE | — | no |
 | `jeeta.get_ai_reply_queue` | How many replies are waiting, and how long the oldest has waited | `reports.read` | READ | — | no |
 | `jeeta.set_ai_execution` | Who does this workspace's AI work: SERVER / AUTO / MCP / MCP_ONLY | `settings.manage` | WRITE | — | no |
+| `jeeta.score_lead` | Write the advisory 0-100 AI score and its reasoning for one lead (one-shot per lead) | `leads.write` | WRITE | — | no |
 | `jeeta.update_agent` | Refine an AI agent's persona, tone, goals or guardrails | `settings.manage` | WRITE | — | no |
 | `jeeta.verify_channel` | Run a live health check against a channel and report whether it can actually send AND receive | `reports.read` | READ | — | no |
 

@@ -317,6 +317,11 @@ export class MarketingLeadsService {
     if (filter.source) where.source = filter.source;
     if (filter.businessType) where.businessType = filter.businessType;
     if (filter.priority) where.priority = filter.priority;
+    // Scored-ness is read off `scoredAt`, never off `aiScore` — a lead that
+    // legitimately scored zero HAS been scored, and testing the score itself
+    // would hand it back to the scorer on every run.
+    if (filter.scored === 'no') where.scoredAt = null;
+    else if (filter.scored === 'yes') where.scoredAt = { not: null };
 
     if (filter.dateFrom || filter.dateTo) {
       where.createdAt = {};

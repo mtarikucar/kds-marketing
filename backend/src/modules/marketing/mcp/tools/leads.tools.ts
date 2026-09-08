@@ -53,6 +53,14 @@ export function registerLeadsTools(registry: McpToolRegistry, deps: LeadsToolDep
         .optional()
         .describe('Coarse assignment filter: unassigned, assigned to anyone, or assigned to the caller.'),
       priority: z.string().optional().describe('Lead priority filter.'),
+      scored: z
+        .enum(['yes', 'no'])
+        .optional()
+        .describe(
+          "Whether the advisory AI score has been written. 'no' is how a scoring pass finds its " +
+            'work; the flag is scoredAt, so a lead that legitimately scored zero counts as scored ' +
+            'and is not handed back on the next run.',
+        ),
       dateFrom: z.string().optional().describe('Inclusive start date, ISO 8601 (YYYY-MM-DD).'),
       dateTo: z.string().optional().describe('Inclusive end date, ISO 8601 (YYYY-MM-DD).'),
       sortBy: z.string().optional().describe('Field name to sort results by.'),

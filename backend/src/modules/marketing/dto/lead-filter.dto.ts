@@ -49,6 +49,17 @@ export class LeadFilterDto {
   @IsIn(['unassigned', 'assigned', 'mine'])
   assignmentStatus?: 'unassigned' | 'assigned' | 'mine';
 
+  /**
+   * Whether the advisory AI score has ever been written.
+   *
+   * `scoredAt` is the flag, not `aiScore`: a lead legitimately scored zero is
+   * scored, and reading nullness off the score itself would hand it back to
+   * the scorer forever. There is an index on (workspaceId, scoredAt) already.
+   */
+  @IsOptional()
+  @IsIn(['yes', 'no'])
+  scored?: 'yes' | 'no';
+
   // "Bekleyen" work-queue chip on the merged Kişiler tab: only the leads whose
   // OPEN conversation is waiting on US (the customer wrote last). Stacks with
   // assignmentStatus rather than replacing it. See waiting-reply-leads.ts for
