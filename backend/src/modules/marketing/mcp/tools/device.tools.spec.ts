@@ -57,6 +57,31 @@ describe('device tool declarations', () => {
     }
   });
 
+  /**
+   * The tripwire for the failure that actually shipped.
+   *
+   * `jeeta.device_command` tells a model, in its own description, to reach for
+   * TAP_ON. The `kind` enum comes from DEVICE_COMMAND_KINDS, and for one
+   * release those two disagreed: the description recommended a command the
+   * schema then refused, so a model following the instruction correctly got a
+   * validation error and no way to understand why. Nothing caught it, because
+   * every test drove the handler directly and so never met the enum.
+   */
+  it('never recommends a command its own schema would refuse', () => {
+    const { registry } = build();
+    const tool = registry.get('jeeta.device_command')!;
+    const kinds = (tool.inputSchema as never as { shape: { kind: { options: string[] } } }).shape.kind
+      .options;
+    // Underscore-shouted tokens: TAP_ON, UI_DUMP. Narrower than "every
+    // capitalised word" on purpose — this description also shouts IMPORTANT
+    // and MANUAL, and a rule that needed an exceptions list would grow one
+    // until it stopped failing.
+    const named = new Set(tool.description.match(/[A-Z]+_[A-Z_]+/g) ?? []);
+    expect(named.size).toBeGreaterThan(1);
+    expect(named.has('TAP_ON')).toBe(true);
+    for (const kind of named) expect(kinds).toContain(kind);
+  });
+
   it('offers no way to run a shell command', () => {
     const { registry } = build();
     const kinds = (registry.get('jeeta.device_command')!.inputSchema as never as {

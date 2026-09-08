@@ -13,6 +13,17 @@ import { BadRequestException } from '@nestjs/common';
  */
 export const DEVICE_COMMAND_KINDS = [
   'TAP',
+  /**
+   * Tap the element that says X — resolved ON the phone, in the same breath.
+   *
+   * The reason this exists rather than "dump, then TAP the coordinate you
+   * read" is a race nobody can code around from here: between the dump and the
+   * tap the screen can move (a list settles, a banner lands, a keyboard opens)
+   * and the coordinate that meant "Send" now means whatever slid under it. A
+   * caller acting on a stale dump does not tap the wrong thing occasionally;
+   * it does so exactly when the phone is busiest.
+   */
+  'TAP_ON',
   'SWIPE',
   'TEXT',
   'KEY',
@@ -102,6 +113,21 @@ export function validateDeviceCommand(kind: string, raw: unknown): Record<string
   switch (kind as DeviceCommandKind) {
     case 'TAP':
       return { x: coordinate(args, 'x'), y: coordinate(args, 'y') };
+
+    case 'TAP_ON': {
+      // Exactly one selector. Two would need a precedence rule, and a caller
+      // who passes both means something that rule would have to guess at.
+      const given = ['text', 'id', 'desc'].filter((k) => args[k] !== undefined);
+      if (given.length !== 1) {
+        throw new BadRequestException('TAP_ON needs exactly one of: text, id, desc');
+      }
+      const [key] = given;
+      const occurrence = args.occurrence === undefined ? 1 : num(args, 'occurrence');
+      if (!Number.isInteger(occurrence) || occurrence < 1 || occurrence > 20) {
+        throw new BadRequestException('occurrence must be a whole number between 1 and 20');
+      }
+      return { [key]: str(args, key, 200), occurrence };
+    }
 
     case 'SWIPE': {
       const ms = args.durationMs === undefined ? 300 : num(args, 'durationMs');
@@ -193,6 +219,12 @@ export function describeDeviceCommand(kind: string, args: Record<string, unknown
   switch (kind as DeviceCommandKind) {
     case 'TAP':
       return `Ekrana dokun (${args.x}, ${args.y})`;
+    case 'TAP_ON': {
+      // The person approving must read the same thing the phone will look for.
+      const what = args.text ?? args.desc ?? args.id;
+      const nth = Number(args.occurrence ?? 1) > 1 ? ` (${args.occurrence}. eşleşme)` : '';
+      return `Şuna dokun: "${String(what ?? '').slice(0, 120)}"${nth}`;
+    }
     case 'SWIPE':
       return `Ekranı kaydır (${args.x1}, ${args.y1}) → (${args.x2}, ${args.y2})`;
     case 'TEXT':

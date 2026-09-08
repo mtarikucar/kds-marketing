@@ -1,6 +1,10 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { DevicesService } from './devices.service';
-import { validateDeviceCommand, describeDeviceCommand } from './device-commands';
+import {
+  validateDeviceCommand,
+  describeDeviceCommand,
+  DEVICE_COMMAND_KINDS,
+} from './device-commands';
 
 const WS = 'ws-1';
 const DEV = 'dev-1';
@@ -103,6 +107,43 @@ describe('device commands — what a phone may be asked to do', () => {
     expect(() => validateDeviceCommand('TAP', { x: -5, y: 10 })).toThrow(/outside the screen/i);
     expect(() => validateDeviceCommand('TAP', { x: 10 })).toThrow(/y must be a number/i);
     expect(validateDeviceCommand('TAP', { x: 10.6, y: 20.2 })).toEqual({ x: 11, y: 20 });
+  });
+
+  it('gives EVERY kind a sentence, because a blank approval card cannot be consented to', () => {
+    // The bridge shows `describeDeviceCommand`'s output and nothing else. A
+    // kind added to the vocabulary without a case here does not throw — the
+    // switch falls off the end and returns undefined — so the person at the
+    // phone is asked to approve an empty box.
+    const sample: Record<string, Record<string, unknown>> = {
+      TAP: { x: 1, y: 2 },
+      TAP_ON: { text: 'Gönder', occurrence: 1 },
+      SWIPE: { x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 300 },
+      TEXT: { value: 'merhaba' },
+      KEY: { key: 'BACK' },
+      OPEN_URL: { url: 'https://wa.me/9055' },
+      LAUNCH_APP: { package: 'com.whatsapp' },
+      SCREENSHOT: {},
+      UI_DUMP: {},
+    };
+    for (const kind of DEVICE_COMMAND_KINDS) {
+      expect(Object.keys(sample)).toContain(kind);
+      const sentence = describeDeviceCommand(kind, sample[kind]);
+      expect(typeof sentence).toBe('string');
+      expect(sentence.length).toBeGreaterThan(3);
+    }
+  });
+
+  it('takes exactly one selector for a named tap, and defaults the occurrence', () => {
+    expect(validateDeviceCommand('TAP_ON', { text: 'Gönder' })).toEqual({
+      text: 'Gönder',
+      occurrence: 1,
+    });
+    expect(validateDeviceCommand('TAP_ON', { desc: 'Ara', occurrence: 3 })).toEqual({
+      desc: 'Ara',
+      occurrence: 3,
+    });
+    expect(() => validateDeviceCommand('TAP_ON', { text: 'a', id: 'b' })).toThrow(/exactly one/i);
+    expect(() => validateDeviceCommand('TAP_ON', {})).toThrow(/exactly one/i);
   });
 
   it('refuses text a phone would type WRONG rather than typing it', () => {
