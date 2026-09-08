@@ -339,6 +339,11 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.get_brand_profile` | The workspace's brand profile (name, voice guide, audience) | `reports.read` | READ | — | no |
 | `jeeta.update_brand_profile` | Rewrite the brand profile every piece of AI copy is written from | `settings.manage` | WRITE | — | no |
 | `jeeta.get_workspace_info` | Effective plan: package, subscription status, quotas/limits, enabled features | `reports.read` | READ | — | yes |
+| `jeeta.get_setup_readiness` | Everything this workspace still needs before the engine runs at full strength | `reports.read` | READ | — | no |
+| `jeeta.list_pending_approvals` | Actions waiting on a human decision. Read-only by design — no tool approves | `reports.read` | READ | — | no |
+| `jeeta.create_tax_rate` | Create a tax rate | `settings.manage` | WRITE | — | no |
+| `jeeta.create_order_form` | Create an order form | `settings.manage` | WRITE | — | no |
+| `jeeta.create_email_template` | Create a saved email template | `campaigns.write` | WRITE | — | no |
 | `jeeta.find_tools` | Search the FULL catalogue, deferred tools included, with their input schemas | *(none)* | READ | — | yes |
 | `jeeta.get_ai_usage` | Anthropic spend for this workspace: tokens and real cost per action and model, plus a daily curve | `reports.read` | READ | — | no |
 | `jeeta.get_vendor_spend` | Outside-vendor spend (NetGSM, Meta, fal.ai, Firecrawl, Apify) and which units have no tariff at all | `reports.read` | READ | — | no |
@@ -362,6 +367,10 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.search_companies` | Search companies | `contacts.read` | READ | — | no |
 | `jeeta.create_company` | Create a company | `contacts.write` | WRITE | — | no |
 | `jeeta.list_segments` | List audience segments | `contacts.read` | READ | — | no |
+| `jeeta.preview_segment` | How many leads a segment definition would match, saving nothing | `contacts.write` | READ | — | no |
+| `jeeta.create_segment` | Save a reusable audience (a named filter over leads) | `contacts.write` | WRITE | — | no |
+| `jeeta.list_custom_fields` | The workspace-defined fields on a lead/contact, with types and options | `contacts.read` | READ | — | no |
+| `jeeta.create_custom_field` | Add a workspace-defined field to leads or contacts | `contacts.write` | WRITE | — | no |
 | `jeeta.list_tags` | List tags | `contacts.read` | READ | — | no |
 | `jeeta.list_tasks` | List tasks | `tasks.read` | READ | — | yes |
 | `jeeta.create_task` | Create a task and assign it | `tasks.write` | WRITE | — | yes |
@@ -372,6 +381,8 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.move_opportunity_stage` | Advance a deal | `leads.write` | WRITE | — | yes |
 | `jeeta.delete_opportunity` | Permanently delete a deal | `leads.manage` | DESTRUCTIVE | **DESTRUCTIVE** | no |
 | `jeeta.get_distribution_config` | How new leads get an owner: the assignment strategy, and who was assigned last | `settings.manage` | READ | — | no |
+| `jeeta.set_distribution_config` | Turn automatic lead assignment on (ROUND_ROBIN / LEAST_LOADED) or off | `settings.manage` | WRITE | — | no |
+| `jeeta.list_offers` | The offers (teklifler) in this workspace, with status and totals | `leads.read` | READ | — | no |
 | `jeeta.list_companies` | List this workspace's B2B accounts (companies) with their id, name, domain and city | `contacts.read` | READ | — | no |
 | `jeeta.list_duplicate_leads` | Find groups of leads that look like the same customer, matched on normalised phone and email across every source | `leads.read` | READ | — | no |
 | `jeeta.merge_leads` | Merge duplicate leads into one record; notes, tasks, deals and conversations move across | `leads.write` | DESTRUCTIVE | yes | no |

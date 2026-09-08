@@ -292,6 +292,7 @@ import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerReadinessTools } from './mcp/tools/readiness.tools';
 import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
+import { registerOperationsTools } from './mcp/tools/operations.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -1354,6 +1355,9 @@ export class MarketingModule {
     opportunities: OpportunitiesService,
     pipelines: PipelinesService,
     segments: SegmentsService,
+    approvals: ApprovalRequestService,
+    customFields: CustomFieldsService,
+    offers: MarketingOffersService,
     tags: TagsService,
     // Faz 5 D2 — content & social automation.
     calendar: UnifiedCalendarService,
@@ -1408,6 +1412,17 @@ export class MarketingModule {
     // The three gaps the readiness list could NAME and not close.
     registerSetupWriteTools(registry, { taxRates, orderForms, emailTemplates });
     registerLeadsTools(registry, { leads, distribution });
+    // Wave 1 of closing the API-vs-connector gap: the settings and sales
+    // surfaces that had no tool at all, starting with the ones measured to be
+    // blocking something rather than merely absent.
+    registerOperationsTools(registry, {
+      distribution,
+      approvals,
+      customFields,
+      segments,
+      offers,
+      principals,
+    });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
     registerTasksTools(registry, { tasks, principals });
     registerContactsTools(registry, { leads, companies, principals });

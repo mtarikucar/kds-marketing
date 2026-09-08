@@ -30,6 +30,11 @@ export interface SetupWriteToolDeps {
 export function registerSetupWriteTools(registry: McpToolRegistry, deps: SetupWriteToolDeps): void {
   registry.register({
     name: 'jeeta.create_tax_rate',
+    // Deferred, not demoted: these are occasional setup actions, and the
+    // advertised list is a budget. See tool-catalogue.spec's ceiling note —
+    // they were only ever advertised because their registrar sat outside the
+    // guard that enforces it.
+    defer: true,
     description:
       'Create a tax rate for this workspace (e.g. KDV 20). Invoices and order forms apply the default rate; with no rate defined every invoice bills NET, silently. Use when `jeeta.get_setup_readiness` reports `tax-rates` missing.',
     domain: 'commerce',
@@ -58,6 +63,11 @@ export function registerSetupWriteTools(registry: McpToolRegistry, deps: SetupWr
 
   registry.register({
     name: 'jeeta.create_order_form',
+    // Deferred, not demoted: these are occasional setup actions, and the
+    // advertised list is a budget. See tool-catalogue.spec's ceiling note —
+    // they were only ever advertised because their registrar sat outside the
+    // guard that enforces it.
+    defer: true,
     description:
       'Create a public order form so a visitor can buy without anyone being involved: it creates the lead, mints the invoice at the SERVER-resolved price and returns the payment link. Requires a product to sell (`jeeta.create_product`) and, to be payable, a payment provider the owner has configured. Use when `jeeta.get_setup_readiness` reports `order-form` missing.',
     domain: 'commerce',
@@ -90,6 +100,11 @@ export function registerSetupWriteTools(registry: McpToolRegistry, deps: SetupWr
 
   registry.register({
     name: 'jeeta.create_email_template',
+    // Deferred, not demoted: these are occasional setup actions, and the
+    // advertised list is a budget. See tool-catalogue.spec's ceiling note —
+    // they were only ever advertised because their registrar sat outside the
+    // guard that enforces it.
+    defer: true,
     description:
       'Create a reusable email template from content blocks. Campaigns send templates, so with none defined there is nothing for an email campaign to send. Use when `jeeta.get_setup_readiness` reports `email-templates` missing. Write the copy in the brand voice — read it first with `jeeta.get_brand_profile`.',
     domain: 'content',
