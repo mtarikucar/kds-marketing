@@ -29,8 +29,29 @@ const FIRST_RUN_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MAX_SOURCE_BYTES = 1_000_000;
 const CONNECT_TIMEOUT_MS = 20_000;
 
-/** Senders whose mail is machinery answering machinery. */
-const DAEMON_LOCAL_PARTS = new Set(['mailer-daemon', 'postmaster', 'bounce', 'bounces']);
+/**
+ * Local parts that do not accept a reply, so mail from one is not the opening
+ * of a conversation. Two groups: delivery machinery, and the unattended
+ * addresses products send their notifications from.
+ *
+ * `notifications@` is the judgement call here and it is deliberate. Someone
+ * may genuinely own such an address, but nobody holds a conversation with one
+ * — and the cost of being wrong is asymmetric. Letting one through creates a
+ * lead, opens a thread and points the auto-reply engine at a mailbox that will
+ * never answer; keeping one out costs a line in a debug log.
+ */
+const DAEMON_LOCAL_PARTS = new Set([
+  'mailer-daemon',
+  'postmaster',
+  'bounce',
+  'bounces',
+  'no-reply',
+  'noreply',
+  'donotreply',
+  'do-not-reply',
+  'notifications',
+  'notification',
+]);
 
 /**
  * Pull replies out of a workspace's OWN mailbox over IMAP.
@@ -85,9 +106,14 @@ const DAEMON_LOCAL_PARTS = new Set(['mailer-daemon', 'postmaster', 'bounce', 'bo
  * is capped at `MAX_PER_TICK`; the rest simply arrive on the following tick.
  *
  * Automated mail is skipped outright (RFC 3834 `Auto-Submitted`, `Precedence`,
- * `List-Unsubscribe`, and daemon senders). Without that, a bounce or an
- * out-of-office becomes a lead the AI then answers — and two auto-responders
- * introduced to each other do not stop.
+ * `List-*`, unattended senders, and this platform's OWN address). Without it a
+ * bounce or an out-of-office becomes a lead the AI then answers — and two
+ * auto-responders introduced to each other do not stop.
+ *
+ * The last two of those rules were written after the first live run, which
+ * turned our own daily digest and a `notifications@` newsletter into leads.
+ * Neither carried a single header marking it as machine mail; the only thing
+ * wrong with either was the sender. Header rules alone are not enough here.
  *
  * ## Inert by default
  *
@@ -275,8 +301,9 @@ export class EmailImapPollService {
     if (!full?.source) return false;
 
     const parsed = await simpleParser(full.source);
-    if (this.isAutomated(parsed)) {
-      this.logger.debug(`email-imap-poll: uid=${uid} is automated mail — skipped`);
+    const skip = this.skipReason(parsed);
+    if (skip) {
+      this.logger.debug(`email-imap-poll: uid=${uid} skipped — ${skip}`);
       return false;
     }
 
@@ -306,11 +333,16 @@ export class EmailImapPollService {
   }
 
   /**
-   * Mail sent by machinery. Ingesting it would create a lead out of a bounce
-   * and let the auto-reply engine answer an auto-responder, which is a loop
-   * with no natural end.
+   * Why this mail is not a customer writing to us — or null when it is.
+   *
+   * Ingesting machine mail creates a lead out of a bounce and points the
+   * auto-reply engine at an auto-responder, which is a loop with no natural
+   * end. The REASON is returned rather than a boolean so the debug log says
+   * which rule fired: the first live run tripped over two senders no
+   * header-based rule would ever have caught, and a bare "skipped" would not
+   * have told anyone why.
    */
-  private isAutomated(parsed: ParsedMail): boolean {
+  private skipReason(parsed: ParsedMail): string | null {
     const header = (name: string): string => {
       const v = parsed.headers?.get(name as any);
       if (!v) return '';
@@ -319,18 +351,45 @@ export class EmailImapPollService {
     };
     // RFC 3834: anything but "no" means the message was generated, not typed.
     const autoSubmitted = header('auto-submitted');
-    if (autoSubmitted && autoSubmitted !== 'no') return true;
-    if (/\b(bulk|list|junk|auto_reply)\b/.test(header('precedence'))) return true;
+    if (autoSubmitted && autoSubmitted !== 'no') return `Auto-Submitted: ${autoSubmitted}`;
+    if (/\b(bulk|list|junk|auto_reply)\b/.test(header('precedence'))) return 'bulk Precedence';
     // NOT 'list-unsubscribe': mailparser folds every RFC 2369 List-* header
     // into one structured `list` key, so asking for the raw name always
     // answers false. Both are checked because the fold is the parser's
     // behaviour, not the format's, and this must stay right if that changes.
-    if (parsed.headers?.has?.('list') || parsed.headers?.has?.('list-unsubscribe')) return true;
-    if (header('x-autoreply') || header('x-autorespond')) return true;
+    if (parsed.headers?.has?.('list') || parsed.headers?.has?.('list-unsubscribe')) {
+      return 'mailing-list headers';
+    }
+    if (header('x-autoreply') || header('x-autorespond')) return 'auto-responder header';
 
-    const from = (parsed.from?.value?.[0]?.address ?? '').toLowerCase();
+    const from = (parsed.from?.value?.[0]?.address ?? '').trim().toLowerCase();
+    if (!from) return 'no sender address';
+
+    /**
+     * OUR OWN product mail. The daily digest is addressed to the workspace
+     * owner and leaves from the platform's `EMAIL_FROM`, so it lands in the
+     * very mailbox this poller reads — and on the first live run it became a
+     * lead named after the platform, with the digest as its opening message.
+     *
+     * `EmailChannelAdapter.parseInbound` already drops the WORKSPACE's own
+     * address; this is that guard one level up, for the platform's. No header
+     * would have caught it: the digest is a perfectly ordinary person-shaped
+     * email, and the only thing wrong with it is who sent it.
+     */
+    const platform = this.platformFrom();
+    if (platform && from === platform) return 'the platform own notification mail';
+
     const local = from.split('@')[0] ?? '';
-    return DAEMON_LOCAL_PARTS.has(local);
+    if (DAEMON_LOCAL_PARTS.has(local)) return `unattended sender (${local}@)`;
+    return null;
+  }
+
+  /** The address this deployment sends its own mail from — EmailService's
+   *  `fromHeader` resolves it in exactly this order. */
+  private platformFrom(): string {
+    const raw = process.env.EMAIL_FROM || process.env.EMAIL_USER || '';
+    const m = /<([^>]+)>/.exec(raw);
+    return (m ? m[1] : raw).trim().toLowerCase();
   }
 
   /** Plain text, falling back to a flattened HTML part for HTML-only mail. */
