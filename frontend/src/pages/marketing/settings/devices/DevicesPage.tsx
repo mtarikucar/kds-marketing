@@ -33,6 +33,8 @@ interface DeviceRow {
   status: 'ACTIVE' | 'PAUSED';
   lastSeenAt?: string | null;
   pairedAt?: string | null;
+  /** What the bridge found on the cable, reported on every heartbeat. */
+  properties?: { serial?: string; model?: string; androidVersion?: string; screen?: string } | null;
 }
 
 interface CommandRow {
@@ -42,6 +44,7 @@ interface CommandRow {
   error?: string | null;
   createdAt: string;
   completedAt?: string | null;
+  result?: { screenshotUrl?: string; screenshotUnavailable?: string } | null;
 }
 
 /** The bridge posts a heartbeat every 30s, so 90s of silence is a closed laptop
@@ -74,6 +77,24 @@ function History({ deviceId }: { deviceId: string }) {
           <div className="min-w-0">
             <code className="text-xs">{c.kind}</code>
             {c.error && <p className="truncate text-micro text-danger">{c.error}</p>}
+            {/* A screenshot nobody can open is a screenshot we did not take.
+                The link is the whole point of storing it rather than the
+                bytes. */}
+            {c.result?.screenshotUrl && (
+              <a
+                className="text-micro text-primary underline"
+                href={c.result.screenshotUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t('devices.openShot', { defaultValue: 'Open the screenshot' })}
+              </a>
+            )}
+            {c.result?.screenshotUnavailable && (
+              <p className="truncate text-micro text-muted-foreground">
+                {c.result.screenshotUnavailable}
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Badge
@@ -338,6 +359,17 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
                       </Badge>
                     )}
                   </div>
+                  {/* Which handset is on the cable. A workspace with two
+                      phones cannot otherwise tell one row from the other, and
+                      "the wrong phone messaged a customer" is not a mistake
+                      anybody wants to make twice. */}
+                  {d.properties?.model && (
+                    <p className="mt-1 text-micro text-muted-foreground">
+                      {[d.properties.model, d.properties.androidVersion && `Android ${d.properties.androidVersion}`, d.properties.serial]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  )}
                   <p className="mt-1 text-micro text-muted-foreground">
                     {d.lastSeenAt
                       ? t('devices.lastSeen', {
@@ -410,12 +442,24 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
                     {d.mode === 'AUTO'
                       ? t('devices.autoOn', {
                           defaultValue:
-                            'Commands run as soon as the desktop app collects them. Nobody is asked first.',
+                            'Commands run as soon as the desktop app collects them. Nobody at the phone is asked first.',
                         })
                       : t('devices.autoOff', {
                           defaultValue:
                             'Every command waits for someone to approve it in the desktop app.',
                         })}
+                  </p>
+                  {/* THE SECOND GATE. Turning this switch on removes the
+                      approval at the PHONE and nothing else: an agent's
+                      command is still held by Jeeta's own write mode, which
+                      lives one tab away. An owner who flips this and finds
+                      the phone still idle has no way to guess that from
+                      here — so it is said here. */}
+                  <p className="mt-1 text-micro text-muted-foreground">
+                    {t('devices.autoSecondGate', {
+                      defaultValue:
+                        'This switch only removes the approval at the phone. A command from Claude is also held by this workspace’s write mode — the Claude connector tab, next to this one, is where APPROVAL becomes AUTONOMOUS.',
+                    })}
                   </p>
                 </div>
               </div>

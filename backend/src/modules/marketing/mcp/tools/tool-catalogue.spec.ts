@@ -36,6 +36,7 @@ import { registerDeviceTools } from './device.tools';
 import { registerReadinessTools } from './readiness.tools';
 import { registerSetupWriteTools } from './setup-write.tools';
 import { registerOperationsTools } from './operations.tools';
+import { registerAiLaneTools } from './ai-lane.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -247,6 +248,10 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     taxRates: { create: jest.fn() } as any,
     orderForms: { create: jest.fn() } as any,
     emailTemplates: { create: jest.fn() } as any,
+  });
+  registerAiLaneTools(registry, {
+    lease: { claim: jest.fn(), complete: jest.fn(), pending: jest.fn() } as any,
+    auth: { setAiExecution: jest.fn() } as any,
   });
   registerOperationsTools(registry, {
     distribution: { update: jest.fn() } as any,
@@ -539,6 +544,13 @@ describe('MCP tool catalogue', () => {
         'jeeta.preview_segment',
         'jeeta.create_segment',
         'jeeta.list_offers',
+        // The MCP-first AI lane. All deferred: a connector learns these names
+        // from the instruction claim_reply_job hands it, exactly as the
+        // research drainer does.
+        'jeeta.claim_reply_job',
+        'jeeta.complete_reply_job',
+        'jeeta.get_ai_reply_queue',
+        'jeeta.set_ai_execution',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -575,7 +587,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(144);
+    expect(names).toHaveLength(148);
   });
 
   /**
@@ -695,7 +707,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(144);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(148);
   });
 });
 

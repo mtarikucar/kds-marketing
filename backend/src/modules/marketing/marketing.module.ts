@@ -144,6 +144,7 @@ import { ScheduledJobService } from './scheduling/scheduled-job.service';
 import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
+import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
 import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
@@ -293,6 +294,7 @@ import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerReadinessTools } from './mcp/tools/readiness.tools';
 import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
 import { registerOperationsTools } from './mcp/tools/operations.tools';
+import { registerAiLaneTools } from './mcp/tools/ai-lane.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -902,6 +904,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // metering, the knowledge base + agent profiles (Agent Studio), and
     // one-shot content generation.
     AnthropicService,
+    AiReplyLeaseService,
     AiCreditsService,
     // The ONE brand-safety screen. Every path that publishes machine-written
     // copy on a customer's behalf goes through this instance — it lived as a
@@ -1358,6 +1361,8 @@ export class MarketingModule {
     approvals: ApprovalRequestService,
     customFields: CustomFieldsService,
     offers: MarketingOffersService,
+    aiReplyLease: AiReplyLeaseService,
+    marketingAuth: MarketingAuthService,
     tags: TagsService,
     // Faz 5 D2 — content & social automation.
     calendar: UnifiedCalendarService,
@@ -1415,6 +1420,9 @@ export class MarketingModule {
     // Wave 1 of closing the API-vs-connector gap: the settings and sales
     // surfaces that had no tool at all, starting with the ones measured to be
     // blocking something rather than merely absent.
+    // MCP FIRST: the lane that lets a workspace's own Claude answer its
+    // customers, with the platform key as the fallback rather than the default.
+    registerAiLaneTools(registry, { lease: aiReplyLease, auth: marketingAuth });
     registerOperationsTools(registry, {
       distribution,
       approvals,

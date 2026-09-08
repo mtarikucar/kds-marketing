@@ -176,6 +176,63 @@ describe('DevicesPage', () => {
     vi.useRealTimers();
   });
 
+  it('names the handset on the cable, so two phones are not one row twice', async () => {
+    // "The wrong phone messaged a customer" is not a mistake anybody wants to
+    // make twice, and the label alone does not prevent it.
+    respond([
+      device({
+        properties: { model: 'Redmi Note 12', androidVersion: '13', serial: 'abc123' },
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText(/Redmi Note 12 · Android 13 · abc123/)).toBeInTheDocument();
+  });
+
+  it('offers a screenshot as something you can open, not as a status', async () => {
+    const user = userEvent.setup();
+    respond([device()], [
+      {
+        id: 'c1',
+        kind: 'SCREENSHOT',
+        status: 'DONE',
+        createdAt: new Date().toISOString(),
+        result: { screenshotUrl: 'https://cdn.test/shot.png' },
+      },
+    ]);
+    renderPage();
+    await screen.findByText('Office phone');
+    await user.click(screen.getByText('Recent commands'));
+
+    const link = await screen.findByRole('link', { name: /Open the screenshot/ });
+    expect(link).toHaveAttribute('href', 'https://cdn.test/shot.png');
+  });
+
+  it('says why a picture is missing rather than showing a bare DONE', async () => {
+    const user = userEvent.setup();
+    respond([device()], [
+      {
+        id: 'c1',
+        kind: 'SCREENSHOT',
+        status: 'DONE',
+        createdAt: new Date().toISOString(),
+        result: { screenshotUnavailable: 'no object store is configured' },
+      },
+    ]);
+    renderPage();
+    await screen.findByText('Office phone');
+    await user.click(screen.getByText('Recent commands'));
+    expect(await screen.findByText(/no object store is configured/)).toBeInTheDocument();
+  });
+
+  it('names the OTHER gate, which this page cannot turn off', async () => {
+    // An owner who flips AUTO and finds the phone still idle has no way to
+    // guess from this page that Jeeta's own write mode is holding the command.
+    respond([device()]);
+    renderPage();
+    expect(await screen.findByText(/only removes the approval at the phone/i)).toBeInTheDocument();
+    expect(screen.getByText(/Claude connector tab/i)).toBeInTheDocument();
+  });
+
   it('reads a phone command history only when the section is opened', async () => {
     const user = userEvent.setup();
     respond([device()], [

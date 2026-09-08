@@ -15,6 +15,7 @@ import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
 import { ResearchExecutionMode } from '../dto/set-research-execution.dto';
+import { type AiExecutionMode } from '../ai/ai-execution';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 import { isIanaTimeZone } from '../common/iana-timezone';
@@ -1022,6 +1023,29 @@ export class MarketingAuthService {
       select: { researchExecution: true },
     });
     return { researchExecution: workspace.researchExecution };
+  }
+
+  /**
+   * WHO does this workspace's AI work. Sibling of setResearchExecution, and
+   * the same caveat applies twice over: nothing here can verify that a drainer
+   * exists on the owner's side.
+   *
+   * It matters more here, because `MCP_ONLY` is a guarantee that the platform
+   * key is never used — which means it is also the one mode that can leave a
+   * customer unanswered indefinitely. Setting it without a scheduled Claude is
+   * not a misconfiguration the system can refuse; it is a promise the owner
+   * has made to themselves. So the queue depth is reported by name
+   * (`AiReplyLeaseService.pending`) and surfaced on the setup list: choosing
+   * this mode and then forgetting to drain must look like a growing backlog,
+   * never like "the AI had nothing to say".
+   */
+  async setAiExecution(workspaceId: string, mode: AiExecutionMode) {
+    const workspace = await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { aiExecution: mode },
+      select: { aiExecution: true },
+    });
+    return { aiExecution: workspace.aiExecution };
   }
 
   /**
