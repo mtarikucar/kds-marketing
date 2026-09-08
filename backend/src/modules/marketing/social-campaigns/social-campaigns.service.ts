@@ -523,6 +523,15 @@ export class SocialCampaignsService implements OnModuleInit {
     const c = await this.prisma.socialCampaign.findFirst({ where: { id: campaignId, workspaceId } });
     if (!c || c.status !== 'ACTIVE') return; // stop-on-pause / cancel / completed
 
+    // A PROGRAMME'S campaign is only the publishing lane. The programme plans
+    // the calendar itself — typed slots, chosen by what has measured well, with
+    // a trend hook and a lead time for the storyboard — and hands each one in
+    // as a promoted concept at the slot it decided. If this tick ALSO planned,
+    // every programme slot would sit beside a stock topic the campaign
+    // invented at the same cadence, and both would spend. No reschedule
+    // either: there is nothing for this job to come back for.
+    if (c.programmeId) return;
+
     const last = await this.prisma.socialCampaignItem.findFirst({
       where: { socialCampaignId: campaignId },
       orderBy: { scheduledFor: 'desc' },

@@ -1417,3 +1417,31 @@ describe('ConceptPromotionService.promote — the reviewer\'s storyboard becomes
     expect(h.scheduledJobs.schedule).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ConceptPromotionService.promote — a programme names the slot', () => {
+  /**
+   * The programme plans its calendar AHEAD (T-36h concept, T-12h clips) and the
+   * slot is already decided when the concept is promoted. The campaign's own
+   * cadence would put the item at the NEXT free cadence slot, which is a
+   * different moment — usually the one the programme has already filled with
+   * another slot.
+   */
+  it('creates the item at exactly scheduledFor when the caller supplies one', async () => {
+    const at = new Date('2026-09-20T15:00:00Z');
+    const { svc, createItem } = harness();
+
+    await svc.promote(WS, CONCEPT_ID, { scheduledFor: at });
+
+    expect(createItem).toHaveBeenCalledTimes(1);
+    expect(createItem.mock.calls[0][0].data.scheduledFor).toEqual(at);
+  });
+
+  it('falls back to the cadence slot when none is supplied', async () => {
+    const { svc, createItem } = harness();
+    await svc.promote(WS, CONCEPT_ID);
+    const scheduledFor: Date = createItem.mock.calls[0][0].data.scheduledFor;
+    // Monday/Wednesday/Friday at 09:00 UTC, per the harness campaign's cadence.
+    expect([1, 3, 5]).toContain(scheduledFor.getUTCDay());
+    expect(scheduledFor.getUTCHours()).toBe(9);
+  });
+});
