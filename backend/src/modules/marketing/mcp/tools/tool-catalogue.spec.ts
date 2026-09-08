@@ -340,6 +340,7 @@ describe('MCP tool catalogue', () => {
         'jeeta.create_webchat_channel',
         'jeeta.list_channels',
         'jeeta.get_distribution_config',
+        'jeeta.set_channel_agent',
         'jeeta.set_channel_status',
         'jeeta.list_calendars',
         'jeeta.list_companies',
@@ -523,15 +524,16 @@ describe('MCP tool catalogue', () => {
     // either branch predicted. This is the failure mode the note below warns
     // about: trust the assertion, which counts a real registry.
     //
-    // MEASURED, not counted by grep. `grep -c 'registry.register('` over the
-    // non-spec tool files is a legitimate cross-check and currently agrees:
-    // 123 calls for 123 names before that tool, 124/124 after, 126/126 with
-    // stage 4's two distribution tools. An earlier note
-    // recorded "125 register calls but 123 registered names" and claimed grep
-    // over-counts; re-measured, grep did not — the counts have always matched,
-    // and the figure to trust is the one this assertion takes from a built
-    // registry.
-    expect(names).toHaveLength(132);
+    // MEASURED from a built registry, and that is now the ONLY figure worth
+    // quoting. `grep -c 'registry.register('` over the non-spec tool files used
+    // to agree exactly (123/123, then 124/124, then 126/126) and no longer
+    // does: at 133 registered names the same grep reports 137 register calls,
+    // and `name: 'jeeta.` reports 141. Both greps count text; the registry
+    // counts what a client can actually reach, and only the second one is the
+    // catalogue. The gap has NOT been chased down to a cause here — saying so
+    // is the point, because the previous version of this comment asserted an
+    // agreement that had quietly stopped being true.
+    expect(names).toHaveLength(133);
   });
 
   /**
@@ -626,14 +628,16 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(45);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45 + DISCOVERY_TOOLS.length);
-    // 128 total, 45 advertised (+2 discovery) and 81 deferred: everything a
+    // 133 total, 45 advertised (+2 discovery) and 88 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
-    // hundred. `jeeta.submit_strategy` is the newest, and deferred for that
-    // reason — like `jeeta.submit_content_concepts` before it. The number in this comment said 120 while the assertion
-    // below said 123; a comment that disagrees with its own assertion is how a
-    // measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(132);
+    // hundred. `jeeta.set_channel_agent` is the newest, and deferred for that
+    // reason — like `jeeta.submit_strategy` and `jeeta.submit_content_concepts`
+    // before it. Both figures here are READ OFF the built registry, never
+    // remembered: this comment has twice disagreed with its own assertion, and
+    // a comment that does that is how a measured number quietly becomes a
+    // recalled one.
+    expect(registry.list(ALL_SCOPES)).toHaveLength(133);
   });
 });
 

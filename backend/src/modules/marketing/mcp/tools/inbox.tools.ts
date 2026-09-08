@@ -267,6 +267,61 @@ export function registerChannelWriteTools(registry: McpToolRegistry, deps: Inbox
   });
 
   /**
+   * The switch that decides whether anyone answers.
+   *
+   * `create_webchat_channel` could attach an agent, but only at the moment it
+   * made the channel — and every other channel type is connected in the panel,
+   * so for all of them the binding could never be set from here at all. That
+   * left the single field the auto-reply engine actually gates on
+   * (`ConversationAiEngineService` declines outright when `agentProfileId` is
+   * null) reachable only by finding one dropdown on one settings tab. A
+   * workspace could connect a mailbox, watch replies arrive, and never learn
+   * why nothing answered them.
+   *
+   * Not approval-gated, and that is a considered call rather than an omission.
+   * It grants exactly the authority the panel already hands a MANAGER, it
+   * destroys nothing, and it is undone by the same call with `null`. What it
+   * DOES do is switch on autonomous replies to real customers in the brand's
+   * own voice, which is why the description says so plainly: an agent bound
+   * here starts answering the next inbound message by itself.
+   */
+  registry.register({
+    name: 'jeeta.set_channel_agent',
+    description:
+      'Choose which AI agent answers on a channel — or pass null to leave it manual-only. This is the ' +
+      'switch the auto-reply engine actually reads: with no agent attached it declines every inbound ' +
+      'message, so a connected inbox can look perfectly healthy and still never answer anyone. ' +
+      'Attaching one means the agent replies to real customers by itself, in the brand voice, on that ' +
+      'channel. It takes effect from the NEXT inbound message: nothing already sitting in the inbox is ' +
+      'answered retroactively. Reversible — call again with null to hand the channel back to humans. ' +
+      'Get ids from jeeta.list_channels and jeeta.list_agents.',
+    domain: 'inbox',
+    defer: true,
+    scopes: ['settings.manage'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      channelId: z.string().min(1).describe('Channel id, from jeeta.list_channels.'),
+      agentProfileId: z
+        .string()
+        .min(1)
+        .max(64)
+        .nullable()
+        .describe(
+          'Agent profile to answer on this channel, from jeeta.list_agents. Pass null to detach the ' +
+            'current one and make the channel manual-only.',
+        ),
+    }),
+    handler: async (ctx, args) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');
+      return deps.channels.update(ctx.workspaceId, String(args.channelId), {
+        agentProfileId: (args.agentProfileId as string | null) ?? null,
+      } as never);
+    },
+  });
+
+
+  /**
    * "Can this channel actually receive?"
    *
    * The check existed and nothing could reach it. Verify was a button on a

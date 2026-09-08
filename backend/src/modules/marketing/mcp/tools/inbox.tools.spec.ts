@@ -1,5 +1,5 @@
 import { McpToolRegistry } from '../mcp-tool-registry';
-import { registerInboxTools } from './inbox.tools';
+import { registerInboxTools, registerChannelWriteTools } from './inbox.tools';
 
 const deps = () => ({
   conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
@@ -124,5 +124,85 @@ describe('inbox feature gate', () => {
         .handler({ workspaceId: 'ws1', grantedScopes: [] }, { conversationId: 'ws-other' }),
     ).rejects.toBeDefined();
     expect(d.entitlements.getEffective).toHaveBeenCalledWith('ws1');
+  });
+});
+
+/**
+ * The one field the auto-reply engine gates on, finally reachable.
+ *
+ * `create_webchat_channel` could set it, but only while creating the channel —
+ * and every other channel type is connected in the panel, so for those the
+ * binding could not be set from here at all. A workspace could connect a
+ * mailbox, watch replies arrive and never learn why nothing answered them.
+ */
+describe('jeeta.set_channel_agent', () => {
+  function build() {
+    const update = jest.fn().mockResolvedValue({ id: 'ch-1', agentProfileId: 'agent-1' });
+    const registry = new McpToolRegistry();
+    registerChannelWriteTools(registry, { ...deps(), channels: { update } } as any);
+    return { tool: registry.get('jeeta.set_channel_agent')!, update, registry };
+  }
+
+  const ctx = { workspaceId: 'ws-1' } as any;
+
+  it('attaches an agent to an existing channel', async () => {
+    const { tool, update } = build();
+    await tool.handler(ctx, { channelId: 'ch-1', agentProfileId: 'agent-1' });
+    expect(update).toHaveBeenCalledWith('ws-1', 'ch-1', { agentProfileId: 'agent-1' });
+  });
+
+  it('hands the channel back to humans with null', async () => {
+    const { tool, update } = build();
+    await tool.handler(ctx, { channelId: 'ch-1', agentProfileId: null });
+    expect(update).toHaveBeenCalledWith('ws-1', 'ch-1', { agentProfileId: null });
+  });
+
+  it('accepts null in the schema — detaching must not need a workaround', () => {
+    const { tool } = build();
+    expect(tool.inputSchema.safeParse({ channelId: 'ch-1', agentProfileId: null }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ channelId: 'ch-1' }).success).toBe(false);
+  });
+
+  it('is a plain WRITE, not approval-gated', () => {
+    // Considered, not overlooked: it grants exactly the authority the panel
+    // already hands a MANAGER, destroys nothing, and is undone by the same call
+    // with null. Gating it would have re-created the very dead end it exists to
+    // remove.
+    const { tool } = build();
+    expect(tool.risk).toBe('WRITE');
+    expect(tool.requiresApproval).toBe(false);
+    expect(tool.scopes).toEqual(['settings.manage']);
+  });
+
+  it('says out loud that it switches on autonomous replies', () => {
+    // The description is the only warning anyone gets before a brand's inbox
+    // starts answering customers by itself.
+    const { tool } = build();
+    expect(tool.description).toMatch(/by itself/i);
+    expect(tool.description).toMatch(/NEXT inbound/i);
+  });
+
+  it('is hidden from a caller without settings.manage', () => {
+    const { registry } = build();
+    expect(registry.list(['contacts.read']).map((t) => t.name)).not.toContain(
+      'jeeta.set_channel_agent',
+    );
+  });
+
+  it('refuses a workspace whose plan has no conversation AI', async () => {
+    const update = jest.fn();
+    const registry = new McpToolRegistry();
+    registerChannelWriteTools(registry, {
+      ...deps(),
+      entitlements: { getEffective: jest.fn(async () => ({ features: { conversationAi: false } })) },
+      channels: { update },
+    } as any);
+    await expect(
+      registry.get('jeeta.set_channel_agent')!.handler(ctx, {
+        channelId: 'ch-1',
+        agentProfileId: 'agent-1',
+      }),
+    ).rejects.toBeDefined();
+    expect(update).not.toHaveBeenCalled();
   });
 });
