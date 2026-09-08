@@ -556,6 +556,10 @@ describe('MCP tool catalogue', () => {
         // reaching back after a PUSH that needs a triggerUrl nobody has ever
         // set. Pulling removes the configuration entirely.
         'jeeta.score_lead',
+        // Replying from the panel pauses the AI on that thread and nothing
+        // turned it back on, so a rep who answered once left the customer
+        // outside every automatic path. The REST route existed all along.
+        'jeeta.set_conversation_ai',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -592,7 +596,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(149);
+    expect(names).toHaveLength(150);
   });
 
   /**
@@ -712,7 +716,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(149);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(150);
   });
 });
 
