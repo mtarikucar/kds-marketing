@@ -177,7 +177,9 @@ beforeEach(() => {
 
 describe('ProgrammePanel — no programme', () => {
   it('offers to start one, and the dialog submits exactly what was typed', async () => {
-    const user = userEvent.setup();
+    // Six typed fields: instant keystrokes and a wide budget, so the whole
+    // suite running in parallel cannot turn this into a timeout.
+    const user = userEvent.setup({ delay: null });
     getProgramme.mockResolvedValue({ programme: null, dashboard: null });
     createProgramme.mockResolvedValue({ programme: programme(), dashboard: dashboard() });
     wrap(<ProgrammePanel now={NOW} />);
@@ -207,7 +209,7 @@ describe('ProgrammePanel — no programme', () => {
         timeOfDay: '09:30',
       }),
     );
-  });
+  }, 20_000);
 
   it('refuses to submit without an account, naming the gap', async () => {
     const user = userEvent.setup();
