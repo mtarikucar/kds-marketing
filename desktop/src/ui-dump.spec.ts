@@ -55,6 +55,16 @@ describe('distillUiDump', () => {
     expect(screen.elements.some((e) => e.text === 'Kabul & devam')).toBe(true);
   });
 
+  it('decodes NUMERIC references too — the kind uiautomator actually emits', () => {
+    // Measured on a real Android 13 screen: Chrome's consent paragraph came
+    // back carrying a literal "&#10;" where the line break was. A model
+    // reading that sees markup, and a TAP_ON matching that label would be
+    // matching a string the screen never displayed.
+    const xml =
+      '<hierarchy><node class="android.widget.TextView" text="Devam&#10;edin &#231;ay" clickable="true" bounds="[0,0][100,50]" /></hierarchy>';
+    expect(distillUiDump(xml).elements[0].text).toBe('Devam edin çay');
+  });
+
   it('reports the screen size once, from the root', () => {
     expect(screen.size).toEqual({ w: 1080, h: 2400 });
   });

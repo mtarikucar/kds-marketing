@@ -64,7 +64,22 @@ const ENTITIES: Record<string, string> = {
 };
 
 function decode(v: string): string {
-  return v.replace(/&(amp|lt|gt|quot|apos);/g, (m) => ENTITIES[m] ?? m).slice(0, MAX_TEXT);
+  return (
+    v
+      .replace(/&(amp|lt|gt|quot|apos);/g, (m) => ENTITIES[m] ?? m)
+      // uiautomator writes newlines and anything else non-ASCII as NUMERIC
+      // references (`&#10;`, `&#231;`), not named ones. Leaving those raw was
+      // measured on a real screen: a Chrome consent paragraph came back with a
+      // literal "&#10;" in the middle of it. A model reading that sees markup
+      // where the phone shows a line break, and a TAP_ON matching on the label
+      // would be matching against a string the screen never displayed.
+      .replace(/&#(\d{1,7});/g, (_, n) => String.fromCodePoint(Number(n)))
+      .replace(/&#x([0-9a-f]{1,6});/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+      // Whatever survives is text somebody typed; collapse the newlines a
+      // label cannot show anyway so one element stays one line.
+      .replace(/\s+/g, ' ')
+      .slice(0, MAX_TEXT)
+  );
 }
 
 function attr(node: string, name: string): string {
