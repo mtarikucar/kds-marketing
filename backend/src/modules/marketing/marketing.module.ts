@@ -145,6 +145,7 @@ import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
+import { AiReplyBackfillService } from './ai/ai-reply-backfill.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
 import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
@@ -905,6 +906,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiReplyLeaseService,
+    // Conversations that were already waiting when the reply lane was switched
+    // on are invisible to it — onInbound only sees messages that ARRIVE.
+    AiReplyBackfillService,
     AiCreditsService,
     // The ONE brand-safety screen. Every path that publishes machine-written
     // copy on a customer's behalf goes through this instance — it lived as a

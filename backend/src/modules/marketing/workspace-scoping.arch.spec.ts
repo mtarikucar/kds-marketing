@@ -469,6 +469,19 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // scoped to it, and the cursor write re-reads the row by { id, workspaceId }.
   'channels/email-imap-poll.service.ts:channel.findMany':
     'inbound-email (IMAP) poller enumerates verified ACTIVE EMAIL channels across all workspaces (system cron); ingest and cursor write are scoped by each row workspaceId',
+  // The reply-backfill sweep. A conversation that was already waiting when the
+  // reply lane was switched on is invisible to it — onInbound only sees
+  // messages that ARRIVE — so an hourly system cron has to find them, and
+  // finding them means asking across workspaces. Every row it reads carries its
+  // own workspaceId straight into the job it enqueues, and the three reads are
+  // separate only because Conversation holds a SOFT channelId with no relation
+  // to join through.
+  'ai/ai-reply-backfill.service.ts:scheduledJob.findMany':
+    'reply-backfill reads in-flight ai_reply jobs across all workspaces to avoid double-queueing one conversation (system cron); only conversationIds are taken',
+  'ai/ai-reply-backfill.service.ts:channel.findMany':
+    'reply-backfill enumerates ACTIVE channels that have an answering agent, across all workspaces (system cron); only ids are taken, to filter conversations',
+  'ai/ai-reply-backfill.service.ts:conversation.findMany':
+    'reply-backfill enumerates OPEN conversations whose customer spoke last, across all workspaces (system cron); each row carries its workspaceId into the enqueued job',
   // CDR-sync sweep: the 5-minute cron asks which workspaces could possibly have
   // NetGSM CDR credentials, by enumerating ACTIVE SMS channels across ALL
   // workspaces — the same system-job shape as the four NetGSM pollers above, and
