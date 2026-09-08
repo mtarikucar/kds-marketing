@@ -6,6 +6,7 @@ import { EmailService } from '../../../common/services/email.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
+import { WorkspaceMailboxService } from '../channels/workspace-mailbox.service';
 import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
 import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
@@ -62,6 +63,7 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly registry: ChannelAdapterRegistry,
+    private readonly mailbox: WorkspaceMailboxService,
     private readonly quota: MessageQuotaService,
     private readonly sendingDomains: SendingDomainsService,
     private readonly smsV2: SmsV2Client,
@@ -441,36 +443,6 @@ export class CampaignSenderService implements OnModuleInit {
     return null;
   }
 
-  /**
-   * The workspace's own mailbox, resolved for sending — or null to fall through
-   * to the platform transport.
-   *
-   * Two conditions, both deliberate:
-   *
-   * `lastVerifiedAt: { not: null }` — ChannelsService.verify writes it ONLY on
-   * `health.ok`, so this is a mailbox whose SMTP login has actually been
-   * accepted. Sending a whole campaign through credentials nobody has proved is
-   * how you get a run of `535 Authentication Failed` with the campaign already
-   * marked SENDING.
-   *
-   * SMTP only — a consent-connected (OAuth) mailbox falls through on purpose.
-   * `email-oauth.sender.ts` pins Microsoft to `contentType: 'Text'` and builds
-   * Gmail's RFC822 without an HTML part, so routing a campaign there would
-   * silently drop the HTML body. Arriving as plain text from the right address
-   * is worse than arriving formatted from the platform's, so that case keeps
-   * the old path until the OAuth sender learns multipart.
-   */
-  private async ownSmtpMailbox(workspaceId: string): Promise<ResolvedChannelConfig | null> {
-    const ch = await this.prisma.channel.findFirst({
-      where: { workspaceId, type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } },
-    });
-    if (!ch) return null;
-    const resolved = this.registry.resolveConfig(ch);
-    const s = (resolved.secrets ?? {}) as Record<string, string | undefined>;
-    if (s.oauthProvider) return null;
-    return s.smtpHost?.trim() && s.smtpUser?.trim() && s.smtpPass ? resolved : null;
-  }
-
   private async send(
     workspaceId: string, channel: string, to: string, subject: string | null, body: string, html?: string,
   ): Promise<{ ok: boolean; messageId?: string | null; error?: string }> {
@@ -505,7 +477,7 @@ export class CampaignSenderService implements OnModuleInit {
         // the other channels now, refund on failure included.
         await this.quota.reserve(workspaceId, 'EMAIL');
         try {
-          const own = await this.ownSmtpMailbox(workspaceId);
+          const own = await this.mailbox.resolve(workspaceId);
           let ok: boolean;
           let ownError: string | undefined;
           let ownMessageId: string | null = null;

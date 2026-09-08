@@ -161,6 +161,7 @@ import { RecordingProxyController } from './controllers/recording-proxy.controll
 import { SseTokenGuard } from './guards/sse-token.guard';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
+import { WorkspaceMailboxService } from './channels/workspace-mailbox.service';
 import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
@@ -909,6 +910,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // init), message quota, the conversation services, and the AI engine
     // (subscribes to inbound events + registers its ScheduledJob handlers).
     ChannelAdapterRegistry,
+    WorkspaceMailboxService,
     WebchatAdapter,
     WhatsappCloudAdapter,
     NetgsmSmsAdapter,
