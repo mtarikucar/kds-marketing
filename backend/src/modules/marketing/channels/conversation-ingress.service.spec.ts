@@ -38,7 +38,11 @@ describe('ConversationIngressService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
-      lead: { create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
+      lead: {
+        create: jest.fn().mockResolvedValue({ id: 'lead-1' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       leadActivity: { create: jest.fn().mockResolvedValue({}) },
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -244,7 +248,11 @@ describe('ConversationIngressService — phone identity matching', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
-      lead: { create: jest.fn().mockResolvedValue({ id: 'lead-new' }) },
+      lead: {
+        create: jest.fn().mockResolvedValue({ id: 'lead-new' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       leadActivity: { create: jest.fn().mockResolvedValue({}) },
       conversation: {
         findFirst: jest.fn().mockResolvedValue({ id: 'conv-existing', status: 'OPEN' }),
@@ -395,7 +403,11 @@ describe('ConversationIngressService — the owner replying from their phone', (
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
-      lead: { create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
+      lead: {
+        create: jest.fn().mockResolvedValue({ id: 'lead-1' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       leadActivity: { create: jest.fn().mockResolvedValue({}) },
       conversation: {
         findFirst: jest.fn().mockResolvedValue({ id: 'conv-1', leadId: 'lead-1' }),
@@ -480,5 +492,207 @@ describe('ConversationIngressService — the owner replying from their phone', (
       expect(emitted()).toContain('marketing.conversation.message.received.v1');
       expect(stream.push.mock.calls[0][1].payload).toMatchObject({ direction: 'INBOUND' });
     });
+  });
+});
+
+/**
+ * A reply must land on the customer you ALREADY have.
+ *
+ * `findIdentity` only asks whether this address has written to THIS channel
+ * before. When it has not, the funnel used to create a lead, full stop — right
+ * for a stranger, wrong for everyone else. A customer entered by hand or
+ * imported from a spreadsheet, who then answers an email we sent them, has no
+ * identity on the email channel, so the CRM quietly gained a second copy: the
+ * outbound message on one record, their answer on the other, and whoever
+ * opened either saw half a conversation. This is the missing direction of a
+ * dedup whose mirror image was already here.
+ */
+describe('ConversationIngressService — a reply adopts the lead you already have', () => {
+  const WS = 'ws-1';
+  const emailChannel = { id: 'ch-mail', workspaceId: WS, type: 'EMAIL' };
+  let prisma: any;
+  let outbox: { append: jest.Mock };
+  let attribution: { capture: jest.Mock };
+  let autoAssigner: { pickAssignee: jest.Mock };
+  let svc: ConversationIngressService;
+
+  const emailIn: InboundMessage = {
+    externalUserId: 'Tarik42777@Gmail.com',
+    kind: 'EMAIL',
+    externalMessageId: 'CAF1@mail.gmail.com',
+    text: 'Merhaba ilgileniyorum',
+    displayName: 'Tarık Uçar',
+  };
+
+  function build(existingLead: any = null) {
+    prisma = {
+      message: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+      },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: existingLead?.id ?? 'lead-new' }),
+      },
+      lead: {
+        create: jest.fn().mockResolvedValue({ id: 'lead-new' }),
+        findFirst: jest.fn().mockResolvedValue(existingLead),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sys-1' }) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    outbox = { append: jest.fn().mockResolvedValue('evt') };
+    attribution = { capture: jest.fn().mockResolvedValue(undefined) };
+    autoAssigner = { pickAssignee: jest.fn().mockResolvedValue('rep-1') };
+    svc = new ConversationIngressService(
+      prisma as any,
+      autoAssigner as any,
+      outbox as any,
+      { push: jest.fn() } as any,
+      attribution as any,
+    );
+  }
+
+  const KNOWN = {
+    id: 'lead-existing',
+    email: 'tarik42777@gmail.com',
+    phone: '905060687100',
+    whatsapp: null,
+  };
+
+  it('attaches the identity to the known lead instead of creating a second one', async () => {
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.create).not.toHaveBeenCalled();
+    expect(prisma.contactIdentity.create.mock.calls[0][0].data).toMatchObject({
+      workspaceId: WS,
+      channelId: 'ch-mail',
+      kind: 'EMAIL',
+      leadId: 'lead-existing',
+    });
+  });
+
+  it('matches on the NORMALISED address, not the provider spelling', async () => {
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.findFirst.mock.calls[0][0].where.OR).toContainEqual({
+      emailNormalized: 'tarik42777@gmail.com',
+    });
+  });
+
+  it('does NOT announce a new lead when it adopted an existing one', async () => {
+    // lead.created is a workflow trigger. Firing it for someone already in the
+    // CRM would re-run first-contact automation on an established customer.
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(outbox.append.mock.calls.map((c: any) => c[0].type)).not.toContain(
+      'marketing.lead.created.v1',
+    );
+  });
+
+  it('does not re-run auto-assignment on someone who already has a record', async () => {
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(autoAssigner.pickAssignee).not.toHaveBeenCalled();
+  });
+
+  it('skips tombstoned and soft-deleted leads', async () => {
+    // A merged-away lead must not be resurrected by a reply, and a soft-deleted
+    // one must not silently swallow a live conversation into a record nobody
+    // can see.
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.findFirst.mock.calls[0][0].where).toMatchObject({
+      workspaceId: WS,
+      mergedIntoId: null,
+      deletedAt: null,
+    });
+  });
+
+  it('takes the OLDEST match, so two ticks cannot adopt different records', async () => {
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.findFirst.mock.calls[0][0].orderBy).toEqual({ createdAt: 'asc' });
+  });
+
+  it('fills a blank field on the adopted lead but never overwrites one', async () => {
+    // The person on this channel is not authority over another channel's
+    // details — but a lead entered by phone that now emails us should gain the
+    // email rather than spawn a twin.
+    build({ id: 'lead-existing', email: null, phone: '905060687100', whatsapp: null });
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { id: 'lead-existing', workspaceId: WS },
+      data: { email: 'Tarik42777@Gmail.com', emailNormalized: 'tarik42777@gmail.com' },
+    });
+    expect(prisma.lead.updateMany.mock.calls[0][0].data.phone).toBeUndefined();
+  });
+
+  it('writes nothing when the adopted lead already has the address', async () => {
+    build(KNOWN);
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still captures ad attribution for an adopted lead', async () => {
+    // Before this change every identity-less inbound created a lead, so
+    // capture() always ran. Adoption must not quietly drop the referral.
+    build(KNOWN);
+    await svc.ingest(emailChannel, {
+      ...emailIn,
+      referral: { sourceType: 'ad', sourceId: 'camp-9', ctwaClid: 'clid-1' },
+    } as any);
+    expect(attribution.capture).toHaveBeenCalledWith(
+      WS,
+      'lead-existing',
+      expect.objectContaining({ ctwaClid: 'clid-1' }),
+      { sourceAdCampaignId: 'camp-9' },
+      expect.anything(),
+    );
+  });
+
+  it('matches every stored spelling of a phone number', async () => {
+    build({ id: 'lead-existing', email: null, phone: '05551112233', whatsapp: null });
+    await svc.ingest({ id: 'ch-wa', workspaceId: WS, type: 'WHATSAPP' }, {
+      externalUserId: '905551112233',
+      kind: 'WA',
+      externalMessageId: 'wamid.1',
+      text: 'selam',
+    });
+    const or = prisma.lead.findFirst.mock.calls[0][0].where.OR;
+    expect(or[0].phoneNormalized.in).toEqual(expect.arrayContaining(['905551112233']));
+    expect(or[0].phoneNormalized.in.length).toBeGreaterThan(1);
+  });
+
+  it('does not treat an opaque provider id as a contact detail', async () => {
+    // Two equal IGSIDs say nothing about the humans behind them, so those kinds
+    // fall through to creation exactly as before.
+    build(KNOWN);
+    await svc.ingest({ id: 'ch-ig', workspaceId: WS, type: 'INSTAGRAM' }, {
+      externalUserId: 'IGSID_9',
+      kind: 'IGSID',
+      externalMessageId: 'mid.1',
+      text: 'selam',
+    });
+    expect(prisma.lead.findFirst).not.toHaveBeenCalled();
+    expect(prisma.lead.create).toHaveBeenCalled();
+  });
+
+  it('still creates a lead for someone genuinely new', async () => {
+    build(null);
+    await svc.ingest(emailChannel, emailIn);
+    expect(prisma.lead.create).toHaveBeenCalled();
+    expect(outbox.append.mock.calls.map((c: any) => c[0].type)).toContain(
+      'marketing.lead.created.v1',
+    );
   });
 });
