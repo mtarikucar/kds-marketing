@@ -697,7 +697,7 @@ describe('ConversationAiEngineService — who does the thinking', () => {
   const WS = 'ws-1';
   const CONVO = 'convo-1';
 
-  function build(aiExecution: string | null, mcpSeen = false) {
+  function build(aiExecution: string | null, mcpSeen = false, paused = false) {
     const anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
     const scheduledJobs = {
       cancel: jest.fn().mockResolvedValue(undefined),
@@ -706,9 +706,15 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     const prisma: any = {
       workspace: { findUnique: jest.fn().mockResolvedValue({ aiExecution }) },
       agentRun: { findFirst: jest.fn().mockResolvedValue(mcpSeen ? { id: 'r1' } : null) },
-      // Reached only on the SERVER path; a null conversation makes reply()
-      // decline immediately, which is all these tests need from it.
-      conversation: { findFirst: jest.fn().mockResolvedValue(null) },
+      // Two callers now: the aiPaused gate before queueing, and reply() on the
+      // SERVER path. A null second answer makes reply() decline immediately,
+      // which is all these tests need from it.
+      conversation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(paused ? { aiPaused: true } : { aiPaused: false })
+          .mockResolvedValue(null),
+      },
     };
     const engine = new ConversationAiEngineService(
       prisma,
@@ -738,15 +744,18 @@ describe('ConversationAiEngineService — who does the thinking', () => {
         dedupKey: CONVO,
       }),
     );
-    // The decisive assertion: the platform key was never consulted.
-    expect(h.prisma.conversation.findFirst).not.toHaveBeenCalled();
+    // The decisive assertion: reply() never ran, so the platform key was never
+    // consulted. Measured on isEnabled() — its very first line — rather than on
+    // a conversation read, because the aiPaused gate legitimately reads the
+    // conversation before deciding to queue.
+    expect(h.anthropic.isEnabled).not.toHaveBeenCalled();
   });
 
   it('queues under MCP_ONLY too', async () => {
     const h = build('MCP_ONLY');
     await h.inbound(event);
     expect(h.scheduledJobs.schedule).toHaveBeenCalled();
-    expect(h.prisma.conversation.findFirst).not.toHaveBeenCalled();
+    expect(h.anthropic.isEnabled).not.toHaveBeenCalled();
   });
 
   it('reads AUTO as the connector only while a Claude is actually connected', async () => {
@@ -784,5 +793,14 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     const h = build('MCP');
     await h.inbound(event);
     expect(h.scheduledJobs.cancel).toHaveBeenCalledWith(expect.any(String), CONVO);
+  });
+
+  it('does not queue a thread a human has taken over', async () => {
+    // reply() declines on the same flag and the backfill skips it. Queueing
+    // anyway would hand the connector work the platform would have refused —
+    // the two answerers disagreeing about who is allowed to speak.
+    const h = build('MCP', false, true);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
   });
 });

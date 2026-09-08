@@ -20,6 +20,10 @@ describe('AiReplyLeaseService', () => {
         updateMany: jest.fn(async () => ({ count: updateCounts[call++] ?? 1 })),
         count: jest.fn(async () => 0),
       },
+      // complete() lifts the pause its own send left behind, guarded on the
+      // last outbound being AI-authored. Default: the AI spoke last.
+      message: { findFirst: jest.fn(async () => ({ authorType: 'AI' })) },
+      conversation: { updateMany: jest.fn(async () => ({ count: 1 })) },
     };
     return { prisma, svc: new AiReplyLeaseService(prisma) };
   }
@@ -186,6 +190,45 @@ describe('AiReplyLeaseService', () => {
       prisma.scheduledJob.count.mockResolvedValue(0);
       prisma.scheduledJob.findFirst.mockResolvedValue(null);
       await expect(svc.pending(WS)).resolves.toEqual({ waiting: 0, oldestQueuedAt: null });
+    });
+  });
+
+  describe('complete — lifting the pause the lane itself caused', () => {
+    it('un-pauses the conversation after the lane answers it', async () => {
+      // Without this the lane answers each thread exactly ONCE and then goes
+      // silent on it forever: ConversationsService.reply() — the path
+      // jeeta.send_message takes — sets aiPaused on the way out, which is right
+      // for a person typing in the panel and wrong for the connector, because
+      // the connector IS the AI answering.
+      const { prisma, svc } = build();
+      prisma.scheduledJob.findFirst.mockResolvedValue({
+        payload: { conversationId: 'convo-1' },
+      });
+      await svc.complete(WS, 'job-1', true);
+      expect(prisma.conversation.updateMany).toHaveBeenCalledWith({
+        where: { id: 'convo-1', workspaceId: WS, aiPaused: true },
+        data: { aiPaused: false },
+      });
+    });
+
+    it('leaves the pause alone when a HUMAN spoke last', async () => {
+      // Someone stepped in while the lease was held. That pause is theirs.
+      const { prisma, svc } = build();
+      prisma.scheduledJob.findFirst.mockResolvedValue({
+        payload: { conversationId: 'convo-1' },
+      });
+      prisma.message.findFirst.mockResolvedValue({ authorType: 'AGENT' });
+      await svc.complete(WS, 'job-1', true);
+      expect(prisma.conversation.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does not un-pause when the reply was handed BACK', async () => {
+      const { prisma, svc } = build();
+      prisma.scheduledJob.findFirst.mockResolvedValue({
+        payload: { conversationId: 'convo-1' },
+      });
+      await svc.complete(WS, 'job-1', false);
+      expect(prisma.conversation.updateMany).not.toHaveBeenCalled();
     });
   });
 });
