@@ -9,8 +9,13 @@ import { RouteFallback } from '../../../components/RouteFallback';
 // route before, and neither should be paid for by someone who wanted the other.
 const ApiKeysPage = lazy(() => import('./apiKeys/ApiKeysPage'));
 const McpConsolePage = lazy(() => import('./mcpConsole/McpConsolePage'));
+const DevicesPage = lazy(() => import('./devices/DevicesPage'));
 
-const TABS = ['keys', 'connector'] as const;
+// `phones` sits here rather than in its own settings entry because pairing a
+// phone needs BOTH halves of this page: an API key from the first tab and the
+// device id from the third. Two entries in the settings list would have meant
+// walking back and forth between them to finish one setup.
+const TABS = ['keys', 'connector', 'phones'] as const;
 type Tab = (typeof TABS)[number];
 
 function Lazy({ children }: { children: ReactNode }) {
@@ -45,13 +50,16 @@ export default function ApiAccessPage() {
     <div className="space-y-5">
       <PageHeader
         title={t('apiAccess.title', { defaultValue: 'API access' })}
-        description={t('apiAccess.subtitle', { defaultValue: 'Keys for your own code, and the Claude connector.' })}
+        description={t('apiAccess.subtitle', {
+          defaultValue: 'Keys for your own code, the Claude connector, and any phone Jeeta can act on.',
+        })}
       />
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="keys">{t('apiAccess.tab.keys', { defaultValue: 'API keys' })}</TabsTrigger>
           <TabsTrigger value="connector">{t('apiAccess.tab.connector', { defaultValue: 'Claude connector' })}</TabsTrigger>
+          <TabsTrigger value="phones">{t('apiAccess.tab.phones', { defaultValue: 'Paired phones' })}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="keys" className="pt-5">
@@ -59,6 +67,9 @@ export default function ApiAccessPage() {
         </TabsContent>
         <TabsContent value="connector" className="pt-5">
           <Lazy><McpConsolePage embedded /></Lazy>
+        </TabsContent>
+        <TabsContent value="phones" className="pt-5">
+          <Lazy><DevicesPage embedded /></Lazy>
         </TabsContent>
       </Tabs>
     </div>

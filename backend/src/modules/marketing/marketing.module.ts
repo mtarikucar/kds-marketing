@@ -306,6 +306,7 @@ import { registerSchedulingTools } from './mcp/tools/scheduling.tools';
 import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
+import { registerDeviceTools } from './mcp/tools/device.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
 import { registerContentConceptTools } from './mcp/tools/content-concepts.tools';
 import { registerContentDistributionTools } from './mcp/tools/content-distribution.tools';
@@ -1362,6 +1363,7 @@ export class MarketingModule {
     // The storyboard a reviewer can draw before approving a concept.
     storyboard: StoryboardService,
     contentDistribution: ContentDistributionService,
+    devices: DevicesService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
     salesCalls: SalesCallService,
@@ -1425,6 +1427,7 @@ export class MarketingModule {
       email: emailService,
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
+    registerDeviceTools(registry, { devices, principals });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
     registerContentDistributionTools(registry, {

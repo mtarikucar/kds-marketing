@@ -32,6 +32,7 @@ import { registerResearchTools } from './research.tools';
 import { registerCommerceTools } from './commerce.tools';
 import { registerCourseTools } from './courses.tools';
 import { registerReviewTools } from './reviews.tools';
+import { registerDeviceTools } from './device.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -221,6 +222,10 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerReviewTools(registry, {
     reviews: { list: jest.fn(), saveReply: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerDeviceTools(registry, {
+    devices: { list: jest.fn(), enqueue: jest.fn(), history: jest.fn(), findCommand: jest.fn() } as any,
+    principals: { resolve: jest.fn() } as any,
   });
   registerDiscoveryTools(registry, {
     registry,
@@ -486,6 +491,12 @@ describe('MCP tool catalogue', () => {
         // distribution-send.boundary.spec.ts.
         'jeeta.plan_content_distribution',
         'jeeta.list_distribution_drafts',
+        // The paired-phone lane. All three deferred and — uniquely — none
+        // advertised; see the note beside `defer: true` in device.tools.ts and
+        // the domain-coverage test below.
+        'jeeta.list_devices',
+        'jeeta.device_command',
+        'jeeta.device_command_result',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -502,6 +513,7 @@ describe('MCP tool catalogue', () => {
     // 127 -> 128: jeeta.storyboard_content_concept, also deferred.
     // 128 -> 129: jeeta.submit_strategy, also deferred — the credit-free way
     // to a first MarketingStrategy row.
+    // 129 -> 132: the three device tools, all deferred and none advertised.
     //
     // Those two waves ran in PARALLEL and each appended its own line here, each
     // starting from the number it saw before the other landed — so both were
@@ -519,7 +531,7 @@ describe('MCP tool catalogue', () => {
     // over-counts; re-measured, grep did not — the counts have always matched,
     // and the figure to trust is the one this assertion takes from a built
     // registry.
-    expect(names).toHaveLength(129);
+    expect(names).toHaveLength(132);
   });
 
   /**
@@ -558,8 +570,17 @@ describe('MCP tool catalogue', () => {
     registerFullCatalogue(registry);
     const advertisedDomains = new Set(registry.listAdvertised(ALL_SCOPES).map((t) => t.domain));
     for (const tool of registry.list(ALL_SCOPES)) {
+      // `devices` is the one domain with no advertised member, and it is an
+      // exception with a mechanism behind it rather than a slip: the domain
+      // WORD ships advertised anyway inside `jeeta.find_tools`'s `domain`
+      // enum, so `find_tools({domain: 'devices'})` reaches all three deferred
+      // tools without any of them costing a slot. Pinned by name so the next
+      // domain that wants the same deal has to argue for it here instead of
+      // inheriting a loophole.
+      if (tool.domain === 'devices') continue;
       expect(advertisedDomains).toContain(tool.domain);
     }
+    expect(advertisedDomains).not.toContain('devices');
     for (const d of ['strategy', 'workflows', 'research']) expect(advertisedDomains).toContain(d);
     for (const d of ['commerce', 'courses', 'reviews']) expect(advertisedDomains).toContain(d);
   });
@@ -612,7 +633,7 @@ describe('MCP tool catalogue', () => {
     // reason — like `jeeta.submit_content_concepts` before it. The number in this comment said 120 while the assertion
     // below said 123; a comment that disagrees with its own assertion is how a
     // measured figure quietly becomes a remembered one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(129);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(132);
   });
 });
 
@@ -685,6 +706,12 @@ const ID_SOURCES: Record<string, string> = {
   courseId: 'jeeta.list_courses',
   budgetId: 'jeeta.get_budget',
   conceptId: 'jeeta.list_content_concepts',
+  // devices
+  deviceId: 'jeeta.list_devices',
+  // Handed back by the tool that queues the command. There is no "list every
+  // command" read on purpose: a caller reads the outcome of the command it
+  // asked for, not a log of what other people's agents did to the phone.
+  commandId: 'jeeta.device_command',
 };
 
 describe('MCP catalogue — every required id must be discoverable', () => {

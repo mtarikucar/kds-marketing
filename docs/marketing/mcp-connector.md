@@ -446,6 +446,25 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.plan_content_distribution` | For an APPROVED/SCHEDULED/PUBLISHED campaign item: the cross-post schedule, what to tag, and a PREPARED (unsent) message per contactable person. **Sends nothing** | `campaigns.write` | WRITE | — | no |
 | `jeeta.list_distribution_drafts` | Prepared outreach messages and their state (DRAFT / SENT / DISMISSED / FAILED) | `campaigns.read` | READ | — | no |
 
+### Paired phones (`devices`)
+
+A workspace can pair a physical Android phone: the Jeeta desktop app sits next
+to it on USB and takes one command at a time off a queue. Nothing here reaches
+a phone directly — every tool below writes to (or reads) that queue, and on a
+MANUAL device a person at the desk approves each command before it runs and may
+refuse, which is a normal outcome and not an error.
+
+All three are **deferred and none is advertised** — the only domain of which
+that is true. Reach them with `jeeta.find_tools({domain: 'devices'})` and run
+them through `jeeta.call_tool`. There is no shell command in this domain and
+there will not be one.
+
+| Tool | What it does | Scope | Risk | Approval | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_devices` | Paired phones with their mode (MANUAL = a person approves every command), status, and whether the desktop bridge is online | `reports.read` | READ | — | no |
+| `jeeta.device_command` | QUEUE one command: `OPEN_URL` (https/tel — how a WhatsApp click-to-chat draft gets on screen), `LAUNCH_APP`, `TAP`, `SWIPE`, `TEXT`, `KEY`, `SCREENSHOT`, `UI_DUMP`. Waits ~25s for an outcome, then reports honestly that it is still queued | `campaigns.send` | WRITE | PUBLISH | no |
+| `jeeta.device_command_result` | What became of a queued command — DONE / FAILED / REFUSED / EXPIRED / QUEUED | `reports.read` | READ | — | no |
+
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 
 ### Why there are two ways to make concepts

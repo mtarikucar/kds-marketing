@@ -19,8 +19,16 @@ Dizüstü kapalı olabilir, kablo çıkmış olabilir, siz "hayır" demiş olabi
 3. Telefonu USB ile bağlayın ve ekranda çıkan **"Bu bilgisayara izin ver"**
    uyarısını onaylayın. (Onaylamazsanız uygulama telefonu "yetkisiz" olarak
    gösterir — liste boş görünmez, ne yapmanız gerektiğini söyler.)
-4. Jeeta'da **Ayarlar → API ve bağlayıcı**'dan bir API anahtarı üretin.
-5. Uygulamaya anahtarı ve sunucu adresini girin, telefonu seçin.
+4. Jeeta'da **Ayarlar → API ve bağlayıcı → API anahtarları**'ndan bir anahtar
+   üretin. Anahtar yalnızca bir kez gösterilir.
+5. Aynı sayfanın **Eşleşmiş telefonlar** sekmesinde telefonu ekleyin ve çıkan
+   **cihaz kimliğini** kopyalayın. Telefon önce orada var olmalı: kimliği üreten
+   şey o kayıttır.
+6. Uygulamaya sunucu adresini, anahtarı ve cihaz kimliğini girin, telefonu
+   seçin, **Başlat**'a basın.
+
+Kimlik doğru girildiğinde o sayfadaki rozet birkaç saniye içinde **"Köprü
+çevrimiçi"**ye döner — dönmüyorsa bakılacak yer bu uygulamadır, kuyruk değil.
 
 ## Güvenlik — niyet değil, yapı
 
@@ -35,6 +43,8 @@ Dizüstü kapalı olabilir, kablo çıkmış olabilir, siz "hayır" demiş olabi
 - **Sadece `https` ve `tel` açılır.** `intent:` bir bileşeni ve parametrelerini
   adlandırabildiği için dışarıda bırakıldı.
 - **API anahtarı iptal edilirse uygulama durur**, yeniden denemez.
+- **Duraklatmak kuyruğu BOŞALTIR**, beklemeye almaz. Ayarlardaki "Duraklat" bir
+  tutma değil, durdurma düğmesidir; bekleyen ne varsa düşer.
 - **Komutların ömrü vardır.** Bir hafta sonra takılan telefon, bir günlük
   dokunuşu peş peşe tekrar etmez: o komutların yazıldığı ekran çoktan yok.
 

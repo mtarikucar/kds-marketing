@@ -59,6 +59,13 @@ export type ToolDomain =
   | 'strategy'
   | 'workflows'
   | 'research'
+  // A domain of its own rather than a corner of `workspace`, because it is the
+  // only one whose effects leave the product entirely: a command here lands on
+  // a real handset, in somebody's real WhatsApp, and cannot be undone by a
+  // compensating row. `jeeta.find_tools` matches on the domain word, and a
+  // model asking "can I control a phone?" should not have to guess that the
+  // answer lives under settings.
+  | 'devices'
   // Faz 5 D5 — the commerce & reputation wave. `commerce` is one domain on
   // purpose: products, estimates, invoices and order forms are the single
   // question "what do we sell and how do we get paid for it", and every one of
@@ -92,6 +99,11 @@ export const TOOL_DOMAINS: readonly ToolDomain[] = [
   'commerce',
   'courses',
   'reviews',
+  // Last on purpose: it is the only domain whose tools are all deferred, and
+  // this list IS its entry point — it ships inside `jeeta.find_tools`'s
+  // `domain` enum, so `find_tools({domain: 'devices'})` is how a model reaches
+  // a paired phone at all.
+  'devices',
 ] as const;
 
 const DOMAIN_SET: ReadonlySet<string> = new Set<string>(TOOL_DOMAINS);

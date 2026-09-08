@@ -148,6 +148,12 @@ export class DevicesService {
     });
   }
 
+  /** One command by id, workspace-scoped. The MCP tool waits on this rather
+   *  than re-reading a page of history for a single row. */
+  findCommand(workspaceId: string, commandId: string) {
+    return this.prisma.deviceCommand.findFirst({ where: { id: commandId, workspaceId } });
+  }
+
   history(workspaceId: string, deviceId: string, take = 50) {
     return this.prisma.deviceCommand.findMany({
       where: { workspaceId, deviceId },
