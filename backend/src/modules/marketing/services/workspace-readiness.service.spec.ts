@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { WorkspaceReadinessService } from './workspace-readiness.service';
+import { AI_MCP_GRACE_MS } from '../ai/ai-execution';
 import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
 
 /**
@@ -132,7 +133,17 @@ describe('workspace readiness', () => {
     const anthropic = {
       platformAiUnavailable: jest.fn(() => o.platformAiUnavailable ?? null),
     };
-    svc = new WorkspaceReadinessService(prisma as any, entitlements as any, anthropic as any);
+    // A connector-first workspace answers from a queue; an empty one is the
+    // default so every existing test keeps measuring what it was written for.
+    const aiReplyQueue = {
+      pending: jest.fn(async () => o.replyQueue ?? { waiting: 0, oldestQueuedAt: null }),
+    };
+    svc = new WorkspaceReadinessService(
+      prisma as any,
+      entitlements as any,
+      anthropic as any,
+      aiReplyQueue as any,
+    );
   }
 
   const item = async (id: string) => {
@@ -850,5 +861,52 @@ describe('workspace readiness', () => {
         }
       }
     }
+  });
+
+  /**
+   * The line `setAiExecution` promises exists.
+   *
+   * MCP_ONLY is offerable only because this is here: it lets a workspace say
+   * "never use the platform key" without that quietly meaning "never answer
+   * anyone". Nothing on the server can verify a drainer exists on the owner's
+   * side, so the backlog is the only honest instrument.
+   */
+  describe('workspace readiness — customers waiting on an answer', () => {
+    const queued = (waiting: number, ageMs: number | null) => ({
+      replyQueue: {
+        waiting,
+        oldestQueuedAt: ageMs === null ? null : new Date(Date.now() - ageMs),
+      },
+    });
+
+    it('says NOTHING on an empty queue, rather than reporting a task nobody did', async () => {
+      // The rest of this list is "what you still have to do". An empty reply
+      // queue is not something someone completed, it is the system working —
+      // and a checklist that congratulates you for it dilutes the lines that
+      // need acting on.
+      build(queued(0, null));
+      expect(await item('ai-reply-queue')).toBeUndefined();
+    });
+
+    it('is READY while a reply is merely recent — a queue is normal', async () => {
+      build(queued(2, 30_000));
+      const i = await item('ai-reply-queue');
+      expect(i.state).toBe('READY');
+      expect(i.detail.waiting).toBe(2);
+    });
+
+    it('is ATTENTION once the oldest has outlived BOTH answerers', async () => {
+      // Older than twice the grace window means the connector never polled AND
+      // the platform, which should have taken it at 1x, did not either.
+      build(queued(3, AI_MCP_GRACE_MS * 2 + 60_000));
+      const i = await item('ai-reply-queue');
+      expect(i.state).toBe('ATTENTION');
+      expect(i.detail.waiting).toBe(3);
+    });
+
+    it('names the tool that drains it, because this gap IS agent-closable', async () => {
+      build(queued(1, 0));
+      expect((await item('ai-reply-queue')).mcpTool).toBe('jeeta.claim_reply_job');
+    });
   });
 });

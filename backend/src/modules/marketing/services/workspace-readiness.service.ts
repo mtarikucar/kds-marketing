@@ -3,6 +3,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
 import { AnthropicService } from '../ai/anthropic.service';
+import { AiReplyLeaseService } from '../ai/ai-reply-lease.service';
+import { AI_MCP_GRACE_MS } from '../ai/ai-execution';
 
 /**
  * How far ahead a token expiry is worth complaining about — and why there are
@@ -142,6 +144,11 @@ export class WorkspaceReadinessService {
     // and still get nothing, because the PLATFORM's own vendor key is being
     // refused — and no amount of buying fixes that one.
     private readonly anthropic: AnthropicService,
+    // A connector-first workspace answers its customers from a queue. A queue
+    // nobody drains looks exactly like an inbox where nobody wrote — which is
+    // this codebase's oldest failure shape, and the reason the mode that can
+    // produce it had to arrive with the line that reports it.
+    private readonly aiReplyQueue: AiReplyLeaseService,
   ) {}
 
   async get(workspaceId: string): Promise<WorkspaceReadiness> {
@@ -374,6 +381,9 @@ export class WorkspaceReadinessService {
 
     const yes = (ok: boolean): ReadinessState => (ok ? 'READY' : 'MISSING');
     const platformAi = this.anthropic.platformAiUnavailable();
+    const replyQueue = await this.aiReplyQueue
+      .pending(workspaceId)
+      .catch(() => ({ waiting: 0, oldestQueuedAt: null as Date | null }));
 
     const connected = liveMcpTokens > 0 || mcpApiKeys > 0;
     // Fails towards APPROVAL, the same direction `McpInvokerService` does:
@@ -697,6 +707,47 @@ export class WorkspaceReadinessService {
       },
 
       // ── fuel ────────────────────────────────────────────────────────────
+      // Present only when there IS a backlog, and that is a deliberate
+      // difference from every other line here. The rest of this list is "what
+      // you still have to DO"; an empty reply queue is not a task anyone
+      // completed, it is the system working. Listing it as READY on a brand-new
+      // workspace would dilute the items that actually need doing — which is
+      // exactly what the "ready for nothing" test above is protecting.
+      ...(replyQueue.waiting > 0
+        ? [
+            {
+              id: 'ai-reply-queue',
+              group: 'fuel',
+        /**
+         * Customers waiting on an answer that nobody has written.
+         *
+         * `setAiExecution` promises this line exists, and the promise is the
+         * whole reason MCP_ONLY is offerable at all: it lets a workspace say
+         * "never use the platform key" without that quietly meaning "never
+         * answer anyone". Nothing on the server can verify a drainer exists on
+         * the owner's side — that is a scheduled task in their Claude, not a
+         * row we can read — so the only honest instrument is the backlog.
+         *
+         * The threshold is TWICE the grace window, and that is what makes it
+         * meaningful rather than noisy. A reply queued thirty seconds ago is
+         * the system working. One older than 2x grace means BOTH answerers
+         * declined it: the connector never polled, and under MCP the platform
+         * should already have taken it and did not. A queue is normal; a queue
+         * that is not moving is the finding.
+         */
+              state:
+                Date.now() - replyQueue.oldestQueuedAt!.getTime() > AI_MCP_GRACE_MS * 2
+                  ? 'ATTENTION'
+                  : 'READY',
+              to: '/inbox',
+              mcpTool: 'jeeta.claim_reply_job',
+              detail: {
+                waiting: replyQueue.waiting,
+                oldestQueuedAt: replyQueue.oldestQueuedAt?.toISOString() ?? null,
+              },
+            } as const,
+          ]
+        : []),
       {
         id: 'ai-credits',
         group: 'fuel',
