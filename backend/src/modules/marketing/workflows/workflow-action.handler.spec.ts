@@ -7,11 +7,13 @@ import { WorkflowActionHandler, WorkflowContext } from './workflow-action.handle
  * whitelist token replace (resolveField, lead/trigger/context roots only) is
  * the injection-safe part and is exercised here implicitly.
  */
+const MAILBOX_NONE = { resolve: async () => null, send: async () => null };
+
 describe('WorkflowActionHandler.interpolate', () => {
   // interpolate() only touches ctx via resolveField, so the injected services
   // are irrelevant here — construct with nulls and reach the private method.
   const handler = new WorkflowActionHandler(
-    null as any, null as any, null as any, null as any,
+    null as any, null as any, MAILBOX_NONE as any, null as any, null as any,
     null as any, null as any, null as any, null as any,
     null as any,
   );
@@ -64,7 +66,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
     // successful.
     const sender = { send: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) };
     const handler = new WorkflowActionHandler(
-      prisma as any, null as any, null as any, null as any,
+      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, sender as any, null as any, null as any,
     );
     const ctx: WorkflowContext = {
@@ -85,7 +87,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
   it('send_email skips a lead who opted out of email (never sends)', async () => {
     const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
     const handler = new WorkflowActionHandler(
-      {} as any, email as any, null as any, null as any,
+      {} as any, email as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, null as any, null as any, null as any,
     );
     const ctx: WorkflowContext = {
@@ -103,7 +105,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
     const prisma = { channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) } };
     const sender = { send: jest.fn().mockResolvedValue(undefined) };
     const handler = new WorkflowActionHandler(
-      prisma as any, null as any, null as any, null as any,
+      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, sender as any, null as any, null as any,
     );
     const ctx: WorkflowContext = {
@@ -131,7 +133,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
     };
     const sender = { send: jest.fn().mockResolvedValue(undefined) };
     const handler = new WorkflowActionHandler(
-      prisma as any, null as any, null as any, null as any,
+      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, sender as any, null as any, null as any,
     );
     const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: null, trigger: {}, context: {} };
@@ -147,7 +149,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
 describe('WorkflowActionHandler assign_lead', () => {
   const mkHandler = (prisma: any, autoAssigner: any) =>
     new WorkflowActionHandler(
-      prisma, null as any, null as any, null as any,
+      prisma, null as any, MAILBOX_NONE as any, null as any, null as any,
       autoAssigner, null as any, null as any, null as any, null as any,
     );
   const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
@@ -193,7 +195,7 @@ describe('WorkflowActionHandler assign_lead', () => {
 describe('WorkflowActionHandler ai_classify (category routing)', () => {
   const mkHandler = (anthropic: any, credits: any) =>
     new WorkflowActionHandler(
-      null as any, null as any, anthropic, credits,
+      null as any, null as any, MAILBOX_NONE as any, anthropic, credits,
       null as any, null as any, null as any, null as any, null as any,
     );
   const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
@@ -249,7 +251,7 @@ describe('WorkflowActionHandler ai_classify (category routing)', () => {
 describe('WorkflowActionHandler tag actions', () => {
   const mkHandler = (tags: any) =>
     new WorkflowActionHandler(
-      null as any, null as any, null as any, null as any,
+      null as any, null as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, null as any, null as any,
       tags,
     );
@@ -319,7 +321,7 @@ describe('WorkflowActionHandler tag actions', () => {
 describe('WorkflowActionHandler create_task', () => {
   const mkTaskHandler = (prisma: any, autoAssigner: any, notifications: any = { create: jest.fn().mockResolvedValue({}) }) =>
     new WorkflowActionHandler(
-      prisma, null as any, null as any, null as any,
+      prisma, null as any, MAILBOX_NONE as any, null as any, null as any,
       autoAssigner, notifications, null as any, null as any, null as any,
     );
   const taskCtx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
@@ -405,7 +407,7 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
   const make = (sendOk: boolean) => {
     const email = { sendPlainEmail: jest.fn().mockResolvedValue(sendOk) };
     const handler = new WorkflowActionHandler(
-      {} as any, email as any, null as any, null as any,
+      {} as any, email as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, null as any, null as any, null as any,
     );
     const ctx: WorkflowContext = {
@@ -437,7 +439,7 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
     };
     const sender = { send: jest.fn().mockResolvedValue({ id: 'm1', status: 'FAILED' }) };
     const handler = new WorkflowActionHandler(
-      prisma as any, null as any, null as any, null as any,
+      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, null as any, sender as any, null as any, null as any,
     );
     const ctx: WorkflowContext = {
@@ -470,7 +472,7 @@ describe('WorkflowActionHandler notify_user', () => {
   const make = () => {
     const notifications = { create: jest.fn().mockResolvedValue({}) };
     const handler = new WorkflowActionHandler(
-      null as any, null as any, null as any, null as any,
+      null as any, null as any, MAILBOX_NONE as any, null as any, null as any,
       null as any, notifications as any, null as any, null as any, null as any,
     );
     return { handler, notifications };

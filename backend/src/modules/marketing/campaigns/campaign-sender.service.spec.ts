@@ -17,6 +17,7 @@ describe('CampaignSenderService.batch', () => {
   let scheduledJobs: { schedule: jest.Mock };
   let conversationSpend: { settleCampaignSms: jest.Mock };
   let registry: { get: jest.Mock; resolveConfig: jest.Mock };
+  let mailbox: { resolve: jest.Mock };
   let svc: CampaignSenderService;
 
   beforeEach(() => {
@@ -62,6 +63,8 @@ describe('CampaignSenderService.batch', () => {
     scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     registry = { get: jest.fn(), resolveConfig: jest.fn() };
+    // No connected mailbox by default: these tests exercise the PLATFORM path.
+    mailbox = { resolve: jest.fn().mockResolvedValue(null) };
     quota = { reserve: jest.fn(), refund: jest.fn() };
     // Inert by default: no ESP transport → platform-default From (null).
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
@@ -80,7 +83,7 @@ describe('CampaignSenderService.batch', () => {
     // campaign sends' describe below), but still required by the constructor.
     const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, mailbox as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -114,23 +117,20 @@ describe('CampaignSenderService.batch', () => {
    * just connected its own address watched the campaign arrive from ours. The
    * channel was read only by the inbound webhook.
    */
+  /**
+   * Connecting a mailbox used to change NOTHING about campaign mail: this
+   * branch went straight to the platform transport. WHICH mailbox qualifies is
+   * WorkspaceMailboxService's job (and its spec); what this block pins is that
+   * the sender ASKS, and honours the answer.
+   */
   describe('the workspace’s own mailbox', () => {
-    const SMTP = {
-      secrets: {
-        smtpHost: 'smtpout.secureserver.net',
-        smtpUser: 'admin@own.com',
-        smtpPass: 'x',
-        fromEmail: 'admin@own.com',
-      },
-      public: {},
-    };
+    const SMTP = { secrets: { smtpHost: 'h', smtpUser: 'u', smtpPass: 'p' }, public: {} };
     let send: jest.Mock;
 
     beforeEach(() => {
       send = jest.fn().mockResolvedValue({ externalMessageId: 'm1', status: 'SENT' });
       registry.get.mockReturnValue({ send });
-      registry.resolveConfig.mockReturnValue(SMTP);
-      prisma.channel.findFirst.mockResolvedValue({ id: 'ch-email', type: 'EMAIL' });
+      mailbox.resolve.mockResolvedValue(SMTP);
     });
 
     it('sends through it instead of the platform transport', async () => {
@@ -141,10 +141,10 @@ describe('CampaignSenderService.batch', () => {
     });
 
     it('records the provider’s message id, which is what tells the two paths apart', async () => {
-      // The platform mailer answers a bare boolean, so a recipient row with a
-      // messageId was sent from the workspace's own mailbox. Without this the
+      // The platform mailer answers a bare boolean, so a recipient row carrying
+      // a messageId was sent from the workspace's own mailbox. Without it the
       // only way to answer "which address did this leave from" is to open the
-      // mail — which is exactly the position this feature was written in.
+      // mail — which is the position this feature was written in.
       await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
       const ids = prisma.campaignRecipient.update.mock.calls
         .map((c: any) => c[0].data.messageId)
@@ -153,44 +153,15 @@ describe('CampaignSenderService.batch', () => {
     });
 
     it('carries the campaign’s own subject, not the thread default', async () => {
-      // The adapter was built for inbound replies, where the subject is a
-      // property of the thread and lives on the channel config. A campaign has
-      // a different one per send, which that shape could not express.
+      // The adapter was built for inbound replies, where the subject belongs to
+      // the thread and lives on the channel config. A campaign has a different
+      // one per send, which that shape could not express.
       await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
       expect(send.mock.calls[0][0]).toMatchObject({ subject: 'S', to: 'ok@lead.com' });
     });
 
-    it('asks only for a mailbox that has PASSED a health check', async () => {
-      // Sending a whole campaign through credentials nobody has proved is how
-      // you get a run of 535s with the campaign already marked SENDING.
-      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
-      expect(prisma.channel.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            type: 'EMAIL',
-            status: 'ACTIVE',
-            lastVerifiedAt: { not: null },
-          }),
-        }),
-      );
-    });
-
-    it('falls back to the platform for an OAuth-connected mailbox', async () => {
-      // email-oauth.sender.ts pins Microsoft to contentType:'Text' and builds
-      // Gmail's RFC822 with no HTML part, so routing a campaign there would
-      // silently drop the HTML body. Plain text from the right address is
-      // worse than formatted from ours.
-      registry.resolveConfig.mockReturnValue({
-        secrets: { oauthProvider: 'GOOGLE', oauthAccessToken: 't', fromEmail: 'a@b.com' },
-        public: {},
-      });
-      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
-      expect(send).not.toHaveBeenCalled();
-      expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
-    });
-
-    it('falls back to the platform when the SMTP credentials are incomplete', async () => {
-      registry.resolveConfig.mockReturnValue({ secrets: { smtpHost: 'h' }, public: {} });
+    it('falls back to the platform when the workspace has no usable mailbox', async () => {
+      mailbox.resolve.mockResolvedValue(null);
       await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
       expect(send).not.toHaveBeenCalled();
       expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
@@ -494,6 +465,7 @@ describe('CampaignSenderService.launchScheduled', () => {
     scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     const registry = { get: jest.fn(), resolveConfig: jest.fn() };
+    const mailbox = { resolve: jest.fn().mockResolvedValue(null) };
     const quota = { reserve: jest.fn(), refund: jest.fn() };
     const sendingDomains = { resolveFrom: jest.fn() };
     const smsV2 = { send: jest.fn() };
@@ -502,7 +474,7 @@ describe('CampaignSenderService.launchScheduled', () => {
     const budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, mailbox as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -602,6 +574,7 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
   const WS = 'ws-1';
   let prisma: any;
   let registry: { get: jest.Mock; resolveConfig: jest.Mock };
+  let mailbox: { resolve: jest.Mock };
   let quota: { reserve: jest.Mock; refund: jest.Mock };
   let smsV2: { send: jest.Mock };
   let conversationSpend: { settleCampaignSms: jest.Mock };
@@ -683,6 +656,8 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     const scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     registry = { get: jest.fn(), resolveConfig: jest.fn().mockReturnValue(resolvedConfig) };
+    // These suites are SMS/VOICE; email never resolves a workspace mailbox here.
+    mailbox = { resolve: jest.fn().mockResolvedValue(null) };
     quota = { reserve: jest.fn(), refund: jest.fn() };
     smsV2 = { send: jest.fn() };
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
@@ -695,7 +670,7 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, mailbox as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -966,6 +941,7 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
   const WS = 'ws-1';
   let prisma: any;
   let registry: { get: jest.Mock; resolveConfig: jest.Mock };
+  let mailbox: { resolve: jest.Mock };
   let quota: { reserve: jest.Mock; refund: jest.Mock };
   let smsV2: { send: jest.Mock };
   let iysClient: { search: jest.Mock };
@@ -1030,6 +1006,8 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
     const scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     registry = { get: jest.fn(), resolveConfig: jest.fn().mockReturnValue(resolvedConfig) };
+    // These suites are SMS/VOICE; email never resolves a workspace mailbox here.
+    mailbox = { resolve: jest.fn().mockResolvedValue(null) };
     quota = { reserve: jest.fn(), refund: jest.fn() };
     smsV2 = { send: jest.fn().mockResolvedValue({ ok: true, code: '00', jobid: 'job-1', message: null, retriable: false, transport: false }) };
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
@@ -1041,7 +1019,7 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
     budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, mailbox as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -1266,6 +1244,7 @@ describe('CampaignSenderService.batch — VOICE campaigns', () => {
   const WS = 'ws-1';
   let prisma: any;
   let registry: { get: jest.Mock; resolveConfig: jest.Mock };
+  let mailbox: { resolve: jest.Mock };
   let quota: { reserve: jest.Mock; refund: jest.Mock };
   let voicesmsSend: { send: jest.Mock };
   let iysClient: { search: jest.Mock };
@@ -1340,6 +1319,8 @@ describe('CampaignSenderService.batch — VOICE campaigns', () => {
     const scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     registry = { get: jest.fn(), resolveConfig: jest.fn().mockReturnValue(resolvedConfig) };
+    // These suites are SMS/VOICE; email never resolves a workspace mailbox here.
+    mailbox = { resolve: jest.fn().mockResolvedValue(null) };
     quota = { reserve: jest.fn(), refund: jest.fn() };
     const smsV2 = { send: jest.fn() };
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
@@ -1352,7 +1333,7 @@ describe('CampaignSenderService.batch — VOICE campaigns', () => {
     budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, mailbox as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 

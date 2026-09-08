@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { WorkspaceMailboxService } from '../channels/workspace-mailbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
@@ -47,6 +48,7 @@ export class WorkflowActionHandler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
+    private readonly mailbox: WorkspaceMailboxService,
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
     private readonly autoAssigner: LeadAutoAssignerService,
@@ -113,6 +115,25 @@ export class WorkflowActionHandler {
       // lead email)", "skipped (lead opted out)". This one said "email sent"
       // whether or not it was, so a workflow run could show a customer as
       // contacted when nothing reached them.
+      // The workspace's OWN mailbox first, so an automation's mail leaves from
+      // the same address its campaigns do. This path used to go straight to the
+      // platform mailer, so a workspace that had connected its own address
+      // watched its CAMPAIGNS arrive from itself and its AUTOMATIONS arrive
+      // from the platform — the same decision made twice, fixed once.
+      //
+      // `null` means the workspace has no usable mailbox, which is a normal
+      // state and not a reason to skip the send.
+      const own = await this.mailbox.send({
+        workspaceId: ctx.workspaceId,
+        to: lead.email,
+        subject: subject ?? 'Message',
+        text: body,
+      });
+      if (own) {
+        return own.ok
+          ? 'email sent (workspace mailbox)'
+          : `email NOT sent (${own.error ?? 'delivery failed'})`;
+      }
       const delivered = await this.email.sendPlainEmail(
         lead.email,
         subject ?? 'Message',
