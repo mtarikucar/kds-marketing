@@ -1,4 +1,4 @@
-import { domainOf, suggestFromMxHosts, suggestSmtp } from './smtp-autodiscover';
+import { domainOf, suggestFromMxHosts, suggestSmtp, imapForSmtpHost } from './smtp-autodiscover';
 
 describe('SMTP autodiscovery — the server is a property of the domain, not the person', () => {
   describe('domainOf', () => {
@@ -23,7 +23,7 @@ describe('SMTP autodiscovery — the server is a property of the domain, not the
       // and LEAVES through smtpout. Returning the MX host here would produce a
       // form that looks right and cannot send.
       const s = suggestFromMxHosts(['smtp.secureserver.net', 'mailstore1.secureserver.net']);
-      expect(s).toEqual({ host: 'smtpout.secureserver.net', port: 587, secure: false, provider: 'GoDaddy' });
+      expect(s).toMatchObject({ host: 'smtpout.secureserver.net', port: 587, secure: false, provider: 'GoDaddy' });
     });
 
     it('recognises Google Workspace from a per-customer MX host', () => {
@@ -74,6 +74,48 @@ describe('SMTP autodiscovery — the server is a property of the domain, not the
       const resolver = jest.fn();
       expect(await suggestSmtp('not-an-address', resolver)).toBeNull();
       expect(resolver).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * The incoming server rides in the SAME table as the outgoing one, because
+ * "who runs this domain's mail" is a single fact and two tables answering it
+ * would drift the moment one of them gained a provider.
+ */
+describe('imapForSmtpHost', () => {
+  it('answers for a provider we recognise', () => {
+    expect(imapForSmtpHost('smtpout.secureserver.net')).toEqual({
+      host: 'imap.secureserver.net',
+      port: 993,
+    });
+  });
+
+  it('is case- and trailing-dot-insensitive, as hostnames are', () => {
+    expect(imapForSmtpHost('SMTPOUT.SecureServer.NET.')).toEqual({
+      host: 'imap.secureserver.net',
+      port: 993,
+    });
+  });
+
+  it('returns null for a pure-outbound relay that has no IMAP at all', () => {
+    // Mailgun is in the table for sending. Inventing `imap.mailgun.org` by
+    // string surgery would produce a host that fails at connect time on a
+    // five-minute cron, forever.
+    expect(imapForSmtpHost('smtp.mailgun.org')).toBeNull();
+  });
+
+  it('returns null rather than guessing at an unknown host', () => {
+    expect(imapForSmtpHost('mail.some-host.example')).toBeNull();
+    expect(imapForSmtpHost('')).toBeNull();
+  });
+
+  it('hands back a COPY, so a caller cannot mutate the shared table', () => {
+    const a = imapForSmtpHost('smtpout.secureserver.net')!;
+    a.port = 143;
+    expect(imapForSmtpHost('smtpout.secureserver.net')).toEqual({
+      host: 'imap.secureserver.net',
+      port: 993,
     });
   });
 });

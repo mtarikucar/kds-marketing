@@ -177,6 +177,7 @@ import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
 import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
 import { NetgsmMoPollService } from './channels/netgsm-mo-poll.service';
+import { EmailImapPollService } from './channels/email-imap-poll.service';
 import { NetgsmVoicemailPollService } from './channels/netgsm-voicemail-poll.service';
 import { NetgsmFaxPollService } from './channels/netgsm-fax-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
@@ -940,6 +941,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // inbox() so panel misconfiguration (wrong/missing callback URL) doesn't
     // silently drop customer replies with no error visible to us.
     NetgsmMoPollService,
+    EmailImapPollService,
     // NetGSM Phase 4 Task 6 — voicemail (telesekreter) has no push webhook at
     // all, so this hourly poll of /voicesms/receive IS the (only) path a
     // voicemail reaches the shared inbox through, best-effort proxy-storing

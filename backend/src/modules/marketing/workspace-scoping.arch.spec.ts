@@ -138,6 +138,12 @@ const OWNED_DELEGATES = [
   // cron, which is exactly the shape that needs a guard rather than trust.
   'socialPostMetric',
   'socialAccountMetric',
+  // Device control: a workspace's paired phone and the commands queued for it.
+  // Both are workspace-owned, and the command rows are the audit of what a
+  // machine asked somebody's handset to do — precisely the table a
+  // cross-workspace read must never touch.
+  'device',
+  'deviceCommand',
   // NetGSM telephony config — the highest-value row in the module: its
   // configSealed holds the santral usercode/password. Three system crons
   // enumerate it across workspaces (they project workspaceId and never touch
@@ -456,6 +462,13 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'inbound-SMS (MO) poller enumerates ACTIVE SMS channels across all workspaces (system cron); ingest is scoped by each row workspaceId',
   'channels/netgsm-voicemail-poll.service.ts:channel.findMany':
     'voicemail poller enumerates ACTIVE SMS channels across all workspaces (system cron); ingest is scoped by each row workspaceId',
+  // The IMAP inbound poller, for the same reason one delegate up: a mailbox is
+  // reachable only through the credentials sealed on its own channel row, so
+  // the cron has to enumerate every verified EMAIL channel to know which
+  // mailboxes exist at all. Each row carries its workspaceId, every ingest is
+  // scoped to it, and the cursor write re-reads the row by { id, workspaceId }.
+  'channels/email-imap-poll.service.ts:channel.findMany':
+    'inbound-email (IMAP) poller enumerates verified ACTIVE EMAIL channels across all workspaces (system cron); ingest and cursor write are scoped by each row workspaceId',
   // CDR-sync sweep: the 5-minute cron asks which workspaces could possibly have
   // NetGSM CDR credentials, by enumerating ACTIVE SMS channels across ALL
   // workspaces — the same system-job shape as the four NetGSM pollers above, and
