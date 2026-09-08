@@ -110,10 +110,33 @@ export interface ExecOutcome {
  * here would be a second set of filter rules to drift apart.
  */
 async function readScreen(serial?: string): Promise<UiScreen> {
-  await adb(['shell', 'uiautomator', 'dump', '/sdcard/jeeta-ui.xml'], serial);
-  const xml = await adb(['shell', 'cat', '/sdcard/jeeta-ui.xml'], serial);
-  await adb(['shell', 'rm', '-f', '/sdcard/jeeta-ui.xml'], serial).catch(() => undefined);
-  return distillUiDump(xml);
+  // TWO attempts, because the common failure is transient and the way it fails
+  // is worse than failing. `uiautomator dump` refuses while the screen is
+  // moving — a list still settling, a keyboard sliding up, a page transition —
+  // and it does so by printing "ERROR: could not get idle state." and exiting
+  // ZERO. Taken at face value the next `cat` then yields nothing, the distiller
+  // yields no elements, and the caller is told the screen is empty.
+  //
+  // That is the worst possible answer: a model reads "nothing here" about a
+  // screen that is full, and TAP_ON reports "no such element — visible: (none)"
+  // about a button that is right there. An error is recoverable; a confident
+  // wrong answer is not.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const out = await adb(['shell', 'uiautomator', 'dump', '/sdcard/jeeta-ui.xml'], serial);
+    if (!/could not get idle state|ERROR/i.test(out)) {
+      const xml = await adb(['shell', 'cat', '/sdcard/jeeta-ui.xml'], serial).catch(() => '');
+      await adb(['shell', 'rm', '-f', '/sdcard/jeeta-ui.xml'], serial).catch(() => undefined);
+      // An absent or stub file is the same failure wearing a different mask:
+      // the dump claimed success and wrote nothing usable.
+      if (xml.includes('<node')) return distillUiDump(xml);
+    }
+    // Screens settle. Half a second is the difference between "it never works
+    // while anything animates" and "it works".
+    if (attempt === 1) await new Promise((r) => setTimeout(r, 700));
+  }
+  throw new AdbError(
+    'ekran okunamadı — telefonda bir şey hareket ediyor olabilir (liste, klavye, geçiş). Bir saniye sonra tekrar deneyin.',
+  );
 }
 
 export async function execute(
