@@ -145,6 +145,18 @@ export class ConversationAiEngineService implements OnModuleInit {
      */
     const mode = await this.aiModeFor(p.workspaceId).catch(() => 'SERVER' as const);
     if (mode !== 'SERVER') {
+      // A human took this thread over. `reply()` declines on the same flag and
+      // the backfill sweep skips it; queueing anyway would hand the connector
+      // work the platform would have refused, which is the two answerers
+      // disagreeing about who is allowed to speak.
+      const convo = await this.prisma.conversation.findFirst({
+        where: { id: p.conversationId, workspaceId: p.workspaceId },
+        select: { aiPaused: true },
+      });
+      if (convo?.aiPaused) {
+        this.decline(p.conversationId, 'AI paused on this conversation (a human took over)');
+        return;
+      }
       await this.scheduledJobs
         .schedule({
           workspaceId: p.workspaceId,

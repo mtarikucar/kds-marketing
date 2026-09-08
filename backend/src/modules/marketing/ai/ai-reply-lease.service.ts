@@ -132,16 +132,61 @@ export class AiReplyLeaseService {
     return null;
   }
 
-  /** Close a leased reply. `handled: false` returns it to the queue instead,
-   *  which is what a connector that decided NOT to answer should say. */
+  /**
+   * Close a leased reply. `handled: false` returns it to the queue instead,
+   * which is what a connector that decided NOT to answer should say.
+   *
+   * A handled reply also LIFTS `aiPaused`, and that is not a convenience —
+   * without it this lane answers each conversation exactly once and then goes
+   * silent on it forever.
+   *
+   * `ConversationsService.reply()` — the path `jeeta.send_message` takes, and
+   * the one this lane is deliberately routed through so a reply carries the
+   * quota, channel resolution and audit trail every other reply gets — sets
+   * `aiPaused: true` on the way out. That is right for what it was written
+   * for: a person typing in the panel HAS taken the thread over. It is wrong
+   * for the connector, because the connector IS the AI answering. The pause its
+   * own send set microseconds earlier is not a human takeover, and leaving it
+   * would make `reply()` decline the next message, the backfill skip the
+   * thread, and the customer's follow-up land in silence.
+   *
+   * Guarded on the last outbound being AI-authored, so a human who genuinely
+   * stepped in WHILE the lease was held keeps their pause. That is the only
+   * case where clearing would be wrong, and it is cheap to exclude.
+   */
   async complete(workspaceId: string, jobId: string, handled: boolean): Promise<boolean> {
+    const job = await this.prisma.scheduledJob.findFirst({
+      where: { id: jobId, workspaceId, kind: AI_REPLY_KIND, status: AI_REPLY_CLAIMED },
+      select: { payload: true },
+    });
     const { count } = await this.prisma.scheduledJob.updateMany({
       where: { id: jobId, workspaceId, kind: AI_REPLY_KIND, status: AI_REPLY_CLAIMED },
       data: handled
         ? { status: 'DONE', completedAt: new Date() }
         : { status: 'PENDING', lockedAt: null },
     });
+    if (count === 1 && handled) {
+      const conversationId = (job?.payload as any)?.conversationId;
+      if (typeof conversationId === 'string' && conversationId) {
+        await this.resumeIfWeAnswered(workspaceId, conversationId);
+      }
+    }
     return count === 1;
+  }
+
+  /** Lift the pause the lane's own send left behind — but only when the last
+   *  word out was in fact the AI's. */
+  private async resumeIfWeAnswered(workspaceId: string, conversationId: string): Promise<void> {
+    const lastOut = await this.prisma.message.findFirst({
+      where: { workspaceId, conversationId, direction: 'OUTBOUND' },
+      orderBy: { createdAt: 'desc' },
+      select: { authorType: true },
+    });
+    if (lastOut?.authorType !== 'AI') return;
+    await this.prisma.conversation.updateMany({
+      where: { id: conversationId, workspaceId, aiPaused: true },
+      data: { aiPaused: false },
+    });
   }
 
   /** How many replies are waiting, and how long the oldest has waited. The
