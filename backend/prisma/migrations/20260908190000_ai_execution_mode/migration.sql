@@ -1,0 +1,18 @@
+-- AI EXECUTION MODE — who does this workspace's AI work.
+--
+-- MCP first; the platform's Anthropic key is the FALLBACK, never the default.
+-- The product is meant to be usable by someone who already has a Claude
+-- account: they connect it, the platform carries the durable half (channels,
+-- state, scheduling, sending) and their own Claude does the thinking.
+--
+-- Purely additive, and the default preserves today's behaviour exactly:
+-- 'AUTO' resolves to MCP only while a Claude is actually connected and to
+-- SERVER otherwise, which is what every workspace already gets. A deploy that
+-- applies this and rolls back leaves one unread column.
+--
+-- Allowed values live in ai/ai-execution.ts (SERVER | AUTO | MCP | MCP_ONLY)
+-- and are NOT a database enum, for the same reason researchExecution is not:
+-- the resolver fails safe towards SERVER on anything it does not recognise, so
+-- an unknown value costs money rather than losing work, and adding a mode does
+-- not need a migration.
+ALTER TABLE "workspaces" ADD COLUMN "aiExecution" TEXT NOT NULL DEFAULT 'AUTO';

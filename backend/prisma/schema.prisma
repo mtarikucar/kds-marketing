@@ -102,6 +102,16 @@ model Workspace {
   /// `research/research-execution.ts`.
   researchExecution String @default("AUTO")
 
+  /// WHO does this workspace's AI work — its own connected Claude, or the
+  /// platform's Anthropic key. MCP first; the platform key is the FALLBACK.
+  ///
+  /// SERVER / AUTO / MCP / MCP_ONLY. `MCP_ONLY` is a guarantee rather than a
+  /// preference: the platform key is never used, and work waits for the agent
+  /// for as long as that takes. Everything else fails safe towards SERVER.
+  ///
+  /// Allowed values are AI_EXECUTION_MODES in `ai/ai-execution.ts`.
+  aiExecution String @default("AUTO")
+
   /// WHICH fal.ai model this workspace's generations run on, by kind — the
   /// middle term of `campaign override ?? workspace default ?? code constant`.
   ///

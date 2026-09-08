@@ -408,6 +408,10 @@ Gated on the `conversationAi` package feature, matching the REST controller.
 | `jeeta.message_lead` | Start a conversation with a chosen lead on SMS, WhatsApp or email | `contacts.write` | WRITE | SEND | no |
 | `jeeta.set_channel_status` | Enable or disable a channel | `settings.manage` | WRITE | — | no |
 | `jeeta.set_channel_agent` | Choose which AI agent auto-replies on a channel (null = manual only) | `settings.manage` | WRITE | — | no |
+| `jeeta.claim_reply_job` | Take the next customer message awaiting an answer and hold it while you write one | `contacts.write` | WRITE | — | no |
+| `jeeta.complete_reply_job` | Close a claimed reply, or return it to the queue | `contacts.write` | WRITE | — | no |
+| `jeeta.get_ai_reply_queue` | How many replies are waiting, and how long the oldest has waited | `reports.read` | READ | — | no |
+| `jeeta.set_ai_execution` | Who does this workspace's AI work: SERVER / AUTO / MCP / MCP_ONLY | `settings.manage` | WRITE | — | no |
 | `jeeta.update_agent` | Refine an AI agent's persona, tone, goals or guardrails | `settings.manage` | WRITE | — | no |
 | `jeeta.verify_channel` | Run a live health check against a channel and report whether it can actually send AND receive | `reports.read` | READ | — | no |
 
