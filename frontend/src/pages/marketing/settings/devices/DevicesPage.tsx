@@ -442,12 +442,24 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
                     {d.mode === 'AUTO'
                       ? t('devices.autoOn', {
                           defaultValue:
-                            'Commands run as soon as the desktop app collects them. Nobody is asked first.',
+                            'Commands run as soon as the desktop app collects them. Nobody at the phone is asked first.',
                         })
                       : t('devices.autoOff', {
                           defaultValue:
                             'Every command waits for someone to approve it in the desktop app.',
                         })}
+                  </p>
+                  {/* THE SECOND GATE. Turning this switch on removes the
+                      approval at the PHONE and nothing else: an agent's
+                      command is still held by Jeeta's own write mode, which
+                      lives one tab away. An owner who flips this and finds
+                      the phone still idle has no way to guess that from
+                      here — so it is said here. */}
+                  <p className="mt-1 text-micro text-muted-foreground">
+                    {t('devices.autoSecondGate', {
+                      defaultValue:
+                        'This switch only removes the approval at the phone. A command from Claude is also held by this workspace’s write mode — the Claude connector tab, next to this one, is where APPROVAL becomes AUTONOMOUS.',
+                    })}
                   </p>
                 </div>
               </div>

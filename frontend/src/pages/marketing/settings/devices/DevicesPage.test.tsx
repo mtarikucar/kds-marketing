@@ -224,6 +224,15 @@ describe('DevicesPage', () => {
     expect(await screen.findByText(/no object store is configured/)).toBeInTheDocument();
   });
 
+  it('names the OTHER gate, which this page cannot turn off', async () => {
+    // An owner who flips AUTO and finds the phone still idle has no way to
+    // guess from this page that Jeeta's own write mode is holding the command.
+    respond([device()]);
+    renderPage();
+    expect(await screen.findByText(/only removes the approval at the phone/i)).toBeInTheDocument();
+    expect(screen.getByText(/Claude connector tab/i)).toBeInTheDocument();
+  });
+
   it('reads a phone command history only when the section is opened', async () => {
     const user = userEvent.setup();
     respond([device()], [
