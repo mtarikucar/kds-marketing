@@ -7,7 +7,12 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ConversationStreamService } from './conversation-stream.service';
 import { ChannelType, InboundMessage } from './channel-adapter.interface';
-import { normalizePhone, normalizeEmail, phoneIdentityVariants } from '../utils/lead-normalize';
+import {
+  normalizePhone,
+  normalizeEmail,
+  phoneIdentityVariants,
+  localMsisdnVariants,
+} from '../utils/lead-normalize';
 
 export interface IngressChannel {
   id: string;
@@ -211,6 +216,67 @@ export class ConversationIngressService {
     return tx.contactIdentity.findFirst({ where: { workspaceId, channelId, value: { in: variants } } });
   }
 
+  /**
+   * The lead this person ALREADY is, matched on the contact details rather than
+   * on a channel identity — or null when they are genuinely new.
+   *
+   * `findIdentity` only ever asks "has this address written to THIS channel
+   * before". When the answer is no, the caller used to create a lead, full
+   * stop. That is right for a stranger and wrong for everyone else: a customer
+   * entered by hand, imported from a spreadsheet, or captured by a website
+   * form, who then replies to an email we sent them, has no identity on the
+   * email channel — so the CRM quietly gained a second copy of them, the
+   * outbound message sat on one record and their answer on the other, and the
+   * person looking at either saw half a conversation.
+   *
+   * The dedup direction that DID exist is the mirror of this one: lead creation
+   * here writes `emailNormalized`/`phoneNormalized` so a LATER form or import
+   * matches the channel-born lead. This is the same rule pointing the other
+   * way, and it is deliberately the same query the form, booking, import and
+   * order-form paths use — including their two exclusions. A tombstoned
+   * (`mergedIntoId`) lead must not be resurrected by a reply, and a
+   * soft-deleted (`deletedAt`) one must not silently swallow a live
+   * conversation into a record nobody can see.
+   *
+   * Only real contact keys qualify. PSID/IGSID/WEBCHAT/TIKTOKID/LINKEDIN are
+   * opaque per-provider ids, not addresses: two of them being equal says
+   * nothing about the human behind them, so those kinds fall through to
+   * creation exactly as before.
+   */
+  private async findLeadByContact(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    inbound: InboundMessage,
+  ): Promise<{ id: string; email: string | null; phone: string | null; whatsapp: string | null } | null> {
+    const emailNormalized = inbound.kind === 'EMAIL' ? normalizeEmail(inbound.externalUserId) : null;
+    const phoneNormalized =
+      inbound.kind === 'PHONE' || inbound.kind === 'WA' ? normalizePhone(inbound.externalUserId) : null;
+    if (!emailNormalized && !phoneNormalized) return null;
+
+    return tx.lead.findFirst({
+      where: {
+        workspaceId,
+        mergedIntoId: null,
+        deletedAt: null,
+        OR: [
+          ...(emailNormalized ? [{ emailNormalized }] : []),
+          // Every stored spelling of the number (0- / bare / 90- / +90 / 00-),
+          // as İYS, telephony and leadgen do — an exact match would miss a lead
+          // first stored in another format and duplicate it anyway.
+          ...(phoneNormalized
+            ? [{ phoneNormalized: { in: localMsisdnVariants(phoneNormalized) } }]
+            : []),
+        ],
+      },
+      select: { id: true, email: true, phone: true, whatsapp: true },
+      // Oldest wins, so two ticks of the same inbound cannot adopt different
+      // records, and the record chosen is the one the rest of the CRM's own
+      // duplicate tooling calls canonical.
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+
   private async ingestInTx(
     tx: Prisma.TransactionClient,
     channel: IngressChannel,
@@ -221,53 +287,91 @@ export class ConversationIngressService {
 
     // 1. Resolve (or create) the contact identity → lead.
     let identity = await this.findIdentity(tx, workspaceId, channel.id, inbound);
-    const createdNewLead = !identity;
+    let createdNewLead = false;
 
     if (!identity) {
-      const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
       const displayName = (inbound.displayName || '').trim();
       const isPhone = inbound.kind === 'PHONE' || inbound.kind === 'WA';
-      const lead = await tx.lead.create({
-        data: {
-          workspaceId,
-          businessName: displayName || `${this.label(channel.type)} contact`,
-          contactPerson: displayName || PLACEHOLDER_CONTACT_NAME,
-          businessType: 'OTHER',
-          source: SOURCE_BY_CHANNEL[channel.type] ?? 'OTHER',
-          status: 'NEW',
-          // Write the normalized phone too so a later form/manual lead with the
-          // same number dedup-matches this channel-created lead (cross-path).
-          ...(isPhone
-            ? { phone: inbound.externalUserId, phoneNormalized: normalizePhone(inbound.externalUserId) }
-            : {}),
-          ...(inbound.kind === 'WA' ? { whatsapp: inbound.externalUserId } : {}),
-          // Email leads get their address written (+ normalized) so a later
-          // form/manual lead with the same email dedup-matches this one.
-          ...(inbound.kind === 'EMAIL'
-            ? { email: inbound.externalUserId, emailNormalized: normalizeEmail(inbound.externalUserId) }
-            : {}),
-          ...(autoOwner ? { assignedToId: autoOwner } : {}),
-        },
-      });
+      // No identity on THIS channel does not mean no lead. The address may
+      // already be in the CRM from a form, an import or a hand-entered record
+      // — see findLeadByContact for why that used to duplicate.
+      const existingLead = await this.findLeadByContact(tx, workspaceId, inbound);
+      let leadId: string;
+
+      if (existingLead) {
+        leadId = existingLead.id;
+        // Fill in the address we just learned, ONLY where the lead has none.
+        // A lead entered by phone that now emails us should gain the email;
+        // one that already carries a different address keeps it, because the
+        // person on this channel is not authority over the other channel's
+        // details.
+        const fill: Record<string, string | null> = {};
+        if (inbound.kind === 'EMAIL' && !existingLead.email) {
+          fill.email = inbound.externalUserId;
+          fill.emailNormalized = normalizeEmail(inbound.externalUserId);
+        }
+        if (isPhone && !existingLead.phone) {
+          fill.phone = inbound.externalUserId;
+          fill.phoneNormalized = normalizePhone(inbound.externalUserId);
+        }
+        if (inbound.kind === 'WA' && !existingLead.whatsapp) {
+          fill.whatsapp = inbound.externalUserId;
+        }
+        if (Object.keys(fill).length > 0) {
+          await tx.lead.updateMany({
+            where: { id: leadId, workspaceId },
+            data: fill as Prisma.LeadUpdateManyMutationInput,
+          });
+        }
+      } else {
+        createdNewLead = true;
+        const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
+        const lead = await tx.lead.create({
+          data: {
+            workspaceId,
+            businessName: displayName || `${this.label(channel.type)} contact`,
+            contactPerson: displayName || PLACEHOLDER_CONTACT_NAME,
+            businessType: 'OTHER',
+            source: SOURCE_BY_CHANNEL[channel.type] ?? 'OTHER',
+            status: 'NEW',
+            // Write the normalized phone too so a later form/manual lead with the
+            // same number dedup-matches this channel-created lead (cross-path).
+            ...(isPhone
+              ? { phone: inbound.externalUserId, phoneNormalized: normalizePhone(inbound.externalUserId) }
+              : {}),
+            ...(inbound.kind === 'WA' ? { whatsapp: inbound.externalUserId } : {}),
+            // Email leads get their address written (+ normalized) so a later
+            // form/manual lead with the same email dedup-matches this one.
+            ...(inbound.kind === 'EMAIL'
+              ? { email: inbound.externalUserId, emailNormalized: normalizeEmail(inbound.externalUserId) }
+              : {}),
+            ...(autoOwner ? { assignedToId: autoOwner } : {}),
+          },
+        });
+        leadId = lead.id;
+      }
+
       identity = await tx.contactIdentity.create({
         data: {
           workspaceId,
           channelId: channel.id,
           kind: inbound.kind,
           value: inbound.externalUserId,
-          leadId: lead.id,
+          leadId,
         },
       });
       // First-touch attribution (D10b): a CTWA/CTM ad referral on the FIRST
       // message ties this conversation-born lead to the sourcing ad. Only an
       // ad-typed referral maps its source id; capture() is best-effort and
-      // first-touch-idempotent, enrolled in this tx.
+      // first-touch-idempotent, enrolled in this tx. It runs for an ADOPTED
+      // lead too — the referral is just as real when the person was already in
+      // the CRM, and idempotency makes a second capture a no-op.
       if (inbound.referral) {
         const r = inbound.referral;
         const isAd = /^ads?$/i.test(String(r.sourceType ?? ''));
         await this.leadAttribution.capture(
           workspaceId,
-          lead.id,
+          leadId,
           {
             ...(r.ctwaClid ? { ctwaClid: r.ctwaClid } : {}),
             ...(r.sourceUrl ? { url: r.sourceUrl } : {}),
@@ -279,7 +383,7 @@ export class ConversationIngressService {
       if (sentinelId) {
         await tx.leadActivity.create({
           data: {
-            leadId: lead.id,
+            leadId,
             type: 'NOTE',
             // An echo means the owner messaged this person first, from the
             // provider's own app. Same note, honest about who spoke — the
