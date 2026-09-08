@@ -5,7 +5,10 @@ import { validateDeviceCommand, describeDeviceCommand } from './device-commands'
 const WS = 'ws-1';
 const DEV = 'dev-1';
 
-function deps(device: Record<string, unknown> | null = { id: DEV, workspaceId: WS, label: 'Satış telefonu', status: 'ACTIVE', mode: 'MANUAL', pairedAt: null }) {
+function deps(
+  device: Record<string, unknown> | null = { id: DEV, workspaceId: WS, label: 'Satış telefonu', status: 'ACTIVE', mode: 'MANUAL', pairedAt: null },
+  storageOver: Partial<{ configured: boolean; upload: jest.Mock }> = {},
+) {
   // ONE mutable command row behind findMany/updateMany, so a conditional claim
   // can be told apart from an unconditional write — a mock that always reports
   // success cannot distinguish the two, which is the whole property here.
@@ -50,7 +53,18 @@ function deps(device: Record<string, unknown> | null = { id: DEV, workspaceId: W
     },
     $transaction: jest.fn(async (ops: any[]) => Promise.all(ops)),
   };
-  return { svc: new DevicesService(prisma), prisma, seed: (rows: any[]) => (queued = rows) };
+  const storage: any = {
+    isConfigured: jest.fn(() => storageOver.configured ?? false),
+    upload:
+      storageOver.upload ??
+      jest.fn(async () => ({ url: 'https://cdn.test/shot.png', key: 'ws-1/shot.png', mime: 'image/png' })),
+  };
+  return {
+    svc: new DevicesService(prisma, storage),
+    prisma,
+    storage,
+    seed: (rows: any[]) => (queued = rows),
+  };
 }
 
 describe('device commands — what a phone may be asked to do', () => {
@@ -89,6 +103,16 @@ describe('device commands — what a phone may be asked to do', () => {
     expect(() => validateDeviceCommand('TAP', { x: -5, y: 10 })).toThrow(/outside the screen/i);
     expect(() => validateDeviceCommand('TAP', { x: 10 })).toThrow(/y must be a number/i);
     expect(validateDeviceCommand('TAP', { x: 10.6, y: 20.2 })).toEqual({ x: 11, y: 20 });
+  });
+
+  it('refuses text a phone would type WRONG rather than typing it', () => {
+    // The failure this prevents is silent: `input text` maps to ASCII
+    // keycodes, so "Ayşe" is not typed slowly or partially — it is typed
+    // wrong, and the phone reports success either way.
+    expect(validateDeviceCommand('TEXT', { value: 'Merhaba' })).toEqual({ value: 'Merhaba' });
+    expect(() => validateDeviceCommand('TEXT', { value: 'Merhaba Ayşe' })).toThrow(/plain ASCII/i);
+    // And it says what DOES work, because a refusal with no route is a dead end.
+    expect(() => validateDeviceCommand('TEXT', { value: 'çğıöşü' })).toThrow(/wa\.me|TAP_ON/);
   });
 
   it('describes a command in words a person can consent to', () => {
@@ -193,6 +217,54 @@ describe('DevicesService — the rendezvous', () => {
     // A phone plugged back in after a week must not replay a day of taps: the
     // screen those commands were written for is gone.
     expect(await svc.claimNext(WS, DEV)).toBeNull();
+  });
+
+  it('never lets a screenshot reach the database as text', async () => {
+    // Base64 in a JSONB column is megabytes per tap, and the same string is
+    // what an MCP caller would then be handed. It must not survive this method
+    // under ANY configuration — including the one where there is nowhere to
+    // put it.
+    const { svc, prisma, seed } = deps();
+    seed([{ id: 'cmd-1', workspaceId: WS, deviceId: DEV, status: 'CLAIMED' }]);
+    await svc.complete(WS, 'cmd-1', {
+      status: 'DONE',
+      result: { screenshotBase64: 'AAAABBBBCCCC', tapped: true },
+    });
+    const written = prisma.deviceCommand.updateMany.mock.calls.at(-1)[0].data.result;
+    expect(written.screenshotBase64).toBeUndefined();
+    expect(written.tapped).toBe(true);
+    expect(written.screenshotUnavailable).toMatch(/no object store/i);
+  });
+
+  it('turns a screenshot into a link when there is somewhere to put it', async () => {
+    const { svc, prisma } = deps(undefined, { configured: true });
+    prisma.deviceCommand.updateMany.mockResolvedValue({ count: 1 });
+    await svc.complete(WS, 'cmd-1', {
+      status: 'DONE',
+      result: { screenshotBase64: Buffer.from('png').toString('base64') },
+    });
+    const call = prisma.deviceCommand.updateMany.mock.calls.at(-1)[0].data;
+    expect(call.result.screenshotUrl).toBe('https://cdn.test/shot.png');
+    expect(call.result.screenshotBase64).toBeUndefined();
+    expect(call.screenshotKey).toBe('ws-1/shot.png');
+  });
+
+  it('still records what the phone did when the upload fails', async () => {
+    // The tap happened. Losing the outcome because a bucket was unreachable
+    // would turn a missing picture into a missing fact.
+    const upload = jest.fn(async () => {
+      throw new Error('bucket unreachable');
+    });
+    const { svc, prisma } = deps(undefined, { configured: true, upload });
+    prisma.deviceCommand.updateMany.mockResolvedValue({ count: 1 });
+    await svc.complete(WS, 'cmd-1', {
+      status: 'DONE',
+      result: { screenshotBase64: 'AAAA', tapped: true },
+    });
+    const written = prisma.deviceCommand.updateMany.mock.calls.at(-1)[0].data;
+    expect(written.status).toBe('DONE');
+    expect(written.result.tapped).toBe(true);
+    expect(written.result.screenshotUnavailable).toMatch(/bucket unreachable/);
   });
 
   it('is invisible across workspaces', async () => {

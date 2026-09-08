@@ -30,6 +30,34 @@ Dizüstü kapalı olabilir, kablo çıkmış olabilir, siz "hayır" demiş olabi
 Kimlik doğru girildiğinde o sayfadaki rozet birkaç saniye içinde **"Köprü
 çevrimiçi"**ye döner — dönmüyorsa bakılacak yer bu uygulamadır, kuyruk değil.
 
+## Bir yapay zekâ telefonu nasıl sürer
+
+Ekranı okumadan dokunmak, karanlıkta düğme aramaktır. Akış şu:
+
+1. `UI_DUMP` — ekrandaki **dokunulabilir/okunabilir** öğelerin listesi döner.
+   Ham XML değil: uiautomator'ın birkaç yüz kilobaytlık ağacı, birkaç kilobaytlık
+   düğme listesine indirgenir (metin, id, açıklama, sınıf ve **dokunulacak nokta**).
+2. `TAP_ON` — gördüğün etiketle bas. Öğeyi **aynı komut içinde** yeniden bulup
+   basar; okuman ile dokunman arasında liste oturursa, bildirim düşerse ya da
+   klavye açılırsa yanlış yere basmazsın. Ham koordinatlı `TAP` yalnızca hiç
+   etiketi olmayan yerler için.
+
+Tam eşleşme kısmi eşleşmeyi yener — "Sil", "Silinenler"e basmaz — ve aynı yazan
+satırlar için `occurrence` vardır.
+
+`TEXT` yalnızca düz ASCII kabul eder ve Türkçe karakterde **reddeder**. Sebebi
+sessiz olması: `adb shell input text` harfleri ASCII tuş kodlarına eşler, yani
+"Ayşe" yavaş ya da eksik değil, **yanlış** yazılır ve telefon yine de "oldu" der.
+Mesaj metni için `?text=` URL-kodlu bir wa.me bağlantısı, listeden seçim için
+`TAP_ON` doğru yollardır.
+
+`SCREENSHOT` ekran görüntüsünü base64 döndürmez: sunucuda yüklenir, sonuçta bir
+bağlantı gelir. Depolama yapılandırılmamışsa resim atılır ve sonuç bunu söyler —
+megabaytlarca metni bir modelin bağlamına dökmek, resmi hiç göndermemekten kötüdür.
+
+**Kesintisiz çalışma:** cihaz `AUTO` moddayken bu döngüde kimseye sorulmaz.
+`MANUAL`'de her adım için bu pencerede onay istenir — yavaştır ama izlenebilir.
+
 ## Güvenlik — niyet değil, yapı
 
 - **Cihaz varsayılan olarak `MANUAL`.** Her komut için siz onaylarsınız. Bu bir
@@ -47,6 +75,26 @@ Kimlik doğru girildiğinde o sayfadaki rozet birkaç saniye içinde **"Köprü
   tutma değil, durdurma düğmesidir; bekleyen ne varsa düşer.
 - **Komutların ömrü vardır.** Bir hafta sonra takılan telefon, bir günlük
   dokunuşu peş peşe tekrar etmez: o komutların yazıldığı ekran çoktan yok.
+
+## Paketleme
+
+```
+npm run pack     # taşınabilir klasör + zip  → release/
+npm run dist     # imzalı NSIS kurulumu (aşağıya bakın)
+```
+
+`npm run pack` hiçbir ayrıcalık istemez: Electron çalışma zamanını kopyalar,
+uygulamayı içine koyar, `JeetaMasaustu.exe` olarak adlandırır ve zip'ler.
+Açıp çalıştırmak yeterlidir.
+
+`npm run dist` (electron-builder) **düz bir Windows hesabında çalışmaz**: indirdiği
+kod imzalama araç zinciri macOS sembolik bağları içerir ve Windows'ta sembolik bağ
+oluşturmak Geliştirici Modu ya da yükseltilmiş bir kabuk ister. Bunu açmak makine
+sahibinin kararıdır, bir derleme adımının değil — o yüzden `pack` yanında duruyor.
+
+Zaten ikisi de **imzasız**: elimizde sertifika yok, ve imzasız bir NSIS kurulumu
+Windows'ta zip'ten daha yüksek sesle uyarmaz. Kayıp olan Başlat menüsü girdisi,
+otomatik güncelleme ve .exe'nin kendi ikonu/sürüm bilgisidir.
 
 ## Geliştirme
 

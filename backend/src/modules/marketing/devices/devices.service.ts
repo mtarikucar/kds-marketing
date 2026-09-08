@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { R2StorageService } from '../../../common/storage/r2-storage.service';
 import {
   DEVICE_MODES,
   DEVICE_STATUSES,
@@ -50,7 +51,10 @@ export interface EnqueueOptions {
 export class DevicesService {
   private readonly logger = new Logger(DevicesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: R2StorageService,
+  ) {}
 
   // ── the workspace side ────────────────────────────────────────────────────
 
@@ -235,6 +239,57 @@ export class DevicesService {
    * would make the one signal that proves a human was in the loop look like a
    * malfunction.
    */
+  /**
+   * A screenshot becomes a URL here, and never a string in a result.
+   *
+   * The bridge sends the PNG as base64 because it has no other way across
+   * HTTP. That is fine for one hop and catastrophic anywhere after it: stored,
+   * it puts megabytes of text in a JSONB column; returned to an MCP caller, it
+   * puts the same megabytes into a model's context, where it is unreadable and
+   * costs more than the whole task. So the blob stops at this method — it is
+   * uploaded, and what survives is a link.
+   *
+   * With no object store configured the picture is DROPPED and the result says
+   * so. Keeping it "just in case" would mean the failure above happens on
+   * exactly the deployments that were never set up for it.
+   */
+  private async storeScreenshot(
+    workspaceId: string,
+    outcome: { result?: Record<string, unknown>; screenshotKey?: string },
+  ): Promise<{ result?: Record<string, unknown>; screenshotKey?: string }> {
+    const raw = outcome.result?.screenshotBase64;
+    if (typeof raw !== 'string' || !raw) return { result: outcome.result };
+
+    const { screenshotBase64: _dropped, ...rest } = outcome.result as Record<string, unknown>;
+    if (!this.storage.isConfigured()) {
+      return {
+        result: {
+          ...rest,
+          screenshotUnavailable: 'no object store is configured, so the picture was discarded',
+        },
+      };
+    }
+    try {
+      const buffer = Buffer.from(raw, 'base64');
+      const up = await this.storage.upload(workspaceId, {
+        originalname: 'device-screen.png',
+        mimetype: 'image/png',
+        buffer,
+        size: buffer.length,
+      });
+      return { result: { ...rest, screenshotUrl: up.url }, screenshotKey: up.key };
+    } catch (e) {
+      // An upload that failed must not take the command's outcome with it: the
+      // tap still happened, and that is the part the caller is waiting on.
+      return {
+        result: {
+          ...rest,
+          screenshotUnavailable: `upload failed: ${e instanceof Error ? e.message : String(e)}`,
+        },
+      };
+    }
+  }
+
   async complete(
     workspaceId: string,
     commandId: string,
@@ -245,13 +300,14 @@ export class DevicesService {
       screenshotKey?: string;
     },
   ) {
+    const { result, screenshotKey } = await this.storeScreenshot(workspaceId, outcome);
     const done = await this.prisma.deviceCommand.updateMany({
       where: { id: commandId, workspaceId, status: 'CLAIMED' },
       data: {
         status: outcome.status,
-        result: (outcome.result ?? null) as never,
+        result: (result ?? null) as never,
         error: outcome.error?.slice(0, 1000) ?? null,
-        screenshotKey: outcome.screenshotKey ?? null,
+        screenshotKey: screenshotKey ?? outcome.screenshotKey ?? null,
         completedAt: new Date(),
       },
     });

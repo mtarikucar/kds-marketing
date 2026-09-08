@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Smartphone, Clipboard, Pause, Play } from 'lucide-react';
+import { Plus, Smartphone, Clipboard, Pause, Play, Stethoscope } from 'lucide-react';
 import marketingApi from '../../../../features/marketing/api/marketingApi';
 import { fmtDateTime } from '../../../../features/marketing/utils/format';
 import { copyToClipboard } from '../../../../lib/clipboard';
@@ -97,6 +97,98 @@ function History({ deviceId }: { deviceId: string }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * "It says online" and "it works" are different claims.
+ *
+ * A heartbeat only proves the desktop app can reach the server. It says
+ * nothing about whether the phone is still on the cable, whether `adb` is
+ * installed, or whether anyone at the desk is approving anything. This queues
+ * the most harmless command there is — read the screen — and waits for a real
+ * outcome, which is the only thing that answers the question.
+ */
+function useProbe(deviceId: string) {
+  const [state, setState] = useState<{ status: string; detail?: string } | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const run = async () => {
+    setRunning(true);
+    setState(null);
+    try {
+      const { data } = await marketingApi.post(`/devices/${deviceId}/commands`, { kind: 'UI_DUMP' });
+      const id = data?.id;
+      // Poll the phone's own history rather than a dedicated endpoint: this is
+      // the same row an operator sees under "Recent commands", so what the
+      // button reports and what that list shows can never disagree.
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const { data: rows } = await marketingApi.get(`/devices/${deviceId}/commands?take=10`);
+        const row = (Array.isArray(rows) ? rows : []).find((r: CommandRow) => r.id === id);
+        if (row && !['QUEUED', 'CLAIMED'].includes(row.status)) {
+          const count = (row as { result?: { elements?: unknown[] } }).result?.elements?.length;
+          setState({
+            status: row.status,
+            detail: row.error ?? (typeof count === 'number' ? `${count} öğe okundu` : undefined),
+          });
+          return;
+        }
+      }
+      setState({ status: 'QUEUED' });
+    } catch (e: any) {
+      setState({ status: 'FAILED', detail: e?.response?.data?.message ?? String(e) });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return { state, running, run };
+}
+
+function Probe({ deviceId }: { deviceId: string }) {
+  const { t } = useTranslation('marketing');
+  const { state, running, run } = useProbe(deviceId);
+
+  const message = !state
+    ? null
+    : state.status === 'DONE'
+      ? t('devices.probeOk', {
+          defaultValue: 'Works — the phone read its own screen. {{detail}}',
+          detail: state.detail ?? '',
+        })
+      : state.status === 'REFUSED'
+        ? t('devices.probeRefused', {
+            defaultValue: 'Someone at the phone declined. The chain works; they said no.',
+          })
+        : state.status === 'QUEUED'
+          ? t('devices.probeStuck', {
+              defaultValue:
+                'Nobody collected it. The desktop app is not running, or it is pointed at a different device id.',
+            })
+          : t('devices.probeFailed', {
+              defaultValue: 'The phone could not do it: {{detail}}',
+              detail: state.detail ?? '',
+            });
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <Button variant="outline" size="sm" onClick={() => void run()} disabled={running}>
+        <Stethoscope className="h-4 w-4" aria-hidden="true" />
+        {running
+          ? t('devices.probing', { defaultValue: 'Testing…' })
+          : t('devices.probe', { defaultValue: 'Test the connection' })}
+      </Button>
+      {message && (
+        <span
+          className={
+            state?.status === 'DONE' ? 'text-micro text-success' : 'text-micro text-muted-foreground'
+          }
+        >
+          {message}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -327,6 +419,8 @@ export default function DevicesPage({ embedded }: { embedded?: boolean } = {}) {
                   </p>
                 </div>
               </div>
+
+              <Probe deviceId={d.id} />
 
               <div className="mt-4 border-t border-border pt-2">
                 <Disclosure title={t('devices.history', { defaultValue: 'Recent commands' })}>

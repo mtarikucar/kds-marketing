@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { distillUiDump, findElement, UiScreen } from './ui-dump';
 
 const run = promisify(execFile);
 
@@ -101,6 +102,20 @@ export interface ExecOutcome {
  * is one version behind the server must refuse a command it does not
  * understand, not improvise one.
  */
+/**
+ * What is on screen right now, distilled.
+ *
+ * Shared by `UI_DUMP` (look) and `TAP_ON` (look-and-press) so the two can
+ * never disagree about what the screen contains — a second implementation
+ * here would be a second set of filter rules to drift apart.
+ */
+async function readScreen(serial?: string): Promise<UiScreen> {
+  await adb(['shell', 'uiautomator', 'dump', '/sdcard/jeeta-ui.xml'], serial);
+  const xml = await adb(['shell', 'cat', '/sdcard/jeeta-ui.xml'], serial);
+  await adb(['shell', 'rm', '-f', '/sdcard/jeeta-ui.xml'], serial).catch(() => undefined);
+  return distillUiDump(xml);
+}
+
 export async function execute(
   serial: string,
   kind: string,
@@ -160,11 +175,31 @@ export async function execute(
       }
     }
 
-    case 'UI_DUMP': {
-      await adb(['shell', 'uiautomator', 'dump', '/sdcard/jeeta-ui.xml'], serial);
-      const xml = await adb(['shell', 'cat', '/sdcard/jeeta-ui.xml'], serial);
-      await adb(['shell', 'rm', '-f', '/sdcard/jeeta-ui.xml'], serial).catch(() => undefined);
-      return { result: { xml: xml.slice(0, 400_000) } };
+    case 'UI_DUMP':
+      // The DISTILLED screen, not the XML. The raw dump is a few hundred
+      // kilobytes of layout scaffolding; what comes back here is the list of
+      // things a person could press, each with the point that presses it.
+      return { result: (await readScreen(serial)) as unknown as Record<string, unknown> };
+
+    case 'TAP_ON': {
+      // Read and tap in ONE command, on purpose: a caller that dumps, thinks,
+      // and then taps a remembered coordinate is racing the phone. Here the
+      // element is located and pressed microseconds apart.
+      const screen = await readScreen(serial);
+      const hit = findElement(screen, args as never);
+      if (!hit) {
+        // Naming what IS on screen turns "it didn't work" into a next step.
+        const visible = screen.elements
+          .slice(0, 12)
+          .map((e) => e.text || e.desc || e.id)
+          .filter(Boolean)
+          .join(', ');
+        throw new AdbError(
+          `ekranda böyle bir öğe yok — görünenler: ${visible || '(etiketli öğe yok)'}`,
+        );
+      }
+      await adb(['shell', 'input', 'tap', String(hit.tap[0]), String(hit.tap[1])], serial);
+      return { result: { tapped: hit } };
     }
 
     default:

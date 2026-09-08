@@ -127,6 +127,47 @@ describe('jeeta.device_command', () => {
     expect(Date.now() - started).toBeLessThan(500);
   });
 
+  it('folds a named tap into one selector, and drops the fields that kind does not use', async () => {
+    const { registry, devices } = build();
+    await registry.get('jeeta.device_command')!.handler(ctx as never, {
+      deviceId: 'd1',
+      kind: 'TAP_ON',
+      element: 'Gönder',
+      elementBy: 'desc',
+      occurrence: 2,
+      // A model that fills in every optional field must not turn a named tap
+      // into a link-opening command.
+      url: 'https://example.com/evil',
+      x: 10,
+    });
+    expect(devices.enqueue).toHaveBeenCalledWith(
+      CALLER_WS,
+      'd1',
+      'TAP_ON',
+      { desc: 'Gönder', occurrence: 2 },
+      expect.anything(),
+    );
+  });
+
+  it('defaults a named tap to matching on visible text', async () => {
+    const { registry, devices } = build();
+    await registry.get('jeeta.device_command')!.handler(ctx as never, {
+      deviceId: 'd1',
+      kind: 'TAP_ON',
+      element: 'Ayşe Yılmaz',
+    });
+    expect(devices.enqueue.mock.calls[0][3]).toEqual({ text: 'Ayşe Yılmaz' });
+  });
+
+  it('teaches the look-then-tap loop in its own description', () => {
+    // The only place a model learns this. A tool that offers TAP and TAP_ON
+    // side by side without saying which to reach for gets coordinate-tapping
+    // by default, which is the failure mode TAP_ON exists to remove.
+    const desc = build().registry.get('jeeta.device_command')!.description;
+    expect(desc).toMatch(/UI_DUMP first/i);
+    expect(desc).toMatch(/Prefer TAP_ON over TAP/i);
+  });
+
   it('reports a command nobody has run as QUEUED rather than as a result', async () => {
     const { registry } = build({ command: null });
     const out = (await registry.get('jeeta.device_command')!.handler(ctx as never, {

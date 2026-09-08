@@ -117,8 +117,28 @@ export function validateDeviceCommand(kind: string, raw: unknown): Record<string
       };
     }
 
-    case 'TEXT':
-      return { value: str(args, 'value', MAX_TEXT_LENGTH) };
+    case 'TEXT': {
+      const value = str(args, 'value', MAX_TEXT_LENGTH);
+      // `adb shell input text` maps characters to ASCII keycodes. Anything
+      // outside that is not typed slowly or partially — it is typed WRONG, and
+      // the first person to find out is the customer reading "Merhaba Ayse"
+      // where a name was meant, or worse. A phone cannot report this: as far
+      // as it is concerned the keystrokes happened.
+      //
+      // So it is refused here, where the mistake was made, and the message
+      // names the two routes that DO carry Turkish correctly: a wa.me link
+      // whose ?text= is URL-encoded, and TAP_ON, which finds a row by its
+      // label without typing anything at all.
+      const bad = [...value].filter((c) => c.codePointAt(0)! > 0x7e || c.codePointAt(0)! < 0x20);
+      if (bad.length) {
+        throw new BadRequestException(
+          `a phone can only be made to type plain ASCII — "${[...new Set(bad)].join('')}" would come out wrong. ` +
+            'For message text use OPEN_URL with a wa.me link (its ?text= is URL-encoded and carries any alphabet); ' +
+            'to pick something from a list use TAP_ON, which matches the label without typing.',
+        );
+      }
+      return { value };
+    }
 
     case 'KEY': {
       const key = str(args, 'key', 32).toUpperCase();

@@ -9,7 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest",
     "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "pack": "npm run build && node scripts/pack-portable.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

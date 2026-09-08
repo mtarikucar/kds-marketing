@@ -63,7 +63,8 @@ export function registerDeviceTools(registry: McpToolRegistry, deps: DeviceToolD
   registry.register({
     name: 'jeeta.device_command',
     description:
-      'Ask a paired phone to do ONE thing: open a link (https or tel — this is how a WhatsApp click-to-chat draft is put on screen), launch an app, tap, swipe, type, press a key, take a screenshot, or read the on-screen elements. ' +
+      'Ask a paired phone to do ONE thing: open a link (https or tel — this is how a WhatsApp click-to-chat draft is put on screen), launch an app, tap a named element (TAP_ON) or a raw coordinate (TAP), swipe, type, press a key, take a screenshot, or read what is on screen (UI_DUMP). ' +
+      'HOW TO DRIVE A PHONE: UI_DUMP first — it returns the things on screen, each with the point that presses it — then TAP_ON with a label you saw there. Prefer TAP_ON over TAP: it finds the element and presses it in the same command, so a screen that moves between your reading and your tap cannot make you press the wrong thing. Use TAP only where there is no label at all. ' +
       'IMPORTANT: this QUEUES the command. It has not happened when this returns. The phone is on somebody\'s desk behind a cable, the laptop may be closed, and on a MANUAL device a person must approve it — they may refuse, which is a normal outcome and not an error. This waits a short while for a result and then reports honestly whether one arrived. ' +
       'There is no shell command and there never will be.',
     domain: 'devices',
@@ -89,6 +90,26 @@ export function registerDeviceTools(registry: McpToolRegistry, deps: DeviceToolD
       package: z.string().max(200).optional().describe('LAUNCH_APP only, e.g. com.whatsapp'),
       text: z.string().max(4000).optional().describe('TEXT only — the characters to type.'),
       key: z.enum(ALLOWED_KEYS).optional().describe('KEY only.'),
+      element: z
+        .string()
+        .max(200)
+        .optional()
+        .describe(
+          'TAP_ON only — the label of the thing to press, copied from a UI_DUMP result (its text, id or desc). An exact match wins over a partial one, so "Sil" will not press "Silinenler" when both are on screen.',
+        ),
+      elementBy: z
+        .enum(['text', 'id', 'desc'])
+        .optional()
+        .describe(
+          'TAP_ON only — which field `element` is. Default "text". Use "desc" for icon buttons, which usually carry no text at all.',
+        ),
+      occurrence: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .optional()
+        .describe('TAP_ON only — when several elements read the same, which one (1 = the first). Default 1.'),
       x: z.number().optional(),
       y: z.number().optional(),
       x1: z.number().optional(),
@@ -105,6 +126,13 @@ export function registerDeviceTools(registry: McpToolRegistry, deps: DeviceToolD
       // in any place.
       const byKind: Record<string, Record<string, unknown>> = {
         TAP: { x: args.x, y: args.y },
+        // One selector value plus how to read it, rather than three sibling
+        // fields: `text` on this schema already means "characters to type",
+        // and a field that means two things is a field somebody fills in wrong.
+        TAP_ON: {
+          [String(args.elementBy ?? 'text')]: args.element,
+          ...(args.occurrence === undefined ? {} : { occurrence: args.occurrence }),
+        },
         SWIPE: { x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, durationMs: args.durationMs },
         TEXT: { value: args.text },
         KEY: { key: args.key },

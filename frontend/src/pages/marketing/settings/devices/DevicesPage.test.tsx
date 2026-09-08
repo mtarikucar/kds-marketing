@@ -136,6 +136,46 @@ describe('DevicesPage', () => {
     );
   });
 
+  it('answers "does it actually work" with a real outcome, not a heartbeat', async () => {
+    // The whole point of the button: a bridge can be online (heartbeating) and
+    // still be unable to touch the phone — no cable, no adb, wrong device id.
+    // Only a command that came back proves otherwise.
+    const user = userEvent.setup();
+    api.post.mockResolvedValue({ data: { id: 'c9', status: 'QUEUED' } });
+    api.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: String(url).includes('/commands')
+          ? [{ id: 'c9', kind: 'UI_DUMP', status: 'DONE', result: { elements: [1, 2, 3] }, createdAt: new Date().toISOString() }]
+          : [device()],
+      }),
+    );
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: /Test the connection/ }));
+
+    expect(api.post).toHaveBeenCalledWith('/devices/dev-1/commands', { kind: 'UI_DUMP' });
+    expect(await screen.findByText(/Works/, undefined, { timeout: 5000 })).toBeInTheDocument();
+  });
+
+  it('names the likely cause when nobody collects the test', async () => {
+    const user = userEvent.setup();
+    api.post.mockResolvedValue({ data: { id: 'c9', status: 'QUEUED' } });
+    // Stays QUEUED forever: the desktop app is not running, or is pointed at a
+    // different device id — which is the sentence the operator needs.
+    api.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: String(url).includes('/commands')
+          ? [{ id: 'c9', kind: 'UI_DUMP', status: 'QUEUED', createdAt: new Date().toISOString() }]
+          : [device()],
+      }),
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: /Test the connection/ }));
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(await screen.findByText(/Nobody collected it/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it('reads a phone command history only when the section is opened', async () => {
     const user = userEvent.setup();
     respond([device()], [
