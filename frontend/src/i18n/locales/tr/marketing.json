@@ -4157,6 +4157,11 @@
     "programme": {
       "editor": {
         "frozen": "Düzenleme penceresi kapandı; slot olduğu gibi yayınlanır.",
+        "frozenFailed": "Başarısız: {{error}}",
+        "frozenMeasured": "Yayınlandı · ödül {{reward}}",
+        "frozenProducing": "Üretiliyor; klipler hazır olunca planlanan saatte yayınlanır.",
+        "frozenPublished": "Yayınlandı.",
+        "frozenSkipped": "Atlandı; bir şey yayınlanmayacak.",
         "idea": "Fikir",
         "metrics": "Metrikler",
         "noApproval": "Her şey düzenlenebilir; hiçbir adım onay beklemez.",
@@ -4164,6 +4169,9 @@
         "regenerate": "Yeniden üret",
         "regenerateFailed": "Slot yeniden üretilemedi.",
         "regenerated": "Slot yeniden planlanıyor.",
+        "retried": "Slot yeniden deneniyor.",
+        "retry": "Tekrar dene",
+        "retryFailed": "Slot yeniden denenemedi.",
         "save": "Kaydet",
         "saveFailed": "Slot kaydedilemedi.",
         "saved": "Slot güncellendi.",
@@ -4258,13 +4266,13 @@
         "name": "Ad",
         "needAccounts": "En az bir hesap seçin.",
         "needBrief": "Program neyle ilgili? Kısaca yazın.",
-        "needCap": "Haftalık kredi tavanı en az 50 olmalı.",
+        "needCap": "Haftalık kredi tavanı 50 ile 20000 arasında bir tam sayı olmalı.",
         "needName": "Programa bir ad verin.",
         "needTime": "Saat SS:DD biçiminde olmalı.",
         "noAccounts": "Bağlı hesap yok — önce bir hesap bağlayın.",
         "perWeek": "Haftalık gönderi (hesap başına)",
         "submit": "Başlat",
-        "time": "Yayın saati (SS:DD)",
+        "time": "Yayın saati (Türkiye saati, SS:DD)",
         "title": "İçerik programını başlat"
       },
       "slotStatus": {
@@ -4283,6 +4291,7 @@
         "editableFor": "{{hours}} sa düzenlenebilir",
         "empty": "Bu pencerede slot yok.",
         "reward": "Ödül",
+        "spent": "Harcanan / teklif",
         "status": "Durum",
         "type": "Tür",
         "when": "Zaman",
@@ -4338,7 +4347,8 @@
         "samples": "Örnek",
         "saveFailed": "Tür kaydedilemedi.",
         "share": "Pay: planlanan / öğrenilen"
-      }
+      },
+      "unavailable": "İçerik programı bu planda yok"
     },
     "tab": {
       "autopilot": "Otopilot",

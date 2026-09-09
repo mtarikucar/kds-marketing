@@ -1,4 +1,4 @@
-import { TREND_REFRESH_INTERVAL_MS, TREND_REFRESH_KIND, TrendSignalService } from './trend-signal.service';
+import { TREND_BOOT_DELAY_MS, TREND_REFRESH_INTERVAL_MS, TREND_REFRESH_KIND, TREND_REGION, TrendSignalService } from './trend-signal.service';
 import type { TrendCandidate, TrendProvider } from './providers/trend-provider';
 
 const NOW = new Date('2026-09-08T12:00:00Z');
@@ -117,20 +117,36 @@ describe('TrendSignalService.top', () => {
 });
 
 describe('TrendSignalService job', () => {
-  it('registers the 12-hourly trend.refresh handler and seeds one global dedup-keyed job', async () => {
+  it('registers the 12-hourly trend.refresh handler and seeds one global dedup-keyed job due a minute after boot', async () => {
     const g = provider('google-trends');
     const { svc, scheduledJobs, runner } = harness([g]);
+    const boot = Date.now();
     svc.onModuleInit();
     expect(runner.registerHandler).toHaveBeenCalledWith(TREND_REFRESH_KIND, expect.any(Function));
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'system', kind: TREND_REFRESH_KIND, dedupKey: 'trend-refresh', payload: {}, runAt: expect.any(Date),
     }));
+    // schedule() moves the existing PENDING row, so a boot that scheduled the
+    // first run 12h out would push it back on every deploy: a minute instead.
+    const runAt: Date = scheduledJobs.schedule.mock.calls[0][0].runAt;
+    expect(runAt.getTime()).toBeGreaterThanOrEqual(boot + TREND_BOOT_DELAY_MS);
+    expect(runAt.getTime()).toBeLessThan(boot + TREND_BOOT_DELAY_MS + 5_000);
+    expect(TREND_BOOT_DELAY_MS).toBe(60_000);
     const handler = runner.registerHandler.mock.calls[0][1];
     const before = Date.now();
     const result = await handler({ id: 'j', workspaceId: 'system', kind: TREND_REFRESH_KIND, payload: {}, attempts: 0 });
-    expect(g.fetch).toHaveBeenCalledWith('TR');
+    // The job refreshes the ONE exported region every reader uses.
+    expect(g.fetch).toHaveBeenCalledWith(TREND_REGION);
+    expect(TREND_REGION).toBe(process.env.TREND_REGION ?? 'TR');
     expect(result.reschedule.runAt.getTime()).toBeGreaterThanOrEqual(before + TREND_REFRESH_INTERVAL_MS);
     expect(TREND_REFRESH_INTERVAL_MS).toBe(12 * 60 * 60 * 1000);
+  });
+
+  it('refresh() defaults to the exported region as well', async () => {
+    const g = provider('google-trends');
+    const { svc } = harness([g]);
+    await svc.refresh();
+    expect(g.fetch).toHaveBeenCalledWith(TREND_REGION);
   });
 
   it('never throws out of the handler even when every provider fails, so the chain keeps rescheduling', async () => {

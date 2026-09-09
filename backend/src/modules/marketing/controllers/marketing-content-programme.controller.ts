@@ -23,7 +23,7 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { Audit } from '../../audit/audit.decorator';
 import { MarketingUserPayload } from '../types';
-import { ContentProgrammeService, PROGRAMME_GOALS } from '../content-programme/content-programme.service';
+import { ContentProgrammeService, PER_WEEK_MAX, PROGRAMME_GOALS, WEEKLY_CREDIT_CAP_MAX } from '../content-programme/content-programme.service';
 import { CONTENT_TYPE_NETWORKS, ContentTypesService } from '../content-programme/content-types.service';
 import { Dashboard, ProgrammeDashboardService, SlotView, TypeView } from '../content-programme/programme-dashboard.service';
 import { SlotEditorService } from '../content-programme/slot-editor.service';
@@ -47,10 +47,11 @@ class CreateProgrammeDto {
   @IsString({ each: true })
   accountIds!: string[];
 
+  /** One post per weekday at most, so at most seven. */
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(14)
+  @Max(PER_WEEK_MAX)
   perWeek?: number;
 
   @IsOptional()
@@ -60,6 +61,7 @@ class CreateProgrammeDto {
   @IsOptional()
   @IsInt()
   @Min(50)
+  @Max(WEEKLY_CREDIT_CAP_MAX)
   weeklyCreditCap?: number;
 
   @IsOptional()
@@ -67,11 +69,14 @@ class CreateProgrammeDto {
   @MaxLength(64)
   personaId?: string;
 
+  /** 'HH:MM' in TURKEY TIME (Europe/Istanbul); the service converts it to the
+   *  UTC cadence the lane runs on. */
   @IsOptional()
   @IsString()
   @MaxLength(5)
   timeOfDay?: string;
 
+  /** 0 = Sunday … 6 = Saturday, Turkey time; must list exactly `perWeek` days. */
   @IsOptional()
   @IsArray()
   @IsInt({ each: true })
@@ -104,12 +109,21 @@ class UpdateProgrammeDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(14)
+  @Max(PER_WEEK_MAX)
   perWeek?: number;
+
+  /** 0 = Sunday … 6 = Saturday, Turkey time; must list exactly `perWeek` days. */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  daysOfWeek?: number[];
 
   @IsOptional()
   @IsInt()
   @Min(50)
+  @Max(WEEKLY_CREDIT_CAP_MAX)
   weeklyCreditCap?: number;
 
   @IsOptional()
@@ -461,6 +475,20 @@ export class MarketingContentProgrammeController {
   ): Promise<SlotView> {
     const programme = await this.requireSlot(user.workspaceId, id, slotId);
     await this.editor.regenerateSlot(user.workspaceId, slotId, user.id);
+    return this.dashboard.slotView(user.workspaceId, programme.id, slotId);
+  }
+
+  /** A FAILED slot back to PLANNED with its plan job re-armed; spends nothing until it is planned again. */
+  @Post(':id/slots/:slotId/retry')
+  @RequirePermission('campaigns.write')
+  @Audit({ action: 'content.programme.slot.retry', resourceType: 'content_programme', resourceIdParam: 'id' })
+  async retrySlot(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Param('id') id: string,
+    @Param('slotId') slotId: string,
+  ): Promise<SlotView> {
+    const programme = await this.requireSlot(user.workspaceId, id, slotId);
+    await this.editor.retrySlot(user.workspaceId, slotId, user.id);
     return this.dashboard.slotView(user.workspaceId, programme.id, slotId);
   }
 

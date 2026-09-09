@@ -20,9 +20,22 @@ describe('decayedScore', () => {
 });
 
 describe('brandRelevance', () => {
-  it('is token Jaccard over words of at least 3 characters', () => {
-    // title tokens {yeni, kahve, makinesi} ∩ brand {kahve, makinesi, filtre} = 2 / union 4
-    expect(brandRelevance('Yeni kahve makinesi', ['kahve', 'makinesi', 'filtre'])).toBeCloseTo(0.5, 6);
+  it('is the fraction of the title\'s words (≥ 3 characters) that are brand vocabulary', () => {
+    // title tokens {yeni, kahve, makinesi} ∩ brand {kahve, makinesi, filtre} = 2 of the title's 3
+    expect(brandRelevance('Yeni kahve makinesi', ['kahve', 'makinesi', 'filtre'])).toBeCloseTo(2 / 3, 6);
+  });
+
+  it('is not diluted by the size of the brand keyword bag: an on-brand title scores 1.0 against 200 keywords', () => {
+    // The planner's bag is every token of name + tagline + description + brief.
+    // Jaccard put the whole bag in the denominator (3 / 200 ≈ 0.015 here) and
+    // the 0.3 floor in the suggestion decided the ranking on raw score alone.
+    const bag = Array.from({ length: 197 }, (_, i) => `kelime${i}`).concat(['figür', 'koleksiyon', 'hediye']);
+    expect(brandRelevance('Figür koleksiyon hediye', bag)).toBe(1);
+    expect(brandRelevance('Galatasaray derbi', bag)).toBe(0);
+    // A half-on-brand title stays half: the denominator is the title, not the bag.
+    expect(brandRelevance('Figür derbi', bag)).toBeCloseTo(0.5, 6);
+    // Ranking consequence: a lukewarm on-brand trend outranks a hot off-brand one.
+    expect(suggestionScore(50, brandRelevance('Figür koleksiyon hediye', bag))).toBeGreaterThan(suggestionScore(90, brandRelevance('Galatasaray derbi', bag)));
   });
 
   it('folds Turkish diacritics so "Ürün" matches "urun" and "İSTANBUL" matches "istanbul"', () => {

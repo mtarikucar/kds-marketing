@@ -1,16 +1,20 @@
 import {
   ANOMALY_FAIL_STREAK,
+  BOOT_SWEEP_DELAY_MS,
   CONTENT_PROGRAMME_PLAN_KIND,
   CONTENT_SLOT_PLAN_KIND,
   CONTENT_SLOT_PRODUCE_KIND,
   PLAN_INTERVAL_MS,
   ProgrammePlannerService,
+  TERMINAL_SLOT_STATUSES,
+  TREND_MIN_SUGGESTION,
   composeIdea,
   istanbulWeekBounds,
   slotPlanDedup,
   slotProduceDedup,
   trendLine,
 } from './programme-planner.service';
+import { TREND_REGION } from '../trends/trend-signal.service';
 
 const WS = 'ws-1';
 const PROG = 'prog-1';
@@ -40,7 +44,7 @@ const arm = (key: string, over: Record<string, unknown> = {}) =>
 const slotRow = (over: Record<string, unknown> = {}) => ({
   id: 'slot-1', workspaceId: WS, programmeId: PROG, scheduledFor: at('2026-09-16T18:00:00Z'), status: 'PLANNED',
   contentTypeId: 'id-how-to', contentTypeKey: 'how-to', selectionReason: 'seed', trendSignalId: null, trendTitle: null,
-  idea: 'x', conceptId: null, campaignItemId: null, socialPostId: null, quotedCredits: null, editableUntil: at('2026-09-16T16:00:00Z'),
+  idea: 'x', conceptId: null, campaignItemId: null, socialPostId: null, quotedCredits: null, spentCredits: 0, editableUntil: at('2026-09-16T16:00:00Z'),
   error: null, ...over,
 });
 
@@ -157,7 +161,7 @@ describe('ProgrammePlannerService.fill', () => {
     expect(jobs[5].runAt).toEqual(at('2026-09-18T06:00:00Z'));
   });
 
-  it('skips times that already have a slot and walks on from the last planned one', async () => {
+  it('skips times that already have a slot, carries the type mix on from the last one', async () => {
     const existing = slotRow({ id: 'have', scheduledFor: at('2026-09-16T18:00:00Z'), contentTypeKey: 'listicle' });
     const { svc, prisma } = harness({ upcoming: [existing], last: existing });
     prisma.contentSlot.count.mockResolvedValue(7);
@@ -168,6 +172,27 @@ describe('ProgrammePlannerService.fill', () => {
     // The previous slot's type (listicle) is not repeated; the seed cursor continues from the count.
     expect(rows[0].contentTypeKey).not.toBe('listicle');
     expect(rows[0].selectionReason).toMatch(/cursor 7 of 3/);
+    // The walk reads EVERY slot from now on, whatever its status — a SKIPPED
+    // time must stay empty and a FAILED one must keep its row.
+    expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { workspaceId: WS, programmeId: PROG, scheduledFor: { gte: NOW } },
+    }));
+  });
+
+  it('backfills a hole BEHIND the newest slot (a slot moved forward, a cadence raised), leaving SKIPPED and FAILED times as they are', async () => {
+    // Calendar: Wed 16 (skipped), Thu 17 (failed), Fri 18 EMPTY, Mon 21 … Tue 29 live, and the owner moved one slot to Wed 30.
+    const live = ['21', '22', '23', '24', '25', '28', '29'].map((d) => slotRow({ id: `s-${d}`, scheduledFor: at(`2026-09-${d}T18:00:00Z`) }));
+    const moved = slotRow({ id: 's-moved', scheduledFor: at('2026-09-30T18:00:00Z') });
+    const upcoming = [
+      slotRow({ id: 's-skip', scheduledFor: at('2026-09-16T18:00:00Z'), status: 'SKIPPED', error: 'skipped by u-1' }),
+      slotRow({ id: 's-fail', scheduledFor: at('2026-09-17T18:00:00Z'), status: 'FAILED', error: 'boom' }),
+      ...live,
+      moved,
+    ];
+    const { svc, prisma } = harness({ upcoming, last: moved });
+    const out = await svc.fill(WS, programme(), NOW);
+    expect(out.created).toBe(1);
+    expect(created(prisma)[0].scheduledFor).toEqual(at('2026-09-18T18:00:00Z'));
   });
 
   it('treats a unique-constraint collision as "someone else planned that time" and carries on', async () => {
@@ -195,36 +220,63 @@ describe('ProgrammePlannerService.fill', () => {
 
   it('attaches the top on-brand trend to a trend-remix slot and writes the hook into the idea', async () => {
     const { svc, prisma, trends } = harness({ types: [type('trend-remix')], arms: [arm('trend-remix')] });
+    // Suggestion scores are on the providers' 0..100 scale.
     trends.top.mockResolvedValue([
-      { signal: { id: 't-1', title: 'Figurunica figür challenge', network: 'TIKTOK', kind: 'HASHTAG' }, decayed: 0.8, relevance: 0.3, suggestion: 0.41 },
-      { signal: { id: 't-2', title: 'other', network: 'TIKTOK', kind: 'TOPIC' }, decayed: 0.5, relevance: 0, suggestion: 0.15 },
+      { signal: { id: 't-1', title: 'Figurunica figür challenge', network: 'GOOGLE', kind: 'TOPIC' }, decayed: 60, relevance: 0.3, suggestion: 41 },
+      { signal: { id: 't-2', title: 'other', network: 'TIKTOK', kind: 'TOPIC' }, decayed: 30, relevance: 0, suggestion: 9 },
     ]);
     await svc.fill(WS, programme({ lookaheadDays: 7 }), NOW);
     const rows = created(prisma);
     expect(rows[0]).toMatchObject({ trendSignalId: 't-1', trendTitle: 'Figurunica figür challenge' });
-    expect(rows[0].idea).toContain('Trend kancası: Figurunica figür challenge (TIKTOK/HASHTAG) — kopyalama, markaya uyarla');
-    // One trend read per fill, scoped to the campaign's networks and the brand's words.
+    expect(rows[0].idea).toContain('Trend kancası: Figurunica figür challenge (GOOGLE/TOPIC) — kopyalama, markaya uyarla');
+    // One trend read per fill, for the feed's region, with NO network filter
+    // (signals are GOOGLE/TIKTOK/YOUTUBE feeds, not the accounts' networks —
+    // a filter on account networks would hide the always-on Google feed).
     expect(trends.top).toHaveBeenCalledTimes(1);
     const opts = trends.top.mock.calls[0][1];
-    expect(trends.top.mock.calls[0][0]).toBe('TR');
-    expect(opts.networks).toEqual(['INSTAGRAM', 'TIKTOK']);
+    expect(trends.top.mock.calls[0][0]).toBe(TREND_REGION);
+    expect(TREND_REGION).toBe(process.env.TREND_REGION ?? 'TR');
+    expect(opts.networks).toBeUndefined();
     expect(opts.brandKeywords).toEqual(expect.arrayContaining(['figurunica', 'figurler', 'baski']));
     expect(opts.limit).toBe(5);
-    expect(prisma.socialAccount.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS, id: { in: ['acc-1', 'acc-2'] } }) }));
     expect(prisma.brandProfile.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { workspaceId: WS } }));
   });
 
-  it('leaves a slot without a trend when the best signal is too weak, and a non-remix type only takes one on the coin', async () => {
+  it('the noise gate is on the 0..100 scale: a signal at or under it is left out, a non-remix type only takes a hook on the coin', async () => {
+    expect(TREND_MIN_SUGGESTION).toBe(15);
     const weak = harness({ types: [type('trend-remix')], arms: [arm('trend-remix')] });
-    weak.trends.top.mockResolvedValue([{ signal: { id: 't-1', title: 'x', network: 'TIKTOK', kind: 'TOPIC' }, suggestion: 0.1 }]);
+    weak.trends.top.mockResolvedValue([
+      { signal: { id: 't-1', title: 'x', network: 'GOOGLE', kind: 'TOPIC' }, suggestion: 15 },
+      { signal: { id: 't-2', title: 'y', network: 'GOOGLE', kind: 'TOPIC' }, suggestion: 3 },
+    ]);
     await weak.svc.fill(WS, programme({ lookaheadDays: 7 }), NOW);
-    expect(created(weak.prisma)[0].trendSignalId).toBeNull();
+    expect(created(weak.prisma).every((r: any) => r.trendSignalId === null)).toBe(true);
 
     const coin = harness({ types: [type('how-to')], arms: [arm('how-to')] });
     coin.svc.rng = () => 0.1; // < 0.25 → every slot draws a hook
-    coin.trends.top.mockResolvedValue([{ signal: { id: 't-9', title: 'hot', network: 'INSTAGRAM', kind: 'SOUND' }, suggestion: 0.5 }]);
+    coin.trends.top.mockResolvedValue([{ signal: { id: 't-9', title: 'hot', network: 'YOUTUBE', kind: 'VIDEO' }, suggestion: 50 }]);
     await coin.svc.fill(WS, programme({ lookaheadDays: 7 }), NOW);
     expect(created(coin.prisma).every((r: any) => r.trendSignalId === 't-9')).toBe(true);
+
+    const noCoin = harness({ types: [type('how-to')], arms: [arm('how-to')] });
+    noCoin.trends.top.mockResolvedValue([{ signal: { id: 't-9', title: 'hot', network: 'YOUTUBE', kind: 'VIDEO' }, suggestion: 50 }]);
+    await noCoin.svc.fill(WS, programme({ lookaheadDays: 7 }), NOW); // rng 0.9 → no hook
+    expect(created(noCoin.prisma).every((r: any) => r.trendSignalId === null)).toBe(true);
+    expect(noCoin.trends.top).not.toHaveBeenCalled();
+  });
+
+  it('rotates the usable trends across the slots of one fill instead of hooking every slot on the hottest one', async () => {
+    const { svc, prisma, trends } = harness({ types: [type('trend-remix')], arms: [arm('trend-remix')] });
+    trends.top.mockResolvedValue([
+      { signal: { id: 't-1', title: 'one', network: 'GOOGLE', kind: 'TOPIC' }, suggestion: 60 },
+      { signal: { id: 't-2', title: 'two', network: 'GOOGLE', kind: 'TOPIC' }, suggestion: 40 },
+      { signal: { id: 't-weak', title: 'weak', network: 'GOOGLE', kind: 'TOPIC' }, suggestion: 5 },
+      { signal: { id: 't-3', title: 'three', network: 'TIKTOK', kind: 'HASHTAG' }, suggestion: 20 },
+    ]);
+    await svc.fill(WS, programme({ lookaheadDays: 7 }), NOW);
+    // Wed 16 … Wed 23 12:00: 16,17,18,21,22 = five remix slots → 1,2,3,1,2 (the weak one never).
+    expect(created(prisma).map((r: any) => r.trendSignalId)).toEqual(['t-1', 't-2', 't-3', 't-1', 't-2']);
+    expect(trends.top).toHaveBeenCalledTimes(1);
   });
 
   it('scopes every read to the workspace', async () => {
@@ -259,7 +311,7 @@ describe('ProgrammePlannerService.reconcile', () => {
     await svc.reconcile(WS, programme());
 
     expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { workspaceId: WS, programmeId: PROG, status: 'PRODUCING', campaignItemId: { not: null } },
+      where: { workspaceId: WS, programmeId: PROG, status: { in: ['PRODUCING', 'READY'] }, campaignItemId: { not: null } },
     }));
     expect(prisma.socialCampaignItem.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: { in: ['i-ok', 'i-pub', 'i-bad', 'i-skip', 'i-wait'] }, workspaceId: WS },
@@ -273,18 +325,50 @@ describe('ProgrammePlannerService.reconcile', () => {
     ]);
     expect(events(programmes).map((e) => e.kind)).toEqual(['SLOT_READY', 'SLOT_READY', 'SLOT_FAILED', 'SLOT_SKIPPED']);
   });
+
+  it('follows READY slots too: an item the gate ended is carried onto the slot (SKIPPED with its reason, FAILED with its error); a published one is left to settle', async () => {
+    const { svc, prisma, programmes } = harness();
+    prisma.contentSlot.findMany.mockResolvedValue([
+      slotRow({ id: 'r-safety', status: 'READY', campaignItemId: 'i-safety' }),
+      slotRow({ id: 'r-rejected', status: 'READY', campaignItemId: 'i-rejected' }),
+      slotRow({ id: 'r-media', status: 'READY', campaignItemId: 'i-media' }),
+      slotRow({ id: 'r-live', status: 'READY', campaignItemId: 'i-live' }),
+      slotRow({ id: 'r-armed', status: 'READY', campaignItemId: 'i-armed' }),
+    ]);
+    prisma.socialCampaignItem.findMany.mockResolvedValue([
+      { id: 'i-safety', status: 'SKIPPED', error: 'brand safety: blocked', socialPostId: 'p-1' },
+      { id: 'i-rejected', status: 'SKIPPED', error: null, socialPostId: 'p-2' },
+      { id: 'i-media', status: 'FAILED', error: 'no attachable media', socialPostId: 'p-3' },
+      { id: 'i-live', status: 'PUBLISHED', error: null, socialPostId: 'p-4' },
+      { id: 'i-armed', status: 'SCHEDULED', error: null, socialPostId: 'p-5' },
+    ]);
+    await svc.reconcile(WS, programme());
+    const writes = prisma.contentSlot.updateMany.mock.calls.map((c: any[]) => c[0]);
+    expect(writes).toEqual([
+      { where: { id: 'r-safety', workspaceId: WS, status: 'READY' }, data: { status: 'SKIPPED', error: 'brand safety: blocked' } },
+      { where: { id: 'r-rejected', workspaceId: WS, status: 'READY' }, data: { status: 'SKIPPED', error: 'ended by the publish gate' } },
+      { where: { id: 'r-media', workspaceId: WS, status: 'READY' }, data: { status: 'FAILED', error: 'no attachable media' } },
+    ]);
+    expect(events(programmes).map((e) => e.kind)).toEqual(['SLOT_SKIPPED', 'SLOT_SKIPPED', 'SLOT_FAILED']);
+    expect(events(programmes)[0].data).toMatchObject({ slotId: 'r-safety', from: 'READY', error: 'brand safety: blocked' });
+  });
 });
 
 describe('ProgrammePlannerService.checkAnomalies', () => {
-  it('pauses the programme after three FAILED slots in a row, once per streak', async () => {
+  const failed = (id: string, over: Record<string, unknown> = {}) => slotRow({ id, status: 'FAILED', error: `boom ${id}`, ...over });
+
+  it('pauses the programme after the three most recently SETTLED slots all failed, once per streak', async () => {
     const { svc, prisma, programmes } = harness();
-    const failed = ['f1', 'f2', 'f3'].map((id) => slotRow({ id, status: 'FAILED', error: `boom ${id}` }));
-    prisma.contentSlot.findMany.mockResolvedValueOnce(failed);
+    const streak = ['f1', 'f2', 'f3'].map((id) => failed(id));
+    prisma.contentSlot.findMany.mockResolvedValueOnce([...streak, slotRow({ id: 'old-ok', status: 'MEASURED' })]);
     await svc.checkAnomalies(WS, programme(), NOW);
 
+    // Terminal slots only, newest settled first — a future slot that is merely
+    // IDEATED or PRODUCING is not in the read at all, so it cannot mask a streak.
     expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { workspaceId: WS, programmeId: PROG, status: { not: 'PLANNED' } }, take: ANOMALY_FAIL_STREAK,
+      where: { workspaceId: WS, programmeId: PROG, status: { in: TERMINAL_SLOT_STATUSES } }, orderBy: { updatedAt: 'desc' },
     }));
+    expect(TERMINAL_SLOT_STATUSES).toEqual(['FAILED', 'SKIPPED', 'PUBLISHED', 'MEASURED']);
     expect(programmes.pause).toHaveBeenCalledWith(WS, PROG);
     const ev = events(programmes).find((e) => e.kind === 'ANOMALY_PAUSE');
     expect(ev.message).toMatch(/3 slots failed in a row: boom f1; boom f2; boom f3/);
@@ -292,46 +376,79 @@ describe('ProgrammePlannerService.checkAnomalies', () => {
 
     // The same three after a resume: already reported, not paused again.
     programmes.pause.mockClear();
-    prisma.contentSlot.findMany.mockResolvedValueOnce(failed).mockResolvedValueOnce([]);
+    prisma.contentSlot.findMany.mockResolvedValueOnce(streak).mockResolvedValueOnce([]);
     prisma.contentProgrammeEvent.findFirst.mockResolvedValue({ data: { slotIds: ['f1', 'f2', 'f3'] } });
     await svc.checkAnomalies(WS, programme(), NOW);
     expect(programmes.pause).not.toHaveBeenCalled();
   });
 
-  it('pauses when this Istanbul week\'s committed credits pass 120% of the cap', async () => {
+  it('an owner skip between the failures is not a symptom: it is dropped, the streak still counts', async () => {
     const { svc, prisma, programmes } = harness();
     prisma.contentSlot.findMany
-      .mockResolvedValueOnce([slotRow({ status: 'READY' })]) // streak check: not three failures
-      .mockResolvedValueOnce([{ id: 'a', quotedCredits: 400 }, { id: 'b', quotedCredits: 350 }, { id: 'c', quotedCredits: null }]);
+      .mockResolvedValueOnce([failed('f1'), slotRow({ id: 'mine', status: 'SKIPPED', error: 'skipped by u-owner' }), failed('f2'), failed('f3'), slotRow({ id: 'ok', status: 'PUBLISHED' })])
+      .mockResolvedValueOnce([]);
+    await svc.checkAnomalies(WS, programme(), NOW);
+    expect(programmes.pause).toHaveBeenCalledWith(WS, PROG);
+    expect(events(programmes).find((e) => e.kind === 'ANOMALY_PAUSE').data.slotIds).toEqual(['f1', 'f2', 'f3']);
+  });
+
+  it('a cap skip or a published slot among the last three breaks the streak', async () => {
+    for (const between of [slotRow({ id: 'cap', status: 'SKIPPED', error: 'weekly credit cap' }), slotRow({ id: 'pub', status: 'PUBLISHED' })]) {
+      const { svc, prisma, programmes } = harness();
+      prisma.contentSlot.findMany.mockResolvedValueOnce([failed('f1'), between, failed('f2'), failed('f3')]).mockResolvedValueOnce([]);
+      await svc.checkAnomalies(WS, programme(), NOW);
+      expect(programmes.pause).not.toHaveBeenCalled();
+    }
+  });
+
+  it('pauses when this Istanbul week\'s REAL spend (Σ spentCredits, every status) passes 120% of the cap — once per week', async () => {
+    const { svc, prisma, programmes } = harness();
+    prisma.contentSlot.findMany
+      .mockResolvedValueOnce([slotRow({ status: 'PUBLISHED' })]) // streak check: not three failures
+      .mockResolvedValueOnce([{ id: 'a', spentCredits: 400 }, { id: 'b', spentCredits: 350 }, { id: 'c', spentCredits: 0 }]);
     await svc.checkAnomalies(WS, programme({ weeklyCreditCap: 600 }), NOW);
 
     expect(prisma.contentSlot.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
-      where: {
-        workspaceId: WS, programmeId: PROG, status: { in: ['IDEATED', 'PRODUCING', 'READY', 'PUBLISHED', 'MEASURED'] },
-        scheduledFor: { gte: at('2026-09-13T21:00:00Z'), lt: at('2026-09-20T21:00:00Z') },
-      },
+      where: { workspaceId: WS, programmeId: PROG, scheduledFor: { gte: at('2026-09-13T21:00:00Z'), lt: at('2026-09-20T21:00:00Z') } },
+      select: { id: true, spentCredits: true },
+    }));
+    expect(prisma.contentProgrammeEvent.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { workspaceId: WS, programmeId: PROG, kind: 'ANOMALY_PAUSE', data: { path: ['weekStart'], equals: '2026-09-13T21:00:00.000Z' } },
     }));
     expect(programmes.pause).toHaveBeenCalledWith(WS, PROG);
     const ev = events(programmes).find((e) => e.kind === 'ANOMALY_PAUSE');
-    expect(ev.data).toMatchObject({ reason: 'spend', spent: 750, cap: 600, limit: 720 });
+    expect(ev.data).toMatchObject({ reason: 'spend', spent: 750, cap: 600, limit: 720, weekStart: '2026-09-13T21:00:00.000Z' });
+
+    // Six hours later, after a resume: the week's pause is on record, so the
+    // sum (which cannot fall until the week rolls) does not undo the resume.
+    programmes.pause.mockClear();
+    prisma.contentSlot.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'a', spentCredits: 750 }]);
+    prisma.contentProgrammeEvent.findFirst.mockResolvedValue({ id: 'ev-week' });
+    await svc.checkAnomalies(WS, programme({ weeklyCreditCap: 600 }), new Date(NOW.getTime() + 6 * H));
+    expect(programmes.pause).not.toHaveBeenCalled();
   });
 
   it('does nothing at 120% exactly or below', async () => {
     const { svc, prisma, programmes } = harness();
-    prisma.contentSlot.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'a', quotedCredits: 720 }]);
+    prisma.contentSlot.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'a', spentCredits: 720 }]);
     await svc.checkAnomalies(WS, programme({ weeklyCreditCap: 600 }), NOW);
     expect(programmes.pause).not.toHaveBeenCalled();
   });
 });
 
 describe('ProgrammePlannerService job', () => {
-  it('registers the 6-hourly sweep under the system workspace with its dedup key', () => {
+  it('registers the 6-hourly sweep under the system workspace with its dedup key, first run a minute after boot (not a full interval — a boot rewrites the dedup\'d row\'s runAt)', () => {
     const { svc, runner, scheduledJobs } = harness();
+    const before = Date.now();
     svc.onModuleInit();
     expect(runner.registerHandler).toHaveBeenCalledWith(CONTENT_PROGRAMME_PLAN_KIND, expect.any(Function));
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'system', kind: CONTENT_PROGRAMME_PLAN_KIND, dedupKey: 'content-programme-plan',
     }));
+    const runAt = scheduledJobs.schedule.mock.calls[0][0].runAt.getTime();
+    expect(BOOT_SWEEP_DELAY_MS).toBe(60_000);
+    expect(runAt).toBeGreaterThanOrEqual(before + BOOT_SWEEP_DELAY_MS);
+    expect(runAt).toBeLessThan(before + BOOT_SWEEP_DELAY_MS + 5_000);
   });
 
   it('runs reconcile → fill → anomaly per live programme, logs a failing one as PLAN_ERROR, carries on, and reschedules', async () => {

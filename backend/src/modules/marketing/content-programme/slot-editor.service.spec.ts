@@ -11,24 +11,29 @@ const at = (iso: string) => new Date(iso);
 const ACTOR = 'u-owner';
 
 function programme(over: Record<string, unknown> = {}) {
-  return { id: PROG, workspaceId: WS, status: 'ACTIVE', socialCampaignId: 'camp-1', editWindowHours: 2, lookaheadDays: 14, planLeadHours: 36, produceLeadHours: 12, ...over } as any;
+  return {
+    id: PROG, workspaceId: WS, status: 'ACTIVE', killSwitch: false, socialCampaignId: 'camp-1', weeklyCreditCap: 600,
+    editWindowHours: 2, lookaheadDays: 14, planLeadHours: 36, produceLeadHours: 12, ...over,
+  } as any;
 }
 function slot(over: Record<string, unknown> = {}) {
   return {
     id: 'slot-1', workspaceId: WS, programmeId: PROG, scheduledFor: at('2026-09-18T18:00:00Z'), status: 'PLANNED',
     contentTypeId: 'id-how-to', contentTypeKey: 'how-to', selectionReason: 'seed', trendSignalId: null, trendTitle: null,
-    idea: 'old idea', conceptId: null, campaignItemId: null, socialPostId: null, quotedCredits: null,
+    idea: 'old idea', conceptId: null, campaignItemId: null, socialPostId: null, quotedCredits: null, spentCredits: 0,
     editableUntil: at('2026-09-18T16:00:00Z'), publishedAt: null, measuredAt: null, reward: null, rewardBreakdown: null, error: null, ...over,
   } as any;
 }
 
-function harness(over: { slot?: unknown; item?: unknown } = {}) {
+function harness(over: { slot?: unknown; item?: unknown; programme?: unknown; campaign?: unknown; weekRows?: unknown[] } = {}) {
   const current = over.slot === undefined ? slot() : over.slot;
   const prisma: any = {
     contentSlot: {
       findFirst: jest.fn().mockResolvedValue(current),
+      findMany: jest.fn().mockResolvedValue(over.weekRows ?? []),
       update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...(current as object), ...data })),
     },
+    socialCampaign: { findFirst: jest.fn().mockResolvedValue(over.campaign === undefined ? { status: 'ACTIVE' } : over.campaign) },
     contentType: { findFirst: jest.fn().mockResolvedValue({ id: 'id-pov', key: 'pov-ugc', active: true }) },
     contentConcept: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -39,7 +44,7 @@ function harness(over: { slot?: unknown; item?: unknown } = {}) {
     socialPostTarget: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1'), cancel: jest.fn().mockResolvedValue(true) };
-  const programmes = { getOrThrow: jest.fn().mockResolvedValue(programme()), logEvent: jest.fn().mockResolvedValue(undefined) };
+  const programmes = { getOrThrow: jest.fn().mockResolvedValue(over.programme === undefined ? programme() : over.programme), logEvent: jest.fn().mockResolvedValue(undefined) };
   const socialCampaigns = { rejectItem: jest.fn().mockResolvedValue({ id: 'item-1', status: 'SKIPPED' }), regenerateItem: jest.fn().mockResolvedValue({ id: 'item-1' }) };
   const arming = { armApproved: jest.fn().mockResolvedValue({ id: 'item-1', status: 'SCHEDULED' }) };
   const svc = new SlotEditorService(prisma, scheduledJobs as any, programmes as any, socialCampaigns as any, arming as any);
@@ -179,12 +184,41 @@ describe('SlotEditorService.skipSlot', () => {
   it('READY: rejects the item first, discards the concept, cancels both jobs and marks the slot SKIPPED by the actor', async () => {
     const { svc, prisma, scheduledJobs, socialCampaigns, programmes } = harness({ slot: slot({ status: 'READY', conceptId: 'c-1', campaignItemId: 'item-1' }) });
     const out = await svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
+    expect(prisma.socialCampaignItem.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'item-1', workspaceId: WS } }));
     expect(socialCampaigns.rejectItem).toHaveBeenCalledWith(WS, 'item-1');
     expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' } }));
     expect(scheduledJobs.cancel.mock.calls).toEqual([[CONTENT_SLOT_PLAN_KIND, slotPlanDedup('slot-1')], [CONTENT_SLOT_PRODUCE_KIND, slotProduceDedup('slot-1')]]);
     expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'SKIPPED', error: `skipped by ${ACTOR}` } });
     expect(out.status).toBe('SKIPPED');
     expect(event(programmes, 'SLOT_SKIPPED').data).toMatchObject({ actorId: ACTOR, from: 'READY', campaignItemId: 'item-1' });
+  });
+
+  it('READY whose item the gate already ended (SKIPPED / FAILED): nothing to reject, the slot is still skipped', async () => {
+    for (const status of ['SKIPPED', 'FAILED']) {
+      const { svc, prisma, socialCampaigns } = harness({ slot: slot({ status: 'READY', campaignItemId: 'item-1' }), item: { id: 'item-1', status } });
+      await svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
+      expect(socialCampaigns.rejectItem).not.toHaveBeenCalled();
+      expect(update(prisma).data.status).toBe('SKIPPED');
+    }
+  });
+
+  it('FAILED: skippable — the concept is discarded, the jobs cancelled, a rejectable item rejected, an ended item left alone', async () => {
+    const noItem = harness({ slot: slot({ status: 'FAILED', conceptId: 'c-1', error: 'AI not configured' }) });
+    const out = await noItem.svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
+    expect(out.status).toBe('SKIPPED');
+    expect(noItem.prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' } }));
+    expect(noItem.scheduledJobs.cancel).toHaveBeenCalledTimes(2);
+    expect(noItem.socialCampaigns.rejectItem).not.toHaveBeenCalled();
+    expect(event(noItem.programmes, 'SLOT_SKIPPED').data).toMatchObject({ from: 'FAILED' });
+
+    const failedItem = harness({ slot: slot({ status: 'FAILED', campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'FAILED' } });
+    await failedItem.svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
+    expect(failedItem.socialCampaigns.rejectItem).not.toHaveBeenCalled();
+    expect(update(failedItem.prisma).data.status).toBe('SKIPPED');
+
+    const armedItem = harness({ slot: slot({ status: 'FAILED', campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'NEEDS_APPROVAL' } });
+    await armedItem.svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
+    expect(armedItem.socialCampaigns.rejectItem).toHaveBeenCalledWith(WS, 'item-1');
   });
 
   it('PLANNED: no item, no concept — just the jobs and the row', async () => {
@@ -202,40 +236,119 @@ describe('SlotEditorService.skipSlot', () => {
     expect(prisma.contentSlot.update).not.toHaveBeenCalled();
   });
 
-  it('refuses PRODUCING / PUBLISHED / SKIPPED slots', async () => {
-    for (const status of ['PRODUCING', 'PUBLISHED', 'SKIPPED']) {
+  it('an item past the gate (PUBLISHING / PUBLISHED) cannot be stopped: refused by name, slot untouched', async () => {
+    const { svc, prisma, socialCampaigns } = harness({ slot: slot({ status: 'READY', campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'PUBLISHED' } });
+    await expect(svc.skipSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/PUBLISHED and cannot be stopped/);
+    expect(socialCampaigns.rejectItem).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses PRODUCING / PUBLISHED / SKIPPED / MEASURED slots', async () => {
+    for (const status of ['PRODUCING', 'PUBLISHED', 'SKIPPED', 'MEASURED']) {
       const { svc } = harness({ slot: slot({ status }) });
       await expect(svc.skipSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(new RegExp(`A ${status} slot cannot be skipped`));
     }
   });
 });
 
+describe('SlotEditorService.retrySlot', () => {
+  const failed = (over: Record<string, unknown> = {}) => slot({ status: 'FAILED', conceptId: 'c-1', quotedCredits: 45, spentCredits: 22, error: 'AI overloaded', ...over });
+
+  it('FAILED without an item: back to PLANNED (concept, quote, error cleared; spend kept), both jobs re-armed, SLOT_RETRIED', async () => {
+    const { svc, prisma, scheduledJobs, programmes } = harness({ slot: failed() });
+    const out = await svc.retrySlot(WS, 'slot-1', ACTOR, NOW);
+    expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' }, data: expect.objectContaining({ reviewNote: `retried by ${ACTOR}` }),
+    }));
+    expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'PLANNED', conceptId: null, quotedCredits: null, error: null } });
+    expect(update(prisma).data.spentCredits).toBeUndefined();
+    expect(out.status).toBe('PLANNED');
+    expect(jobs(scheduledJobs)).toEqual([
+      expect.objectContaining({ kind: CONTENT_SLOT_PLAN_KIND, runAt: at('2026-09-17T06:00:00Z'), dedupKey: slotPlanDedup('slot-1'), payload: { workspaceId: WS, slotId: 'slot-1', programmeId: PROG } }),
+      expect.objectContaining({ kind: CONTENT_SLOT_PRODUCE_KIND, runAt: at('2026-09-18T06:00:00Z'), dedupKey: slotProduceDedup('slot-1') }),
+    ]);
+    expect(event(programmes, 'SLOT_RETRIED').data).toMatchObject({ slotId: 'slot-1', actorId: ACTOR, via: 'replan', previousError: 'AI overloaded' });
+  });
+
+  it('FAILED with an item goes through regenerate, and says so', async () => {
+    const { svc, socialCampaigns, prisma, programmes } = harness({ slot: failed({ campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'FAILED' } });
+    const out = await svc.retrySlot(WS, 'slot-1', ACTOR, NOW);
+    expect(socialCampaigns.regenerateItem).toHaveBeenCalledWith(WS, 'item-1');
+    expect(update(prisma).data).toMatchObject({ status: 'PRODUCING' });
+    expect(out.status).toBe('PRODUCING');
+    expect(event(programmes, 'SLOT_REGENERATED')).toBeDefined();
+    expect(event(programmes, 'SLOT_RETRIED').data).toMatchObject({ via: 'regenerate', campaignItemId: 'item-1' });
+  });
+
+  it('refuses a slot that is not FAILED, a killed programme, and a slot whose time has passed', async () => {
+    const planned = harness();
+    await expect(planned.svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/A PLANNED slot cannot be retried/);
+    const killed = harness({ slot: failed(), programme: programme({ status: 'KILLED', killSwitch: true }) });
+    await expect(killed.svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/killed/);
+    expect(killed.prisma.contentSlot.update).not.toHaveBeenCalled();
+    const past = harness({ slot: failed({ scheduledFor: at('2026-09-16T11:00:00Z') }) });
+    await expect(past.svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/time has passed/);
+    expect(past.scheduledJobs.schedule).not.toHaveBeenCalled();
+  });
+});
+
 describe('SlotEditorService.regenerateSlot', () => {
-  it('READY with an armed (SCHEDULED) item: rejects then regenerates through the campaign\'s doors, slot → PRODUCING', async () => {
-    const { svc, prisma, socialCampaigns, programmes } = harness({ slot: slot({ status: 'READY', campaignItemId: 'item-1' }) });
-    const out = await svc.regenerateSlot(WS, 'slot-1', ACTOR);
+  const ready = (over: Record<string, unknown> = {}) => slot({ status: 'READY', campaignItemId: 'item-1', quotedCredits: 45, spentCredits: 61, ...over });
+
+  it('READY with an armed (SCHEDULED) item: rejects then regenerates through the campaign\'s doors, slot → PRODUCING with the full quote booked', async () => {
+    const { svc, prisma, socialCampaigns, programmes } = harness({ slot: ready(), weekRows: [{ id: 'a', spentCredits: 300 }] });
+    const out = await svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW);
     expect(socialCampaigns.rejectItem).toHaveBeenCalledWith(WS, 'item-1');
     expect(socialCampaigns.regenerateItem).toHaveBeenCalledWith(WS, 'item-1');
     expect(socialCampaigns.rejectItem.mock.invocationCallOrder[0]).toBeLessThan(socialCampaigns.regenerateItem.mock.invocationCallOrder[0]);
-    expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'PRODUCING', error: null } });
+    expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'PRODUCING', error: null, spentCredits: { increment: 45 } } });
     expect(out.status).toBe('PRODUCING');
-    expect(event(programmes, 'SLOT_REGENERATED').data).toMatchObject({ actorId: ACTOR, from: 'READY', itemStatus: 'SCHEDULED' });
+    expect(event(programmes, 'SLOT_REGENERATED').data).toMatchObject({ actorId: ACTOR, from: 'READY', itemStatus: 'SCHEDULED', spent: 45, weekSpent: 300 });
+    // The programme and its lane are consulted, workspace-scoped; the week is the SLOT's week.
+    expect(programmes.getOrThrow).toHaveBeenCalledWith(WS, PROG);
+    expect(prisma.socialCampaign.findFirst).toHaveBeenCalledWith({ where: { id: 'camp-1', workspaceId: WS }, select: { status: true } });
+    expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ workspaceId: WS, programmeId: PROG, scheduledFor: { gte: at('2026-09-13T21:00:00Z'), lt: at('2026-09-20T21:00:00Z') } }),
+    }));
   });
 
   it('FAILED with a FAILED item: regenerates directly (the cursor of bought beats survives there)', async () => {
-    const { svc, socialCampaigns } = harness({ slot: slot({ status: 'FAILED', campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'FAILED' } });
-    await svc.regenerateSlot(WS, 'slot-1', ACTOR);
+    const { svc, socialCampaigns } = harness({ slot: slot({ status: 'FAILED', campaignItemId: 'item-1', quotedCredits: 45 }), item: { id: 'item-1', status: 'FAILED' } });
+    await svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW);
     expect(socialCampaigns.rejectItem).not.toHaveBeenCalled();
     expect(socialCampaigns.regenerateItem).toHaveBeenCalledWith(WS, 'item-1');
   });
 
+  it('refuses a paused or killed programme, and a lane that is not running — before any item is touched', async () => {
+    const paused = harness({ slot: ready(), programme: programme({ status: 'PAUSED' }) });
+    await expect(paused.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/programme is paused/);
+    const killed = harness({ slot: ready(), programme: programme({ status: 'KILLED', killSwitch: true }) });
+    await expect(killed.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/programme is killed/);
+    const lane = harness({ slot: ready(), campaign: { status: 'PAUSED' } });
+    await expect(lane.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/campaign is PAUSED/);
+    for (const h of [paused, killed, lane]) {
+      expect(h.socialCampaigns.rejectItem).not.toHaveBeenCalled();
+      expect(h.socialCampaigns.regenerateItem).not.toHaveBeenCalled();
+      expect(h.prisma.contentSlot.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses when the re-buy would pass the weekly cap, naming the cap; and a slot without a quote', async () => {
+    const over = harness({ slot: ready(), weekRows: [{ id: 'a', spentCredits: 500 }, { id: 'slot-1', spentCredits: 61 }] }); // 561 + 45 > 600
+    await expect(over.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/561 \+ 45 credits against the 600-credit weekly cap/);
+    expect(over.socialCampaigns.regenerateItem).not.toHaveBeenCalled();
+    const noQuote = harness({ slot: ready({ quotedCredits: null }) });
+    await expect(noQuote.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/no quote/);
+    expect(noQuote.socialCampaigns.regenerateItem).not.toHaveBeenCalled();
+  });
+
   it('refuses a slot that never reached production, and an item that cannot be regenerated', async () => {
     const planned = harness();
-    await expect(planned.svc.regenerateSlot(WS, 'slot-1', ACTOR)).rejects.toThrow(/A PLANNED slot without a campaign item cannot be regenerated/);
+    await expect(planned.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/A PLANNED slot without a campaign item cannot be regenerated/);
     const failedNoItem = harness({ slot: slot({ status: 'FAILED' }) });
-    await expect(failedNoItem.svc.regenerateSlot(WS, 'slot-1', ACTOR)).rejects.toThrow(BadRequestException);
-    const live = harness({ slot: slot({ status: 'READY', campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'PUBLISHED' } });
-    await expect(live.svc.regenerateSlot(WS, 'slot-1', ACTOR)).rejects.toThrow(/PUBLISHED and cannot be regenerated/);
+    await expect(failedNoItem.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(BadRequestException);
+    const live = harness({ slot: ready(), item: { id: 'item-1', status: 'PUBLISHED' } });
+    await expect(live.svc.regenerateSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/PUBLISHED and cannot be regenerated/);
     expect(live.socialCampaigns.regenerateItem).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { ContentProgramme, ContentProgrammeEvent, ContentSlot, ContentType, ContentTypeStat } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { TrendSignalService } from '../trends/trend-signal.service';
+import { TrendSignalService, TREND_REGION } from '../trends/trend-signal.service';
 import { ContentProgrammeService } from './content-programme.service';
 import { ContentTypesService } from './content-types.service';
 import { ProgrammePlannerService } from './programme-planner.service';
@@ -20,8 +20,6 @@ const MAX_TYPES_PER_POINT = 50;
 const DASHBOARD_EVENTS = 30;
 const TREND_LIMIT = 10;
 /** Mirrors the region the refresh job fills (trend-signal.service.ts); v1 serves Turkish workspaces. */
-const TREND_REGION = process.env.TREND_REGION ?? 'TR';
-
 /** The editor's own rule, so `editable` on the strip never disagrees with what
  *  `SlotEditorService.updateSlot` would then refuse. */
 const EDITABLE_STATUSES: ReadonlySet<string> = new Set(EDITABLE_SLOT_STATUSES);
@@ -39,6 +37,8 @@ export interface SlotView {
   campaignItemId: string | null;
   socialPostId: string | null;
   quotedCredits: number | null;
+  /** What the slot has actually cost so far (batch, frames, clips, regenerates) — kept on SKIPPED/FAILED rows. */
+  spentCredits: number;
   editableUntil: string;
   editable: boolean;
   publishedAt: string | null;
@@ -110,6 +110,7 @@ export interface Dashboard {
   phase: string;
   status: string;
   killSwitch: boolean;
+  /** `spent` is Σ spentCredits over every slot of the Istanbul week, whatever its status. */
   week: { weekStart: string; spent: number; cap: number };
   slots: SlotView[];
   types: TypeView[];
@@ -305,6 +306,7 @@ export class ProgrammeDashboardService {
       campaignItemId: slot.campaignItemId ?? null,
       socialPostId: slot.socialPostId ?? null,
       quotedCredits: slot.quotedCredits ?? null,
+      spentCredits: slot.spentCredits ?? 0,
       editableUntil: slot.editableUntil.toISOString(),
       editable: now < slot.editableUntil && EDITABLE_STATUSES.has(slot.status),
       publishedAt: slot.publishedAt ? slot.publishedAt.toISOString() : null,

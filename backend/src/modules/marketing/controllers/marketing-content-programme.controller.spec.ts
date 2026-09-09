@@ -44,6 +44,7 @@ function build() {
     updateSlot: jest.fn().mockResolvedValue({ id: 'slot-1' }),
     skipSlot: jest.fn().mockResolvedValue({ id: 'slot-1', status: 'SKIPPED' }),
     regenerateSlot: jest.fn().mockResolvedValue({ id: 'slot-1' }),
+    retrySlot: jest.fn().mockResolvedValue({ id: 'slot-1', status: 'PLANNED' }),
     slotMetrics: jest.fn().mockResolvedValue({ slot: slotView, targets: [] }),
   };
   const ctrl = new MarketingContentProgrammeController(programmes as never, types as never, dashboard as never, editor as never);
@@ -76,6 +77,7 @@ describe('MarketingContentProgrammeController — guards and metadata', () => {
       updateSlot: 'content.programme.slot.update',
       skipSlot: 'content.programme.slot.skip',
       regenerateSlot: 'content.programme.slot.regenerate',
+      retrySlot: 'content.programme.slot.retry',
     } as const;
     for (const [name, action] of Object.entries(writes)) {
       const handler = proto[name as keyof typeof writes];
@@ -171,22 +173,26 @@ describe('MarketingContentProgrammeController — sub-resources', () => {
     expect(dashboard.slotView).toHaveBeenCalledTimes(2);
   });
 
-  it('a slot that is not the programme\'s is a 404 and nothing is edited, skipped or regenerated', async () => {
+  it('a slot that is not the programme\'s is a 404 and nothing is edited, skipped, regenerated or retried', async () => {
     const { ctrl, editor } = build();
     await expect(ctrl.updateSlot(user, 'prog-1', 'slot-x', { idea: 'x' })).rejects.toBeInstanceOf(NotFoundException);
     await expect(ctrl.skipSlot(user, 'prog-1', 'slot-x')).rejects.toBeInstanceOf(NotFoundException);
     await expect(ctrl.regenerateSlot(user, 'prog-1', 'slot-x')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(ctrl.retrySlot(user, 'prog-1', 'slot-x')).rejects.toBeInstanceOf(NotFoundException);
     expect(editor.updateSlot).not.toHaveBeenCalled();
     expect(editor.skipSlot).not.toHaveBeenCalled();
     expect(editor.regenerateSlot).not.toHaveBeenCalled();
+    expect(editor.retrySlot).not.toHaveBeenCalled();
   });
 
-  it('skip and regenerate go through the editor as the signed-in person and answer the SlotView', async () => {
+  it('skip, regenerate and retry go through the editor as the signed-in person and answer the SlotView', async () => {
     const { ctrl, editor } = build();
     await expect(ctrl.skipSlot(user, 'prog-1', 'slot-1')).resolves.toBe(slotView);
     expect(editor.skipSlot).toHaveBeenCalledWith('ws-1', 'slot-1', 'u-1');
     await expect(ctrl.regenerateSlot(user, 'prog-1', 'slot-1')).resolves.toBe(slotView);
     expect(editor.regenerateSlot).toHaveBeenCalledWith('ws-1', 'slot-1', 'u-1');
+    await expect(ctrl.retrySlot(user, 'prog-1', 'slot-1')).resolves.toBe(slotView);
+    expect(editor.retrySlot).toHaveBeenCalledWith('ws-1', 'slot-1', 'u-1');
   });
 
   it('GET /:id/slots/:slotId/metrics answers the editor\'s metrics view for the programme\'s slot', async () => {

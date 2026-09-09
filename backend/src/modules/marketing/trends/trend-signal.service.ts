@@ -11,6 +11,14 @@ import { brandRelevance, decayedScore, suggestionScore } from './trend-score.uti
 
 export const TREND_REFRESH_KIND = 'trend.refresh';
 export const TREND_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
+/**
+ * First refresh after a boot. WHY a minute and not the interval: schedule()
+ * moves the existing PENDING row's runAt, so scheduling a boot's first run
+ * TREND_REFRESH_INTERVAL_MS out pushed it back on every deploy and, with
+ * restarts closer than 12h apart, no refresh ever ran. The handler
+ * reschedules the full interval itself.
+ */
+export const TREND_BOOT_DELAY_MS = 60 * 1000;
 /** Signals older than this are noise for a planner that looks a week ahead. */
 export const TREND_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_HALF_LIFE_HOURS = 48;
@@ -18,8 +26,13 @@ const DEFAULT_TOP_LIMIT = 10;
 /** Upper bound on rows scored in memory per top() call; the DB already
  *  orders by raw score so the tail we drop is the tail that could not win. */
 const TOP_SCAN_ROWS = 300;
-/** Region the global job refreshes — v1 serves Turkish workspaces. */
-const JOB_REGION = process.env.TREND_REGION ?? 'TR';
+/**
+ * The ONE region every trend reader and writer uses — the refresh job, the
+ * dashboard and the planner's hook lookup. Exported so no caller hard-codes
+ * its own 'TR' and reads a region the job never fills. v1 serves Turkish
+ * workspaces; ops override with TREND_REGION.
+ */
+export const TREND_REGION = process.env.TREND_REGION ?? 'TR';
 
 /** DI token for the provider list. Module wiring is TREND_PROVIDERS_FACTORY
  *  (register the three provider classes, then this factory) — the service
@@ -81,7 +94,7 @@ export class TrendSignalService implements OnModuleInit {
       // refresh() already isolates provider errors; a DB-level failure is the
       // only way here, and even that must not kill the self-rescheduling chain.
       try {
-        const res = await this.refresh(JOB_REGION);
+        const res = await this.refresh(TREND_REGION);
         const failed = res.filter((r) => r.error);
         if (failed.length) this.logger.warn(`trend refresh partial: ${failed.map((r) => `${r.provider}: ${r.error}`).join('; ')}`);
       } catch (e) {
@@ -92,14 +105,14 @@ export class TrendSignalService implements OnModuleInit {
     void this.scheduledJobs.schedule({
       workspaceId: 'system',
       kind: TREND_REFRESH_KIND,
-      runAt: new Date(Date.now() + TREND_REFRESH_INTERVAL_MS),
+      runAt: new Date(Date.now() + TREND_BOOT_DELAY_MS),
       payload: {},
       dedupKey: 'trend-refresh',
     }).catch(() => undefined);
   }
 
   /** Pull every enabled provider for the region and upsert what came back. */
-  async refresh(region = 'TR'): Promise<TrendRefreshResult[]> {
+  async refresh(region = TREND_REGION): Promise<TrendRefreshResult[]> {
     const out: TrendRefreshResult[] = [];
     for (const p of this.providers) {
       if (!p.enabled()) continue;

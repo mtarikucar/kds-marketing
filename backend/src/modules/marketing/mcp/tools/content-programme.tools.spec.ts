@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerContentProgrammeTools } from './content-programme.tools';
 
-const programme = { id: 'prog-1', workspaceId: 'ws1', status: 'ACTIVE' };
+const programme = { id: 'prog-1', workspaceId: 'ws1', status: 'ACTIVE', perWeek: 5, weeklyCreditCap: 600 };
 const dash = { phase: 'SEED', slots: [] };
 const slotView = { id: 'slot-1', status: 'PLANNED', editable: true };
 
@@ -152,7 +152,59 @@ describe('jeeta.update_content_programme', () => {
     expect(schema.safeParse({ programmeId: 'p', settings: { killSwitch: true } }).success).toBe(false);
     expect(schema.safeParse({ programmeId: 'p', settings: { goal: 'FAME' } }).success).toBe(false);
     expect(schema.safeParse({ programmeId: 'p', settings: { personaId: null, perWeek: 5 } }).success).toBe(true);
+    expect(schema.safeParse({ programmeId: 'p', settings: { daysOfWeek: [1, 3, 5], perWeek: 3 } }).success).toBe(true);
     expect(schema.safeParse({ programmeId: 'p', action: 'resume' }).success).toBe(true);
+  });
+
+  it('holds the schema to the service bounds: perWeek at most 7, weeklyCreditCap at most 20000, weekdays 0-6', () => {
+    const schema = build().registry.get('jeeta.update_content_programme')!.inputSchema;
+    expect(schema.safeParse({ programmeId: 'p', settings: { perWeek: 8 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { perWeek: 7 } }).success).toBe(true);
+    expect(schema.safeParse({ programmeId: 'p', settings: { weeklyCreditCap: 20001 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { weeklyCreditCap: 20000 } }).success).toBe(true);
+    expect(schema.safeParse({ programmeId: 'p', settings: { daysOfWeek: [7] } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { daysOfWeek: [] } }).success).toBe(false);
+  });
+
+  /**
+   * Create and kill are hub-only because they start and end autonomous spend;
+   * the lever that SCALES it has to be hub-only in the upward direction too, or
+   * one injected instruction raises the only money bound on the autopilot.
+   */
+  describe('the cap and the cadence only move DOWN from an agent', () => {
+    it.each([
+      ['a higher weeklyCreditCap', { weeklyCreditCap: 601 }],
+      ['a higher perWeek', { perWeek: 6 }],
+      ['both, with other settings alongside', { weeklyCreditCap: 10000000, perWeek: 7, brief: 'x' }],
+    ])('refuses %s by name, updates nothing and applies no action', async (_label, settings) => {
+      const { registry, programmes } = build();
+      await expect(
+        registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings, action: 'pause' }),
+      ).rejects.toThrow('Raising the weekly cap or the cadence is done from the hub, not by an agent');
+      expect(programmes.update).not.toHaveBeenCalled();
+      expect(programmes.pause).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the same cap and cadence', { weeklyCreditCap: 600, perWeek: 5 }],
+      ['a lower cap', { weeklyCreditCap: 300 }],
+      ['a lower cadence', { perWeek: 2 }],
+      ['settings that touch neither', { brief: 'new brief', explorationRate: 0.1 }],
+    ])('lets %s through', async (_label, settings) => {
+      const { registry, programmes } = build();
+      await registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings });
+      expect(programmes.update).toHaveBeenCalledWith('ws1', 'prog-1', settings);
+    });
+
+    it('compares against the CURRENT row, read workspace-scoped, not against a default', async () => {
+      const { registry, programmes } = build();
+      programmes.getOrThrow.mockResolvedValueOnce({ ...programme, weeklyCreditCap: 1000, perWeek: 2 });
+      await registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings: { weeklyCreditCap: 900 } });
+      expect(programmes.update).toHaveBeenCalled();
+      await expect(
+        registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings: { perWeek: 6 } }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });
 

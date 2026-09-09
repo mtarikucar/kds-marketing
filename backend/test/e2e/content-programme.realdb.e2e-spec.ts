@@ -15,6 +15,7 @@ import { AnglePerformanceService } from '../../src/modules/marketing/content-con
 import { CampaignItemArmingService } from '../../src/modules/marketing/social-campaigns/campaign-item-arming.service';
 import { SocialCampaignsService } from '../../src/modules/marketing/social-campaigns/social-campaigns.service';
 import { DEFAULT_VIDEO_MODEL } from '../../src/modules/marketing/ai/media/media-models.config';
+import { creditCost } from '../../src/modules/marketing/ai/ai-credit-costs';
 import { ContentProgrammeService } from '../../src/modules/marketing/content-programme/content-programme.service';
 import { ContentTypesService } from '../../src/modules/marketing/content-programme/content-types.service';
 import { DEFAULT_CONTENT_TYPES } from '../../src/modules/marketing/content-programme/content-types.seed';
@@ -76,6 +77,9 @@ const describeRealDb = realDbEnabled() ? describe : describe.skip;
 const NOW = new Date('2026-09-14T06:00:00.000Z');
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
+/** What every planSlot books before the frames: the concept batch. */
+const BATCH_COST = creditCost('content.concepts');
+type QuotedPlan = { shots: unknown[]; production?: { credits?: number; keyframes?: { credits: number } } };
 
 /**
  * Three concepts under the `hook-story` type (the seed's first format, which
@@ -162,6 +166,11 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
   let chosenConceptId: string;
   let itemId: string;
   let slot1Quote: number;
+  /** The frames inside slot 1's quote, booked at plan time; the clips are the rest. */
+  let slot1Frames: number;
+  /** What slot 2 (planned, then capped) cost the week: its batch and frames.
+   *  Its clips were never bought, but its batch and frames were — and they stay counted. */
+  let slot2Spent: number;
 
   /** Every generation this suite performs, so a test can read the arguments. */
   let requests: Array<{ workspaceId: string; dto: Record<string, unknown> }> = [];
@@ -375,7 +384,9 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     expect(campaign.automationMode).toBe('FULL_AUTO');
     expect(campaign.programmeId).toBe(programmeId);
     expect(campaign.targetAccountIds).toEqual([accountId]);
-    expect(campaign.cadence).toMatchObject({ daysOfWeek: [1, 2, 3, 4, 5], timeOfDay: '18:00' });
+    // 18:00 was typed in Turkey time; the lane runs on UTC, so the campaign
+    // carries 15:00 and remembers the typed 18:00 beside it.
+    expect(campaign.cadence).toMatchObject({ daysOfWeek: [1, 2, 3, 4, 5], timeOfDay: '15:00', localTimeOfDay: '18:00', timezone: 'Europe/Istanbul' });
 
     // The seed, copied into OUR workspace only.
     const seeded = await prisma.contentType.findMany({ where: { workspaceId }, orderBy: { ordinal: 'asc' } });
@@ -410,7 +421,7 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
       expect(r.status).toBe('PLANNED');
       expect(r.scheduledFor.getTime()).toBeGreaterThan(NOW.getTime());
       expect(r.scheduledFor.getTime()).toBeLessThanOrEqual(horizon.getTime());
-      expect(r.scheduledFor.getUTCHours()).toBe(18);
+      expect(r.scheduledFor.getUTCHours()).toBe(15); // 18:00 Istanbul
       expect(r.scheduledFor.getUTCMinutes()).toBe(0);
       expect([1, 2, 3, 4, 5]).toContain(r.scheduledFor.getUTCDay());
       expect(r.contentTypeKey).toBeTruthy();
@@ -422,7 +433,7 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     }
     // SEED walks the seed in order, so every type gets exactly one slot.
     expect(rows.map((r) => r.contentTypeKey)).toEqual(DEFAULT_CONTENT_TYPES.map((t) => t.key));
-    expect(rows[0].scheduledFor.toISOString()).toBe('2026-09-14T18:00:00.000Z');
+    expect(rows[0].scheduledFor.toISOString()).toBe('2026-09-14T15:00:00.000Z');
 
     // Two jobs per slot, under the slot's own dedup keys, at its lead times
     // (clamped to now for a slot already inside its window).
@@ -505,12 +516,16 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     const chosen = batch.find((c) => c.id === chosenConceptId)!;
     expect(chosen.status).toBe('PROPOSED');
     expect(chosen.hook).toBe(PROGRAMME_CONCEPTS[0].hook);
-    const plan = chosen.shotPlan as { shots: unknown[]; production?: { credits?: number } };
+    const plan = chosen.shotPlan as QuotedPlan;
     expect(plan.shots).toHaveLength(4);
     expect(typeof plan.production?.credits).toBe('number');
     slot1Quote = Math.round(plan.production!.credits!);
+    slot1Frames = plan.production!.keyframes?.credits ?? 0;
     expect(slot1Quote).toBeGreaterThan(0);
     expect(after.quotedCredits).toBe(slot1Quote);
+    // The money that is spent at plan time is on the row: the batch, and the
+    // frames the storyboard job will draw. The clips are not — not yet.
+    expect(after.spentCredits).toBe(BATCH_COST + slot1Frames);
 
     const others = batch.filter((c) => c.id !== chosenConceptId);
     expect(others).toHaveLength(2);
@@ -557,6 +572,9 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     expect(after.status).toBe('PRODUCING');
     expect(after.campaignItemId).toBe(item.id);
     expect(after.error).toBeNull();
+    // The clips (quote minus the frames already booked) join the row's spend:
+    // batch + frames + clips = batch + quote.
+    expect(after.spentCredits).toBe(BATCH_COST + slot1Quote);
 
     // Production was handed to the queue — through the existing engine path,
     // under the item's dedup key — and nothing was bought synchronously.
@@ -578,6 +596,9 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     expect(ideated.status).toBe('IDEATED');
     const conceptId = ideated.conceptId as string;
     expect(ideated.quotedCredits).toBeGreaterThan(10);
+    const plan2 = (await prisma.contentConcept.findUniqueOrThrow({ where: { id: conceptId } })).shotPlan as QuotedPlan;
+    slot2Spent = BATCH_COST + (plan2.production?.keyframes?.credits ?? 0);
+    expect(ideated.spentCredits).toBe(slot2Spent);
 
     // Below the service's own floor on purpose: this is the row the producer
     // reads, and the test is about what the producer does with it.
@@ -605,8 +626,12 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     const capped = await events('CAP_SKIPPED');
     expect(capped).toHaveLength(1);
     expect(capped[0].data).toMatchObject({ slotId: target.id, cap: 10, wanted: ideated.quotedCredits });
-    // The spend it refused against is the FIRST slot's quote, summed from the row.
-    expect(capped[0].data).toMatchObject({ spent: slot1Quote });
+    // The spend it refused against is what the FIRST slot actually cost (its
+    // batch, frames and clips), summed from the rows — this slot's own row is
+    // left out because its quote already carries its frames.
+    expect(capped[0].data).toMatchObject({ spent: BATCH_COST + slot1Quote });
+    // The capped slot keeps what it cost: the batch and the frames are not refunded.
+    expect(after.spentCredits).toBe(slot2Spent);
 
     await prisma.contentProgramme.update({ where: { id: programmeId }, data: { weeklyCreditCap: 600 } });
   });
@@ -765,7 +790,10 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     expect(view.killSwitch).toBe(false);
     expect(view.slots.map((s) => s.id)).toEqual(slotIds);
     const byId = new Map(view.slots.map((s) => [s.id, s]));
-    expect(byId.get(slotIds[0])).toMatchObject({ status: 'MEASURED', conceptId: chosenConceptId, campaignItemId: itemId, quotedCredits: slot1Quote, editable: false });
+    expect(byId.get(slotIds[0])).toMatchObject({
+      status: 'MEASURED', conceptId: chosenConceptId, campaignItemId: itemId, quotedCredits: slot1Quote, spentCredits: BATCH_COST + slot1Quote, editable: false,
+    });
+    expect(byId.get(slotIds[1])).toMatchObject({ status: 'SKIPPED', spentCredits: slot2Spent });
     expect(byId.get(slotIds[0])!.concept).toMatchObject({ hook: PROGRAMME_CONCEPTS[0].hook });
     expect(byId.get(slotIds[1])!.status).toBe('SKIPPED');
     expect(byId.get(slotIds[2])!.status).toBe('SKIPPED');
@@ -795,9 +823,13 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
     expect(view.learning.history[0].computedAt).toBe(NOW.toISOString());
 
     expect(view.week.cap).toBe(600);
-    expect(view.week.spent).toBeGreaterThanOrEqual(slot1Quote);
-    // The skipped slot's quote is NOT this week's spend.
-    expect(view.week.spent).toBe(slot1Quote);
+    // The week's spend is what was actually paid: the published slot's batch,
+    // frames and clips, PLUS the capped slot's batch and frames — a skip does
+    // not refund what was already bought. The owner-skipped slot cost nothing.
+    const rows = await prisma.contentSlot.findMany({ where: { workspaceId, programmeId } });
+    expect(view.week.spent).toBe(rows.reduce((n, r) => n + r.spentCredits, 0));
+    expect(view.week.spent).toBe(BATCH_COST + slot1Quote + slot2Spent);
+    expect(view.week.spent).toBeGreaterThan(slot1Quote);
     expect(view.events.some((e) => e.kind === 'REWEIGHT')).toBe(true);
   });
 

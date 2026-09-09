@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { BarChart3, Clapperboard, RefreshCw, Save, SkipForward } from 'lucide-react';
+import { BarChart3, Clapperboard, RefreshCw, RotateCcw, Save, SkipForward } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
@@ -44,10 +44,28 @@ export function fromLocalInput(local: string): string | null {
 }
 
 /**
+ * The same instant with its seconds and milliseconds dropped. The datetime
+ * input only carries minutes, so this is the precision the editor can SEE,
+ * and therefore the precision it compares and sends at.
+ */
+export function toMinute(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setSeconds(0, 0);
+  return d.toISOString();
+}
+
+/**
  * Only what CHANGED, trimmed. The backend treats every present field as an
  * override and logs each one as an owner edit, so re-sending an unchanged
  * type would write "owner override" over a selection reason that was the
  * engine's — and that reason is what the learning tab audits.
+ *
+ * Time is compared at MINUTE precision on both sides: a slot moved through
+ * the API to `18:30:15` would otherwise differ from its own round-trip
+ * through the input (which drops the seconds), leaving Save enabled with
+ * nothing typed and shipping a 15-second "move" — which the backend logs as
+ * an owner time edit and re-arms the publish jobs for — with every idea edit.
  */
 export function slotDiff(slot: SlotView, draft: { contentTypeKey: string; idea: string; local: string }): SlotPatch {
   const patch: SlotPatch = {};
@@ -55,8 +73,32 @@ export function slotDiff(slot: SlotView, draft: { contentTypeKey: string; idea: 
   const idea = draft.idea.trim();
   if (idea && idea !== slot.idea.trim()) patch.idea = idea;
   const when = fromLocalInput(draft.local);
-  if (when && when !== new Date(slot.scheduledFor).toISOString()) patch.scheduledFor = when;
+  const current = toMinute(slot.scheduledFor);
+  if (when && when !== current) patch.scheduledFor = when;
   return patch;
+}
+
+/**
+ * Which actions a slot can take, by STATUS — the same rules the backend
+ * enforces, so a button is never enabled for a call that always 400s.
+ *
+ * - Skip: PLANNED, IDEATED or READY (the loop has not published), and FAILED
+ *   (nothing will publish, but the chip should stop saying so in red).
+ * - Regenerate: re-makes the CLIPS, so it needs clips to re-make — READY, or
+ *   FAILED with the campaign item the production left behind.
+ * - Retry: any FAILED slot; it resumes from the step that broke, item or not.
+ */
+export function slotActions(slot: Pick<SlotView, 'status' | 'campaignItemId'>): {
+  skip: boolean;
+  regenerate: boolean;
+  retry: boolean;
+} {
+  const failed = slot.status === 'FAILED';
+  return {
+    skip: failed || slot.status === 'PLANNED' || slot.status === 'IDEATED' || slot.status === 'READY',
+    regenerate: slot.status === 'READY' || (failed && Boolean(slot.campaignItemId)),
+    retry: failed,
+  };
 }
 
 /** Hours left in the edit window, rounded up; 0 once it has closed. */
@@ -73,6 +115,7 @@ export interface SlotEditorProps {
   onSave: (patch: SlotPatch) => void;
   onSkip: () => void;
   onRegenerate: () => void;
+  onRetry: () => void;
   onMetrics: () => void;
   onClose: () => void;
 }
@@ -86,7 +129,7 @@ export interface SlotEditorProps {
  * so changing its type or idea would mean throwing them away; only the time
  * is still open there, and the form says so rather than greying out silently.
  */
-export function SlotEditor({ slot, types, now, busy, onSave, onSkip, onRegenerate, onMetrics, onClose }: SlotEditorProps) {
+export function SlotEditor({ slot, types, now, busy, onSave, onSkip, onRegenerate, onRetry, onMetrics, onClose }: SlotEditorProps) {
   const { t } = useTranslation('marketing');
   const id = useId();
   const [contentTypeKey, setType] = useState(slot.contentTypeKey);
@@ -108,6 +151,31 @@ export function SlotEditor({ slot, types, now, busy, onSave, onSkip, onRegenerat
   const patch = slotDiff(slot, { contentTypeKey, idea, local });
   const dirty = Object.keys(patch).length > 0;
   const activeTypes = types.filter((ty) => ty.active || ty.key === slot.contentTypeKey);
+  const can = slotActions(slot);
+
+  /**
+   * What a non-editable slot IS, not just that it is closed. "The slot
+   * publishes as it stands" is only true of a slot that is still on its way
+   * out (PLANNED/IDEATED/READY past the window); a SKIPPED or FAILED one
+   * publishes nothing, and a PUBLISHED one already did.
+   */
+  const frozenCopy = (): string => {
+    switch (slot.status) {
+      case 'SKIPPED':
+        return t('studio.programme.editor.frozenSkipped', 'Atlandı; bir şey yayınlanmayacak.');
+      case 'FAILED':
+        return t('studio.programme.editor.frozenFailed', 'Başarısız: {{error}}', { error: slot.error ?? '—' });
+      case 'PUBLISHED':
+      case 'MEASURED':
+        return slot.reward == null
+          ? t('studio.programme.editor.frozenPublished', 'Yayınlandı.')
+          : t('studio.programme.editor.frozenMeasured', 'Yayınlandı · ödül {{reward}}', { reward: slot.reward.toFixed(2) });
+      case 'PRODUCING':
+        return t('studio.programme.editor.frozenProducing', 'Üretiliyor; klipler hazır olunca planlanan saatte yayınlanır.');
+      default:
+        return t('studio.programme.editor.frozen', 'Düzenleme penceresi kapandı; slot olduğu gibi yayınlanır.');
+    }
+  };
 
   return (
     <div
@@ -125,7 +193,10 @@ export function SlotEditor({ slot, types, now, busy, onSave, onSkip, onRegenerat
         <span className="text-muted-foreground" data-testid="programme-slot-window">
           {editable
             ? t('studio.programme.editor.window', 'Düzenleme penceresi: {{hours}} saat kaldı', { hours: left })
-            : t('studio.programme.editor.frozen', 'Düzenleme penceresi kapandı; slot olduğu gibi yayınlanır.')}
+            : frozenCopy()}
+        </span>
+        <span className="tabular-nums text-muted-foreground" data-testid="programme-slot-credits">
+          {t('studio.programme.slots.spent', 'Harcanan / teklif')}: {slot.spentCredits} / {slot.quotedCredits ?? '—'}
         </span>
         {ready && editable && (
           <span className="text-muted-foreground">
@@ -190,14 +261,20 @@ export function SlotEditor({ slot, types, now, busy, onSave, onSkip, onRegenerat
           <Save className="me-1.5 h-4 w-4" aria-hidden="true" />
           {t('studio.programme.editor.save', 'Kaydet')}
         </Button>
-        <Button size="sm" variant="outline" disabled={!editable || busy} onClick={onSkip}>
+        <Button size="sm" variant="outline" disabled={!can.skip || busy} onClick={onSkip}>
           <SkipForward className="me-1.5 h-4 w-4" aria-hidden="true" />
           {t('studio.programme.editor.skip', 'Atla')}
         </Button>
-        <Button size="sm" variant="outline" disabled={!editable || busy} onClick={onRegenerate}>
+        <Button size="sm" variant="outline" disabled={!can.regenerate || busy} onClick={onRegenerate}>
           <RefreshCw className="me-1.5 h-4 w-4" aria-hidden="true" />
           {t('studio.programme.editor.regenerate', 'Yeniden üret')}
         </Button>
+        {can.retry && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={onRetry}>
+            <RotateCcw className="me-1.5 h-4 w-4" aria-hidden="true" />
+            {t('studio.programme.editor.retry', 'Tekrar dene')}
+          </Button>
+        )}
         <Button size="sm" variant="ghost" onClick={onMetrics}>
           <BarChart3 className="me-1.5 h-4 w-4" aria-hidden="true" />
           {t('studio.programme.editor.metrics', 'Metrikler')}

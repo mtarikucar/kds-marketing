@@ -4,7 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService } from '../scheduling/scheduled-job-runner.service';
 import { Cadence, nextCadenceSlot } from '../social-campaigns/cadence.util';
-import { TrendSignalService, TopTrend } from '../trends/trend-signal.service';
+import { TrendSignalService, TopTrend, TREND_REGION } from '../trends/trend-signal.service';
 import { tokenize } from '../trends/trend-score.util';
 import { ContentProgrammeService } from './content-programme.service';
 import { ContentTypesService, typeGuidanceLines } from './content-types.service';
@@ -28,20 +28,39 @@ export const TREND_REMIX_KEY = 'trend-remix';
  *  current, rare enough that the type's own structure still dominates. */
 export const TREND_HOOK_PROBABILITY = 0.25;
 /** Below this suggestion score a trend is noise for this brand (off-brand AND
- *  fading); the slot is planned on the brief alone. */
-export const TREND_MIN_SUGGESTION = 0.2;
+ *  fading); the slot is planned on the brief alone. Suggestion scores are on
+ *  the providers' 0..100 scale (a fresh, on-brand signal sits around 30-100;
+ *  a fading off-brand one decays through the single digits), so the gate is
+ *  a score on that scale — 15 is roughly "half-faded and half-relevant". */
+export const TREND_MIN_SUGGESTION = 15;
+/** How many trends one fill rotates through, so a fortnight of slots does not
+ *  all riff on the single hottest signal. */
+export const TREND_ROTATION = 5;
+/** The region the planner reads trends for. It mirrors the region the refresh
+ *  job fills (`trend-signal.service.ts` keeps its own copy un-exported) and the
+ *  dashboard reads: one env var, three readers, so a workspace never plans on
+ *  a region the feed does not fill. */
 /** Three slots failed back to back: something upstream is broken (a dead
  *  provider, an exhausted wallet) and every further slot would just burn. */
 export const ANOMALY_FAIL_STREAK = 3;
 /** Spend past this multiple of the weekly cap pauses the programme: the per-slot
  *  cap check is a QUOTE, and quotes can run over. */
 export const ANOMALY_SPEND_RATIO = 1.2;
-/** Slot statuses whose quoted credits count as this week's spend: everything
- *  from "a concept was bought" onwards. PLANNED has no quote yet; SKIPPED and
- *  FAILED were refunded or never charged. */
-export const SPENT_SLOT_STATUSES = ['IDEATED', 'PRODUCING', 'READY', 'PUBLISHED', 'MEASURED'];
+/** Slot statuses that are over: the fail-streak breaker reads the last few of
+ *  these. PLANNED/IDEATED/PRODUCING/READY are still in flight and say nothing
+ *  about whether the pipeline works. */
+export const TERMINAL_SLOT_STATUSES = ['FAILED', 'SKIPPED', 'PUBLISHED', 'MEASURED'];
+/** The error prefix the editor writes on a slot the OWNER skipped; such a skip
+ *  is a decision, not a symptom, and is left out of the streak. */
+export const OWNER_SKIP_PREFIX = 'skipped by';
+/** How many terminal slots the streak check reads before dropping owner skips. */
+const STREAK_SCAN = 10;
 /** Slots that are still on the calendar (count toward the type window). */
 const WINDOW_SLOT_STATUSES = ['PLANNED', 'IDEATED', 'PRODUCING', 'READY', 'PUBLISHED', 'MEASURED'];
+/** The first sweep after boot waits this long — enough for the app to settle,
+ *  short enough that a deploy cadence faster than the sweep interval can never
+ *  starve it (a dedup'd PENDING row has its runAt rewritten on every boot). */
+export const BOOT_SWEEP_DELAY_MS = 60 * 1000;
 const PROGRAMME_TIMEZONE = 'Europe/Istanbul';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -87,9 +106,11 @@ export function istanbulWeekBounds(now: Date): { weekStart: Date; weekEnd: Date 
 }
 
 /**
- * Σ quotedCredits of the programme's slots inside this Istanbul week that are
- * past the point of having bought something. One implementation for the
- * planner's anomaly check and the producer's cap check, so the two cannot
+ * Σ spentCredits of EVERY slot of the programme inside this Istanbul week,
+ * whatever its status: a SKIPPED slot's frames and a FAILED slot's half-bought
+ * clips were paid for, and a regenerate is a second purchase on the same row.
+ * One implementation for the planner's anomaly check, the producer's cap
+ * checks, the editor's regenerate and the dashboard, so none of them can
  * disagree about what "this week's spend" is.
  */
 export async function sumWeekSpend(
@@ -100,17 +121,16 @@ export async function sumWeekSpend(
   opts: { excludeSlotId?: string } = {},
 ): Promise<{ weekStart: Date; weekEnd: Date; spent: number }> {
   const { weekStart, weekEnd } = istanbulWeekBounds(now);
-  const rows: Array<{ id: string; quotedCredits: number | null }> = await prisma.contentSlot.findMany({
+  const rows: Array<{ id: string; spentCredits: number | null }> = await prisma.contentSlot.findMany({
     where: {
       workspaceId,
       programmeId,
-      status: { in: SPENT_SLOT_STATUSES },
       scheduledFor: { gte: weekStart, lt: weekEnd },
       ...(opts.excludeSlotId ? { id: { not: opts.excludeSlotId } } : {}),
     },
-    select: { id: true, quotedCredits: true },
+    select: { id: true, spentCredits: true },
   });
-  const spent = rows.reduce((s, r) => s + (r.quotedCredits ?? 0), 0);
+  const spent = rows.reduce((s, r) => s + (r.spentCredits ?? 0), 0);
   return { weekStart, weekEnd, spent };
 }
 
@@ -180,8 +200,8 @@ const isUniqueViolation = (e: unknown): boolean =>
  *              why), a trend hook is attached when the format wants one, the
  *              idea text is composed, and the two per-slot jobs are armed at
  *              the slot's lead times
- *   anomaly    three failures in a row, or spend past 120% of the cap, pause
- *              the programme with the reason in the log
+ *   anomaly    three settled slots failed in a row, or real spend past 120%
+ *              of the cap, pause the programme with the reason in the log
  *
  * Every read and write is workspace-scoped even though the sweep walks every
  * workspace's programme: the programme row carries its workspaceId and every
@@ -213,7 +233,7 @@ export class ProgrammePlannerService implements OnModuleInit {
       .schedule({
         workspaceId: 'system',
         kind: CONTENT_PROGRAMME_PLAN_KIND,
-        runAt: new Date(Date.now() + PLAN_INTERVAL_MS),
+        runAt: new Date(Date.now() + BOOT_SWEEP_DELAY_MS),
         payload: {},
         dedupKey: PROGRAMME_PLAN_DEDUP,
       })
@@ -238,11 +258,15 @@ export class ProgrammePlannerService implements OnModuleInit {
   }
 
   /**
-   * Open the slots the look-ahead window is missing. The walk starts at the
-   * later of now and the last planned slot — a cadence change reaches the
-   * calendar after the slots already on it, never underneath them — and stops
-   * at now + lookaheadDays. (programmeId, scheduledFor) is unique, so a time a
-   * concurrent tick already filled is a caught P2002 and a skipped iteration.
+   * Open the slots the look-ahead window is missing. The walk visits EVERY
+   * cadence time in [now, now + lookaheadDays] and creates the ones no slot
+   * holds — a hole behind the newest slot (a slot moved forward by the owner,
+   * a cadence raised after the window was filled) is refilled on the next
+   * sweep, not never. A time that has a slot of ANY status stays as it is: a
+   * SKIPPED time is the owner's or the cap's decision and stays empty, a
+   * FAILED time keeps its FAILED row for the retry door. (programmeId,
+   * scheduledFor) is unique, so a time a concurrent tick already filled is a
+   * caught P2002 and a skipped iteration.
    */
   async fill(workspaceId: string, programme: ContentProgramme, now = new Date()): Promise<FillResult> {
     const campaign = await this.prisma.socialCampaign.findFirst({
@@ -267,10 +291,11 @@ export class ProgrammePlannerService implements OnModuleInit {
     });
     const usable = arms.length > 0 ? arms : armsAll;
 
+    // Every slot from now on, whatever its status: the ones that hold a time.
     const upcoming = await this.prisma.contentSlot.findMany({
-      where: { workspaceId, programmeId: programme.id, scheduledFor: { gte: now }, status: { in: WINDOW_SLOT_STATUSES } },
+      where: { workspaceId, programmeId: programme.id, scheduledFor: { gte: now } },
       orderBy: { scheduledFor: 'asc' },
-      select: { id: true, scheduledFor: true, contentTypeKey: true },
+      select: { id: true, scheduledFor: true, contentTypeKey: true, status: true },
     });
     const last = await this.prisma.contentSlot.findFirst({
       where: { workspaceId, programmeId: programme.id },
@@ -279,24 +304,33 @@ export class ProgrammePlannerService implements OnModuleInit {
     });
     let seedCursor = await this.prisma.contentSlot.count({ where: { workspaceId, programmeId: programme.id } });
 
+    // Only the slots still on the calendar shape the type mix.
+    const live = upcoming.filter((s) => WINDOW_SLOT_STATUSES.includes(s.status));
     const windowCounts: Record<string, number> = {};
-    for (const s of upcoming) windowCounts[s.contentTypeKey] = (windowCounts[s.contentTypeKey] ?? 0) + 1;
-    let windowSize = upcoming.length;
+    for (const s of live) windowCounts[s.contentTypeKey] = (windowCounts[s.contentTypeKey] ?? 0) + 1;
+    let windowSize = live.length;
     const taken = new Set(upcoming.map((s) => s.scheduledFor.getTime()));
     let previousKey: string | null = last?.contentTypeKey ?? null;
 
+    // Trends: one read per fill, no network filter (signals are GOOGLE /
+    // TIKTOK / YOUTUBE feeds, not the social networks the programme posts to;
+    // a Google trend is as good a hook for an Instagram reel as for anything).
+    // The slots that want a hook rotate through the top few, so one fill does
+    // not plan five riffs on the same signal.
     let brandKeywords: string[] | null = null;
-    let topTrends: TopTrend[] | null = null;
+    let usableTrends: TopTrend[] | null = null;
+    let trendOrdinal = 0;
     const pickTrend = async (): Promise<TopTrend | null> => {
-      if (topTrends === null) {
+      if (usableTrends === null) {
         brandKeywords = brandKeywords ?? (await this.brandKeywords(workspaceId, programme));
-        topTrends = await this.trends.top('TR', { networks: targetNetworks, brandKeywords, limit: 5, now });
+        const top = await this.trends.top(TREND_REGION, { brandKeywords, limit: TREND_ROTATION, now });
+        usableTrends = top.filter((t) => t.suggestion > TREND_MIN_SUGGESTION);
       }
-      const best = topTrends[0];
-      return best && best.suggestion > TREND_MIN_SUGGESTION ? best : null;
+      if (usableTrends.length === 0) return null;
+      return usableTrends[trendOrdinal++ % usableTrends.length];
     };
 
-    let cursor = new Date(Math.max(now.getTime(), last?.scheduledFor.getTime() ?? 0));
+    let cursor = now;
     let created = 0;
     const mix: Record<string, number> = {};
     for (let guard = 0; guard < 400; guard++) {
@@ -383,15 +417,20 @@ export class ProgrammePlannerService implements OnModuleInit {
   }
 
   /**
-   * PRODUCING slots follow their item. SCHEDULED / NEEDS_APPROVAL / PUBLISHED
-   * all mean the clips exist and the gate is armed → READY (the learning
-   * service's `settle` takes READY → PUBLISHED, so a PUBLISHED item is READY
-   * here and PUBLISHED one tick later — the slot walks the same path either
-   * way). FAILED and SKIPPED carry the item's verdict onto the slot.
+   * PRODUCING and READY slots follow their item. For a PRODUCING slot,
+   * SCHEDULED / NEEDS_APPROVAL / PUBLISHED all mean the clips exist and the
+   * gate is armed → READY (the learning service's `settle` takes READY →
+   * PUBLISHED, so a PUBLISHED item is READY here and PUBLISHED one tick later
+   * — the slot walks the same path either way). FAILED and SKIPPED carry the
+   * item's verdict onto the slot from EITHER status: the publish gate can end
+   * a READY slot's item without ever touching its post (brand safety → item
+   * SKIPPED, no attachable media → item FAILED, a rejection from the campaign
+   * panel), and `settle` only reads the post, so without this a READY slot
+   * whose item died would sit READY for good, unskippable and unlearned.
    */
   async reconcile(workspaceId: string, programme: ContentProgramme): Promise<void> {
     const slots = await this.prisma.contentSlot.findMany({
-      where: { workspaceId, programmeId: programme.id, status: 'PRODUCING', campaignItemId: { not: null } },
+      where: { workspaceId, programmeId: programme.id, status: { in: ['PRODUCING', 'READY'] }, campaignItemId: { not: null } },
     });
     if (slots.length === 0) return;
     const items: Array<{ id: string; status: string; error: string | null; socialPostId: string | null }> =
@@ -403,8 +442,8 @@ export class ProgrammePlannerService implements OnModuleInit {
     for (const slot of slots) {
       const item = byId.get(slot.campaignItemId as string);
       if (!item) continue;
-      const where = { id: slot.id, workspaceId, status: 'PRODUCING' };
-      if (item.status === 'SCHEDULED' || item.status === 'NEEDS_APPROVAL' || item.status === 'PUBLISHED') {
+      const where = { id: slot.id, workspaceId, status: slot.status };
+      if (slot.status === 'PRODUCING' && (item.status === 'SCHEDULED' || item.status === 'NEEDS_APPROVAL' || item.status === 'PUBLISHED')) {
         await this.prisma.contentSlot.updateMany({
           where,
           data: { status: 'READY', error: null, ...(item.socialPostId ? { socialPostId: item.socialPostId } : {}) },
@@ -419,26 +458,36 @@ export class ProgrammePlannerService implements OnModuleInit {
           slotId: slot.id, contentTypeKey: slot.contentTypeKey, campaignItemId: item.id, error,
         });
       } else if (item.status === 'SKIPPED') {
-        await this.prisma.contentSlot.updateMany({ where, data: { status: 'SKIPPED', error: 'campaign item skipped' } });
-        await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_SKIPPED', `Slot ${slot.contentTypeKey} skipped: its campaign item was rejected.`, {
-          slotId: slot.id, contentTypeKey: slot.contentTypeKey, campaignItemId: item.id,
+        const error = (item.error ?? (slot.status === 'READY' ? 'ended by the publish gate' : 'campaign item skipped')).slice(0, 500);
+        await this.prisma.contentSlot.updateMany({ where, data: { status: 'SKIPPED', error } });
+        await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_SKIPPED', `Slot ${slot.contentTypeKey} skipped: ${error}.`, {
+          slotId: slot.id, contentTypeKey: slot.contentTypeKey, campaignItemId: item.id, from: slot.status, error,
         });
       }
     }
   }
 
   /**
-   * The two circuit breakers. A failure streak is checked against the last
-   * ANOMALY_PAUSE so a resume does not trip again on the same three slots; a
-   * spend overrun always trips (the money is the money).
+   * The two circuit breakers.
+   *
+   * Fail streak: the three most recently SETTLED slots (by updatedAt, so a
+   * future slot that is merely IDEATED cannot sit in front of the failures and
+   * mask them) are all FAILED. Owner skips are not symptoms and are dropped
+   * before counting. Checked against the last ANOMALY_PAUSE so a resume does
+   * not trip again on the same three slots.
+   *
+   * Spend: this Istanbul week's real spend is past 120% of the cap. Once per
+   * week — the sum cannot fall until the week rolls, so without the dedup the
+   * owner's every resume would be undone at the next tick.
    */
   async checkAnomalies(workspaceId: string, programme: ContentProgramme, now = new Date()): Promise<void> {
-    const recent: Array<{ id: string; status: string; error: string | null }> = await this.prisma.contentSlot.findMany({
-      where: { workspaceId, programmeId: programme.id, status: { not: 'PLANNED' } },
-      orderBy: { scheduledFor: 'desc' },
-      take: ANOMALY_FAIL_STREAK,
+    const settled: Array<{ id: string; status: string; error: string | null }> = await this.prisma.contentSlot.findMany({
+      where: { workspaceId, programmeId: programme.id, status: { in: TERMINAL_SLOT_STATUSES } },
+      orderBy: { updatedAt: 'desc' },
+      take: STREAK_SCAN,
       select: { id: true, status: true, error: true },
     });
+    const recent = settled.filter((s) => !(s.status === 'SKIPPED' && (s.error ?? '').startsWith(OWNER_SKIP_PREFIX))).slice(0, ANOMALY_FAIL_STREAK);
     if (recent.length === ANOMALY_FAIL_STREAK && recent.every((s) => s.status === 'FAILED')) {
       const ids = recent.map((s) => s.id).sort();
       const previous = await this.prisma.contentProgrammeEvent.findFirst({
@@ -460,6 +509,11 @@ export class ProgrammePlannerService implements OnModuleInit {
     const { spent, weekStart } = await sumWeekSpend(this.prisma, workspaceId, programme.id, now);
     const limit = ANOMALY_SPEND_RATIO * programme.weeklyCreditCap;
     if (spent > limit) {
+      const already = await this.prisma.contentProgrammeEvent.findFirst({
+        where: { workspaceId, programmeId: programme.id, kind: 'ANOMALY_PAUSE', data: { path: ['weekStart'], equals: weekStart.toISOString() } },
+        select: { id: true },
+      });
+      if (already) return;
       await this.programmes.pause(workspaceId, programme.id);
       await this.programmes.logEvent(workspaceId, programme.id, 'ANOMALY_PAUSE',
         `This week's spend (${spent} credits) is past ${Math.round(ANOMALY_SPEND_RATIO * 100)}% of the ${programme.weeklyCreditCap}-credit cap. Programme paused.`,

@@ -1201,3 +1201,42 @@ describe('ContentConceptsService.decideByProgramme — the autopilot approval', 
     await expect(svc.decideByProgramme('ws1', 'c1', 'prog-1', 'camp-1')).rejects.toThrow(/discarded/);
   });
 });
+
+/**
+ * A concept the PROGRAMME planned is decided by the programme at its slot's
+ * time, or by the slot editor — never through the concept hub's review door.
+ * An approval here would promote it off-calendar (no `scheduledFor`) and the
+ * slot would then FAIL at produce time on "already approved"; a discard would
+ * fail the slot the same way.
+ */
+describe('ContentConceptsService.review — a programme concept is not reviewed here', () => {
+  const programmeConcept = {
+    id: 'c-prog',
+    workspaceId: 'ws1',
+    status: 'PROPOSED',
+    socialCampaignId: 'camp-1',
+    programmeId: 'prog-1',
+    slotId: 'slot-1',
+    shotPlan: { shots: [{ ord: 0 }] },
+  };
+
+  it.each(['APPROVED', 'DISCARDED'] as const)('%s is refused by name, before any verdict or promotion', async (decision) => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue(programmeConcept);
+    await expect(svc.review('ws1', 'c-prog', { decision, reviewerId: 'u9' })).rejects.toThrow(
+      'This concept belongs to a content programme; edit or skip its slot instead of reviewing it here.',
+    );
+    expect(prisma.contentConcept.findFirst.mock.calls[0][0].where).toEqual({ id: 'c-prog', workspaceId: 'ws1' });
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+    expect(promotion.requireCampaign).not.toHaveBeenCalled();
+    expect(promotion.promote).not.toHaveBeenCalled();
+  });
+
+  it('a concept with no programme is decided exactly as before', async () => {
+    const { svc, prisma } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...programmeConcept, programmeId: null, status: 'DISCARDED' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+    await svc.review('ws1', 'c-prog', { decision: 'DISCARDED', reviewerId: 'u9' });
+    expect(prisma.contentConcept.updateMany.mock.calls[0][0].data.status).toBe('DISCARDED');
+  });
+});

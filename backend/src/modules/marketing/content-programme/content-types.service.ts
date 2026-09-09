@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { ContentType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DEFAULT_CONTENT_TYPES, type ContentTypeBeat } from './content-types.seed';
+import { sharesFeasible } from './engine/posterior.util';
 
 /** Slug shape for a type key: it ends up in URLs, stat rows and prompt text, so keep it ASCII. */
 const KEY_RE = /^[a-z0-9-]{2,40}$/;
@@ -89,6 +90,9 @@ export class ContentTypesService {
     // Owner-defined types queue after everything present, so the seed order holds.
     const existing = await this.list(workspaceId);
     const ordinal = existing.reduce((m, t) => Math.max(m, t.ordinal), -1) + 1;
+    // A new active type adds its floor to the calendar's promises; its cap can
+    // only raise the cap sum, so only the floors are checked here.
+    requireFeasibleShares([...existing, { id: '', minShare, maxShare, active: true }], { floorsOnly: true });
 
     return this.prisma.contentType.create({
       data: {
@@ -132,9 +136,20 @@ export class ContentTypesService {
     }
     if (patch.active !== undefined) data.active = Boolean(patch.active);
 
+    // Shares are a promise over the WHOLE active set: a floor raised here, or a
+    // type retired here, can make the remaining floors/caps impossible to keep
+    // at once. Check the set the patch would leave behind, not the row alone.
+    if (patch.minShare !== undefined || patch.maxShare !== undefined || patch.active !== undefined) {
+      const after = (await this.list(workspaceId)).map((t) => (t.id === current.id ? { ...t, ...data } : t));
+      if (!after.some((t) => t.id === current.id)) after.push({ ...current, ...data } as ContentType);
+      requireFeasibleShares(after as ShareRow[]);
+    }
+
     return this.prisma.contentType.update({ where: { id: current.id }, data });
   }
 }
+
+type ShareRow = { id: string; minShare: number; maxShare: number; active: boolean };
 
 function requireName(name: unknown): string {
   const s = typeof name === 'string' ? name.trim() : '';
@@ -147,6 +162,25 @@ function requireShares(minShare: number, maxShare: number): void {
   if (!fin(minShare) || !fin(maxShare) || minShare < 0 || maxShare > 1 || minShare > maxShare) {
     throw new BadRequestException('shares must satisfy 0 <= minShare <= maxShare <= 1');
   }
+}
+
+/**
+ * Cross-type feasibility over the ACTIVE types: the floors must fit in one
+ * calendar (Σ minShare ≤ 1) and the caps must be able to fill it (Σ maxShare
+ * ≥ 1). Per-row checks cannot see this; without it the selector starves every
+ * type forever (floors) or the weights chart sums to less than 1 (caps). An
+ * empty active set is vacuously feasible — retiring the last type is the
+ * programme's problem to report, not a share problem.
+ */
+function requireFeasibleShares(rows: ShareRow[], opts: { floorsOnly?: boolean } = {}): void {
+  const { feasible, minSum, maxSum } = sharesFeasible(rows);
+  if (feasible) return;
+  const fmt2 = (x: number) => x.toFixed(2);
+  if (minSum > 1) {
+    throw new BadRequestException(`active types' floors sum to ${fmt2(minSum)} — lower a floor or retire a type`);
+  }
+  if (opts.floorsOnly) return;
+  throw new BadRequestException(`active types' caps sum to ${fmt2(maxSum)} — raise a cap or activate a type`);
 }
 
 function requireDuration(sec: unknown): number {

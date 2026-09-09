@@ -3284,6 +3284,11 @@
     "programme": {
       "editor": {
         "frozen": "The edit window has closed; the slot publishes as it stands.",
+        "frozenFailed": "Failed: {{error}}",
+        "frozenMeasured": "Published · reward {{reward}}",
+        "frozenProducing": "Producing; it publishes at the planned time once the clips are ready.",
+        "frozenPublished": "Published.",
+        "frozenSkipped": "Skipped; nothing will publish.",
         "idea": "Idea",
         "metrics": "Metrics",
         "noApproval": "Everything is editable; no step waits for approval.",
@@ -3291,6 +3296,9 @@
         "regenerate": "Regenerate",
         "regenerateFailed": "Could not regenerate the slot.",
         "regenerated": "Slot is being re-planned.",
+        "retried": "Slot is being retried.",
+        "retry": "Retry",
+        "retryFailed": "Could not retry the slot.",
         "save": "Save",
         "saveFailed": "Could not save the slot.",
         "saved": "Slot updated.",
@@ -3385,13 +3393,13 @@
         "name": "Name",
         "needAccounts": "Pick at least one account.",
         "needBrief": "What is the programme about? A sentence will do.",
-        "needCap": "The weekly credit cap must be at least 50.",
+        "needCap": "The weekly credit cap must be a whole number between 50 and 20000.",
         "needName": "Give the programme a name.",
         "needTime": "The time must be HH:MM.",
         "noAccounts": "No connected accounts — connect one first.",
         "perWeek": "Posts per week (per account)",
         "submit": "Start",
-        "time": "Publish time (HH:MM)",
+        "time": "Publish time (Turkey time, HH:MM)",
         "title": "Start the content programme"
       },
       "slotStatus": {
@@ -3410,6 +3418,7 @@
         "editableFor": "editable for {{hours}} h",
         "empty": "No slots in this window.",
         "reward": "Reward",
+        "spent": "Spent / quote",
         "status": "Status",
         "type": "Type",
         "when": "Time",
@@ -3465,7 +3474,8 @@
         "samples": "Samples",
         "saveFailed": "Could not save the type.",
         "share": "Share: planned / learned"
-      }
+      },
+      "unavailable": "The content programme is not available on this plan"
     },
     "tab": {
       "autopilot": "Autopilot",

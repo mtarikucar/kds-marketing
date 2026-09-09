@@ -1,8 +1,8 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { CalendarRange, ChevronDown, ChevronUp, Info, Ban, Pencil, RefreshCw, SkipForward } from 'lucide-react';
+import { CalendarRange, ChevronDown, ChevronUp, Info, Ban, Pencil, RefreshCw, RotateCcw, SkipForward } from 'lucide-react';
 import { Badge, type BadgeProps } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -13,6 +13,8 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/Tooltip';
 import { cn } from '@/components/ui/cn';
+import { hasMarketingRole, MarketingRole } from '@/features/marketing/types';
+import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import {
   getProgramme,
   killProgramme,
@@ -20,18 +22,20 @@ import {
   programmeKeys,
   regenerateSlot,
   resumeProgramme,
+  retrySlot,
   skipSlot,
   slotMetrics,
   updateSlot,
   type Dashboard,
   type ContentProgramme,
+  type ProgrammeResponse,
   type SlotPatch,
   type SlotView,
 } from '../../../features/marketing/api/contentProgramme.service';
 import { EventLog } from './programme/EventLog';
 import { LearningPanel, PHASE_TONE, usePhaseLabels } from './programme/LearningPanel';
 import { ProgrammeSetupDialog } from './programme/ProgrammeSetupDialog';
-import { SlotEditor, errorMessage, hoursLeft } from './programme/SlotEditor';
+import { SlotEditor, errorMessage, hoursLeft, slotActions } from './programme/SlotEditor';
 import { SlotStrip, statusGlyph, typeColour } from './programme/SlotStrip';
 import { TrendFeed } from './programme/TrendFeed';
 import { TypesTable } from './programme/TypesTable';
@@ -80,10 +84,40 @@ const STATUS_TONE: Record<string, BadgeProps['tone']> = {
 
 type Tab = 'slots' | 'types' | 'learning' | 'trends' | 'events';
 
+/** How often the dashboard is re-read while the loop is running. */
+export const PROGRAMME_POLL_MS = 60_000;
+/** How often the panel's idea of "now" moves, for the hours-left and window maths. */
+export const NOW_TICK_MS = 30_000;
+
+/**
+ * A clock that TICKS. The Studio is one long-lived screen: left open over
+ * lunch, a `now` captured at mount keeps saying "2 saat kaldı" an hour after
+ * the window closed, and Save stays enabled for a call that will 400. The
+ * override is for tests, which need a fixed instant and no timer.
+ */
+export function useTickingNow(override?: Date): Date {
+  const [now, setNow] = useState(() => override ?? new Date());
+  useEffect(() => {
+    if (override) {
+      setNow(override);
+      return undefined;
+    }
+    const timer = window.setInterval(() => setNow(new Date()), NOW_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [override]);
+  return now;
+}
+
+/** A 403 (role, feature) or 404 (route not mounted) from the root read: the programme is not for this workspace. */
+function isUnavailable(e: unknown): boolean {
+  const status = (e as { response?: { status?: number } } | null)?.response?.status;
+  return status === 403 || status === 404;
+}
+
 export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
-  const [now] = useState(() => nowProp ?? new Date());
+  const now = useTickingNow(nowProp);
   const [setupOpen, setSetupOpen] = useState(false);
   const [killOpen, setKillOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -91,9 +125,28 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [metricsSlot, setMetricsSlot] = useState<string | null>(null);
 
+  /**
+   * Every route of the programme controller is MANAGER-only, the read
+   * included. A REP reaches /studio (the queue and the accounts list plan for
+   * that), so firing the request for them would only produce a permanent red
+   * line with a Retry that can never succeed. Like AutopilotStatusBar, the
+   * panel gates on the role it already knows instead of asking the server.
+   */
+  const user = useMarketingAuthStore((s) => s.user);
+  const canManage = hasMarketingRole(user?.role, MarketingRole.MANAGER);
+
   // `meta.silent`: main.tsx toasts every non-401 query failure globally and
   // this panel has an inline error line of its own — see AutopilotStatusBar.
-  const q = useQuery({ queryKey: programmeKeys.root, queryFn: getProgramme, meta: { silent: true } });
+  const q = useQuery({
+    queryKey: programmeKeys.root,
+    queryFn: getProgramme,
+    meta: { silent: true },
+    enabled: canManage,
+    // An autonomous loop moves without the owner: chips go from PLANNED to
+    // PUBLISHED and the week's burn climbs while nobody clicks. Polled only
+    // while ACTIVE — a paused programme changes when the owner changes it.
+    refetchInterval: (query) => (query.state.data?.dashboard?.status === 'ACTIVE' ? PROGRAMME_POLL_MS : false),
+  });
   const invalidate = () => qc.invalidateQueries({ queryKey: programmeKeys.root });
   const fail = (fallback: string) => (e: unknown) => toast.error(errorMessage(e, fallback));
 
@@ -102,9 +155,27 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
 
   const running = useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) => (on ? resumeProgramme(id) : pauseProgramme(id)),
-    onSuccess: invalidate,
+    // The controller answers with the new envelope precisely so the row can
+    // show PAUSED the instant it is: written straight into the cache, then
+    // the refetch AWAITED so the switch stays disabled until it lands — a
+    // switch that snaps back to "running" for one round-trip invites a
+    // second click, and pausing a PAUSED programme is a 400.
+    onSuccess: async (data: ProgrammeResponse) => {
+      qc.setQueryData(programmeKeys.root, data);
+      await invalidate();
+    },
     onError: fail(t('studio.programme.row.toggleFailed', 'Program durumu değiştirilemedi.')),
   });
+  const toggleRunning = (on: boolean) => {
+    if (!programme || !dashboard) return;
+    // Guard on what the cache says: resume when ACTIVE and pause when PAUSED
+    // are both refused by the backend, so neither is ever sent.
+    const status = dashboard.killSwitch ? 'KILLED' : dashboard.status;
+    if (status === 'KILLED') return;
+    if (on && status === 'ACTIVE') return;
+    if (!on && status === 'PAUSED') return;
+    running.mutate({ id: programme.id, on });
+  };
   const kill = useMutation({
     mutationFn: (id: string) => killProgramme(id),
     onSuccess: () => {
@@ -138,6 +209,14 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
     },
     onError: fail(t('studio.programme.editor.regenerateFailed', 'Slot yeniden üretilemedi.')),
   });
+  const retry = useMutation({
+    mutationFn: ({ id, slotId }: { id: string; slotId: string }) => retrySlot(id, slotId),
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('studio.programme.editor.retried', 'Slot yeniden deneniyor.'));
+    },
+    onError: fail(t('studio.programme.editor.retryFailed', 'Slot yeniden denenemedi.')),
+  });
 
   const shell = (children: React.ReactNode) => (
     <TooltipProvider delayDuration={200}>
@@ -145,7 +224,19 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
     </TooltipProvider>
   );
 
+  if (!canManage) return null;
+
   if (q.isError && q.data === undefined) {
+    // A plan without the feature (403) or a route that is not there (404) is
+    // a fact about the workspace, not a transient failure: one quiet
+    // sentence, no Retry that could never succeed.
+    if (isUnavailable(q.error)) {
+      return shell(
+        <p className="text-sm text-muted-foreground" data-testid="programme-unavailable">
+          {t('studio.programme.unavailable', 'İçerik programı bu planda yok')}
+        </p>,
+      );
+    }
     return shell(
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm text-danger">{t('studio.programme.error', 'İçerik programı okunamadı.')}</span>
@@ -189,7 +280,7 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
   }
 
   const selected = dashboard.slots.find((s) => s.id === selectedSlot) ?? null;
-  const busy = save.isPending || skip.isPending || regenerate.isPending;
+  const busy = save.isPending || skip.isPending || regenerate.isPending || retry.isPending;
   const openMetrics = (slotId: string) => {
     setExpanded(true);
     setTab('slots');
@@ -204,7 +295,7 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
         stale={q.isError}
         expanded={expanded}
         onToggleExpanded={() => setExpanded((e) => !e)}
-        onRunning={(on) => running.mutate({ id: programme.id, on })}
+        onRunning={toggleRunning}
         runningPending={running.isPending}
         onKill={() => setKillOpen(true)}
         now={now}
@@ -212,55 +303,70 @@ export function ProgrammePanel({ className, now: nowProp }: ProgrammePanelProps)
         onSelectSlot={(id) => setSelectedSlot((cur) => (cur === id ? null : id))}
       />
 
-      {selected && (
-        <SlotEditor
-          slot={selected}
-          types={dashboard.types}
-          now={now}
-          busy={busy}
-          onSave={(patch) => save.mutate({ id: programme.id, slotId: selected.id, patch })}
-          onSkip={() => skip.mutate({ id: programme.id, slotId: selected.id })}
-          onRegenerate={() => regenerate.mutate({ id: programme.id, slotId: selected.id })}
-          onMetrics={() => openMetrics(selected.id)}
-          onClose={() => setSelectedSlot(null)}
-        />
-      )}
-
-      {expanded && (
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} data-testid="programme-detail">
-          <TabsList>
-            <TabsTrigger value="slots">{t('studio.programme.tabs.slots', 'Slotlar')}</TabsTrigger>
-            <TabsTrigger value="types">{t('studio.programme.tabs.types', 'Türler')}</TabsTrigger>
-            <TabsTrigger value="learning">{t('studio.programme.tabs.learning', 'Öğrenme')}</TabsTrigger>
-            <TabsTrigger value="trends">{t('studio.programme.tabs.trends', 'Trendler')}</TabsTrigger>
-            <TabsTrigger value="events">{t('studio.programme.tabs.events', 'Günlük')}</TabsTrigger>
-          </TabsList>
-          <TabsContent value="slots">
-            <SlotsTable
-              programmeId={programme.id}
-              slots={dashboard.slots}
+      {/*
+        The editor and the tabs live in ONE box capped at roughly half the
+        viewport on lg, scrolling inside. The Studio root is a fixed-height
+        flex column and the work area below is what flexes: a fourteen-day
+        slots table plus an open editor would otherwise grow the section past
+        the viewport and squeeze the queue, the ideas and the stats to zero.
+        The compact row above stays out of the box, so the kill switch and
+        the strip never scroll away.
+      */}
+      {(selected || expanded) && (
+        <div className="flex flex-col gap-3 lg:max-h-[48vh] lg:overflow-y-auto" data-testid="programme-work">
+          {selected && (
+            <SlotEditor
+              slot={selected}
+              types={dashboard.types}
               now={now}
               busy={busy}
-              openMetrics={metricsSlot}
-              onToggleMetrics={(id) => setMetricsSlot((cur) => (cur === id ? null : id))}
-              onEdit={(id) => setSelectedSlot(id)}
-              onSkip={(id) => skip.mutate({ id: programme.id, slotId: id })}
-              onRegenerate={(id) => regenerate.mutate({ id: programme.id, slotId: id })}
+              onSave={(patch) => save.mutate({ id: programme.id, slotId: selected.id, patch })}
+              onSkip={() => skip.mutate({ id: programme.id, slotId: selected.id })}
+              onRegenerate={() => regenerate.mutate({ id: programme.id, slotId: selected.id })}
+              onRetry={() => retry.mutate({ id: programme.id, slotId: selected.id })}
+              onMetrics={() => openMetrics(selected.id)}
+              onClose={() => setSelectedSlot(null)}
             />
-          </TabsContent>
-          <TabsContent value="types">
-            <TypesTable programmeId={programme.id} types={dashboard.types} />
-          </TabsContent>
-          <TabsContent value="learning">
-            <LearningPanel learning={dashboard.learning} types={dashboard.types} />
-          </TabsContent>
-          <TabsContent value="trends">
-            <TrendFeed trends={dashboard.trends} />
-          </TabsContent>
-          <TabsContent value="events">
-            <EventLog events={dashboard.events} now={now} />
-          </TabsContent>
-        </Tabs>
+          )}
+
+          {expanded && (
+            <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} data-testid="programme-detail">
+              <TabsList>
+                <TabsTrigger value="slots">{t('studio.programme.tabs.slots', 'Slotlar')}</TabsTrigger>
+                <TabsTrigger value="types">{t('studio.programme.tabs.types', 'Türler')}</TabsTrigger>
+                <TabsTrigger value="learning">{t('studio.programme.tabs.learning', 'Öğrenme')}</TabsTrigger>
+                <TabsTrigger value="trends">{t('studio.programme.tabs.trends', 'Trendler')}</TabsTrigger>
+                <TabsTrigger value="events">{t('studio.programme.tabs.events', 'Günlük')}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="slots">
+                <SlotsTable
+                  programmeId={programme.id}
+                  slots={dashboard.slots}
+                  now={now}
+                  busy={busy}
+                  openMetrics={metricsSlot}
+                  onToggleMetrics={(id) => setMetricsSlot((cur) => (cur === id ? null : id))}
+                  onEdit={(id) => setSelectedSlot(id)}
+                  onSkip={(id) => skip.mutate({ id: programme.id, slotId: id })}
+                  onRegenerate={(id) => regenerate.mutate({ id: programme.id, slotId: id })}
+                  onRetry={(id) => retry.mutate({ id: programme.id, slotId: id })}
+                />
+              </TabsContent>
+              <TabsContent value="types">
+                <TypesTable programmeId={programme.id} types={dashboard.types} />
+              </TabsContent>
+              <TabsContent value="learning">
+                <LearningPanel learning={dashboard.learning} types={dashboard.types} />
+              </TabsContent>
+              <TabsContent value="trends">
+                <TrendFeed trends={dashboard.trends} />
+              </TabsContent>
+              <TabsContent value="events">
+                <EventLog events={dashboard.events} now={now} />
+              </TabsContent>
+            </Tabs>
+          )}
+        </div>
       )}
 
       <ConfirmDialog
@@ -400,6 +506,7 @@ interface SlotsTableProps {
   onEdit: (id: string) => void;
   onSkip: (id: string) => void;
   onRegenerate: (id: string) => void;
+  onRetry: (id: string) => void;
 }
 
 const SLOT_TONE: Record<string, BadgeProps['tone']> = {
@@ -419,7 +526,7 @@ const SLOT_TONE: Record<string, BadgeProps['tone']> = {
  * into its metrics; the edit action hands the slot to the same inline editor
  * the chips use, so there is exactly one place a slot is changed.
  */
-function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetrics, onEdit, onSkip, onRegenerate }: SlotsTableProps) {
+function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetrics, onEdit, onSkip, onRegenerate, onRetry }: SlotsTableProps) {
   const { t, i18n } = useTranslation('marketing');
   const rows = [...slots].sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor));
 
@@ -435,7 +542,7 @@ function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetric
             <TH>{t('studio.programme.slots.when', 'Zaman')}</TH>
             <TH>{t('studio.programme.slots.type', 'Tür')}</TH>
             <TH>{t('studio.programme.slots.status', 'Durum')}</TH>
-            <TH numeric>{t('studio.programme.slots.credits', 'Teklif (kredi)')}</TH>
+            <TH numeric>{t('studio.programme.slots.spent', 'Harcanan / teklif')}</TH>
             <TH>{t('studio.programme.slots.reward', 'Ödül')}</TH>
             <TH>{t('studio.programme.slots.actions', 'İşlemler')}</TH>
           </TR>
@@ -444,14 +551,16 @@ function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetric
           {rows.map((s) => {
             const open = openMetrics === s.id;
             const left = hoursLeft(s.editableUntil, now);
+            const can = slotActions(s);
             return (
               <Fragment key={s.id}>
-                <TR
-                  data-testid="programme-slot-row"
-                  className={cn('cursor-pointer', open && 'bg-surface-muted/60')}
-                  onClick={() => onToggleMetrics(s.id)}
-                  aria-expanded={open}
-                >
+                {/*
+                  The row is not the control: `aria-expanded` on a <tr> is
+                  nothing a row role supports, and a click-only row is
+                  invisible to a keyboard. The Metrikler button in the last
+                  cell is the one expand control, and it says what it holds.
+                */}
+                <TR data-testid="programme-slot-row" className={cn(open && 'bg-surface-muted/60')}>
                   <TD className="whitespace-nowrap tabular-nums">
                     {new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(s.scheduledFor))}
                     {s.editable && (
@@ -473,7 +582,6 @@ function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetric
                             type="button"
                             className="text-muted-foreground"
                             aria-label={t('studio.programme.slots.why', 'Neden bu tür?')}
-                            onClick={(e) => e.stopPropagation()}
                           >
                             <Info className="h-3.5 w-3.5" aria-hidden="true" />
                           </button>
@@ -492,22 +600,29 @@ function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetric
                     </Badge>
                     {s.error && <span className="ms-2 text-micro text-danger">{s.error}</span>}
                   </TD>
-                  <TD numeric>{s.quotedCredits ?? '—'}</TD>
+                  <TD numeric data-testid="programme-slot-credits-cell">
+                    {s.spentCredits} / {s.quotedCredits ?? '—'}
+                  </TD>
                   <TD>
                     <RewardBar value={s.reward} />
                   </TD>
                   <TD>
-                    <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <span className="flex items-center gap-1">
                       <Button variant="ghost" size="sm" className="h-7 px-2" disabled={!s.editable} onClick={() => onEdit(s.id)} aria-label={t('common.edit', 'Düzenle')}>
                         <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2" disabled={!s.editable || busy} onClick={() => onSkip(s.id)} aria-label={t('studio.programme.editor.skip', 'Atla')}>
+                      <Button variant="ghost" size="sm" className="h-7 px-2" disabled={!can.skip || busy} onClick={() => onSkip(s.id)} aria-label={t('studio.programme.editor.skip', 'Atla')}>
                         <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2" disabled={!s.editable || busy} onClick={() => onRegenerate(s.id)} aria-label={t('studio.programme.editor.regenerate', 'Yeniden üret')}>
+                      <Button variant="ghost" size="sm" className="h-7 px-2" disabled={!can.regenerate || busy} onClick={() => onRegenerate(s.id)} aria-label={t('studio.programme.editor.regenerate', 'Yeniden üret')}>
                         <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onToggleMetrics(s.id)}>
+                      {can.retry && (
+                        <Button variant="ghost" size="sm" className="h-7 px-2" disabled={busy} onClick={() => onRetry(s.id)} aria-label={t('studio.programme.editor.retry', 'Tekrar dene')}>
+                          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" aria-expanded={open} onClick={() => onToggleMetrics(s.id)}>
                         {t('studio.programme.editor.metrics', 'Metrikler')}
                       </Button>
                     </span>
@@ -531,11 +646,20 @@ function SlotsTable({ programmeId, slots, now, busy, openMetrics, onToggleMetric
 
 /** A 0..1 reward as a short bar with the number beside it; "—" when unmeasured. */
 function RewardBar({ value }: { value: number | null }) {
+  const { t } = useTranslation('marketing');
   if (value == null) return <span className="text-muted-foreground">—</span>;
   const pct = Math.round(Math.min(1, Math.max(0, value)) * 100);
   return (
     <span className="inline-flex items-center gap-2" data-testid="programme-reward">
-      <span className="h-1.5 w-16 rounded-full bg-border" role="meter" aria-valuemin={0} aria-valuemax={1} aria-valuenow={value}>
+      {/* A meter must have a name; the label carries the value so it reads as one phrase. */}
+      <span
+        className="h-1.5 w-16 rounded-full bg-border"
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={1}
+        aria-valuenow={value}
+        aria-label={`${t('studio.programme.slots.reward', 'Ödül')} ${value.toFixed(2)}`}
+      >
         <span className={cn('block h-full rounded-full', value >= 0.5 ? 'bg-success' : 'bg-warning')} style={{ width: `${pct}%` }} />
       </span>
       <span className="tabular-nums text-xs">{value.toFixed(2)}</span>

@@ -45,23 +45,35 @@ function parseShare(raw: string): number | null {
  */
 function ShareBars({ planned, weight, colour }: { planned: number; weight: number; colour: string }) {
   const { t } = useTranslation('marketing');
+  const plannedLabel = t('studio.programme.types.planned', 'Planlanan');
+  const learnedLabel = t('studio.programme.types.learned', 'Öğrenilen');
   return (
-    <div className="flex min-w-[8rem] flex-col gap-1" aria-hidden="true">
-      <div className="flex items-center gap-2 text-micro text-muted-foreground">
-        <span className="w-14 shrink-0">{t('studio.programme.types.planned', 'Planlanan')}</span>
-        <div className="h-1.5 flex-1 rounded-full bg-border">
-          <div className={cn('h-full rounded-full border', colour)} style={{ width: pct(planned) }} />
+    <>
+      {/*
+        The bars are decoration over two numbers, and the numbers are what a
+        screen reader gets — one sentence with both — while the drawing stays
+        hidden so the same percentages are not read out twice.
+      */}
+      <span className="sr-only" data-testid="programme-share-text">
+        {plannedLabel} {pct(planned)}, {learnedLabel} {pct(weight)}
+      </span>
+      <div className="flex min-w-[8rem] flex-col gap-1" aria-hidden="true">
+        <div className="flex items-center gap-2 text-micro text-muted-foreground">
+          <span className="w-14 shrink-0">{plannedLabel}</span>
+          <div className="h-1.5 flex-1 rounded-full bg-border">
+            <div className={cn('h-full rounded-full border', colour)} style={{ width: pct(planned) }} />
+          </div>
+          <span className="w-9 text-end tabular-nums">{pct(planned)}</span>
         </div>
-        <span className="w-9 text-end tabular-nums">{pct(planned)}</span>
-      </div>
-      <div className="flex items-center gap-2 text-micro text-muted-foreground">
-        <span className="w-14 shrink-0">{t('studio.programme.types.learned', 'Öğrenilen')}</span>
-        <div className="h-1.5 flex-1 rounded-full bg-border">
-          <div className="h-full rounded-full bg-primary" style={{ width: pct(weight) }} />
+        <div className="flex items-center gap-2 text-micro text-muted-foreground">
+          <span className="w-14 shrink-0">{learnedLabel}</span>
+          <div className="h-1.5 flex-1 rounded-full bg-border">
+            <div className="h-full rounded-full bg-primary" style={{ width: pct(weight) }} />
+          </div>
+          <span className="w-9 text-end tabular-nums">{pct(weight)}</span>
         </div>
-        <span className="w-9 text-end tabular-nums">{pct(weight)}</span>
       </div>
-    </div>
+    </>
   );
 }
 

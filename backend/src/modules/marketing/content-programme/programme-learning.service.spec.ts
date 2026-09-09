@@ -1,5 +1,5 @@
 import {
-  CONTENT_PROGRAMME_LEARN_KIND, LEARN_INTERVAL_MS, METRIC_GRACE_HOURS, ProgrammeLearningService,
+  CONTENT_PROGRAMME_LEARN_KIND, LEARN_BOOT_DELAY_MS, LEARN_INTERVAL_MS, METRIC_GRACE_HOURS, ProgrammeLearningService,
 } from './programme-learning.service';
 import { NETWORK_DEFAULTS } from './engine/reward.util';
 
@@ -26,7 +26,7 @@ function slot(over: Record<string, unknown> = {}) {
 const type = (key: string, over: Record<string, unknown> = {}) =>
   ({ id: `id-${key}`, workspaceId: WS, key, active: true, minShare: 0.05, maxShare: 0.4, ordinal: 0, ...over });
 const metric = (over: Record<string, unknown> = {}) => ({
-  impressions: 0, reach: 0, engagements: 0, likes: 0, comments: 0, shares: 0, saves: 0, videoViews: 0, leads: 0, date: daysAgo(1), ...over,
+  impressions: 0, reach: 0, engagements: 0, likes: 0, comments: 0, shares: 0, saves: 0, clicks: 0, videoViews: 0, leads: 0, date: daysAgo(1), ...over,
 });
 
 function harness() {
@@ -168,6 +168,20 @@ describe('ProgrammeLearningService.measureDue', () => {
   });
 });
 
+describe('ProgrammeLearningService.measureDue — the metric row\'s clicks and a Reel\'s views reach the reward', () => {
+  it('reads clicks off the metric row for a LEADS programme and scores a Reel (no impressions) on its views', async () => {
+    const { svc, prisma } = harness();
+    prisma.contentSlot.findMany.mockResolvedValue([slot({ id: 'slot-m', status: 'PUBLISHED', socialPostId: 'post-1', publishedAt: hoursAgo(80) })]);
+    // A Reel row as the IG mapper writes it: views → videoViews, impressions 0, 20 link clicks, no leads.
+    prisma.socialPostTarget.findMany.mockResolvedValue([
+      { id: 't-ig', socialAccountId: 'acc-ig', network: 'INSTAGRAM', status: 'PUBLISHED', metrics: [metric({ videoViews: 1000, engagements: 60, clicks: 20 })] },
+    ]);
+    await svc.measureDue(WS, programme({ goal: 'LEADS' }), NOW);
+    const ig = slotWrites(prisma)[0].data.rewardBreakdown.INSTAGRAM;
+    expect(ig).toEqual(expect.objectContaining({ clicks: 20, leads: 0, denominator: 1000, leadSource: 'clicks', leadRate: 0.02, leadBaseline: 0.01, reward: 1 }));
+  });
+});
+
 describe('ProgrammeLearningService.reweight', () => {
   const measured = (id: string, key: string, reward: number, perNetwork: Record<string, number>, measuredAt = hoursAgo(10)) =>
     slot({
@@ -217,15 +231,60 @@ describe('ProgrammeLearningService.reweight', () => {
     expect(row('how-to', 'TIKTOK')).toEqual(expect.objectContaining({ samples: 1, alpha: 1.8, beta: 1.2 }));
     expect(row('pov-ugc', 'TIKTOK')).toEqual(expect.objectContaining({ samples: 0, alpha: 1, beta: 1 }));
     expect(row('pov-ugc', 'ALL')).toEqual(expect.objectContaining({ samples: 1, alpha: 1.2, beta: 1.8 }));
-    // Weights: means 0.6 and 0.4 clipped to the 0.4 cap — both pinned.
-    expect(row('how-to', 'ALL').weight).toBeCloseTo(0.4, 9);
+    // Weights: two active types capped at 0.4 cannot fill a calendar (Σ max
+    // 0.8), so the bounds are infeasible — the weights are the plain means
+    // (0.6 / 0.4) and the reweight says so instead of charting 0.4 + 0.4.
+    expect(row('how-to', 'ALL').weight).toBeCloseTo(0.6, 9);
     expect(row('pov-ugc', 'ALL').weight).toBeCloseTo(0.4, 9);
 
     expect(prisma.contentProgramme.updateMany).toHaveBeenCalledWith({ where: { id: PROG, workspaceId: WS }, data: { phase: 'SEED', lastReweightedAt: NOW } });
-    expect(res).toEqual(expect.objectContaining({ phase: 'SEED', previousPhase: 'SEED', folded: 3, weights: { 'how-to': expect.any(Number), 'pov-ugc': expect.any(Number) } }));
+    expect(res).toEqual(expect.objectContaining({ phase: 'SEED', previousPhase: 'SEED', folded: 3, sharesFeasible: false, weights: { 'how-to': expect.any(Number), 'pov-ugc': expect.any(Number) } }));
     const ev = events(prisma).find((e: any) => e.kind === 'REWEIGHT');
     expect(ev).toEqual(expect.objectContaining({ workspaceId: WS, programmeId: PROG, message: expect.stringMatching(/how-to/) }));
-    expect(ev.data).toEqual(expect.objectContaining({ folded: 3, phase: 'SEED', weights: expect.any(Object), arms: expect.arrayContaining([expect.objectContaining({ key: 'how-to', samples: 2 })]) }));
+    expect(ev.message).toMatch(/share bounds infeasible: floors sum to 0\.1, caps to 0\.8/);
+    expect(ev.data).toEqual(expect.objectContaining({ folded: 3, phase: 'SEED', sharesFeasible: false, minShareSum: 0.1, maxShareSum: 0.8, weights: expect.any(Object), arms: expect.arrayContaining([expect.objectContaining({ key: 'how-to', samples: 2 })]) }));
+  });
+
+  it('with feasible bounds the weights are clipped to the caps, sum to 1, and the event carries no warning', async () => {
+    const { svc, prisma } = harness();
+    prisma.contentSlot.count.mockResolvedValue(1);
+    prisma.contentType.findMany.mockResolvedValue([type('how-to', { ordinal: 0, maxShare: 0.5 }), type('pov-ugc', { ordinal: 1, maxShare: 0.6 })]);
+    prisma.contentSlot.findMany.mockResolvedValue([measured('s1', 'how-to', 1, { INSTAGRAM: 1 })]);
+    const res = await svc.reweight(WS, programme(), NOW);
+    // Means 2/3 and 1/2 → 0.571 / 0.429 unclipped; how-to is pinned at 0.5 and pov-ugc takes the rest.
+    expect(res!.sharesFeasible).toBe(true);
+    expect(res!.weights['how-to']).toBeCloseTo(0.5, 9);
+    expect(res!.weights['pov-ugc']).toBeCloseTo(0.5, 9);
+    const ev = events(prisma).find((e: any) => e.kind === 'REWEIGHT');
+    expect(ev.message).not.toMatch(/infeasible/);
+    expect(ev.data).toEqual(expect.objectContaining({ sharesFeasible: true }));
+  });
+
+  it('EXPLOIT is held by the type that led the PREVIOUS reweight, so a younger leader cannot flap the phase', async () => {
+    const { svc, prisma } = harness();
+    prisma.contentType.findMany.mockResolvedValue([type('how-to', { ordinal: 0, maxShare: 1 }), type('pov-ugc', { ordinal: 1, maxShare: 1 })]);
+    // how-to led last week on 5 samples (mean 0.6); pov-ugc sits at 0.5 on 48 samples with a tight sd.
+    // The old symmetric exit saw how-to's wide lower bound under 0.5 and dropped to LEARN every week.
+    prisma.contentTypeStat.findMany.mockResolvedValue([
+      { contentTypeKey: 'how-to', contentTypeId: 'id-how-to', network: 'ALL', alpha: 4.2, beta: 2.8, samples: 5, computedAt: daysAgo(7) },
+      { contentTypeKey: 'pov-ugc', contentTypeId: 'id-pov-ugc', network: 'ALL', alpha: 25, beta: 25, samples: 48, computedAt: daysAgo(7) },
+    ]);
+    const held = await svc.reweight(WS, programme({ phase: 'EXPLOIT', lastReweightedAt: daysAgo(7), createdAt: daysAgo(60), halfLifeDays: 0 }), NOW);
+    expect(held!.phase).toBe('EXPLOIT');
+    expect(events(prisma).find((e: any) => e.kind === 'REWEIGHT').data).toEqual(expect.objectContaining({ leaderKey: 'how-to' }));
+    expect(events(prisma).some((e: any) => e.kind === 'PHASE')).toBe(false);
+
+    // The week how-to is actually overtaken (two flops fold in, mean 0.46 < 0.5): back to LEARN.
+    const b = harness();
+    b.prisma.contentType.findMany.mockResolvedValue([type('how-to', { ordinal: 0, maxShare: 1 }), type('pov-ugc', { ordinal: 1, maxShare: 1 })]);
+    b.prisma.contentTypeStat.findMany.mockResolvedValue([
+      { contentTypeKey: 'how-to', contentTypeId: 'id-how-to', network: 'ALL', alpha: 4.2, beta: 2.8, samples: 5, computedAt: daysAgo(7) },
+      { contentTypeKey: 'pov-ugc', contentTypeId: 'id-pov-ugc', network: 'ALL', alpha: 25, beta: 25, samples: 48, computedAt: daysAgo(7) },
+    ]);
+    b.prisma.contentSlot.findMany.mockResolvedValue([measured('f1', 'how-to', 0, { INSTAGRAM: 0 }), measured('f2', 'how-to', 0, { INSTAGRAM: 0 })]);
+    const lost = await b.svc.reweight(WS, programme({ phase: 'EXPLOIT', lastReweightedAt: daysAgo(7), createdAt: daysAgo(60), halfLifeDays: 0 }), NOW);
+    expect(lost!.phase).toBe('LEARN');
+    expect(events(b.prisma).find((e: any) => e.kind === 'PHASE').data).toEqual(expect.objectContaining({ from: 'EXPLOIT', to: 'LEARN' }));
   });
 
   it('decays the previous posterior by the elapsed time before folding, only reads slots since the last reweight, and moves the phase', async () => {
@@ -290,11 +349,20 @@ describe('ProgrammeLearningService.currentArms', () => {
 });
 
 describe('ProgrammeLearningService job', () => {
-  it('registers the 6-hourly learn job under the system workspace with a dedup key', () => {
+  it('registers the 6-hourly learn job under the system workspace with a dedup key, first due a minute after boot', () => {
     const { svc, scheduledJobs, runner } = harness();
+    const before = Date.now();
     svc.onModuleInit();
     expect(runner.registerHandler).toHaveBeenCalledWith(CONTENT_PROGRAMME_LEARN_KIND, expect.any(Function));
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'system', kind: CONTENT_PROGRAMME_LEARN_KIND, dedupKey: 'content-programme-learn' }));
+    // schedule() moves the existing PENDING row's runAt, so a boot must not
+    // push the sweep a full interval out — deploys closer than 6h apart would
+    // never let it become due. A minute after boot, and the handler takes it
+    // from there.
+    const runAt: Date = scheduledJobs.schedule.mock.calls[0][0].runAt;
+    expect(runAt.getTime()).toBeGreaterThanOrEqual(before + LEARN_BOOT_DELAY_MS);
+    expect(runAt.getTime()).toBeLessThan(before + LEARN_BOOT_DELAY_MS + 5_000);
+    expect(LEARN_BOOT_DELAY_MS).toBe(60_000);
     expect(LEARN_INTERVAL_MS).toBe(6 * 3600_000);
   });
 

@@ -328,22 +328,53 @@ export class SocialCampaignsService implements OnModuleInit {
 
   // ──────────────────────────────────────────────────────── Lifecycle
 
-  async activate(workspaceId: string, id: string) {
+  /**
+   * `byProgramme`: the content programme moving its own lane. A campaign that
+   * carries a `programmeId` is that programme's publishing lane, and the
+   * programme's pause/kill are what stop it — so the campaign's own
+   * resume/activate doors refuse it (see `assertNotProgrammeLane`) unless the
+   * programme itself is the caller.
+   */
+  async activate(workspaceId: string, id: string, opts: { byProgramme?: boolean } = {}) {
     const c = await this.getOwned(workspaceId, id);
     if (!['DRAFT', 'PAUSED'].includes(c.status)) {
       throw new BadRequestException(`Cannot activate from ${c.status}`);
     }
+    if (!opts.byProgramme) await this.assertNotProgrammeLane(workspaceId, c);
     await this.prisma.socialCampaign.update({ where: { id }, data: { status: 'ACTIVE' } });
     await this.enqueuePlan(workspaceId, id);
     return this.get(workspaceId, id);
   }
 
-  async resume(workspaceId: string, id: string) {
+  async resume(workspaceId: string, id: string, opts: { byProgramme?: boolean } = {}) {
     const c = await this.getOwned(workspaceId, id);
     if (c.status !== 'PAUSED') throw new BadRequestException(`Cannot resume from ${c.status}`);
+    if (!opts.byProgramme) await this.assertNotProgrammeLane(workspaceId, c);
     await this.prisma.socialCampaign.update({ where: { id }, data: { status: 'ACTIVE' } });
     await this.enqueuePlan(workspaceId, id);
     return this.get(workspaceId, id);
+  }
+
+  /**
+   * A programme's lane is resumed through the PROGRAMME, never here. The
+   * programme pauses its lane on pause and on kill; every READY slot's item
+   * sits SCHEDULED behind the paused gate, which reschedules hourly. Resuming
+   * the campaign by hand — from the campaigns list, or an agent tidying up
+   * with set_campaign_status — would release all of them at once, regardless
+   * of what the programme is doing, and after a kill there is no programme
+   * left to have decided that. `pause` stays open on purpose: a hand-paused
+   * lane is a safe state the programme itself holds for.
+   */
+  private async assertNotProgrammeLane(workspaceId: string, c: { programmeId?: string | null }): Promise<void> {
+    if (!c.programmeId) return;
+    const programme = await this.prisma.contentProgramme.findFirst({
+      where: { id: c.programmeId, workspaceId },
+      select: { status: true, killSwitch: true },
+    });
+    if (!programme || programme.status === 'KILLED' || programme.killSwitch) {
+      throw new BadRequestException("This campaign is a content programme's lane and the programme was killed; start a new programme instead.");
+    }
+    throw new BadRequestException("This campaign is a content programme's lane; resume the programme instead.");
   }
 
   async pause(workspaceId: string, id: string) {

@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, renderHook, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ProgrammePanel } from './ProgrammePanel';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ProgrammePanel, useTickingNow, NOW_TICK_MS, PROGRAMME_POLL_MS } from './ProgrammePanel';
 import * as api from '../../../features/marketing/api/contentProgramme.service';
 import * as social from '../../../features/marketing/api/socialPosts.service';
 import type {
@@ -29,6 +29,7 @@ vi.mock('../../../features/marketing/api/contentProgramme.service', async (impor
     updateSlot: vi.fn(),
     skipSlot: vi.fn(),
     regenerateSlot: vi.fn(),
+    retrySlot: vi.fn(),
     slotMetrics: vi.fn(),
     updateType: vi.fn(),
     createType: vi.fn(),
@@ -39,6 +40,11 @@ vi.mock('../../../features/marketing/api/socialPosts.service', () => ({
   socialQueryKeys: { accounts: ['marketing', 'social', 'accounts'] },
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+// The panel gates on the role it already knows, exactly like AutopilotStatusBar.
+const mockRole = vi.fn<() => string | undefined>(() => 'OWNER');
+vi.mock('@/store/marketingAuthStore', () => ({
+  useMarketingAuthStore: (sel: (s: unknown) => unknown) => sel({ user: { role: mockRole() } }),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -58,6 +64,8 @@ const resumeProgramme = vi.mocked(api.resumeProgramme);
 const killProgramme = vi.mocked(api.killProgramme);
 const updateSlot = vi.mocked(api.updateSlot);
 const skipSlot = vi.mocked(api.skipSlot);
+const regenerateSlot = vi.mocked(api.regenerateSlot);
+const retrySlot = vi.mocked(api.retrySlot);
 const slotMetrics = vi.mocked(api.slotMetrics);
 const listSocialAccounts = vi.mocked(social.listSocialAccounts);
 
@@ -107,6 +115,7 @@ const slot = (over: Partial<SlotView> = {}): SlotView => ({
   campaignItemId: null,
   socialPostId: null,
   quotedCredits: null,
+  spentCredits: 0,
   editableUntil: hours(28),
   editable: true,
   publishedAt: null,
@@ -141,7 +150,7 @@ const dashboard = (over: Partial<Dashboard> = {}): Dashboard => ({
   slots: [
     slot(),
     slot({ id: 's2', scheduledFor: hours(54), editableUntil: hours(52), contentTypeKey: 'bts', contentTypeName: 'Kamera arkası', status: 'IDEATED' }),
-    slot({ id: 's3', scheduledFor: hours(-20), editableUntil: hours(-22), editable: false, status: 'PUBLISHED', reward: 0.62, publishedAt: hours(-20) }),
+    slot({ id: 's3', scheduledFor: hours(-20), editableUntil: hours(-22), editable: false, status: 'PUBLISHED', reward: 0.62, publishedAt: hours(-20), quotedCredits: 120, spentCredits: 40 }),
     // Beyond the strip's 14 days, inside the dashboard window.
     slot({ id: 's4', scheduledFor: hours(20 * 24), editableUntil: hours(20 * 24 - 2) }),
   ],
@@ -165,6 +174,7 @@ function wrap(children: ReactNode) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRole.mockReturnValue('OWNER');
   listSocialAccounts.mockResolvedValue([
     { id: 'a1', network: 'INSTAGRAM', externalId: 'x', displayName: '@heykel', accessToken: '••', tokenExpiresAt: null, enabled: true, createdAt: hours(-100) },
   ] as never);
@@ -173,7 +183,12 @@ beforeEach(() => {
   killProgramme.mockResolvedValue({ programme: null, dashboard: null });
   updateSlot.mockResolvedValue(slot());
   skipSlot.mockResolvedValue(slot({ status: 'SKIPPED' }));
+  regenerateSlot.mockResolvedValue(slot({ status: 'PLANNED' }));
+  retrySlot.mockResolvedValue(slot({ status: 'PLANNED' }));
 });
+
+/** An axios-shaped rejection, the way marketingApi hands a status to the panel. */
+const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: {} } });
 
 describe('ProgrammePanel — no programme', () => {
   it('offers to start one, and the dialog submits exactly what was typed', async () => {
@@ -193,7 +208,7 @@ describe('ProgrammePanel — no programme', () => {
     const cap = within(dialog).getByLabelText('Haftalık kredi tavanı');
     await user.clear(cap);
     await user.type(cap, '400');
-    const time = within(dialog).getByLabelText('Yayın saati (SS:DD)');
+    const time = within(dialog).getByLabelText('Yayın saati (Türkiye saati, SS:DD)');
     await user.clear(time);
     await user.type(time, '09:30');
     await user.click(within(dialog).getByRole('button', { name: 'Başlat' }));
@@ -265,6 +280,46 @@ describe('ProgrammePanel — compact row', () => {
     expect(resumeProgramme).not.toHaveBeenCalled();
   });
 
+  it('pausing shows PAUSED from the envelope before the refetch lands, and keeps the switch disabled until it does', async () => {
+    const user = userEvent.setup();
+    // The first read says ACTIVE; the refetch after the pause is SLOW — the
+    // round-trip during which the old switch snapped back to "running".
+    let releaseRefetch!: () => void;
+    getProgramme
+      .mockResolvedValueOnce({ programme: programme(), dashboard: dashboard() })
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseRefetch = () => resolve({ programme: programme({ status: 'PAUSED' }), dashboard: dashboard({ status: 'PAUSED' }) });
+          }),
+      );
+    let releasePause!: () => void;
+    pauseProgramme.mockReturnValue(
+      new Promise((resolve) => {
+        releasePause = () => resolve({ programme: programme({ status: 'PAUSED' }), dashboard: dashboard({ status: 'PAUSED' }) });
+      }),
+    );
+    wrap(<ProgrammePanel now={NOW} />);
+    const sw = await screen.findByTestId('programme-running');
+    await user.click(sw);
+    await waitFor(() => expect(pauseProgramme).toHaveBeenCalledTimes(1));
+    expect(sw).toBeDisabled();
+
+    // The envelope lands: the row says PAUSED at once, from the cache …
+    releasePause();
+    expect(await screen.findByText('Duraklatıldı')).toBeInTheDocument();
+    // … and the switch is STILL disabled, because the refetch has not returned.
+    expect(sw).toBeDisabled();
+    await user.click(sw);
+    expect(pauseProgramme).toHaveBeenCalledTimes(1);
+    expect(resumeProgramme).not.toHaveBeenCalled();
+
+    releaseRefetch();
+    await waitFor(() => expect(sw).toBeEnabled());
+    expect(screen.getByTestId('programme-status')).toHaveTextContent('Duraklatıldı');
+    expect(pauseProgramme).toHaveBeenCalledTimes(1);
+  });
+
   it('resumes from PAUSED', async () => {
     const user = userEvent.setup();
     getProgramme.mockResolvedValue({ programme: programme({ status: 'PAUSED' }), dashboard: dashboard({ status: 'PAUSED' }) });
@@ -321,20 +376,132 @@ describe('ProgrammePanel — slot editor', () => {
     await waitFor(() => expect(skipSlot).toHaveBeenCalledWith('p1', 's1'));
   });
 
-  it('a frozen slot keeps its fields but disables every write', async () => {
+  it('a frozen READY slot keeps its fields, disables the edit, and still offers skip and regenerate', async () => {
     const user = userEvent.setup();
     getProgramme.mockResolvedValue({
       programme: programme(),
-      dashboard: dashboard({ slots: [slot({ editable: false, editableUntil: hours(-1), status: 'READY' })] }),
+      dashboard: dashboard({ slots: [slot({ editable: false, editableUntil: hours(-1), status: 'READY', campaignItemId: 'ci1' })] }),
     });
     wrap(<ProgrammePanel now={NOW} />);
     await user.click((await screen.findAllByTestId('programme-chip'))[0]);
     const editor = await screen.findByTestId('programme-slot-editor');
-    expect(within(editor).getByTestId('programme-slot-window')).toHaveTextContent('Düzenleme penceresi kapandı');
+    // Still on its way out, so the "publishes as it stands" sentence is true here.
+    expect(within(editor).getByTestId('programme-slot-window')).toHaveTextContent('Düzenleme penceresi kapandı; slot olduğu gibi yayınlanır.');
     expect(within(editor).getByRole('button', { name: 'Kaydet' })).toBeDisabled();
-    expect(within(editor).getByRole('button', { name: 'Atla' })).toBeDisabled();
-    expect(within(editor).getByRole('button', { name: 'Yeniden üret' })).toBeDisabled();
     expect(within(editor).getByLabelText('Fikir')).toBeDisabled();
+    // The backend's own words for a frozen slot: "skip it if it must not go
+    // out" — and regenerate accepts READY whatever the window says.
+    expect(within(editor).getByRole('button', { name: 'Atla' })).toBeEnabled();
+    expect(within(editor).getByRole('button', { name: 'Yeniden üret' })).toBeEnabled();
+    expect(within(editor).queryByRole('button', { name: 'Tekrar dene' })).not.toBeInTheDocument();
+  });
+
+  it('the frozen sentence names what the slot IS: skipped, failed, or published with its reward', async () => {
+    const user = userEvent.setup();
+    getProgramme.mockResolvedValue({
+      programme: programme(),
+      dashboard: dashboard({
+        slots: [
+          slot({ id: 'sk', scheduledFor: hours(30), editable: false, status: 'SKIPPED' }),
+          slot({ id: 'fa', scheduledFor: hours(31), editable: false, status: 'FAILED', error: 'produce: budget exhausted', quotedCredits: 120, spentCredits: 45 }),
+          slot({ id: 'me', scheduledFor: hours(32), editable: false, status: 'MEASURED', reward: 0.62 }),
+          slot({ id: 'pu', scheduledFor: hours(33), editable: false, status: 'PUBLISHED' }),
+        ],
+      }),
+    });
+    wrap(<ProgrammePanel now={NOW} />);
+    const chips = await screen.findAllByTestId('programme-chip');
+
+    await user.click(chips[0]);
+    let editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByTestId('programme-slot-window')).toHaveTextContent('Atlandı; bir şey yayınlanmayacak.');
+    expect(within(editor).getByTestId('programme-slot-window')).not.toHaveTextContent('olduğu gibi yayınlanır');
+
+    await user.click(chips[1]);
+    editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByTestId('programme-slot-window')).toHaveTextContent('Başarısız: produce: budget exhausted');
+    // What it cost beside what it was quoted — kept on a FAILED slot.
+    expect(within(editor).getByTestId('programme-slot-credits')).toHaveTextContent('Harcanan / teklif: 45 / 120');
+
+    await user.click(chips[2]);
+    editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByTestId('programme-slot-window')).toHaveTextContent('Yayınlandı · ödül 0.62');
+
+    await user.click(chips[3]);
+    editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByTestId('programme-slot-window')).toHaveTextContent('Yayınlandı.');
+  });
+
+  it('Yeniden üret follows the backend: off for PLANNED, on for FAILED with an item; Tekrar dene on every FAILED slot', async () => {
+    const user = userEvent.setup();
+    getProgramme.mockResolvedValue({
+      programme: programme(),
+      dashboard: dashboard({
+        slots: [
+          slot({ id: 'pl', scheduledFor: hours(30), status: 'PLANNED' }),
+          slot({ id: 'fi', scheduledFor: hours(31), editable: false, status: 'FAILED', error: 'x', campaignItemId: 'ci1' }),
+          slot({ id: 'fn', scheduledFor: hours(32), editable: false, status: 'FAILED', error: 'x', campaignItemId: null }),
+        ],
+      }),
+    });
+    wrap(<ProgrammePanel now={NOW} />);
+    const chips = await screen.findAllByTestId('programme-chip');
+
+    await user.click(chips[0]);
+    let editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByRole('button', { name: 'Yeniden üret' })).toBeDisabled();
+    expect(within(editor).getByRole('button', { name: 'Atla' })).toBeEnabled();
+    expect(within(editor).queryByRole('button', { name: 'Tekrar dene' })).not.toBeInTheDocument();
+
+    await user.click(chips[1]);
+    editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByRole('button', { name: 'Yeniden üret' })).toBeEnabled();
+    expect(within(editor).getByRole('button', { name: 'Atla' })).toBeEnabled();
+    await user.click(within(editor).getByRole('button', { name: 'Tekrar dene' }));
+    await waitFor(() => expect(retrySlot).toHaveBeenCalledWith('p1', 'fi'));
+    expect(regenerateSlot).not.toHaveBeenCalled();
+
+    await user.click(chips[2]);
+    editor = await screen.findByTestId('programme-slot-editor');
+    // Failed before it had an item: nothing to re-make, but the loop can retry.
+    expect(within(editor).getByRole('button', { name: 'Yeniden üret' })).toBeDisabled();
+    expect(within(editor).getByRole('button', { name: 'Tekrar dene' })).toBeEnabled();
+  });
+
+  it('a slot whose time carries seconds is not dirty, and an idea edit does not ship a time move', async () => {
+    const user = userEvent.setup();
+    getProgramme.mockResolvedValue({
+      programme: programme(),
+      dashboard: dashboard({ slots: [slot({ scheduledFor: '2026-09-09T15:30:15.000Z', editableUntil: hours(28) })] }),
+    });
+    wrap(<ProgrammePanel now={NOW} />);
+    await user.click((await screen.findAllByTestId('programme-chip'))[0]);
+    const editor = await screen.findByTestId('programme-slot-editor');
+    expect(within(editor).getByRole('button', { name: 'Kaydet' })).toBeDisabled();
+
+    const idea = within(editor).getByLabelText('Fikir');
+    await user.clear(idea);
+    await user.type(idea, 'Yeni fikir');
+    await user.click(within(editor).getByRole('button', { name: 'Kaydet' }));
+    await waitFor(() => expect(updateSlot).toHaveBeenCalledWith('p1', 's1', { idea: 'Yeni fikir' }));
+  });
+
+  it('the editor and the tabs share one scroll box under the compact row, and only while something is open', async () => {
+    const user = userEvent.setup();
+    wrap(<ProgrammePanel now={NOW} />);
+    await screen.findByTestId('programme-row');
+    expect(screen.queryByTestId('programme-work')).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByTestId('programme-chip')[0]);
+    const work = await screen.findByTestId('programme-work');
+    expect(work.className).toMatch(/lg:max-h-\[48vh\]/);
+    expect(work.className).toMatch(/lg:overflow-y-auto/);
+    expect(work).toContainElement(screen.getByTestId('programme-slot-editor'));
+    // The row with the kill switch and the strip is NOT inside the box.
+    expect(work).not.toContainElement(screen.getByTestId('programme-row'));
+
+    await user.click(screen.getByRole('button', { name: 'Ayrıntı' }));
+    expect(work).toContainElement(screen.getByTestId('programme-detail'));
   });
 });
 
@@ -371,8 +538,19 @@ describe('ProgrammePanel — detail', () => {
     expect(rows).toHaveLength(4);
     // The published one carries a reward bar; the planned ones do not.
     expect(screen.getAllByTestId('programme-reward')).toHaveLength(1);
+    // The meter has a name that carries its value.
+    expect(screen.getByRole('meter', { name: 'Ödül 0.62' })).toHaveAttribute('aria-valuenow', '0.62');
+    // Spent beside quoted, and a dash where nothing was quoted yet.
+    expect(within(rows[0]).getByTestId('programme-slot-credits-cell')).toHaveTextContent('40 / 120');
+    expect(within(rows[1]).getByTestId('programme-slot-credits-cell')).toHaveTextContent('0 / —');
+    expect(screen.getByRole('columnheader', { name: 'Harcanan / teklif' })).toBeInTheDocument();
 
-    await user.click(within(rows[0]).getByRole('button', { name: 'Metrikler' }));
+    // The expand control is the button, not the row.
+    expect(rows[0]).not.toHaveAttribute('aria-expanded');
+    const metricsButton = within(rows[0]).getByRole('button', { name: 'Metrikler' });
+    expect(metricsButton).toHaveAttribute('aria-expanded', 'false');
+    await user.click(metricsButton);
+    expect(metricsButton).toHaveAttribute('aria-expanded', 'true');
     const metrics = await screen.findByTestId('programme-metrics');
     expect(slotMetrics).toHaveBeenCalledWith('p1', 's3');
     expect(within(metrics).getByText('Rüzgarın işi')).toBeInTheDocument();
@@ -417,5 +595,80 @@ describe('ProgrammePanel — failure', () => {
     wrap(<ProgrammePanel now={NOW} />);
     expect(await screen.findByText('İçerik programı okunamadı.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Yeniden dene' })).toBeInTheDocument();
+  });
+
+  it('a 403 or 404 is one quiet sentence with no retry: the programme is not on this plan', async () => {
+    getProgramme.mockRejectedValue(httpError(403));
+    const { unmount } = wrap(<ProgrammePanel now={NOW} />);
+    expect(await screen.findByTestId('programme-unavailable')).toHaveTextContent('İçerik programı bu planda yok');
+    expect(screen.queryByRole('button', { name: 'Yeniden dene' })).not.toBeInTheDocument();
+    expect(screen.queryByText('İçerik programı okunamadı.')).not.toBeInTheDocument();
+    unmount();
+
+    getProgramme.mockRejectedValue(httpError(404));
+    wrap(<ProgrammePanel now={NOW} />);
+    expect(await screen.findByTestId('programme-unavailable')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Yeniden dene' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ProgrammePanel — roles', () => {
+  it('renders nothing for a REP, and never fires the MANAGER-only read', async () => {
+    mockRole.mockReturnValue('REP');
+    getProgramme.mockResolvedValue({ programme: programme(), dashboard: dashboard() });
+    const { container } = wrap(<ProgrammePanel now={NOW} />);
+    // Give a query that WOULD fire a tick to do so.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container).toBeEmptyDOMElement();
+    expect(getProgramme).not.toHaveBeenCalled();
+  });
+
+  it('a MANAGER sees the row', async () => {
+    mockRole.mockReturnValue('MANAGER');
+    getProgramme.mockResolvedValue({ programme: programme(), dashboard: dashboard() });
+    wrap(<ProgrammePanel now={NOW} />);
+    expect(await screen.findByTestId('programme-row')).toBeInTheDocument();
+  });
+});
+
+describe('ProgrammePanel — freshness', () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  it('re-reads the dashboard every minute while ACTIVE, and not while PAUSED', async () => {
+    getProgramme.mockResolvedValue({ programme: programme(), dashboard: dashboard() });
+    const { unmount } = wrap(<ProgrammePanel now={NOW} />);
+    await screen.findByTestId('programme-row');
+    expect(getProgramme).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PROGRAMME_POLL_MS + 50);
+    });
+    expect(getProgramme).toHaveBeenCalledTimes(2);
+    unmount();
+
+    getProgramme.mockClear();
+    getProgramme.mockResolvedValue({ programme: programme({ status: 'PAUSED' }), dashboard: dashboard({ status: 'PAUSED' }) });
+    wrap(<ProgrammePanel now={NOW} />);
+    await screen.findByTestId('programme-row');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PROGRAMME_POLL_MS * 2 + 50);
+    });
+    expect(getProgramme).toHaveBeenCalledTimes(1);
+  });
+
+  it('useTickingNow moves every 30 s, and stays put on the override tests pass', () => {
+    vi.setSystemTime(NOW);
+    const ticking = renderHook(() => useTickingNow());
+    expect(ticking.result.current.getTime()).toBe(NOW.getTime());
+    act(() => {
+      vi.advanceTimersByTime(NOW_TICK_MS + 5);
+    });
+    expect(ticking.result.current.getTime()).toBeGreaterThanOrEqual(NOW.getTime() + NOW_TICK_MS);
+
+    const fixed = renderHook(() => useTickingNow(NOW));
+    act(() => {
+      vi.advanceTimersByTime(NOW_TICK_MS * 3);
+    });
+    expect(fixed.result.current).toBe(NOW);
   });
 });

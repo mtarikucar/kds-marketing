@@ -83,6 +83,19 @@ describe('LearningPanel', () => {
     expect(screen.getByRole('img')).toHaveAttribute('aria-describedby', table.id);
   });
 
+  it('a single reweight still shows: a marker per type and the table, not an empty chart', () => {
+    const one = { ...learning, history: learning.history.slice(0, 1) };
+    render(<LearningPanel learning={one} types={[type('howto', 'Nasıl yapılır'), type('bts', 'Kamera arkası')]} />);
+    expect(screen.getByTestId('programme-weight-history')).toBeInTheDocument();
+    expect(screen.queryByTestId('programme-weight-history-empty')).not.toBeInTheDocument();
+    // A one-point polyline paints nothing; the markers are what is visible.
+    const points = screen.getAllByTestId('programme-weight-point');
+    expect(points).toHaveLength(2);
+    expect(points.map((p) => p.getAttribute('data-type'))).toEqual(['howto', 'bts']);
+    const table = screen.getByTestId('programme-weight-table');
+    expect(within(table).getAllByRole('row')).toHaveLength(2);
+  });
+
   it('says so when there is no history yet, instead of drawing an empty chart', () => {
     render(<LearningPanel learning={{ ...learning, history: [], rows: [] }} types={[]} />);
     expect(screen.getByTestId('programme-weight-history-empty')).toBeInTheDocument();

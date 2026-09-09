@@ -5,12 +5,20 @@ import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService } from '../scheduling/scheduled-job-runner.service';
 import { accountBaseline, Baseline, Goal, MetricSnapshot, rewardFor } from './engine/reward.util';
 import {
-  decayPosterior, nextPhase, Phase, Posterior, posteriorMean, updatePosterior, weightsFrom,
+  decayPosterior, nextPhase, Phase, Posterior, posteriorMean, sharesFeasible, updatePosterior, weightsFrom,
 } from './engine/posterior.util';
 import { TypeArm } from './engine/type-selector.util';
 
 export const CONTENT_PROGRAMME_LEARN_KIND = 'content.programme.learn';
 export const LEARN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/**
+ * First tick after a boot. WHY one minute and not one interval: schedule()
+ * moves the existing PENDING row's runAt, so a boot that scheduled the sweep
+ * LEARN_INTERVAL_MS out pushed it back on every deploy — with restarts closer
+ * than six hours apart the sweep never became due and nothing settled,
+ * measured or reweighted. The handler reschedules the full interval itself.
+ */
+export const LEARN_BOOT_DELAY_MS = 60 * 1000;
 /** The programme reweights at most once a week: a posterior fed every tick
  *  would chase day-to-day noise and the weights chart would be unreadable. */
 export const REWEIGHT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -32,6 +40,8 @@ export interface ReweightResult {
   previousPhase: Phase;
   folded: number;
   weights: Record<string, number>;
+  /** False when the active types' floors/caps cannot all hold (see weightsFrom): the weights are then unbounded means. */
+  sharesFeasible: boolean;
   arms: Array<{ key: string; alpha: number; beta: number; mean: number; samples: number }>;
 }
 
@@ -73,7 +83,7 @@ export class ProgrammeLearningService implements OnModuleInit {
     void this.scheduledJobs.schedule({
       workspaceId: 'system',
       kind: CONTENT_PROGRAMME_LEARN_KIND,
-      runAt: new Date(Date.now() + LEARN_INTERVAL_MS),
+      runAt: new Date(Date.now() + LEARN_BOOT_DELAY_MS),
       payload: {},
       dedupKey: 'content-programme-learn',
     }).catch(() => undefined);
@@ -277,9 +287,11 @@ export class ProgrammeLearningService implements OnModuleInit {
 
     const rows: Prisma.ContentTypeStatCreateManyInput[] = [];
     let allWeights: Record<string, number> = {};
+    // One verdict for every network: feasibility depends on the bounds only.
+    const bounds = sharesFeasible(types.map((t) => ({ minShare: t.minShare, maxShare: t.maxShare, active: true })));
     for (const network of networks) {
       const arms = types.map((t) => ({ key: t.key, ...cells.get(`${t.key}|${network}`), minShare: t.minShare, maxShare: t.maxShare, active: true }));
-      const weights = weightsFrom(arms);
+      const { weights } = weightsFrom(arms);
       if (network === ALL) allWeights = weights;
       for (const t of types) {
         const c = cells.get(`${t.key}|${network}`);
@@ -298,7 +310,16 @@ export class ProgrammeLearningService implements OnModuleInit {
     const measuredPerType = Object.fromEntries(allArms.map((a) => [a.key, a.samples]));
     const seedWeeksElapsed = now.getTime() - programme.createdAt.getTime() >= programme.seedWeeks * 7 * DAY_MS;
     const previousPhase = programme.phase as Phase;
-    const phase = nextPhase(previousPhase, { seedWeeksElapsed, measuredPerType, arms: allArms });
+    // The incumbent leader is whichever active type led the PREVIOUS reweight's
+    // ALL posterior: EXPLOIT ends only when that type is actually overtaken.
+    const leaderKey = types
+      .map((t) => ({ key: t.key, prev: prevByKey.get(`${t.key}|${ALL}`) }))
+      .filter((x): x is { key: string; prev: StatRow } => !!x.prev)
+      .reduce<{ key: string; mean: number } | null>((best, x) => {
+        const mean = posteriorMean(x.prev);
+        return !best || mean > best.mean ? { key: x.key, mean } : best;
+      }, null)?.key ?? null;
+    const phase = nextPhase(previousPhase, { seedWeeksElapsed, measuredPerType, arms: allArms, leaderKey });
 
     await this.prisma.contentProgramme.updateMany({
       where: { id: programme.id, workspaceId },
@@ -306,13 +327,19 @@ export class ProgrammeLearningService implements OnModuleInit {
     });
 
     const result: ReweightResult = {
-      phase, previousPhase, folded: slots.length, weights: allWeights,
+      phase, previousPhase, folded: slots.length, weights: allWeights, sharesFeasible: bounds.feasible,
       arms: allArms.map(({ key, alpha, beta, mean, samples }) => ({ key, alpha: round(alpha), beta: round(beta), mean: round(mean), samples })),
     };
     const weightLine = types.map((t) => `${t.key} ${round(allWeights[t.key] ?? 0, 2)}`).join(', ');
+    const boundsNote = bounds.feasible
+      ? ''
+      : ` (share bounds infeasible: floors sum to ${round(bounds.minSum, 2)}, caps to ${round(bounds.maxSum, 2)} — weights ignore them)`;
     await this.logEvent(workspaceId, programme.id, 'REWEIGHT',
-      `Reweighted after folding ${slots.length} measurement(s): ${weightLine}; phase ${phase}`,
-      { folded: slots.length, phase, previousPhase, weights: allWeights, arms: result.arms, networks: [...networks] });
+      `Reweighted after folding ${slots.length} measurement(s): ${weightLine}; phase ${phase}${boundsNote}`,
+      {
+        folded: slots.length, phase, previousPhase, weights: allWeights, arms: result.arms, networks: [...networks],
+        sharesFeasible: bounds.feasible, minShareSum: round(bounds.minSum), maxShareSum: round(bounds.maxSum), leaderKey,
+      });
     if (phase !== previousPhase) {
       await this.logEvent(workspaceId, programme.id, 'PHASE', `Phase ${previousPhase} → ${phase}`, {
         from: previousPhase, to: phase, seedWeeksElapsed, measuredPerType,
@@ -393,7 +420,7 @@ function toSnapshot(m: Record<string, unknown>): MetricSnapshot {
   const n = (k: string) => Math.max(0, Number(m[k]) || 0);
   return {
     impressions: n('impressions'), reach: n('reach'), engagements: n('engagements'), likes: n('likes'), comments: n('comments'),
-    shares: n('shares'), saves: n('saves'), videoViews: n('videoViews'), leads: n('leads'),
+    shares: n('shares'), saves: n('saves'), clicks: n('clicks'), videoViews: n('videoViews'), leads: n('leads'),
   };
 }
 

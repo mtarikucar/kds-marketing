@@ -128,6 +128,8 @@ describe('ContentTypesService.update', () => {
   it('checks shares against the stored counterpart, so a lone minShare cannot climb over maxShare', async () => {
     const { svc, prisma } = harness();
     prisma.contentType.findFirst.mockResolvedValue(row({ minShare: 0.1, maxShare: 0.3 }));
+    // A sibling with a 0.7 cap keeps the active set's caps able to reach 1.
+    prisma.contentType.findMany.mockResolvedValue([row({ minShare: 0.1, maxShare: 0.3 }), row({ id: 'ct-2', key: 'pov-ugc', minShare: 0.05, maxShare: 0.7 })]);
     await expect(svc.update(WS, 'ct-1', { minShare: 0.35 })).rejects.toBeInstanceOf(BadRequestException);
     await expect(svc.update(WS, 'ct-1', { maxShare: 0.05 })).rejects.toBeInstanceOf(BadRequestException);
     await expect(svc.update(WS, 'ct-1', { name: '' })).rejects.toBeInstanceOf(BadRequestException);
@@ -135,6 +137,49 @@ describe('ContentTypesService.update', () => {
     expect(prisma.contentType.update).not.toHaveBeenCalled();
     await svc.update(WS, 'ct-1', { minShare: 0.2 });
     expect(prisma.contentType.update).toHaveBeenCalledWith({ where: { id: 'ct-1' }, data: { minShare: 0.2 } });
+  });
+
+  it('rejects a patch that leaves the ACTIVE set\'s floors over 1 or its caps under 1, naming the sum', async () => {
+    const { svc, prisma } = harness();
+    const a = row({ id: 'ct-1', key: 'a', minShare: 0.6, maxShare: 1 });
+    const b = row({ id: 'ct-2', key: 'b', minShare: 0.5, maxShare: 1 });
+    const c = row({ id: 'ct-3', key: 'c', minShare: 0.05, maxShare: 0.4 });
+    prisma.contentType.findFirst.mockResolvedValue(b);
+    prisma.contentType.findMany.mockResolvedValue([a, b, c]);
+    // Raising b's floor to 0.55: floors of the active set would sum to 0.6 + 0.55 + 0.05 = 1.20.
+    await expect(svc.update(WS, 'ct-2', { minShare: 0.55 })).rejects.toThrow(/active types' floors sum to 1\.20 — lower a floor or retire a type/);
+    // Lowering it to 0.35 fits (1.00 exactly) — the sum is checked on the patched row, not the stored one.
+    await svc.update(WS, 'ct-2', { minShare: 0.35 });
+    expect(prisma.contentType.update).toHaveBeenLastCalledWith({ where: { id: 'ct-2' }, data: { minShare: 0.35 } });
+
+    // Retiring a type is the other way to break the set: with a gone, b (cap
+    // 0.4 after the patch) and c (0.4) can fill at most 0.80 of a calendar.
+    prisma.contentType.findFirst.mockResolvedValue(a);
+    prisma.contentType.findMany.mockResolvedValue([a, { ...b, maxShare: 0.4 }, c]);
+    await expect(svc.update(WS, 'ct-1', { active: false })).rejects.toThrow(/active types' caps sum to 0\.80 — raise a cap or activate a type/);
+    // A retired type's own shares do not count: re-activating c later is judged on the set it joins.
+    const b35 = { ...b, minShare: 0.35 };
+    prisma.contentType.findFirst.mockResolvedValue({ ...c, active: false, minShare: 0.9 });
+    prisma.contentType.findMany.mockResolvedValue([a, b35, { ...c, active: false, minShare: 0.9 }]);
+    await expect(svc.update(WS, 'ct-3', { active: true })).rejects.toThrow(/floors sum to 1\.85/);
+    await svc.update(WS, 'ct-3', { active: true, minShare: 0 }); // 0.6 + 0.35 + 0 = 0.95
+    // A settings-only patch (name) does not re-read the set at all.
+    prisma.contentType.findMany.mockClear();
+    await svc.update(WS, 'ct-3', { name: 'x' });
+    expect(prisma.contentType.findMany).not.toHaveBeenCalled();
+    // Retiring the LAST active type is not a share problem.
+    prisma.contentType.findFirst.mockResolvedValue(a);
+    prisma.contentType.findMany.mockResolvedValue([a]);
+    await svc.update(WS, 'ct-1', { active: false });
+  });
+
+  it('create refuses a floor the active set cannot honour', async () => {
+    const { svc, prisma } = harness();
+    prisma.contentType.findMany.mockResolvedValue([row({ id: 'ct-1', key: 'a', minShare: 0.5, maxShare: 1 }), row({ id: 'ct-2', key: 'b', minShare: 0.45, maxShare: 1 })]);
+    await expect(svc.create(WS, { key: 'unboxing', name: 'n', minShare: 0.1 })).rejects.toThrow(/floors sum to 1\.05/);
+    expect(prisma.contentType.create).not.toHaveBeenCalled();
+    await svc.create(WS, { key: 'unboxing', name: 'n' }); // the 0.05 default fits exactly
+    expect(prisma.contentType.create).toHaveBeenCalled();
   });
 
   it("is NotFound for another workspace's row", async () => {

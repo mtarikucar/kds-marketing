@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { ContentProgramme, ContentProgrammeEvent, Prisma } from '@prisma/client';
+import type { ContentProgramme, ContentProgrammeEvent, ContentSlot, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import type { Cadence } from '../social-campaigns/cadence.util';
 import { SocialCampaignsService } from '../social-campaigns/social-campaigns.service';
 import { ContentTypesService } from './content-types.service';
@@ -13,23 +14,53 @@ export type ProgrammeGoal = (typeof PROGRAMME_GOALS)[number];
 /** Programme statuses. KILLED is terminal; `get` never returns one. */
 export const PROGRAMME_STATUSES = ['ACTIVE', 'PAUSED', 'KILLED'] as const;
 
-/** Slot statuses the kill switch sweeps: nothing has been spent on them yet. */
-const OPEN_SLOT_STATUSES = ['PLANNED', 'IDEATED'];
+/** The statuses under which a programme still owns the workspace's calendar:
+ *  a second one next to either would plan and spend beside it, unseen. */
+const LIVE_PROGRAMME_STATUSES = ['ACTIVE', 'PAUSED'];
 
-const PROGRAMME_TIMEZONE = 'Europe/Istanbul';
+/** Slot statuses the kill switch sweeps: the money is not yet spent (PLANNED,
+ *  IDEATED) or the piece is bought but not yet published (READY — its armed
+ *  item is rejected so the gate drops it). PRODUCING is left alone: the produce
+ *  job reads the kill flag itself and stops. */
+const OPEN_SLOT_STATUSES = ['PLANNED', 'IDEATED', 'READY'];
+/** Slots a pause leaves waiting and a resume has to re-arm. */
+const WAITING_SLOT_STATUSES = ['PLANNED', 'IDEATED'];
+
+export const PROGRAMME_TIMEZONE = 'Europe/Istanbul';
+/** Turkey has kept +03:00 all year since 2016; the zone has no DST to model. */
+const ISTANBUL_OFFSET_MINUTES = 3 * 60;
+const MINUTES_PER_DAY = 24 * 60;
 const DEFAULT_TIME_OF_DAY = '18:00';
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** One post per listed weekday: the cadence cannot carry more than seven a week. */
+export const PER_WEEK_MAX = 7;
+/** The most any door — panel, REST or agent — may set as the weekly credit cap. */
+export const WEEKLY_CREDIT_CAP_MAX = 20000;
+/** The lane releases at most one post a day; `perWeek` is spread over weekdays, never stacked. */
+const DAILY_PUBLISH_CAP = 1;
 
 /** The bounds every setting is held to, stated once and read by both create and update. */
-const BOUNDS = {
-  perWeek: [1, 14],
-  weeklyCreditCap: [50, Number.POSITIVE_INFINITY],
+export const BOUNDS = {
+  perWeek: [1, PER_WEEK_MAX],
+  weeklyCreditCap: [50, WEEKLY_CREDIT_CAP_MAX],
   explorationRate: [0.05, 0.5],
   maturityHours: [24, 168],
   halfLifeDays: [7, 90],
   editWindowHours: [1, 24],
   lookaheadDays: [7, 28],
 } as const;
+
+/**
+ * The cadence as the programme writes it onto its campaign. `daysOfWeek` and
+ * `timeOfDay` are what `nextCadenceSlot` reads — and it reads them as UTC —
+ * so they are the CONVERTED values; the two `local*` fields keep what the
+ * owner typed, in Turkey time, for the panel and for the next edit.
+ */
+export interface ProgrammeCadence extends Cadence {
+  timezone: string;
+  localTimeOfDay: string;
+  localDaysOfWeek: number[];
+}
 
 export interface CreateProgrammeInput {
   name: string;
@@ -40,9 +71,9 @@ export interface CreateProgrammeInput {
   goal?: string;
   weeklyCreditCap?: number;
   personaId?: string;
-  /** 0 = Sunday … 6 = Saturday. Spread evenly from `perWeek` when absent. */
+  /** 0 = Sunday … 6 = Saturday, in Turkey time. Spread evenly from `perWeek` when absent. */
   daysOfWeek?: number[];
-  /** 'HH:MM'. */
+  /** 'HH:MM' in Turkey time (Europe/Istanbul). */
   timeOfDay?: string;
   createdById: string;
 }
@@ -53,6 +84,8 @@ export interface UpdateProgrammeInput {
   brief?: string;
   goal?: string;
   perWeek?: number;
+  /** 0 = Sunday … 6 = Saturday, in Turkey time; must list exactly `perWeek` days. */
+  daysOfWeek?: number[];
   weeklyCreditCap?: number;
   explorationRate?: number;
   maturityHours?: number;
@@ -69,6 +102,7 @@ const UPDATABLE: ReadonlySet<keyof UpdateProgrammeInput> = new Set<keyof UpdateP
   'brief',
   'goal',
   'perWeek',
+  'daysOfWeek',
   'weeklyCreditCap',
   'explorationRate',
   'maturityHours',
@@ -82,9 +116,9 @@ const UPDATABLE: ReadonlySet<keyof UpdateProgrammeInput> = new Set<keyof UpdateP
 
 /**
  * Which weekdays carry `perWeek` posts, spread across the week rather than
- * bunched at its start: three a week is Mon/Wed/Fri, not Mon/Tue/Wed. Above
- * seven every day carries at least one and the campaign's daily cap takes the
- * remainder.
+ * bunched at its start: three a week is Mon/Wed/Fri, not Mon/Tue/Wed. Seven
+ * is every day; there is no eighth slot because the cadence yields one post
+ * per weekday (see `nextCadenceSlot`), which is why `perWeek` is capped at 7.
  */
 export function spreadDaysOfWeek(perWeek: number): number[] {
   const table: Record<number, number[]> = {
@@ -98,17 +132,40 @@ export function spreadDaysOfWeek(perWeek: number): number[] {
   return table[perWeek] ?? [0, 1, 2, 3, 4, 5, 6];
 }
 
-/** Posts per day the publishing lane may release: at least one, and enough for `perWeek`. */
-function dailyCapFor(perWeek: number): number {
-  return Math.max(1, Math.ceil(perWeek / 7));
+/**
+ * Turkey wall-clock → the UTC cadence the campaign runs on. `nextCadenceSlot`
+ * sets `timeOfDay` with `setUTCHours` and matches `daysOfWeek` against
+ * `getUTCDay`, so an 18:00 the owner typed has to reach it as 15:00 — and a
+ * time before 03:00 belongs to the PREVIOUS UTC day, so each weekday shifts
+ * back one (Monday 01:30 Istanbul is Sunday 22:30 UTC). Pure; the offset is
+ * fixed because the zone has had no DST since 2016.
+ */
+export function cadenceForIstanbul(localDaysOfWeek: number[], localTimeOfDay: string): ProgrammeCadence {
+  const [h, m] = localTimeOfDay.split(':').map((n) => parseInt(n, 10));
+  const localMinutes = h * 60 + m;
+  let utcMinutes = localMinutes - ISTANBUL_OFFSET_MINUTES;
+  let dayShift = 0;
+  if (utcMinutes < 0) {
+    utcMinutes += MINUTES_PER_DAY;
+    dayShift = -1;
+  }
+  const localDays = [...new Set(localDaysOfWeek)].sort((a, b) => a - b);
+  const utcDays = [...new Set(localDays.map((d) => (d + dayShift + 7) % 7))].sort((a, b) => a - b);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    daysOfWeek: utcDays,
+    timeOfDay: `${pad(Math.floor(utcMinutes / 60))}:${pad(utcMinutes % 60)}`,
+    timezone: PROGRAMME_TIMEZONE,
+    localTimeOfDay,
+    localDaysOfWeek: localDays,
+  };
 }
 
 function inRange(name: keyof typeof BOUNDS, value: unknown): asserts value is number {
   const [lo, hi] = BOUNDS[name];
   const isInt = name !== 'explorationRate';
   if (typeof value !== 'number' || !Number.isFinite(value) || (isInt && !Number.isInteger(value)) || value < lo || value > hi) {
-    const range = hi === Number.POSITIVE_INFINITY ? `at least ${lo}` : `between ${lo} and ${hi}`;
-    throw new BadRequestException(`${name} must be ${isInt ? 'an integer' : 'a number'} ${range} (got ${String(value)})`);
+    throw new BadRequestException(`${name} must be ${isInt ? 'an integer' : 'a number'} between ${lo} and ${hi} (got ${String(value)})`);
   }
 }
 
@@ -125,6 +182,30 @@ function requireText(name: string, value: unknown): string {
   return s;
 }
 
+function requireDaysOfWeek(daysOfWeek: unknown): number[] {
+  if (!Array.isArray(daysOfWeek) || daysOfWeek.length === 0 || daysOfWeek.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+    throw new BadRequestException('daysOfWeek must be a non-empty list of weekdays 0 (Sunday) to 6 (Saturday)');
+  }
+  return [...new Set(daysOfWeek as number[])].sort((a, b) => a - b);
+}
+
+/** One post per listed day, so the list IS the weekly count; a mismatch is a
+ *  contradiction the owner has to settle, not one the service guesses at. */
+function requireDaysMatchPerWeek(days: number[], perWeek: number): void {
+  if (days.length !== perWeek) {
+    throw new BadRequestException(
+      `daysOfWeek lists ${days.length} weekday(s) but perWeek is ${perWeek}; the cadence carries one post per listed day, so the two must agree.`,
+    );
+  }
+}
+
+function requireTimeOfDay(timeOfDay: unknown): string {
+  if (typeof timeOfDay !== 'string' || !TIME_RE.test(timeOfDay)) {
+    throw new BadRequestException(`timeOfDay must be HH:MM in Turkey time (got ${String(timeOfDay)})`);
+  }
+  return timeOfDay;
+}
+
 /**
  * THE PROGRAMME — the owner's "make these types of content, publish, wait,
  * then lean into what worked" loop, as one row plus the FULL_AUTO campaign it
@@ -133,12 +214,14 @@ function requireText(name: string, value: unknown): string {
  * and the "why" log every job writes to. Planning, producing and learning live
  * in their own services and only read what this one wrote.
  *
- * ## One programme per workspace (v1)
+ * ## One live programme per workspace
  *
- * `get(workspaceId)` returns the newest programme that is not KILLED. Nothing
- * prevents a second row from existing — a killed programme stays for its
- * history, and a new one is created next to it — but the panel and the jobs
- * treat "the programme" as singular, and that is what `get` answers.
+ * `get(workspaceId)` returns the newest programme that is not KILLED, and
+ * `create` refuses while an ACTIVE or PAUSED one exists. The panel, the MCP
+ * tools and the jobs all treat "the programme" as singular; a second live row
+ * would keep its own campaign, cap and slot jobs with no door that shows its
+ * id, and spend beside the one the owner can see. Killed programmes stay for
+ * their history and a new one is created next to them.
  *
  * ## The campaign is the lane, not the planner
  *
@@ -147,6 +230,8 @@ function requireText(name: string, value: unknown): string {
  * tick returns immediately for a campaign that carries a `programmeId` — so
  * the order is not cosmetic: linking after activating would let the first
  * tick plan a stock topic into the calendar the programme is about to fill.
+ * From then on the campaign's own resume/activate doors refuse the lane; only
+ * this service moves it, through `setCampaignRunning`.
  *
  * ## No half-armed campaign
  *
@@ -164,6 +249,7 @@ export class ContentProgrammeService {
     private readonly prisma: PrismaService,
     private readonly socialCampaigns: SocialCampaignsService,
     private readonly contentTypes: ContentTypesService,
+    private readonly scheduledJobs: ScheduledJobService,
   ) {}
 
   async create(workspaceId: string, input: CreateProgrammeInput): Promise<ContentProgramme> {
@@ -171,13 +257,17 @@ export class ContentProgrammeService {
     // nothing and leaves nothing behind.
     const name = requireText('name', input.name);
     const brief = requireText('brief', input.brief);
-    const perWeek = input.perWeek ?? 5;
+    const days = input.daysOfWeek !== undefined ? requireDaysOfWeek(input.daysOfWeek) : undefined;
+    const perWeek = input.perWeek ?? days?.length ?? 5;
     inRange('perWeek', perWeek);
+    if (days) requireDaysMatchPerWeek(days, perWeek);
     const weeklyCreditCap = input.weeklyCreditCap ?? 600;
     inRange('weeklyCreditCap', weeklyCreditCap);
     const goal = requireGoal(input.goal ?? 'COMPOSITE');
-    const cadence = this.cadenceFor(perWeek, input.daysOfWeek, input.timeOfDay);
+    const cadence = cadenceForIstanbul(days ?? spreadDaysOfWeek(perWeek), requireTimeOfDay(input.timeOfDay ?? DEFAULT_TIME_OF_DAY));
     await this.requireAccounts(workspaceId, input.accountIds);
+    if (input.personaId !== undefined && input.personaId !== null) await this.requirePersona(workspaceId, input.personaId);
+    await this.requireNoLiveProgramme(workspaceId);
 
     const campaign = await this.socialCampaigns.create(workspaceId, {
       name,
@@ -190,7 +280,7 @@ export class ContentProgrammeService {
       startDate: new Date(),
       targetAccountIds: [...input.accountIds],
       mediaKinds: ['VIDEO'],
-      dailyPublishCap: dailyCapFor(perWeek),
+      dailyPublishCap: DAILY_PUBLISH_CAP,
       createdById: input.createdById,
     });
 
@@ -200,7 +290,7 @@ export class ContentProgrammeService {
     const programmeId = randomUUID();
     try {
       await this.prisma.socialCampaign.update({ where: { id: campaign.id }, data: { programmeId } });
-      await this.socialCampaigns.activate(workspaceId, campaign.id);
+      await this.socialCampaigns.activate(workspaceId, campaign.id, { byProgramme: true });
       await this.contentTypes.ensureDefaults(workspaceId);
       const programme = await this.prisma.contentProgramme.create({
         data: {
@@ -269,6 +359,11 @@ export class ContentProgrammeService {
       inRange('perWeek', patch.perWeek);
       data.perWeek = patch.perWeek;
     }
+    // The weekday list is not a programme column — it lives on the campaign's
+    // cadence — but it is validated here with the rest, against the count it
+    // has to agree with (the new one when both move, the stored one otherwise).
+    const days = patch.daysOfWeek !== undefined ? requireDaysOfWeek(patch.daysOfWeek) : undefined;
+    if (days) requireDaysMatchPerWeek(days, patch.perWeek ?? current.perWeek);
     if (patch.weeklyCreditCap !== undefined) {
       inRange('weeklyCreditCap', patch.weeklyCreditCap);
       data.weeklyCreditCap = patch.weeklyCreditCap;
@@ -300,22 +395,42 @@ export class ContentProgrammeService {
       if (patch.personaId !== null && typeof patch.personaId !== 'string') {
         throw new BadRequestException('personaId must be a string or null');
       }
+      // Proven to be this workspace's NOW, at the door: the first job to read a
+      // foreign or deleted persona would otherwise fail a slot 36 hours from
+      // now, and three of those pause the programme with the cause buried in a
+      // slot's error text.
+      if (patch.personaId !== null) await this.requirePersona(workspaceId, patch.personaId);
       data.personaId = patch.personaId;
     }
 
-    if (Object.keys(data).length === 0) return current;
+    const cadenceMoves = (patch.perWeek !== undefined && patch.perWeek !== current.perWeek) || days !== undefined;
+    if (Object.keys(data).length === 0 && !cadenceMoves) return current;
 
-    const updated = await this.prisma.contentProgramme.update({ where: { id }, data });
+    const updated = Object.keys(data).length ? await this.prisma.contentProgramme.update({ where: { id }, data }) : current;
 
-    // The cadence lives on the campaign; a new weekly count has to reach it or
-    // the programme would plan slots the lane refuses to release.
-    if (patch.perWeek !== undefined && patch.perWeek !== current.perWeek) {
-      await this.syncCampaignCadence(workspaceId, current.socialCampaignId, patch.perWeek);
+    // The cadence lives on the campaign; a new weekly count or weekday list
+    // has to reach it or the programme would plan slots the lane refuses to
+    // release.
+    let cadenceNote = '';
+    if (cadenceMoves) {
+      const perWeek = patch.perWeek ?? current.perWeek;
+      const cadence = await this.syncCampaignCadence(workspaceId, current.socialCampaignId, perWeek, days);
+      cadenceNote = ` Cadence now ${perWeek}/week per account on days [${cadence.localDaysOfWeek.join(', ')}] at ${cadence.localTimeOfDay} ${PROGRAMME_TIMEZONE}.`;
     }
-    await this.logEvent(workspaceId, id, 'UPDATED', `Settings changed: ${Object.keys(data).join(', ')}.`, data as Record<string, unknown>);
+    const changed = [...Object.keys(data), ...(days ? ['daysOfWeek'] : [])];
+    await this.logEvent(workspaceId, id, 'UPDATED', `Settings changed: ${changed.join(', ')}.${cadenceNote}`, {
+      ...(data as Record<string, unknown>),
+      ...(days ? { daysOfWeek: days } : {}),
+    });
     return updated;
   }
 
+  /**
+   * Pause: the programme stops, the lane is paused, and every slot stays as it
+   * is. Nothing is rejected — a READY slot's armed item waits behind the paused
+   * campaign's gate (which reschedules hourly rather than dropping), so the
+   * piece already paid for publishes when the owner resumes.
+   */
   async pause(workspaceId: string, id: string): Promise<ContentProgramme> {
     const current = await this.getOrThrow(workspaceId, id);
     if (current.status !== 'ACTIVE') {
@@ -327,23 +442,72 @@ export class ContentProgrammeService {
     return updated;
   }
 
-  async resume(workspaceId: string, id: string): Promise<ContentProgramme> {
+  /**
+   * Resume: the programme and its lane run again, and the calendar is brought
+   * back with them. While paused, a slot's plan/produce job that fired held
+   * itself off, but a job can also have been consumed (a crash, an old row),
+   * so every PLANNED/IDEATED slot still ahead of us is RE-ARMED here — belt
+   * and braces, at the cost of two idempotent schedule calls per slot. A slot
+   * whose publish time passed during the pause cannot be caught up: it is
+   * SKIPPED with the reason on the row and its proposed concept discarded, so
+   * the fill sweep plans the next times instead of leaving dead rows that
+   * block them.
+   */
+  async resume(workspaceId: string, id: string, now = new Date()): Promise<ContentProgramme> {
     const current = await this.getOrThrow(workspaceId, id);
     if (current.status !== 'PAUSED') {
       throw new BadRequestException(`Cannot resume a ${current.status} programme.`);
     }
     const updated = await this.prisma.contentProgramme.update({ where: { id }, data: { status: 'ACTIVE' } });
     await this.setCampaignRunning(workspaceId, current.socialCampaignId, true);
-    await this.logEvent(workspaceId, id, 'RESUMED', 'Programme resumed by the owner.');
+
+    const waiting: Array<Pick<ContentSlot, 'id' | 'scheduledFor' | 'status' | 'conceptId'>> = await this.prisma.contentSlot.findMany({
+      where: { workspaceId, programmeId: id, status: { in: WAITING_SLOT_STATUSES } },
+      select: { id: true, scheduledFor: true, status: true, conceptId: true },
+    });
+    const missed = waiting.filter((s) => s.scheduledFor.getTime() <= now.getTime());
+    const ahead = waiting.filter((s) => s.scheduledFor.getTime() > now.getTime());
+
+    const { scheduleSlotJobs } = await this.slotJobs();
+    for (const slot of ahead) await scheduleSlotJobs(this.scheduledJobs, workspaceId, updated, slot, now);
+
+    if (missed.length) {
+      const conceptIds = missed.map((s) => s.conceptId).filter((c): c is string => Boolean(c));
+      if (conceptIds.length) await this.discardConcepts(workspaceId, conceptIds, id, 'programme: slot skipped', now);
+      await this.prisma.contentSlot.updateMany({
+        where: { id: { in: missed.map((s) => s.id) }, workspaceId, status: { in: WAITING_SLOT_STATUSES } },
+        data: { status: 'SKIPPED', error: 'missed while paused' },
+      });
+    }
+
+    await this.logEvent(
+      workspaceId,
+      id,
+      'RESUMED',
+      `Programme resumed by the owner: ${ahead.length} slot(s) re-armed, ${missed.length} missed while paused and skipped.`,
+      { rearmedSlots: ahead.length, missedSlots: missed.length, missedSlotIds: missed.map((s) => s.id) },
+    );
     return updated;
   }
 
   /**
    * THE KILL SWITCH. Terminal: the programme is KILLED, the flag every job
-   * checks is set, the lane is paused, and every slot nothing has been spent
-   * on is SKIPPED with the reason on the row. Slots already producing or
-   * published are left as they are — their money is spent and their history
-   * is the programme's record.
+   * checks is set, the lane is paused, and every slot nothing has been
+   * published for is closed:
+   *
+   *  - PLANNED / IDEATED: SKIPPED, their slot jobs cancelled and an IDEATED
+   *    slot's proposed concept DISCARDED — otherwise it stays approvable in
+   *    the concept hub and its storyboard job keeps drawing frames.
+   *  - READY: the armed item is REJECTED (SCHEDULED → SKIPPED, which the
+   *    publish gate drops) and the slot SKIPPED — otherwise the gate loops
+   *    hourly forever against the paused lane, and anyone resuming the
+   *    campaign by hand would publish a piece under a programme the owner
+   *    ended. A rejection that fails (published under our feet) leaves that
+   *    slot as it is; the reconcile sweep settles it.
+   *  - PRODUCING: left as is. The produce job reads the kill flag before it
+   *    buys the next clip and fails the item itself.
+   *
+   * Slots already published or measured keep their history.
    */
   async kill(workspaceId: string, id: string): Promise<ContentProgramme> {
     const current = await this.getOrThrow(workspaceId, id);
@@ -353,12 +517,60 @@ export class ContentProgrammeService {
       data: { status: 'KILLED', killSwitch: true },
     });
     await this.setCampaignRunning(workspaceId, current.socialCampaignId, false);
-    const { count } = await this.prisma.contentSlot.updateMany({
+
+    const open: Array<Pick<ContentSlot, 'id' | 'status' | 'conceptId' | 'campaignItemId'>> = await this.prisma.contentSlot.findMany({
       where: { workspaceId, programmeId: id, status: { in: OPEN_SLOT_STATUSES } },
-      data: { status: 'SKIPPED', error: 'programme killed' },
+      select: { id: true, status: true, conceptId: true, campaignItemId: true },
     });
-    await this.logEvent(workspaceId, id, 'KILLED', `Kill switch: programme stopped, campaign paused, ${count} open slot(s) skipped.`, { skippedSlots: count });
+    const { cancelSlotJobs } = await this.slotJobs();
+    const now = new Date();
+    const swept: string[] = [];
+    let rejectedItems = 0;
+    for (const slot of open) {
+      if (slot.status === 'READY' && slot.campaignItemId) {
+        try {
+          await this.socialCampaigns.rejectItem(workspaceId, slot.campaignItemId);
+          rejectedItems += 1;
+        } catch (e) {
+          this.logger.warn(`programme ${id}: slot ${slot.id} kept — its item could not be rejected: ${(e as Error)?.message ?? e}`);
+          continue;
+        }
+      }
+      if (slot.conceptId) await this.discardConcepts(workspaceId, [slot.conceptId], id, 'programme killed', now);
+      await cancelSlotJobs(this.scheduledJobs, slot.id);
+      swept.push(slot.id);
+    }
+    const { count } = swept.length
+      ? await this.prisma.contentSlot.updateMany({
+          where: { id: { in: swept }, workspaceId, programmeId: id, status: { in: OPEN_SLOT_STATUSES } },
+          data: { status: 'SKIPPED', error: 'programme killed' },
+        })
+      : { count: 0 };
+    await this.logEvent(
+      workspaceId,
+      id,
+      'KILLED',
+      `Kill switch: programme stopped, campaign paused, ${count} open slot(s) skipped, ${rejectedItems} armed item(s) rejected.`,
+      { skippedSlots: count, rejectedItems },
+    );
     return updated;
+  }
+
+  /**
+   * Whether the programme's lane can publish right now. The campaign is an
+   * ordinary row in the campaigns list and a person or an agent may pause it
+   * by hand (`pause` is the one campaign door the lane keeps); when they do,
+   * the programme must hold its slots rather than buy clips into a gate that
+   * releases nothing. Anything but ACTIVE — PAUSED, DRAFT, a cancelled or
+   * missing campaign — is answered as PAUSED, because "cannot publish" is the
+   * only thing the producer needs to know.
+   */
+  async assertLaneRunning(workspaceId: string, programme: Pick<ContentProgramme, 'socialCampaignId'>): Promise<'ACTIVE' | 'PAUSED'> {
+    const campaign = await this.prisma.socialCampaign.findFirst({
+      where: { id: programme.socialCampaignId, workspaceId },
+      select: { status: true },
+    });
+    return campaign?.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
   }
 
   /**
@@ -398,20 +610,52 @@ export class ContentProgrammeService {
 
   // ───────────────────────────────────────────────────────── internals
 
-  private cadenceFor(perWeek: number, daysOfWeek: number[] | undefined, timeOfDay: string | undefined): Cadence {
-    if (daysOfWeek !== undefined) {
-      if (!Array.isArray(daysOfWeek) || daysOfWeek.length === 0 || daysOfWeek.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
-        throw new BadRequestException('daysOfWeek must be a non-empty list of weekdays 0 (Sunday) to 6 (Saturday)');
-      }
+  /**
+   * The per-slot job helpers live in the planner, and the planner INJECTS this
+   * service. A top-level import of it here would load the planner while this
+   * module is still half-built, and its constructor metadata would then name
+   * `Object` where it should name this class — Nest fails to resolve it at
+   * boot. Reading the helpers at call time keeps one copy of "which two jobs a
+   * slot has" without the cycle.
+   */
+  private slotJobs() {
+    return import('./programme-planner.service');
+  }
+
+  /** Only PROPOSED rows move: a concept a human already decided keeps that verdict. */
+  private async discardConcepts(workspaceId: string, ids: string[], programmeId: string, note: string, now: Date): Promise<void> {
+    await this.prisma.contentConcept.updateMany({
+      where: { id: { in: ids }, workspaceId, status: 'PROPOSED' },
+      data: { status: 'DISCARDED', reviewedAt: now, reviewedById: `programme:${programmeId}`, reviewNote: note },
+    });
+  }
+
+  private async requireNoLiveProgramme(workspaceId: string): Promise<void> {
+    const live = await this.prisma.contentProgramme.findFirst({
+      where: { workspaceId, status: { in: LIVE_PROGRAMME_STATUSES } },
+      select: { id: true, name: true },
+    });
+    if (live) {
+      throw new BadRequestException(`This workspace already runs programme "${live.name}"; pause or kill it first.`);
     }
-    if (timeOfDay !== undefined && !TIME_RE.test(timeOfDay)) {
-      throw new BadRequestException(`timeOfDay must be HH:MM (got ${timeOfDay})`);
+  }
+
+  /** The persona must be this workspace's and usable; a foreign or archived one
+   *  would fail every slot at plan time, days from now. */
+  private async requirePersona(workspaceId: string, personaId: unknown): Promise<void> {
+    if (typeof personaId !== 'string' || !personaId.trim()) {
+      throw new BadRequestException('personaId must be a non-empty string');
     }
-    return {
-      daysOfWeek: daysOfWeek ? [...new Set(daysOfWeek)].sort((a, b) => a - b) : spreadDaysOfWeek(perWeek),
-      timeOfDay: timeOfDay ?? DEFAULT_TIME_OF_DAY,
-      timezone: PROGRAMME_TIMEZONE,
-    };
+    const persona = await this.prisma.videoPersona.findFirst({
+      where: { id: personaId, workspaceId },
+      select: { id: true, name: true, status: true },
+    });
+    if (!persona) {
+      throw new BadRequestException(`Persona ${personaId} does not exist in this workspace.`);
+    }
+    if (persona.status !== 'ACTIVE') {
+      throw new BadRequestException(`Persona "${persona.name}" is ${persona.status} and cannot front a programme.`);
+    }
   }
 
   /** Every account must be the workspace's own AND connected: a slot planned
@@ -435,36 +679,44 @@ export class ContentProgrammeService {
   }
 
   /**
-   * Cadence and daily cap follow `perWeek`. Written through Prisma rather than
-   * `SocialCampaignsService.update`, which refuses cadence changes on anything
-   * but a DRAFT campaign — a rule written for campaigns a human schedules by
-   * hand, where a moving cadence under a running plan tick would be a bug. The
-   * programme's lane has no plan tick of its own (see `planTick`), so the rule
-   * it exists for does not apply.
+   * The cadence follows `perWeek` and the weekday list. Written through Prisma
+   * rather than `SocialCampaignsService.update`, which refuses cadence changes
+   * on anything but a DRAFT campaign — a rule written for campaigns a human
+   * schedules by hand, where a moving cadence under a running plan tick would
+   * be a bug. The programme's lane has no plan tick of its own (see
+   * `planTick`), so the rule it exists for does not apply.
+   *
+   * Which weekdays: the ones given; else the ones the owner already had when
+   * they still fit the new count (raising 2 → 3 must not silently move Tue/Thu
+   * to Mon/Wed/Fri — but it has to add a day somewhere, so a count the old list
+   * cannot carry is spread afresh). The time is always what the owner typed,
+   * re-converted; a cadence written before the conversion existed carries its
+   * typed time in `timeOfDay`, and is repaired here on the first edit.
    */
-  private async syncCampaignCadence(workspaceId: string, campaignId: string, perWeek: number): Promise<void> {
+  private async syncCampaignCadence(workspaceId: string, campaignId: string, perWeek: number, daysOfWeek: number[] | undefined): Promise<ProgrammeCadence> {
     const campaign = await this.prisma.socialCampaign.findFirst({
       where: { id: campaignId, workspaceId },
       select: { cadence: true },
     });
-    const old = (campaign?.cadence ?? {}) as Partial<Cadence>;
-    const cadence: Cadence = {
-      daysOfWeek: spreadDaysOfWeek(perWeek),
-      timeOfDay: old.timeOfDay ?? DEFAULT_TIME_OF_DAY,
-      timezone: old.timezone ?? PROGRAMME_TIMEZONE,
-    };
+    const old = (campaign?.cadence ?? {}) as Partial<ProgrammeCadence>;
+    const oldDays = old.localDaysOfWeek ?? old.daysOfWeek;
+    const days = daysOfWeek ?? (Array.isArray(oldDays) && oldDays.length === perWeek ? oldDays : spreadDaysOfWeek(perWeek));
+    const localTime = old.localTimeOfDay ?? old.timeOfDay ?? DEFAULT_TIME_OF_DAY;
+    const cadence = cadenceForIstanbul(days, TIME_RE.test(localTime) ? localTime : DEFAULT_TIME_OF_DAY);
     await this.prisma.socialCampaign.updateMany({
       where: { id: campaignId, workspaceId },
-      data: { cadence: cadence as unknown as Prisma.InputJsonValue, dailyPublishCap: dailyCapFor(perWeek) },
+      data: { cadence: cadence as unknown as Prisma.InputJsonValue, dailyPublishCap: DAILY_PUBLISH_CAP },
     });
+    return cadence;
   }
 
   /**
    * Move the lane with the programme, through the campaign service's own
    * transitions (they cancel/schedule the plan job and validate the from
-   * state). Only a transition that is legal from the campaign's CURRENT
-   * status is attempted — a lane already paused by hand must not fail the
-   * programme's pause.
+   * state), flagged as the programme's so the lane guard on resume/activate
+   * lets them through. Only a transition that is legal from the campaign's
+   * CURRENT status is attempted — a lane already paused by hand must not fail
+   * the programme's pause.
    */
   private async setCampaignRunning(workspaceId: string, campaignId: string, running: boolean): Promise<void> {
     const campaign = await this.prisma.socialCampaign.findFirst({
@@ -473,8 +725,8 @@ export class ContentProgrammeService {
     });
     if (!campaign) return;
     if (running) {
-      if (campaign.status === 'PAUSED') await this.socialCampaigns.resume(workspaceId, campaignId);
-      else if (campaign.status === 'DRAFT') await this.socialCampaigns.activate(workspaceId, campaignId);
+      if (campaign.status === 'PAUSED') await this.socialCampaigns.resume(workspaceId, campaignId, { byProgramme: true });
+      else if (campaign.status === 'DRAFT') await this.socialCampaigns.activate(workspaceId, campaignId, { byProgramme: true });
     } else if (campaign.status === 'ACTIVE') {
       await this.socialCampaigns.pause(workspaceId, campaignId);
     }

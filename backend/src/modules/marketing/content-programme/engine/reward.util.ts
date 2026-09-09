@@ -21,6 +21,8 @@ export interface MetricSnapshot {
   comments: number;
   shares: number;
   saves: number;
+  /** Link clicks (the metric row carries them): the LEADS goal's fallback signal. */
+  clicks: number;
   videoViews: number;
   leads: number;
 }
@@ -36,6 +38,14 @@ export interface Baseline {
 export const NETWORK_DEFAULTS = Object.freeze({ engagementRate: 0.03, saveShareRate: 0.005, views: 500 });
 /** Leads have no per-account baseline yet (too sparse to take a median of): a fixed 0.2% of impressions. */
 export const LEAD_RATE_BASELINE = 0.002;
+/**
+ * Click-through baseline for the LEADS goal when the row carries no leads.
+ * WHY a fallback at all: SocialPostMetric.leads is first-party attribution
+ * that no provider fills in, so a LEADS programme scored on leads alone
+ * rewards every slot 0 and learns nothing. Clicks are the provider-counted
+ * step right before a lead; 1% of the denominator is a typical organic CTR.
+ */
+export const CLICK_RATE_BASELINE = 0.01;
 /** Rows an account needs before its own medians beat the network default. */
 const MIN_BASELINE_ROWS = 3;
 /** COMPOSITE mix: engagement first, saves/shares second, reach third. */
@@ -45,30 +55,60 @@ const isTikTok = (network: string): boolean => network.toUpperCase() === 'TIKTOK
 const safeDiv = (num: number, den: number): number => (den > 0 ? num / den : 0);
 const clip01 = (x: number): number => (Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0);
 
+export type LeadSource = 'leads' | 'clicks';
+
+export interface Rates {
+  engagementRate: number;
+  saveShareRate: number;
+  views: number;
+  leadRate: number;
+  /** Which counter fed leadRate: real leads when the row has any, else clicks. */
+  leadSource: LeadSource;
+  /** The audience count every rate divides by; 0 means the row is not usable. */
+  denominator: number;
+  usable: boolean;
+}
+
 /**
- * The three rates a snapshot yields on a network. TikTok's insight API has
- * no engagements/saves counters, so its engagement is (likes+comments+
- * shares)/views and its "save-share" is shares/views.
+ * The rates a snapshot yields on a network.
+ *
+ * The denominator is the first non-zero of impressions, reach, videoViews.
+ * WHY not impressions alone: Meta retired `impressions` for Instagram media
+ * and reports `views` instead, so a Reel row has impressions 0 and (as the
+ * programme publishes video only) every Instagram slot would score as a flop
+ * with an unusable row. `views` for the VIEWS goal prefers videoViews, then
+ * impressions, then reach.
+ *
+ * TikTok's insight API has no engagements/saves counters, so its engagement
+ * is (likes+comments+shares)/views and its "save-share" is shares/views.
+ *
+ * leadRate divides leads by the denominator when the row has any, else
+ * clicks (see CLICK_RATE_BASELINE); `leadSource` says which.
  */
-export function ratesOf(network: string, m: MetricSnapshot): {
-  engagementRate: number; saveShareRate: number; views: number; leadRate: number; usable: boolean;
-} {
-  const views = m.videoViews || m.impressions || 0;
+export function ratesOf(network: string, m: MetricSnapshot): Rates {
+  const views = m.videoViews || m.impressions || m.reach || 0;
+  const leadSource: LeadSource = m.leads > 0 ? 'leads' : 'clicks';
   if (isTikTok(network)) {
+    const denominator = m.videoViews || 0;
     return {
-      engagementRate: safeDiv(m.likes + m.comments + m.shares, m.videoViews),
-      saveShareRate: safeDiv(m.shares, m.videoViews),
+      engagementRate: safeDiv(m.likes + m.comments + m.shares, denominator),
+      saveShareRate: safeDiv(m.shares, denominator),
       views,
-      leadRate: safeDiv(m.leads, m.impressions || m.videoViews),
-      usable: m.videoViews > 0,
+      leadRate: safeDiv(leadSource === 'leads' ? m.leads : m.clicks, denominator),
+      leadSource,
+      denominator,
+      usable: denominator > 0,
     };
   }
+  const denominator = m.impressions || m.reach || m.videoViews || 0;
   return {
-    engagementRate: safeDiv(m.engagements, m.impressions),
-    saveShareRate: safeDiv(m.saves + m.shares, m.impressions),
+    engagementRate: safeDiv(m.engagements, denominator),
+    saveShareRate: safeDiv(m.saves + m.shares, denominator),
     views,
-    leadRate: safeDiv(m.leads, m.impressions || m.videoViews),
-    usable: m.impressions > 0,
+    leadRate: safeDiv(leadSource === 'leads' ? m.leads : m.clicks, denominator),
+    leadSource,
+    denominator,
+    usable: denominator > 0,
   };
 }
 
@@ -102,7 +142,7 @@ const normalise = (x: number, baseline: number): number => clip01(x / (2 * basel
 
 /** The goal's reward and every number that went into it. */
 export function rewardFor(goal: Goal, network: string, m: MetricSnapshot, b: Baseline): {
-  reward: number; breakdown: Record<string, number>;
+  reward: number; breakdown: Record<string, number | string>;
 } {
   const rates = ratesOf(network, m);
   const engagementBaseline = b.engagementRate > 0 ? b.engagementRate : NETWORK_DEFAULTS.engagementRate;
@@ -111,7 +151,10 @@ export function rewardFor(goal: Goal, network: string, m: MetricSnapshot, b: Bas
   const engagementR = normalise(rates.engagementRate, engagementBaseline);
   const saveShareR = normalise(rates.saveShareRate, saveShareBaseline);
   const viewsR = normalise(rates.views, viewsBaseline);
-  const leadR = normalise(rates.leadRate, LEAD_RATE_BASELINE);
+  // A row with no leads is scored on clicks against the click baseline; the
+  // breakdown's `leadSource` says which, so the metrics panel can tell.
+  const leadBaseline = rates.leadSource === 'leads' ? LEAD_RATE_BASELINE : CLICK_RATE_BASELINE;
+  const leadR = normalise(rates.leadRate, leadBaseline);
 
   let reward: number;
   switch (goal) {
@@ -130,9 +173,11 @@ export function rewardFor(goal: Goal, network: string, m: MetricSnapshot, b: Bas
     reward,
     breakdown: {
       impressions: m.impressions, reach: m.reach, engagements: m.engagements, likes: m.likes, comments: m.comments,
-      shares: m.shares, saves: m.saves, videoViews: m.videoViews, leads: m.leads,
+      shares: m.shares, saves: m.saves, clicks: m.clicks, videoViews: m.videoViews, leads: m.leads,
+      denominator: rates.denominator,
       engagementRate: rates.engagementRate, saveShareRate: rates.saveShareRate, views: rates.views, leadRate: rates.leadRate,
-      engagementBaseline, saveShareBaseline, viewsBaseline, leadBaseline: LEAD_RATE_BASELINE,
+      leadSource: rates.leadSource,
+      engagementBaseline, saveShareBaseline, viewsBaseline, leadBaseline,
       engagementR, saveShareR, viewsR, leadR,
       reward,
     },

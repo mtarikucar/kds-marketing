@@ -10,7 +10,7 @@ text an invoice, book an appointment).
 
 **The catalogue is 132 tools across 21 domains, of which 45 are advertised up
 front** (plus `jeeta.find_tools` and `jeeta.call_tool`, which are always
-advertised). **The other 77 are reachable** through those two — see
+advertised). **The other 87 are reachable** through those two — see
 [Tool catalogue](#tool-catalogue).
 
 This guide is for the person setting the connector up for a workspace, not
@@ -446,7 +446,7 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.plan_content_distribution` | For an APPROVED/SCHEDULED/PUBLISHED campaign item: the cross-post schedule, what to tag, and a PREPARED (unsent) message per contactable person. **Sends nothing** | `campaigns.write` | WRITE | — | no |
 | `jeeta.list_distribution_drafts` | Prepared outreach messages and their state (DRAFT / SENT / DISMISSED / FAILED) | `campaigns.read` | READ | — | no |
 | `jeeta.get_content_programme` | The workspace's **content programme** — the autonomous typed-content loop — with its dashboard: phase, status, kill switch, this week's credit spend against `weeklyCreditCap`, the upcoming calendar slots (type, why, idea, concept, editable-until), every type's learned weight and planned share, the type×network learning table + weights history, brand-ranked trend signals, and the last 30 "why" log lines. `programme: null` when none exists — a programme is **started from the Studio panel only**, because starting one begins **autonomous credit spend** (plans, storyboards, buys clips and publishes with no approval, up to the weekly cap) | `campaigns.read` | READ | — | no |
-| `jeeta.update_content_programme` | Steer the programme: settings (brief, goal, posts/week, `weeklyCreditCap`, exploration rate, lead times, persona) and/or `pause` / `resume`. **The programme spends credits autonomously while ACTIVE**, bounded by the cap — raising the cap or the weekly count raises what it will spend; pausing stops spend and keeps the calendar. **No kill here on purpose**: the kill switch is terminal and lives only in the panel | `campaigns.write` | WRITE | — | no |
+| `jeeta.update_content_programme` | Steer the programme: settings (brief, goal, posts/week, `weeklyCreditCap`, exploration rate, lead times, persona) and/or `pause` / `resume`. **The programme spends credits autonomously while ACTIVE**, bounded by the cap — an agent may **lower** the cap or the weekly count; **raising either is refused** here and done from the panel; pausing stops spend and keeps the calendar (resume re-arms the waiting slots). **No kill here on purpose**: the kill switch is terminal and lives only in the panel | `campaigns.write` | WRITE | — | no |
 | `jeeta.edit_content_slot` | Rewrite ONE calendar slot before it is produced — its type, idea or publish time — or `skip` it, or `regenerate` it. **Editing spends nothing** until the slot is produced (refused once its edit window has closed); skipping is free; **`regenerate` re-buys the clips** | `campaigns.write` | WRITE | — | no |
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.

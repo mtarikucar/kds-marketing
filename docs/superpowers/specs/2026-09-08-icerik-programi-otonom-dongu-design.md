@@ -160,7 +160,7 @@ weeklyCreditCap, personaId?), `PATCH` (ayarlar), `POST /pause|resume|kill`,
 `GET /slots/:id/metrics`.
 
 MCP (3 yeni, deferred): `jeeta.get_content_programme` (READ), `jeeta.update_content_programme`
-(WRITE: ayarlar, pause/resume), `jeeta.edit_content_slot` (WRITE). Katalog pini 128 → 131;
+(WRITE: ayarlar, pause/resume), `jeeta.edit_content_slot` (WRITE). Katalog pini 129 → 132;
 connector belgesine satırlar.
 
 ## Tek ekran (Studio)
@@ -180,7 +180,8 @@ geçmişi mini-grafik SVG), **Trendler** (skor + uygunluk), **Günlük**. Progra
 Saf motorlar: tohumlu RNG ile deterministik; taban/tavan/no-repeat/keşif/evre geçişleri
 mutasyonla doğrulanır. Servisler: mock Prisma. Gerçek-DB e2e: migrasyon round-trip
 (up→down→up), program kurulumu → plan → slot → (sahte medya) üretim → ölçüm → yeniden
-ağırlıklandırma zinciri gerçek Postgres'te. Frontend: panel/sekme/düzenleyici testleri,
+ağırlıklandırma zinciri gerçek Postgres'te — `backend/test/e2e/content-programme.realdb.e2e-spec.ts`
+(`E2E_REAL_DB=1` ile açılır). Frontend: panel/sekme/düzenleyici testleri,
 i18n parity/usedKeys/studioSurfaceKeys. Kiracı izolasyonu: yabancı çalışma alanının
 programı/slotu/türü okunmaz.
 

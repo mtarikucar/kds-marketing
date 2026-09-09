@@ -547,7 +547,10 @@ describe('ConnectedAccountsList', () => {
     // The VALUE cell, not the row: the date cell beside it reads "10 Ağu" on
     // a window that opens on the 10th, and that zero is a calendar's, not a
     // follower count's.
-    const valueCell = (row: HTMLElement) => within(row).getAllByRole('cell').at(-1)!;
+    const valueCell = (row: HTMLElement) => {
+      const cells = within(row).getAllByRole('cell');
+      return cells[cells.length - 1];
+    };
     expect(valueCell(rows[1])).toHaveTextContent('—');
     expect(valueCell(rows[1])).not.toHaveTextContent('0');
     // …and the day we did read carries the level.

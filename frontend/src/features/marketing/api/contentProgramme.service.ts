@@ -105,6 +105,12 @@ export interface SlotView {
   campaignItemId: string | null;
   socialPostId: string | null;
   quotedCredits: number | null;
+  /**
+   * What the slot has actually cost so far. Kept on SKIPPED and FAILED slots
+   * too, because a production that was paid for and then thrown away is the
+   * number an owner wants next to the quote, not a dash.
+   */
+  spentCredits: number;
   editableUntil: string;
   /** `now < editableUntil` and the slot is PLANNED, IDEATED or READY. */
   editable: boolean;
@@ -343,6 +349,15 @@ export const skipSlot = (id: string, slotId: string): Promise<SlotView> =>
 
 export const regenerateSlot = (id: string, slotId: string): Promise<SlotView> =>
   marketingApi.post(`${BASE}/${id}/slots/${slotId}/regenerate`).then((r) => r.data);
+
+/**
+ * A FAILED slot back into the loop from where it broke — as opposed to
+ * `regenerateSlot`, which throws the clips away and re-produces a slot that
+ * has a campaign item. Retry is what a slot that failed BEFORE it had an item
+ * (ideation, planning) needs, so the panel offers it on every FAILED slot.
+ */
+export const retrySlot = (id: string, slotId: string): Promise<SlotView> =>
+  marketingApi.post(`${BASE}/${id}/slots/${slotId}/retry`).then((r) => r.data);
 
 export const slotMetrics = (id: string, slotId: string): Promise<SlotMetricsView> =>
   marketingApi.get(`${BASE}/${id}/slots/${slotId}/metrics`).then((r) => r.data);

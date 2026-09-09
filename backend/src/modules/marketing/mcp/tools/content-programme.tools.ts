@@ -1,7 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
-import { ContentProgrammeService, PROGRAMME_GOALS, type UpdateProgrammeInput } from '../../content-programme/content-programme.service';
+import {
+  ContentProgrammeService,
+  PER_WEEK_MAX,
+  PROGRAMME_GOALS,
+  WEEKLY_CREDIT_CAP_MAX,
+  type UpdateProgrammeInput,
+} from '../../content-programme/content-programme.service';
 import { ProgrammeDashboardService } from '../../content-programme/programme-dashboard.service';
 import { SlotEditorService } from '../../content-programme/slot-editor.service';
 import { assertFeature } from '../mcp-feature-gate';
@@ -25,8 +31,9 @@ const SETTINGS_SCHEMA = z
     name: z.string().min(1).max(200).optional().describe('Display name.'),
     brief: z.string().min(1).max(8000).optional().describe('What the programme is about — product, audience, tone. Grounds every idea it plans.'),
     goal: z.enum(PROGRAMME_GOALS).optional().describe('What "working" means: ENGAGEMENT, VIEWS, SAVES_SHARES, LEADS, or the COMPOSITE blend.'),
-    perWeek: z.number().int().min(1).max(14).optional().describe('Posts per week per account. Changes the calendar cadence too.'),
-    weeklyCreditCap: z.number().int().min(50).optional().describe('The most credits the programme may spend in one week; a slot that would cross it is deferred, not produced.'),
+    perWeek: z.number().int().min(1).max(PER_WEEK_MAX).optional().describe('Posts per week per account, at most one a day. Changes the calendar cadence too. An agent may LOWER it; raising it is done from the hub.'),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(PER_WEEK_MAX).optional().describe('Which weekdays carry the posts (0 = Sunday … 6 = Saturday, Turkey time); must list exactly perWeek days.'),
+    weeklyCreditCap: z.number().int().min(50).max(WEEKLY_CREDIT_CAP_MAX).optional().describe('The most credits the programme may spend in one week; a slot that would cross it is deferred, not produced. An agent may LOWER it; raising it is done from the hub.'),
     explorationRate: z.number().min(0.05).max(0.5).optional().describe('Share of slots given to the least-tried types instead of the best-scoring ones (never zero, even when exploiting).'),
     maturityHours: z.number().int().min(24).max(168).optional().describe('How long after publishing a slot is measured.'),
     halfLifeDays: z.number().int().min(7).max(90).optional().describe('How fast old evidence fades from the type weights.'),
@@ -86,7 +93,7 @@ export function registerContentProgrammeTools(registry: McpToolRegistry, deps: C
   registry.register({
     name: 'jeeta.update_content_programme',
     description:
-      'Steer the content programme: change its settings (brief, goal, posts per week, weeklyCreditCap, exploration rate, lead times, persona) and/or pause or resume it. The programme SPENDS CREDITS AUTONOMOUSLY while ACTIVE — every planned slot is storyboarded, its clips bought and published without an approval — bounded only by weeklyCreditCap, so raising the cap or the weekly count raises what it will spend, and pausing is the way to stop spend without losing the calendar (open slots wait; resume picks them up). Settings take effect on the next slot the programme plans; a slot already produced is not re-bought. There is no kill here on purpose — the kill switch is terminal and sweeps the calendar, and lives only in the Studio panel. Pass settings, action, or both; an empty call is refused.',
+      'Steer the content programme: change its settings (brief, goal, posts per week, weeklyCreditCap, exploration rate, lead times, persona) and/or pause or resume it. The programme SPENDS CREDITS AUTONOMOUSLY while ACTIVE — every planned slot is storyboarded, its clips bought and published without an approval — bounded only by weeklyCreditCap. Lowering the cap or the weekly count lowers what it will spend; RAISING either is refused here — that is done from the Studio panel by a person. Pausing is the way to stop spend without losing the calendar (open slots wait; resume re-arms them, and skips only those whose publish time passed while paused). Settings take effect on the next slot the programme plans; a slot already produced is not re-bought. There is no kill here on purpose — the kill switch is terminal and sweeps the calendar, and lives only in the Studio panel. Pass settings, action, or both; an empty call is refused.',
     domain: 'content',
     defer: true,
     scopes: ['campaigns.write'],
@@ -107,7 +114,19 @@ export function registerContentProgrammeTools(registry: McpToolRegistry, deps: C
         throw new BadRequestException('Nothing to do: pass settings to change, an action (pause/resume), or both.');
       }
       let programme = await deps.programmes.getOrThrow(ctx.workspaceId, programmeId);
-      if (hasSettings) programme = await deps.programmes.update(ctx.workspaceId, programmeId, settings);
+      // The two levers that SCALE autonomous spend only move down from here.
+      // Create and kill are hub-only because they start and end the spend; a
+      // cap an agent could raise would make that fence decorative — one
+      // injected instruction in a lead note and the only money bound on the
+      // autopilot is gone. Lowering is always safe and stays open.
+      if (hasSettings) {
+        const raisesCap = settings.weeklyCreditCap !== undefined && settings.weeklyCreditCap > programme.weeklyCreditCap;
+        const raisesCadence = settings.perWeek !== undefined && settings.perWeek > programme.perWeek;
+        if (raisesCap || raisesCadence) {
+          throw new BadRequestException('Raising the weekly cap or the cadence is done from the hub, not by an agent');
+        }
+        programme = await deps.programmes.update(ctx.workspaceId, programmeId, settings);
+      }
       if (action === 'pause') programme = await deps.programmes.pause(ctx.workspaceId, programmeId);
       if (action === 'resume') programme = await deps.programmes.resume(ctx.workspaceId, programmeId);
       return { programme };

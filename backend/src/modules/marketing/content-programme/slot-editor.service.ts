@@ -5,11 +5,14 @@ import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { SocialCampaignsService } from '../social-campaigns/social-campaigns.service';
 import { CampaignItemArmingService } from '../social-campaigns/campaign-item-arming.service';
 import { ContentProgrammeService } from './content-programme.service';
-import { CONTENT_SLOT_PLAN_KIND, cancelSlotJobs, scheduleSlotJobs, slotPlanDedup } from './programme-planner.service';
+import { CONTENT_SLOT_PLAN_KIND, cancelSlotJobs, scheduleSlotJobs, slotPlanDedup, sumWeekSpend } from './programme-planner.service';
 
 /** Statuses an owner may still touch: nothing bought (PLANNED), frames only
  *  (IDEATED), or clips made but not yet out (READY — time only). */
 export const EDITABLE_SLOT_STATUSES = ['PLANNED', 'IDEATED', 'READY'] as const;
+/** Statuses an owner may drop: the editable ones, and FAILED — a failed slot
+ *  is the one the owner most needs a door out of. */
+export const SKIPPABLE_SLOT_STATUSES = [...EDITABLE_SLOT_STATUSES, 'FAILED'] as const;
 /** The concept planner's own idea limit, held here so a rejected edit says so
  *  at the door rather than after a job has spent a credit. */
 const MAX_IDEA_CHARS = 4000;
@@ -19,6 +22,10 @@ const HOUR_MS = 60 * 60 * 1000;
 const ITEM_REGENERATABLE = ['PLANNED', 'NEEDS_APPROVAL', 'FAILED', 'SKIPPED'];
 /** Item statuses the publish gate may still fire from — the ones a moved time must re-arm. */
 const ITEM_ARMED = ['SCHEDULED', 'NEEDS_APPROVAL'];
+/** Item statuses `rejectItem` accepts (see REJECTABLE_STATES there). */
+const ITEM_REJECTABLE = ['PLANNED', 'NEEDS_APPROVAL', 'SCHEDULED'];
+/** Item statuses that are already over — nothing to reject, nothing to stop. */
+const ITEM_ENDED = ['SKIPPED', 'FAILED'];
 
 export interface SlotPatch {
   contentTypeKey?: string;
@@ -48,7 +55,7 @@ const isUniqueViolation = (e: unknown): boolean =>
 
 /**
  * THE OWNER'S HANDS on a calendar the programme otherwise runs alone (design
- * K3: every step editable, no approval gate). Three moves and one read:
+ * K3: every step editable, no approval gate). Four moves and one read:
  *
  *   update      type / idea / time, inside the edit window; what it costs
  *               depends on how far the slot got — a PLANNED slot is rewritten,
@@ -56,9 +63,15 @@ const isUniqueViolation = (e: unknown): boolean =>
  *               READY one only moves (its clips are bought; "different" is
  *               `regenerate`)
  *   skip        the slot is dropped and whatever it holds is released: the
- *               concept discarded, the jobs cancelled, the item rejected
+ *               concept discarded, the jobs cancelled, the item rejected (or
+ *               left alone when it already ended)
+ *   retry       FAILED → PLANNED and both jobs re-armed, so a transient
+ *               failure (a model outage at plan time) costs the owner one
+ *               click, not the calendar day; a FAILED slot that reached an
+ *               item is sent through `regenerate` instead
  *   regenerate  READY (or FAILED with an item): the clips are re-made through
- *               the campaign's own regenerate door
+ *               the campaign's own regenerate door — under the programme's
+ *               state and the weekly cap, because it is a second purchase
  *   metrics     the slot with everything it became, down to the latest metric
  *               row per network
  *
@@ -172,14 +185,13 @@ export class SlotEditorService {
 
   async skipSlot(workspaceId: string, slotId: string, actorId: string, now = new Date()): Promise<ContentSlot> {
     const slot = await this.getOwned(workspaceId, slotId);
-    if (!(EDITABLE_SLOT_STATUSES as readonly string[]).includes(slot.status)) {
-      throw new BadRequestException(`A ${slot.status} slot cannot be skipped; only PLANNED, IDEATED or READY slots can.`);
+    if (!(SKIPPABLE_SLOT_STATUSES as readonly string[]).includes(slot.status)) {
+      throw new BadRequestException(`A ${slot.status} slot cannot be skipped; only PLANNED, IDEATED, READY or FAILED slots can.`);
     }
     // The item first: a refusal there (already published under our feet)
     // leaves the slot as it was, rather than a SKIPPED slot over a live post.
-    if (slot.status === 'READY' && slot.campaignItemId) {
-      await this.socialCampaigns.rejectItem(workspaceId, slot.campaignItemId);
-    }
+    // An item the gate already ended (SKIPPED / FAILED) has nothing to reject.
+    if (slot.campaignItemId) await this.releaseItem(workspaceId, slot.campaignItemId);
     if (slot.conceptId) await this.discardConcept(workspaceId, slot.conceptId, slot.programmeId, `skipped by ${actorId}`, now);
     await cancelSlotJobs(this.scheduledJobs, slot.id);
     const updated = await this.prisma.contentSlot.update({
@@ -193,18 +205,77 @@ export class SlotEditorService {
   }
 
   /**
+   * FAILED → PLANNED, both jobs re-armed at the slot's lead times (clamped to
+   * now). The concept, quote and error go; `spentCredits` stays — the batch
+   * and frames the failed attempt bought were paid for and the week counts
+   * them. A FAILED slot that reached a campaign item is the regenerate case:
+   * its clips may be half-bought and the campaign's door resumes from there.
+   */
+  async retrySlot(workspaceId: string, slotId: string, actorId: string, now = new Date()): Promise<ContentSlot> {
+    const slot = await this.getOwned(workspaceId, slotId);
+    if (slot.status !== 'FAILED') throw new BadRequestException(`A ${slot.status} slot cannot be retried; only FAILED slots can.`);
+    if (slot.campaignItemId) {
+      const updated = await this.regenerateSlot(workspaceId, slotId, actorId, now);
+      await this.programmes.logEvent(workspaceId, slot.programmeId, 'SLOT_RETRIED', `Slot ${slot.contentTypeKey} retried by ${actorId} through regenerate.`, {
+        slotId: slot.id, actorId, via: 'regenerate', campaignItemId: slot.campaignItemId,
+      });
+      return updated;
+    }
+    const programme = await this.programmes.getOrThrow(workspaceId, slot.programmeId);
+    if (programme.status === 'KILLED' || programme.killSwitch) throw new BadRequestException('This programme is killed; nothing can be retried.');
+    if (slot.scheduledFor.getTime() <= now.getTime()) {
+      throw new BadRequestException('This slot\'s time has passed; it cannot be retried. Skip it, or wait for the planner to fill the next time.');
+    }
+    if (slot.conceptId) await this.discardConcept(workspaceId, slot.conceptId, programme.id, `retried by ${actorId}`, now);
+    const updated = await this.prisma.contentSlot.update({
+      where: { id: slot.id },
+      data: { status: 'PLANNED', conceptId: null, quotedCredits: null, error: null },
+    });
+    await scheduleSlotJobs(this.scheduledJobs, workspaceId, programme, updated, now);
+    await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_RETRIED', `Slot ${slot.contentTypeKey} retried by ${actorId}: back to PLANNED, jobs re-armed.`, {
+      slotId: slot.id, actorId, via: 'replan', previousError: slot.error, conceptId: slot.conceptId,
+    });
+    return updated;
+  }
+
+  /**
    * Re-make the clips. `regenerateItem` is the campaign's own door and refuses
    * an item that is SCHEDULED (armed to publish) — the state every READY slot
    * of a FULL_AUTO programme is in — so an armed item is first rejected
    * (SCHEDULED → SKIPPED, which the gate drops) and then regenerated from
    * there. Two public transitions, no private write to the item's status.
+   *
+   * A regenerate is a purchase the programme did not plan, so it is held to
+   * what the programme is held to: the programme must be running (not paused,
+   * not killed), its lane must be running (a PAUSED campaign would take the
+   * clips and never publish them), and the re-buy must fit the weekly cap of
+   * the slot's week. The full quote is charged to `spentCredits` — the
+   * campaign door may resume from bought beats, but the cap is conservative.
    */
-  async regenerateSlot(workspaceId: string, slotId: string, actorId: string): Promise<ContentSlot> {
+  async regenerateSlot(workspaceId: string, slotId: string, actorId: string, now = new Date()): Promise<ContentSlot> {
     const slot = await this.getOwned(workspaceId, slotId);
     const eligible = slot.status === 'READY' || (slot.status === 'FAILED' && Boolean(slot.campaignItemId));
     if (!eligible || !slot.campaignItemId) {
       throw new BadRequestException(
         `A ${slot.status} slot${slot.campaignItemId ? '' : ' without a campaign item'} cannot be regenerated; only READY slots (or FAILED ones that reached production) can.`,
+      );
+    }
+    const programme = await this.programmes.getOrThrow(workspaceId, slot.programmeId);
+    if (programme.status !== 'ACTIVE' || programme.killSwitch) {
+      throw new BadRequestException(`The programme is ${programme.killSwitch ? 'killed' : programme.status.toLowerCase()}; nothing is regenerated until it runs.`);
+    }
+    const campaign = await this.prisma.socialCampaign.findFirst({ where: { id: programme.socialCampaignId, workspaceId }, select: { status: true } });
+    if (!campaign || campaign.status !== 'ACTIVE') {
+      throw new BadRequestException(`The programme's campaign is ${campaign?.status ?? 'gone'}; resume it before regenerating.`);
+    }
+    if (slot.quotedCredits === null || slot.quotedCredits === undefined) {
+      throw new BadRequestException('This slot carries no quote, so a regenerate cannot be held to the weekly cap.');
+    }
+    // The slot's week, not the calendar week of the click: spend is bucketed by scheduledFor.
+    const { spent } = await sumWeekSpend(this.prisma, workspaceId, programme.id, slot.scheduledFor);
+    if (spent + slot.quotedCredits > programme.weeklyCreditCap) {
+      throw new BadRequestException(
+        `Regenerating would spend ${spent} + ${slot.quotedCredits} credits against the ${programme.weeklyCreditCap}-credit weekly cap; raise the cap or wait for next week.`,
       );
     }
     const item = await this.prisma.socialCampaignItem.findFirst({ where: { id: slot.campaignItemId, workspaceId }, select: { id: true, status: true } });
@@ -216,10 +287,10 @@ export class SlotEditorService {
     await this.socialCampaigns.regenerateItem(workspaceId, item.id);
     const updated = await this.prisma.contentSlot.update({
       where: { id: slot.id },
-      data: { status: 'PRODUCING', error: null },
+      data: { status: 'PRODUCING', error: null, spentCredits: { increment: slot.quotedCredits } },
     });
     await this.programmes.logEvent(workspaceId, slot.programmeId, 'SLOT_REGENERATED', `Slot ${slot.contentTypeKey} sent back to production by ${actorId}.`, {
-      slotId: slot.id, actorId, from: slot.status, campaignItemId: item.id, itemStatus: item.status,
+      slotId: slot.id, actorId, from: slot.status, campaignItemId: item.id, itemStatus: item.status, spent: slot.quotedCredits, weekSpent: spent, at: now.toISOString(),
     });
     return updated;
   }
@@ -303,6 +374,21 @@ export class SlotEditorService {
       where: { id: conceptId, workspaceId, status: 'PROPOSED' },
       data: { status: 'DISCARDED', reviewedAt: now, reviewedById: `programme:${programmeId}`, reviewNote: note },
     });
+  }
+
+  /**
+   * Let go of a slot's item on a skip: rejected through the campaign's door
+   * when the door accepts it, left alone when the gate already ended it, and
+   * a refusal (mid-publish, published) propagates so the slot is not marked
+   * SKIPPED over a live post.
+   */
+  private async releaseItem(workspaceId: string, itemId: string): Promise<void> {
+    const item = await this.prisma.socialCampaignItem.findFirst({ where: { id: itemId, workspaceId }, select: { id: true, status: true } });
+    if (!item || ITEM_ENDED.includes(String(item.status))) return;
+    if (!ITEM_REJECTABLE.includes(String(item.status))) {
+      throw new BadRequestException(`The slot's campaign item is ${item.status} and cannot be stopped; the slot stays as it is.`);
+    }
+    await this.socialCampaigns.rejectItem(workspaceId, item.id);
   }
 
   /**

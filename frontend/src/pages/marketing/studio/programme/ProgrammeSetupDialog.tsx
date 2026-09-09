@@ -32,8 +32,13 @@ import {
 } from '../../../../features/marketing/api/contentProgramme.service';
 import { errorMessage } from './SlotEditor';
 
-const PER_WEEK = Array.from({ length: 14 }, (_, i) => i + 1);
+// One slot per day at most: the cadence carries a single publish time per
+// weekday, and the backend refuses more than seven.
+const PER_WEEK = Array.from({ length: 7 }, (_, i) => i + 1);
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** The backend's bounds for `weeklyCreditCap` (`@Min(50) @Max(20000)`). */
+export const CAP_MIN = 50;
+export const CAP_MAX = 20_000;
 
 export interface ProgrammeSetupDialogProps {
   open: boolean;
@@ -102,7 +107,9 @@ export function ProgrammeSetupDialog({ open, onOpenChange }: ProgrammeSetupDialo
     if (!name.trim()) return setError(t('studio.programme.setup.needName', 'Programa bir ad verin.'));
     if (!brief.trim()) return setError(t('studio.programme.setup.needBrief', 'Program neyle ilgili? Kısaca yazın.'));
     if (accountIds.length === 0) return setError(t('studio.programme.setup.needAccounts', 'En az bir hesap seçin.'));
-    if (!Number.isFinite(capN) || capN < 50) return setError(t('studio.programme.setup.needCap', 'Haftalık kredi tavanı en az 50 olmalı.'));
+    if (!Number.isInteger(capN) || capN < CAP_MIN || capN > CAP_MAX) {
+      return setError(t('studio.programme.setup.needCap', 'Haftalık kredi tavanı 50 ile 20000 arasında bir tam sayı olmalı.'));
+    }
     if (!TIME_RE.test(timeOfDay)) return setError(t('studio.programme.setup.needTime', 'Saat SS:DD biçiminde olmalı.'));
     create.mutate({
       name: name.trim(),
@@ -128,8 +135,15 @@ export function ProgrammeSetupDialog({ open, onOpenChange }: ProgrammeSetupDialo
           </DialogDescription>
         </DialogHeader>
 
+        {/*
+          `noValidate`: the browser's own constraint bubbles are English, not
+          announced by every screen reader, and — with a `step` on the cap —
+          refuse values the backend accepts. Every rule is checked in `submit`
+          instead and reported through the one localized `role="alert"` line.
+        */}
         <form
           className="flex flex-col gap-3"
+          noValidate
           onSubmit={(e) => {
             e.preventDefault();
             submit();
@@ -137,12 +151,12 @@ export function ProgrammeSetupDialog({ open, onOpenChange }: ProgrammeSetupDialo
         >
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`${id}-name`}>{t('studio.programme.setup.name', 'Ad')}</Label>
-            <Input id={`${id}-name`} value={name} onChange={(e) => setName(e.target.value)} required />
+            <Input id={`${id}-name`} value={name} onChange={(e) => setName(e.target.value)} aria-required="true" />
           </div>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`${id}-brief`}>{t('studio.programme.setup.brief', 'Konu / ürün / ton')}</Label>
-            <Textarea id={`${id}-brief`} rows={3} value={brief} onChange={(e) => setBrief(e.target.value)} required />
+            <Textarea id={`${id}-brief`} rows={3} value={brief} onChange={(e) => setBrief(e.target.value)} aria-required="true" />
           </div>
 
           <fieldset className="flex flex-col gap-1.5">
@@ -213,15 +227,21 @@ export function ProgrammeSetupDialog({ open, onOpenChange }: ProgrammeSetupDialo
               <Input
                 id={`${id}-cap`}
                 type="number"
-                min={50}
-                step={10}
+                min={CAP_MIN}
+                max={CAP_MAX}
+                step={1}
                 value={cap}
                 onChange={(e) => setCap(e.target.value)}
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${id}-time`}>{t('studio.programme.setup.time', 'Yayın saati (SS:DD)')}</Label>
+              {/*
+                The engine schedules every slot in Europe/Istanbul whatever the
+                browser's zone is, and the strip then prints the chips in the
+                browser's — so the label says which clock this field is on.
+              */}
+              <Label htmlFor={`${id}-time`}>{t('studio.programme.setup.time', 'Yayın saati (Türkiye saati, SS:DD)')}</Label>
               <Input
                 id={`${id}-time`}
                 type="time"

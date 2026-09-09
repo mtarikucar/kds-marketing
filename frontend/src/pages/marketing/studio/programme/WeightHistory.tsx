@@ -39,18 +39,23 @@ export function historyKeys(history: LearningView['history']): string[] {
   return seen;
 }
 
-/** The SVG points for one type, `x` by reweight index and `y` by weight 0..1. */
-export function polylinePoints(history: LearningView['history'], key: string): string {
+/** The chart coordinates for one type, `x` by reweight index and `y` by weight 0..1. */
+export function pointCoords(history: LearningView['history'], key: string): Array<{ x: number; y: number }> {
   const n = history.length;
   const innerW = W - PAD.l - PAD.r;
   const innerH = H - PAD.t - PAD.b;
-  return history
-    .map((h, i) => {
-      const x = PAD.l + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
-      const w = Math.min(1, Math.max(0, h.weights[key] ?? 0));
-      const y = PAD.t + innerH - w * innerH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
+  return history.map((h, i) => {
+    const x = PAD.l + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+    const w = Math.min(1, Math.max(0, h.weights[key] ?? 0));
+    const y = PAD.t + innerH - w * innerH;
+    return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) };
+  });
+}
+
+/** The same, as an SVG `points` string. */
+export function polylinePoints(history: LearningView['history'], key: string): string {
+  return pointCoords(history, key)
+    .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
     .join(' ');
 }
 
@@ -124,6 +129,25 @@ export function WeightHistory({ history, typeKeys, names = {}, className }: Weig
             strokeLinecap="round"
           />
         ))}
+        {/*
+          A polyline with ONE point paints nothing — a line needs two ends —
+          so the first reweight would show a legend over an empty chart. A
+          marker per point makes that first week visible, and stays on later
+          so the exact reweight instants are readable off the line.
+        */}
+        {keys.map((k, i) =>
+          pointCoords(history, k).map((p, j) => (
+            <circle
+              key={`${k}-${j}`}
+              data-testid="programme-weight-point"
+              data-type={k}
+              cx={p.x}
+              cy={p.y}
+              r={2}
+              fill={STROKES[i % STROKES.length]}
+            />
+          )),
+        )}
       </svg>
 
       <figcaption className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-micro text-muted-foreground">

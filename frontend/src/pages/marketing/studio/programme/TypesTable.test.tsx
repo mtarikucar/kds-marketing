@@ -65,6 +65,14 @@ describe('TypesTable', () => {
     expect(rows[1]).toHaveTextContent('—');
   });
 
+  it('reads both shares to a screen reader as text, while the bars stay hidden', () => {
+    wrap(<TypesTable programmeId="p1" types={[type({ plannedShare: 0.5, weight: 0.4 })]} />);
+    const text = screen.getByTestId('programme-share-text');
+    expect(text).toHaveTextContent('Planlanan 50%, Öğrenilen 40%');
+    expect(text).not.toHaveAttribute('aria-hidden');
+    expect(text.className).toMatch(/sr-only/);
+  });
+
   it('saves a changed floor on blur, and only the floor', async () => {
     const user = userEvent.setup();
     wrap(<TypesTable programmeId="p1" types={[type()]} />);

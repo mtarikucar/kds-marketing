@@ -51,7 +51,7 @@ describe('type-selector — floors', () => {
     // b is at 0.10 of 0.20 (half its floor); c is at 0.10 of 0.30 — c is further from its floor.
     expect(r.mode).toBe('floor');
     expect(r.key).toBe('c');
-    expect(r.reason).toMatch(/floor: c 0\.10 < min 0\.30/);
+    expect(r.reason).toMatch(/floor: c 0\.10 < min 0\.30 \(1 of 3 slots in 10\)/);
     // Once c is at its floor, b is the one still under.
     expect(selectType(learn({ arms, windowCounts: { a: 6, b: 1, c: 3 }, windowSize: 10 })).key).toBe('b');
   });
@@ -65,10 +65,63 @@ describe('type-selector — floors', () => {
     expect(full.key).toBe('a');
   });
 
-  it('an empty window (windowSize 0) counts every share as 0 without dividing by zero', () => {
+  it('an empty window (windowSize 0) forces no floor and applies no cap: the bandit simply samples', () => {
     const r = selectType(learn({ windowCounts: {}, windowSize: 0 }));
-    expect(r.mode).toBe('floor');
-    expect(Number.isFinite(Number(r.reason.match(/(\d+\.\d+) </)?.[1]))).toBe(true);
+    expect(r.mode).toBe('thompson');
+    const capped = selectType(learn({ windowCounts: { 'hook-story': 50, 'how-to': 50, 'pov-ugc': 50 }, windowSize: 0 }));
+    expect(capped.mode).toBe('thompson');
+  });
+
+  it('counts floors in slots — floor(windowSize × minShare) — so the seed floors force nothing in a 10-slot window', () => {
+    // Ten seed types at 0.05: needed = floor(10 × 0.05) = 0. Compared as a
+    // fraction every type would be "under" 0.05 with an empty window and all
+    // ten slots would be floor picks; counted in slots the bandit runs.
+    const ten = Array.from({ length: 10 }, (_, i) => arm(`t${i}`, { minShare: 0.05, maxShare: 0.4, alpha: i === 0 ? 40 : 5, beta: i === 0 ? 5 : 40, samples: 45 }));
+    const modes: Record<string, number> = {};
+    const picks: Record<string, number> = {};
+    for (let seed = 1; seed <= 200; seed++) {
+      const r = selectType(learn({ arms: ten, windowCounts: {}, windowSize: 10, rng: mulberry32(seed) }));
+      modes[r.mode] = (modes[r.mode] ?? 0) + 1;
+      picks[r.key] = (picks[r.key] ?? 0) + 1;
+    }
+    expect(modes.floor).toBeUndefined();
+    expect(modes.thompson).toBe(200);
+    expect(picks.t0).toBeGreaterThan(150);
+    // Any count satisfies a floor of 0 slots.
+    expect(selectType(learn({ arms: ten, windowCounts: { t3: 1 }, windowSize: 10 })).mode).toBe('thompson');
+  });
+
+  it('in a 40-slot window every seed type is forced up to floor(40 × 0.05) = 2 slots, then released', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => arm(`t${i}`, { minShare: 0.05, maxShare: 0.4, alpha: i === 0 ? 40 : 5, beta: i === 0 ? 5 : 40, samples: 45 }));
+    const full: Record<string, number> = Object.fromEntries(ten.map((a) => [a.key, 2]));
+    // t7 holds one of its two promised slots: it is the only starved type.
+    const r = selectType(learn({ arms: ten, windowCounts: { ...full, t7: 1 }, windowSize: 40 }));
+    expect(r).toEqual(expect.objectContaining({ key: 't7', mode: 'floor' }));
+    expect(r.reason).toMatch(/floor: t7 0\.03 < min 0\.05 \(1 of 2 slots in 40\)/);
+    // Two slots each: every floor is met and the posterior decides.
+    for (let seed = 1; seed <= 50; seed++) {
+      expect(selectType(learn({ arms: ten, windowCounts: full, windowSize: 40, rng: mulberry32(seed) })).mode).toBe('thompson');
+    }
+    // Filling an empty 40-slot window from scratch: the first twenty picks
+    // are all floors (two per type), and no type is asked for a third.
+    const counts: Record<string, number> = {};
+    let prev: string | null = null;
+    for (let i = 0; i < 20; i++) {
+      const pick = selectType(learn({ arms: ten, windowCounts: counts, windowSize: 40, previousKey: prev, rng: mulberry32(i + 1) }));
+      expect(pick.mode).toBe('floor');
+      counts[pick.key] = (counts[pick.key] ?? 0) + 1;
+      prev = pick.key;
+    }
+    expect(Object.values(counts)).toEqual(Array(10).fill(2));
+    expect(selectType(learn({ arms: ten, windowCounts: counts, windowSize: 40, previousKey: prev })).mode).toBe('thompson');
+  });
+
+  it('the type missing the most promised slots is filled first, and the floor line names the slot count', () => {
+    // b needs floor(20 × 0.2) = 4, has 2 (missing 2); c needs floor(20 × 0.3) = 6, has 5 (missing 1).
+    const arms = [arm('a', { alpha: 50, beta: 1 }), arm('b', { minShare: 0.2 }), arm('c', { minShare: 0.3 })];
+    const r = selectType(learn({ arms, windowCounts: { a: 12, b: 2, c: 5 }, windowSize: 20 }));
+    expect(r.key).toBe('b');
+    expect(r.reason).toBe('floor: b 0.10 < min 0.20 (2 of 4 slots in 20)');
   });
 });
 
@@ -144,7 +197,7 @@ describe('type-selector — Thompson sampling', () => {
   it('skips arms at or over their window cap and the previous slot, unless nothing else is left', () => {
     const arms = [arm('a', { alpha: 90, beta: 1, samples: 9 }), arm('b', { alpha: 1, beta: 90, samples: 9 }), arm('c', { alpha: 1, beta: 90, samples: 9 })];
     for (let seed = 1; seed <= 30; seed++) {
-      // a is the obvious winner but sits exactly at its cap (4/10 = 0.4); c was the previous slot.
+      // a is the obvious winner but sits exactly at its cap (ceil(10 × 0.4) = 4 slots); c was the previous slot.
       const r = selectType(learn({ arms, windowCounts: { a: 4, b: 3, c: 3 }, windowSize: 10, previousKey: 'c', rng: mulberry32(seed) }));
       expect(r.key).toBe('b');
       expect(r.mode).toBe('thompson');

@@ -54,6 +54,7 @@ function slotRow(over: Record<string, unknown> = {}) {
     campaignItemId: null,
     socialPostId: null,
     quotedCredits: null,
+    spentCredits: 0,
     editableUntil: new Date(NOW.getTime() + 2 * DAY - 2 * 60 * 60 * 1000),
     publishedAt: null,
     measuredAt: null,
@@ -156,6 +157,7 @@ describe('ProgrammeDashboardService.toSlotView', () => {
       idea: 'a figure emerging from the printer',
       conceptId: null,
       quotedCredits: null,
+      spentCredits: 0,
       editable: true,
       publishedAt: null,
       reward: null,
@@ -164,6 +166,11 @@ describe('ProgrammeDashboardService.toSlotView', () => {
     });
     expect(view.scheduledFor).toBe(slotRow().scheduledFor.toISOString());
     expect(view.editableUntil).toBe(slotRow().editableUntil.toISOString());
+  });
+
+  it('carries what the slot has actually cost — on a SKIPPED row too, because the week paid for it', () => {
+    const { svc } = harness();
+    expect(svc.toSlotView(slotRow({ status: 'SKIPPED', quotedCredits: 45, spentCredits: 22 }) as never, names, new Map(), NOW)).toMatchObject({ quotedCredits: 45, spentCredits: 22 });
   });
 
   it('is NOT editable once the window has closed, whatever the status', () => {

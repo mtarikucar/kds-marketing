@@ -857,16 +857,32 @@ export class ContentConceptsService {
     // This read does NOT weaken the write below: the conditional update still
     // carries `workspaceId` and `status: 'PROPOSED'` itself, so nothing here
     // depends on the read having been done correctly — it only decides whether
-    // the write is worth attempting. The discard path keeps the original shape
-    // exactly, with no preceding read at all.
+    // the write is worth attempting. A discard of a concept that is not a
+    // programme's keeps the original shape: the write's own predicate is what
+    // refuses it, whatever the read answered.
+    //
+    // One exception to "no preceding read on a discard": a concept the
+    // PROGRAMME planned is looked at before EITHER verdict, because this door
+    // is the wrong one for it. Its slot still points at it — an approval here
+    // would promote it off-calendar (no `scheduledFor`, so the next cadence
+    // time after the campaign's last item) and its slot would then FAIL at
+    // produce time on "already approved"; a discard would fail the slot the
+    // same way. The slot editor (edit / skip / regenerate) is the door that
+    // keeps the slot and the concept moving together. The read decides only
+    // whether to refuse; the write below still carries its own predicate.
+    const target = await this.prisma.contentConcept.findFirst({
+      where: { id: conceptId, workspaceId },
+      // `shotPlan` joins the select because the pre-flight also asks whether
+      // the campaign's destinations can CARRY this many clips, and that
+      // question is answered by the plan's own beat count.
+      select: { id: true, socialCampaignId: true, shotPlan: true, programmeId: true },
+    });
+    if (target?.programmeId) {
+      throw new BadRequestException(
+        'This concept belongs to a content programme; edit or skip its slot instead of reviewing it here.',
+      );
+    }
     if (input.decision === 'APPROVED') {
-      const target = await this.prisma.contentConcept.findFirst({
-        where: { id: conceptId, workspaceId },
-        // `shotPlan` joins the select because the pre-flight now also asks
-        // whether the campaign's destinations can CARRY this many clips, and
-        // that question is answered by the plan's own beat count.
-        select: { id: true, socialCampaignId: true, shotPlan: true },
-      });
       if (!target) throw new NotFoundException('Concept not found');
       await this.promotion.requireCampaign(
         workspaceId,

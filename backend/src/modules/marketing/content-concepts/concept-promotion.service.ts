@@ -67,6 +67,10 @@ export const produceDedup = (itemId: string) => `content-concept-produce-${itemI
  */
 export const PRODUCE_WAIT_MS = Number(process.env.CONCEPT_PRODUCE_WAIT_MS ?? 2 * 60 * 1000);
 export const PRODUCE_MAX_WAITS = Number(process.env.CONCEPT_PRODUCE_MAX_WAITS ?? 30);
+/** How long a programme's item holds off while its programme is PAUSED
+ *  before asking again. Not counted as a wait: a pause is the owner's, not the
+ *  queue's, and may last days. */
+export const PROGRAMME_HOLD_MS = 60 * 60 * 1000;
 
 /** When the campaign's cadence has no slot left, the promoted item still needs
  *  a timestamp. A day out is far enough not to fire before a human looks and
@@ -822,6 +826,30 @@ export class ConceptPromotionService implements OnModuleInit {
     // Anything but GENERATING means this run is a duplicate, or a human has
     // already moved the item on. Touching it would re-charge for clips.
     if (item.status !== 'GENERATING' || !item.contentConceptId) return;
+
+    // A PROGRAMME's item asks the programme before every purchase — this job
+    // re-enters after each wait, and a kill or a pause can land between two of
+    // them. Killed: the item fails here rather than buying the remaining clips
+    // for a programme nobody will publish. Paused: hold, without touching the
+    // wait budget, and come back once an hour; the resume brings it through.
+    if (item.campaign.programmeId) {
+      const programme = await this.prisma.contentProgramme.findFirst({
+        where: { id: item.campaign.programmeId, workspaceId },
+        select: { status: true, killSwitch: true },
+      });
+      if (!programme || programme.status === 'KILLED' || programme.killSwitch) {
+        await this.fail(itemId, 'the programme was killed');
+        return;
+      }
+      if (programme.status === 'PAUSED') {
+        return {
+          reschedule: {
+            runAt: new Date(Date.now() + PROGRAMME_HOLD_MS),
+            payload: { itemId, workspaceId, waits, frameWaits },
+          },
+        };
+      }
+    }
 
     const concept = await this.prisma.contentConcept.findFirst({
       where: { id: item.contentConceptId, workspaceId },
