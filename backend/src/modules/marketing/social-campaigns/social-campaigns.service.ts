@@ -365,7 +365,7 @@ export class SocialCampaignsService implements OnModuleInit {
    * left to have decided that. `pause` stays open on purpose: a hand-paused
    * lane is a safe state the programme itself holds for.
    */
-  private async assertNotProgrammeLane(workspaceId: string, c: { programmeId?: string | null }): Promise<void> {
+  private async assertNotProgrammeLane(workspaceId: string, c: { programmeId?: string | null }, door: 'resume' | 'cancel' = 'resume'): Promise<void> {
     if (!c.programmeId) return;
     const programme = await this.prisma.contentProgramme.findFirst({
       where: { id: c.programmeId, workspaceId },
@@ -374,7 +374,11 @@ export class SocialCampaignsService implements OnModuleInit {
     if (!programme || programme.status === 'KILLED' || programme.killSwitch) {
       throw new BadRequestException("This campaign is a content programme's lane and the programme was killed; start a new programme instead.");
     }
-    throw new BadRequestException("This campaign is a content programme's lane; resume the programme instead.");
+    throw new BadRequestException(
+      door === 'cancel'
+        ? "This campaign is a content programme's lane; kill the programme instead."
+        : "This campaign is a content programme's lane; resume the programme instead.",
+    );
   }
 
   async pause(workspaceId: string, id: string) {
@@ -385,11 +389,20 @@ export class SocialCampaignsService implements OnModuleInit {
     return this.get(workspaceId, id);
   }
 
-  async cancel(workspaceId: string, id: string) {
+  /**
+   * A programme's lane is not cancelled by hand either: CANCELLED is a state
+   * the programme has no door out of (its resume re-runs only a PAUSED or
+   * DRAFT lane), so a cancelled lane under a live programme fails every slot
+   * at produce time — three in a row pause the programme, a resume repeats
+   * the loop — and its READY items' gates return silently, leaving those
+   * slots open for good. The programme's kill is the door that ends the lane.
+   */
+  async cancel(workspaceId: string, id: string, opts: { byProgramme?: boolean } = {}) {
     const c = await this.getOwned(workspaceId, id);
     if (['COMPLETED', 'CANCELLED'].includes(c.status)) {
       throw new BadRequestException(`Cannot cancel from ${c.status}`);
     }
+    if (!opts.byProgramme) await this.assertNotProgrammeLane(workspaceId, c, 'cancel');
     await this.prisma.socialCampaign.update({ where: { id }, data: { status: 'CANCELLED' } });
     await this.scheduledJobs.cancel(SOCIAL_CAMPAIGN_PLAN_KIND, planDedup(id));
     return this.get(workspaceId, id);

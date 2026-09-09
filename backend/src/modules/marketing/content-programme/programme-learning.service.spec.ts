@@ -366,9 +366,20 @@ describe('ProgrammeLearningService job', () => {
     expect(LEARN_INTERVAL_MS).toBe(6 * 3600_000);
   });
 
-  it('runs settle → measure → reweight for every live programme, logs a failing programme and carries on, then reschedules', async () => {
+  /**
+   * A published piece is out in front of people whatever happened to the
+   * programme afterwards: settle and measure walk PAUSED and KILLED programmes
+   * too, or a kill that caught a READY slot mid-publish would pin it READY
+   * forever. Only the reweight is the running programme's.
+   */
+  it('runs settle → measure for EVERY programme and reweight only for an ACTIVE one, logs a failing programme and carries on, then reschedules', async () => {
     const { svc, prisma, runner } = harness();
-    prisma.contentProgramme.findMany.mockResolvedValue([programme({ id: 'p-bad', workspaceId: 'ws-bad' }), programme({ id: 'p-ok' })]);
+    prisma.contentProgramme.findMany.mockResolvedValue([
+      programme({ id: 'p-bad', workspaceId: 'ws-bad' }),
+      programme({ id: 'p-ok' }),
+      programme({ id: 'p-paused', status: 'PAUSED' }),
+      programme({ id: 'p-killed', status: 'KILLED', killSwitch: true }),
+    ]);
     const calls: string[] = [];
     jest.spyOn(svc, 'settle').mockImplementation(async (_ws, p: any) => { calls.push(`settle:${p.id}`); if (p.id === 'p-bad') throw new Error('boom'); return 0; });
     jest.spyOn(svc, 'measureDue').mockImplementation(async (_ws, p: any) => { calls.push(`measure:${p.id}`); return 0; });
@@ -379,8 +390,13 @@ describe('ProgrammeLearningService job', () => {
     const before = Date.now();
     const res = await handler({ id: 'j', workspaceId: 'system', kind: CONTENT_PROGRAMME_LEARN_KIND, payload: {}, attempts: 0 });
 
-    expect(prisma.contentProgramme.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: 'ACTIVE', killSwitch: false } }));
-    expect(calls).toEqual(['settle:p-bad', 'settle:p-ok', 'measure:p-ok', 'reweight:p-ok']);
+    expect(prisma.contentProgramme.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: { in: ['ACTIVE', 'PAUSED', 'KILLED'] } } }));
+    expect(calls).toEqual([
+      'settle:p-bad',
+      'settle:p-ok', 'measure:p-ok', 'reweight:p-ok',
+      'settle:p-paused', 'measure:p-paused',
+      'settle:p-killed', 'measure:p-killed',
+    ]);
     expect(events(prisma)).toEqual([expect.objectContaining({ workspaceId: 'ws-bad', programmeId: 'p-bad', kind: 'LEARN_ERROR', message: expect.stringContaining('boom') })]);
     expect(res.reschedule.runAt.getTime()).toBeGreaterThanOrEqual(before + LEARN_INTERVAL_MS);
   });

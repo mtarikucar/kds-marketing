@@ -76,7 +76,10 @@ const isUniqueViolation = (e: unknown): boolean =>
  *               row per network
  *
  * Every read is workspace-scoped; an id from another workspace is NotFound,
- * never a foreign row moved.
+ * never a foreign row moved. Every status write is CONDITIONAL on the status
+ * the door read (`writeAs`): the producer claims IDEATED → PRODUCING with the
+ * same kind of write, so an owner move and a produce job racing each other
+ * cannot both land — one of them finds the row changed and says so.
  */
 @Injectable()
 export class SlotEditorService {
@@ -142,7 +145,7 @@ export class SlotEditorService {
       // The concept was planned for the old type/idea: give it back and start
       // the slot over. Its quote goes with it — the cap must not count a
       // concept that will never be produced.
-      if (slot.conceptId) await this.discardConcept(workspaceId, slot.conceptId, programme.id, `owner edited the slot (${changed.join(', ')})`, now);
+      if (slot.conceptId) await this.discardConcept(workspaceId, slot, `owner edited the slot (${changed.join(', ')})`, now);
       data.status = 'PLANNED';
       data.conceptId = null;
       data.quotedCredits = null;
@@ -151,7 +154,7 @@ export class SlotEditorService {
 
     let updated: ContentSlot;
     try {
-      updated = await this.prisma.contentSlot.update({ where: { id: slot.id }, data });
+      updated = await this.writeAs(workspaceId, slot, data);
     } catch (e) {
       if (isUniqueViolation(e)) throw new BadRequestException('Another slot of this programme is already at that time.');
       throw e;
@@ -192,12 +195,9 @@ export class SlotEditorService {
     // leaves the slot as it was, rather than a SKIPPED slot over a live post.
     // An item the gate already ended (SKIPPED / FAILED) has nothing to reject.
     if (slot.campaignItemId) await this.releaseItem(workspaceId, slot.campaignItemId);
-    if (slot.conceptId) await this.discardConcept(workspaceId, slot.conceptId, slot.programmeId, `skipped by ${actorId}`, now);
+    if (slot.conceptId) await this.discardConcept(workspaceId, slot, `skipped by ${actorId}`, now);
     await cancelSlotJobs(this.scheduledJobs, slot.id);
-    const updated = await this.prisma.contentSlot.update({
-      where: { id: slot.id },
-      data: { status: 'SKIPPED', error: `skipped by ${actorId}` },
-    });
+    const updated = await this.writeAs(workspaceId, slot, { status: 'SKIPPED', error: `skipped by ${actorId}` });
     await this.programmes.logEvent(workspaceId, slot.programmeId, 'SLOT_SKIPPED', `Slot ${slot.contentTypeKey} skipped by ${actorId}.`, {
       slotId: slot.id, actorId, from: slot.status, campaignItemId: slot.campaignItemId, conceptId: slot.conceptId,
     });
@@ -226,11 +226,8 @@ export class SlotEditorService {
     if (slot.scheduledFor.getTime() <= now.getTime()) {
       throw new BadRequestException('This slot\'s time has passed; it cannot be retried. Skip it, or wait for the planner to fill the next time.');
     }
-    if (slot.conceptId) await this.discardConcept(workspaceId, slot.conceptId, programme.id, `retried by ${actorId}`, now);
-    const updated = await this.prisma.contentSlot.update({
-      where: { id: slot.id },
-      data: { status: 'PLANNED', conceptId: null, quotedCredits: null, error: null },
-    });
+    if (slot.conceptId) await this.discardConcept(workspaceId, slot, `retried by ${actorId}`, now);
+    const updated = await this.writeAs(workspaceId, slot, { status: 'PLANNED', conceptId: null, quotedCredits: null, error: null });
     await scheduleSlotJobs(this.scheduledJobs, workspaceId, programme, updated, now);
     await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_RETRIED', `Slot ${slot.contentTypeKey} retried by ${actorId}: back to PLANNED, jobs re-armed.`, {
       slotId: slot.id, actorId, via: 'replan', previousError: slot.error, conceptId: slot.conceptId,
@@ -285,10 +282,7 @@ export class SlotEditorService {
       throw new BadRequestException(`The slot's campaign item is ${item.status} and cannot be regenerated.`);
     }
     await this.socialCampaigns.regenerateItem(workspaceId, item.id);
-    const updated = await this.prisma.contentSlot.update({
-      where: { id: slot.id },
-      data: { status: 'PRODUCING', error: null, spentCredits: { increment: slot.quotedCredits } },
-    });
+    const updated = await this.writeAs(workspaceId, slot, { status: 'PRODUCING', error: null, spentCredits: { increment: slot.quotedCredits } });
     await this.programmes.logEvent(workspaceId, slot.programmeId, 'SLOT_REGENERATED', `Slot ${slot.contentTypeKey} sent back to production by ${actorId}.`, {
       slotId: slot.id, actorId, from: slot.status, campaignItemId: item.id, itemStatus: item.status, spent: slot.quotedCredits, weekSpent: spent, at: now.toISOString(),
     });
@@ -369,10 +363,32 @@ export class SlotEditorService {
     }
   }
 
-  private async discardConcept(workspaceId: string, conceptId: string, programmeId: string, note: string, now: Date): Promise<void> {
+  /**
+   * Write `data` onto the slot ONLY if it is still in the status the door
+   * read; a row that moved on (the produce job claimed it, the sweep settled
+   * it) is refused, and the caller's earlier steps (an item rejected, a
+   * concept discarded) were all made against a row that is still consistent
+   * with them. The row is read back rather than merged, so what is returned
+   * is what the database holds.
+   */
+  private async writeAs(workspaceId: string, slot: ContentSlot, data: Prisma.ContentSlotUncheckedUpdateInput): Promise<ContentSlot> {
+    const { count } = await this.prisma.contentSlot.updateMany({ where: { id: slot.id, workspaceId, status: slot.status }, data });
+    if (count === 0) throw new BadRequestException('the slot changed while you were looking; read it again');
+    return this.getOwned(workspaceId, slot.id);
+  }
+
+  /**
+   * The slot's concept, when it never became an item: PROPOSED, or APPROVED
+   * by the programme and never promoted (a promotion that threw after the
+   * verdict). A promoted concept keeps its verdict — its item is the thing
+   * `releaseItem` deals with — and only this slot's own row moves. No human
+   * verdict is overwritten: the review door refuses programme concepts.
+   */
+  private async discardConcept(workspaceId: string, slot: Pick<ContentSlot, 'id' | 'conceptId' | 'programmeId'>, note: string, now: Date): Promise<void> {
+    if (!slot.conceptId) return;
     await this.prisma.contentConcept.updateMany({
-      where: { id: conceptId, workspaceId, status: 'PROPOSED' },
-      data: { status: 'DISCARDED', reviewedAt: now, reviewedById: `programme:${programmeId}`, reviewNote: note },
+      where: { id: slot.conceptId, workspaceId, slotId: slot.id, status: { in: ['PROPOSED', 'APPROVED'] }, promotedItemId: null },
+      data: { status: 'DISCARDED', reviewedAt: now, reviewedById: `programme:${slot.programmeId}`, reviewNote: note },
     });
   }
 

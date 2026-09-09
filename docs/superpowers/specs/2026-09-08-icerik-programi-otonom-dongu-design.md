@@ -138,7 +138,36 @@ skoru = decayed · (0.3 + 0.7·uygunluk).
 | `trend.refresh` | her 12 saat (global) | Sağlayıcılar: Google Trends günlük RSS (`trends.google.com/trending/rss?geo=TR`, anahtarsız), Apify TikTok trend aktörü (`APIFY_TOKEN` + `TREND_TIKTOK_ACTOR`), YouTube mostPopular (`YOUTUBE_API_KEY`). Her biri env ile açılır; kapalıysa sessizce atlanır. |
 
 Anomali: art arda 3 slot FAILED veya haftalık harcama tavanın %120'si ⇒ program PAUSED +
-olay. Kill switch: plan/produce/learn hiçbir şey yapmaz; kampanya PAUSE.
+olay. Kill switch: plan/produce hiçbir şey yapmaz; kampanya PAUSE; açık slotlar (PLANNED,
+IDEATED, PRODUCING, READY) süpürülür — kurulmuş öğe (SCHEDULED/NEEDS_APPROVAL) reddedilir,
+reddedilemeyen (GENERATING ya da yayınlanmış) slot olduğu gibi bırakılıp olayda sayılır.
+`learn` işinin settle/measure adımları ACTIVE, PAUSED ve KILLED programların hepsini gezer
+(yayınlanan parça programa ne olursa olsun ölçülür); yalnız reweight ACTIVE programındır.
+
+### Sınırlar ve kapılar
+
+- **Sınırlar (`BOUNDS`, tek yerde; REST DTO ve MCP zod şeması oradan okur):** perWeek 1–7,
+  weeklyCreditCap 50–20000, explorationRate 0.05–0.5, maturityHours 24–168, halfLifeDays
+  7–90, editWindowHours 1–24, lookaheadDays 7–28, planLeadHours 6–96, produceLeadHours 2–48
+  (produce < plan). Öncü süreler ve bakış ufku üstten de sınırlıdır çünkü gizli harcama
+  kollarıdır: haftalık tavan işin koştuğu haftaya göre denetlenir, uzun bir öncü süre
+  gelecek haftaların slotlarını bu gecenin denetimine çeker ve harcamayı hiçbir denetimin
+  okumadığı haftalara yazar.
+- **Ajan harcama kollarını yükseltemez:** `jeeta.update_content_programme` weeklyCreditCap,
+  perWeek, lookaheadDays, planLeadHours ve produceLeadHours'u yalnızca DÜŞÜRÜR; yükseltme
+  panelden bir insanın işidir. Kurma ve kill de yalnız paneldedir.
+- **Kampanya kapıları şeride kapalı:** programın kampanyası (`programmeId` taşıyan)
+  kampanyanın kendi resume/activate/cancel kapılarından geçmez — "programı sürdür / programı
+  öldür" der. Yalnız `pause` açıktır: elle duraklatılmış şerit güvenli bir durumdur;
+  program ACTIVE iken şerit duraklatılmışsa programın `resume`'u şeridi yeniden çalıştırır
+  (`LANE_RESUMED` olayı), programın kendisine dokunmaz.
+- **Programın konsepti yalnız slotundan hareket eder:** `review` ve `produce`
+  (`jeeta.produce_content_concept`) `programmeId` taşıyan konsepti reddeder — slotun
+  retry/skip/regenerate kapıları vardır; buradan promote edilseydi takvim dışında, tavan
+  dışında, slotsuz ikinci bir gönderi olurdu.
+- **İnsan tavanın dışında yeniden çizer:** slotun `regenerate`'i klipleri yeniden satın
+  alır ve harcamayı slota yazar, ama haftalık tavana karşı denetlenmez — bilinçli bir
+  insan kararıdır, otopilotun kolu değil.
 
 ## Koruyucular ve para
 

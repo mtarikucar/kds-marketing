@@ -55,6 +55,16 @@ export const TERMINAL_SLOT_STATUSES = ['FAILED', 'SKIPPED', 'PUBLISHED', 'MEASUR
 export const OWNER_SKIP_PREFIX = 'skipped by';
 /** How many terminal slots the streak check reads before dropping owner skips. */
 const STREAK_SCAN = 10;
+/** A PRODUCING slot with no item this long after its claim was orphaned by a
+ *  crash between the claim and the link write (the reaper's own revive delay,
+ *  so a job that is merely slow is never mistaken for a dead one). */
+export const ORPHAN_PRODUCING_MS = 15 * 60 * 1000;
+/** The error the orphan sweep writes on a slot whose concept never became an item. */
+export const PRODUCTION_DID_NOT_START = 'production did not start';
+/** Programme statuses the reconcile sweep still visits: a paused or killed
+ *  programme's in-flight slots still follow their items (an item the kill
+ *  could not reject publishes; a produced slot must still reach READY). */
+const RECONCILED_PROGRAMME_STATUSES = ['ACTIVE', 'PAUSED', 'KILLED'];
 /** Slots that are still on the calendar (count toward the type window). */
 const WINDOW_SLOT_STATUSES = ['PLANNED', 'IDEATED', 'PRODUCING', 'READY', 'PUBLISHED', 'MEASURED'];
 /** The first sweep after boot waits this long — enough for the app to settle,
@@ -192,10 +202,13 @@ const isUniqueViolation = (e: unknown): boolean =>
 
 /**
  * THE PLANNER — the half of the loop that runs BEFORE anything is made. Every
- * six hours, for every live programme:
+ * six hours, for every programme that is not archived:
  *
- *   reconcile  PRODUCING slots follow their campaign item (READY / FAILED / SKIPPED)
- *   fill       open a PLANNED slot at every cadence time inside `lookaheadDays`
+ *   reconcile  PRODUCING slots follow their campaign item (READY / FAILED /
+ *              SKIPPED); orphans (claimed, never linked) are linked or failed.
+ *              Runs for ACTIVE, PAUSED and KILLED programmes alike — a slot
+ *              in flight when the programme stopped still ends somewhere.
+ *   fill       (ACTIVE only) open a PLANNED slot at every cadence time inside `lookaheadDays`
  *              that has none: the type selector picks the format (and says
  *              why), a trend hook is attached when the format wants one, the
  *              idea text is composed, and the two per-slot jobs are armed at
@@ -240,13 +253,16 @@ export class ProgrammePlannerService implements OnModuleInit {
       .catch(() => undefined);
   }
 
-  /** One tick over every live programme; one programme's failure is its own
-   *  PLAN_ERROR event, never another programme's lost tick. */
+  /** One tick over every programme that is not archived; one programme's
+   *  failure is its own PLAN_ERROR event, never another programme's lost tick.
+   *  Only a running programme is filled and breaker-checked; every one is
+   *  reconciled, so a kill or a pause never leaves a slot PRODUCING for good. */
   async runAll(now = new Date()): Promise<void> {
-    const programmes = await this.prisma.contentProgramme.findMany({ where: { status: 'ACTIVE', killSwitch: false } });
+    const programmes = await this.prisma.contentProgramme.findMany({ where: { status: { in: RECONCILED_PROGRAMME_STATUSES } } });
     for (const p of programmes) {
       try {
-        await this.reconcile(p.workspaceId, p);
+        await this.reconcile(p.workspaceId, p, now);
+        if (p.status !== 'ACTIVE' || p.killSwitch) continue;
         await this.fill(p.workspaceId, p, now);
         await this.checkAnomalies(p.workspaceId, p, now);
       } catch (e: any) {
@@ -427,8 +443,17 @@ export class ProgrammePlannerService implements OnModuleInit {
    * SKIPPED, no attachable media → item FAILED, a rejection from the campaign
    * panel), and `settle` only reads the post, so without this a READY slot
    * whose item died would sit READY for good, unskippable and unlearned.
+   *
+   * Before that, the orphans: a PRODUCING slot with NO item, older than the
+   * reaper's revive delay, was claimed by a produce job that died between the
+   * claim and the link write (the revived job finds the slot PRODUCING and
+   * ends). Its concept says how far it got — promoted: the item exists and is
+   * linked here (with the clips' cost, so the week's spend is right); decided
+   * or untouched but never promoted: nothing was bought, the slot is FAILED
+   * by name and the retry door discards the concept and plans again.
    */
-  async reconcile(workspaceId: string, programme: ContentProgramme): Promise<void> {
+  async reconcile(workspaceId: string, programme: ContentProgramme, now = new Date()): Promise<void> {
+    await this.linkOrphans(workspaceId, programme, now);
     const slots = await this.prisma.contentSlot.findMany({
       where: { workspaceId, programmeId: programme.id, status: { in: ['PRODUCING', 'READY'] }, campaignItemId: { not: null } },
     });
@@ -467,14 +492,44 @@ export class ProgrammePlannerService implements OnModuleInit {
     }
   }
 
+  private async linkOrphans(workspaceId: string, programme: ContentProgramme, now: Date): Promise<void> {
+    const orphans = await this.prisma.contentSlot.findMany({
+      where: {
+        workspaceId, programmeId: programme.id, status: 'PRODUCING', campaignItemId: null,
+        updatedAt: { lt: new Date(now.getTime() - ORPHAN_PRODUCING_MS) },
+      },
+    });
+    for (const slot of orphans) {
+      const where = { id: slot.id, workspaceId, status: 'PRODUCING', campaignItemId: null };
+      const concept: { status: string; promotedItemId: string | null; shotPlan: unknown } | null = slot.conceptId
+        ? await this.prisma.contentConcept.findFirst({ where: { id: slot.conceptId, workspaceId }, select: { status: true, promotedItemId: true, shotPlan: true } })
+        : null;
+      if (concept?.promotedItemId) {
+        const production = (concept.shotPlan as { production?: { credits?: number; keyframes?: { credits?: number } } } | null)?.production;
+        const clipCost = Math.max(0, Math.round((production?.credits ?? slot.quotedCredits ?? 0) - (production?.keyframes?.credits ?? 0)));
+        await this.prisma.contentSlot.updateMany({ where, data: { campaignItemId: concept.promotedItemId, error: null, spentCredits: { increment: clipCost } } });
+        await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_PRODUCING',
+          `Slot ${slot.contentTypeKey} linked to item ${concept.promotedItemId} by the sweep: the produce job ended before it could write the link.`,
+          { slotId: slot.id, contentTypeKey: slot.contentTypeKey, conceptId: slot.conceptId, campaignItemId: concept.promotedItemId, quotedCredits: slot.quotedCredits, spent: clipCost, recovered: true });
+        continue;
+      }
+      const error = concept ? PRODUCTION_DID_NOT_START : 'concept missing';
+      await this.prisma.contentSlot.updateMany({ where, data: { status: 'FAILED', error } });
+      await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_FAILED',
+        `Slot ${slot.contentTypeKey} failed: claimed for production but ${concept ? `its concept (${concept.status.toLowerCase()}) never became an item` : 'its concept is gone'}; retry it.`,
+        { slotId: slot.id, contentTypeKey: slot.contentTypeKey, conceptId: slot.conceptId, conceptStatus: concept?.status ?? null, error, recovered: true });
+    }
+  }
+
   /**
    * The two circuit breakers.
    *
    * Fail streak: the three most recently SETTLED slots (by updatedAt, so a
    * future slot that is merely IDEATED cannot sit in front of the failures and
    * mask them) are all FAILED. Owner skips are not symptoms and are dropped
-   * before counting. Checked against the last ANOMALY_PAUSE so a resume does
-   * not trip again on the same three slots.
+   * before counting. Checked against the last fail-streak ANOMALY_PAUSE (a
+   * spend pause in between is a different reason and must not hide it) so a
+   * resume does not trip again on the same three slots.
    *
    * Spend: this Istanbul week's real spend is past 120% of the cap. Once per
    * week — the sum cannot fall until the week rolls, so without the dedup the
@@ -491,7 +546,7 @@ export class ProgrammePlannerService implements OnModuleInit {
     if (recent.length === ANOMALY_FAIL_STREAK && recent.every((s) => s.status === 'FAILED')) {
       const ids = recent.map((s) => s.id).sort();
       const previous = await this.prisma.contentProgrammeEvent.findFirst({
-        where: { workspaceId, programmeId: programme.id, kind: 'ANOMALY_PAUSE' },
+        where: { workspaceId, programmeId: programme.id, kind: 'ANOMALY_PAUSE', data: { path: ['reason'], equals: 'fail-streak' } },
         orderBy: { createdAt: 'desc' },
         select: { data: true },
       });

@@ -545,6 +545,35 @@ describe('ContentProgrammeService.update', () => {
     await expect(svc.update(WS, 'prog-1', { name: 'x' })).rejects.toThrow(BadRequestException);
     expect(prisma.contentProgramme.update).not.toHaveBeenCalled();
   });
+
+  /**
+   * The cap is checked against the week the JOB runs in, and a slot's jobs are
+   * clamped to "now" when its lead reaches back past it — so a lead long enough
+   * to pull every slot of the look-ahead into tonight has each of them checked
+   * against this week's sum and booked into weeks no check reads. The leads
+   * are therefore bounded above, in BOUNDS, like every other setting.
+   */
+  it('holds the two lead times to BOUNDS above as well as below, and BOUNDS carries them', async () => {
+    expect(BOUNDS.planLeadHours).toEqual([6, 96]);
+    expect(BOUNDS.produceLeadHours).toEqual([2, 48]);
+    expect(BOUNDS.lookaheadDays).toEqual([7, 28]);
+    expect(BOUNDS.editWindowHours).toEqual([1, 24]);
+    for (const patch of [
+      { planLeadHours: 97 },
+      { planLeadHours: 800, produceLeadHours: 799 },
+      { produceLeadHours: 49, planLeadHours: 96 },
+      { planLeadHours: 5, produceLeadHours: 2 },
+      { produceLeadHours: 1 },
+      { lookaheadDays: 29 },
+    ]) {
+      const { svc, prisma } = harness();
+      await expect(svc.update(WS, 'prog-1', patch)).rejects.toThrow(BadRequestException);
+      expect(prisma.contentProgramme.update).not.toHaveBeenCalled();
+    }
+    const { svc, prisma } = harness();
+    await svc.update(WS, 'prog-1', { planLeadHours: 96, produceLeadHours: 48 });
+    expect(prisma.contentProgramme.update.mock.calls[0][0].data).toEqual({ planLeadHours: 96, produceLeadHours: 48 });
+  });
 });
 
 describe('ContentProgrammeService.pause', () => {
@@ -651,11 +680,35 @@ describe('ContentProgrammeService.resume', () => {
     });
   });
 
-  it('resume refuses ACTIVE and KILLED programmes', async () => {
-    const a = harness();
+  it('resume refuses a KILLED programme, and an ACTIVE one whose lane already runs', async () => {
+    const a = harness({ campaign: campaignRow({ status: 'ACTIVE' }) });
     await expect(a.svc.resume(WS, 'prog-1')).rejects.toThrow(BadRequestException);
-    const k = harness({ programme: programmeRow({ status: 'KILLED' }) });
+    expect(a.socialCampaigns.resume).not.toHaveBeenCalled();
+    const k = harness({ programme: programmeRow({ status: 'KILLED' }), campaign: campaignRow({ status: 'PAUSED' }) });
     await expect(k.svc.resume(WS, 'prog-1')).rejects.toThrow(BadRequestException);
+    expect(k.socialCampaigns.resume).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `pause` is the one campaign door the lane keeps, so the programme can be
+   * ACTIVE with its campaign PAUSED by hand. The campaign's own resume door
+   * refuses a lane and points here; this door has to open, or the only way
+   * out is an undocumented pause-then-resume of the programme while every
+   * produce job holds and skips its slot as missed.
+   */
+  it('an ACTIVE programme whose lane was paused by hand has the lane re-run AS the programme, logs LANE_RESUMED, and touches no slot', async () => {
+    const { svc, prisma, socialCampaigns, scheduledJobs } = harness({ campaign: campaignRow({ status: 'PAUSED' }), slots: [slotRow({ status: 'PLANNED' })] });
+    const out = await svc.resume(WS, 'prog-1', NOW);
+    expect(socialCampaigns.resume).toHaveBeenCalledWith(WS, CAMPAIGN_ID, { byProgramme: true });
+    expect(prisma.socialCampaign.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: CAMPAIGN_ID, workspaceId: WS } }));
+    // The programme itself did not move, and no slot was consumed while it kept planning: nothing to re-arm or skip.
+    expect(prisma.contentProgramme.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.findMany).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
+    expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(out.status).toBe('ACTIVE');
+    expect(eventOf(prisma, 'LANE_RESUMED')).toMatchObject({ data: { socialCampaignId: CAMPAIGN_ID } });
+    expect(eventOf(prisma, 'RESUMED')).toBeUndefined();
   });
 });
 
@@ -670,9 +723,9 @@ describe('ContentProgrammeService.kill', () => {
 
     expect(prisma.contentProgramme.update.mock.calls[0][0].data).toEqual({ status: 'KILLED', killSwitch: true });
     expect(socialCampaigns.pause).toHaveBeenCalledWith(WS, CAMPAIGN_ID);
-    // PRODUCING is not in the sweep: its produce job reads the flag itself.
+    // PRODUCING is in the sweep too: its item may already be armed (see below).
     expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { workspaceId: WS, programmeId: 'prog-1', status: { in: ['PLANNED', 'IDEATED', 'READY'] } } }),
+      expect.objectContaining({ where: { workspaceId: WS, programmeId: 'prog-1', status: { in: ['PLANNED', 'IDEATED', 'PRODUCING', 'READY'] } } }),
     );
     // The READY slot's armed item is rejected, so the publish gate drops it.
     expect(socialCampaigns.rejectItem).toHaveBeenCalledTimes(1);
@@ -691,11 +744,45 @@ describe('ContentProgrammeService.kill', () => {
     );
     expect(cancelled).toHaveLength(6);
     expect(prisma.contentSlot.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['slot-p', 'slot-i', 'slot-r'] }, workspaceId: WS, programmeId: 'prog-1', status: { in: ['PLANNED', 'IDEATED', 'READY'] } },
+      where: { id: { in: ['slot-p', 'slot-i', 'slot-r'] }, workspaceId: WS, programmeId: 'prog-1', status: { in: ['PLANNED', 'IDEATED', 'PRODUCING', 'READY'] } },
       data: { status: 'SKIPPED', error: 'programme killed' },
     });
     expect(out.status).toBe('KILLED');
-    expect(eventOf(prisma, 'KILLED')).toMatchObject({ data: { skippedSlots: 3, rejectedItems: 1 } });
+    expect(eventOf(prisma, 'KILLED')).toMatchObject({ data: { skippedSlots: 3, rejectedItems: 1, leftSlots: 0, leftSlotIds: [] } });
+  });
+
+  /**
+   * The produce job arms the item SCHEDULED within minutes of the clips, but
+   * the slot stays PRODUCING until the 6-hourly reconcile. A kill in that
+   * window used to sweep nothing for the slot — its job was DONE, so the kill
+   * flag was never read again — and the armed item looped hourly against the
+   * paused lane with no door left to drop it.
+   */
+  it('a PRODUCING slot whose item is already armed has the item rejected and the slot swept; one still generating, or with no item yet, is left and counted', async () => {
+    const armed = slotRow({ id: 'slot-armed', status: 'PRODUCING', conceptId: 'c-armed', campaignItemId: 'item-armed' });
+    const generating = slotRow({ id: 'slot-gen', status: 'PRODUCING', conceptId: 'c-gen', campaignItemId: 'item-gen' });
+    const noItem = slotRow({ id: 'slot-none', status: 'PRODUCING', conceptId: 'c-none', campaignItemId: null });
+    const { svc, prisma, socialCampaigns, scheduledJobs } = harness({ campaign: campaignRow({ status: 'ACTIVE' }), slots: [armed, generating, noItem] });
+    socialCampaigns.rejectItem.mockImplementation(async (_ws: string, itemId: string) => {
+      if (itemId === 'item-gen') throw new BadRequestException('Cannot reject an item in status GENERATING');
+      return { id: itemId, status: 'SKIPPED' };
+    });
+
+    await svc.kill(WS, 'prog-1');
+
+    expect(socialCampaigns.rejectItem.mock.calls.map((c: any[]) => c[1])).toEqual(['item-armed', 'item-gen']);
+    expect(prisma.contentSlot.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: { in: ['slot-armed'] } }), data: { status: 'SKIPPED', error: 'programme killed' } }),
+    );
+    const cancelled = scheduledJobs.cancel.mock.calls.map((c: any[]) => c[1]);
+    expect(cancelled).toEqual([slotPlanDedup('slot-armed'), slotProduceDedup('slot-armed')]);
+    // The left slots keep their status: the produce job fails the generating
+    // item on its next clip, and the reconcile/settle sweeps (which walk
+    // KILLED programmes) follow each item to FAILED or PUBLISHED.
+    expect(eventOf(prisma, 'KILLED')).toMatchObject({
+      message: expect.stringContaining('2 slot(s) left to settle'),
+      data: { skippedSlots: 1, rejectedItems: 1, leftSlots: 2, leftSlotIds: ['slot-gen', 'slot-none'] },
+    });
   });
 
   it('a READY slot whose item can no longer be rejected (published under our feet) is left as it is', async () => {
@@ -709,7 +796,7 @@ describe('ContentProgrammeService.kill', () => {
     expect(prisma.contentSlot.updateMany.mock.calls[0][0].where.id).toEqual({ in: ['slot-p'] });
     expect(scheduledJobs.cancel.mock.calls.map((c: any[]) => c[1])).not.toContain(slotPlanDedup('slot-r'));
     expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
-    expect(eventOf(prisma, 'KILLED')).toMatchObject({ data: { skippedSlots: 1, rejectedItems: 0 } });
+    expect(eventOf(prisma, 'KILLED')).toMatchObject({ data: { skippedSlots: 1, rejectedItems: 0, leftSlots: 1, leftSlotIds: ['slot-r'] } });
   });
 
   it('kill with no open slots writes no sweep and still records the kill', async () => {

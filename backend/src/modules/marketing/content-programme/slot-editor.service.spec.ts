@@ -27,10 +27,17 @@ function slot(over: Record<string, unknown> = {}) {
 
 function harness(over: { slot?: unknown; item?: unknown; programme?: unknown; campaign?: unknown; weekRows?: unknown[] } = {}) {
   const current = over.slot === undefined ? slot() : over.slot;
+  // The row as the database holds it: every conditional write lands on it,
+  // and the read-back after a write returns it.
+  let row: any = current;
   const prisma: any = {
     contentSlot: {
-      findFirst: jest.fn().mockResolvedValue(current),
+      findFirst: jest.fn().mockImplementation(async () => row),
       findMany: jest.fn().mockResolvedValue(over.weekRows ?? []),
+      updateMany: jest.fn().mockImplementation(async ({ data }: any) => {
+        row = row ? { ...row, ...data } : row;
+        return { count: 1 };
+      }),
       update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...(current as object), ...data })),
     },
     socialCampaign: { findFirst: jest.fn().mockResolvedValue(over.campaign === undefined ? { status: 'ACTIVE' } : over.campaign) },
@@ -50,7 +57,11 @@ function harness(over: { slot?: unknown; item?: unknown; programme?: unknown; ca
   const svc = new SlotEditorService(prisma, scheduledJobs as any, programmes as any, socialCampaigns as any, arming as any);
   return { svc, prisma, scheduledJobs, programmes, socialCampaigns, arming };
 }
-const update = (prisma: any) => prisma.contentSlot.update.mock.calls[0]?.[0];
+/** The first conditional write: `where` pins the status the door read. */
+const update = (prisma: any) => prisma.contentSlot.updateMany.mock.calls[0]?.[0];
+const asWas = (status: string) => ({ id: 'slot-1', workspaceId: WS, status });
+/** What a discard looks like: this slot's own PROPOSED or APPROVED-but-unpromoted row, never a promoted one. */
+const discardWhere = (conceptId: string) => ({ id: conceptId, workspaceId: WS, slotId: 'slot-1', status: { in: ['PROPOSED', 'APPROVED'] }, promotedItemId: null });
 const jobs = (scheduledJobs: any) => scheduledJobs.schedule.mock.calls.map((c: any[]) => c[0]);
 const event = (programmes: any, kind: string) => programmes.logEvent.mock.calls.map((c: any[]) => ({ kind: c[2], message: c[3], data: c[4] })).find((e: any) => e.kind === kind);
 
@@ -58,7 +69,7 @@ describe('SlotEditorService.updateSlot — the window', () => {
   it('refuses a slot that is past its edit window, naming when it froze', async () => {
     const { svc, prisma } = harness({ slot: slot({ editableUntil: at('2026-09-16T11:00:00Z') }) });
     await expect(svc.updateSlot(WS, 'slot-1', { idea: 'x' }, ACTOR, NOW)).rejects.toThrow(/froze at 2026-09-16T11:00:00.000Z/);
-    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses a slot whose status is not editable, by name', async () => {
@@ -81,7 +92,7 @@ describe('SlotEditorService.updateSlot — the window', () => {
     await expect(svc.updateSlot(WS, 'slot-1', { idea: 'x'.repeat(4001) }, ACTOR, NOW)).rejects.toThrow(/1 to 4000/);
     await expect(svc.updateSlot(WS, 'slot-1', { scheduledFor: new Date(NOW.getTime() - 1) }, ACTOR, NOW)).rejects.toThrow(/in the future/);
     await expect(svc.updateSlot(WS, 'slot-1', { scheduledFor: new Date(NOW.getTime() + 16 * D) }, ACTOR, NOW)).rejects.toThrow(/within the next 15 days/);
-    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -90,7 +101,7 @@ describe('SlotEditorService.updateSlot — PLANNED', () => {
     const { svc, prisma, programmes, scheduledJobs } = harness();
     const out = await svc.updateSlot(WS, 'slot-1', { contentTypeKey: 'pov-ugc', idea: '  new idea  ' }, ACTOR, NOW);
     expect(update(prisma)).toEqual({
-      where: { id: 'slot-1' },
+      where: asWas('PLANNED'),
       data: { contentTypeId: 'id-pov', contentTypeKey: 'pov-ugc', selectionReason: `owner override by ${ACTOR}`, idea: 'new idea' },
     });
     expect(out.contentTypeKey).toBe('pov-ugc');
@@ -112,14 +123,23 @@ describe('SlotEditorService.updateSlot — PLANNED', () => {
   it('returns the slot untouched when nothing actually changes', async () => {
     const { svc, prisma, programmes } = harness();
     await svc.updateSlot(WS, 'slot-1', { idea: 'old idea', scheduledFor: at('2026-09-18T18:00:00Z') }, ACTOR, NOW);
-    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
     expect(programmes.logEvent).not.toHaveBeenCalled();
   });
 
   it('turns a time collision into a BadRequest', async () => {
     const { svc, prisma } = harness();
-    prisma.contentSlot.update.mockRejectedValue({ code: 'P2002' });
+    prisma.contentSlot.updateMany.mockRejectedValue({ code: 'P2002' });
     await expect(svc.updateSlot(WS, 'slot-1', { scheduledFor: at('2026-09-22T18:00:00Z') }, ACTOR, NOW)).rejects.toThrow(/already at that time/);
+  });
+
+  it('a slot that moved on between the read and the write is refused, not overwritten: the write is conditional on the status it read', async () => {
+    const { svc, prisma, programmes, scheduledJobs } = harness();
+    prisma.contentSlot.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.updateSlot(WS, 'slot-1', { idea: 'late' }, ACTOR, NOW)).rejects.toThrow(/slot changed while you were looking; read it again/);
+    expect(update(prisma).where).toEqual(asWas('PLANNED'));
+    expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(programmes.logEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -130,9 +150,10 @@ describe('SlotEditorService.updateSlot — IDEATED', () => {
     const { svc, prisma, scheduledJobs, programmes } = harness({ slot: ideated() });
     await svc.updateSlot(WS, 'slot-1', { contentTypeKey: 'pov-ugc' }, ACTOR, NOW);
     expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith({
-      where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' },
+      where: discardWhere('c-1'),
       data: { status: 'DISCARDED', reviewedAt: NOW, reviewedById: `programme:${PROG}`, reviewNote: 'owner edited the slot (contentTypeKey)' },
     });
+    expect(update(prisma).where).toEqual(asWas('IDEATED'));
     expect(update(prisma).data).toMatchObject({ contentTypeKey: 'pov-ugc', status: 'PLANNED', conceptId: null, quotedCredits: null, error: null });
     expect(scheduledJobs.cancel).toHaveBeenCalledWith(CONTENT_SLOT_PLAN_KIND, slotPlanDedup('slot-1'));
     const planJobs = jobs(scheduledJobs).filter((j: any) => j.kind === CONTENT_SLOT_PLAN_KIND);
@@ -148,6 +169,18 @@ describe('SlotEditorService.updateSlot — IDEATED', () => {
     expect(scheduledJobs.cancel).not.toHaveBeenCalled();
     expect(jobs(scheduledJobs)).toHaveLength(2);
   });
+
+  it('the produce job claimed the slot under the edit (IDEATED → PRODUCING): the edit is refused, the concept it would have given back is untouched by the row write', async () => {
+    const { svc, prisma, scheduledJobs } = harness({ slot: ideated() });
+    prisma.contentSlot.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.updateSlot(WS, 'slot-1', { idea: 'different' }, ACTOR, NOW)).rejects.toThrow(/slot changed while you were looking/);
+    expect(update(prisma).where).toEqual(asWas('IDEATED'));
+    expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+    // The discard ran against the row as read; a concept the job already
+    // approved AND promoted is outside its predicate (promotedItemId null).
+    expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: discardWhere('c-1') }));
+  });
 });
 
 describe('SlotEditorService.updateSlot — READY', () => {
@@ -156,7 +189,7 @@ describe('SlotEditorService.updateSlot — READY', () => {
   it('refuses a type or idea change: the clips are bought', async () => {
     const { svc, prisma } = harness({ slot: ready() });
     await expect(svc.updateSlot(WS, 'slot-1', { idea: 'different' }, ACTOR, NOW)).rejects.toThrow(/already produced; regenerate it or skip it/);
-    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
   });
 
   it('a move re-arms the campaign item at the new time through the arming service (same dedup key, one step)', async () => {
@@ -186,9 +219,9 @@ describe('SlotEditorService.skipSlot', () => {
     const out = await svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
     expect(prisma.socialCampaignItem.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'item-1', workspaceId: WS } }));
     expect(socialCampaigns.rejectItem).toHaveBeenCalledWith(WS, 'item-1');
-    expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' } }));
+    expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: discardWhere('c-1') }));
     expect(scheduledJobs.cancel.mock.calls).toEqual([[CONTENT_SLOT_PLAN_KIND, slotPlanDedup('slot-1')], [CONTENT_SLOT_PRODUCE_KIND, slotProduceDedup('slot-1')]]);
-    expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'SKIPPED', error: `skipped by ${ACTOR}` } });
+    expect(update(prisma)).toEqual({ where: asWas('READY'), data: { status: 'SKIPPED', error: `skipped by ${ACTOR}` } });
     expect(out.status).toBe('SKIPPED');
     expect(event(programmes, 'SLOT_SKIPPED').data).toMatchObject({ actorId: ACTOR, from: 'READY', campaignItemId: 'item-1' });
   });
@@ -206,7 +239,7 @@ describe('SlotEditorService.skipSlot', () => {
     const noItem = harness({ slot: slot({ status: 'FAILED', conceptId: 'c-1', error: 'AI not configured' }) });
     const out = await noItem.svc.skipSlot(WS, 'slot-1', ACTOR, NOW);
     expect(out.status).toBe('SKIPPED');
-    expect(noItem.prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' } }));
+    expect(noItem.prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: discardWhere('c-1') }));
     expect(noItem.scheduledJobs.cancel).toHaveBeenCalledTimes(2);
     expect(noItem.socialCampaigns.rejectItem).not.toHaveBeenCalled();
     expect(event(noItem.programmes, 'SLOT_SKIPPED').data).toMatchObject({ from: 'FAILED' });
@@ -233,14 +266,22 @@ describe('SlotEditorService.skipSlot', () => {
     const { svc, prisma, socialCampaigns } = harness({ slot: slot({ status: 'READY', campaignItemId: 'item-1' }) });
     socialCampaigns.rejectItem.mockRejectedValue(new BadRequestException('Cannot reject an item in status PUBLISHED'));
     await expect(svc.skipSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/Cannot reject/);
-    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('the produce job claimed the slot under the skip (IDEATED → PRODUCING): the skip is refused instead of marking a bought slot SKIPPED', async () => {
+    const { svc, prisma, socialCampaigns } = harness({ slot: slot({ status: 'IDEATED', conceptId: 'c-1', quotedCredits: 45 }) });
+    prisma.contentSlot.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.skipSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/slot changed while you were looking; read it again/);
+    expect(update(prisma)).toEqual({ where: asWas('IDEATED'), data: { status: 'SKIPPED', error: `skipped by ${ACTOR}` } });
+    expect(socialCampaigns.rejectItem).not.toHaveBeenCalled();
   });
 
   it('an item past the gate (PUBLISHING / PUBLISHED) cannot be stopped: refused by name, slot untouched', async () => {
     const { svc, prisma, socialCampaigns } = harness({ slot: slot({ status: 'READY', campaignItemId: 'item-1' }), item: { id: 'item-1', status: 'PUBLISHED' } });
     await expect(svc.skipSlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/PUBLISHED and cannot be stopped/);
     expect(socialCampaigns.rejectItem).not.toHaveBeenCalled();
-    expect(prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(prisma.contentSlot.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses PRODUCING / PUBLISHED / SKIPPED / MEASURED slots', async () => {
@@ -257,10 +298,13 @@ describe('SlotEditorService.retrySlot', () => {
   it('FAILED without an item: back to PLANNED (concept, quote, error cleared; spend kept), both jobs re-armed, SLOT_RETRIED', async () => {
     const { svc, prisma, scheduledJobs, programmes } = harness({ slot: failed() });
     const out = await svc.retrySlot(WS, 'slot-1', ACTOR, NOW);
+    // The discard reaches an APPROVED-but-unpromoted concept too: a promotion
+    // that threw after the programme's verdict must not leave an approved
+    // orphan the concept `produce` door could later promote off-calendar.
     expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'c-1', workspaceId: WS, status: 'PROPOSED' }, data: expect.objectContaining({ reviewNote: `retried by ${ACTOR}` }),
+      where: discardWhere('c-1'), data: expect.objectContaining({ reviewNote: `retried by ${ACTOR}` }),
     }));
-    expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'PLANNED', conceptId: null, quotedCredits: null, error: null } });
+    expect(update(prisma)).toEqual({ where: asWas('FAILED'), data: { status: 'PLANNED', conceptId: null, quotedCredits: null, error: null } });
     expect(update(prisma).data.spentCredits).toBeUndefined();
     expect(out.status).toBe('PLANNED');
     expect(jobs(scheduledJobs)).toEqual([
@@ -285,10 +329,18 @@ describe('SlotEditorService.retrySlot', () => {
     await expect(planned.svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/A PLANNED slot cannot be retried/);
     const killed = harness({ slot: failed(), programme: programme({ status: 'KILLED', killSwitch: true }) });
     await expect(killed.svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/killed/);
-    expect(killed.prisma.contentSlot.update).not.toHaveBeenCalled();
+    expect(killed.prisma.contentSlot.updateMany).not.toHaveBeenCalled();
     const past = harness({ slot: failed({ scheduledFor: at('2026-09-16T11:00:00Z') }) });
     await expect(past.svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/time has passed/);
     expect(past.scheduledJobs.schedule).not.toHaveBeenCalled();
+  });
+
+  it('a slot that left FAILED between the read and the write is refused, and no job is re-armed', async () => {
+    const { svc, prisma, scheduledJobs } = harness({ slot: failed() });
+    prisma.contentSlot.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.retrySlot(WS, 'slot-1', ACTOR, NOW)).rejects.toThrow(/slot changed while you were looking/);
+    expect(update(prisma).where).toEqual(asWas('FAILED'));
+    expect(scheduledJobs.schedule).not.toHaveBeenCalled();
   });
 });
 
@@ -301,7 +353,7 @@ describe('SlotEditorService.regenerateSlot', () => {
     expect(socialCampaigns.rejectItem).toHaveBeenCalledWith(WS, 'item-1');
     expect(socialCampaigns.regenerateItem).toHaveBeenCalledWith(WS, 'item-1');
     expect(socialCampaigns.rejectItem.mock.invocationCallOrder[0]).toBeLessThan(socialCampaigns.regenerateItem.mock.invocationCallOrder[0]);
-    expect(update(prisma)).toEqual({ where: { id: 'slot-1' }, data: { status: 'PRODUCING', error: null, spentCredits: { increment: 45 } } });
+    expect(update(prisma)).toEqual({ where: asWas('READY'), data: { status: 'PRODUCING', error: null, spentCredits: { increment: 45 } } });
     expect(out.status).toBe('PRODUCING');
     expect(event(programmes, 'SLOT_REGENERATED').data).toMatchObject({ actorId: ACTOR, from: 'READY', itemStatus: 'SCHEDULED', spent: 45, weekSpent: 300 });
     // The programme and its lane are consulted, workspace-scoped; the week is the SLOT's week.
@@ -329,7 +381,7 @@ describe('SlotEditorService.regenerateSlot', () => {
     for (const h of [paused, killed, lane]) {
       expect(h.socialCampaigns.rejectItem).not.toHaveBeenCalled();
       expect(h.socialCampaigns.regenerateItem).not.toHaveBeenCalled();
-      expect(h.prisma.contentSlot.update).not.toHaveBeenCalled();
+      expect(h.prisma.contentSlot.updateMany).not.toHaveBeenCalled();
     }
   });
 

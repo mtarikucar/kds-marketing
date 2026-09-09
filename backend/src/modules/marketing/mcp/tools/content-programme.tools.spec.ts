@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerContentProgrammeTools } from './content-programme.tools';
 
-const programme = { id: 'prog-1', workspaceId: 'ws1', status: 'ACTIVE', perWeek: 5, weeklyCreditCap: 600 };
+const programme = { id: 'prog-1', workspaceId: 'ws1', status: 'ACTIVE', perWeek: 5, weeklyCreditCap: 600, lookaheadDays: 14, planLeadHours: 36, produceLeadHours: 12 };
 const dash = { phase: 'SEED', slots: [] };
 const slotView = { id: 'slot-1', status: 'PLANNED', editable: true };
 
@@ -166,30 +166,55 @@ describe('jeeta.update_content_programme', () => {
     expect(schema.safeParse({ programmeId: 'p', settings: { daysOfWeek: [] } }).success).toBe(false);
   });
 
+  it('bounds the look-ahead and the two lead times above as well as below — an unbounded lead pulls later weeks into one week\'s spend check', () => {
+    const schema = build().registry.get('jeeta.update_content_programme')!.inputSchema;
+    expect(schema.safeParse({ programmeId: 'p', settings: { planLeadHours: 800, produceLeadHours: 799 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { planLeadHours: 97 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { planLeadHours: 5 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { produceLeadHours: 49 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { produceLeadHours: 1 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { lookaheadDays: 29 } }).success).toBe(false);
+    expect(schema.safeParse({ programmeId: 'p', settings: { planLeadHours: 96, produceLeadHours: 48, lookaheadDays: 28 } }).success).toBe(true);
+    expect(schema.safeParse({ programmeId: 'p', settings: { planLeadHours: 6, produceLeadHours: 2, lookaheadDays: 7 } }).success).toBe(true);
+  });
+
   /**
    * Create and kill are hub-only because they start and end autonomous spend;
    * the lever that SCALES it has to be hub-only in the upward direction too, or
    * one injected instruction raises the only money bound on the autopilot.
    */
-  describe('the cap and the cadence only move DOWN from an agent', () => {
+  describe('the cap, the cadence, the look-ahead and the lead times only move DOWN from an agent', () => {
     it.each([
       ['a higher weeklyCreditCap', { weeklyCreditCap: 601 }],
       ['a higher perWeek', { perWeek: 6 }],
       ['both, with other settings alongside', { weeklyCreditCap: 10000000, perWeek: 7, brief: 'x' }],
+      // The three that decide how many weeks' slots one week's cap check sees.
+      ['a longer lookaheadDays', { lookaheadDays: 15 }],
+      ['a longer planLeadHours', { planLeadHours: 37 }],
+      ['a longer produceLeadHours', { produceLeadHours: 13 }],
+      ['every lever at its schema ceiling', { lookaheadDays: 28, planLeadHours: 96, produceLeadHours: 48 }],
     ])('refuses %s by name, updates nothing and applies no action', async (_label, settings) => {
       const { registry, programmes } = build();
       await expect(
         registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings, action: 'pause' }),
-      ).rejects.toThrow('Raising the weekly cap or the cadence is done from the hub, not by an agent');
+      ).rejects.toThrow(/Raising the weekly cap, the cadence, the look-ahead or the lead times is done from the hub, not by an agent/);
       expect(programmes.update).not.toHaveBeenCalled();
       expect(programmes.pause).not.toHaveBeenCalled();
+    });
+
+    it('names the levers it refused', async () => {
+      const { registry } = build();
+      await expect(
+        registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings: { planLeadHours: 48, produceLeadHours: 12, lookaheadDays: 7 } }),
+      ).rejects.toThrow(/\(planLeadHours\)$/);
     });
 
     it.each([
       ['the same cap and cadence', { weeklyCreditCap: 600, perWeek: 5 }],
       ['a lower cap', { weeklyCreditCap: 300 }],
       ['a lower cadence', { perWeek: 2 }],
-      ['settings that touch neither', { brief: 'new brief', explorationRate: 0.1 }],
+      ['the same or shorter look-ahead and leads', { lookaheadDays: 14, planLeadHours: 24, produceLeadHours: 6 }],
+      ['settings that touch none of them', { brief: 'new brief', explorationRate: 0.1 }],
     ])('lets %s through', async (_label, settings) => {
       const { registry, programmes } = build();
       await registry.get('jeeta.update_content_programme')!.handler(ctx(), { programmeId: 'prog-1', settings });

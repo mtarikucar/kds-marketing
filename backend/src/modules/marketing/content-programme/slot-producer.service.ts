@@ -145,9 +145,17 @@ export class SlotProducerService implements OnModuleInit {
     );
   }
 
-  /** This Istanbul week's real spend (see `sumWeekSpend`). */
-  async weekSpend(workspaceId: string, programmeId: string, now = new Date(), opts: { excludeSlotId?: string } = {}): Promise<WeekSpend> {
-    const { weekStart, spent } = await sumWeekSpend(this.prisma, workspaceId, programmeId, now, opts);
+  /**
+   * The real spend of the Istanbul week that contains `at` (see `sumWeekSpend`).
+   * The cap checks pass the SLOT's `scheduledFor`, never the job's clock: a
+   * slot's spend is booked into the week it publishes in, and the two per-slot
+   * jobs run up to `planLeadHours` before that — a Monday slot's jobs run on
+   * the weekend before. Checking the job's week would hold Monday against a
+   * week that is already closing, and let a long lead pull every week of the
+   * look-ahead into one night's spend.
+   */
+  async weekSpend(workspaceId: string, programmeId: string, at = new Date(), opts: { excludeSlotId?: string } = {}): Promise<WeekSpend> {
+    const { weekStart, spent } = await sumWeekSpend(this.prisma, workspaceId, programmeId, at, opts);
     return { weekStart, spent };
   }
 
@@ -172,9 +180,17 @@ export class SlotProducerService implements OnModuleInit {
       if (!type) throw new Error(`content type ${slot.contentTypeKey} no longer exists in this workspace`);
 
       const campaign = await this.campaign(workspaceId, programme);
-      const estimate = estimateSlotCredits(type, campaign?.defaultVideoModel ?? null);
+      // The lane not running (paused by hand, cancelled, gone): a concept
+      // planned now is a batch and frames bought for a slot that will be
+      // skipped as missed at publish time. Wait for the lane — nothing bought.
+      if (campaign?.status !== 'ACTIVE') {
+        const lane = await this.holdForLane(workspaceId, programme, slot, campaign?.status ?? null, now);
+        return lane === 'end' ? undefined : lane;
+      }
+      const estimate = estimateSlotCredits(type, campaign.defaultVideoModel ?? null);
       // The slot's own spend counts: a retried slot already paid for a batch.
-      const { spent } = await this.weekSpend(workspaceId, programme.id, now);
+      // Bucketed by the slot's week (see `weekSpend`).
+      const { spent } = await this.weekSpend(workspaceId, programme.id, slot.scheduledFor);
       if (spent + estimate > programme.weeklyCreditCap) {
         const produceAt = slot.scheduledFor.getTime() - hours(programme.produceLeadHours);
         if (produceAt <= now.getTime() + CAP_RETRY_MS) {
@@ -203,11 +219,15 @@ export class SlotProducerService implements OnModuleInit {
       // The money is spent now — the batch was charged and the frames will be
       // drawn by the storyboard job — and it stays on the row whatever happens
       // to the slot next (edited, skipped, capped): the week paid for it.
+      // Out of scope by design: a storyboard REDRAW a person or an agent asks
+      // for on this concept during the edit window is billed to the workspace
+      // like any other frame but is NOT booked here, so it sits outside the
+      // weekly cap — the cap is the programme's own spending, not the owner's.
       const planCost = creditCost('content.concepts') + (productionOf(chosen)?.keyframes?.credits ?? 0);
       await this.prisma.contentSlot.updateMany({ where: { id: slot.id, workspaceId }, data: { spentCredits: { increment: planCost } } });
 
       const others = batch.concepts.filter((c) => c.id !== chosen.id).map((c) => c.id);
-      if (others.length) await this.discardConcepts(workspaceId, others, programme.id, 'programme: not selected', now);
+      if (others.length) await this.discardConcepts(workspaceId, others, programme.id, slot.id, 'programme: not selected', now);
 
       // Frames are optional: `produce` draws any that are missing. A storyboard
       // that cannot be requested now must not cost the slot its concept.
@@ -225,7 +245,7 @@ export class SlotProducerService implements OnModuleInit {
       if (count === 0) {
         // Edited or skipped between the load and the write: the owner's move
         // stands, and the concept it would have used goes with the others.
-        await this.discardConcepts(workspaceId, [chosen.id], programme.id, 'programme: slot changed while planning', now);
+        await this.discardConcepts(workspaceId, [chosen.id], programme.id, slot.id, 'programme: slot changed while planning', now);
         return;
       }
       // Re-arm produce so a slot planned inside its lead window (both jobs
@@ -268,42 +288,35 @@ export class SlotProducerService implements OnModuleInit {
     // fire, with its clips bought. Wait for the lane instead, once in the log.
     const campaign = await this.campaign(workspaceId, programme);
     if (campaign?.status === 'PAUSED') {
-      // The lane may come back any hour, and the clips can still be made up
-      // to the publish moment itself — so the wait runs to scheduledFor, not
-      // to the produce lead the programme's own pause is held to.
-      if (slot.scheduledFor.getTime() <= now.getTime()) {
-        await this.skipAsMissed(workspaceId, programme, slot, now, 'lane paused');
-        return;
-      }
-      const already = await this.prisma.contentProgrammeEvent.findFirst({
-        where: { workspaceId, programmeId: programme.id, kind: 'LANE_PAUSED', data: { path: ['slotId'], equals: slot.id } },
-        select: { id: true },
-      });
-      if (!already) {
-        await this.programmes.logEvent(workspaceId, programme.id, 'LANE_PAUSED',
-          `Slot ${slot.contentTypeKey} is waiting: the programme's campaign is paused, so nothing is bought until it runs again.`,
-          { slotId: slot.id, contentTypeKey: slot.contentTypeKey, socialCampaignId: programme.socialCampaignId });
-      }
-      return this.retryLater(workspaceId, programme, slot, now);
+      const lane = await this.holdForLane(workspaceId, programme, slot, campaign.status, now);
+      return lane === 'end' ? undefined : lane;
     }
 
+    let clipCost: number;
     try {
       // No quote means nothing to hold the cap against: refuse, do not guess.
       if (slot.quotedCredits === null || slot.quotedCredits === undefined) {
-        await this.discardConcepts(workspaceId, [conceptId], programme.id, `programme: ${NO_QUOTE_ERROR}`, now);
+        await this.discardConcepts(workspaceId, [conceptId], programme.id, slot.id, `programme: ${NO_QUOTE_ERROR}`, now);
         throw new Error(NO_QUOTE_ERROR);
       }
-      const quote = slot.quotedCredits;
-      // This slot's own spend is left out: its quote already carries its frames.
-      const { spent } = await this.weekSpend(workspaceId, programme.id, now, { excludeSlotId: slot.id });
-      if (spent + quote > programme.weeklyCreditCap) {
-        await this.discardConcepts(workspaceId, [conceptId], programme.id, 'programme: weekly credit cap', now);
-        await this.skipForCap(workspaceId, programme, slot, spent, quote);
+      // What this job will buy: the clips — the quote minus the frames the
+      // plan job already booked. The check is Σ spent of the slot's week
+      // INCLUDING this slot's own batch and frames, plus the clips: the sum
+      // the week will actually close on, so it can never close above the cap.
+      const production = await this.productionOfConcept(workspaceId, conceptId);
+      clipCost = Math.max(0, Math.round((production?.credits ?? quote0(slot)) - (production?.keyframes?.credits ?? 0)));
+      const { spent } = await this.weekSpend(workspaceId, programme.id, slot.scheduledFor);
+      if (spent + clipCost > programme.weeklyCreditCap) {
+        await this.discardConcepts(workspaceId, [conceptId], programme.id, slot.id, 'programme: weekly credit cap', now);
+        await this.skipForCap(workspaceId, programme, slot, spent, clipCost);
         return;
       }
 
+      // The claim pins the time as well as the status: an owner move that
+      // landed after the load would otherwise be overridden on the item, which
+      // is promoted at the time THIS job read.
       const { count } = await this.prisma.contentSlot.updateMany({
-        where: { id: slot.id, workspaceId, status: 'IDEATED' },
+        where: { id: slot.id, workspaceId, status: 'IDEATED', scheduledFor: slot.scheduledFor },
         data: { status: 'PRODUCING' },
       });
       // Edited or skipped under the job: the owner's move stands, nothing bought.
@@ -313,25 +326,37 @@ export class SlotProducerService implements OnModuleInit {
       return;
     }
 
+    // The link (campaignItemId + the clips' spend) is written as the very
+    // next statement after the promotion: between the two the item exists,
+    // buys clips and arms its gate, while the slot says nothing about it. A
+    // link write that throws is tried once more; if it still fails the slot is
+    // FAILED with the item's id in the error — the reconcile sweep and the
+    // owner can then find the item, and the retry door will not buy a second.
+    let item: { id: string } | null = null;
     try {
-      const production = await this.productionOfConcept(workspaceId, conceptId);
       await this.concepts.decideByProgramme(workspaceId, conceptId, programme.id, programme.socialCampaignId);
-      const { item } = await this.promotion.promote(workspaceId, conceptId, {
+      ({ item } = await this.promotion.promote(workspaceId, conceptId, {
         socialCampaignId: programme.socialCampaignId,
         scheduledFor: slot.scheduledFor,
-      });
-      // The clips: the quote minus the frames the plan job already paid for.
-      const clipCost = Math.max(0, Math.round((production?.credits ?? quote0(slot)) - (production?.keyframes?.credits ?? 0)));
-      await this.prisma.contentSlot.updateMany({
-        where: { id: slot.id, workspaceId, status: 'PRODUCING' },
-        data: { campaignItemId: item.id, error: null, spentCredits: { increment: clipCost } },
-      });
-      await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_PRODUCING',
-        `Slot ${slot.contentTypeKey} in production: item ${item.id} at ${slot.scheduledFor.toISOString()}.`,
-        { slotId: slot.id, contentTypeKey: slot.contentTypeKey, conceptId, campaignItemId: item.id, quotedCredits: slot.quotedCredits, spent: clipCost });
+      }));
+      await this.linkItem(workspaceId, slot, item.id, clipCost);
     } catch (e: any) {
-      await this.fail(workspaceId, programme, slot, 'PRODUCING', e);
+      if (!item) {
+        await this.fail(workspaceId, programme, slot, 'PRODUCING', e);
+        return;
+      }
+      try {
+        await this.linkItem(workspaceId, slot, item.id, clipCost);
+      } catch (again: any) {
+        await this.fail(workspaceId, programme, slot, 'PRODUCING',
+          new Error(`item ${item.id} produced but not linked: ${String(again?.message ?? again)}`),
+          { campaignItemId: item.id });
+        return;
+      }
     }
+    await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_PRODUCING',
+      `Slot ${slot.contentTypeKey} in production: item ${item.id} at ${slot.scheduledFor.toISOString()}.`,
+      { slotId: slot.id, contentTypeKey: slot.contentTypeKey, conceptId, campaignItemId: item.id, quotedCredits: slot.quotedCredits, spent: clipCost });
   }
 
   // ───────────────────────────────────────────────────────── internals
@@ -369,12 +394,49 @@ export class SlotProducerService implements OnModuleInit {
     return this.retryLater(workspaceId, programme, slot, now);
   }
 
+  /**
+   * The lane (the campaign, not the programme) is not running. The item a
+   * promotion would create sits SCHEDULED behind a gate that refuses to fire,
+   * with its clips bought; a concept planned now is a batch bought for a slot
+   * that will be missed. Wait for the lane instead, once in the log per slot.
+   * The lane may come back any hour, and the clips can still be made up to
+   * the publish moment itself — so the wait runs to scheduledFor, not to the
+   * produce lead the programme's own pause is held to.
+   */
+  private async holdForLane(workspaceId: string, programme: ContentProgramme, slot: ContentSlot, campaignStatus: string | null, now: Date): Promise<'end' | JobHandlerResult> {
+    if (slot.scheduledFor.getTime() <= now.getTime()) {
+      await this.skipAsMissed(workspaceId, programme, slot, now, 'lane paused');
+      return 'end';
+    }
+    const already = await this.prisma.contentProgrammeEvent.findFirst({
+      where: { workspaceId, programmeId: programme.id, kind: 'LANE_PAUSED', data: { path: ['slotId'], equals: slot.id } },
+      select: { id: true },
+    });
+    if (!already) {
+      const state = campaignStatus ? campaignStatus.toLowerCase() : 'gone';
+      await this.programmes.logEvent(workspaceId, programme.id, 'LANE_PAUSED',
+        `Slot ${slot.contentTypeKey} is waiting: the programme's campaign is ${state}, so nothing is bought until it runs again.`,
+        { slotId: slot.id, contentTypeKey: slot.contentTypeKey, socialCampaignId: programme.socialCampaignId, campaignStatus });
+    }
+    return this.retryLater(workspaceId, programme, slot, now);
+  }
+
+  /** The item onto the slot, and the clips onto its spend. A write that finds
+   *  the slot no longer PRODUCING is a failure, not a shrug: the item exists. */
+  private async linkItem(workspaceId: string, slot: ContentSlot, itemId: string, clipCost: number): Promise<void> {
+    const { count } = await this.prisma.contentSlot.updateMany({
+      where: { id: slot.id, workspaceId, status: 'PRODUCING' },
+      data: { campaignItemId: itemId, error: null, spentCredits: { increment: clipCost } },
+    });
+    if (count === 0) throw new Error('the slot left PRODUCING before the item was linked');
+  }
+
   private retryLater(workspaceId: string, programme: ContentProgramme, slot: ContentSlot, now: Date): JobHandlerResult {
     return { reschedule: { runAt: new Date(now.getTime() + PAUSE_RETRY_MS), payload: { workspaceId, slotId: slot.id, programmeId: programme.id } } };
   }
 
   private async skipAsMissed(workspaceId: string, programme: ContentProgramme, slot: ContentSlot, now: Date, why: string): Promise<void> {
-    if (slot.conceptId) await this.discardConcepts(workspaceId, [slot.conceptId], programme.id, `programme: ${MISSED_WHILE_PAUSED}`, now);
+    if (slot.conceptId) await this.discardConcepts(workspaceId, [slot.conceptId], programme.id, slot.id, `programme: ${MISSED_WHILE_PAUSED}`, now);
     await this.prisma.contentSlot.updateMany({
       where: { id: slot.id, workspaceId, status: slot.status },
       data: { status: 'SKIPPED', error: MISSED_WHILE_PAUSED },
@@ -430,11 +492,18 @@ export class SlotProducerService implements OnModuleInit {
     return concepts.map((c) => c.hook);
   }
 
-  /** Only PROPOSED rows move: a concept a human approved or discarded in the
-   *  window keeps that person's verdict. */
-  private async discardConcepts(workspaceId: string, ids: string[], programmeId: string, note: string, now: Date): Promise<void> {
+  /**
+   * The slot's own concepts that never became an item: PROPOSED rows, and
+   * APPROVED rows the programme decided but never promoted (a promotion that
+   * threw after the verdict). A promoted concept keeps its verdict — its item
+   * is the thing to deal with, not the concept — and only this slot's rows
+   * move, so an id from elsewhere can never be discarded through here. No
+   * human verdict is overwritten: the review door refuses programme concepts,
+   * so an APPROVED programme concept was approved by the programme.
+   */
+  private async discardConcepts(workspaceId: string, ids: string[], programmeId: string, slotId: string, note: string, now: Date): Promise<void> {
     await this.prisma.contentConcept.updateMany({
-      where: { id: { in: ids }, workspaceId, status: 'PROPOSED' },
+      where: { id: { in: ids }, workspaceId, slotId, status: { in: ['PROPOSED', 'APPROVED'] }, promotedItemId: null },
       data: { status: 'DISCARDED', reviewedAt: now, reviewedById: `programme:${programmeId}`, reviewNote: note },
     });
   }
@@ -449,15 +518,18 @@ export class SlotProducerService implements OnModuleInit {
       { slotId: slot.id, contentTypeKey: slot.contentTypeKey, spent, wanted, cap: programme.weeklyCreditCap, scheduledFor: slot.scheduledFor.toISOString() });
   }
 
-  private async fail(workspaceId: string, programme: ContentProgramme, slot: ContentSlot, from: string, e: any): Promise<void> {
+  /** `extra` rides on the FAILED write: the item id of a produced-but-unlinked
+   *  slot, so the retry door goes through regenerate instead of buying a
+   *  second item for the same time. */
+  private async fail(workspaceId: string, programme: ContentProgramme, slot: ContentSlot, from: string, e: any, extra: { campaignItemId?: string } = {}): Promise<void> {
     const error = String(e?.message ?? e).slice(0, 500);
     this.logger.warn(`slot ${slot.id} (${from}) failed: ${error}`);
     await this.prisma.contentSlot.updateMany({
       where: { id: slot.id, workspaceId, status: from },
-      data: { status: 'FAILED', error },
+      data: { status: 'FAILED', error, ...extra },
     });
     await this.programmes.logEvent(workspaceId, programme.id, 'SLOT_FAILED', `Slot ${slot.contentTypeKey} failed while ${from === 'PLANNED' ? 'planning' : 'producing'}: ${error}`, {
-      slotId: slot.id, contentTypeKey: slot.contentTypeKey, from, error,
+      slotId: slot.id, contentTypeKey: slot.contentTypeKey, from, error, ...extra,
     });
   }
 }

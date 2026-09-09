@@ -968,6 +968,40 @@ describe('ContentConceptsService.planConcepts — angle learning', () => {
  * generation step. An agent's batch is not exempt from the contract; being
  * Claude is not evidence about this particular batch.
  */
+/**
+ * The produce door is the rescue for an APPROVED concept that never became an
+ * item. A concept the PROGRAMME planned can be exactly that (its slot's
+ * promote failed after the programme's approval) — and promoting it here would
+ * put a second post on the lane at the next cadence time, outside the weekly
+ * cap and tied to no slot. The slot's retry/skip are its doors.
+ */
+describe('ContentConceptsService.produce', () => {
+  it('refuses a concept that belongs to a programme, before anything is promoted', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce({ programmeId: 'prog-1' });
+    await expect(svc.produce('ws1', 'c-prog')).rejects.toThrow('This concept belongs to a content programme; retry or skip its slot instead.');
+    expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c-prog', workspaceId: 'ws1' } }));
+    expect(promotion.promote).not.toHaveBeenCalled();
+  });
+
+  it('promotes an ordinary approved concept, answering the item and whether it was created', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce({ programmeId: null });
+    promotion.promote.mockResolvedValueOnce({ item: { id: 'item-1', status: 'GENERATING', socialCampaignId: 'camp-1', scheduledFor: null }, created: true });
+    await expect(svc.produce('ws1', 'c-1', { socialCampaignId: 'camp-1' })).resolves.toEqual({
+      conceptId: 'c-1', itemId: 'item-1', socialCampaignId: 'camp-1', status: 'GENERATING', scheduledFor: null, created: true,
+    });
+    expect(promotion.promote).toHaveBeenCalledWith('ws1', 'c-1', { socialCampaignId: 'camp-1' });
+  });
+
+  it('leaves a missing concept to promote, which answers NotFound on its own', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce(null);
+    promotion.promote.mockRejectedValueOnce(new NotFoundException('Concept not found'));
+    await expect(svc.produce('ws1', 'c-x')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 describe('ContentConceptsService.submitConcepts', () => {
   const submitFrom = (
     svc: ContentConceptsService,

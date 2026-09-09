@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
 import { EntitlementsService } from '../../../billing/entitlements.service';
 import {
+  BOUNDS,
   ContentProgrammeService,
   PER_WEEK_MAX,
   PROGRAMME_GOALS,
@@ -23,6 +24,8 @@ export interface ContentProgrammeToolDeps {
 }
 
 const PROGRAMME_ACTIONS = ['pause', 'resume'] as const;
+/** The settings an agent may only LOWER (see the update tool's handler). */
+const SPEND_LEVERS = ['weeklyCreditCap', 'perWeek', 'lookaheadDays', 'planLeadHours', 'produceLeadHours'] as const;
 const SLOT_ACTIONS = ['skip', 'regenerate'] as const;
 
 /** The owner's settings, as the update route accepts them; bounds are the service's. */
@@ -38,9 +41,9 @@ const SETTINGS_SCHEMA = z
     maturityHours: z.number().int().min(24).max(168).optional().describe('How long after publishing a slot is measured.'),
     halfLifeDays: z.number().int().min(7).max(90).optional().describe('How fast old evidence fades from the type weights.'),
     editWindowHours: z.number().int().min(1).max(24).optional().describe('Until how many hours before publish a slot may still be edited.'),
-    lookaheadDays: z.number().int().min(7).max(28).optional().describe('How far ahead the calendar is planned.'),
-    planLeadHours: z.number().int().min(1).optional().describe('How many hours before publish the concept and storyboard are planned. Must exceed produceLeadHours.'),
-    produceLeadHours: z.number().int().min(1).optional().describe('How many hours before publish the clips are bought.'),
+    lookaheadDays: z.number().int().min(BOUNDS.lookaheadDays[0]).max(BOUNDS.lookaheadDays[1]).optional().describe('How far ahead the calendar is planned (7-28 days). An agent may LOWER it; raising it is done from the hub.'),
+    planLeadHours: z.number().int().min(BOUNDS.planLeadHours[0]).max(BOUNDS.planLeadHours[1]).optional().describe('How many hours before publish the concept and storyboard are planned (6-96). Must exceed produceLeadHours. An agent may LOWER it; raising it is done from the hub.'),
+    produceLeadHours: z.number().int().min(BOUNDS.produceLeadHours[0]).max(BOUNDS.produceLeadHours[1]).optional().describe('How many hours before publish the clips are bought (2-48). An agent may LOWER it; raising it is done from the hub.'),
     personaId: z.string().max(64).nullable().optional().describe('A VideoPersona to lock one face/product across every slot; null clears it.'),
   })
   .strict();
@@ -93,7 +96,7 @@ export function registerContentProgrammeTools(registry: McpToolRegistry, deps: C
   registry.register({
     name: 'jeeta.update_content_programme',
     description:
-      'Steer the content programme: change its settings (brief, goal, posts per week, weeklyCreditCap, exploration rate, lead times, persona) and/or pause or resume it. The programme SPENDS CREDITS AUTONOMOUSLY while ACTIVE — every planned slot is storyboarded, its clips bought and published without an approval — bounded only by weeklyCreditCap. Lowering the cap or the weekly count lowers what it will spend; RAISING either is refused here — that is done from the Studio panel by a person. Pausing is the way to stop spend without losing the calendar (open slots wait; resume re-arms them, and skips only those whose publish time passed while paused). Settings take effect on the next slot the programme plans; a slot already produced is not re-bought. There is no kill here on purpose — the kill switch is terminal and sweeps the calendar, and lives only in the Studio panel. Pass settings, action, or both; an empty call is refused.',
+      'Steer the content programme: change its settings (brief, goal, posts per week, weeklyCreditCap, exploration rate, lead times, persona) and/or pause or resume it. The programme SPENDS CREDITS AUTONOMOUSLY while ACTIVE — every planned slot is storyboarded, its clips bought and published without an approval — bounded only by weeklyCreditCap. Lowering the cap or the weekly count lowers what it will spend; RAISING either is refused here — that is done from the Studio panel by a person. The same holds for lookaheadDays and the two lead times (they decide how many weeks\' slots are pulled into one week\'s spend check): an agent may lower them, never raise them. Pausing is the way to stop spend without losing the calendar (open slots wait; resume re-arms them, and skips only those whose publish time passed while paused). Settings take effect on the next slot the programme plans; a slot already produced is not re-bought. There is no kill here on purpose — the kill switch is terminal and sweeps the calendar, and lives only in the Studio panel. Pass settings, action, or both; an empty call is refused.',
     domain: 'content',
     defer: true,
     scopes: ['campaigns.write'],
@@ -114,16 +117,21 @@ export function registerContentProgrammeTools(registry: McpToolRegistry, deps: C
         throw new BadRequestException('Nothing to do: pass settings to change, an action (pause/resume), or both.');
       }
       let programme = await deps.programmes.getOrThrow(ctx.workspaceId, programmeId);
-      // The two levers that SCALE autonomous spend only move down from here.
+      // The levers that SCALE autonomous spend only move down from here.
       // Create and kill are hub-only because they start and end the spend; a
       // cap an agent could raise would make that fence decorative — one
       // injected instruction in a lead note and the only money bound on the
-      // autopilot is gone. Lowering is always safe and stays open.
+      // autopilot is gone. The look-ahead and the two leads are spend levers
+      // too, in disguise: the cap is checked against the week the job runs
+      // in, so a longer lead pulls later weeks' slots into this week's check
+      // and books their spend where no check reads it. Lowering any of them
+      // is always safe and stays open.
       if (hasSettings) {
-        const raisesCap = settings.weeklyCreditCap !== undefined && settings.weeklyCreditCap > programme.weeklyCreditCap;
-        const raisesCadence = settings.perWeek !== undefined && settings.perWeek > programme.perWeek;
-        if (raisesCap || raisesCadence) {
-          throw new BadRequestException('Raising the weekly cap or the cadence is done from the hub, not by an agent');
+        const raised = SPEND_LEVERS.filter((k) => settings[k] !== undefined && (settings[k] as number) > programme[k]);
+        if (raised.length) {
+          throw new BadRequestException(
+            `Raising the weekly cap, the cadence, the look-ahead or the lead times is done from the hub, not by an agent (${raised.join(', ')})`,
+          );
         }
         programme = await deps.programmes.update(ctx.workspaceId, programmeId, settings);
       }

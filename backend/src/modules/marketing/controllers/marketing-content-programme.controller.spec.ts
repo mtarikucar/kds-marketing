@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 import { NotFoundException } from '@nestjs/common';
-import { MarketingContentProgrammeController } from './marketing-content-programme.controller';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { MarketingContentProgrammeController, UpdateProgrammeDto } from './marketing-content-programme.controller';
 import { REQUIRE_PERMISSION_KEY } from '../roles/require-permission.decorator';
 import { AUDIT_METADATA } from '../../audit/audit.decorator';
 import { REQUIRES_FEATURE_KEY } from '../guards/feature.guard';
@@ -87,6 +89,33 @@ describe('MarketingContentProgrammeController — guards and metadata', () => {
       // Create has no :id yet; every other write names the programme param.
       if (name !== 'create') expect(audit.resourceIdParam).toBe('id');
     }
+  });
+});
+
+/**
+ * The door holds the same bounds the service does, read from BOUNDS — above
+ * all the look-ahead and the two leads, which are spend levers in disguise
+ * (a lead long enough to pull next month's slots into tonight has each of
+ * them checked against this week's cap and booked where no check reads).
+ */
+describe('MarketingContentProgrammeController — UpdateProgrammeDto bounds', () => {
+  const errorsOf = (body: Record<string, unknown>) => validateSync(plainToInstance(UpdateProgrammeDto, body)).map((e) => e.property);
+
+  it('refuses a lead, look-ahead or edit window outside BOUNDS', () => {
+    expect(errorsOf({ planLeadHours: 97 })).toEqual(['planLeadHours']);
+    expect(errorsOf({ planLeadHours: 5 })).toEqual(['planLeadHours']);
+    expect(errorsOf({ produceLeadHours: 49 })).toEqual(['produceLeadHours']);
+    expect(errorsOf({ produceLeadHours: 1 })).toEqual(['produceLeadHours']);
+    expect(errorsOf({ lookaheadDays: 29 })).toEqual(['lookaheadDays']);
+    expect(errorsOf({ lookaheadDays: 6 })).toEqual(['lookaheadDays']);
+    expect(errorsOf({ editWindowHours: 25 })).toEqual(['editWindowHours']);
+    expect(errorsOf({ editWindowHours: 0 })).toEqual(['editWindowHours']);
+    expect(errorsOf({ maturityHours: 169, halfLifeDays: 91, explorationRate: 0.6 })).toEqual(['explorationRate', 'maturityHours', 'halfLifeDays']);
+  });
+
+  it('accepts the bounds themselves', () => {
+    expect(errorsOf({ planLeadHours: 96, produceLeadHours: 48, lookaheadDays: 28, editWindowHours: 24 })).toEqual([]);
+    expect(errorsOf({ planLeadHours: 6, produceLeadHours: 2, lookaheadDays: 7, editWindowHours: 1 })).toEqual([]);
   });
 });
 

@@ -28,6 +28,9 @@ export const REWEIGHT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 export const METRIC_GRACE_HOURS = 7 * 24;
 /** Baseline window: the account's posts of the last 30 days. */
 const BASELINE_DAYS = 30;
+/** Every programme status settles and measures (see `runAll`); the list is
+ *  spelled out rather than left open so a status added later is a decision. */
+const LEARNING_PROGRAMME_STATUSES = ['ACTIVE', 'PAUSED', 'KILLED'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ALL = 'ALL';
 
@@ -89,15 +92,26 @@ export class ProgrammeLearningService implements OnModuleInit {
     }).catch(() => undefined);
   }
 
-  /** One tick: every live programme, in turn; one programme's failure is its
-   *  own event, never the others' lost tick. */
+  /**
+   * One tick: every programme, in turn; one programme's failure is its own
+   * event, never the others' lost tick.
+   *
+   * Settle and measure run for ACTIVE, PAUSED and KILLED programmes alike: a
+   * piece that was published is out in front of people whatever happened to
+   * the programme afterwards, and its slot has to follow its post to
+   * PUBLISHED and then be measured — otherwise a pause, or a kill that caught
+   * a READY slot mid-publish, would pin that slot READY forever with no date
+   * and no reward on the row. Only the reweight is the running programme's:
+   * a paused or killed one plans nothing, so its weights have nobody to
+   * steer.
+   */
   async runAll(now = new Date()): Promise<void> {
-    const programmes = await this.prisma.contentProgramme.findMany({ where: { status: 'ACTIVE', killSwitch: false } });
+    const programmes = await this.prisma.contentProgramme.findMany({ where: { status: { in: LEARNING_PROGRAMME_STATUSES } } });
     for (const p of programmes) {
       try {
         await this.settle(p.workspaceId, p);
         await this.measureDue(p.workspaceId, p, now);
-        await this.reweight(p.workspaceId, p, now);
+        if (p.status === 'ACTIVE' && !p.killSwitch) await this.reweight(p.workspaceId, p, now);
       } catch (e: any) {
         const msg = String(e?.message ?? e).slice(0, 500);
         this.logger.warn(`learn tick failed for programme ${p.id}: ${msg}`);

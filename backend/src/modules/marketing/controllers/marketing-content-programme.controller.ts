@@ -23,7 +23,7 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { Audit } from '../../audit/audit.decorator';
 import { MarketingUserPayload } from '../types';
-import { ContentProgrammeService, PER_WEEK_MAX, PROGRAMME_GOALS, WEEKLY_CREDIT_CAP_MAX } from '../content-programme/content-programme.service';
+import { BOUNDS, ContentProgrammeService, PER_WEEK_MAX, PROGRAMME_GOALS, WEEKLY_CREDIT_CAP_MAX } from '../content-programme/content-programme.service';
 import { CONTENT_TYPE_NETWORKS, ContentTypesService } from '../content-programme/content-types.service';
 import { Dashboard, ProgrammeDashboardService, SlotView, TypeView } from '../content-programme/programme-dashboard.service';
 import { SlotEditorService } from '../content-programme/slot-editor.service';
@@ -87,11 +87,11 @@ class CreateProgrammeDto {
 
 /**
  * The owner's settings. Bounds are the service's (`BOUNDS` in
- * content-programme.service.ts) — repeated here only loosely so a wildly wrong
- * body is refused at the door; the exact range and the produce < plan rule are
- * the service's to state, in one place.
+ * content-programme.service.ts), read from there so the door and the service
+ * cannot drift; the produce < plan rule and the cadence/weekday agreement are
+ * the service's to state, in one place. Exported for the DTO spec only.
  */
-class UpdateProgrammeDto {
+export class UpdateProgrammeDto {
   @IsOptional()
   @IsString()
   @MaxLength(200)
@@ -128,38 +128,46 @@ class UpdateProgrammeDto {
 
   @IsOptional()
   @IsNumber()
-  @Min(0)
-  @Max(1)
+  @Min(BOUNDS.explorationRate[0])
+  @Max(BOUNDS.explorationRate[1])
   explorationRate?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(BOUNDS.maturityHours[0])
+  @Max(BOUNDS.maturityHours[1])
   maturityHours?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(BOUNDS.halfLifeDays[0])
+  @Max(BOUNDS.halfLifeDays[1])
   halfLifeDays?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(BOUNDS.editWindowHours[0])
+  @Max(BOUNDS.editWindowHours[1])
   editWindowHours?: number;
 
+  /** The look-ahead and the two leads are bounded above too: see BOUNDS for
+   *  why a lead long enough to pull next month into tonight is a spend lever. */
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(BOUNDS.lookaheadDays[0])
+  @Max(BOUNDS.lookaheadDays[1])
   lookaheadDays?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(BOUNDS.planLeadHours[0])
+  @Max(BOUNDS.planLeadHours[1])
   planLeadHours?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(BOUNDS.produceLeadHours[0])
+  @Max(BOUNDS.produceLeadHours[1])
   produceLeadHours?: number;
 
   /** `null` clears the persona; `IsOptional` lets null through on purpose. */

@@ -19,10 +19,12 @@ export const PROGRAMME_STATUSES = ['ACTIVE', 'PAUSED', 'KILLED'] as const;
 const LIVE_PROGRAMME_STATUSES = ['ACTIVE', 'PAUSED'];
 
 /** Slot statuses the kill switch sweeps: the money is not yet spent (PLANNED,
- *  IDEATED) or the piece is bought but not yet published (READY — its armed
- *  item is rejected so the gate drops it). PRODUCING is left alone: the produce
- *  job reads the kill flag itself and stops. */
-const OPEN_SLOT_STATUSES = ['PLANNED', 'IDEATED', 'READY'];
+ *  IDEATED), the piece is being bought (PRODUCING) or is bought but not yet
+ *  published (READY). A slot with an armed item has that item rejected so the
+ *  gate drops it; one whose item cannot be rejected (still GENERATING, or
+ *  already out) is left for the reconcile/settle sweeps, which walk KILLED
+ *  programmes too. */
+const OPEN_SLOT_STATUSES = ['PLANNED', 'IDEATED', 'PRODUCING', 'READY'];
 /** Slots a pause leaves waiting and a resume has to re-arm. */
 const WAITING_SLOT_STATUSES = ['PLANNED', 'IDEATED'];
 
@@ -39,7 +41,16 @@ export const WEEKLY_CREDIT_CAP_MAX = 20000;
 /** The lane releases at most one post a day; `perWeek` is spread over weekdays, never stacked. */
 const DAILY_PUBLISH_CAP = 1;
 
-/** The bounds every setting is held to, stated once and read by both create and update. */
+/**
+ * The bounds every setting is held to, stated once and read by create, update,
+ * the REST DTO and the MCP schema. The two lead times and the look-ahead are
+ * bounded ABOVE as well as below because they are spend levers in disguise:
+ * the weekly cap is checked against the week the job runs in, and a lead long
+ * enough to pull next month's slots into tonight would have every one of them
+ * checked against this week's sum and booked into weeks no check reads.
+ * Ninety-six hours of plan lead is four days — enough to storyboard over a long
+ * weekend, never enough to reach past the coming week.
+ */
 export const BOUNDS = {
   perWeek: [1, PER_WEEK_MAX],
   weeklyCreditCap: [50, WEEKLY_CREDIT_CAP_MAX],
@@ -48,6 +59,8 @@ export const BOUNDS = {
   halfLifeDays: [7, 90],
   editWindowHours: [1, 24],
   lookaheadDays: [7, 28],
+  planLeadHours: [6, 96],
+  produceLeadHours: [2, 48],
 } as const;
 
 /**
@@ -380,9 +393,11 @@ export class ContentProgrammeService {
     const planLead = patch.planLeadHours ?? current.planLeadHours;
     const produceLead = patch.produceLeadHours ?? current.produceLeadHours;
     if (patch.planLeadHours !== undefined || patch.produceLeadHours !== undefined) {
-      for (const [k, v] of [['planLeadHours', planLead], ['produceLeadHours', produceLead]] as const) {
-        if (!Number.isInteger(v) || v < 1) throw new BadRequestException(`${k} must be a positive integer (got ${String(v)})`);
-      }
+      // Both halves are held to BOUNDS, the stored one included: a row whose
+      // stored lead sits outside them cannot keep it by editing only the other
+      // half — the pair is settled together or not at all.
+      inRange('planLeadHours', planLead);
+      inRange('produceLeadHours', produceLead);
       if (produceLead >= planLead) {
         throw new BadRequestException(
           `produceLeadHours (${produceLead}) must be smaller than planLeadHours (${planLead}): the storyboard is planned before the clips are bought.`,
@@ -452,9 +467,30 @@ export class ContentProgrammeService {
    * SKIPPED with the reason on the row and its proposed concept discarded, so
    * the fill sweep plans the next times instead of leaving dead rows that
    * block them.
+   *
+   * ## The lane paused by hand
+   *
+   * `pause` is the one campaign door the lane keeps open, so a person or an
+   * agent can leave the programme ACTIVE with its campaign PAUSED: produce
+   * jobs then hold hourly and skip their slots as missed. The campaign's own
+   * resume door refuses a lane ("resume the programme instead"), so THIS is
+   * the door it points at — an ACTIVE programme whose lane is not running has
+   * its lane re-run and nothing else touched: no slot was consumed while the
+   * programme itself kept planning, so there is nothing to re-arm. An ACTIVE
+   * programme whose lane is already running has nothing to resume and says so.
    */
   async resume(workspaceId: string, id: string, now = new Date()): Promise<ContentProgramme> {
     const current = await this.getOrThrow(workspaceId, id);
+    if (current.status === 'ACTIVE') {
+      if ((await this.assertLaneRunning(workspaceId, current)) === 'ACTIVE') {
+        throw new BadRequestException('Cannot resume an ACTIVE programme whose lane is already running.');
+      }
+      await this.setCampaignRunning(workspaceId, current.socialCampaignId, true);
+      await this.logEvent(workspaceId, id, 'LANE_RESUMED', 'The programme\'s campaign had been paused by hand; it runs again. Slots held meanwhile publish at their times.', {
+        socialCampaignId: current.socialCampaignId,
+      });
+      return current;
+    }
     if (current.status !== 'PAUSED') {
       throw new BadRequestException(`Cannot resume a ${current.status} programme.`);
     }
@@ -498,14 +534,23 @@ export class ContentProgrammeService {
    *  - PLANNED / IDEATED: SKIPPED, their slot jobs cancelled and an IDEATED
    *    slot's proposed concept DISCARDED — otherwise it stays approvable in
    *    the concept hub and its storyboard job keeps drawing frames.
-   *  - READY: the armed item is REJECTED (SCHEDULED → SKIPPED, which the
-   *    publish gate drops) and the slot SKIPPED — otherwise the gate loops
-   *    hourly forever against the paused lane, and anyone resuming the
-   *    campaign by hand would publish a piece under a programme the owner
-   *    ended. A rejection that fails (published under our feet) leaves that
-   *    slot as it is; the reconcile sweep settles it.
-   *  - PRODUCING: left as is. The produce job reads the kill flag before it
-   *    buys the next clip and fails the item itself.
+   *  - READY, and PRODUCING with an item: the armed item is REJECTED
+   *    (SCHEDULED / NEEDS_APPROVAL → SKIPPED, which the publish gate drops)
+   *    and the slot SKIPPED — otherwise the gate loops hourly forever against
+   *    the paused lane, and anyone resuming the campaign by hand would publish
+   *    a piece under a programme the owner ended. PRODUCING is in this sweep
+   *    because the produce job arms the item SCHEDULED within minutes of the
+   *    clips, while the slot stays PRODUCING until the 6-hourly reconcile: in
+   *    that window the job is DONE, its kill check never runs again, and the
+   *    item would sit armed behind the paused lane with nobody to drop it.
+   *  - An item that cannot be rejected — still GENERATING (the produce job
+   *    reads the kill flag before its next clip and fails it), or already
+   *    out — leaves its slot as it is, counted in the event as left. The
+   *    planner's reconcile and the learner's settle both walk KILLED
+   *    programmes, so such a slot follows its item to FAILED or PUBLISHED
+   *    rather than staying open forever.
+   *  - PRODUCING with no item yet: left; the produce job is mid-flight before
+   *    the item exists and reads the flag itself.
    *
    * Slots already published or measured keep their history.
    */
@@ -525,14 +570,23 @@ export class ContentProgrammeService {
     const { cancelSlotJobs } = await this.slotJobs();
     const now = new Date();
     const swept: string[] = [];
+    const left: string[] = [];
     let rejectedItems = 0;
     for (const slot of open) {
-      if (slot.status === 'READY' && slot.campaignItemId) {
+      if (slot.status === 'PRODUCING' && !slot.campaignItemId) {
+        left.push(slot.id);
+        continue;
+      }
+      if (slot.campaignItemId) {
+        // `rejectItem` carries the one list of rejectable item states; an
+        // item outside it (GENERATING, PUBLISHED, …) is the refusal itself,
+        // not a second copy of that list here.
         try {
           await this.socialCampaigns.rejectItem(workspaceId, slot.campaignItemId);
           rejectedItems += 1;
         } catch (e) {
           this.logger.warn(`programme ${id}: slot ${slot.id} kept — its item could not be rejected: ${(e as Error)?.message ?? e}`);
+          left.push(slot.id);
           continue;
         }
       }
@@ -550,8 +604,8 @@ export class ContentProgrammeService {
       workspaceId,
       id,
       'KILLED',
-      `Kill switch: programme stopped, campaign paused, ${count} open slot(s) skipped, ${rejectedItems} armed item(s) rejected.`,
-      { skippedSlots: count, rejectedItems },
+      `Kill switch: programme stopped, campaign paused, ${count} open slot(s) skipped, ${rejectedItems} armed item(s) rejected, ${left.length} slot(s) left to settle.`,
+      { skippedSlots: count, rejectedItems, leftSlots: left.length, leftSlotIds: left },
     );
     return updated;
   }

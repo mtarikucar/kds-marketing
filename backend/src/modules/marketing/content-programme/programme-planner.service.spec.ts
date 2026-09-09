@@ -4,7 +4,9 @@ import {
   CONTENT_PROGRAMME_PLAN_KIND,
   CONTENT_SLOT_PLAN_KIND,
   CONTENT_SLOT_PRODUCE_KIND,
+  ORPHAN_PRODUCING_MS,
   PLAN_INTERVAL_MS,
+  PRODUCTION_DID_NOT_START,
   ProgrammePlannerService,
   TERMINAL_SLOT_STATUSES,
   TREND_MIN_SUGGESTION,
@@ -76,6 +78,7 @@ function harness(over: { types?: unknown[]; arms?: unknown[]; upcoming?: unknown
       findFirst: jest.fn().mockResolvedValue({ brandName: 'Figurunica', tagline: 'Masaüstü figürler', description: 'Anime ve oyun figürleri' }),
     },
     socialCampaignItem: { findMany: jest.fn().mockResolvedValue([]) },
+    contentConcept: { findFirst: jest.fn().mockResolvedValue(null) },
     contentProgrammeEvent: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1'), cancel: jest.fn().mockResolvedValue(true) };
@@ -89,6 +92,10 @@ function harness(over: { types?: unknown[]; arms?: unknown[]; upcoming?: unknown
   return { svc, prisma, scheduledJobs, runner, programmes, types, learning, trends };
 }
 const created = (prisma: any) => prisma.contentSlot.create.mock.calls.map((c: any[]) => c[0].data);
+/** The two reads of a reconcile: the orphans (PRODUCING, no item) and the linked slots. */
+const reconcileRows = (prisma: any, rows: { orphans?: unknown[]; linked?: unknown[] }) =>
+  prisma.contentSlot.findMany.mockImplementation(async ({ where }: any) => (where?.campaignItemId === null ? rows.orphans ?? [] : rows.linked ?? []));
+const slotWrites = (prisma: any) => prisma.contentSlot.updateMany.mock.calls.map((c: any[]) => c[0]);
 const scheduled = (jobs: any) => jobs.schedule.mock.calls.map((c: any[]) => c[0]);
 const events = (programmes: any) => programmes.logEvent.mock.calls.map((c: any[]) => ({ kind: c[2], message: c[3], data: c[4] }));
 
@@ -294,13 +301,13 @@ describe('ProgrammePlannerService.fill', () => {
 describe('ProgrammePlannerService.reconcile', () => {
   it('moves PRODUCING slots with their item: SCHEDULED/PUBLISHED → READY, FAILED → FAILED with the reason, SKIPPED → SKIPPED', async () => {
     const { svc, prisma, programmes } = harness();
-    prisma.contentSlot.findMany.mockResolvedValue([
+    reconcileRows(prisma, { linked: [
       slotRow({ id: 's-ok', status: 'PRODUCING', campaignItemId: 'i-ok' }),
       slotRow({ id: 's-pub', status: 'PRODUCING', campaignItemId: 'i-pub' }),
       slotRow({ id: 's-bad', status: 'PRODUCING', campaignItemId: 'i-bad' }),
       slotRow({ id: 's-skip', status: 'PRODUCING', campaignItemId: 'i-skip' }),
       slotRow({ id: 's-wait', status: 'PRODUCING', campaignItemId: 'i-wait' }),
-    ]);
+    ] });
     prisma.socialCampaignItem.findMany.mockResolvedValue([
       { id: 'i-ok', status: 'SCHEDULED', error: null, socialPostId: 'post-1' },
       { id: 'i-pub', status: 'PUBLISHED', error: null, socialPostId: 'post-2' },
@@ -308,8 +315,13 @@ describe('ProgrammePlannerService.reconcile', () => {
       { id: 'i-skip', status: 'SKIPPED', error: null, socialPostId: null },
       { id: 'i-wait', status: 'GENERATING', error: null, socialPostId: null },
     ]);
-    await svc.reconcile(WS, programme());
+    await svc.reconcile(WS, programme(), NOW);
 
+    // Orphans first (claimed longer ago than the reaper's revive delay, never linked), then the linked slots.
+    expect(prisma.contentSlot.findMany.mock.calls[0][0]).toEqual({
+      where: { workspaceId: WS, programmeId: PROG, status: 'PRODUCING', campaignItemId: null, updatedAt: { lt: new Date(NOW.getTime() - ORPHAN_PRODUCING_MS) } },
+    });
+    expect(ORPHAN_PRODUCING_MS).toBe(15 * 60 * 1000);
     expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { workspaceId: WS, programmeId: PROG, status: { in: ['PRODUCING', 'READY'] }, campaignItemId: { not: null } },
     }));
@@ -328,13 +340,13 @@ describe('ProgrammePlannerService.reconcile', () => {
 
   it('follows READY slots too: an item the gate ended is carried onto the slot (SKIPPED with its reason, FAILED with its error); a published one is left to settle', async () => {
     const { svc, prisma, programmes } = harness();
-    prisma.contentSlot.findMany.mockResolvedValue([
+    reconcileRows(prisma, { linked: [
       slotRow({ id: 'r-safety', status: 'READY', campaignItemId: 'i-safety' }),
       slotRow({ id: 'r-rejected', status: 'READY', campaignItemId: 'i-rejected' }),
       slotRow({ id: 'r-media', status: 'READY', campaignItemId: 'i-media' }),
       slotRow({ id: 'r-live', status: 'READY', campaignItemId: 'i-live' }),
       slotRow({ id: 'r-armed', status: 'READY', campaignItemId: 'i-armed' }),
-    ]);
+    ] });
     prisma.socialCampaignItem.findMany.mockResolvedValue([
       { id: 'i-safety', status: 'SKIPPED', error: 'brand safety: blocked', socialPostId: 'p-1' },
       { id: 'i-rejected', status: 'SKIPPED', error: null, socialPostId: 'p-2' },
@@ -351,6 +363,47 @@ describe('ProgrammePlannerService.reconcile', () => {
     ]);
     expect(events(programmes).map((e) => e.kind)).toEqual(['SLOT_SKIPPED', 'SLOT_SKIPPED', 'SLOT_FAILED']);
     expect(events(programmes)[0].data).toMatchObject({ slotId: 'r-safety', from: 'READY', error: 'brand safety: blocked' });
+  });
+
+  it('orphans (PRODUCING, no item, claimed a while ago): a promoted concept is linked with its clips\' cost; an unpromoted or missing concept fails the slot by name', async () => {
+    const { svc, prisma, programmes } = harness();
+    reconcileRows(prisma, { orphans: [
+      slotRow({ id: 'o-promoted', status: 'PRODUCING', conceptId: 'c-promoted', quotedCredits: 45 }),
+      slotRow({ id: 'o-approved', status: 'PRODUCING', conceptId: 'c-approved', quotedCredits: 45 }),
+      slotRow({ id: 'o-proposed', status: 'PRODUCING', conceptId: 'c-proposed', quotedCredits: 45 }),
+      slotRow({ id: 'o-gone', status: 'PRODUCING', conceptId: 'c-gone', quotedCredits: 45 }),
+      slotRow({ id: 'o-none', status: 'PRODUCING', conceptId: null, quotedCredits: null }),
+    ] });
+    prisma.contentConcept.findFirst.mockImplementation(async ({ where }: any) => ({
+      'c-promoted': { status: 'APPROVED', promotedItemId: 'i-late', shotPlan: { shots: [], production: { credits: 45, keyframes: { credits: 6 } } } },
+      'c-approved': { status: 'APPROVED', promotedItemId: null, shotPlan: {} },
+      'c-proposed': { status: 'PROPOSED', promotedItemId: null, shotPlan: {} },
+    } as Record<string, unknown>)[where.id] ?? null);
+    await svc.reconcile(WS, programme(), NOW);
+
+    expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith({ where: { id: 'c-promoted', workspaceId: WS }, select: { status: true, promotedItemId: true, shotPlan: true } });
+    expect(prisma.contentConcept.findFirst).toHaveBeenCalledTimes(4); // not for the slot with no concept
+    const orphan = (id: string) => ({ id, workspaceId: WS, status: 'PRODUCING', campaignItemId: null });
+    expect(slotWrites(prisma)).toEqual([
+      { where: orphan('o-promoted'), data: { campaignItemId: 'i-late', error: null, spentCredits: { increment: 45 - 6 } } },
+      { where: orphan('o-approved'), data: { status: 'FAILED', error: PRODUCTION_DID_NOT_START } },
+      { where: orphan('o-proposed'), data: { status: 'FAILED', error: PRODUCTION_DID_NOT_START } },
+      { where: orphan('o-gone'), data: { status: 'FAILED', error: 'concept missing' } },
+      { where: orphan('o-none'), data: { status: 'FAILED', error: 'concept missing' } },
+    ]);
+    const ev = events(programmes);
+    expect(ev.map((e) => e.kind)).toEqual(['SLOT_PRODUCING', 'SLOT_FAILED', 'SLOT_FAILED', 'SLOT_FAILED', 'SLOT_FAILED']);
+    expect(ev[0].data).toMatchObject({ slotId: 'o-promoted', campaignItemId: 'i-late', spent: 39, recovered: true });
+    expect(ev[1].data).toMatchObject({ slotId: 'o-approved', conceptStatus: 'APPROVED', error: PRODUCTION_DID_NOT_START, recovered: true });
+    expect(ev[1].message).toMatch(/retry it/);
+  });
+
+  it('a promoted orphan with no production block on its plan books the slot\'s quote as the clips', async () => {
+    const { svc, prisma } = harness();
+    reconcileRows(prisma, { orphans: [slotRow({ id: 'o', status: 'PRODUCING', conceptId: 'c', quotedCredits: 50 })] });
+    prisma.contentConcept.findFirst.mockResolvedValue({ status: 'APPROVED', promotedItemId: 'i', shotPlan: { shots: [] } });
+    await svc.reconcile(WS, programme(), NOW);
+    expect(slotWrites(prisma)[0].data).toEqual({ campaignItemId: 'i', error: null, spentCredits: { increment: 50 } });
   });
 });
 
@@ -373,6 +426,11 @@ describe('ProgrammePlannerService.checkAnomalies', () => {
     const ev = events(programmes).find((e) => e.kind === 'ANOMALY_PAUSE');
     expect(ev.message).toMatch(/3 slots failed in a row: boom f1; boom f2; boom f3/);
     expect(ev.data).toMatchObject({ reason: 'fail-streak', slotIds: ['f1', 'f2', 'f3'] });
+    // The dedup reads the newest FAIL-STREAK pause, not the newest pause of any reason.
+    expect(prisma.contentProgrammeEvent.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { workspaceId: WS, programmeId: PROG, kind: 'ANOMALY_PAUSE', data: { path: ['reason'], equals: 'fail-streak' } },
+      orderBy: { createdAt: 'desc' },
+    }));
 
     // The same three after a resume: already reported, not paused again.
     programmes.pause.mockClear();
@@ -380,6 +438,22 @@ describe('ProgrammePlannerService.checkAnomalies', () => {
     prisma.contentProgrammeEvent.findFirst.mockResolvedValue({ data: { slotIds: ['f1', 'f2', 'f3'] } });
     await svc.checkAnomalies(WS, programme(), NOW);
     expect(programmes.pause).not.toHaveBeenCalled();
+  });
+
+  it('a spend pause written after the streak pause does not make the same three failures pause the programme again', async () => {
+    const { svc, prisma, programmes } = harness();
+    const streak = ['f1', 'f2', 'f3'].map((id) => failed(id));
+    // The newest ANOMALY_PAUSE is the spend one (no slotIds); the newest fail-streak one names the three.
+    prisma.contentProgrammeEvent.findFirst.mockImplementation(async ({ where }: any) =>
+      where.data?.path?.[0] === 'reason' && where.data.equals === 'fail-streak'
+        ? { data: { reason: 'fail-streak', slotIds: ['f1', 'f2', 'f3'] } }
+        : where.data?.path?.[0] === 'weekStart'
+          ? { id: 'ev-spend' }
+          : { data: { reason: 'spend', weekStart: '2026-09-13T21:00:00.000Z' } });
+    prisma.contentSlot.findMany.mockResolvedValueOnce(streak).mockResolvedValueOnce([{ id: 'a', spentCredits: 750 }]);
+    await svc.checkAnomalies(WS, programme({ weeklyCreditCap: 600 }), NOW);
+    expect(programmes.pause).not.toHaveBeenCalled();
+    expect(events(programmes).filter((e) => e.kind === 'ANOMALY_PAUSE')).toHaveLength(0);
   });
 
   it('an owner skip between the failures is not a symptom: it is dropped, the streak still counts', async () => {
@@ -462,12 +536,31 @@ describe('ProgrammePlannerService job', () => {
     const before = Date.now();
     const res = await handler({ id: 'j', workspaceId: 'system', kind: CONTENT_PROGRAMME_PLAN_KIND, payload: {}, attempts: 0 });
 
-    expect(prisma.contentProgramme.findMany).toHaveBeenCalledWith({ where: { status: 'ACTIVE', killSwitch: false } });
+    // Every programme that is not archived is visited: a paused or killed one still has slots to reconcile.
+    expect(prisma.contentProgramme.findMany).toHaveBeenCalledWith({ where: { status: { in: ['ACTIVE', 'PAUSED', 'KILLED'] } } });
     const errs = events(programmes).filter((e) => e.kind === 'PLAN_ERROR');
     expect(errs).toHaveLength(1);
     expect(errs[0].message).toMatch(/campaign gone is gone/);
     expect(programmes.logEvent.mock.calls[0][1]).toBe('p-bad');
     expect(events(programmes).some((e) => e.kind === 'SLOT_PLANNED')).toBe(true);
     expect(res.reschedule.runAt.getTime()).toBeGreaterThanOrEqual(before + PLAN_INTERVAL_MS - 1000);
+  });
+
+  it('a PAUSED or KILLED programme is reconciled (its produced slots still follow their items) but neither filled nor breaker-checked', async () => {
+    const { svc, prisma, programmes } = harness();
+    prisma.contentProgramme.findMany.mockResolvedValue([
+      programme({ id: 'p-paused', status: 'PAUSED' }),
+      programme({ id: 'p-killed', status: 'KILLED', killSwitch: true }),
+      programme({ id: 'p-flagged', status: 'ACTIVE', killSwitch: true }),
+    ]);
+    reconcileRows(prisma, { linked: [slotRow({ id: 's', status: 'PRODUCING', campaignItemId: 'i' })] });
+    prisma.socialCampaignItem.findMany.mockResolvedValue([{ id: 'i', status: 'SCHEDULED', error: null, socialPostId: null }]);
+    await svc.runAll(NOW);
+    // Three reconciles, each moving the slot READY; no slot created, no pause.
+    expect(slotWrites(prisma).filter((w) => w.data.status === 'READY')).toHaveLength(3);
+    expect(prisma.contentSlot.create).not.toHaveBeenCalled();
+    expect(prisma.socialCampaign.findFirst).not.toHaveBeenCalled();
+    expect(programmes.pause).not.toHaveBeenCalled();
+    expect(events(programmes).map((e) => e.kind)).toEqual(['SLOT_READY', 'SLOT_READY', 'SLOT_READY']);
   });
 });

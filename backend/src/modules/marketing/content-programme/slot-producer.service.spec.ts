@@ -86,7 +86,13 @@ const spent = (prisma: any, credits: number) =>
     where?.scheduledFor?.lt ? [{ id: 'x', spentCredits: credits }] : []);
 const ESTIMATE = estimateSlotCredits(typeRow as any, null);
 const PLAN_COST = BATCH_COST + FRAMES;
+/** The clips of the fixture concept: its 45-credit quote minus the 6 credits of frames the plan job booked. */
+const CLIPS = 45 - FRAMES;
 const hold = (runAt: Date, slotId = 'slot-1') => ({ reschedule: { runAt, payload: { workspaceId: WS, slotId, programmeId: PROG } } });
+/** What a discard looks like: this slot's own PROPOSED or APPROVED-but-unpromoted rows, never a promoted one. */
+const discardWhere = (ids: string[], slotId = 'slot-1') => ({ id: { in: ids }, workspaceId: WS, slotId, status: { in: ['PROPOSED', 'APPROVED'] }, promotedItemId: null });
+/** The Istanbul week (Sun 21:00Z → Sun 21:00Z) a `findMany` read spend over. */
+const weekReads = (prisma: any) => prisma.contentSlot.findMany.mock.calls.map((c: any[]) => c[0].where).filter((w: any) => w?.scheduledFor?.lt);
 
 describe('hook distinctness', () => {
   it('Jaccard on folded tokens; the first concept far enough from every recent hook wins, else the first', () => {
@@ -173,10 +179,12 @@ describe('SlotProducerService.planSlot', () => {
     expect(prisma.contentConcept.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['old-1', 'old-2'] }, workspaceId: WS } }));
     // c-1's hook is a rewrite of a recent one → c-2 is kept.
     expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['c-1', 'c-3'] }, workspaceId: WS, status: 'PROPOSED' },
+      where: discardWhere(['c-1', 'c-3']),
       data: { status: 'DISCARDED', reviewedAt: NOW, reviewedById: `programme:${PROG}`, reviewNote: 'programme: not selected' },
     });
     expect(storyboard.request).toHaveBeenCalledWith(WS, 'c-2', `programme:${PROG}`);
+    // The cap is read over the SLOT's week (Fri 18 → the week of Mon 14), this slot's own row included.
+    expect(weekReads(prisma)).toEqual([{ workspaceId: WS, programmeId: PROG, scheduledFor: { gte: at('2026-09-13T21:00:00Z'), lt: at('2026-09-20T21:00:00Z') } }]);
     // The batch and the chosen concept's frames are booked BEFORE the status
     // write, unconditionally: whatever the slot becomes, the week paid for them.
     expect(slotWrites(prisma)).toEqual([
@@ -197,7 +205,61 @@ describe('SlotProducerService.planSlot', () => {
     prisma.contentSlot.updateMany.mockImplementation(async ({ where }: any) => ({ count: where.status === 'PLANNED' ? 0 : 1 }));
     await svc.planSlot(WS, 'slot-1', NOW);
     expect(slotWrites(prisma)[0]).toEqual({ where: { id: 'slot-1', workspaceId: WS }, data: { spentCredits: { increment: PLAN_COST } } });
-    expect(prisma.contentConcept.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: { id: { in: ['c-1'] }, workspaceId: WS, status: 'PROPOSED' } }));
+    expect(prisma.contentConcept.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: discardWhere(['c-1']) }));
+  });
+
+  it('buckets the cap by the SLOT\'s week: a Monday slot planned on the Saturday before is held against the new week, not the closing one', async () => {
+    // Saturday 19 Sep 12:00Z; the slot is Monday 21 Sep 18:00 Istanbul (15:00Z), plan lead 36h → this job.
+    const saturday = at('2026-09-19T12:00:00Z');
+    const monday = at('2026-09-21T15:00:00Z');
+    const newWeek = { gte: at('2026-09-20T21:00:00Z'), lt: at('2026-09-27T21:00:00Z') };
+    const h = harness({ slot: slot({ scheduledFor: monday }) });
+    // The closing week is at the cap; the new week is empty.
+    h.prisma.contentSlot.findMany.mockImplementation(async ({ where }: any) =>
+      where?.scheduledFor?.lt ? (where.scheduledFor.gte.getTime() === newWeek.gte.getTime() ? [] : [{ id: 'old', spentCredits: 600 }]) : []);
+    const res = await h.svc.planSlot(WS, 'slot-1', saturday);
+    expect(res).toBeUndefined();
+    expect(weekReads(h.prisma)).toEqual([{ workspaceId: WS, programmeId: PROG, scheduledFor: newWeek }]);
+    expect(h.concepts.planConcepts).toHaveBeenCalled();
+    expect(slotWrites(h.prisma)[1].data.status).toBe('IDEATED');
+    // Produce is re-armed at the slot's own lead, clamped to the job's clock — not the slot's.
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ kind: CONTENT_SLOT_PRODUCE_KIND, runAt: at('2026-09-21T03:00:00Z') }));
+
+    // Same slot, same Saturday, with the NEW week already at the cap: held.
+    const full = harness({ slot: slot({ scheduledFor: monday }) });
+    spent(full.prisma, 600 - ESTIMATE + 1);
+    expect(await full.svc.planSlot(WS, 'slot-1', saturday)).toEqual({ reschedule: { runAt: new Date(saturday.getTime() + CAP_RETRY_MS) } });
+    expect(full.concepts.planConcepts).not.toHaveBeenCalled();
+  });
+
+  it('lane not running (campaign PAUSED, programme ACTIVE): waits an hour, LANE_PAUSED once per slot, no batch bought; past the slot\'s time it is SKIPPED as missed', async () => {
+    const h = harness({ campaign: { status: 'PAUSED', defaultVideoModel: null } });
+    const res = await h.svc.planSlot(WS, 'slot-1', NOW);
+    expect(res).toEqual(hold(new Date(NOW.getTime() + PAUSE_RETRY_MS)));
+    expect(h.concepts.planConcepts).not.toHaveBeenCalled();
+    expect(h.prisma.contentSlot.updateMany).not.toHaveBeenCalled();
+    expect(h.prisma.contentSlot.findMany).not.toHaveBeenCalled(); // no cap read either: nothing is bought
+    expect(events(h.programmes)).toEqual([expect.objectContaining({ kind: 'LANE_PAUSED', data: expect.objectContaining({ slotId: 'slot-1', socialCampaignId: CAMP, campaignStatus: 'PAUSED' }) })]);
+    expect(h.prisma.contentProgrammeEvent.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { workspaceId: WS, programmeId: PROG, kind: 'LANE_PAUSED', data: { path: ['slotId'], equals: 'slot-1' } },
+    }));
+    h.programmes.logEvent.mockClear();
+    h.prisma.contentProgrammeEvent.findFirst.mockResolvedValue({ id: 'ev-1' });
+    await h.svc.planSlot(WS, 'slot-1', NOW);
+    expect(h.programmes.logEvent).not.toHaveBeenCalled();
+
+    // A cancelled (or gone) lane is not running either.
+    const cancelled = harness({ campaign: { status: 'CANCELLED', defaultVideoModel: null } });
+    expect(await cancelled.svc.planSlot(WS, 'slot-1', NOW)).toEqual(hold(new Date(NOW.getTime() + PAUSE_RETRY_MS)));
+    expect(cancelled.concepts.planConcepts).not.toHaveBeenCalled();
+    const gone = harness({ campaign: null });
+    expect(await gone.svc.planSlot(WS, 'slot-1', NOW)).toEqual(hold(new Date(NOW.getTime() + PAUSE_RETRY_MS)));
+    expect(events(gone.programmes)[0].message).toMatch(/campaign is gone/);
+
+    const late = harness({ slot: slot({ scheduledFor: at('2026-09-16T11:00:00Z') }), campaign: { status: 'PAUSED', defaultVideoModel: null } });
+    expect(await late.svc.planSlot(WS, 'slot-1', NOW)).toBeUndefined();
+    expect(slotWrites(late.prisma)).toEqual([{ where: { id: 'slot-1', workspaceId: WS, status: 'PLANNED' }, data: { status: 'SKIPPED', error: MISSED_WHILE_PAUSED } }]);
+    expect(events(late.programmes)[0]).toMatchObject({ kind: 'SLOT_SKIPPED', data: { why: 'lane paused', reason: MISSED_WHILE_PAUSED } });
   });
 
   it('holds the slot for 6h when the catalogue estimate would pass the weekly cap and there is still time — this slot\'s own past spend included', async () => {
@@ -293,19 +355,59 @@ describe('SlotProducerService.planSlot', () => {
 describe('SlotProducerService.produceSlot', () => {
   const ideated = (over: Record<string, unknown> = {}) => slot({ status: 'IDEATED', conceptId: 'c-2', quotedCredits: 45, spentCredits: PLAN_COST, ...over });
 
-  it('claims the slot FIRST (IDEATED → PRODUCING), then lets the programme decide, promotes AT THE SLOT TIME and books the clips (quote minus frames) with the item', async () => {
+  it('claims the slot FIRST (IDEATED → PRODUCING, pinned to the time it read), then lets the programme decide, promotes AT THE SLOT TIME and links the item with the clips (quote minus frames) as the very next write', async () => {
     const { svc, prisma, concepts, promotion, programmes } = harness({ slot: ideated() });
     await svc.produceSlot(WS, 'slot-1', NOW);
     expect(concepts.decideByProgramme).toHaveBeenCalledWith(WS, 'c-2', PROG, CAMP);
     expect(promotion.promote).toHaveBeenCalledWith(WS, 'c-2', { socialCampaignId: CAMP, scheduledFor: at('2026-09-18T18:00:00Z') });
     expect(slotWrites(prisma)).toEqual([
-      { where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED' }, data: { status: 'PRODUCING' } },
-      { where: { id: 'slot-1', workspaceId: WS, status: 'PRODUCING' }, data: { campaignItemId: 'item-1', error: null, spentCredits: { increment: 45 - FRAMES } } },
+      { where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED', scheduledFor: at('2026-09-18T18:00:00Z') }, data: { status: 'PRODUCING' } },
+      { where: { id: 'slot-1', workspaceId: WS, status: 'PRODUCING' }, data: { campaignItemId: 'item-1', error: null, spentCredits: { increment: CLIPS } } },
     ]);
-    // The claim precedes the decision and the promotion — the race door.
+    // The claim precedes the decision and the promotion — the race door — and
+    // the link is written before anything else happens after the promotion.
     expect(prisma.contentSlot.updateMany.mock.invocationCallOrder[0]).toBeLessThan(concepts.decideByProgramme.mock.invocationCallOrder[0]);
+    expect(prisma.contentSlot.updateMany.mock.invocationCallOrder[1]).toBeGreaterThan(promotion.promote.mock.invocationCallOrder[0]);
+    expect(prisma.contentSlot.updateMany.mock.invocationCallOrder[1]).toBeLessThan(programmes.logEvent.mock.invocationCallOrder[0]);
     expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith({ where: { id: 'c-2', workspaceId: WS }, select: { shotPlan: true } });
-    expect(events(programmes)[0]).toMatchObject({ kind: 'SLOT_PRODUCING', data: { slotId: 'slot-1', conceptId: 'c-2', campaignItemId: 'item-1', spent: 45 - FRAMES } });
+    expect(events(programmes)[0]).toMatchObject({ kind: 'SLOT_PRODUCING', data: { slotId: 'slot-1', conceptId: 'c-2', campaignItemId: 'item-1', spent: CLIPS } });
+  });
+
+  it('a link write that throws once is tried again and the slot is linked; twice, the slot is FAILED naming the item, with the item on the row so retry goes through regenerate', async () => {
+    const once = harness({ slot: ideated() });
+    once.prisma.contentSlot.updateMany
+      .mockResolvedValueOnce({ count: 1 }) // the claim
+      .mockRejectedValueOnce(new Error('connection reset')) // the link
+      .mockResolvedValue({ count: 1 }); // the link again
+    await once.svc.produceSlot(WS, 'slot-1', NOW);
+    expect(once.promotion.promote).toHaveBeenCalledTimes(1);
+    expect(slotWrites(once.prisma).slice(1)).toEqual([
+      { where: { id: 'slot-1', workspaceId: WS, status: 'PRODUCING' }, data: { campaignItemId: 'item-1', error: null, spentCredits: { increment: CLIPS } } },
+      { where: { id: 'slot-1', workspaceId: WS, status: 'PRODUCING' }, data: { campaignItemId: 'item-1', error: null, spentCredits: { increment: CLIPS } } },
+    ]);
+    expect(events(once.programmes).map((e) => e.kind)).toEqual(['SLOT_PRODUCING']);
+
+    const twice = harness({ slot: ideated() });
+    twice.prisma.contentSlot.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValue({ count: 1 });
+    await twice.svc.produceSlot(WS, 'slot-1', NOW);
+    expect(twice.promotion.promote).toHaveBeenCalledTimes(1);
+    const failed = slotWrites(twice.prisma)[3];
+    expect(failed).toEqual({
+      where: { id: 'slot-1', workspaceId: WS, status: 'PRODUCING' },
+      data: { status: 'FAILED', error: 'item item-1 produced but not linked: connection reset', campaignItemId: 'item-1' },
+    });
+    expect(events(twice.programmes)).toEqual([expect.objectContaining({ kind: 'SLOT_FAILED', data: expect.objectContaining({ from: 'PRODUCING', campaignItemId: 'item-1', error: expect.stringContaining('item item-1 produced but not linked') }) })]);
+
+    // A link that finds the slot no longer PRODUCING is a failure too: the item exists.
+    const moved = harness({ slot: ideated() });
+    moved.prisma.contentSlot.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValue({ count: 0 });
+    await moved.svc.produceSlot(WS, 'slot-1', NOW);
+    expect(events(moved.programmes)[0]).toMatchObject({ kind: 'SLOT_FAILED', data: { campaignItemId: 'item-1' } });
+    expect(events(moved.programmes)[0].data.error).toMatch(/item item-1 produced but not linked: the slot left PRODUCING/);
   });
 
   it('a claim that finds nothing (edited or skipped under the job) buys nothing and logs nothing', async () => {
@@ -318,19 +420,38 @@ describe('SlotProducerService.produceSlot', () => {
     expect(slotWrites(prisma)).toHaveLength(1);
   });
 
-  it('skips the slot and gives its concept back when the quote would pass the weekly cap', async () => {
+  it('skips the slot and gives its concept back when the CLIPS would pass the weekly cap — the week\'s spend INCLUDING this slot\'s own batch and frames', async () => {
     const { svc, prisma, concepts, promotion, programmes } = harness({ slot: ideated() });
-    spent(prisma, 580); // + 45 > 600
+    spent(prisma, 600 - CLIPS + 1); // Σ (this slot's PLAN_COST inside) + clips = 601 > 600
     await svc.produceSlot(WS, 'slot-1', NOW);
     expect(concepts.decideByProgramme).not.toHaveBeenCalled();
     expect(promotion.promote).not.toHaveBeenCalled();
     expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: { in: ['c-2'] }, workspaceId: WS, status: 'PROPOSED' }, data: expect.objectContaining({ status: 'DISCARDED' }),
+      where: discardWhere(['c-2']), data: expect.objectContaining({ status: 'DISCARDED' }),
     }));
     expect(slotWrites(prisma)).toEqual([{ where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED' }, data: { status: 'SKIPPED', error: 'weekly credit cap' } }]);
-    expect(events(programmes)[0]).toMatchObject({ kind: 'CAP_SKIPPED', data: { spent: 580, wanted: 45 } });
-    // The cap check leaves this slot's own spend out: its quote already carries its frames.
-    expect(prisma.contentSlot.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: { not: 'slot-1' } }) }));
+    expect(events(programmes)[0]).toMatchObject({ kind: 'CAP_SKIPPED', data: { spent: 600 - CLIPS + 1, wanted: CLIPS } });
+    // The read is the slot's week with NO row left out: the sum the week will close on.
+    expect(weekReads(prisma)).toEqual([{ workspaceId: WS, programmeId: PROG, scheduledFor: { gte: at('2026-09-13T21:00:00Z'), lt: at('2026-09-20T21:00:00Z') } }]);
+
+    // Exactly at the cap it produces: Σ + clips = 600.
+    const edge = harness({ slot: ideated() });
+    spent(edge.prisma, 600 - CLIPS);
+    await edge.svc.produceSlot(WS, 'slot-1', NOW);
+    expect(edge.promotion.promote).toHaveBeenCalled();
+  });
+
+  it('buckets the cap by the SLOT\'s week: a Monday slot produced on Sunday night reads the new week, into which its clips are booked', async () => {
+    const sundayNight = at('2026-09-20T15:00:00Z'); // 18:00 Istanbul, produce lead 12h → 06:00Z Monday… clamped to now by the planner
+    const monday = at('2026-09-21T15:00:00Z');
+    const newWeek = { gte: at('2026-09-20T21:00:00Z'), lt: at('2026-09-27T21:00:00Z') };
+    const h = harness({ slot: ideated({ scheduledFor: monday }) });
+    h.prisma.contentSlot.findMany.mockImplementation(async ({ where }: any) =>
+      where?.scheduledFor?.lt ? (where.scheduledFor.gte.getTime() === newWeek.gte.getTime() ? [{ id: 'slot-1', spentCredits: PLAN_COST }] : [{ id: 'old', spentCredits: 600 }]) : []);
+    await h.svc.produceSlot(WS, 'slot-1', sundayNight);
+    expect(weekReads(h.prisma)).toEqual([{ workspaceId: WS, programmeId: PROG, scheduledFor: newWeek }]);
+    expect(h.promotion.promote).toHaveBeenCalledWith(WS, 'c-2', { socialCampaignId: CAMP, scheduledFor: monday });
+    expect(slotWrites(h.prisma)[0].where).toEqual({ id: 'slot-1', workspaceId: WS, status: 'IDEATED', scheduledFor: monday });
   });
 
   it('REFUSES a slot with no quote: FAILED by name, concept discarded, nothing bought', async () => {
@@ -339,20 +460,22 @@ describe('SlotProducerService.produceSlot', () => {
     await svc.produceSlot(WS, 'slot-1', NOW);
     expect(concepts.decideByProgramme).not.toHaveBeenCalled();
     expect(promotion.promote).not.toHaveBeenCalled();
-    expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['c-2'] }, workspaceId: WS, status: 'PROPOSED' } }));
+    expect(prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: discardWhere(['c-2']) }));
     expect(slotWrites(prisma)).toEqual([{ where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED' }, data: { status: 'FAILED', error: NO_QUOTE_ERROR } }]);
     expect(events(programmes)[0]).toMatchObject({ kind: 'SLOT_FAILED', data: { from: 'IDEATED', error: NO_QUOTE_ERROR } });
   });
 
-  it('fails the slot from PRODUCING when the decision or the promotion throws after the claim', async () => {
+  it('fails the slot from PRODUCING when the decision or the promotion throws after the claim — no item, no link, no retry', async () => {
     const { svc, prisma, promotion, programmes } = harness({ slot: ideated() });
     promotion.promote.mockRejectedValue(new Error('campaign not active'));
     await svc.produceSlot(WS, 'slot-1', NOW);
     expect(slotWrites(prisma)).toEqual([
-      { where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED' }, data: { status: 'PRODUCING' } },
+      { where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED', scheduledFor: at('2026-09-18T18:00:00Z') }, data: { status: 'PRODUCING' } },
       { where: { id: 'slot-1', workspaceId: WS, status: 'PRODUCING' }, data: { status: 'FAILED', error: 'campaign not active' } },
     ]);
+    expect(promotion.promote).toHaveBeenCalledTimes(1);
     expect(events(programmes)[0]).toMatchObject({ kind: 'SLOT_FAILED', data: { from: 'PRODUCING' } });
+    expect(events(programmes)[0].data.campaignItemId).toBeUndefined();
   });
 
   it('lane paused by hand (campaign PAUSED, programme ACTIVE): waits an hour and logs LANE_PAUSED once per slot', async () => {
@@ -361,7 +484,7 @@ describe('SlotProducerService.produceSlot', () => {
     expect(res).toEqual(hold(new Date(NOW.getTime() + PAUSE_RETRY_MS)));
     expect(h.concepts.decideByProgramme).not.toHaveBeenCalled();
     expect(h.prisma.contentSlot.updateMany).not.toHaveBeenCalled();
-    expect(events(h.programmes)).toEqual([expect.objectContaining({ kind: 'LANE_PAUSED', data: expect.objectContaining({ slotId: 'slot-1', socialCampaignId: CAMP }) })]);
+    expect(events(h.programmes)).toEqual([expect.objectContaining({ kind: 'LANE_PAUSED', data: expect.objectContaining({ slotId: 'slot-1', socialCampaignId: CAMP, campaignStatus: 'PAUSED' }) })]);
     expect(h.prisma.contentProgrammeEvent.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { workspaceId: WS, programmeId: PROG, kind: 'LANE_PAUSED', data: { path: ['slotId'], equals: 'slot-1' } },
     }));
@@ -376,7 +499,7 @@ describe('SlotProducerService.produceSlot', () => {
     const h = harness({ slot: ideated({ scheduledFor: at('2026-09-16T11:00:00Z') }), campaign: { status: 'PAUSED', defaultVideoModel: null } });
     await h.svc.produceSlot(WS, 'slot-1', NOW);
     expect(slotWrites(h.prisma)).toEqual([{ where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED' }, data: { status: 'SKIPPED', error: MISSED_WHILE_PAUSED } }]);
-    expect(h.prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['c-2'] }, workspaceId: WS, status: 'PROPOSED' } }));
+    expect(h.prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: discardWhere(['c-2']) }));
   });
 
   it('PAUSED programme: waits while the produce time is ahead; SKIPPED as missed (concept discarded) once it is behind', async () => {
@@ -388,7 +511,7 @@ describe('SlotProducerService.produceSlot', () => {
     expect(await behind.svc.produceSlot(WS, 'slot-1', NOW)).toBeUndefined();
     expect(slotWrites(behind.prisma)).toEqual([{ where: { id: 'slot-1', workspaceId: WS, status: 'IDEATED' }, data: { status: 'SKIPPED', error: MISSED_WHILE_PAUSED } }]);
     expect(behind.prisma.contentConcept.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: { in: ['c-2'] }, workspaceId: WS, status: 'PROPOSED' }, data: expect.objectContaining({ reviewNote: `programme: ${MISSED_WHILE_PAUSED}` }),
+      where: discardWhere(['c-2']), data: expect.objectContaining({ reviewNote: `programme: ${MISSED_WHILE_PAUSED}` }),
     }));
     expect(events(behind.programmes)[0]).toMatchObject({ kind: 'SLOT_SKIPPED', data: { from: 'IDEATED', reason: MISSED_WHILE_PAUSED } });
     expect(behind.concepts.decideByProgramme).not.toHaveBeenCalled();

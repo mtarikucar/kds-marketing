@@ -155,6 +155,45 @@ describe('resume / activate — a programme-owned campaign is moved by the progr
     expect(prisma.socialCampaign.update).toHaveBeenCalledWith({ where: { id: 'c-1' }, data: { status: 'ACTIVE' } });
   });
 
+  /**
+   * CANCELLED is a state the programme has no door out of: its resume re-runs
+   * only a PAUSED or DRAFT lane. A lane cancelled by hand under a live
+   * programme fails every slot at produce time and leaves READY items' gates
+   * returning silently. The programme's kill is what ends the lane.
+   */
+  it('cancel refuses a lane, naming the kill switch, and writes nothing', async () => {
+    const { svc, prisma, scheduledJobs } = build({ programme: { status: 'ACTIVE', killSwitch: false } });
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ programmeId: 'prog-1', status: 'ACTIVE' }));
+    await expect(svc.cancel(WS, 'c-1')).rejects.toThrow("This campaign is a content programme's lane; kill the programme instead.");
+    expect(prisma.contentProgramme.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'prog-1', workspaceId: WS } }));
+    expect(prisma.socialCampaign.update).not.toHaveBeenCalled();
+    expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+  });
+
+  it('cancel of a killed programme\'s lane says so, the programme itself passes with byProgramme, and a plain campaign cancels as before', async () => {
+    const killed = build({ programme: { status: 'KILLED', killSwitch: true } });
+    killed.prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ programmeId: 'prog-1', status: 'PAUSED' }));
+    await expect(killed.svc.cancel(WS, 'c-1')).rejects.toThrow(/the programme was killed/);
+    expect(killed.prisma.socialCampaign.update).not.toHaveBeenCalled();
+
+    const own = build();
+    own.prisma.socialCampaign.findFirst
+      .mockResolvedValueOnce(makeCampaign({ programmeId: 'prog-1', status: 'PAUSED' }))
+      .mockResolvedValue(makeCampaign({ programmeId: 'prog-1', status: 'CANCELLED' }));
+    await own.svc.cancel(WS, 'c-1', { byProgramme: true });
+    expect(own.prisma.contentProgramme.findFirst).not.toHaveBeenCalled();
+    expect(own.prisma.socialCampaign.update).toHaveBeenCalledWith({ where: { id: 'c-1' }, data: { status: 'CANCELLED' } });
+
+    const plain = build();
+    plain.prisma.socialCampaign.findFirst
+      .mockResolvedValueOnce(makeCampaign({ status: 'ACTIVE' }))
+      .mockResolvedValue(makeCampaign({ status: 'CANCELLED' }));
+    await plain.svc.cancel(WS, 'c-1');
+    expect(plain.prisma.contentProgramme.findFirst).not.toHaveBeenCalled();
+    expect(plain.prisma.socialCampaign.update).toHaveBeenCalledWith({ where: { id: 'c-1' }, data: { status: 'CANCELLED' } });
+    expect(plain.scheduledJobs.cancel).toHaveBeenCalled();
+  });
+
   it('pause stays open on the lane: a hand-paused lane is a safe state the programme holds for', async () => {
     const { svc, prisma, scheduledJobs } = build();
     prisma.socialCampaign.findFirst

@@ -965,6 +965,20 @@ export class ContentConceptsService {
     conceptId: string,
     opts: { socialCampaignId?: string } = {},
   ) {
+    // A concept the PROGRAMME planned is refused here as it is in `review`:
+    // its slot owns it. Promoting it from this door would put a second post
+    // on the programme's lane at the next cadence time after its last item —
+    // off the calendar, outside the weekly cap and tied to no slot — and the
+    // orphan this door exists to rescue (APPROVED, never promoted) is exactly
+    // what a slot whose promote failed after the programme's approval leaves
+    // behind. The slot's retry re-plans it; the slot's skip closes it.
+    const target = await this.prisma.contentConcept.findFirst({
+      where: { id: conceptId, workspaceId },
+      select: { programmeId: true },
+    });
+    if (target?.programmeId) {
+      throw new BadRequestException('This concept belongs to a content programme; retry or skip its slot instead.');
+    }
     const { item, created } = await this.promotion.promote(workspaceId, conceptId, opts);
     return {
       conceptId,

@@ -625,11 +625,15 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
 
     const capped = await events('CAP_SKIPPED');
     expect(capped).toHaveLength(1);
-    expect(capped[0].data).toMatchObject({ slotId: target.id, cap: 10, wanted: ideated.quotedCredits });
-    // The spend it refused against is what the FIRST slot actually cost (its
-    // batch, frames and clips), summed from the rows — this slot's own row is
-    // left out because its quote already carries its frames.
-    expect(capped[0].data).toMatchObject({ spent: BATCH_COST + slot1Quote });
+    // What the job wanted to buy is the CLIPS: the quote minus the frames the
+    // plan job already booked on the row.
+    const slot2Clips = (ideated.quotedCredits as number) - (plan2.production?.keyframes?.credits ?? 0);
+    expect(capped[0].data).toMatchObject({ slotId: target.id, cap: 10, wanted: slot2Clips });
+    // The spend it refused against is the slot's WHOLE week as the rows hold
+    // it: the first slot's batch, frames and clips, PLUS this slot's own batch
+    // and frames — the sum the week would actually close on with the clips
+    // added, so the week can never close above the cap.
+    expect(capped[0].data).toMatchObject({ spent: BATCH_COST + slot1Quote + slot2Spent });
     // The capped slot keeps what it cost: the batch and the frames are not refunded.
     expect(after.spentCredits).toBe(slot2Spent);
 
