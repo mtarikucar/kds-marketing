@@ -4267,6 +4267,10 @@ model ContentSlot {
   campaignItemId  String?
   socialPostId    String?
   quotedCredits   Int?
+  /// Credits this slot actually cost so far — planning, frames, clips, every
+  /// regenerate — kept on SKIPPED and FAILED slots too. The weekly cap and the
+  /// spend breaker sum THIS, never the quote of live slots only.
+  spentCredits    Int       @default(0)
   /// After this the slot is frozen: the item publishes as it stands.
   editableUntil   DateTime
   publishedAt     DateTime?

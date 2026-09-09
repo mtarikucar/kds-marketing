@@ -83,6 +83,7 @@ CREATE TABLE "content_slots" (
     "campaignItemId" TEXT,
     "socialPostId" TEXT,
     "quotedCredits" INTEGER,
+    "spentCredits" INTEGER NOT NULL DEFAULT 0,
     "editableUntil" TIMESTAMP(3) NOT NULL,
     "publishedAt" TIMESTAMP(3),
     "measuredAt" TIMESTAMP(3),
