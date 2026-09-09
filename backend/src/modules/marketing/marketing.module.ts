@@ -309,6 +309,7 @@ import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
 import { registerOperationsTools } from './mcp/tools/operations.tools';
 import { registerAiLaneTools } from './mcp/tools/ai-lane.tools';
 import { registerConsentTools } from './mcp/tools/consent.tools';
+import { registerOfferTools } from './mcp/tools/offers.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -1472,6 +1473,10 @@ export class MarketingModule {
     // could not obey. Every send gate reads the opt-out flag; nothing an agent
     // could call ever set one.
     registerConsentTools(registry, { compliance });
+    // The artifact the pipeline closes on. The connector could LIST offers and
+    // not make one, so an agent could run a whole conversation and then stop at
+    // the exact step the funnel is built around.
+    registerOfferTools(registry, { offers, principals });
     registerOperationsTools(registry, {
       distribution,
       approvals,

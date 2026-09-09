@@ -39,6 +39,7 @@ import { registerSetupWriteTools } from './setup-write.tools';
 import { registerOperationsTools } from './operations.tools';
 import { registerAiLaneTools } from './ai-lane.tools';
 import { registerConsentTools } from './consent.tools';
+import { registerOfferTools } from './offers.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -257,6 +258,15 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     taxRates: { create: jest.fn() } as any,
     orderForms: { create: jest.fn() } as any,
     emailTemplates: { create: jest.fn() } as any,
+  });
+  registerOfferTools(registry, {
+    offers: {
+      create: jest.fn(),
+      markSent: jest.fn(),
+      markAccepted: jest.fn(),
+      markRejected: jest.fn(),
+    } as any,
+    principals: { resolve: jest.fn() } as any,
   });
   registerConsentTools(registry, {
     compliance: { recordConsent: jest.fn(), getConsents: jest.fn() } as any,
@@ -575,6 +585,13 @@ describe('MCP tool catalogue', () => {
         // "Stop emailing me" — readable by the connector, and until now not
         // obeyable by it. Every send gate reads the opt-out flag and nothing an
         // agent could call ever set one.
+        // The artifact the pipeline closes on: ALLOWED_TRANSITIONS reaches WON
+        // through OFFER_SENT -> WAITING, and the connector could list offers
+        // without being able to make one.
+        'jeeta.create_offer',
+        'jeeta.mark_offer_sent',
+        'jeeta.mark_offer_accepted',
+        'jeeta.mark_offer_rejected',
         'jeeta.record_consent',
         'jeeta.get_consents',
         // Replying from the panel pauses the AI on that thread and nothing
@@ -627,7 +644,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(156);
+    expect(names).toHaveLength(160);
   });
 
   /**
@@ -747,7 +764,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(156);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(160);
   });
 });
 
@@ -785,6 +802,7 @@ const ID_SOURCES: Record<string, string> = {
   // reader knows this was decided, not missed.
   entityId: EXTERNAL,
   opportunityId: 'jeeta.list_opportunities',
+  offerId: 'jeeta.list_offers',
   taskId: 'jeeta.list_tasks',
   assignedToId: 'jeeta.list_team',
   // inbox

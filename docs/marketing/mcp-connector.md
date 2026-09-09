@@ -383,6 +383,10 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.get_distribution_config` | How new leads get an owner: the assignment strategy, and who was assigned last | `settings.manage` | READ | — | no |
 | `jeeta.set_distribution_config` | Turn automatic lead assignment on (ROUND_ROBIN / LEAST_LOADED) or off | `settings.manage` | WRITE | — | no |
 | `jeeta.list_offers` | The offers (teklifler) in this workspace, with status and totals | `leads.read` | READ | — | no |
+| `jeeta.create_offer` | Draft an offer for a lead — nothing is sent, it creates a DRAFT | `leads.write` | WRITE | — | no |
+| `jeeta.mark_offer_sent` | Record that the customer HAS the offer and advance the lead to OFFER_SENT (does not email) | `leads.write` | WRITE | — | no |
+| `jeeta.mark_offer_accepted` | Customer said yes: offer ACCEPTED, lead WAITING (provisioning stays a human step) | `leads.write` | WRITE | — | no |
+| `jeeta.mark_offer_rejected` | Customer said no to this offer (does not close the lead) | `leads.write` | WRITE | — | no |
 | `jeeta.list_companies` | List this workspace's B2B accounts (companies) with their id, name, domain and city | `contacts.read` | READ | — | no |
 | `jeeta.list_duplicate_leads` | Find groups of leads that look like the same customer, matched on normalised phone and email across every source | `leads.read` | READ | — | no |
 | `jeeta.merge_leads` | Merge duplicate leads into one record; notes, tasks, deals and conversations move across | `leads.write` | DESTRUCTIVE | yes | no |
