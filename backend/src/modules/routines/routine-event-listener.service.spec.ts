@@ -242,4 +242,60 @@ describe('RoutineEventListener', () => {
       ).resolves.toBeUndefined();
     });
   });
+
+  describe('a customer wrote in — the handler that replaces a poll', () => {
+    function wired() {
+      const bus = makeDomainEventBus();
+      const triggerSvc = makeTriggerService();
+      const listener = new RoutineEventListener(
+        bus as any,
+        triggerSvc as any,
+        makePrismaService() as any,
+      );
+      listener.onModuleInit();
+      return { bus, triggerSvc };
+    }
+
+    it('subscribes to the inbound-message event at all', () => {
+      const { bus } = wired();
+      expect(bus.on).toHaveBeenCalledWith(
+        'marketing.conversation.message.received.v1',
+        expect.any(Function),
+      );
+    });
+
+    it('triggers inbox-reply when an inbound message arrives', async () => {
+      // MCP is client-to-server only, so nothing can wake a connector through
+      // it. triggerUrl is a different mechanism — an HTTPS call to a claude.ai
+      // task endpoint — and it is push. This is what stops the alternative: a
+      // Claude asking "anything for me?" every few minutes and almost always
+      // finding an empty queue.
+      const { bus, triggerSvc } = wired();
+      await bus.dispatch('marketing.conversation.message.received.v1', {
+        payload: { workspaceId: 'ws-1', conversationId: 'c1' },
+      });
+      expect(triggerSvc.trigger).toHaveBeenCalledWith('inbox-reply', 'event');
+    });
+
+    it('fires on the MESSAGE, not on whether a reply was queued', async () => {
+      // The enqueue is a per-workspace decision (aiExecution, aiPaused, whether
+      // an agent is attached). A trigger keyed to it would have to reach into
+      // that decision to know it happened. An inbound message is the plain
+      // fact; the cooldown bounds the rate, and a wake that finds nothing
+      // queued costs one empty check.
+      const { bus, triggerSvc } = wired();
+      await bus.dispatch('marketing.conversation.message.received.v1', { payload: {} });
+      expect(triggerSvc.trigger).toHaveBeenCalledWith('inbox-reply', 'event');
+    });
+
+    it('never throws out of the handler', async () => {
+      // It runs on the domain event bus. A throw here would take the emitter
+      // with it.
+      const { bus, triggerSvc } = wired();
+      triggerSvc.trigger.mockRejectedValue(new Error('trigger endpoint down'));
+      await expect(
+        bus.dispatch('marketing.conversation.message.received.v1', { payload: {} }),
+      ).resolves.toBeUndefined();
+    });
+  });
 });
