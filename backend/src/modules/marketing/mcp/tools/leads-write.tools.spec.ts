@@ -401,3 +401,66 @@ describe('jeeta.score_lead', () => {
   });
 });
 
+/**
+ * The same write, for a PASS.
+ *
+ * At four hundred unscored leads it is the round trips, not the thinking, that
+ * stop the pass being run at all.
+ */
+describe('jeeta.score_leads', () => {
+  const ctx = { workspaceId: 'ws-a' } as any;
+  const row = (id: string) => ({ leadId: id, score: 70, reason: 'gerekce' });
+
+  it('stamps every lead in the batch', async () => {
+    const { registry, leads } = setup();
+    const out = await registry.get('jeeta.score_leads')!.handler(ctx, {
+      scores: [row('l1'), row('l2'), row('l3')],
+    });
+    expect(leads.applyAiScore).toHaveBeenCalledTimes(3);
+    expect(out).toMatchObject({ written: 3, skipped: 0 });
+  });
+
+  it('treats a partly-done batch as a RESULT, not a failure', async () => {
+    // "Already scored" is the normal answer on a re-run. A batch that failed
+    // whole because one row was done would make re-running a pass the
+    // dangerous thing to do — and re-running is exactly what an unattended
+    // drainer needs to be safe.
+    const { registry, leads } = setup();
+    leads.applyAiScore.mockResolvedValueOnce(1).mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    const out = await registry.get('jeeta.score_leads')!.handler(ctx, {
+      scores: [row('l1'), row('l2'), row('l3')],
+    });
+    expect(out).toMatchObject({ written: 2, skipped: 1, skippedLeadIds: ['l2'] });
+    expect(out.note).toMatch(/already scored/i);
+  });
+
+  it('says nothing about skips when there were none', async () => {
+    const { registry } = setup();
+    const out = await registry.get('jeeta.score_leads')!.handler(ctx, { scores: [row('l1')] });
+    expect(out.note).toBeNull();
+  });
+
+  it('caps the batch, and refuses an empty one', async () => {
+    // Capped so one call cannot hold a transaction-length write open, and so a
+    // mistake is 50 rows to look at rather than a workspace.
+    const { registry } = setup();
+    const schema = registry.get('jeeta.score_leads')!.inputSchema;
+    expect(schema.safeParse({ scores: [] }).success).toBe(false);
+    expect(schema.safeParse({ scores: Array.from({ length: 50 }, (_, i) => row(`l${i}`)) }).success).toBe(true);
+    expect(schema.safeParse({ scores: Array.from({ length: 51 }, (_, i) => row(`l${i}`)) }).success).toBe(false);
+  });
+
+  it('applies the same per-lead rules as the single write', async () => {
+    const { registry } = setup();
+    const schema = registry.get('jeeta.score_leads')!.inputSchema;
+    expect(schema.safeParse({ scores: [{ leadId: 'l1', score: 101, reason: 'x' }] }).success).toBe(false);
+    expect(schema.safeParse({ scores: [{ leadId: 'l1', score: 50, reason: '' }] }).success).toBe(false);
+  });
+
+  it('scopes every write to the caller workspace', async () => {
+    const { registry, leads } = setup();
+    await registry.get('jeeta.score_leads')!.handler(ctx, { scores: [row('l1'), row('l2')] });
+    for (const call of leads.applyAiScore.mock.calls) expect(call[0]).toBe('ws-a');
+  });
+});
+

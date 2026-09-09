@@ -556,6 +556,10 @@ describe('MCP tool catalogue', () => {
         // reaching back after a PUSH that needs a triggerUrl nobody has ever
         // set. Pulling removes the configuration entirely.
         'jeeta.score_lead',
+        // The same write, for a PASS rather than a lead: at four hundred
+        // unscored leads the round trips, not the thinking, are what stop the
+        // pass being run at all.
+        'jeeta.score_leads',
         // Replying from the panel pauses the AI on that thread and nothing
         // turned it back on, so a rep who answered once left the customer
         // outside every automatic path. The REST route existed all along.
@@ -596,7 +600,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(150);
+    expect(names).toHaveLength(151);
   });
 
   /**
@@ -716,7 +720,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(150);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(151);
   });
 });
 
