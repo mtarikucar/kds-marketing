@@ -6,6 +6,7 @@ const ctx = { workspaceId: 'ws1', grantedScopes: ['contacts.write'] };
 
 function deps() {
   const conversations = {
+    setAiPaused: jest.fn().mockResolvedValue({ id: 'c1', aiPaused: false }),
     assign: jest.fn().mockResolvedValue({ id: 'cv1' }),
     close: jest.fn().mockResolvedValue({ id: 'cv1', status: 'CLOSED' }),
     reopen: jest.fn().mockResolvedValue({ id: 'cv1', status: 'OPEN' }),
@@ -110,3 +111,42 @@ describe('inbox management risk classification', () => {
     expect(registry.has('jeeta.add_conversation_note')).toBe(true);
   });
 });
+
+/**
+ * The flag that quietly took customers out of every automatic path.
+ *
+ * A panel reply sets `aiPaused` — right, because a person answering has taken
+ * over — and nothing gave it back. A rep who answered one question and moved on
+ * left that thread where `reply()` declines, the backfill skips, and the
+ * connector lane will not queue: silent, and indistinguishable from a customer
+ * who simply stopped writing.
+ */
+describe('jeeta.set_conversation_ai', () => {
+  it('hands a thread back to the AI', async () => {
+    const { registry, conversations } = deps();
+    await registry.get('jeeta.set_conversation_ai')!.handler(ctx, {
+      conversationId: 'c1',
+      paused: false,
+    });
+    expect(conversations.setAiPaused).toHaveBeenCalledWith('ws1', 'c1', false);
+  });
+
+  it('takes it away when a human wants the thread', async () => {
+    const { registry, conversations } = deps();
+    await registry.get('jeeta.set_conversation_ai')!.handler(ctx, {
+      conversationId: 'c1',
+      paused: true,
+    });
+    expect(conversations.setAiPaused).toHaveBeenCalledWith('ws1', 'c1', true);
+  });
+
+  it('requires the caller to SAY which way, rather than defaulting', async () => {
+    // A default here would be a tool that silently turns something on or off
+    // depending on which way the author happened to lean.
+    const { registry } = deps();
+    const schema = registry.get('jeeta.set_conversation_ai')!.inputSchema;
+    expect(schema.safeParse({ conversationId: 'c1' }).success).toBe(false);
+    expect(schema.safeParse({ conversationId: 'c1', paused: false }).success).toBe(true);
+  });
+});
+

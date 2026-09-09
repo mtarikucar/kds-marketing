@@ -339,6 +339,11 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.get_brand_profile` | The workspace's brand profile (name, voice guide, audience) | `reports.read` | READ | — | no |
 | `jeeta.update_brand_profile` | Rewrite the brand profile every piece of AI copy is written from | `settings.manage` | WRITE | — | no |
 | `jeeta.get_workspace_info` | Effective plan: package, subscription status, quotas/limits, enabled features | `reports.read` | READ | — | yes |
+| `jeeta.get_setup_readiness` | Everything this workspace still needs before the engine runs at full strength | `reports.read` | READ | — | no |
+| `jeeta.list_pending_approvals` | Actions waiting on a human decision. Read-only by design — no tool approves | `reports.read` | READ | — | no |
+| `jeeta.create_tax_rate` | Create a tax rate | `settings.manage` | WRITE | — | no |
+| `jeeta.create_order_form` | Create an order form | `settings.manage` | WRITE | — | no |
+| `jeeta.create_email_template` | Create a saved email template | `campaigns.write` | WRITE | — | no |
 | `jeeta.find_tools` | Search the FULL catalogue, deferred tools included, with their input schemas | *(none)* | READ | — | yes |
 | `jeeta.get_ai_usage` | Anthropic spend for this workspace: tokens and real cost per action and model, plus a daily curve | `reports.read` | READ | — | no |
 | `jeeta.get_vendor_spend` | Outside-vendor spend (NetGSM, Meta, fal.ai, Firecrawl, Apify) and which units have no tariff at all | `reports.read` | READ | — | no |
@@ -362,6 +367,10 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.search_companies` | Search companies | `contacts.read` | READ | — | no |
 | `jeeta.create_company` | Create a company | `contacts.write` | WRITE | — | no |
 | `jeeta.list_segments` | List audience segments | `contacts.read` | READ | — | no |
+| `jeeta.preview_segment` | How many leads a segment definition would match, saving nothing | `contacts.write` | READ | — | no |
+| `jeeta.create_segment` | Save a reusable audience (a named filter over leads) | `contacts.write` | WRITE | — | no |
+| `jeeta.list_custom_fields` | The workspace-defined fields on a lead/contact, with types and options | `contacts.read` | READ | — | no |
+| `jeeta.create_custom_field` | Add a workspace-defined field to leads or contacts | `contacts.write` | WRITE | — | no |
 | `jeeta.list_tags` | List tags | `contacts.read` | READ | — | no |
 | `jeeta.list_tasks` | List tasks | `tasks.read` | READ | — | yes |
 | `jeeta.create_task` | Create a task and assign it | `tasks.write` | WRITE | — | yes |
@@ -372,6 +381,8 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.move_opportunity_stage` | Advance a deal | `leads.write` | WRITE | — | yes |
 | `jeeta.delete_opportunity` | Permanently delete a deal | `leads.manage` | DESTRUCTIVE | **DESTRUCTIVE** | no |
 | `jeeta.get_distribution_config` | How new leads get an owner: the assignment strategy, and who was assigned last | `settings.manage` | READ | — | no |
+| `jeeta.set_distribution_config` | Turn automatic lead assignment on (ROUND_ROBIN / LEAST_LOADED) or off | `settings.manage` | WRITE | — | no |
+| `jeeta.list_offers` | The offers (teklifler) in this workspace, with status and totals | `leads.read` | READ | — | no |
 | `jeeta.list_companies` | List this workspace's B2B accounts (companies) with their id, name, domain and city | `contacts.read` | READ | — | no |
 | `jeeta.list_duplicate_leads` | Find groups of leads that look like the same customer, matched on normalised phone and email across every source | `leads.read` | READ | — | no |
 | `jeeta.merge_leads` | Merge duplicate leads into one record; notes, tasks, deals and conversations move across | `leads.write` | DESTRUCTIVE | yes | no |
@@ -396,6 +407,13 @@ Gated on the `conversationAi` package feature, matching the REST controller.
 | `jeeta.list_channels` | List every messaging channel this workspace has — type, name, status, and which provider identity it is bound to | `settings.manage` | READ | — | no |
 | `jeeta.message_lead` | Start a conversation with a chosen lead on SMS, WhatsApp or email | `contacts.write` | WRITE | SEND | no |
 | `jeeta.set_channel_status` | Enable or disable a channel | `settings.manage` | WRITE | — | no |
+| `jeeta.set_channel_agent` | Choose which AI agent auto-replies on a channel (null = manual only) | `settings.manage` | WRITE | — | no |
+| `jeeta.claim_reply_job` | Take the next customer message awaiting an answer and hold it while you write one | `contacts.write` | WRITE | — | no |
+| `jeeta.complete_reply_job` | Close a claimed reply, or return it to the queue | `contacts.write` | WRITE | — | no |
+| `jeeta.get_ai_reply_queue` | How many replies are waiting, and how long the oldest has waited | `reports.read` | READ | — | no |
+| `jeeta.set_ai_execution` | Who does this workspace's AI work: SERVER / AUTO / MCP / MCP_ONLY | `settings.manage` | WRITE | — | no |
+| `jeeta.score_lead` | Write the advisory 0-100 AI score and its reasoning for one lead (one-shot per lead) | `leads.write` | WRITE | — | no |
+| `jeeta.set_conversation_ai` | Hand a thread back to the AI, or take it off (panel replies pause it automatically) | `contacts.write` | WRITE | — | no |
 | `jeeta.update_agent` | Refine an AI agent's persona, tone, goals or guardrails | `settings.manage` | WRITE | — | no |
 | `jeeta.verify_channel` | Run a live health check against a channel and report whether it can actually send AND receive | `reports.read` | READ | — | no |
 
@@ -448,6 +466,52 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.get_content_programme` | The workspace's **content programme** — the autonomous typed-content loop — with its dashboard: phase, status, kill switch, this week's credit spend against `weeklyCreditCap`, the upcoming calendar slots (type, why, idea, concept, editable-until), every type's learned weight and planned share, the type×network learning table + weights history, brand-ranked trend signals, and the last 30 "why" log lines. `programme: null` when none exists — a programme is **started from the Studio panel only**, because starting one begins **autonomous credit spend** (plans, storyboards, buys clips and publishes with no approval, up to the weekly cap) | `campaigns.read` | READ | — | no |
 | `jeeta.update_content_programme` | Steer the programme: settings (brief, goal, posts/week, `weeklyCreditCap`, exploration rate, look-ahead, lead times, persona) and/or `pause` / `resume`. **The programme spends credits autonomously while ACTIVE**, bounded by the cap — an agent may **lower** the cap, the weekly count, `lookaheadDays` or the two lead times; **raising any of them is refused** here and done from the panel (the look-ahead and the leads decide how many weeks' slots one week's cap check sees, so they are spend levers too). Bounds: lookaheadDays 7–28, planLeadHours 6–96, produceLeadHours 2–48, editWindowHours 1–24. Pausing stops spend and keeps the calendar (resume re-arms the waiting slots; a `resume` on an ACTIVE programme whose lane was paused by hand re-runs the lane). **No kill here on purpose**: the kill switch is terminal and lives only in the panel | `campaigns.write` | WRITE | — | no |
 | `jeeta.edit_content_slot` | Rewrite ONE calendar slot before it is produced — its type, idea or publish time — or `skip` it, or `regenerate` it. **Editing spends nothing** until the slot is produced (refused once its edit window has closed); skipping is free; **`regenerate` re-buys the clips** | `campaigns.write` | WRITE | — | no |
+
+### Paired phones (`devices`)
+
+A workspace can pair a physical Android phone: the Jeeta desktop app sits next
+to it on USB and takes one command at a time off a queue. Nothing here reaches
+a phone directly — every tool below writes to (or reads) that queue, and on a
+MANUAL device a person at the desk approves each command before it runs and may
+refuse, which is a normal outcome and not an error.
+
+All three are **deferred and none is advertised** — the only domain of which
+that is true. Reach them with `jeeta.find_tools({domain: 'devices'})` and run
+them through `jeeta.call_tool`. There is no shell command in this domain and
+there will not be one.
+
+| Tool | What it does | Scope | Risk | Approval | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_devices` | Paired phones with their mode (MANUAL = a person approves every command), status, whether the desktop bridge is online, its version, and `bridgeOutdated` when that version predates the current instruction set | `reports.read` | READ | — | no |
+| `jeeta.device_command` | QUEUE one command: `OPEN_URL` (https/tel — how a WhatsApp click-to-chat draft gets on screen), `LAUNCH_APP`, `TAP_ON` (press a named element), `TAP`, `SWIPE`, `TEXT`, `KEY`, `SCREENSHOT`, `UI_DUMP`. Waits ~25s for an outcome, then reports honestly that it is still queued — and does not wait at all when the bridge is offline | `campaigns.send` | WRITE | PUBLISH | no |
+| `jeeta.device_command_result` | What became of a queued command — DONE / FAILED / REFUSED / EXPIRED / QUEUED | `reports.read` | READ | — | no |
+
+**Driving a phone is a loop, not a script.** `UI_DUMP` does not return XML: it
+returns the distilled list of things on screen — text, id, description, class,
+and the point that presses each one — a few kilobytes rather than a few hundred.
+Read it, then press what you saw with `TAP_ON`:
+
+```
+UI_DUMP                       → { elements: [{ i:3, text:"Ayşe Yılmaz", cls:"TextView", tap:[540,470] }, …], size:{w,h} }
+TAP_ON element:"Ayşe Yılmaz"  → { tapped: { text:"Ayşe Yılmaz", tap:[540,470] } }
+```
+
+`TAP_ON` re-reads the screen and presses in the same command, so it cannot be
+made stale by a list that settles or a banner that lands between your reading
+and your tap. `TAP` with raw coordinates still exists, for the places with no
+label at all. An exact label wins over a partial one — "Sil" will not press
+"Silinenler" — and `occurrence` picks among rows that read alike.
+
+A bridge reports its own version on every heartbeat. When it is older than the
+commands the server can now send, `jeeta.list_devices` says so in
+`bridgeOutdated` — an old bridge is online and healthy and will refuse anything
+added since it shipped, so check that field before planning a sequence around a
+newer command. The field is absent when the bridge is current.
+
+`SCREENSHOT` returns `screenshotUrl`, never image bytes: the picture is uploaded
+server-side and the result carries a link. With no object store configured the
+result says `screenshotUnavailable` and why, rather than quietly returning
+nothing.
 
 Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
 

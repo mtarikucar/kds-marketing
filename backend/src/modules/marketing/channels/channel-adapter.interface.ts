@@ -110,6 +110,17 @@ export interface OutboundSend {
    *  Templates are WhatsApp-only (ignored by Messenger/Instagram). */
   template?: OutboundTemplate;
   media?: OutboundMedia;
+  /**
+   * Email-only. Every other adapter ignores both: SMS and the chat networks
+   * have no subject line and no markup.
+   *
+   * `subject` exists because the email adapter was written for INBOUND replies,
+   * where the subject is a property of the thread and lives on the channel
+   * config. A campaign has a different subject per send, which that shape
+   * could not express.
+   */
+  subject?: string;
+  html?: string;
 }
 
 export interface SendResult {

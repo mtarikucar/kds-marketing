@@ -280,7 +280,21 @@ export class ChannelsService {
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.status !== undefined) data.status = dto.status;
-    if (dto.agentProfileId !== undefined) data.agentProfileId = dto.agentProfileId;
+    if (dto.agentProfileId !== undefined) {
+      // The panel picks from a workspace-scoped list, so this hole is invisible
+      // there — but the endpoint takes a raw id, and an unvalidated one would
+      // let a channel answer with ANOTHER tenant's agent: their persona, their
+      // guardrails, their knowledge base, replying to this workspace's
+      // customers. Scope the read, and the id becomes unusable across tenants.
+      if (dto.agentProfileId) {
+        const agent = await this.prisma.agentProfile.findFirst({
+          where: { id: dto.agentProfileId, workspaceId },
+          select: { id: true },
+        });
+        if (!agent) throw new NotFoundException('Agent profile not found');
+      }
+      data.agentProfileId = dto.agentProfileId;
+    }
     if (dto.externalId !== undefined) {
       const externalId = this.normalizeExternalId(existing.type, dto.externalId);
       await this.assertExternalIdFree(existing.type, externalId, existing.id);

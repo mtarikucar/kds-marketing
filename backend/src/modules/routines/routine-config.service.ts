@@ -8,13 +8,41 @@ import {
 } from '../../common/crypto/secret-box.helper';
 import type { RoutineConfig } from '@prisma/client';
 
-/** All 4 cloud routine keys that must always exist in the DB. */
-const ROUTINE_KEYS = [
+/**
+ * The cloud routine keys that must always exist in the DB.
+ *
+ * `inbox-reply` is the newest and the one that is not like the others. The
+ * first four are scheduled work — a nightly pass over reviews, content or
+ * scores. This one is a customer waiting: it fires when someone writes in and
+ * a reply has been queued for the workspace's own Claude.
+ *
+ * It exists because the alternative was a Claude that POLLED. MCP is
+ * client-to-server only, so nothing can wake a connector through it — but
+ * `triggerUrl` is a different mechanism entirely, an HTTPS call to a claude.ai
+ * task endpoint, and it is push. A poll that runs every few minutes and finds
+ * an empty queue almost every time is the shape this replaces.
+ *
+ * Its cooldown matters more than the others': the four nightly routines are
+ * compared against the morning, and this one against how long a customer will
+ * sit there. Seeded lower for that reason (the operator can still change it).
+ */
+/** Exported so the specs assert against THIS list rather than a copy of it.
+ *  A duplicate here is how a spec comes to pin a count that stopped being true. */
+export const ROUTINE_KEYS = [
   'review-draft',
   'content-pack',
   'insight-digest',
   'lead-scoring',
+  'inbox-reply',
 ] as const;
+
+/** Per-key create-time defaults. Only applied when the row does not exist —
+ *  `ensureSeeded` never clobbers what an operator has since set. */
+const SEED_DEFAULTS: Partial<Record<(typeof ROUTINE_KEYS)[number], { eventCooldownSec: number }>> = {
+  // Thirty seconds, against the five-minute default the nightly routines use.
+  // A customer who has just written is the thing being measured.
+  'inbox-reply': { eventCooldownSec: 30 },
+};
 
 export type RoutineKey = (typeof ROUTINE_KEYS)[number];
 
@@ -67,7 +95,7 @@ export class RoutineConfigService implements OnModuleInit {
   }
 
   /**
-   * Upsert the 4 canonical routine rows so they always exist.
+   * Upsert the canonical routine rows so they always exist.
    * Only creates missing rows; does NOT toggle enabled on existing ones.
    */
   async ensureSeeded(): Promise<void> {
@@ -75,7 +103,7 @@ export class RoutineConfigService implements OnModuleInit {
       ROUTINE_KEYS.map((key) =>
         this.prisma.routineConfig.upsert({
           where: { key },
-          create: { key, enabled: false },
+          create: { key, enabled: false, ...(SEED_DEFAULTS[key] ?? {}) },
           update: {}, // never clobber operator settings on restart
         }),
       ),
@@ -84,7 +112,7 @@ export class RoutineConfigService implements OnModuleInit {
   }
 
   /**
-   * Returns all 4 configs. Token is NEVER returned — callers get hasToken:boolean.
+   * Returns every config. Token is NEVER returned — callers get hasToken:boolean.
    */
   async list(): Promise<RoutineConfigPublic[]> {
     const rows = await this.prisma.routineConfig.findMany();

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { WorkspaceReadinessService } from './workspace-readiness.service';
+import { AI_MCP_GRACE_MS } from '../ai/ai-execution';
 import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
 
 /**
@@ -78,9 +79,16 @@ describe('workspace readiness', () => {
       },
       sendingDomain: { count: counter('sendingDomain') },
       channel: {
-        count: jest.fn(async (a: any) =>
-          a?.where?.type === 'SMS' ? count('smsChannel') : count('mailbox'),
-        ),
+        // THREE counts share this model now. The email pair is the point: one
+        // asks "is a mailbox configured", the other "has one ever passed a
+        // health check". Keyed apart so a test can say "configured but never
+        // proved" — the state a row-exists check reads as fine while every
+        // send 535s.
+        count: jest.fn(async (a: any) => {
+          if (a?.where?.type === 'SMS') return count('smsChannel');
+          if (a?.where?.lastVerifiedAt) return count('provenMailbox');
+          return count('mailbox');
+        }),
       },
       product: { count: counter('product') },
       taxRate: { count: counter('taxRate') },
@@ -119,7 +127,23 @@ describe('workspace readiness', () => {
         limits: { aiCreditsMonthly: o.aiCreditsMonthly },
       })),
     };
-    svc = new WorkspaceReadinessService(prisma as any, entitlements as any);
+    // The PLATFORM's own vendor key. Null means fine — the breaker only ever
+    // reports a refusal the vendor has already returned, so "no news" is the
+    // honest default rather than an optimistic one.
+    const anthropic = {
+      platformAiUnavailable: jest.fn(() => o.platformAiUnavailable ?? null),
+    };
+    // A connector-first workspace answers from a queue; an empty one is the
+    // default so every existing test keeps measuring what it was written for.
+    const aiReplyQueue = {
+      pending: jest.fn(async () => o.replyQueue ?? { waiting: 0, oldestQueuedAt: null }),
+    };
+    svc = new WorkspaceReadinessService(
+      prisma as any,
+      entitlements as any,
+      anthropic as any,
+      aiReplyQueue as any,
+    );
   }
 
   const item = async (id: string) => {
@@ -477,12 +501,53 @@ describe('workspace readiness', () => {
     expect((await item('payment-provider')).state).toBe('READY');
   });
 
-  it('accepts either route to sending mail', async () => {
-    // Your own mailbox for replies, or a verified domain for campaign volume.
-    build({ counts: { mailbox: 1 } as any });
-    expect((await item('email-sending')).state).toBe('READY');
-    build({ counts: { sendingDomain: 1 } as any });
-    expect((await item('email-sending')).state).toBe('READY');
+  describe('sending mail, where a configured mailbox is not a working one', () => {
+    it('accepts a VERIFIED sending domain on its own', async () => {
+      // The domain's verification IS the proof; there is no second check to
+      // wait for. No mailbox needed.
+      build({ counts: { sendingDomain: 1 } as any });
+      expect((await item('email-sending')).state).toBe('READY');
+    });
+
+    it('accepts a mailbox that has PASSED a health check', async () => {
+      build({ counts: { mailbox: 1, provenMailbox: 1 } as any });
+      const i = await item('email-sending');
+      expect(i.state).toBe('READY');
+      expect(i.detail).toMatchObject({ mailboxes: 1, provenMailboxes: 1 });
+    });
+
+    it('calls a mailbox that has never passed one ATTENTION, not READY', async () => {
+      // Measured live: a channel saved with the wrong password. The row
+      // existed, so a two-state test said the reach was covered, while every
+      // send died on `535 Authentication Failed`. Configured is not working.
+      build({ counts: { mailbox: 1, provenMailbox: 0 } as any });
+      const i = await item('email-sending');
+      expect(i.state).toBe('ATTENTION');
+      expect(i.detail).toMatchObject({ mailboxes: 1, provenMailboxes: 0, verifiedDomains: 0 });
+    });
+
+    it('still counts the domain when the mailbox is broken', async () => {
+      // One good route is enough — a failing mailbox must not drag a workspace
+      // that also has a verified domain down to ATTENTION.
+      build({ counts: { mailbox: 1, provenMailbox: 0, sendingDomain: 1 } as any });
+      expect((await item('email-sending')).state).toBe('READY');
+    });
+
+    it('asks for one when there is neither', async () => {
+      build();
+      expect((await item('email-sending')).state).toBe('MISSING');
+    });
+
+    it('narrows the proven count by lastVerifiedAt, not by pressing the button', async () => {
+      // `ChannelsService.verify` writes `lastVerifiedAt` only when health.ok,
+      // so this query is what separates "checked and worked" from "checked".
+      build({ counts: { mailbox: 1, provenMailbox: 1 } as any });
+      await svc.get(WS);
+      const wheres = prisma.channel.count.mock.calls.map((c: any[]) => c[0].where);
+      expect(wheres).toContainEqual(
+        expect.objectContaining({ type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } }),
+      );
+    });
   });
 
   describe('AI credits: "can an action run right now", not "is there a wallet"', () => {
@@ -621,6 +686,54 @@ describe('workspace readiness', () => {
       expect(i.state).toBe('READY');
       expect(i.detail).toMatchObject({ fuel: 'prepaid-wallet', planUnreadable: true });
     });
+
+  /**
+   * The gap that is not the workspace's.
+   *
+   * `AnthropicService.platformAiUnavailable()` says WHICH failure a refused
+   * platform key is — its own docstring says it exists "so a panel or a health
+   * check can say" — and nothing read it. So a workspace with plenty of credit
+   * saw a healthy fuel line while every AI path in the product declined,
+   * including the auto-reply that was the whole reason its inbox was connected.
+   */
+  describe('the PLATFORM key, which no amount of workspace credit fixes', () => {
+    const REFUSED = { reason: 'credit balance is too low', until: new Date('2026-09-08T18:00:00Z') };
+
+    it('calls a refused platform key ATTENTION, not MISSING', async () => {
+      // MISSING points at /billing and reads as "buy credits". Buying is
+      // exactly the wrong move here — the workspace's own fuel is fine.
+      build({ aiCreditsMonthly: 1500, aiCreditsUsed: 10, platformAiUnavailable: REFUSED });
+      expect((await item('ai-credits')).state).toBe('ATTENTION');
+    });
+
+    it('names the vendor reason and when it will retry', async () => {
+      // "Out of credit" and "key rejected" have different fixes, and a reader
+      // who only sees a red dot cannot tell either from "never set up".
+      build({ aiCreditsMonthly: 1500, aiCreditsUsed: 10, platformAiUnavailable: REFUSED });
+      expect((await item('ai-credits')).detail).toMatchObject({
+        platformKeyRefused: 'credit balance is too low',
+        retryAfter: REFUSED.until.toISOString(),
+      });
+    });
+
+    it('outranks the workspace fuel answer even when there is none', async () => {
+      // Both are true, but only one of them is actionable by the operator, and
+      // it is not the one that says "top up".
+      build({ aiCreditsMonthly: 0, aiCreditsUsed: 0, platformAiUnavailable: REFUSED });
+      expect((await item('ai-credits')).state).toBe('ATTENTION');
+    });
+
+    it('says nothing at all when the vendor has not refused anything', async () => {
+      // The breaker is per-process and in-memory: it reports a failure that has
+      // ALREADY happened, never a prediction. A freshly restarted API knows
+      // nothing, and inventing a warning there would be the checklist lying in
+      // the other direction.
+      build({ aiCreditsMonthly: 1500, aiCreditsUsed: 10 });
+      const i = await item('ai-credits');
+      expect(i.state).toBe('READY');
+      expect(i.detail).not.toHaveProperty('platformKeyRefused');
+    });
+  });
   });
 
   it('does not call an empty growth wallet ready', async () => {
@@ -748,5 +861,52 @@ describe('workspace readiness', () => {
         }
       }
     }
+  });
+
+  /**
+   * The line `setAiExecution` promises exists.
+   *
+   * MCP_ONLY is offerable only because this is here: it lets a workspace say
+   * "never use the platform key" without that quietly meaning "never answer
+   * anyone". Nothing on the server can verify a drainer exists on the owner's
+   * side, so the backlog is the only honest instrument.
+   */
+  describe('workspace readiness — customers waiting on an answer', () => {
+    const queued = (waiting: number, ageMs: number | null) => ({
+      replyQueue: {
+        waiting,
+        oldestQueuedAt: ageMs === null ? null : new Date(Date.now() - ageMs),
+      },
+    });
+
+    it('says NOTHING on an empty queue, rather than reporting a task nobody did', async () => {
+      // The rest of this list is "what you still have to do". An empty reply
+      // queue is not something someone completed, it is the system working —
+      // and a checklist that congratulates you for it dilutes the lines that
+      // need acting on.
+      build(queued(0, null));
+      expect(await item('ai-reply-queue')).toBeUndefined();
+    });
+
+    it('is READY while a reply is merely recent — a queue is normal', async () => {
+      build(queued(2, 30_000));
+      const i = await item('ai-reply-queue');
+      expect(i.state).toBe('READY');
+      expect(i.detail.waiting).toBe(2);
+    });
+
+    it('is ATTENTION once the oldest has outlived BOTH answerers', async () => {
+      // Older than twice the grace window means the connector never polled AND
+      // the platform, which should have taken it at 1x, did not either.
+      build(queued(3, AI_MCP_GRACE_MS * 2 + 60_000));
+      const i = await item('ai-reply-queue');
+      expect(i.state).toBe('ATTENTION');
+      expect(i.detail.waiting).toBe(3);
+    });
+
+    it('names the tool that drains it, because this gap IS agent-closable', async () => {
+      build(queued(1, 0));
+      expect((await item('ai-reply-queue')).mcpTool).toBe('jeeta.claim_reply_job');
+    });
   });
 });

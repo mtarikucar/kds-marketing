@@ -2,14 +2,17 @@
  * RoutineConfigService — plain-instantiation spec (no NestJS testing harness).
  *
  * Covers:
- *   - ensureSeeded() upserts all 4 routine keys
+ *   - ensureSeeded() upserts every routine key
  *   - update() seals triggerToken via sealSecret
  *   - update() throws ServiceUnavailableException when MARKETING_SECRET_KEY unset
  *   - list() never returns triggerTokenSealed; sets hasToken correctly
  */
 
 import { ServiceUnavailableException } from '@nestjs/common';
-import { RoutineConfigService } from './routine-config.service';
+// ROUTINE_KEYS is imported, not copied. This file used to keep its own list and
+// pinned a count of 4 against it; the moment the real list grew, the failure
+// read as a puzzle rather than as a statement about seeding.
+import { RoutineConfigService, ROUTINE_KEYS } from './routine-config.service';
 
 // ── secret-box mock ──────────────────────────────────────────────────────────
 // We mock the module so sealSecret/openSecret never touch the real crypto.
@@ -47,13 +50,6 @@ function makeConfig(secretKeyPresent = true) {
   };
 }
 
-const ROUTINE_KEYS = [
-  'review-draft',
-  'content-pack',
-  'insight-digest',
-  'lead-scoring',
-];
-
 const makeBaseConfig = (key: string, overrides = {}) => ({
   id: `id-${key}`,
   key,
@@ -88,12 +84,15 @@ describe('RoutineConfigService', () => {
   // ── ensureSeeded ─────────────────────────────────────────────────────────
 
   describe('ensureSeeded()', () => {
-    it('upserts all 4 routine keys on module init', async () => {
+    it('upserts every routine key on module init', async () => {
+      // Counted from ROUTINE_KEYS rather than pinned to a literal: the list has
+      // grown once already (inbox-reply), and a hard 4 here would have failed
+      // as a puzzle rather than as a statement about seeding.
       prisma.routineConfig.upsert.mockResolvedValue({});
 
       await service.ensureSeeded();
 
-      expect(prisma.routineConfig.upsert).toHaveBeenCalledTimes(4);
+      expect(prisma.routineConfig.upsert).toHaveBeenCalledTimes(ROUTINE_KEYS.length);
 
       const calledKeys = prisma.routineConfig.upsert.mock.calls.map(
         (call: any) => call[0].where.key,
@@ -269,6 +268,37 @@ describe('RoutineConfigService', () => {
       const updateCall = prisma.routineConfig.update.mock.calls[0][0];
       expect(updateCall.data.lastTriggerStatus).toBe('error');
       expect(updateCall.data.lastTriggerError).toBe('timeout');
+    });
+  });
+
+  describe('inbox-reply — the key that is not a nightly routine', () => {
+    it('is seeded with a much shorter cooldown than the scheduled ones', async () => {
+      // The four nightly routines are compared against the morning they exist
+      // to protect. This one is compared against how long a customer who just
+      // wrote in will sit there.
+      prisma.routineConfig.upsert.mockResolvedValue({});
+      await service.ensureSeeded();
+      const inbox = prisma.routineConfig.upsert.mock.calls.find(
+        (c: any) => c[0].where.key === 'inbox-reply',
+      );
+      expect(inbox[0].create.eventCooldownSec).toBe(30);
+    });
+
+    it('leaves the scheduled routines on the platform default', async () => {
+      prisma.routineConfig.upsert.mockResolvedValue({});
+      await service.ensureSeeded();
+      const nightly = prisma.routineConfig.upsert.mock.calls.find(
+        (c: any) => c[0].where.key === 'lead-scoring',
+      );
+      expect(nightly[0].create).not.toHaveProperty('eventCooldownSec');
+    });
+
+    it('still never clobbers an operator setting on restart', async () => {
+      prisma.routineConfig.upsert.mockResolvedValue({});
+      await service.ensureSeeded();
+      for (const call of prisma.routineConfig.upsert.mock.calls) {
+        expect(call[0].update).toEqual({});
+      }
     });
   });
 });

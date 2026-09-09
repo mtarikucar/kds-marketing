@@ -159,6 +159,28 @@ jobs:
       # build = tsc && vite build (the type check is part of the build)
       - run: npm run build
 
+  # The desktop bridge. Small, and until now it had NO lane at all — 23 tests
+  # that nobody ran on a pull request, guarding the one component that turns
+  # somebody's phone into something a model can press buttons on. It is the
+  # piece where a regression is least visible from anywhere else: it lives in
+  # its own package, imports nothing from backend or frontend, and so nothing
+  # else in this file would go red if it stopped compiling.
+  desktop:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
   # Browser E2E. Runs the REAL API against a throwaway database and drives the
   # built frontend with Playwright — the only lane that exercises the request
   # path end to end (validation pipe, guards, entitlements, navigation). It

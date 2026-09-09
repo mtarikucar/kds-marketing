@@ -114,6 +114,13 @@ describe("the 'mcp' agent value — connection-signal tripwire", () => {
         "{ agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },",
       // READER — the MCP console filters its session list on the same value.
       "modules/marketing/mcp/mcp-console.service.ts :: const MCP_AGENT = 'mcp';",
+      // NOT AN AGENT VALUE — a DeviceCommand.source, saying which surface
+      // queued a phone command ('mcp' vs 'console', a human in settings). Same
+      // five letters, different column, and it opens no AgentRun: the desktop
+      // app prints it in its log so an operator can see whether an agent or a
+      // person asked. Listed so the set stays exact.
+      'modules/marketing/mcp/tools/device.tools.ts :: ' +
+        "{ source: 'mcp', requestedBy: actor?.id ?? undefined },",
       // NOT AN AGENT VALUE — the REST route prefix. Listed so the set stays exact.
       "modules/marketing/mcp/mcp.controller.ts :: @Controller('mcp')",
       // READER — the constant this whole signal is named by.

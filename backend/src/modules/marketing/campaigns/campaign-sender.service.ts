@@ -6,6 +6,7 @@ import { EmailService } from '../../../common/services/email.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
+import { WorkspaceMailboxService } from '../channels/workspace-mailbox.service';
 import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
 import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
@@ -62,6 +63,7 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly registry: ChannelAdapterRegistry,
+    private readonly mailbox: WorkspaceMailboxService,
     private readonly quota: MessageQuotaService,
     private readonly sendingDomains: SendingDomainsService,
     private readonly smsV2: SmsV2Client,
@@ -452,9 +454,20 @@ export class CampaignSenderService implements OnModuleInit {
         return { ok: false, error: 'PUBLIC_BASE_URL not configured (unsubscribe link required)' };
       }
       if (channel === 'EMAIL') {
-        // Per-workspace From from a VERIFIED sending domain — null (platform
-        // default) unless an ESP transport is configured, so this is inert today.
-        const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
+        // The workspace's OWN mailbox, when it has one that has proved it works.
+        //
+        // Connecting a mailbox used to change NOTHING about campaign mail. This
+        // branch went straight to the platform transport, so a workspace that
+        // had just connected admin@its-own-domain.com watched its campaign
+        // arrive from the platform's address instead — the channel was read
+        // only by the inbound webhook, never by a sender. Found the plain way:
+        // a real workspace connected its mailbox, sent, and asked why the mail
+        // came from us.
+        //
+        // The VERIFIED-sending-domain override below stays the route for
+        // volume, and stays inert until an operator sets SENDING_DOMAIN_ESP —
+        // but a connected mailbox is a From address the workspace has already
+        // proved it owns, and it is available today.
         // Campaign email was the one outbound channel with NO meter at all:
         // this branch returned before the reserve below, and MessageQuotaService
         // — which already counts EMAIL as metered — was never called for it.
@@ -464,18 +477,45 @@ export class CampaignSenderService implements OnModuleInit {
         // the other channels now, refund on failure included.
         await this.quota.reserve(workspaceId, 'EMAIL');
         try {
-          const ok = html
-            ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
-            : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
+          const own = await this.mailbox.resolve(workspaceId);
+          let ok: boolean;
+          let ownError: string | undefined;
+          let ownMessageId: string | null = null;
+          if (own) {
+            const r = await this.registry.get('EMAIL').send({
+              config: own,
+              to,
+              text: body,
+              subject: subject ?? 'Update',
+              html,
+            });
+            ok = r.status === 'SENT';
+            ownError = r.error;
+            ownMessageId = r.externalMessageId;
+          } else {
+            const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
+            ok = html
+              ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
+              : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
+          }
           if (!ok) await this.quota.refund(workspaceId, 'EMAIL');
           // A campaign writes its error onto EVERY recipient row. "email send
           // failed" repeated three hundred times says only that something is
           // wrong; the provider's own line says WHICH thing — and when the
           // mailer itself is down, all three hundred share one cause.
-          const why = ok ? undefined : this.email.consumeLastPlainSendError();
+          // The adapter hands back the provider's line directly; the platform
+          // mailer parks it for one read. Same shape either way.
+          const why = ok ? undefined : (ownError ?? this.email.consumeLastPlainSendError());
+          // The mailbox path carries the provider's own message id onto the
+          // recipient row, exactly as the SMS/WhatsApp branch does with
+          // `externalMessageId`. It is the only observable that tells the two
+          // email paths apart after the fact: the platform mailer answers a
+          // bare boolean and leaves this null, so a recipient with a messageId
+          // was sent from the workspace's own mailbox. Debugging "which address
+          // did this actually leave from" without it means reading the mail.
           return {
             ok,
-            messageId: null,
+            messageId: ownMessageId,
             error: ok ? undefined : why ?? 'email send failed',
           };
         } catch (e) {

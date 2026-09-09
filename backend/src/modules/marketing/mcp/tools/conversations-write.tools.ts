@@ -73,6 +73,44 @@ export function registerConversationWriteTools(
     },
   });
 
+  /**
+   * Hand a thread back to the AI, or take it away from it.
+   *
+   * `aiPaused` is set automatically the moment a person replies from the panel
+   * — the right default, because someone typing IS taking over. Nothing gave it
+   * back. So a rep who answered one question and moved on left that customer
+   * permanently outside every automatic path: `reply()` declines on the flag,
+   * the backfill sweep skips it, and the connector lane will not queue it.
+   * Silent, and indistinguishable from a customer who simply stopped writing.
+   *
+   * The REST route has existed all along; only the connector could not reach
+   * it.
+   */
+  registry.register({
+    name: 'jeeta.set_conversation_ai',
+    description:
+      'Turn the AI back on for one conversation, or take it off. Replying from the panel pauses it ' +
+      'automatically — a person answering has taken the thread over — and nothing turns it back on, ' +
+      'so a rep who answered once and moved on leaves that customer outside every automatic path: ' +
+      'the auto-reply declines, the backfill skips it, and the connector lane will not queue it. ' +
+      'Turn it back on when the human is done. Pausing is the polite way to say "leave this one to ' +
+      'me" without closing the thread.',
+    domain: 'inbox',
+    defer: true,
+    scopes: ['contacts.write'],
+    risk: 'WRITE',
+    // Changes who may answer. Sends nothing, and is undone by the same call.
+    requiresApproval: false,
+    inputSchema: z.object({
+      conversationId: z.string().min(1).describe('Conversation to change.'),
+      paused: z
+        .boolean()
+        .describe('true stops the AI answering here; false hands the thread back to it.'),
+    }),
+    handler: async (ctx, args) =>
+      deps.conversations.setAiPaused(ctx.workspaceId, String(args.conversationId), args.paused === true),
+  });
+
   registry.register({
     name: 'jeeta.close_conversation',
     description:

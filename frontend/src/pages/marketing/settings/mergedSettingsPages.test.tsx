@@ -28,6 +28,7 @@ vi.mock('./webhooks/WebhooksPage', () => stub('outgoing-hooks'));
 vi.mock('./inboundWebhooks', () => stub('inbound-hooks'));
 vi.mock('./apiKeys/ApiKeysPage', () => stub('api-keys'));
 vi.mock('./mcpConsole/McpConsolePage', () => stub('connector'));
+vi.mock('./devices/DevicesPage', () => stub('devices'));
 vi.mock('../users', () => stub('members'));
 vi.mock('./roles/RolesPage', () => stub('roles'));
 vi.mock('../crm/segments/SegmentsPage', () => stub('segments'));

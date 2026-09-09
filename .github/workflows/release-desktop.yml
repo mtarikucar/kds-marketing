@@ -1,0 +1,102 @@
+name: Desktop installer
+
+# The installer this repository could not build.
+#
+# `electron-builder` unpacks a code-signing toolchain that contains macOS
+# symlinks, and creating a symlink on Windows needs Developer Mode or an
+# elevated shell. That is a decision belonging to whoever owns the machine, so
+# on a developer's laptop `npm run pack` produces an unsigned portable zip
+# instead. A GitHub Windows runner has no such restriction, which is the whole
+# reason this lane exists: the thing an owner can actually download is built
+# somewhere that is allowed to build it.
+#
+# It is still UNSIGNED — nobody here holds a certificate, and Windows will say
+# "unknown publisher" for both an NSIS installer and a zip. What the installer
+# buys over the zip is a Start-menu entry, an uninstaller, and an .exe carrying
+# our own name and version rather than Electron's.
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or SHA to build (defaults to the current branch)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+
+      # Tests before packaging, not after: an installer built from a broken
+      # bridge is worse than no installer, because somebody will run it.
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Build the installer
+        # Signing is explicitly OFF rather than merely absent. Left to
+        # auto-discovery, electron-builder will pick up any certificate that
+        # happens to be in the runner's store and produce a build signed by
+        # something nobody chose.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+
+      - name: What was produced
+        # Named because a silent artifact upload is how a zero-byte installer
+        # ships. If electron-builder changes its output layout this prints the
+        # truth rather than the expectation.
+        run: dir release
+        shell: pwsh
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-desktop-windows
+          # `directories.output` is pinned to `release` in package.json.
+          # electron-builder defaults to `dist`, which this package already
+          # uses for compiled JS — it would have written the installer among
+          # the sources it was packaging.
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.blockmap
+          if-no-files-found: error
+          retention-days: 30
+
+      # A tag build is a release somebody is meant to download, so it gets a
+      # release page. A manual run is a check, and stops at the artifact.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*.exe
+          body: |
+            Jeeta Masaüstü — telefonu Jeeta'ya bağlayan köprü.
+
+            **Bu paket imzasız.** Windows "bilinmeyen yayıncı" uyarısı verir;
+            elimizde kod imzalama sertifikası yok.
+
+            Kurmadan önce: telefonda USB hata ayıklama açık olmalı, bilgisayarda
+            `adb` (Android Platform Tools) PATH üzerinde bulunmalı.
+
+            API anahtarı ve cihaz kimliği: Jeeta → Ayarlar → API ve bağlayıcı.
+            Anahtara **iki kapsam ailesini birden** verin — kaba `write` (bu
+            uygulama için) ve `campaigns.send` + `reports.read` (Claude'un
+            telefona komut verebilmesi için).

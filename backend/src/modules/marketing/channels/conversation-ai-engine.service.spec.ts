@@ -684,3 +684,123 @@ describe('ConversationAiEngineService.reply', () => {
     });
   });
 });
+
+/**
+ * MCP FIRST — the platform's Anthropic key is the fallback, never the default.
+ *
+ * The product is meant to be usable by someone who already has a Claude
+ * account: they connect it, the platform carries channels, state, scheduling
+ * and sending, and their own Claude does the thinking. So an inbound message
+ * under any connector mode must QUEUE, not spend.
+ */
+describe('ConversationAiEngineService — who does the thinking', () => {
+  const WS = 'ws-1';
+  const CONVO = 'convo-1';
+
+  function build(aiExecution: string | null, mcpSeen = false, paused = false) {
+    const anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
+    const scheduledJobs = {
+      cancel: jest.fn().mockResolvedValue(undefined),
+      schedule: jest.fn().mockResolvedValue('job-1'),
+    };
+    const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiExecution }) },
+      agentRun: { findFirst: jest.fn().mockResolvedValue(mcpSeen ? { id: 'r1' } : null) },
+      // Two callers now: the aiPaused gate before queueing, and reply() on the
+      // SERVER path. A null second answer makes reply() decline immediately,
+      // which is all these tests need from it.
+      conversation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(paused ? { aiPaused: true } : { aiPaused: false })
+          .mockResolvedValue(null),
+      },
+    };
+    const engine = new ConversationAiEngineService(
+      prisma,
+      {} as any,
+      anthropic as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      scheduledJobs as any,
+      { registerHandler: jest.fn() } as any,
+      { push: jest.fn() } as any,
+      {} as any,
+    );
+    const inbound = (engine as any).onInbound.bind(engine);
+    return { engine, prisma, anthropic, scheduledJobs, inbound };
+  }
+
+  const event = { payload: { workspaceId: WS, conversationId: CONVO } };
+
+  it('queues instead of spending under MCP', async () => {
+    const h = build('MCP');
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: WS,
+        kind: 'conversation.ai_reply',
+        dedupKey: CONVO,
+      }),
+    );
+    // The decisive assertion: reply() never ran, so the platform key was never
+    // consulted. Measured on isEnabled() — its very first line — rather than on
+    // a conversation read, because the aiPaused gate legitimately reads the
+    // conversation before deciding to queue.
+    expect(h.anthropic.isEnabled).not.toHaveBeenCalled();
+  });
+
+  it('queues under MCP_ONLY too', async () => {
+    const h = build('MCP_ONLY');
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalled();
+    expect(h.anthropic.isEnabled).not.toHaveBeenCalled();
+  });
+
+  it('reads AUTO as the connector only while a Claude is actually connected', async () => {
+    const connected = build('AUTO', true);
+    await connected.inbound(event);
+    expect(connected.scheduledJobs.schedule).toHaveBeenCalled();
+
+    const alone = build('AUTO', false);
+    await alone.inbound(event);
+    expect(alone.scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(alone.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('runs live on SERVER, which is what every workspace had before', async () => {
+    const h = build('SERVER');
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('falls back to SERVER when the mode cannot be read at all', async () => {
+    // A customer waiting on a reply must not be held hostage to a failed
+    // settings read. Guessing the connector hands the job to a client that may
+    // not exist; guessing the platform only costs money.
+    const h = build('MCP');
+    h.prisma.workspace.findUnique.mockRejectedValue(new Error('db down'));
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('still cancels a pending proactive follow-up before anything else', async () => {
+    // The customer just spoke. Whoever ends up answering, the nudge scheduled
+    // for their silence is wrong now.
+    const h = build('MCP');
+    await h.inbound(event);
+    expect(h.scheduledJobs.cancel).toHaveBeenCalledWith(expect.any(String), CONVO);
+  });
+
+  it('does not queue a thread a human has taken over', async () => {
+    // reply() declines on the same flag and the backfill skips it. Queueing
+    // anyway would hand the connector work the platform would have refused —
+    // the two answerers disagreeing about who is allowed to speak.
+    const h = build('MCP', false, true);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <!-- No remote content, ever. This window renders a URL a stranger's
+         business put on their website and text an LLM wrote; a CSP that
+         forbids everything external means neither can pull anything in. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Jeeta Masaüstü</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #0f2350;
+        --muted: #5b6478;
+        --line: #e3e7ef;
+        --accent: #2458e6;
+        --danger: #c0392b;
+        --ok: #1c7c4a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #10141c;
+          --fg: #e8ecf4;
+          --muted: #98a2b8;
+          --line: #232a38;
+          --accent: #6f97ff;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      main { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+      h1 { font-size: 16px; margin: 0; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+      input, select {
+        width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+        border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit;
+      }
+      .row { display: flex; gap: 8px; }
+      .row > * { flex: 1; }
+      button {
+        padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line);
+        background: var(--bg); color: var(--fg); font: inherit; cursor: pointer;
+      }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.danger { color: var(--danger); border-color: var(--danger); }
+      button:disabled { opacity: .5; cursor: not-allowed; }
+      .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+      .status { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+      .dot.on { background: var(--ok); }
+      .muted { color: var(--muted); font-size: 12px; }
+      #log { max-height: 180px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+      #log li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+      #approval { border-color: var(--accent); }
+      #approval[hidden] { display: none !important; }
+      .cmd { font-weight: 600; word-break: break-all; margin: 6px 0 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Jeeta Masaüstü</h1>
+
+      <!-- The approval sits ABOVE everything: it is the only thing in this
+           window that somebody is being asked to decide, and it must never be
+           something you scroll to find. -->
+      <section class="card" id="approval" hidden>
+        <div class="muted">Jeeta telefonda şunu yapmak istiyor</div>
+        <div class="cmd" id="approval-text"></div>
+        <div class="row">
+          <button class="primary" id="approve">Onayla</button>
+          <button class="danger" id="reject">Reddet</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="status"><span class="dot" id="dot"></span><span id="status">Kurulmadı</span></div>
+        <p class="muted" id="hint">Sunucu adresi, API anahtarı ve telefonu girin.</p>
+      </section>
+
+      <section class="card">
+        <label for="baseUrl">Sunucu</label>
+        <input id="baseUrl" placeholder="https://jeetagrowth.com" />
+
+        <label for="apiKey" style="margin-top:10px">API anahtarı</label>
+        <input id="apiKey" type="password" placeholder="Ayarlar → API ve bağlayıcı → API anahtarları" />
+
+        <label for="deviceId" style="margin-top:10px">Cihaz kimliği</label>
+        <input id="deviceId" placeholder="Ayarlar → API ve bağlayıcı → Eşleşmiş telefonlar" />
+
+        <label for="serial" style="margin-top:10px">Telefon</label>
+        <div class="row">
+          <select id="serial"></select>
+          <button id="scan" style="flex:0 0 auto">Tara</button>
+        </div>
+        <p class="muted" id="phone-hint"></p>
+      </section>
+
+      <div class="row">
+        <button class="primary" id="start">Başlat</button>
+        <button id="stop" disabled>Durdur</button>
+      </div>
+
+      <section class="card">
+        <div class="muted" style="margin-bottom:8px">Yapılanlar</div>
+        <ul id="log"></ul>
+      </section>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>

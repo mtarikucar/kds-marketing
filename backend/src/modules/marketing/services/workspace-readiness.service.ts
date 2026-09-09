@@ -2,6 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
+import { AnthropicService } from '../ai/anthropic.service';
+import { AiReplyLeaseService } from '../ai/ai-reply-lease.service';
+import { AI_MCP_GRACE_MS } from '../ai/ai-execution';
 
 /**
  * How far ahead a token expiry is worth complaining about — and why there are
@@ -137,6 +140,15 @@ export class WorkspaceReadinessService {
     // answered by the PLAN before it is answered by a wallet, and reading the
     // wallet alone got the answer backwards on the plan that needs no wallet.
     private readonly entitlements: EntitlementsService,
+    // Nor is every gap the workspace's. A workspace can hold plenty of credit
+    // and still get nothing, because the PLATFORM's own vendor key is being
+    // refused — and no amount of buying fixes that one.
+    private readonly anthropic: AnthropicService,
+    // A connector-first workspace answers its customers from a queue. A queue
+    // nobody drains looks exactly like an inbox where nobody wrote — which is
+    // this codebase's oldest failure shape, and the reason the mode that can
+    // produce it had to arrive with the line that reports it.
+    private readonly aiReplyQueue: AiReplyLeaseService,
   ) {}
 
   async get(workspaceId: string): Promise<WorkspaceReadiness> {
@@ -180,6 +192,7 @@ export class WorkspaceReadinessService {
       expiringSocial,
       sendingDomains,
       mailboxChannels,
+      provenMailboxes,
       smsChannels,
       products,
       taxRates,
@@ -299,6 +312,15 @@ export class WorkspaceReadinessService {
       }),
       this.prisma.sendingDomain.count({ where: { workspaceId, status: 'VERIFIED' } }),
       this.prisma.channel.count({ where: { workspaceId, type: 'EMAIL', status: 'ACTIVE' } }),
+      // The same mailboxes, narrowed to the ones a health check has actually
+      // passed. `ChannelsService.verify` writes `lastVerifiedAt` ONLY when
+      // `health.ok` (channels.service.ts), so a non-null value means the SMTP
+      // login was accepted at least once — not merely that somebody pressed
+      // the button. Counting the two apart is what lets the item below say
+      // "configured" and "working" are different things.
+      this.prisma.channel.count({
+        where: { workspaceId, type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } },
+      }),
       this.prisma.channel.count({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } }),
       this.prisma.product.count({ where: { workspaceId } }),
       this.prisma.taxRate.count({ where: { workspaceId } }),
@@ -358,6 +380,10 @@ export class WorkspaceReadinessService {
     ]);
 
     const yes = (ok: boolean): ReadinessState => (ok ? 'READY' : 'MISSING');
+    const platformAi = this.anthropic.platformAiUnavailable();
+    const replyQueue = await this.aiReplyQueue
+      .pending(workspaceId)
+      .catch(() => ({ waiting: 0, oldestQueuedAt: null as Date | null }));
 
     const connected = liveMcpTokens > 0 || mcpApiKeys > 0;
     // Fails towards APPROVAL, the same direction `McpInvokerService` does:
@@ -553,10 +579,32 @@ export class WorkspaceReadinessService {
         // Either route works: your own mailbox for one-to-one replies, or a
         // verified domain for campaign volume. Neither means campaign mail
         // arrives in spam, which is worse than not sending it.
-        state: yes(sendingDomains > 0 || mailboxChannels > 0),
+        //
+        // But a mailbox row is not a working mailbox. Measured on a live
+        // workspace: a channel saved with the wrong password read READY here
+        // while every send died on `535 Authentication Failed` — the row
+        // existed, so the two-state test was satisfied, and the list said the
+        // reach was covered. That is precisely the "exists but does not work"
+        // case ATTENTION was added for.
+        //
+        // A VERIFIED sending domain still counts on its own: its verification
+        // IS the proof. A mailbox has to have passed a health check.
+        //
+        // Honest about what this can and cannot see: `lastVerifiedAt` latches
+        // on the first success and is never cleared, so ATTENTION here means
+        // "never proved", not "broke since". A mailbox whose password is
+        // rotated away keeps reading READY until somebody re-runs Verify.
+        // Catching that needs a stored check RESULT, which the Channel model
+        // does not have today.
+        state:
+          sendingDomains > 0 || provenMailboxes > 0 ? 'READY' : mailboxChannels > 0 ? 'ATTENTION' : 'MISSING',
         to: '/settings/domains',
         mcpTool: null,
-        detail: { verifiedDomains: sendingDomains, mailboxes: mailboxChannels },
+        detail: {
+          verifiedDomains: sendingDomains,
+          mailboxes: mailboxChannels,
+          provenMailboxes,
+        },
       },
       {
         id: 'sms',
@@ -659,6 +707,47 @@ export class WorkspaceReadinessService {
       },
 
       // ── fuel ────────────────────────────────────────────────────────────
+      // Present only when there IS a backlog, and that is a deliberate
+      // difference from every other line here. The rest of this list is "what
+      // you still have to DO"; an empty reply queue is not a task anyone
+      // completed, it is the system working. Listing it as READY on a brand-new
+      // workspace would dilute the items that actually need doing — which is
+      // exactly what the "ready for nothing" test above is protecting.
+      ...(replyQueue.waiting > 0
+        ? [
+            {
+              id: 'ai-reply-queue',
+              group: 'fuel',
+        /**
+         * Customers waiting on an answer that nobody has written.
+         *
+         * `setAiExecution` promises this line exists, and the promise is the
+         * whole reason MCP_ONLY is offerable at all: it lets a workspace say
+         * "never use the platform key" without that quietly meaning "never
+         * answer anyone". Nothing on the server can verify a drainer exists on
+         * the owner's side — that is a scheduled task in their Claude, not a
+         * row we can read — so the only honest instrument is the backlog.
+         *
+         * The threshold is TWICE the grace window, and that is what makes it
+         * meaningful rather than noisy. A reply queued thirty seconds ago is
+         * the system working. One older than 2x grace means BOTH answerers
+         * declined it: the connector never polled, and under MCP the platform
+         * should already have taken it and did not. A queue is normal; a queue
+         * that is not moving is the finding.
+         */
+              state:
+                Date.now() - replyQueue.oldestQueuedAt!.getTime() > AI_MCP_GRACE_MS * 2
+                  ? 'ATTENTION'
+                  : 'READY',
+              to: '/inbox',
+              mcpTool: 'jeeta.claim_reply_job',
+              detail: {
+                waiting: replyQueue.waiting,
+                oldestQueuedAt: replyQueue.oldestQueuedAt?.toISOString() ?? null,
+              },
+            } as const,
+          ]
+        : []),
       {
         id: 'ai-credits',
         group: 'fuel',
@@ -683,7 +772,23 @@ export class WorkspaceReadinessService {
         // The honest answer needs the meter as well as the plan, which is why
         // this reads the same `UsageCounter` row `reserve()` increments rather
         // than guessing from the wallet. See the derivation above.
-        state: yes(aiFuel !== 'none' && aiFuel !== 'unknown-plan-unreadable'),
+        //
+        // THIRD question, and the one that outranks both: is the platform's own
+        // vendor key working? `AnthropicService.platformAiUnavailable()` was
+        // written so "a panel or a health check can say WHICH failure this is"
+        // — and until now nothing read it, so a refused key showed here as a
+        // healthy workspace with fuel while every AI path silently declined.
+        // ATTENTION, not MISSING: the workspace's own fuel is fine and buying
+        // more would be the wrong move.
+        //
+        // What this can and cannot see: the breaker is per-process and
+        // in-memory by design, so this reports a failure the vendor has ALREADY
+        // returned, not a prediction. A freshly restarted API says nothing is
+        // wrong until the next call fails — which is the honest answer, since
+        // at that point nobody knows.
+        state: platformAi
+          ? 'ATTENTION'
+          : yes(aiFuel !== 'none' && aiFuel !== 'unknown-plan-unreadable'),
         to: '/billing',
         mcpTool: null,
         // Every input to the answer, plus WHICH route is carrying it, so a
@@ -695,6 +800,11 @@ export class WorkspaceReadinessService {
           period,
           balance: aiPrepaid,
           usedThisPeriod: aiUsedThisPeriod,
+          // Named, because "out of credit" and "key rejected" have different
+          // fixes and neither of them is the workspace's wallet.
+          ...(platformAi
+            ? { platformKeyRefused: platformAi.reason, retryAfter: platformAi.until.toISOString() }
+            : {}),
           ...(aiCreditsMonthly === null
             ? { planUnreadable: true }
             : {

@@ -102,6 +102,16 @@ model Workspace {
   /// `research/research-execution.ts`.
   researchExecution String @default("AUTO")
 
+  /// WHO does this workspace's AI work — its own connected Claude, or the
+  /// platform's Anthropic key. MCP first; the platform key is the FALLBACK.
+  ///
+  /// SERVER / AUTO / MCP / MCP_ONLY. `MCP_ONLY` is a guarantee rather than a
+  /// preference: the platform key is never used, and work waits for the agent
+  /// for as long as that takes. Everything else fails safe towards SERVER.
+  ///
+  /// Allowed values are AI_EXECUTION_MODES in `ai/ai-execution.ts`.
+  aiExecution String @default("AUTO")
+
   /// WHICH fal.ai model this workspace's generations run on, by kind — the
   /// middle term of `campaign override ?? workspace default ?? code constant`.
   ///
@@ -5562,4 +5572,109 @@ model CronHeartbeat {
   updatedAt DateTime  @updatedAt
 
   @@map("cron_heartbeats")
+}
+
+/// A physical device a workspace can drive — today an Android phone reached
+/// over ADB by a local bridge, tomorrow whatever else the bridge learns to
+/// speak.
+///
+/// WHY A ROW AT ALL, when the phone is on somebody's desk and the server is in
+/// a datacentre. The server cannot reach the phone and never will: there is a
+/// laptop, a USB cable and a person in between. So the phone does not receive
+/// commands — it COLLECTS them. This row is the rendezvous: the bridge
+/// authenticates as the workspace, claims what is waiting, does it, and writes
+/// back what happened. Every part of the product can then address a phone
+/// without knowing anything about cables.
+///
+/// `mode` is the safety property, and it is deliberately a column rather than a
+/// setting in the bridge's config file: a device that requires a human to
+/// press the button for every command must be able to say so to the SERVER,
+/// so the queue can refuse to promise something the device will not do.
+model Device {
+  id          String  @id @default(uuid())
+  workspaceId String
+  /// Human name — "Satış telefonu", "Test cihazı".
+  label       String
+  /// ANDROID today. The bridge reports what it actually found.
+  platform    String  @default("ANDROID")
+  /// ADB serial, so a bridge with two phones plugged in knows which is which.
+  serial      String?
+  /// What the bridge last reported about the handset: model, Android version,
+  /// screen size. Free-form because it is the bridge's observation, not our
+  /// contract.
+  properties  Json    @default("{}")
+
+  /// MANUAL  — every command waits for a person to approve it on the bridge.
+  /// AUTO    — the bridge executes without asking.
+  /// Default MANUAL, and the default is the point: a phone that acts on its
+  /// own is a decision someone has to make on purpose.
+  mode        String  @default("MANUAL")
+  /// ACTIVE | PAUSED | REVOKED. PAUSED is the one-click stop; REVOKED unpairs.
+  status      String  @default("ACTIVE")
+
+  /// Set while a bridge is polling. Absence of a recent beat is how the UI
+  /// knows the cable is out, rather than reporting a command as "pending"
+  /// forever.
+  lastSeenAt  DateTime?
+  pairedAt    DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  commands DeviceCommand[]
+
+  @@index([workspaceId, status])
+  @@map("devices")
+}
+
+/// One instruction for a device, and what came back.
+///
+/// The instruction set is deliberately small and deliberately has no SHELL:
+/// a remote shell into somebody's personal phone is a different risk class
+/// from "open this link", and mixing the two into one queue means the audit
+/// trail cannot tell them apart either.
+model DeviceCommand {
+  id       String @id @default(uuid())
+  deviceId String
+  device   Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// Denormalised so a workspace's audit read never has to join through a
+  /// device that may since have been revoked.
+  workspaceId String
+
+  /// TAP | SWIPE | TEXT | KEY | OPEN_URL | LAUNCH_APP | SCREENSHOT | UI_DUMP
+  kind   String
+  /// Kind-specific arguments, validated against the kind before the row is
+  /// written — a malformed command must not reach a phone to find out.
+  args   Json   @default("{}")
+
+  /// QUEUED -> CLAIMED -> DONE | FAILED | REFUSED | EXPIRED
+  /// REFUSED is the human at the bridge saying no. It is not a failure and
+  /// must not read as one: a person declining is the feature working.
+  status String @default("QUEUED")
+
+  /// Who asked. `source` says which part of the product — a person, an MCP
+  /// tool, a strategy action — because "the phone opened WhatsApp" is a
+  /// sentence that needs an actor.
+  source      String
+  requestedBy String?
+
+  /// What the bridge saw. `result` carries structured output (a UI dump, the
+  /// ADB response); `screenshotKey` is an R2 object, kept apart because it is
+  /// large and because a screenshot of somebody's phone deserves its own
+  /// retention answer.
+  result        Json?
+  screenshotKey String?
+  error         String?
+
+  claimedAt   DateTime?
+  completedAt DateTime?
+  /// A command nobody collected is not a command that will run later. The
+  /// sweeper expires them, so a phone plugged back in after a week does not
+  /// replay a day's worth of taps at once.
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([deviceId, status, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("device_commands")
 }

@@ -56,6 +56,8 @@ import {
 } from './services';
 
 // Guards
+import { MarketingDevicesController, DeviceBridgeController } from './devices/devices.controller';
+import { DevicesService } from './devices/devices.service';
 import { MarketingGuard } from './guards/marketing.guard';
 import { MarketingRolesGuard } from './guards/marketing-roles.guard';
 import { IngestTokenGuard } from './guards/ingest-token.guard';
@@ -142,6 +144,8 @@ import { ScheduledJobService } from './scheduling/scheduled-job.service';
 import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
+import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
+import { AiReplyBackfillService } from './ai/ai-reply-backfill.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
 import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
@@ -161,6 +165,7 @@ import { RecordingProxyController } from './controllers/recording-proxy.controll
 import { SseTokenGuard } from './guards/sse-token.guard';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
+import { WorkspaceMailboxService } from './channels/workspace-mailbox.service';
 import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
@@ -176,6 +181,8 @@ import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
 import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
 import { NetgsmMoPollService } from './channels/netgsm-mo-poll.service';
+import { EmailImapPollService } from './channels/email-imap-poll.service';
+import { EmailImapIdleService } from './channels/email-imap-idle.service';
 import { NetgsmVoicemailPollService } from './channels/netgsm-voicemail-poll.service';
 import { NetgsmFaxPollService } from './channels/netgsm-fax-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
@@ -299,6 +306,8 @@ import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerReadinessTools } from './mcp/tools/readiness.tools';
 import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
+import { registerOperationsTools } from './mcp/tools/operations.tools';
+import { registerAiLaneTools } from './mcp/tools/ai-lane.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -313,6 +322,7 @@ import { registerSchedulingTools } from './mcp/tools/scheduling.tools';
 import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
+import { registerDeviceTools } from './mcp/tools/device.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
 import { registerContentConceptTools } from './mcp/tools/content-concepts.tools';
 import { registerContentProgrammeTools } from './mcp/tools/content-programme.tools';
@@ -673,6 +683,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MarketingSegmentsController,
     MarketingImportsController,
     MarketingApiKeysController,
+    MarketingDevicesController,
+    DeviceBridgeController,
     MarketingWebhooksController,
     PublicApiV1Controller,
     MarketingOffersController,
@@ -830,6 +842,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     LeadDedupeService,
     ImportService,
     ApiKeysService,
+    DevicesService,
     WebhookOutboundService,
     MarketingOffersService,
     MarketingDashboardService,
@@ -907,6 +920,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // metering, the knowledge base + agent profiles (Agent Studio), and
     // one-shot content generation.
     AnthropicService,
+    AiReplyLeaseService,
+    // Conversations that were already waiting when the reply lane was switched
+    // on are invisible to it — onInbound only sees messages that ARRIVE.
+    AiReplyBackfillService,
     AiCreditsService,
     // The ONE brand-safety screen. Every path that publishes machine-written
     // copy on a customer's behalf goes through this instance — it lived as a
@@ -923,6 +940,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // init), message quota, the conversation services, and the AI engine
     // (subscribes to inbound events + registers its ScheduledJob handlers).
     ChannelAdapterRegistry,
+    WorkspaceMailboxService,
     WebchatAdapter,
     WhatsappCloudAdapter,
     NetgsmSmsAdapter,
@@ -952,6 +970,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // inbox() so panel misconfiguration (wrong/missing callback URL) doesn't
     // silently drop customer replies with no error visible to us.
     NetgsmMoPollService,
+    EmailImapPollService,
+    // The FAST path: an IDLE connection turns a five-minute poll into about a
+    // second. The poll stays as the guarantee — IDLE fails quietly.
+    EmailImapIdleService,
     // NetGSM Phase 4 Task 6 — voicemail (telesekreter) has no push webhook at
     // all, so this hourly poll of /voicesms/receive IS the (only) path a
     // voicemail reaches the shared inbox through, best-effort proxy-storing
@@ -1374,6 +1396,11 @@ export class MarketingModule {
     opportunities: OpportunitiesService,
     pipelines: PipelinesService,
     segments: SegmentsService,
+    approvals: ApprovalRequestService,
+    customFields: CustomFieldsService,
+    offers: MarketingOffersService,
+    aiReplyLease: AiReplyLeaseService,
+    marketingAuth: MarketingAuthService,
     tags: TagsService,
     // Faz 5 D2 — content & social automation.
     calendar: UnifiedCalendarService,
@@ -1383,6 +1410,7 @@ export class MarketingModule {
     // The storyboard a reviewer can draw before approving a concept.
     storyboard: StoryboardService,
     contentDistribution: ContentDistributionService,
+    devices: DevicesService,
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
     salesCalls: SalesCallService,
@@ -1432,6 +1460,20 @@ export class MarketingModule {
     // The three gaps the readiness list could NAME and not close.
     registerSetupWriteTools(registry, { taxRates, orderForms, emailTemplates });
     registerLeadsTools(registry, { leads, distribution });
+    // Wave 1 of closing the API-vs-connector gap: the settings and sales
+    // surfaces that had no tool at all, starting with the ones measured to be
+    // blocking something rather than merely absent.
+    // MCP FIRST: the lane that lets a workspace's own Claude answer its
+    // customers, with the platform key as the fallback rather than the default.
+    registerAiLaneTools(registry, { lease: aiReplyLease, auth: marketingAuth });
+    registerOperationsTools(registry, {
+      distribution,
+      approvals,
+      customFields,
+      segments,
+      offers,
+      principals,
+    });
     registerLeadsWriteTools(registry, { leads, activities, principals, dedupe: leadDedupe });
     registerTasksTools(registry, { tasks, principals });
     registerContactsTools(registry, { leads, companies, principals });
@@ -1451,6 +1493,7 @@ export class MarketingModule {
       email: emailService,
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
+    registerDeviceTools(registry, { devices, principals });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
     registerContentProgrammeTools(registry, {

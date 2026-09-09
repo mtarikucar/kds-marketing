@@ -10,6 +10,14 @@ import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { KnowledgeService } from '../ai/knowledge.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import {
+  AI_REPLY_KIND,
+  effectiveAiExecution,
+  type EffectiveAiExecution,
+} from '../ai/ai-execution';
+// The connection signal is ONE fact about a workspace, so both lanes read it
+// from the same place rather than each deciding what "connected" means.
+import { MCP_ACTIVITY_AGENT, mcpActivityCutoff } from '../research/research-execution';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import {
   ScheduledJobRunnerService,
@@ -21,7 +29,7 @@ import { PLACEHOLDER_CONTACT_NAME } from './conversation-ingress.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 
-const AI_REPLY_KIND = 'conversation.ai_reply';
+
 const FOLLOWUP_KIND = 'conversation.followup';
 const HISTORY_LIMIT = 12;
 const MAX_TOOL_ITERATIONS = 3;
@@ -100,12 +108,70 @@ export class ConversationAiEngineService implements OnModuleInit {
     this.runner.registerHandler(FOLLOWUP_KIND, (job) => this.handleFollowupJob(job));
   }
 
+  /**
+   * Who does this workspace's AI work. Mirrors `ResearchLeaseService.modeFor`
+   * exactly, against `aiExecution` instead of `researchExecution`, because the
+   * question and its fail-safe direction are the same one.
+   */
+  async aiModeFor(workspaceId: string): Promise<EffectiveAiExecution> {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { aiExecution: true },
+    });
+    const stored = ws?.aiExecution;
+    if (stored !== 'AUTO') return effectiveAiExecution(stored, false);
+    const seen = await this.prisma.agentRun.findFirst({
+      where: { workspaceId, agent: MCP_ACTIVITY_AGENT, startedAt: { gt: mcpActivityCutoff() } },
+      select: { id: true },
+    });
+    return effectiveAiExecution(stored, seen !== null);
+  }
+
   private async onInbound(
     event: DomainEvent<MarketingConversationMessageReceivedPayload>,
   ): Promise<void> {
     const p = event.payload;
     // The customer just spoke — cancel any pending proactive follow-up.
     await this.scheduledJobs.cancel(FOLLOWUP_KIND, p.conversationId).catch(() => undefined);
+
+    /**
+     * MCP FIRST. Under any connector mode this does NOT call the platform's
+     * key — it queues the reply and returns, and `claimBatch` holds the row
+     * back from the in-process worker for the grace window (forever, under
+     * MCP_ONLY). The platform is the fallback, not the default.
+     *
+     * Enqueue-and-return rather than enqueue-and-also-try: trying first would
+     * spend the key on every message and make the queue decorative.
+     */
+    const mode = await this.aiModeFor(p.workspaceId).catch(() => 'SERVER' as const);
+    if (mode !== 'SERVER') {
+      // A human took this thread over. `reply()` declines on the same flag and
+      // the backfill sweep skips it; queueing anyway would hand the connector
+      // work the platform would have refused, which is the two answerers
+      // disagreeing about who is allowed to speak.
+      const convo = await this.prisma.conversation.findFirst({
+        where: { id: p.conversationId, workspaceId: p.workspaceId },
+        select: { aiPaused: true },
+      });
+      if (convo?.aiPaused) {
+        this.decline(p.conversationId, 'AI paused on this conversation (a human took over)');
+        return;
+      }
+      await this.scheduledJobs
+        .schedule({
+          workspaceId: p.workspaceId,
+          kind: AI_REPLY_KIND,
+          runAt: new Date(),
+          dedupKey: p.conversationId,
+          payload: { workspaceId: p.workspaceId, conversationId: p.conversationId },
+        })
+        .catch((err) =>
+          this.logger.error(`could not queue ai_reply for the connector: ${err?.message ?? err}`),
+        );
+      this.logger.log(`ai reply queued for the connector convo=${p.conversationId} mode=${mode}`);
+      return;
+    }
+
     try {
       await this.reply(p.workspaceId, p.conversationId);
     } catch (e: any) {

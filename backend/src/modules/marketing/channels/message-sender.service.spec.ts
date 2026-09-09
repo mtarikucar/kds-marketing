@@ -306,3 +306,84 @@ describe('MessageSenderService.send — template body', () => {
     expect(created[0].meta).toBeUndefined();
   });
 });
+
+/**
+ * Email replies used to leave with "Re: your message" — `EmailChannelAdapter`'s
+ * last-resort fallback — because nothing on this path ever passed a subject. To
+ * the recipient that is a new thread with an English placeholder on it, which
+ * is not the thread the conversation view claims to be continuing.
+ */
+describe('MessageSenderService.send — the subject of an email reply', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const identity = { id: 'ci1', workspaceId: 'w1', value: 'tarik@example.com' };
+  const input = { workspaceId: 'w1', conversationId: 'c1', text: 'merhaba', authorType: 'AI' as const };
+
+  function build(type: string, lastInbound: any) {
+    const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'm', status: 'SENT' }) };
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }),
+      },
+      contactIdentity: { findFirst: jest.fn().mockResolvedValue(identity) },
+      message: { findFirst: jest.fn().mockResolvedValue(lastInbound) },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({
+          message: { create: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+          conversation: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      ),
+    };
+    const service = new MessageSenderService(
+      prisma,
+      { get: () => adapter, resolveConfig: () => ({ secrets: {} }) } as any,
+      { reserve: jest.fn(), refund: jest.fn() } as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue(null) } as any,
+    );
+    return { service, prisma, adapter };
+  }
+
+  it('continues the thread the customer actually opened', async () => {
+    const { service, adapter } = build('EMAIL', {
+      meta: { raw: { subject: 'Fiyat listesi hakkında' } },
+    });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].subject).toBe('Re: Fiyat listesi hakkında');
+  });
+
+  it('does not grow a second Re: on every round', async () => {
+    // Mail clients thread on the subject; "Re: Re: Re: …" is how a thread stops
+    // looking like one.
+    const { service, adapter } = build('EMAIL', { meta: { raw: { subject: 'RE: Teklif' } } });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].subject).toBe('RE: Teklif');
+  });
+
+  it('leaves the adapter fallback alone when there is nothing to reply to', async () => {
+    // An outbound thread the customer has not answered yet. Inventing a subject
+    // here would put this service in the business of writing copy.
+    const { service, adapter } = build('EMAIL', null);
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].subject).toBeUndefined();
+  });
+
+  it('reads the LATEST inbound message, scoped to the workspace', async () => {
+    const { service, prisma } = build('EMAIL', { meta: { raw: { subject: 'x' } } });
+    await service.send(input);
+    expect(prisma.message.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { workspaceId: 'w1', conversationId: 'c1', direction: 'INBOUND' },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
+  });
+
+  it('does not go looking for a subject on a channel that has none', async () => {
+    const { service, prisma, adapter } = build('SMS', { meta: { raw: { subject: 'x' } } });
+    await service.send(input);
+    expect(prisma.message.findFirst).not.toHaveBeenCalled();
+    expect(adapter.send.mock.calls[0][0].subject).toBeUndefined();
+  });
+});

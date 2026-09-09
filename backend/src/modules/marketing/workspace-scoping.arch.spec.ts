@@ -138,6 +138,12 @@ const OWNED_DELEGATES = [
   // cron, which is exactly the shape that needs a guard rather than trust.
   'socialPostMetric',
   'socialAccountMetric',
+  // Device control: a workspace's paired phone and the commands queued for it.
+  // Both are workspace-owned, and the command rows are the audit of what a
+  // machine asked somebody's handset to do — precisely the table a
+  // cross-workspace read must never touch.
+  'device',
+  'deviceCommand',
   // NetGSM telephony config — the highest-value row in the module: its
   // configSealed holds the santral usercode/password. Three system crons
   // enumerate it across workspaces (they project workspaceId and never touch
@@ -456,6 +462,33 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'inbound-SMS (MO) poller enumerates ACTIVE SMS channels across all workspaces (system cron); ingest is scoped by each row workspaceId',
   'channels/netgsm-voicemail-poll.service.ts:channel.findMany':
     'voicemail poller enumerates ACTIVE SMS channels across all workspaces (system cron); ingest is scoped by each row workspaceId',
+  // The IMAP inbound poller, for the same reason one delegate up: a mailbox is
+  // reachable only through the credentials sealed on its own channel row, so
+  // the cron has to enumerate every verified EMAIL channel to know which
+  // mailboxes exist at all. Each row carries its workspaceId, every ingest is
+  // scoped to it, and the cursor write re-reads the row by { id, workspaceId }.
+  'channels/email-imap-poll.service.ts:channel.findMany':
+    'inbound-email (IMAP) poller enumerates verified ACTIVE EMAIL channels across all workspaces (system cron); ingest and cursor write are scoped by each row workspaceId',
+  // Its fast twin. The IDLE service holds one connection per mailbox so a
+  // reply arrives in about a second instead of within five minutes, and
+  // reconciling which mailboxes should have one means asking across
+  // workspaces. It fetches nothing itself — an announcement calls
+  // EmailImapPollService.pollOne, which re-reads the row by id.
+  'channels/email-imap-idle.service.ts:channel.findMany':
+    'inbound-email IDLE holder enumerates verified ACTIVE EMAIL channels across all workspaces to decide which need a held connection (system cron); it performs no ingest of its own',
+  // The reply-backfill sweep. A conversation that was already waiting when the
+  // reply lane was switched on is invisible to it — onInbound only sees
+  // messages that ARRIVE — so an hourly system cron has to find them, and
+  // finding them means asking across workspaces. Every row it reads carries its
+  // own workspaceId straight into the job it enqueues, and the three reads are
+  // separate only because Conversation holds a SOFT channelId with no relation
+  // to join through.
+  'ai/ai-reply-backfill.service.ts:scheduledJob.findMany':
+    'reply-backfill reads in-flight ai_reply jobs across all workspaces to avoid double-queueing one conversation (system cron); only conversationIds are taken',
+  'ai/ai-reply-backfill.service.ts:channel.findMany':
+    'reply-backfill enumerates ACTIVE channels that have an answering agent, across all workspaces (system cron); only ids are taken, to filter conversations',
+  'ai/ai-reply-backfill.service.ts:conversation.findMany':
+    'reply-backfill enumerates OPEN conversations whose customer spoke last, across all workspaces (system cron); each row carries its workspaceId into the enqueued job',
   // CDR-sync sweep: the 5-minute cron asks which workspaces could possibly have
   // NetGSM CDR credentials, by enumerating ACTIVE SMS channels across ALL
   // workspaces — the same system-job shape as the four NetGSM pollers above, and

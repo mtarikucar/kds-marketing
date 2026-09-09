@@ -9,6 +9,7 @@ import {
   mcpActivityCutoff,
   researchGraceCutoff,
 } from '../research/research-execution';
+import { AI_REPLY_KIND, aiGraceCutoff } from '../ai/ai-execution';
 
 export interface ClaimedJob {
   id: string;
@@ -318,6 +319,7 @@ export class ScheduledJobRunnerService {
   private async claimBatch(): Promise<ClaimedJob[]> {
     const now = new Date();
     const graceCutoff = researchGraceCutoff(now);
+    const aiCutoff = aiGraceCutoff(now);
     const mcpSeenSince = mcpActivityCutoff(now);
     const rows = await this.prisma.$queryRaw<
       Array<{ id: string; workspaceId: string; kind: string; payload: any; attempts: number }>
@@ -327,6 +329,47 @@ export class ScheduledJobRunnerService {
        WHERE "id" IN (
          SELECT s."id" FROM "scheduled_jobs" s
           WHERE s."status" = 'PENDING' AND s."runAt" <= ${now}
+            /**
+             * The AI reply lane, same shape as research below and one
+             * difference that matters: MCP_ONLY has NO grace term. Research's
+             * invariant is "never silently stops", so its MCP mode always
+             * hands back eventually. A workspace on MCP_ONLY has asked for the
+             * opposite guarantee — the platform key is not used, full stop —
+             * and a window that eventually fires would make that a preference
+             * rather than a promise. The queue waits, and the setup list
+             * reports the depth so the waiting is visible.
+             *
+             * This predicate is the SQL twin of platformMayRun() in
+             * ai/ai-execution.ts -- note the plain text: a backtick inside this
+             * template literal would end the SQL string. Two implementations of
+             * one rule drift unless something pins them together, which is what
+             * the test beside this file is for.
+             */
+            AND NOT (
+              s."kind" = ${AI_REPLY_KIND}
+              AND EXISTS (
+                SELECT 1 FROM "workspaces" w
+                 WHERE w."id" = s."workspaceId"
+                   AND (
+                     w."aiExecution" = 'MCP_ONLY'
+                     OR (
+                       s."createdAt" > ${aiCutoff}
+                       AND (
+                         w."aiExecution" = 'MCP'
+                         OR (
+                           w."aiExecution" = 'AUTO'
+                           AND EXISTS (
+                             SELECT 1 FROM "agent_runs" r
+                              WHERE r."workspaceId" = w."id"
+                                AND r."agent" = ${MCP_ACTIVITY_AGENT}
+                                AND r."startedAt" > ${mcpSeenSince}
+                           )
+                         )
+                       )
+                     )
+                   )
+              )
+            )
             AND NOT (
               s."kind" = ${RESEARCH_RUN_KIND}
               AND s."payload"->>${RESEARCH_MANUAL_KEY} IS DISTINCT FROM 'true'
