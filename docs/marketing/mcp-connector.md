@@ -8,9 +8,9 @@ invoices, reviews, …) and, with a human in the loop by default, take actions
 (reply to a customer, launch a campaign, publish a social post, move ad budget,
 text an invoice, book an appointment).
 
-**The catalogue is 128 tools across 21 domains, of which 45 are advertised up
+**The catalogue is 132 tools across 21 domains, of which 45 are advertised up
 front** (plus `jeeta.find_tools` and `jeeta.call_tool`, which are always
-advertised). **The other 77 are reachable** through those two — see
+advertised). **The other 87 are reachable** through those two — see
 [Tool catalogue](#tool-catalogue).
 
 This guide is for the person setting the connector up for a workspace, not
@@ -31,7 +31,7 @@ for the engineer who built it.
   `mcp-tool-registry`. What has **not** been exercised is a live provider
   send: the test workspace used a WEBCHAT channel, so no message left the
   system to a real phone or inbox. The catalogue has since grown from 18 tools
-  to 128 across five waves (Faz 5 D1–D5) and the work after them; the waves are covered by unit and
+  to 132 across five waves (Faz 5 D1–D5) and the work after them; the waves are covered by unit and
   isolation specs, not by a repeat of that live run.
 - **Which clients can connect.** Two auth paths now exist, and the endpoint
   takes either on the same route:
@@ -112,7 +112,7 @@ After adding, check two things:
 1. **The tool list appears.** Ask Claude what Jeeta tools it has, or run
    whatever your client uses to list a server's tools. You will see the
    **advertised** subset of the [catalogue](#tool-catalogue) whose scopes the
-   key covers — at most 45 of the 128, and fewer for a narrow key.
+   key covers — at most 45 of the 132, and fewer for a narrow key.
    `McpServerFactoryService.build` filters the registry by the key's granted
    scopes per request, so a narrower key legitimately shows fewer tools, not an
    error. A tool you do not see is not necessarily unavailable: ask the model to
@@ -209,8 +209,8 @@ scopes** checklist or by passing the string in the API's `scopes` array (e.g.
 
 ## Tool catalogue
 
-**128 tools in 21 domains: 45 advertised, 2 discovery tools also advertised,
-81 deferred** (45 + 2 + 81 = 128). They are registered in
+**132 tools in 21 domains: 45 advertised, 2 discovery tools also advertised,
+85 deferred** (45 + 2 + 85 = 132). They are registered in
 `backend/src/modules/marketing/mcp/tools/*.tools.ts`, wired in
 `marketing.module.ts`, and asserted by name and count in
 `backend/src/modules/marketing/mcp/tools/tool-catalogue.spec.ts` — a dropped
@@ -252,7 +252,7 @@ schema**, so a model can call a tool it has just discovered on the very next
 turn. It requires no scopes (it can only reveal what the caller could already
 call) and is never itself deferred.
 
-`limit` is capped at 60 while the catalogue is 128, so a broad listing is
+`limit` is capped at 60 while the catalogue is 132, so a broad listing is
 paged: the response carries `offset`, and `nextOffset` when there is more.
 Pass it back to walk the rest. `nextOffset` is **absent** on the last page
 rather than null, so its presence is itself the "there is more" signal.
@@ -460,9 +460,12 @@ Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
 | `jeeta.list_content_concepts` | Proposed / approved / discarded concepts with their shot plans — newest 40 (five batches); `batchId` returns a batch whole | `campaigns.read` | READ | — | no |
 | `jeeta.review_content_concept` | Approve or discard one concept. **Approving starts production and spends credits** — the concept becomes a campaign item, any storyboard frame not yet drawn is drawn, and one clip is animated from each frame. **Requires a signed-in human** | `campaigns.write` | WRITE | — | no |
 | `jeeta.storyboard_content_concept` | Draw one still frame per beat of a proposed concept (or an approved one not yet in production) so a person can look before approving; `regenerateShot` redraws one beat with a fresh seed (refused while that frame is still rendering). Direct a beat by hand, Runway-style, with `regenerateShot` + `keyframePrompt` (what the frame shows — redrawn from your exact words; only that beat is drawn) and/or `motionPrompt` (what happens in the clip — saved only, bought at approval). Frames render in the background — read them back with `list_content_concepts`. **Spends image credits** (a few per frame) | `campaigns.write` | WRITE | — | no |
-| `jeeta.produce_content_concept` | Produce a concept a human ALREADY approved — the repair for one that never became a campaign item, or an item stuck `GENERATING`. Idempotent: a produced concept is returned unchanged, a partly produced one resumes at the next unbought beat. **Spends when the concept was approved and never produced** | `campaigns.write` | WRITE | — | no |
+| `jeeta.produce_content_concept` | Produce a concept a human ALREADY approved — the repair for one that never became a campaign item, or an item stuck `GENERATING`. Idempotent: a produced concept is returned unchanged, a partly produced one resumes at the next unbought beat. **Spends when the concept was approved and never produced.** Refuses a concept the content programme planned (its slot's retry/skip are the doors) | `campaigns.write` | WRITE | — | no |
 | `jeeta.plan_content_distribution` | For an APPROVED/SCHEDULED/PUBLISHED campaign item: the cross-post schedule, what to tag, and a PREPARED (unsent) message per contactable person. **Sends nothing** | `campaigns.write` | WRITE | — | no |
 | `jeeta.list_distribution_drafts` | Prepared outreach messages and their state (DRAFT / SENT / DISMISSED / FAILED) | `campaigns.read` | READ | — | no |
+| `jeeta.get_content_programme` | The workspace's **content programme** — the autonomous typed-content loop — with its dashboard: phase, status, kill switch, this week's credit spend against `weeklyCreditCap`, the upcoming calendar slots (type, why, idea, concept, editable-until), every type's learned weight and planned share, the type×network learning table + weights history, brand-ranked trend signals, and the last 30 "why" log lines. `programme: null` when none exists — a programme is **started from the Studio panel only**, because starting one begins **autonomous credit spend** (plans, storyboards, buys clips and publishes with no approval, up to the weekly cap) | `campaigns.read` | READ | — | no |
+| `jeeta.update_content_programme` | Steer the programme: settings (brief, goal, posts/week, `weeklyCreditCap`, exploration rate, look-ahead, lead times, persona) and/or `pause` / `resume`. **The programme spends credits autonomously while ACTIVE**, bounded by the cap — an agent may **lower** the cap, the weekly count, `lookaheadDays` or the two lead times; **raising any of them is refused** here and done from the panel (the look-ahead and the leads decide how many weeks' slots one week's cap check sees, so they are spend levers too). Bounds: lookaheadDays 7–28, planLeadHours 6–96, produceLeadHours 2–48, editWindowHours 1–24. Pausing stops spend and keeps the calendar (resume re-arms the waiting slots; a `resume` on an ACTIVE programme whose lane was paused by hand re-runs the lane). **No kill here on purpose**: the kill switch is terminal and lives only in the panel | `campaigns.write` | WRITE | — | no |
+| `jeeta.edit_content_slot` | Rewrite ONE calendar slot before it is produced — its type, idea or publish time — or `skip` it, or `regenerate` it. **Editing spends nothing** until the slot is produced (refused once its edit window has closed); skipping is free; **`regenerate` re-buys the clips** | `campaigns.write` | WRITE | — | no |
 
 ### Paired phones (`devices`)
 
@@ -1305,8 +1308,8 @@ answer the thread.
   result so the model can read the reason and adjust, rather than the whole
   MCP request failing.
 - **A tool you expect isn't in the list** — two possible reasons. It may be
-  **deferred**: only 45 of the 128 tools are advertised (plus the two
-  discovery tools), and the other 81 are
+  **deferred**: only 45 of the 132 tools are advertised (plus the two
+  discovery tools), and the other 85 are
   reached by asking the model to call `jeeta.find_tools` and then
   `jeeta.call_tool` (see
   [Progressive disclosure](#progressive-disclosure)). Or the key's scopes may

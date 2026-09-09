@@ -4,7 +4,7 @@ import {
   DEFAULT_KEYFRAME_MODEL, DEFAULT_KEYFRAME_REFERENCE_MODEL,
 } from '../ai/media/media-models.config';
 import { Prisma } from '@prisma/client';
-import { ConceptPromotionService, PRODUCE_MAX_WAITS } from './concept-promotion.service';
+import { ConceptPromotionService, PRODUCE_MAX_WAITS, PROGRAMME_HOLD_MS } from './concept-promotion.service';
 import { MAX_FRAME_ATTEMPTS, STORYBOARD_MAX_WAITS } from './storyboard-frames';
 import {
   CampaignItemArmingService,
@@ -1415,5 +1415,110 @@ describe('ConceptPromotionService.promote — the reviewer\'s storyboard becomes
     const { created } = await h.svc.promote(WS, CONCEPT_ID);
     expect(created).toBe(true);
     expect(h.scheduledJobs.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ConceptPromotionService.promote — a programme names the slot', () => {
+  /**
+   * The programme plans its calendar AHEAD (T-36h concept, T-12h clips) and the
+   * slot is already decided when the concept is promoted. The campaign's own
+   * cadence would put the item at the NEXT free cadence slot, which is a
+   * different moment — usually the one the programme has already filled with
+   * another slot.
+   */
+  it('creates the item at exactly scheduledFor when the caller supplies one', async () => {
+    const at = new Date('2026-09-20T15:00:00Z');
+    const { svc, createItem } = harness();
+
+    await svc.promote(WS, CONCEPT_ID, { scheduledFor: at });
+
+    expect(createItem).toHaveBeenCalledTimes(1);
+    expect(createItem.mock.calls[0][0].data.scheduledFor).toEqual(at);
+  });
+
+  it('falls back to the cadence slot when none is supplied', async () => {
+    const { svc, createItem } = harness();
+    await svc.promote(WS, CONCEPT_ID);
+    const scheduledFor: Date = createItem.mock.calls[0][0].data.scheduledFor;
+    // Monday/Wednesday/Friday at 09:00 UTC, per the harness campaign's cadence.
+    expect([1, 3, 5]).toContain(scheduledFor.getUTCDay());
+    expect(scheduledFor.getUTCHours()).toBe(9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+/**
+ * A PROGRAMME's item asks the programme before every purchase. This job
+ * re-enters after each queue wait, so a kill or a pause can land between two
+ * clips; `kill()` leaves PRODUCING slots alone on the promise that the job
+ * stops itself, and this is that promise.
+ */
+describe('ConceptPromotionService.produce — a programme item stops for its programme', () => {
+  const promotedItem = (programmeId: string | null) => ({
+    id: ITEM_ID,
+    workspaceId: WS,
+    socialCampaignId: CAMPAIGN_ID,
+    contentConceptId: CONCEPT_ID,
+    status: 'GENERATING',
+    generatedAssetIds: [],
+    socialPostId: null,
+    scheduledFor: new Date('2026-09-02T09:00:00Z'),
+    topic: 'Bunun motoru yok.',
+    campaign: campaign({ automationMode: 'FULL_AUTO', programmeId }),
+  });
+
+  function programmeHarness(programme: unknown, programmeId: string | null = 'prog-1') {
+    const h = harness();
+    h.prisma.socialCampaignItem.findFirst = jest.fn().mockResolvedValue(promotedItem(programmeId));
+    h.prisma.contentProgramme = { findFirst: jest.fn().mockResolvedValue(programme) };
+    return h;
+  }
+
+  it('KILLED programme: the item FAILS "the programme was killed" and NOTHING is bought', async () => {
+    const { svc, prisma, mediaGen } = programmeHarness({ status: 'KILLED', killSwitch: true });
+    const res = await svc.produce(ITEM_ID, WS);
+    expect(res).toBeUndefined();
+    expect(prisma.contentProgramme.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'prog-1', workspaceId: WS } }),
+    );
+    expect(mediaGen.requestGeneration).not.toHaveBeenCalled();
+    expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith({
+      where: { id: ITEM_ID },
+      data: { status: 'FAILED', error: 'the programme was killed' },
+    });
+  });
+
+  it('the kill FLAG alone is enough, and so is a programme that no longer exists', async () => {
+    for (const programme of [{ status: 'ACTIVE', killSwitch: true }, null]) {
+      const { svc, prisma, mediaGen } = programmeHarness(programme);
+      await svc.produce(ITEM_ID, WS);
+      expect(mediaGen.requestGeneration).not.toHaveBeenCalled();
+      expect(prisma.socialCampaignItem.update.mock.calls.at(-1)[0].data).toMatchObject({ status: 'FAILED' });
+    }
+  });
+
+  it('PAUSED programme: holds an hour without buying, keeping the wait budget it came in with', async () => {
+    const { svc, prisma, mediaGen } = programmeHarness({ status: 'PAUSED', killSwitch: false });
+    const before = Date.now();
+    const res = await svc.produce(ITEM_ID, WS, 4, 2);
+    expect(mediaGen.requestGeneration).not.toHaveBeenCalled();
+    expect(prisma.socialCampaignItem.update).not.toHaveBeenCalled();
+    expect(res).toEqual({ reschedule: { runAt: expect.any(Date), payload: { itemId: ITEM_ID, workspaceId: WS, waits: 4, frameWaits: 2 } } });
+    const runAt = (res as { reschedule: { runAt: Date } }).reschedule.runAt.getTime();
+    expect(runAt - before).toBeGreaterThanOrEqual(PROGRAMME_HOLD_MS - 1000);
+    expect(runAt - before).toBeLessThanOrEqual(PROGRAMME_HOLD_MS + 5000);
+  });
+
+  it('ACTIVE programme: buys as usual', async () => {
+    const { svc, mediaGen } = programmeHarness({ status: 'ACTIVE', killSwitch: false });
+    await svc.produce(ITEM_ID, WS);
+    expect(mediaGen.requestGeneration).toHaveBeenCalledTimes(3);
+  });
+
+  it('an item of a campaign with no programme never asks', async () => {
+    const { svc, prisma, mediaGen } = programmeHarness({ status: 'KILLED', killSwitch: true }, null);
+    await svc.produce(ITEM_ID, WS);
+    expect(prisma.contentProgramme.findFirst).not.toHaveBeenCalled();
+    expect(mediaGen.requestGeneration).toHaveBeenCalledTimes(3);
   });
 });

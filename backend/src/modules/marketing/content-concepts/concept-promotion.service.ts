@@ -67,6 +67,10 @@ export const produceDedup = (itemId: string) => `content-concept-produce-${itemI
  */
 export const PRODUCE_WAIT_MS = Number(process.env.CONCEPT_PRODUCE_WAIT_MS ?? 2 * 60 * 1000);
 export const PRODUCE_MAX_WAITS = Number(process.env.CONCEPT_PRODUCE_MAX_WAITS ?? 30);
+/** How long a programme's item holds off while its programme is PAUSED
+ *  before asking again. Not counted as a wait: a pause is the owner's, not the
+ *  queue's, and may last days. */
+export const PROGRAMME_HOLD_MS = 60 * 60 * 1000;
 
 /** When the campaign's cadence has no slot left, the promoted item still needs
  *  a timestamp. A day out is far enough not to fire before a human looks and
@@ -332,11 +336,16 @@ export class ConceptPromotionService implements OnModuleInit {
    * what carries the target accounts, the cadence and the model choice, so
    * inventing one would mean inventing all of those too. An approved concept
    * with nowhere to go is refused BY NAME, and the concept keeps its approval.
+   *
+   * `scheduledFor` pins the item to a moment the CALLER already decided — a
+   * programme slot, planned days ahead — instead of the campaign's next free
+   * cadence slot, which for a programme campaign is a slot another concept is
+   * already on its way to.
    */
   async promote(
     workspaceId: string,
     conceptId: string,
-    opts: { socialCampaignId?: string } = {},
+    opts: { socialCampaignId?: string; scheduledFor?: Date } = {},
   ): Promise<PromoteResult> {
     const concept = await this.prisma.contentConcept.findFirst({
       where: { id: conceptId, workspaceId },
@@ -402,7 +411,7 @@ export class ConceptPromotionService implements OnModuleInit {
     let item;
     try {
       item = await this.prisma.$transaction(async (tx) => {
-        const created = await this.createItemWithin(tx, workspaceId, concept, campaign);
+        const created = await this.createItemWithin(tx, workspaceId, concept, campaign, opts.scheduledFor);
         // Same transaction as the create, so the two links can never disagree:
         // an item with no concept pointing back, or a concept naming an item
         // that was rolled back, are both states this makes impossible.
@@ -732,6 +741,9 @@ export class ConceptPromotionService implements OnModuleInit {
    * item, discarding the shot plan a human approved. `GENERATING` also matches
    * neither `REGENERATABLE_STATES` nor `REJECTABLE_STATES`, so nothing can
    * yank the item out from under a production run that is mid-spend.
+   *
+   * `override` is the caller's own slot (a programme's), taken verbatim; the
+   * cadence walk is the fallback for a concept promoted by hand.
    */
   private async createItemWithin(
     tx: Prisma.TransactionClient,
@@ -743,24 +755,14 @@ export class ConceptPromotionService implements OnModuleInit {
       startDate: Date;
       endDate: Date | null;
     },
+    override?: Date,
   ) {
     const last = await tx.socialCampaignItem.findFirst({
       where: { socialCampaignId: campaign.id },
       orderBy: { scheduledFor: 'desc' },
       select: { scheduledFor: true, sequenceIndex: true },
     });
-    const now = new Date();
-    const from =
-      last?.scheduledFor && last.scheduledFor > now
-        ? last.scheduledFor
-        : campaign.startDate > now
-          ? campaign.startDate
-          : now;
-    const slot = nextCadenceSlot(campaign.cadence as unknown as Cadence, from);
-    const scheduledFor =
-      slot && !(campaign.endDate && slot > campaign.endDate)
-        ? slot
-        : new Date(Date.now() + NO_SLOT_FALLBACK_MS);
+    const scheduledFor = override ?? this.cadenceSlotAfter(last?.scheduledFor ?? null, campaign);
 
     return tx.socialCampaignItem.create({
       data: {
@@ -776,6 +778,25 @@ export class ConceptPromotionService implements OnModuleInit {
         topic: concept.hook,
       },
     });
+  }
+
+  /** The campaign's next cadence slot after its last item (or its start), with
+   *  the day-out fallback for an exhausted cadence. */
+  private cadenceSlotAfter(
+    lastScheduledFor: Date | null,
+    campaign: { cadence: Prisma.JsonValue; startDate: Date; endDate: Date | null },
+  ): Date {
+    const now = new Date();
+    const from =
+      lastScheduledFor && lastScheduledFor > now
+        ? lastScheduledFor
+        : campaign.startDate > now
+          ? campaign.startDate
+          : now;
+    const slot = nextCadenceSlot(campaign.cadence as unknown as Cadence, from);
+    return slot && !(campaign.endDate && slot > campaign.endDate)
+      ? slot
+      : new Date(Date.now() + NO_SLOT_FALLBACK_MS);
   }
 
   private async enqueueProduction(workspaceId: string, itemId: string, waits: number): Promise<void> {
@@ -805,6 +826,30 @@ export class ConceptPromotionService implements OnModuleInit {
     // Anything but GENERATING means this run is a duplicate, or a human has
     // already moved the item on. Touching it would re-charge for clips.
     if (item.status !== 'GENERATING' || !item.contentConceptId) return;
+
+    // A PROGRAMME's item asks the programme before every purchase — this job
+    // re-enters after each wait, and a kill or a pause can land between two of
+    // them. Killed: the item fails here rather than buying the remaining clips
+    // for a programme nobody will publish. Paused: hold, without touching the
+    // wait budget, and come back once an hour; the resume brings it through.
+    if (item.campaign.programmeId) {
+      const programme = await this.prisma.contentProgramme.findFirst({
+        where: { id: item.campaign.programmeId, workspaceId },
+        select: { status: true, killSwitch: true },
+      });
+      if (!programme || programme.status === 'KILLED' || programme.killSwitch) {
+        await this.fail(itemId, 'the programme was killed');
+        return;
+      }
+      if (programme.status === 'PAUSED') {
+        return {
+          reschedule: {
+            runAt: new Date(Date.now() + PROGRAMME_HOLD_MS),
+            payload: { itemId, workspaceId, waits, frameWaits },
+          },
+        };
+      }
+    }
 
     const concept = await this.prisma.contentConcept.findFirst({
       where: { id: item.contentConceptId, workspaceId },

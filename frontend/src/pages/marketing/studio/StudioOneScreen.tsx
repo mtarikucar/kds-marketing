@@ -19,9 +19,15 @@ const AccountStatsPanel = lazy(() => import('./AccountStatsPanel'));
 const IdeasPanel = lazy(() => import('./IdeasPanel'));
 const TodayQueuePanel = lazy(() => import('./TodayQueuePanel'));
 const IdeaDetail = lazy(() => import('./IdeaDetail'));
+// The programme is a full-width row under the top strip, but it is not part
+// of the strip: it renders from its own query and can be collapsed to one
+// line, so a chunk landing late moves nothing the pointer is already on.
+const ProgrammePanel = lazy(() => import('./ProgrammePanel'));
 
 // This array is what VALIDATES `?tool=`; a value missing here does not error,
-// it silently falls back to the autopilot console.
+// it silently falls back to the autopilot console. Every member of the
+// `StudioTool` union that `StudioToolsMenu` links to must be here — 'line'
+// was missing for a while, and `?tool=line` opened the Autopilot instead.
 const TOOLS: StudioTool[] = [
   'autopilot',
   'calendar',
@@ -30,6 +36,7 @@ const TOOLS: StudioTool[] = [
   'money',
   'ops',
   'audience',
+  'line',
 ];
 
 /** The window the stats band opens on. 30 days is long enough for a weekly
@@ -183,6 +190,23 @@ export default function StudioOneScreen() {
         <ConnectedAccountsList from={from} to={to} className="max-w-full lg:max-w-[24rem]" />
         <StudioToolsMenu className="shrink-0" />
       </div>
+
+      {/*
+        The content programme: the loop that plans typed slots ahead, produces
+        them without an approval gate, measures, and reweights. One full-width
+        row directly under the strip — the owner asked for it "tek ekranda,
+        kompakt bir panelden" — that opens into tabs only when asked. `shrink-0`
+        for the same reason the strip has it: the work area below is what
+        flexes, and a panel that could be squeezed to nothing is a kill switch
+        that can disappear.
+      */}
+      <section data-testid="studio-programme" className="shrink-0">
+        <Card className="overflow-hidden">
+          <Lazy>
+            <ProgrammePanel />
+          </Lazy>
+        </Card>
+      </section>
 
       {/*
         The work area. It is TAKEN OUT OF THE FLOW while an idea is open rather

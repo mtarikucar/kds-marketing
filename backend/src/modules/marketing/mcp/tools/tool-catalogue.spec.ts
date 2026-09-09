@@ -20,6 +20,7 @@ import { registerWorkspaceTools } from './workspace.tools';
 import { registerContentTools } from './content.tools';
 import { registerSocialCampaignTools } from './social-campaigns.tools';
 import { registerContentConceptTools } from './content-concepts.tools';
+import { registerContentProgrammeTools } from './content-programme.tools';
 import { registerContentDistributionTools } from './content-distribution.tools';
 import { registerEmailTools } from './email.tools';
 import { registerVoiceTools } from './voice.tools';
@@ -151,6 +152,13 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   });
   registerContentConceptTools(registry, {
     concepts: { planConcepts: jest.fn(), list: jest.fn(), review: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerContentProgrammeTools(registry, {
+    programmes: { get: jest.fn(), getOrThrow: jest.fn(), update: jest.fn(), pause: jest.fn(), resume: jest.fn() } as any,
+    dashboard: { dashboard: jest.fn(), slotView: jest.fn() } as any,
+    editor: { updateSlot: jest.fn(), skipSlot: jest.fn(), regenerateSlot: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
@@ -560,6 +568,14 @@ describe('MCP tool catalogue', () => {
         // turned it back on, so a rep who answered once left the customer
         // outside every automatic path. The REST route existed all along.
         'jeeta.set_conversation_ai',
+        // İçerik Programı — the autonomous typed-content loop. Three tools,
+        // all deferred. Read the dashboard, steer the settings / pause /
+        // resume, rewrite one slot. Deliberately NO create and NO kill: the
+        // moment autonomous credit spend starts, and the terminal switch that
+        // sweeps the calendar, are a person's decisions at the Studio panel.
+        'jeeta.get_content_programme',
+        'jeeta.update_content_programme',
+        'jeeta.edit_content_slot',
       ].sort(),
     );
     // 105 -> 107: jeeta.list_channels + jeeta.set_channel_status. Both DEFERRED,
@@ -577,6 +593,8 @@ describe('MCP tool catalogue', () => {
     // 128 -> 129: jeeta.submit_strategy, also deferred — the credit-free way
     // to a first MarketingStrategy row.
     // 129 -> 132: the three device tools, all deferred and none advertised.
+    // 150 -> 153: the three content-programme tools, every one of them
+    // deferred; no create, no kill (see the comment beside them above).
     //
     // Those two waves ran in PARALLEL and each appended its own line here, each
     // starting from the number it saw before the other landed — so both were
@@ -596,7 +614,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(150);
+    expect(names).toHaveLength(153);
   });
 
   /**
@@ -716,7 +734,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(150);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(153);
   });
 });
 
@@ -795,6 +813,11 @@ const ID_SOURCES: Record<string, string> = {
   // command" read on purpose: a caller reads the outcome of the command it
   // asked for, not a log of what other people's agents did to the phone.
   commandId: 'jeeta.device_command',
+  // The programme and its calendar slots both come off ONE read: the
+  // dashboard carries `slots[].id`, so a second listing tool would be a
+  // duplicate of it.
+  programmeId: 'jeeta.get_content_programme',
+  slotId: 'jeeta.get_content_programme',
 };
 
 describe('MCP catalogue — every required id must be discoverable', () => {
