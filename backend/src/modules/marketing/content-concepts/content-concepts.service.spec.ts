@@ -968,6 +968,40 @@ describe('ContentConceptsService.planConcepts — angle learning', () => {
  * generation step. An agent's batch is not exempt from the contract; being
  * Claude is not evidence about this particular batch.
  */
+/**
+ * The produce door is the rescue for an APPROVED concept that never became an
+ * item. A concept the PROGRAMME planned can be exactly that (its slot's
+ * promote failed after the programme's approval) — and promoting it here would
+ * put a second post on the lane at the next cadence time, outside the weekly
+ * cap and tied to no slot. The slot's retry/skip are its doors.
+ */
+describe('ContentConceptsService.produce', () => {
+  it('refuses a concept that belongs to a programme, before anything is promoted', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce({ programmeId: 'prog-1' });
+    await expect(svc.produce('ws1', 'c-prog')).rejects.toThrow('This concept belongs to a content programme; retry or skip its slot instead.');
+    expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c-prog', workspaceId: 'ws1' } }));
+    expect(promotion.promote).not.toHaveBeenCalled();
+  });
+
+  it('promotes an ordinary approved concept, answering the item and whether it was created', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce({ programmeId: null });
+    promotion.promote.mockResolvedValueOnce({ item: { id: 'item-1', status: 'GENERATING', socialCampaignId: 'camp-1', scheduledFor: null }, created: true });
+    await expect(svc.produce('ws1', 'c-1', { socialCampaignId: 'camp-1' })).resolves.toEqual({
+      conceptId: 'c-1', itemId: 'item-1', socialCampaignId: 'camp-1', status: 'GENERATING', scheduledFor: null, created: true,
+    });
+    expect(promotion.promote).toHaveBeenCalledWith('ws1', 'c-1', { socialCampaignId: 'camp-1' });
+  });
+
+  it('leaves a missing concept to promote, which answers NotFound on its own', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce(null);
+    promotion.promote.mockRejectedValueOnce(new NotFoundException('Concept not found'));
+    await expect(svc.produce('ws1', 'c-x')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 describe('ContentConceptsService.submitConcepts', () => {
   const submitFrom = (
     svc: ContentConceptsService,
@@ -1049,5 +1083,194 @@ describe('ContentConceptsService.submitConcepts', () => {
     await expect(submitFrom(svc, GOOD, { socialCampaignId: 'nope' })).rejects.toThrow(
       NotFoundException,
     );
+  });
+});
+
+// ─────────────────────────────────────────────────── the programme lane
+
+/** A programme slot as the planner is handed it: the type, its beats, a trend, the brief. */
+const PROGRAMME = {
+  programmeId: 'prog-1',
+  slotId: 'slot-1',
+  contentType: {
+    key: 'before-after',
+    name: 'Öncesi / sonrası',
+    description: 'Bir durumun önce ve sonra hali, kesin bir dönüşüm.',
+    structure: [
+      { role: 'before', durationSec: 4, guidance: 'the problem, plainly' },
+      { role: 'reveal', durationSec: 6, guidance: 'the transformation in one cut' },
+      { role: 'cta', durationSec: 5, guidance: 'what to do next' },
+    ],
+    defaultDurationSec: 15,
+  },
+  trend: { title: 'sessiz sabah rutini', kind: 'TOPIC', network: 'TIKTOK' },
+  brief: 'Figurunica 3D baskı figürleri; koleksiyoncu genç yetişkinler; samimi ton.',
+};
+
+describe('ContentConceptsService.planConcepts — grounded on a programme slot', () => {
+  it('pins the content type, its beat structure and total duration in the prompt', async () => {
+    const { svc, systemOf, userOf } = deps();
+    await plan(svc, { programme: PROGRAMME });
+    const sys = systemOf();
+    const user = userOf();
+    const all = sys + '\n' + user;
+    expect(all).toContain('Öncesi / sonrası');
+    expect(all).toContain('Bir durumun önce ve sonra hali');
+    expect(all).toContain('before');
+    expect(all).toContain('the transformation in one cut');
+    expect(all).toContain('15');
+    // Both halves carry it: the system prompt states the rule, the user prompt
+    // carries the data — a rule stated nowhere is a rule the model may ignore.
+    expect(sys).toMatch(/content type/i);
+    expect(user).toContain('Öncesi / sonrası');
+  });
+
+  it('weaves the trend in without copying it, and carries the brief', async () => {
+    const { svc, userOf } = deps();
+    await plan(svc, { programme: PROGRAMME });
+    const user = userOf();
+    expect(user).toContain('sessiz sabah rutini');
+    expect(user).toContain('TIKTOK');
+    expect(user).toMatch(/do not copy/i);
+    expect(user).toContain('koleksiyoncu genç yetişkinler');
+  });
+
+  it('stamps contentTypeKey, programmeId and slotId on every saved row', async () => {
+    const { svc, prisma } = deps();
+    await plan(svc, { programme: PROGRAMME });
+    const rows = prisma.contentConcept.createMany.mock.calls[0][0].data;
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.contentTypeKey).toBe('before-after');
+      expect(row.programmeId).toBe('prog-1');
+      expect(row.slotId).toBe('slot-1');
+    }
+  });
+
+  it('a slot with no trend pins the type and the brief only', async () => {
+    const { svc, userOf, prisma } = deps();
+    await plan(svc, { programme: { ...PROGRAMME, trend: undefined } });
+    expect(userOf()).not.toMatch(/do not copy/i);
+    expect(userOf()).toContain('Öncesi / sonrası');
+    expect(prisma.contentConcept.createMany.mock.calls[0][0].data[0].contentTypeKey).toBe('before-after');
+  });
+
+  it('without a programme nothing changes — no type lines, no stamped columns', async () => {
+    const { svc, prisma, systemOf, userOf } = deps();
+    await plan(svc);
+    expect(systemOf()).not.toMatch(/content type/i);
+    expect(userOf()).not.toMatch(/do not copy/i);
+    const row = prisma.contentConcept.createMany.mock.calls[0][0].data[0];
+    expect(row).not.toHaveProperty('contentTypeKey');
+    expect(row).not.toHaveProperty('programmeId');
+    expect(row).not.toHaveProperty('slotId');
+  });
+});
+
+describe('ContentConceptsService.decideByProgramme — the autopilot approval', () => {
+  const proposed = {
+    id: 'c1',
+    workspaceId: 'ws1',
+    status: 'PROPOSED',
+    socialCampaignId: 'camp-1',
+    shotPlan: { shots: [{ ord: 0 }, { ord: 1 }, { ord: 2 }], production: { model: 'm', credits: 9 } },
+  };
+
+  it('approves a PROPOSED concept in the programme name, after the same pre-flight review runs', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst
+      .mockResolvedValueOnce(proposed)
+      .mockResolvedValueOnce({ ...proposed, status: 'APPROVED', reviewedById: 'programme:prog-1' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+
+    const out = await svc.decideByProgramme('ws1', 'c1', 'prog-1', 'camp-1');
+
+    // The quote is checked BEFORE the verdict, exactly as a human review does.
+    expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-1', { plan: proposed.shotPlan });
+    const call = prisma.contentConcept.updateMany.mock.calls[0][0];
+    expect(call.where).toEqual({ id: 'c1', workspaceId: 'ws1', status: 'PROPOSED' });
+    expect(call.data.status).toBe('APPROVED');
+    expect(call.data.reviewedById).toBe('programme:prog-1');
+    expect(call.data.reviewNote).toBe('programme autopilot');
+    expect(call.data.reviewedAt).toBeInstanceOf(Date);
+    expect(out.status).toBe('APPROVED');
+    // It decides; it does not promote. The slot producer promotes at ITS slot.
+    expect(promotion.promote).not.toHaveBeenCalled();
+  });
+
+  it('refuses a campaign that cannot publish — DRAFT — and writes nothing', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce(proposed);
+    promotion.requireCampaign.mockRejectedValueOnce(new BadRequestException('Social campaign "Lane" is DRAFT'));
+
+    await expect(svc.decideByProgramme('ws1', 'c1', 'prog-1', 'camp-draft')).rejects.toThrow(/DRAFT/);
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('NotFound when the concept is not this workspace\'s', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce(null);
+    await expect(svc.decideByProgramme('ws1', 'c-other', 'prog-1', 'camp-1')).rejects.toThrow(NotFoundException);
+    expect(promotion.requireCampaign).not.toHaveBeenCalled();
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+    expect(prisma.contentConcept.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'c-other', workspaceId: 'ws1' }) }),
+    );
+  });
+
+  it('BadRequest when the concept is already decided, and writes nothing', async () => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValueOnce({ ...proposed, status: 'DISCARDED' });
+    await expect(svc.decideByProgramme('ws1', 'c1', 'prog-1', 'camp-1')).rejects.toThrow(BadRequestException);
+    expect(promotion.requireCampaign).not.toHaveBeenCalled();
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('a verdict that lost the race is reported, not swallowed', async () => {
+    const { svc, prisma } = deps();
+    prisma.contentConcept.findFirst
+      .mockResolvedValueOnce(proposed)
+      .mockResolvedValueOnce({ ...proposed, status: 'DISCARDED' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.decideByProgramme('ws1', 'c1', 'prog-1', 'camp-1')).rejects.toThrow(/discarded/);
+  });
+});
+
+/**
+ * A concept the PROGRAMME planned is decided by the programme at its slot's
+ * time, or by the slot editor — never through the concept hub's review door.
+ * An approval here would promote it off-calendar (no `scheduledFor`) and the
+ * slot would then FAIL at produce time on "already approved"; a discard would
+ * fail the slot the same way.
+ */
+describe('ContentConceptsService.review — a programme concept is not reviewed here', () => {
+  const programmeConcept = {
+    id: 'c-prog',
+    workspaceId: 'ws1',
+    status: 'PROPOSED',
+    socialCampaignId: 'camp-1',
+    programmeId: 'prog-1',
+    slotId: 'slot-1',
+    shotPlan: { shots: [{ ord: 0 }] },
+  };
+
+  it.each(['APPROVED', 'DISCARDED'] as const)('%s is refused by name, before any verdict or promotion', async (decision) => {
+    const { svc, prisma, promotion } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue(programmeConcept);
+    await expect(svc.review('ws1', 'c-prog', { decision, reviewerId: 'u9' })).rejects.toThrow(
+      'This concept belongs to a content programme; edit or skip its slot instead of reviewing it here.',
+    );
+    expect(prisma.contentConcept.findFirst.mock.calls[0][0].where).toEqual({ id: 'c-prog', workspaceId: 'ws1' });
+    expect(prisma.contentConcept.updateMany).not.toHaveBeenCalled();
+    expect(promotion.requireCampaign).not.toHaveBeenCalled();
+    expect(promotion.promote).not.toHaveBeenCalled();
+  });
+
+  it('a concept with no programme is decided exactly as before', async () => {
+    const { svc, prisma } = deps();
+    prisma.contentConcept.findFirst.mockResolvedValue({ ...programmeConcept, programmeId: null, status: 'DISCARDED' });
+    prisma.contentConcept.updateMany.mockResolvedValue({ count: 1 });
+    await svc.review('ws1', 'c-prog', { decision: 'DISCARDED', reviewerId: 'u9' });
+    expect(prisma.contentConcept.updateMany.mock.calls[0][0].data.status).toBe('DISCARDED');
   });
 });

@@ -161,32 +161,32 @@ model PlatformOperator {
 }
 
 model MarketingUser {
-  id           String    @id @default(uuid())
-  workspaceId  String
-  email        String    @unique
-  password     String
-  firstName    String
-  lastName     String
-  phone        String?
+  id              String    @id @default(uuid())
+  workspaceId     String
+  email           String    @unique
+  password        String
+  firstName       String
+  lastName        String
+  phone           String?
   /// Netsantral extension this rep's outbound calls ring (e.g. "104"). Null = no
   /// api-dial; SalesCallService falls back to click-to-dial for this rep.
-  dahili       String?
+  dahili          String?
   /// AES-256-GCM sealed SIP password for this rep's dahili (in-app webphone).
   /// Served only to the owning rep over HTTPS; never returned raw.
-  dahiliSecret String?
+  dahiliSecret    String?
   /// NetGSM Phase 6 Task 4 — this rep opted their own available/break
   /// presence toggle (TelephonyQueueService.setPresence) into ALSO syncing to
   /// Netasistan (self-service break/queue via a separate app-key/user-key
   /// auth realm), on top of the existing crmsntrl agentlogin/agentpause.
   /// Default false: an explicit per-rep opt-in, never silently on.
-  netasistanOptIn Boolean @default(false)
-  avatar       String?
-  role         String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
-  status       String    @default("ACTIVE") // ACTIVE, INACTIVE
-  lastLogin    DateTime?
-  lastLoginIp  String?
-  failedLogins Int       @default(0)
-  lockedUntil  DateTime?
+  netasistanOptIn Boolean   @default(false)
+  avatar          String?
+  role            String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
+  status          String    @default("ACTIVE") // ACTIVE, INACTIVE
+  lastLogin       DateTime?
+  lastLoginIp     String?
+  failedLogins    Int       @default(0)
+  lockedUntil     DateTime?
 
   // Public-facing referral code (e.g. "AHMET42"). Marketers share it
   // via /?ref=CODE links or word-of-mouth; the checkout flow resolves
@@ -241,21 +241,21 @@ model MarketingUser {
 /// A MarketingUser identity holds N of these; the active one (JWT `wsp`) supplies
 /// the request's role/customRoleId. See docs/superpowers/specs/2026-07-15-*.md.
 model WorkspaceMembership {
-  id              String    @id @default(uuid())
+  id              String        @id @default(uuid())
   userId          String
   user            MarketingUser @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspaceId     String
-  role            String    // OWNER | MANAGER | REP (workspace-scoped)
-  customRoleId    String?   // Epic F granular role (workspace-scoped); overrides `role`
-  status          String    @default("ACTIVE") // ACTIVE | INVITED | SUSPENDED
+  role            String // OWNER | MANAGER | REP (workspace-scoped)
+  customRoleId    String? // Epic F granular role (workspace-scoped); overrides `role`
+  status          String        @default("ACTIVE") // ACTIVE | INVITED | SUSPENDED
   invitedByUserId String?
   acceptedAt      DateTime?
-  createdAt       DateTime  @default(now())
+  createdAt       DateTime      @default(now())
   // @default(now()) mirrors the shipped 20260715150000_workspace_memberships
   // migration (updatedAt has a DB DEFAULT CURRENT_TIMESTAMP); declaring it here
   // keeps schema ↔ migrations in parity without a prod ALTER. Inert at runtime
   // (Prisma always sets updatedAt on writes via @updatedAt).
-  updatedAt       DateTime  @updatedAt @default(now())
+  updatedAt       DateTime      @default(now()) @updatedAt
 
   @@unique([userId, workspaceId])
   @@index([workspaceId])
@@ -959,59 +959,55 @@ model MarketingDistributionConfig {
 /// avoids back-relations). externalCallId / durationSec / recordingUrl are the
 /// seams a future Netgsm API/webhook provider fills.
 model SalesCall {
-  id              String  @id @default(uuid())
-  workspaceId     String
+  id                  String    @id @default(uuid())
+  workspaceId         String
   /// Nullable (Phase 3 Task 2) — an INBOUND call to an extension that doesn't
   /// match any MarketingUser.dahili has no rep to attribute it to. OUTBOUND
   /// calls (SalesCallService.startCall) always set this from the actor.
-  marketingUserId String?
-  leadId          String?
-  direction       String  @default("OUTBOUND") // OUTBOUND, INBOUND
-  toPhone         String
-  providerId      String // 'netgsm-lite', ...
-  status          String  @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
-  externalCallId  String?
-  durationSec     Int?
+  marketingUserId     String?
+  leadId              String?
+  direction           String    @default("OUTBOUND") // OUTBOUND, INBOUND
+  toPhone             String
+  providerId          String // 'netgsm-lite', ...
+  status              String    @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
+  externalCallId      String?
+  durationSec         Int?
   /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
   /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
-  billableSeconds Int?
-  costAmount      Decimal? @db.Decimal(14, 4)
-  recordingUrl    String?
+  billableSeconds     Int?
+  costAmount          Decimal?  @db.Decimal(14, 4)
+  recordingUrl        String?
   // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
   // the back of the queue (a CONNECTED call with no recording yet, or never), and
   // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
-  recordingCheckedAt DateTime?
+  recordingCheckedAt  DateTime?
   /// NetGSM Phase 4 Task 1 — R2 object key once the recording-ingest sweep
   /// (Task 2) has downloaded the provider recording into stable storage.
   /// Null until ingested (or forever, if recording is off/R2 unconfigured);
   /// `recordingUrl` stays the provider fallback either way.
   recordingStorageKey String?
-  notes              String?   @db.Text
+  notes               String?   @db.Text
   /// Phase 3 Task 2 — the rep whose extension actually picked up (from the
   /// santral `answer`/hangup event's internal_num → MarketingUser.dahili).
   /// May differ from `marketingUserId` on an INBOUND call routed through a
   /// hunt group; null until answered (or never, if unmatched/unanswered).
-  answeredByUserId String?
+  answeredByUserId    String?
   /// Phase 3 Task 2 — stamped when the INBOUND SalesCall row is created from
   /// an `inbound_call` santral event (the extension started ringing). Null
   /// for OUTBOUND calls (startedAt already captures their origination time).
-  ringingAt          DateTime?
+  ringingAt           DateTime?
   /// Final-review HIGH-2 fix — stamped the FIRST time a rep manually logs an
   /// outcome (SalesCallService.logCall), independent of `status` (which the
   /// santral webhook/CDR poll may already have finalized before the rep gets
   /// to it). The atomic claim `updateMany({where:{outcomeLoggedAt:null}})` is
   /// what lets logCall MERGE notes onto an already webhook-finalized row
   /// instead of 409ing, while still rejecting a genuine second manual log.
-  outcomeLoggedAt    DateTime?
-  startedAt          DateTime  @default(now())
-  endedAt            DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  outcomeLoggedAt     DateTime?
+  startedAt           DateTime  @default(now())
+  endedAt             DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  @@index([workspaceId])
-  @@index([marketingUserId, startedAt(sort: Desc)])
-  @@index([leadId])
-  @@index([status])
   // Phase 3 Task 2 MEDIUM follow-up — santral event correlation (crm_id/
   // uniqueId → this row) upserts/reads by (workspaceId, externalCallId) on
   // every inbound_call/answer/hangup/cdr event. A plain index (the original
@@ -1029,6 +1025,10 @@ model SalesCall {
   // duplicate this guards against. See
   // TelephonyEventConsumer.createOrGetInbound for the P2002 catch/re-fetch.
   @@unique([workspaceId, externalCallId])
+  @@index([workspaceId])
+  @@index([marketingUserId, startedAt(sort: Desc)])
+  @@index([leadId])
+  @@index([status])
   @@map("sales_calls")
 }
 
@@ -1805,14 +1805,14 @@ model Channel {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([workspaceId, type])
-  @@index([workspaceId, status])
   /// The provider identity inbound webhooks route by. UNIQUE, not just indexed:
   /// byExternalId resolves it with a findFirst and no ordering, so two ACTIVE
   /// rows sharing one identity means a customer's messages land in whichever
   /// tenant Postgres scans first. v2.203.0 closed the logic hole; this closes
   /// the race in create()'s read-then-write.
   @@unique([type, externalId])
+  @@index([workspaceId, type])
+  @@index([workspaceId, status])
   @@map("channels")
 }
 
@@ -1820,26 +1820,26 @@ model Channel {
 /// calls. One per workspace. Secrets sealed (AES-256-GCM); reads expose only
 /// which credential keys are set, never the sealed blob.
 model TelephonyConfig {
-  id           String   @id @default(uuid())
-  workspaceId  String   @unique
-  provider     String   @default("netgsm-netsantral")
-  status       String   @default("ACTIVE") // ACTIVE | DISABLED
+  id                     String   @id @default(uuid())
+  workspaceId            String   @unique
+  provider               String   @default("netgsm-netsantral")
+  status                 String   @default("ACTIVE") // ACTIVE | DISABLED
   /// Sealed JSON of { username, password } (the NetGSM API sub-user creds).
-  configSealed String?  @db.Text
+  configSealed           String?  @db.Text
   /// Outbound trunk shown as the caller id (the 0850, digits only).
-  trunk        String?
+  trunk                  String?
   /// PBX number when the account requires it (optional).
-  pbxnum       String?
+  pbxnum                 String?
   /// WebRTC websocket endpoint for the in-app webphone, e.g.
   /// wss://sip5.netsantral.com:8089/ws (from the dahili edit screen).
-  wssUrl       String?
+  wssUrl                 String?
   /// SIP domain/realm for AOR + targets, e.g. sip5.netsantral.com.
-  sipDomain    String?
+  sipDomain              String?
   /// NetGSM Phase 4 Task 1 — call-recording toggle (caller_record/
   /// called_record on linkup/originate). OFF by default: KVKK requires a
   /// caller announcement before recording, so this must be an explicit
   /// opt-in, never silently on.
-  recordCalls  Boolean  @default(false)
+  recordCalls            Boolean  @default(false)
   /// How long a recording is kept in R2 before the retention sweep deletes
   /// the object + nulls SalesCall.recordingStorageKey. Null = keep forever.
   recordingRetentionDays Int?
@@ -1849,9 +1849,9 @@ model TelephonyConfig {
   /// break/queue self-service). Independent of configSealed so either can be
   /// rotated/cleared without touching the other. Null = Netasistan not
   /// configured for this workspace.
-  netasistanConfigSealed String? @db.Text
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  netasistanConfigSealed String?  @db.Text
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@map("telephony_configs")
 }
@@ -2232,19 +2232,19 @@ model EmailTemplate {
 /// A frozen recipient of a Campaign. `token` is the unguessable handle in the
 /// open-pixel / click / unsubscribe links. One row per (campaign, lead).
 model CampaignRecipient {
-  id          String    @id @default(uuid())
-  workspaceId String
-  campaignId  String
-  leadId      String
-  token       String    @unique
-  status      String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED | UNSUBSCRIBED
+  id             String    @id @default(uuid())
+  workspaceId    String
+  campaignId     String
+  leadId         String
+  token          String    @unique
+  status         String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED | UNSUBSCRIBED
   /// A/B variant assigned to this recipient at launch (null = control).
-  variantKey  String?
-  messageId   String?
-  error       String?
-  sentAt      DateTime?
-  openedAt    DateTime?
-  clickedAt   DateTime?
+  variantKey     String?
+  messageId      String?
+  error          String?
+  sentAt         DateTime?
+  openedAt       DateTime?
+  clickedAt      DateTime?
   /// NetGSM SMS v2 delivery tracking (Phase 1). netgsmJobId = the v2 batch
   /// jobid this recipient was sent under; referansId = per-recipient
   /// correlation id echoed back on report rows (= this recipient's id);
@@ -2268,9 +2268,9 @@ model CampaignRecipient {
   /// regardless of campaign.channel), so stamping a voice call's jobid there
   /// would leak it into that poller's next /sms/rest/v2/report batch — the
   /// call's own jobid rides the plain, unindexed `messageId` instead.
-  voiceState String?
-  pushButton String?
-  talkSec    Int?
+  voiceState     String?
+  pushButton     String?
+  talkSec        Int?
 
   createdAt DateTime @default(now())
 
@@ -3858,18 +3858,19 @@ model BrandProfile {
   brandName          String
   tagline            String?
   description        String?   @db.Text
-  valueProps         Json?     // string[]
-  toneWords          Json?     // string[]
+  valueProps         Json? // string[]
+  toneWords          Json? // string[]
   voiceGuide         String?   @db.Text
   icpDescription     String?   @db.Text
-  audienceObjections Json?     // string[]
-  offerings          Json?     // [{ name, blurb, price? }]
-  sources            Json?     // [{ type, url?, handle?, scrapedAt }]
-  socialHandles      Json?     // [{ network, handle }]
+  audienceObjections Json? // string[]
+  offerings          Json? // [{ name, blurb, price? }]
+  sources            Json? // [{ type, url?, handle?, scrapedAt }]
+  socialHandles      Json? // [{ network, handle }]
   status             String    @default("DRAFT") // DRAFT | ACTIVE
   lastAnalyzedAt     DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+
   @@map("brand_profiles")
 }
 
@@ -3881,13 +3882,14 @@ model BrandAnalysisRun {
   id            String    @id @default(uuid())
   workspaceId   String
   status        String    @default("QUEUED") // QUEUED | RUNNING | READY_FOR_REVIEW | APPLIED | FAILED
-  inputs        Json      // { websiteUrl?, socialHandles[], gbpUrl?, uploadKeys[] }
-  sourceResults Json?     // per-source raw+status, cached so re-synthesis doesn't re-crawl
-  draft         Json?     // AI-synthesized BrandProfile + proposed ResearchProfile + BrandKit hints + doc refs
-  costUsd       Float?    // metered external spend (Firecrawl/Apify) for this run
+  inputs        Json // { websiteUrl?, socialHandles[], gbpUrl?, uploadKeys[] }
+  sourceResults Json? // per-source raw+status, cached so re-synthesis doesn't re-crawl
+  draft         Json? // AI-synthesized BrandProfile + proposed ResearchProfile + BrandKit hints + doc refs
+  costUsd       Float? // metered external spend (Firecrawl/Apify) for this run
   error         String?
   createdAt     DateTime  @default(now())
   completedAt   DateTime?
+
   @@index([workspaceId, status])
   @@map("brand_analysis_runs")
 }
@@ -3990,6 +3992,11 @@ model SocialCampaign {
   /// re-running quick-start skips accounts already backed by an active
   /// engine-owned campaign for the budget's period. Null = user-authored.
   engineBudgetId     String?
+  /// The ContentProgramme this campaign publishes for, when it is a
+  /// programme's own. Set ⇒ `planTick` creates NOTHING: the programme's planner
+  /// fills the calendar with typed, learned slots and the campaign is only the
+  /// publishing lane (arming, confirm gates, targets). Soft reference.
+  programmeId        String?
   /// { planned, generated, approved, published }
   stats              Json?
   createdById        String
@@ -4001,6 +4008,7 @@ model SocialCampaign {
 
   @@index([workspaceId, status])
   @@index([workspaceId, engineBudgetId])
+  @@index([workspaceId, programmeId])
   @@map("social_campaigns")
 }
 
@@ -4081,7 +4089,7 @@ enum ContentConceptStatus {
 /// `socialCampaignId` is already recorded when the idea arrived scoped to a
 /// campaign.
 model ContentConcept {
-  id          String @id @default(uuid())
+  id          String  @id @default(uuid())
   workspaceId String
   /// Groups the N concepts distilled from ONE idea in ONE call, so a reviewer
   /// sees "these five came from that idea" rather than a flat list.
@@ -4153,13 +4161,204 @@ model ContentConcept {
   /// A unique index here would only forbid two concepts naming one item, which
   /// is not the race that exists.
   promotedItemId   String?
+  /// The CONTENT TYPE this concept was planned under (the programme's
+  /// taxonomy: tutorial, POV, before/after…), by key so a retired type still
+  /// reads. Null on concepts planned outside a programme.
+  contentTypeKey   String?
+  /// The programme and the calendar slot this concept was planned FOR. Soft
+  /// references; null outside the programme lane.
+  programmeId      String?
+  slotId           String?
   createdById      String
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   @@index([workspaceId, status])
   @@index([workspaceId, batchId])
+  @@index([workspaceId, programmeId])
   @@map("content_concepts")
+}
+
+/// A CONTENT TYPE — the format a piece is made in (tutorial, POV, before/after,
+/// trend remix…), as opposed to its angle (curiosity, story…). The programme's
+/// learning arm: every slot is planned under exactly one type, every published
+/// piece is scored back onto its type, and the type's share of the calendar
+/// moves with what actually worked. Seeded per workspace from
+/// `DEFAULT_CONTENT_TYPES`, then the owner's to edit.
+model ContentType {
+  id                 String   @id @default(uuid())
+  workspaceId        String
+  /// Stable slug, unique per workspace; concepts and stats reference it by key.
+  key                String
+  name               String
+  description        String   @default("")
+  /// Beat template the planner follows: [{ role, durationSec, guidance }].
+  structure          Json     @default("[]")
+  defaultDurationSec Int      @default(15)
+  /// Networks this format suits; empty = every network.
+  networks           String[] @default([])
+  /// Share bounds of the calendar this type may take once the programme learns.
+  minShare           Float    @default(0.05)
+  maxShare           Float    @default(0.4)
+  active             Boolean  @default(true)
+  isSeed             Boolean  @default(true)
+  ordinal            Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, active])
+  @@map("content_types")
+}
+
+/// THE PROGRAMME — one per publishing campaign: types, cadence, goal, budget,
+/// learning parameters, and the switches. It plans the calendar ahead, produces
+/// each slot without an approval gate, measures what published, and moves the
+/// type weights toward what worked. See
+/// docs/superpowers/specs/2026-09-08-icerik-programi-otonom-dongu-design.md.
+model ContentProgramme {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  name             String
+  /// ACTIVE | PAUSED | KILLED
+  status           String    @default("ACTIVE")
+  /// The FULL_AUTO SocialCampaign this programme publishes through (1:1).
+  socialCampaignId String    @unique
+  /// ENGAGEMENT | VIEWS | SAVES_SHARES | LEADS | COMPOSITE
+  goal             String    @default("COMPOSITE")
+  /// What the programme is about — product, audience, tone. Grounds every idea.
+  brief            String
+  personaId        String?
+  /// Posts per week per target account.
+  perWeek          Int       @default(5)
+  weeklyCreditCap  Int       @default(600)
+  explorationRate  Float     @default(0.15)
+  maturityHours    Int       @default(72)
+  halfLifeDays     Int       @default(30)
+  editWindowHours  Int       @default(2)
+  lookaheadDays    Int       @default(14)
+  planLeadHours    Int       @default(36)
+  produceLeadHours Int       @default(12)
+  seedWeeks        Int       @default(2)
+  /// SEED | LEARN | EXPLOIT — written by the learning job.
+  phase            String    @default("SEED")
+  killSwitch       Boolean   @default(false)
+  lastPlannedAt    DateTime?
+  lastMeasuredAt   DateTime?
+  lastReweightedAt DateTime?
+  createdById      String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("content_programmes")
+}
+
+/// ONE CALENDAR SLOT of a programme: when it publishes, which type it was given
+/// and why, the idea the planner got, and the concept/item/post it became. The
+/// slot is also where the published piece's measured reward lands, so the type
+/// it was planned under is what learns from it.
+model ContentSlot {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  programmeId     String
+  scheduledFor    DateTime
+  /// PLANNED | IDEATED | PRODUCING | READY | PUBLISHED | MEASURED | SKIPPED | FAILED
+  status          String    @default("PLANNED")
+  contentTypeId   String
+  contentTypeKey  String
+  /// Why this type, in words a person can audit.
+  selectionReason String
+  trendSignalId   String?
+  trendTitle      String?
+  /// The idea text the planner is handed; the owner may rewrite it until the slot is produced.
+  idea            String
+  conceptId       String?
+  campaignItemId  String?
+  socialPostId    String?
+  quotedCredits   Int?
+  /// Credits this slot actually cost so far — planning, frames, clips, every
+  /// regenerate — kept on SKIPPED and FAILED slots too. The weekly cap and the
+  /// spend breaker sum THIS, never the quote of live slots only.
+  spentCredits    Int       @default(0)
+  /// After this the slot is frozen: the item publishes as it stands.
+  editableUntil   DateTime
+  publishedAt     DateTime?
+  measuredAt      DateTime?
+  reward          Float?
+  /// Per network: the metrics read, the baseline, the normalised reward.
+  rewardBreakdown Json?
+  error           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([programmeId, scheduledFor])
+  @@index([workspaceId, programmeId, status])
+  @@index([workspaceId, programmeId, scheduledFor])
+  @@map("content_slots")
+}
+
+/// A snapshot of one type's posterior on one network at one reweight: the
+/// history the "weights over time" chart reads, and the row the type selector
+/// samples from (latest per type/network).
+model ContentTypeStat {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  programmeId    String
+  contentTypeId  String
+  contentTypeKey String
+  /// The network, or "ALL" for the programme-wide blend.
+  network        String
+  samples        Int      @default(0)
+  alpha          Float    @default(1)
+  beta           Float    @default(1)
+  meanReward     Float    @default(0.5)
+  weight         Float    @default(0)
+  computedAt     DateTime @default(now())
+
+  @@index([programmeId, computedAt])
+  @@index([programmeId, contentTypeKey, network, computedAt], map: "content_type_stats_type_network_time_idx")
+  @@map("content_type_stats")
+}
+
+/// A TREND SIGNAL observed on a network in a region — topic, hashtag, sound or
+/// format — with the score its source gave it and the half-life it decays at.
+/// Region-scoped, not workspace-scoped: the same signal serves every workspace;
+/// brand relevance is computed per programme at read time.
+model TrendSignal {
+  id            String   @id @default(uuid())
+  region        String   @default("TR")
+  network       String
+  /// TOPIC | HASHTAG | SOUND | FORMAT
+  kind          String
+  title         String
+  ref           String?
+  score         Float    @default(0)
+  source        String
+  observedAt    DateTime @default(now())
+  halfLifeHours Int      @default(48)
+  raw           Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([region, network, kind, title])
+  @@index([region, observedAt])
+  @@map("trend_signals")
+}
+
+/// The programme's "why" log: every plan, reweight, phase change, pause and
+/// anomaly, in plain words, with the numbers that decided it.
+model ContentProgrammeEvent {
+  id          String   @id @default(uuid())
+  workspaceId String
+  programmeId String
+  kind        String
+  message     String
+  data        Json?
+  createdAt   DateTime @default(now())
+
+  @@index([programmeId, createdAt])
+  @@map("content_programme_events")
 }
 
 /// The state of ONE prepared outreach message.
@@ -4184,12 +4383,12 @@ enum DistributionDraftStatus {
 /// plan's content and keeps its identity, so the drafts a human has already
 /// sent keep pointing at a row that still exists.
 model ContentDistributionPlan {
-  id             String @id @default(uuid())
-  workspaceId    String
+  id               String  @id @default(uuid())
+  workspaceId      String
   /// The item this distributes. UNIQUE: a second plan for one item would mean
   /// two competing answers to "who has been contacted about this video", and
   /// the drafts hang off the plan.
-  campaignItemId String @unique
+  campaignItemId   String  @unique
   /// Denormalised from the item so a plan read needs no join, and so the plan
   /// survives as a record of what was distributed even if the calendar moves.
   socialCampaignId String
@@ -4575,31 +4774,31 @@ model OrderForm {
 /// sweep pulls spend/impressions/clicks/leads into AdMetric for reporting. The
 /// token is SEALED (secret-box); never echoed. Env-gated / inert without creds.
 model AdAccount {
-  id             String    @id @default(uuid())
-  workspaceId    String
-  provider       String // META | TIKTOK
-  externalAdId   String // act_<id> (Meta) / advertiser_id (TikTok)
-  displayName    String
-  accessToken    String    @db.Text // SEALED
-  refreshToken   String?   @db.Text // SEALED (OAuth auto-discovery — follow-up)
-  tokenExpiresAt DateTime?
-  status         String    @default("ACTIVE") // ACTIVE | TOKEN_EXPIRED | DISCONNECTED
-  currency       String?
+  id                       String    @id @default(uuid())
+  workspaceId              String
+  provider                 String // META | TIKTOK
+  externalAdId             String // act_<id> (Meta) / advertiser_id (TikTok)
+  displayName              String
+  accessToken              String    @db.Text // SEALED
+  refreshToken             String?   @db.Text // SEALED (OAuth auto-discovery — follow-up)
+  tokenExpiresAt           DateTime?
+  status                   String    @default("ACTIVE") // ACTIVE | TOKEN_EXPIRED | DISCONNECTED
+  currency                 String?
   // Meta Conversions API (CAPI) destination. pixelId is the dataset id we POST
   // server-side conversion events to (/<pixelId>/events) — non-secret. capiToken
   // is an OPTIONAL dedicated System-User token (SEALED); when unset the sealed
   // accessToken is reused. Feeding real CRM outcomes (won/paid) back to Meta.
-  pixelId        String?
-  capiToken      String?   @db.Text // SEALED
+  pixelId                  String?
+  capiToken                String?   @db.Text // SEALED
   // Per-provider server-side conversion destinations (non-secret). TikTok Events
   // API needs the pixel code; Google Ads offline upload needs the conversion
   // action resource id. Null → that provider's conversion feedback stays inert.
   tiktokPixelCode          String?
   googleConversionActionId String?
-  lastPulledAt   DateTime?
-  lastError      String?   @db.Text
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  lastPulledAt             DateTime?
+  lastError                String?   @db.Text
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   metrics AdMetric[]
   rules   AdRule[]
@@ -4878,28 +5077,28 @@ model AiCreditLedgerEntry {
 /// Written best-effort and never in the request path's way — losing a log line
 /// must never fail a customer's AI call.
 model AiUsageLog {
-  id           String   @id @default(uuid())
-  workspaceId  String
+  id               String   @id @default(uuid())
+  workspaceId      String
   /// The AiAction key the call was charged under (ai-credit-costs.ts).
-  action       String
+  action           String
   /// Resolved model id, so a tier remap stays comparable after the fact.
-  model        String
-  inputTokens  Int
-  outputTokens Int
+  model            String
+  inputTokens      Int
+  outputTokens     Int
   /// Prompt-cache tokens, which Anthropic reports SEPARATELY from
   /// `input_tokens` and bills at different rates: a write costs 1.25x the
   /// input rate, a read 0.1x. Recording only `input_tokens` after caching was
   /// switched on would make the saving look total instead of ~90%, and hide
   /// cache-write cost entirely — a cost report that errs optimistic is worse
   /// than none. Default 0 so pre-caching rows stay valid.
-  cacheWriteTokens Int @default(0)
-  cacheReadTokens  Int @default(0)
+  cacheWriteTokens Int      @default(0)
+  cacheReadTokens  Int      @default(0)
   /// Anthropic SERVER-tool calls, billed per request rather than per token
   /// ($10/1000 for web_search). Token columns cannot express them, so a
   /// search-driven run would otherwise report only its (cheap) Haiku tokens
   /// and look far cheaper than the invoice.
-  webSearches      Int @default(0)
-  createdAt    DateTime @default(now())
+  webSearches      Int      @default(0)
+  createdAt        DateTime @default(now())
 
   @@index([workspaceId, createdAt])
   @@index([action, createdAt])
@@ -4912,31 +5111,31 @@ model AiUsageLog {
 /// halts all autonomous spend instantly. `explorationPct` is held back for
 /// learning; `targetRoas`/`targetCac` are the optimization floor.
 model GrowthBudget {
-  id             String   @id @default(uuid())
-  workspaceId    String
-  periodKey      String // YYYY-MM
-  currency       String   @default("TRY")
-  totalAmount    Decimal  @db.Decimal(14, 2)
-  scope          String   @default("HOLISTIC") // HOLISTIC | AD_ONLY
-  status         String   @default("ACTIVE") // ACTIVE | PAUSED | KILLED
-  killSwitch     Boolean  @default(false)
-  explorationPct Int      @default(20)
-  allocatorStage String   @default("MARGINAL") // MARGINAL | BANDIT | MMM — which allocator the autopilot uses
+  id                 String   @id @default(uuid())
+  workspaceId        String
+  periodKey          String // YYYY-MM
+  currency           String   @default("TRY")
+  totalAmount        Decimal  @db.Decimal(14, 2)
+  scope              String   @default("HOLISTIC") // HOLISTIC | AD_ONLY
+  status             String   @default("ACTIVE") // ACTIVE | PAUSED | KILLED
+  killSwitch         Boolean  @default(false)
+  explorationPct     Int      @default(20)
+  allocatorStage     String   @default("MARGINAL") // MARGINAL | BANDIT | MMM — which allocator the autopilot uses
   /// Autonomy lane (Growth Autopilot): SHADOW = record proposals only;
   /// ASSISTED = propose + human approval queue (the pre-autopilot default);
   /// AUTONOMOUS = propose → auto-apply under machine guardrails, no approvals.
-  autonomyLevel  String   @default("ASSISTED") // SHADOW | ASSISTED | AUTONOMOUS
+  autonomyLevel      String   @default("ASSISTED") // SHADOW | ASSISTED | AUTONOMOUS
   /// Content-arm safety gate (Growth Autopilot). FALSE (default) = the engine
   /// provisions content campaigns as SEMI_AUTO — each post surfaces in the
   /// approval queue and auto-publishes unless the user rejects it in the
   /// window ("show before posting", since autonomous posting can't be undone
   /// by the kill-switch). TRUE = FULL_AUTO, pure never-ask. Ad reallocation is
   /// unaffected (it's reversible and always follows autonomyLevel).
-  contentAutoPublish Boolean @default(false)
-  targetRoas     Decimal? @db.Decimal(10, 4)
-  targetCac      Decimal? @db.Decimal(14, 2)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  contentAutoPublish Boolean  @default(false)
+  targetRoas         Decimal? @db.Decimal(10, 4)
+  targetCac          Decimal? @db.Decimal(14, 2)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   allocations BudgetAllocation[]
 
@@ -5243,12 +5442,12 @@ model CommunityChannelConfig {
 /// headers (`Cache-Control: max-age`), falling back to a 1h default, and the
 /// document is not re-fetched before it lapses.
 model McpOAuthClient {
-  id         String @id @default(uuid())
+  id           String   @id @default(uuid())
   /// The HTTPS URL the client presented as its `client_id`.
-  clientId   String @unique
+  clientId     String   @unique
   /// `client_name` from the document. NULLABLE: CIMD marks it optional, and a
   /// fabricated placeholder would end up on the consent screen.
-  clientName String?
+  clientName   String?
   /// The document's `redirect_uris` array, verbatim.
   redirectUris Json
   /// The rest of the fetched document (logo_uri, client_uri, scope, …).

@@ -3281,6 +3281,202 @@
     }
   },
   "studio": {
+    "programme": {
+      "editor": {
+        "frozen": "The edit window has closed; the slot publishes as it stands.",
+        "frozenFailed": "Failed: {{error}}",
+        "frozenMeasured": "Published · reward {{reward}}",
+        "frozenProducing": "Producing; it publishes at the planned time once the clips are ready.",
+        "frozenPublished": "Published.",
+        "frozenSkipped": "Skipped; nothing will publish.",
+        "idea": "Idea",
+        "metrics": "Metrics",
+        "noApproval": "Everything is editable; no step waits for approval.",
+        "readyHint": "Clips are ready: only the time can change.",
+        "regenerate": "Regenerate",
+        "regenerateFailed": "Could not regenerate the slot.",
+        "regenerated": "Slot is being re-planned.",
+        "retried": "Slot is being retried.",
+        "retry": "Retry",
+        "retryFailed": "Could not retry the slot.",
+        "save": "Save",
+        "saveFailed": "Could not save the slot.",
+        "saved": "Slot updated.",
+        "skip": "Skip",
+        "skipFailed": "Could not skip the slot.",
+        "storyboard": "Storyboard",
+        "title": "Slot editor",
+        "trend": "Trend hook",
+        "type": "Type",
+        "when": "Publish time",
+        "window": "Edit window: {{hours}} h left"
+      },
+      "error": "Could not read the content programme.",
+      "events": {
+        "empty": "No events yet."
+      },
+      "goal": {
+        "COMPOSITE": "Composite — a blend of engagement, saves-shares and views",
+        "ENGAGEMENT": "Engagement — likes, comments, shares per impression",
+        "LEADS": "Leads — people who came through a form",
+        "SAVES_SHARES": "Saves & shares — content people keep and pass on",
+        "VIEWS": "Views — video views and impressions"
+      },
+      "kill": {
+        "confirm": "Yes, stop it",
+        "description": "Irreversible: open slots are cancelled, the campaign is paused, the history and what was learned stay. Starting again means setting up a new programme.",
+        "title": "Stop the programme (kill)?"
+      },
+      "learning": {
+        "allNetworks": "All",
+        "computedAt": "Date",
+        "historyTitle": "Type weights, last 12 reweights",
+        "lastReweighted": "Last reweight: {{when}}",
+        "meanReward": "Mean reward",
+        "network": "Network",
+        "neverReweighted": "Not reweighted yet.",
+        "noHistory": "No reweight yet — it is drawn here once the first week is over.",
+        "noRows": "No measured slots; the table fills once the first posts mature.",
+        "samples": "Samples",
+        "type": "Type",
+        "weight": "Weight"
+      },
+      "metrics": {
+        "beats": "{{beats}} beats · {{seconds}} s",
+        "comments": "Comments",
+        "engagements": "Engagements",
+        "error": "Could not read the metrics.",
+        "impressions": "Impressions",
+        "item": "Campaign item: {{status}}",
+        "leads": "Leads",
+        "likes": "Likes",
+        "network": "Network",
+        "noTargets": "No targets — the slot has not published yet.",
+        "notPublished": "Not published yet.",
+        "publishedAt": "Published: {{when}}",
+        "reach": "Reach",
+        "reward": "Reward",
+        "saves": "Saves",
+        "shares": "Shares",
+        "status": "Status",
+        "videoViews": "Video views"
+      },
+      "none": "No programme yet: the loop that produces by type, publishes, and leans into what works starts here.",
+      "phase": {
+        "EXPLOIT": "Winners",
+        "LEARN": "Learning",
+        "SEED": "Seed"
+      },
+      "phaseHint": {
+        "EXPLOIT": "Winners: the best type is clearly ahead; weight shifts to it, exploration never drops to zero.",
+        "LEARN": "Learning: types are sampled by reward (Thompson); an exploration share is kept.",
+        "SEED": "Seed: every type is tried in turn, no weights. Once enough measurements accrue it moves on to learning."
+      },
+      "row": {
+        "burn": "{{spent}}/{{cap}} credits this week",
+        "detail": "Details",
+        "kill": "Stop (kill)",
+        "killFailed": "Could not stop the programme.",
+        "killed": "Programme stopped; open slots were cancelled.",
+        "running": "Running",
+        "toggleFailed": "Could not change the programme's state."
+      },
+      "setup": {
+        "accounts": "Accounts",
+        "accountsError": "Could not read the accounts.",
+        "brief": "Topic / product / tone",
+        "cap": "Weekly credit cap",
+        "created": "Programme started; the first slots are planned within minutes.",
+        "description": "Produces by type, publishes, measures, and leans into the types that work. No approval gate; every slot stays editable until 2 hours before it publishes.",
+        "failed": "Could not set up the programme.",
+        "goal": "What counts as \"working\"?",
+        "name": "Name",
+        "needAccounts": "Pick at least one account.",
+        "needBrief": "What is the programme about? A sentence will do.",
+        "needCap": "The weekly credit cap must be a whole number between 50 and 20000.",
+        "needName": "Give the programme a name.",
+        "needTime": "The time must be HH:MM.",
+        "noAccounts": "No connected accounts — connect one first.",
+        "perWeek": "Posts per week (per account)",
+        "submit": "Start",
+        "time": "Publish time (Turkey time, HH:MM)",
+        "title": "Start the content programme"
+      },
+      "slotStatus": {
+        "FAILED": "Failed",
+        "IDEATED": "Ideated",
+        "MEASURED": "Measured",
+        "PLANNED": "Planned",
+        "PRODUCING": "Producing",
+        "PUBLISHED": "Published",
+        "READY": "Ready",
+        "SKIPPED": "Skipped"
+      },
+      "slots": {
+        "actions": "Actions",
+        "credits": "Quote (credits)",
+        "editableFor": "editable for {{hours}} h",
+        "empty": "No slots in this window.",
+        "reward": "Reward",
+        "spent": "Spent / quote",
+        "status": "Status",
+        "type": "Type",
+        "when": "Time",
+        "why": "Why this type?"
+      },
+      "stale": "state could not be refreshed",
+      "start": "Start the programme",
+      "status": {
+        "ACTIVE": "Running",
+        "KILLED": "Stopped",
+        "PAUSED": "Paused"
+      },
+      "strip": {
+        "empty": "No slots for the next 14 days — the planner fills them every 6 hours.",
+        "label": "Slots for the next 14 days"
+      },
+      "tabs": {
+        "events": "Log",
+        "learning": "Learning",
+        "slots": "Slots",
+        "trends": "Trends",
+        "types": "Types"
+      },
+      "title": "Content programme",
+      "trends": {
+        "decayed": "Decayed score",
+        "decayedShort": "score",
+        "empty": "No trend signals — providers refresh every 12 hours; with none enabled this list stays empty.",
+        "relevance": "Brand relevance",
+        "relevanceShort": "relevance",
+        "suggestion": "Suggestion"
+      },
+      "types": {
+        "active": "Active",
+        "activeFor": "{{name}} active",
+        "add": "Add type",
+        "addDescription": "A new type joins the seed rotation; its share bounds start at the default 5%–40%.",
+        "addFailed": "Could not add the type.",
+        "addTitle": "New content type",
+        "description": "Description",
+        "duration": "Duration (seconds)",
+        "hint": "Floor and ceiling bound the share of the calendar a type may take once learning starts. Leave the field to save.",
+        "key": "Key (slug)",
+        "learned": "Learned",
+        "maxShare": "Ceiling",
+        "maxShareFor": "{{name}} ceiling share",
+        "meanReward": "Mean reward",
+        "minShare": "Floor",
+        "minShareFor": "{{name}} floor share",
+        "name": "Type",
+        "needKeyName": "Key and name are required.",
+        "planned": "Planned",
+        "samples": "Samples",
+        "saveFailed": "Could not save the type.",
+        "share": "Share: planned / learned"
+      },
+      "unavailable": "The content programme is not available on this plan"
+    },
     "tab": {
       "autopilot": "Autopilot",
       "create": "Create",

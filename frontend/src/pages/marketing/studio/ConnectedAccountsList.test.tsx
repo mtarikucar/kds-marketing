@@ -544,15 +544,17 @@ describe('ConnectedAccountsList', () => {
       name: '@jeeta hesabının günlük takipçi sayısı',
     });
     const rows = within(table).getAllByRole('row');
-    // The READING cell, not the whole row. A row is "<date><value>", and the
-    // date carries digits of its own — this assertion read the row and so went
-    // red on every date whose label happens to contain a 0 ("10 Ağu"), which
-    // is a calendar fact rather than anything about zero-filling.
-    const reading = (row: HTMLElement) => within(row).getAllByRole('cell').at(-1)!;
-    expect(reading(rows[1])).toHaveTextContent('—');
-    expect(reading(rows[1])).not.toHaveTextContent('0');
+    // The VALUE cell, not the row: the date cell beside it reads "10 Ağu" on
+    // a window that opens on the 10th, and that zero is a calendar's, not a
+    // follower count's.
+    const valueCell = (row: HTMLElement) => {
+      const cells = within(row).getAllByRole('cell');
+      return cells[cells.length - 1];
+    };
+    expect(valueCell(rows[1])).toHaveTextContent('—');
+    expect(valueCell(rows[1])).not.toHaveTextContent('0');
     // …and the day we did read carries the level.
-    expect(reading(rows[21])).toHaveTextContent('900');
+    expect(valueCell(rows[21])).toHaveTextContent('900');
   });
 
   it("shows this account's own numbers for the window", async () => {

@@ -328,22 +328,57 @@ export class SocialCampaignsService implements OnModuleInit {
 
   // ──────────────────────────────────────────────────────── Lifecycle
 
-  async activate(workspaceId: string, id: string) {
+  /**
+   * `byProgramme`: the content programme moving its own lane. A campaign that
+   * carries a `programmeId` is that programme's publishing lane, and the
+   * programme's pause/kill are what stop it — so the campaign's own
+   * resume/activate doors refuse it (see `assertNotProgrammeLane`) unless the
+   * programme itself is the caller.
+   */
+  async activate(workspaceId: string, id: string, opts: { byProgramme?: boolean } = {}) {
     const c = await this.getOwned(workspaceId, id);
     if (!['DRAFT', 'PAUSED'].includes(c.status)) {
       throw new BadRequestException(`Cannot activate from ${c.status}`);
     }
+    if (!opts.byProgramme) await this.assertNotProgrammeLane(workspaceId, c);
     await this.prisma.socialCampaign.update({ where: { id }, data: { status: 'ACTIVE' } });
     await this.enqueuePlan(workspaceId, id);
     return this.get(workspaceId, id);
   }
 
-  async resume(workspaceId: string, id: string) {
+  async resume(workspaceId: string, id: string, opts: { byProgramme?: boolean } = {}) {
     const c = await this.getOwned(workspaceId, id);
     if (c.status !== 'PAUSED') throw new BadRequestException(`Cannot resume from ${c.status}`);
+    if (!opts.byProgramme) await this.assertNotProgrammeLane(workspaceId, c);
     await this.prisma.socialCampaign.update({ where: { id }, data: { status: 'ACTIVE' } });
     await this.enqueuePlan(workspaceId, id);
     return this.get(workspaceId, id);
+  }
+
+  /**
+   * A programme's lane is resumed through the PROGRAMME, never here. The
+   * programme pauses its lane on pause and on kill; every READY slot's item
+   * sits SCHEDULED behind the paused gate, which reschedules hourly. Resuming
+   * the campaign by hand — from the campaigns list, or an agent tidying up
+   * with set_campaign_status — would release all of them at once, regardless
+   * of what the programme is doing, and after a kill there is no programme
+   * left to have decided that. `pause` stays open on purpose: a hand-paused
+   * lane is a safe state the programme itself holds for.
+   */
+  private async assertNotProgrammeLane(workspaceId: string, c: { programmeId?: string | null }, door: 'resume' | 'cancel' = 'resume'): Promise<void> {
+    if (!c.programmeId) return;
+    const programme = await this.prisma.contentProgramme.findFirst({
+      where: { id: c.programmeId, workspaceId },
+      select: { status: true, killSwitch: true },
+    });
+    if (!programme || programme.status === 'KILLED' || programme.killSwitch) {
+      throw new BadRequestException("This campaign is a content programme's lane and the programme was killed; start a new programme instead.");
+    }
+    throw new BadRequestException(
+      door === 'cancel'
+        ? "This campaign is a content programme's lane; kill the programme instead."
+        : "This campaign is a content programme's lane; resume the programme instead.",
+    );
   }
 
   async pause(workspaceId: string, id: string) {
@@ -354,11 +389,20 @@ export class SocialCampaignsService implements OnModuleInit {
     return this.get(workspaceId, id);
   }
 
-  async cancel(workspaceId: string, id: string) {
+  /**
+   * A programme's lane is not cancelled by hand either: CANCELLED is a state
+   * the programme has no door out of (its resume re-runs only a PAUSED or
+   * DRAFT lane), so a cancelled lane under a live programme fails every slot
+   * at produce time — three in a row pause the programme, a resume repeats
+   * the loop — and its READY items' gates return silently, leaving those
+   * slots open for good. The programme's kill is the door that ends the lane.
+   */
+  async cancel(workspaceId: string, id: string, opts: { byProgramme?: boolean } = {}) {
     const c = await this.getOwned(workspaceId, id);
     if (['COMPLETED', 'CANCELLED'].includes(c.status)) {
       throw new BadRequestException(`Cannot cancel from ${c.status}`);
     }
+    if (!opts.byProgramme) await this.assertNotProgrammeLane(workspaceId, c, 'cancel');
     await this.prisma.socialCampaign.update({ where: { id }, data: { status: 'CANCELLED' } });
     await this.scheduledJobs.cancel(SOCIAL_CAMPAIGN_PLAN_KIND, planDedup(id));
     return this.get(workspaceId, id);
@@ -522,6 +566,15 @@ export class SocialCampaignsService implements OnModuleInit {
   private async planTick(campaignId: string, workspaceId: string): Promise<JobHandlerResult> {
     const c = await this.prisma.socialCampaign.findFirst({ where: { id: campaignId, workspaceId } });
     if (!c || c.status !== 'ACTIVE') return; // stop-on-pause / cancel / completed
+
+    // A PROGRAMME'S campaign is only the publishing lane. The programme plans
+    // the calendar itself — typed slots, chosen by what has measured well, with
+    // a trend hook and a lead time for the storyboard — and hands each one in
+    // as a promoted concept at the slot it decided. If this tick ALSO planned,
+    // every programme slot would sit beside a stock topic the campaign
+    // invented at the same cadence, and both would spend. No reschedule
+    // either: there is nothing for this job to come back for.
+    if (c.programmeId) return;
 
     const last = await this.prisma.socialCampaignItem.findFirst({
       where: { socialCampaignId: campaignId },

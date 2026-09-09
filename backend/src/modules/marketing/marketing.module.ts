@@ -277,6 +277,17 @@ import { VideoPipelineService } from './video/video-pipeline.service';
 import { ContentConceptsService } from './content-concepts/content-concepts.service';
 import { ConceptPromotionService } from './content-concepts/concept-promotion.service';
 import { StoryboardService } from './content-concepts/storyboard.service';
+import { ContentTypesService } from './content-programme/content-types.service';
+import { ContentProgrammeService } from './content-programme/content-programme.service';
+import { ProgrammeLearningService } from './content-programme/programme-learning.service';
+import { ProgrammePlannerService } from './content-programme/programme-planner.service';
+import { SlotProducerService } from './content-programme/slot-producer.service';
+import { SlotEditorService } from './content-programme/slot-editor.service';
+import { ProgrammeDashboardService } from './content-programme/programme-dashboard.service';
+import { TrendSignalService, TREND_PROVIDERS_FACTORY } from './trends/trend-signal.service';
+import { GoogleTrendsRssProvider } from './trends/providers/google-trends-rss.provider';
+import { ApifyTiktokTrendsProvider } from './trends/providers/apify-tiktok-trends.provider';
+import { YoutubeTrendingProvider } from './trends/providers/youtube-trending.provider';
 import { AnglePerformanceService } from './content-concepts/angle-performance.service';
 import { ContentLineService } from './content-concepts/content-line.service';
 import { CampaignItemArmingService } from './social-campaigns/campaign-item-arming.service';
@@ -314,11 +325,13 @@ import { registerContentTools } from './mcp/tools/content.tools';
 import { registerDeviceTools } from './mcp/tools/device.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
 import { registerContentConceptTools } from './mcp/tools/content-concepts.tools';
+import { registerContentProgrammeTools } from './mcp/tools/content-programme.tools';
 import { registerContentDistributionTools } from './mcp/tools/content-distribution.tools';
 import { ContentDistributionService } from './distribution/content-distribution.service';
 import { DistributionSendService } from './distribution/distribution-send.service';
 import { MarketingContentDistributionController } from './controllers/marketing-content-distribution.controller';
 import { MarketingContentLineController } from './controllers/marketing-content-line.controller';
+import { MarketingContentProgrammeController } from './controllers/marketing-content-programme.controller';
 import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
@@ -706,6 +719,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MarketingConversationsController,
     MarketingContentDistributionController,
     MarketingContentLineController,
+    MarketingContentProgrammeController,
     MarketingChannelsController,
     WebchatPublicController,
     MetaWebhookController,
@@ -1065,6 +1079,22 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // drawn on request while the concept is PROPOSED, and the job that copies
     // each frame's outcome onto the plan. `produce` draws missing frames itself.
     StoryboardService,
+    // İçerik Programı — the typed, learning, autonomous content loop
+    // (docs/superpowers/specs/2026-09-08-icerik-programi-otonom-dongu-design.md).
+    ContentTypesService,
+    ContentProgrammeService,
+    ProgrammeLearningService,
+    // The planning half of the loop (calendar fill + per-slot plan/produce
+    // jobs), the owner's slot editor, and the panel's read model.
+    ProgrammePlannerService,
+    SlotProducerService,
+    SlotEditorService,
+    ProgrammeDashboardService,
+    GoogleTrendsRssProvider,
+    ApifyTiktokTrendsProvider,
+    YoutubeTrendingProvider,
+    TREND_PROVIDERS_FACTORY,
+    TrendSignalService,
     AnglePerformanceService,
     ContentLineService,
     ContentDistributionService,
@@ -1416,6 +1446,11 @@ export class MarketingModule {
     // For `jeeta.submit_strategy` only — the credit-free writer a connected
     // Claude uses when the platform's own key cannot produce a strategy.
     strategySynthesis: StrategySynthesisService,
+    // İçerik Programı over MCP: read the dashboard, steer the settings, rewrite
+    // one slot. Create and kill stay hub-only (see content-programme.tools.ts).
+    contentProgrammes: ContentProgrammeService,
+    programmeDashboard: ProgrammeDashboardService,
+    slotEditor: SlotEditorService,
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
@@ -1461,6 +1496,13 @@ export class MarketingModule {
     registerDeviceTools(registry, { devices, principals });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
     registerContentConceptTools(registry, { concepts: contentConcepts, storyboard, principals, entitlements });
+    registerContentProgrammeTools(registry, {
+      programmes: contentProgrammes,
+      dashboard: programmeDashboard,
+      editor: slotEditor,
+      principals,
+      entitlements,
+    });
     registerContentDistributionTools(registry, {
       distribution: contentDistribution,
       principals,
