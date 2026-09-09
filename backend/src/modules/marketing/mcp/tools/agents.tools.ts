@@ -146,6 +146,37 @@ export function registerAgentTools(registry: McpToolRegistry, deps: AgentToolDep
         .max(200)
         .optional()
         .describe('Cap on AI replies per conversation per day — the runaway-loop guard.'),
+      // The half of a sale that happens when nobody writes back. This policy
+      // is the ONLY thing that makes a silent thread get chased at all, and
+      // until now it could be set from the panel and from nowhere else — so a
+      // workspace run entirely through the connector could not turn chasing on
+      // even though the lane was there the whole time.
+      followup: z
+        .object({
+          enabled: z
+            .boolean()
+            .describe('Whether this agent chases a customer who has gone quiet. Off by default.'),
+          afterHours: z
+            .number()
+            .int()
+            .min(1)
+            .max(168)
+            .describe('Hours of silence before the first nudge. 24-72 is usual; 168 is a week.'),
+          maxFollowups: z
+            .number()
+            .int()
+            .min(0)
+            .max(5)
+            .describe(
+              'How many nudges in total, ever, per conversation. This is the difference between ' +
+                'following up and pestering — 1 or 2 for most businesses. 0 disables chasing.',
+            ),
+        })
+        .optional()
+        .describe(
+          'When to chase a customer who stopped replying. Each nudge is written by this agent, ' +
+            'honours the opt-out on that contact, and stops the moment they answer.',
+        ),
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'conversationAi');

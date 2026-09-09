@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ConversationFollowupService } from '../channels/conversation-followup.service';
 import { AI_REPLY_KIND } from './ai-execution';
 
 /**
@@ -29,6 +30,16 @@ export interface ClaimedReply {
   jobId: string;
   conversationId: string;
   queuedAt: Date;
+  /**
+   * WHY this reply is queued.
+   *
+   * `inbound` — a customer wrote and is waiting. `followup` — nobody wrote:
+   * the thread went quiet and the agent's own policy says chase it. The two
+   * need opposite messages, and a connector that cannot tell them apart writes
+   * an answer to a question nobody asked. Defaulted rather than optional, so
+   * every claim says which it is.
+   */
+  reason: 'inbound' | 'followup';
 }
 
 /**
@@ -52,7 +63,10 @@ export interface ClaimedReply {
 export class AiReplyLeaseService {
   private readonly logger = new Logger(AiReplyLeaseService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly followups: ConversationFollowupService,
+  ) {}
 
   /**
    * Return leases that outlived their window to the queue.
@@ -127,7 +141,8 @@ export class AiReplyLeaseService {
         });
         continue;
       }
-      return { jobId: next.id, conversationId, queuedAt: next.createdAt };
+      const reason = (next.payload as any)?.reason === 'followup' ? 'followup' : 'inbound';
+      return { jobId: next.id, conversationId, queuedAt: next.createdAt, reason };
     }
     return null;
   }
@@ -169,9 +184,36 @@ export class AiReplyLeaseService {
       const conversationId = (job?.payload as any)?.conversationId;
       if (typeof conversationId === 'string' && conversationId) {
         await this.resumeIfWeAnswered(workspaceId, conversationId);
+        await this.chaseNext(workspaceId, conversationId, (job?.payload as any)?.reason);
       }
     }
     return count === 1;
+  }
+
+  /**
+   * Line up the next nudge, the way the platform's own `reply()` does.
+   *
+   * Without this the connector lane answers a customer beautifully and then
+   * never speaks again if they go quiet — which is not a smaller version of
+   * selling, it is the half where deals are lost. The platform has scheduled a
+   * follow-up at the end of every reply for as long as the lane has existed;
+   * the connector doing the same work was simply never given the same ending.
+   *
+   * A nudge that was itself sent through the connector must COUNT first, or
+   * the cap it is measured against never moves and the same customer is chased
+   * forever. Bookkeeping is non-fatal here for the same reason it is in the
+   * engine: the customer already has the message, and throwing would return a
+   * completed job to the queue and send it twice.
+   */
+  private async chaseNext(workspaceId: string, conversationId: string, reason: unknown): Promise<void> {
+    try {
+      if (reason === 'followup') {
+        await this.followups.countFollowup(workspaceId, conversationId);
+      }
+      await this.followups.scheduleNext(workspaceId, conversationId);
+    } catch (e: any) {
+      this.logger.warn(`follow-up bookkeeping failed (non-fatal): ${e?.message ?? e}`);
+    }
   }
 
   /** Lift the pause the lane's own send left behind — but only when the last

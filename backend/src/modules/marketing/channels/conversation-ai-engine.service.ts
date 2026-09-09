@@ -28,17 +28,11 @@ import { ConversationStreamService } from './conversation-stream.service';
 import { PLACEHOLDER_CONTACT_NAME } from './conversation-ingress.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { BrandContextService } from '../brand-brain/brand-context.service';
+import { ConversationFollowupService, FOLLOWUP_KIND } from './conversation-followup.service';
 
 
-const FOLLOWUP_KIND = 'conversation.followup';
 const HISTORY_LIMIT = 12;
 const MAX_TOOL_ITERATIONS = 3;
-
-interface FollowupPolicy {
-  enabled: boolean;
-  afterHours: number;
-  maxFollowups: number;
-}
 
 const TOOLS: Anthropic.Tool[] = [
   {
@@ -98,6 +92,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     private readonly runner: ScheduledJobRunnerService,
     private readonly stream: ConversationStreamService,
     private readonly brandContext: BrandContextService,
+    private readonly followups: ConversationFollowupService,
   ) {}
 
   onModuleInit(): void {
@@ -133,6 +128,12 @@ export class ConversationAiEngineService implements OnModuleInit {
     const p = event.payload;
     // The customer just spoke — cancel any pending proactive follow-up.
     await this.scheduledJobs.cancel(FOLLOWUP_KIND, p.conversationId).catch(() => undefined);
+    // ...including one already handed to the connector. A nudge that reached
+    // the reply lane holds this conversation's dedup slot, so leaving it would
+    // do BOTH wrong things at once: the customer's actual question could not
+    // queue behind it, and the connector would be told to chase someone who is
+    // sitting there waiting for an answer.
+    await this.dropQueuedFollowupReply(p.workspaceId, p.conversationId);
 
     /**
      * MCP FIRST. Under any connector mode this does NOT call the platform's
@@ -209,6 +210,23 @@ export class ConversationAiEngineService implements OnModuleInit {
    * Logged at `log`, not `debug`: a decline is the answer to "why is the AI
    * silent", and production does not print debug.
    */
+  /** Drop a nudge that is waiting in the reply lane for this conversation.
+   *  Only a nudge: a genuine queued reply is the work we still owe. */
+  private async dropQueuedFollowupReply(workspaceId: string, conversationId: string): Promise<void> {
+    try {
+      const queued = await this.prisma.scheduledJob.findMany({
+        where: { workspaceId, kind: AI_REPLY_KIND, dedupKey: conversationId, status: 'PENDING' },
+        select: { id: true, payload: true },
+      });
+      for (const job of queued) {
+        if ((job.payload as any)?.reason !== 'followup') continue;
+        await this.scheduledJobs.cancelById(job.id);
+      }
+    } catch (e: any) {
+      this.logger.warn(`could not drop the queued follow-up: ${e?.message ?? e}`);
+    }
+  }
+
   private decline(conversationId: string, reason: string): void {
     this.logger.log(`ai reply declined convo=${conversationId}: ${reason}`);
   }
@@ -576,14 +594,13 @@ export class ConversationAiEngineService implements OnModuleInit {
 
   // ---- Proactive follow-up -------------------------------------------------
 
-  private followupPolicy(agent: { followup: unknown }): FollowupPolicy | null {
-    const f = (agent.followup ?? null) as Partial<FollowupPolicy> | null;
-    if (!f || !f.enabled) return null;
-    return {
-      enabled: true,
-      afterHours: Math.min(Math.max(Number(f.afterHours) || 24, 1), 168),
-      maxFollowups: Math.min(Math.max(Number(f.maxFollowups) || 0, 0), 5),
-    };
+  // Both the policy and the scheduling moved to ConversationFollowupService,
+  // because this was the ONLY place either could be reached from — which made
+  // chasing a silent customer silently conditional on the PLATFORM having been
+  // the one to answer them. The connector lane schedules the same nudge on the
+  // same policy now.
+  private followupPolicy(agent: { followup: unknown }) {
+    return this.followups.policyFor(agent);
   }
 
   private async scheduleFollowup(
@@ -591,22 +608,17 @@ export class ConversationAiEngineService implements OnModuleInit {
     conversationId: string,
     agent: { followup: unknown },
   ): Promise<void> {
-    const policy = this.followupPolicy(agent);
-    if (!policy || policy.maxFollowups <= 0) return;
-    const runAt = new Date(Date.now() + policy.afterHours * 3600_000);
-    await this.scheduledJobs.schedule({
-      workspaceId,
-      kind: FOLLOWUP_KIND,
-      runAt,
-      dedupKey: conversationId,
-      payload: { workspaceId, conversationId },
-    });
+    await this.followups.scheduleNext(workspaceId, conversationId, agent);
   }
 
   private async handleFollowupJob(job: ClaimedJob): Promise<void> {
     const { workspaceId, conversationId } = job.payload;
-    if (!this.anthropic.isEnabled()) return;
-
+    // The platform-key check used to stand HERE, ahead of everything. On a
+    // workspace whose Claude answers through the connector — the direction this
+    // product is deliberately moving in — that meant every scheduled nudge was
+    // dropped on arrival by the one answerer that was never going to write it.
+    // The gates below are about the CUSTOMER and hold whoever writes; the
+    // question of who writes is settled after them.
     const convo = await this.prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId },
     });
@@ -649,6 +661,38 @@ export class ConversationAiEngineService implements OnModuleInit {
       this.logger.debug(`convo=${conversationId} follow-up suppressed: contact opted out of ${channel.type}`);
       return;
     }
+
+    /**
+     * MCP FIRST, exactly as an inbound reply is. Under any connector mode the
+     * nudge is handed to the workspace's own Claude as an ordinary queued
+     * reply carrying `reason: 'followup'` — so it arrives through the lane the
+     * connector already drains, sends through `jeeta.send_message` with the
+     * quota and audit trail every other message gets, and never spends the
+     * platform's key.
+     *
+     * Every gate above has already run, so what the connector receives is a
+     * nudge that is allowed to be sent: the thread is open and unpaused, the
+     * agent chases, the allowance is not spent, the contact has not opted out.
+     * Handing over first and hoping the client re-checks would put a legal
+     * obligation on the far side of an interface we do not control.
+     */
+    const mode = await this.aiModeFor(workspaceId).catch(() => 'SERVER' as const);
+    if (mode !== 'SERVER') {
+      await this.scheduledJobs
+        .schedule({
+          workspaceId,
+          kind: AI_REPLY_KIND,
+          runAt: new Date(),
+          dedupKey: conversationId,
+          payload: { workspaceId, conversationId, reason: 'followup' },
+        })
+        .catch((err) =>
+          this.logger.error(`could not hand the follow-up to the connector: ${err?.message ?? err}`),
+        );
+      this.logger.log(`follow-up queued for the connector convo=${conversationId} mode=${mode}`);
+      return;
+    }
+    if (!this.anthropic.isEnabled()) return;
 
     const cost = creditCost('conversation.followup');
     await this.credits.reserve(workspaceId, cost);

@@ -176,6 +176,7 @@ import { ConversationStreamService } from './channels/conversation-stream.servic
 import { MessageSenderService } from './channels/message-sender.service';
 import { MessageReceiptService } from './channels/message-receipt.service';
 import { ConversationAiEngineService } from './channels/conversation-ai-engine.service';
+import { ConversationFollowupService } from './channels/conversation-followup.service';
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
 import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
@@ -963,6 +964,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ConversationsService,
     OutboundConversationService,
     ConversationAiEngineService,
+    ConversationFollowupService,
     PublicChannelResolverService,
     // NetGSM delivery reports are POLLED (not pushed): a per-minute, advisory-
     // locked sweeper that resolves still-pending outbound SMS via the report API.
