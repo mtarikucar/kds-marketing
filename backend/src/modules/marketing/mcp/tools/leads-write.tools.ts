@@ -125,6 +125,78 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
    * that is UNSCORED and in this workspace, so a re-run is a no-op rather than
    * a re-score, and `written: 0` is a truthful answer rather than a failure.
    */
+  /**
+   * The same write, for a pass rather than a lead.
+   *
+   * `jeeta.score_lead` is right when you are looking at one customer. A SCORING
+   * PASS is the other shape: a workspace with four hundred unscored leads needs
+   * four hundred round trips through it, and the round trips — not the
+   * thinking — become the reason the pass never gets run.
+   *
+   * Partial success is a first-class outcome here, not an error. Each lead is
+   * stamped independently and the result says exactly which ones were written
+   * and which were skipped, because the guard in the service (unscored, in this
+   * workspace) means "already scored" is the NORMAL answer on a re-run rather
+   * than a fault. A batch that failed whole because one row was already done
+   * would make re-running a pass the dangerous thing to do, when re-running is
+   * precisely what an unattended drainer needs to be safe.
+   */
+  registry.register({
+    name: 'jeeta.score_leads',
+    description:
+      'Write the advisory AI score for MANY leads in one call — the shape a scoring pass needs, where ' +
+      "one call per lead is what stops the pass being run at all. Find the work with " +
+      "jeeta.search_leads({ scored: 'no' }). Each lead is stamped independently: the result lists what " +
+      'was written and what was skipped, and a lead that already carries a score is skipped rather ' +
+      'than failing the batch, so re-running a pass is safe and cheap. Same rules as jeeta.score_lead ' +
+      '— 0-100, advisory only (it ranks attention, it does not move the pipeline or assign anyone), ' +
+      'and every score needs a reason, because a number with no reasoning is one the rep who picks the ' +
+      'lead up will not trust.',
+    domain: 'leads',
+    defer: true,
+    scopes: ['leads.write'],
+    risk: 'WRITE',
+    requiresApproval: false,
+    inputSchema: z.object({
+      scores: z
+        .array(
+          z.object({
+            leadId: z.string().min(1),
+            score: z.number().int().min(0).max(100),
+            reason: z.string().min(1).max(2000),
+          }),
+        )
+        .min(1)
+        .max(50)
+        .describe(
+          'Up to 50 at a time. Capped so one call cannot hold a transaction-length write open, and ' +
+            'so a mistake in the batch is 50 rows to look at rather than a workspace.',
+        ),
+    }),
+    handler: async (ctx, args) => {
+      const rows = args.scores as Array<{ leadId: string; score: number; reason: string }>;
+      const written: string[] = [];
+      const skipped: string[] = [];
+      for (const row of rows) {
+        const n = await deps.leads.applyAiScore(
+          ctx.workspaceId,
+          row.leadId,
+          Number(row.score),
+          row.reason,
+        );
+        (n > 0 ? written : skipped).push(row.leadId);
+      }
+      return {
+        written: written.length,
+        skipped: skipped.length,
+        skippedLeadIds: skipped,
+        note: skipped.length
+          ? 'Skipped leads were already scored, or are not in this workspace. Neither is an error.'
+          : null,
+      };
+    },
+  });
+
   registry.register({
     name: 'jeeta.score_lead',
     description:
