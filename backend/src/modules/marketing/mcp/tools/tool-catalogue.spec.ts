@@ -38,6 +38,7 @@ import { registerReadinessTools } from './readiness.tools';
 import { registerSetupWriteTools } from './setup-write.tools';
 import { registerOperationsTools } from './operations.tools';
 import { registerAiLaneTools } from './ai-lane.tools';
+import { registerConsentTools } from './consent.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -256,6 +257,9 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     taxRates: { create: jest.fn() } as any,
     orderForms: { create: jest.fn() } as any,
     emailTemplates: { create: jest.fn() } as any,
+  });
+  registerConsentTools(registry, {
+    compliance: { recordConsent: jest.fn(), getConsents: jest.fn() } as any,
   });
   registerAiLaneTools(registry, {
     lease: { claim: jest.fn(), complete: jest.fn(), pending: jest.fn() } as any,
@@ -568,6 +572,11 @@ describe('MCP tool catalogue', () => {
         // unscored leads the round trips, not the thinking, are what stop the
         // pass being run at all.
         'jeeta.score_leads',
+        // "Stop emailing me" — readable by the connector, and until now not
+        // obeyable by it. Every send gate reads the opt-out flag and nothing an
+        // agent could call ever set one.
+        'jeeta.record_consent',
+        'jeeta.get_consents',
         // Replying from the panel pauses the AI on that thread and nothing
         // turned it back on, so a rep who answered once left the customer
         // outside every automatic path. The REST route existed all along.
@@ -618,7 +627,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(154);
+    expect(names).toHaveLength(156);
   });
 
   /**
@@ -738,7 +747,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(154);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(156);
   });
 });
 

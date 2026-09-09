@@ -114,6 +114,14 @@ describe("the 'mcp' agent value — connection-signal tripwire", () => {
         "{ agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },",
       // READER — the MCP console filters its session list on the same value.
       "modules/marketing/mcp/mcp-console.service.ts :: const MCP_AGENT = 'mcp';",
+      // NOT AN AGENT VALUE — a ConsentRecord.source, saying WHERE a contact's
+      // opt-out request came from when the caller did not name a place. An
+      // opt-out with no provenance is hard to defend later, so the field is
+      // never left empty; 'mcp' here means "the connector recorded it", opens
+      // no AgentRun, and is read by nothing that decides connectedness.
+      // Listed so the set stays exact.
+      'modules/marketing/mcp/tools/consent.tools.ts :: ' +
+        "{ source: (args.source as string) ?? 'mcp' },",
       // NOT AN AGENT VALUE — a DeviceCommand.source, saying which surface
       // queued a phone command ('mcp' vs 'console', a human in settings). Same
       // five letters, different column, and it opens no AgentRun: the desktop

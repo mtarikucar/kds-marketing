@@ -308,6 +308,7 @@ import { registerReadinessTools } from './mcp/tools/readiness.tools';
 import { registerSetupWriteTools } from './mcp/tools/setup-write.tools';
 import { registerOperationsTools } from './mcp/tools/operations.tools';
 import { registerAiLaneTools } from './mcp/tools/ai-lane.tools';
+import { registerConsentTools } from './mcp/tools/consent.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
@@ -1401,6 +1402,7 @@ export class MarketingModule {
     offers: MarketingOffersService,
     aiReplyLease: AiReplyLeaseService,
     marketingAuth: MarketingAuthService,
+    compliance: ComplianceService,
     tags: TagsService,
     // Faz 5 D2 — content & social automation.
     calendar: UnifiedCalendarService,
@@ -1466,6 +1468,10 @@ export class MarketingModule {
     // MCP FIRST: the lane that lets a workspace's own Claude answer its
     // customers, with the platform key as the fallback rather than the default.
     registerAiLaneTools(registry, { lease: aiReplyLease, auth: marketingAuth });
+    // "Stop emailing me" — the one instruction the connector could read and
+    // could not obey. Every send gate reads the opt-out flag; nothing an agent
+    // could call ever set one.
+    registerConsentTools(registry, { compliance });
     registerOperationsTools(registry, {
       distribution,
       approvals,
