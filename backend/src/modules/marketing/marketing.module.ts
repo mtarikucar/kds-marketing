@@ -145,6 +145,7 @@ import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
+import { WorkspaceAiKeyService } from './ai/workspace-ai-key.service';
 import { AiReplyBackfillService } from './ai/ai-reply-backfill.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
@@ -176,6 +177,7 @@ import { ConversationStreamService } from './channels/conversation-stream.servic
 import { MessageSenderService } from './channels/message-sender.service';
 import { MessageReceiptService } from './channels/message-receipt.service';
 import { ConversationAiEngineService } from './channels/conversation-ai-engine.service';
+import { ConversationFollowupService } from './channels/conversation-followup.service';
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
 import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
@@ -923,6 +925,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiReplyLeaseService,
+    WorkspaceAiKeyService,
     // Conversations that were already waiting when the reply lane was switched
     // on are invisible to it — onInbound only sees messages that ARRIVE.
     AiReplyBackfillService,
@@ -963,6 +966,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     ConversationsService,
     OutboundConversationService,
     ConversationAiEngineService,
+    ConversationFollowupService,
     PublicChannelResolverService,
     // NetGSM delivery reports are POLLED (not pushed): a per-minute, advisory-
     // locked sweeper that resolves still-pending outbound SMS via the report API.

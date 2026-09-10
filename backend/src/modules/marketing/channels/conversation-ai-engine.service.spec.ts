@@ -1,4 +1,5 @@
 import { ConversationAiEngineService } from './conversation-ai-engine.service';
+import { ConversationFollowupService } from './conversation-followup.service';
 
 /**
  * The Conversation AI engine's gate chain + reply behavior. Every gate
@@ -48,9 +49,15 @@ describe('ConversationAiEngineService.reply', () => {
       ...overrides.agent,
     };
     const prisma: any = {
+      // Who does this workspace's AI work. Defaults to SERVER so every test
+      // written before the connector lane existed still describes the platform
+      // answering; the handoff tests set it explicitly.
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiExecution: overrides.aiExecution ?? 'SERVER' }) },
+      agentRun: { findFirst: jest.fn().mockResolvedValue(null) },
       conversation: {
         findFirst: jest.fn().mockResolvedValue(convo),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       channel: { findFirst: jest.fn().mockResolvedValue(channel) },
       agentProfile: { findFirst: jest.fn().mockResolvedValue(agent) },
@@ -64,6 +71,9 @@ describe('ConversationAiEngineService.reply', () => {
     };
     const anthropic = {
       isEnabled: jest.fn().mockReturnValue(overrides.enabled ?? true),
+      // Workspace-aware gate: a workspace with its own key is live even while
+      // the shared platform key is refusing. The reply path asks this one.
+      isEnabledFor: jest.fn().mockResolvedValue(overrides.enabled ?? true),
       complete: jest.fn().mockResolvedValue(
         overrides.complete ?? { text: 'Merhaba! Size nasıl yardımcı olabilirim?', toolUses: [], stopReason: 'end_turn', usage: { input: 1, output: 1 } },
       ),
@@ -80,15 +90,75 @@ describe('ConversationAiEngineService.reply', () => {
     const runner = { registerHandler: jest.fn() };
     const stream = { push: jest.fn() };
     const brandContext = { summaryFor: jest.fn().mockResolvedValue(null) };
+    // The real policy parsing, not a stub: these tests turn chasing on and off
+    // through `agent.followup`, and a double that answered "yes, chase" for
+    // every shape would let a broken policy read pass every one of them.
+    const followups = new ConversationFollowupService(prisma as any, scheduledJobs as any);
     const engine = new ConversationAiEngineService(
       prisma, {} as any, anthropic as any, credits as any, knowledge as any,
       sender as any, scheduledJobs as any, runner as any, stream as any,
-      brandContext as any,
+      brandContext as any, followups,
     );
-    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext };
+    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext, followups };
   }
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
+
+  /**
+   * A nudge under a connector mode goes to the CONNECTOR.
+   *
+   * The platform-key check used to stand at the very top of the follow-up
+   * handler, so on a workspace whose Claude answers through the connector every
+   * scheduled nudge was dropped on arrival by the one answerer that was never
+   * going to write it. Chasing a quiet customer was silently conditional on the
+   * platform doing the chasing.
+   */
+  describe('a nudge under a connector mode', () => {
+    const chases = { agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } };
+    const fire = (h: any) =>
+      (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+
+    it('is handed to the connector, and spends no platform key', async () => {
+      const h = build({ ...chases, aiExecution: 'MCP' });
+      await fire(h);
+      expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'conversation.ai_reply',
+          dedupKey: CONVO,
+          payload: expect.objectContaining({ reason: 'followup' }),
+        }),
+      );
+      expect(h.sender.send).not.toHaveBeenCalled();
+      expect(h.credits.reserve).not.toHaveBeenCalled();
+    });
+
+    it('carries a reason, because a nudge is not an answer', async () => {
+      // Without it the connector writes a reply to a question nobody asked.
+      const h = build({ ...chases, aiExecution: 'MCP_ONLY' });
+      await fire(h);
+      const payload = h.scheduledJobs.schedule.mock.calls[0][0].payload;
+      expect(payload.reason).toBe('followup');
+    });
+
+    it('reaches the connector only AFTER every gate about the customer has run', async () => {
+      // Handing over first and hoping the client re-checks would put a legal
+      // obligation on the far side of an interface we do not control. An
+      // opted-out contact must produce no job at all.
+      const h = build({ ...chases, aiExecution: 'MCP', channel: { type: 'EMAIL' } });
+      h.prisma.lead.findFirst.mockResolvedValue({ businessName: 'Acme', emailOptOut: true });
+      await fire(h);
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('still runs on the platform when the workspace has no connector', async () => {
+      const h = build({ ...chases, aiExecution: 'SERVER' });
+      await fire(h);
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'conversation.ai_reply' }),
+      );
+      expect(h.sender.send).toHaveBeenCalled();
+    });
+  });
 
   // A proactive follow-up fires hours after the last reply. If the lead was
   // bulk-deleted/merged in the meantime, the conversation may still be OPEN but
@@ -510,7 +580,7 @@ describe('ConversationAiEngineService.reply', () => {
     });
 
     it('says so when Anthropic is unconfigured', async () => {
-      expect(await runDecline({ enabled: false })).toMatch(/anthropic not configured/);
+      expect(await runDecline({ enabled: false })).toMatch(/no usable AI key for this workspace/);
     });
 
     it('reports the cap it hit, with the number', async () => {
@@ -697,15 +767,31 @@ describe('ConversationAiEngineService — who does the thinking', () => {
   const WS = 'ws-1';
   const CONVO = 'convo-1';
 
-  function build(aiExecution: string | null, mcpSeen = false, paused = false) {
-    const anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
+  function build(
+    aiExecution: string | null,
+    mcpSeen = false,
+    paused = false,
+    queuedReplies: any[] = [],
+    ownKey = false,
+  ) {
+    const anthropic = {
+      isEnabled: jest.fn().mockReturnValue(true),
+      isEnabledFor: jest.fn().mockResolvedValue(true),
+      complete: jest.fn(),
+    };
     const scheduledJobs = {
       cancel: jest.fn().mockResolvedValue(undefined),
+      cancelById: jest.fn().mockResolvedValue(true),
       schedule: jest.fn().mockResolvedValue('job-1'),
     };
     const prisma: any = {
-      workspace: { findUnique: jest.fn().mockResolvedValue({ aiExecution }) },
+      workspace: {
+        findUnique: jest.fn().mockResolvedValue({ aiExecution, aiApiKeyEnc: ownKey ? 'v1:a:b:c' : null }),
+      },
       agentRun: { findFirst: jest.fn().mockResolvedValue(mcpSeen ? { id: 'r1' } : null) },
+      // A nudge already handed to the connector holds this conversation's slot
+      // in the reply queue. The customer writing back has to clear it.
+      scheduledJob: { findMany: jest.fn().mockResolvedValue(queuedReplies) },
       // Two callers now: the aiPaused gate before queueing, and reply() on the
       // SERVER path. A null second answer makes reply() decline immediately,
       // which is all these tests need from it.
@@ -727,6 +813,7 @@ describe('ConversationAiEngineService — who does the thinking', () => {
       { registerHandler: jest.fn() } as any,
       { push: jest.fn() } as any,
       {} as any,
+      { scheduleNext: jest.fn(), policyFor: jest.fn(() => null) } as any,
     );
     const inbound = (engine as any).onInbound.bind(engine);
     return { engine, prisma, anthropic, scheduledJobs, inbound };
@@ -785,6 +872,60 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     await h.inbound(event);
     expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
     expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('drops a nudge already handed to the connector when the customer writes back', async () => {
+    // A queued nudge holds this conversation's dedup slot, so leaving it does
+    // BOTH wrong things at once: the customer's actual question cannot queue
+    // behind it, and the connector is told to chase someone who is sitting
+    // there waiting for an answer.
+    const h = build('MCP', false, false, [
+      { id: 'nudge-1', payload: { reason: 'followup' } },
+    ]);
+    await h.inbound(event);
+    expect(h.scheduledJobs.cancelById).toHaveBeenCalledWith('nudge-1');
+  });
+
+  it('leaves a genuine queued REPLY alone — that is work we still owe', async () => {
+    const h = build('MCP', false, false, [{ id: 'reply-1', payload: { reason: 'inbound' } }]);
+    await h.inbound(event);
+    expect(h.scheduledJobs.cancelById).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The third writer, and the only instant one.
+   *
+   * The platform key is one shared account and the connector cannot be woken
+   * (MCP is client-to-server, so it must be polled). A key belonging to the
+   * workspace is present when the inbound event fires, so the reply is written
+   * on that event — no queue, no poll.
+   */
+  it('answers IN-PROCESS when the workspace brought its own key', async () => {
+    const h = build('MCP', false, false, [], true);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'conversation.ai_reply' }),
+    );
+    // reply() ran: it reads the conversation on its very first line.
+    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('own key beats MCP_ONLY, because MCP_ONLY is a promise about OUR bill', async () => {
+    // MCP_ONLY guarantees the PLATFORM key is never spent on this workspace.
+    // The workspace's own key is not the platform's, so honouring the promise
+    // does not require making the customer wait.
+    const h = build('MCP_ONLY', false, false, [], true);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('without an own key MCP still queues — the lane is unchanged', async () => {
+    const h = build('MCP', false, false, [], false);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'conversation.ai_reply' }),
+    );
   });
 
   it('still cancels a pending proactive follow-up before anything else', async () => {

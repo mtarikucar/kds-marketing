@@ -25,7 +25,17 @@ describe('AiReplyLeaseService', () => {
       message: { findFirst: jest.fn(async () => ({ authorType: 'AI' })) },
       conversation: { updateMany: jest.fn(async () => ({ count: 1 })) },
     };
-    return { prisma, svc: new AiReplyLeaseService(prisma) };
+    // The follow-up half: completing a handled reply lines up the next nudge
+    // the same way the platform's own reply() does. Doubled, because what these
+    // tests assert is that the lane CALLS it — the policy itself is
+    // ConversationFollowupService's own spec.
+    const followups = {
+      scheduleNext: jest.fn(async () => true),
+      countFollowup: jest.fn(async () => undefined),
+      cancelFor: jest.fn(async () => undefined),
+      policyFor: jest.fn(() => null),
+    };
+    return { prisma, followups, svc: new AiReplyLeaseService(prisma, followups as any) };
   }
 
   const job = (over: any = {}) => ({
@@ -230,5 +240,88 @@ describe('AiReplyLeaseService', () => {
       await svc.complete(WS, 'job-1', false);
       expect(prisma.conversation.updateMany).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The half of a sale that happens when nobody writes back.
+ *
+ * The connector lane answered customers and then went silent on them forever:
+ * `scheduleFollowup` was reachable only from the END of the platform's own
+ * reply(), which made chasing a quiet customer silently conditional on the
+ * platform having been the one to answer. A workspace whose Claude answers
+ * through the connector scheduled a nudge never, for any conversation.
+ */
+describe('AiReplyLeaseService — chasing a customer who went quiet', () => {
+  const WS = 'ws-1';
+
+  function build(payload: any) {
+    const prisma: any = {
+      scheduledJob: {
+        findFirst: jest.fn(async () => ({ id: 'job-1', payload, createdAt: new Date() })),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+        count: jest.fn(async () => 0),
+      },
+      message: { findFirst: jest.fn(async () => ({ authorType: 'AI' })) },
+      conversation: { updateMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const followups = {
+      scheduleNext: jest.fn(async () => true),
+      countFollowup: jest.fn(async () => undefined),
+      cancelFor: jest.fn(async () => undefined),
+      policyFor: jest.fn(() => null),
+    };
+    return { prisma, followups, svc: new AiReplyLeaseService(prisma, followups as any) };
+  }
+
+  it('lines up the next nudge when the connector answers a customer', async () => {
+    const { svc, followups } = build({ conversationId: 'convo-1' });
+    await svc.complete(WS, 'job-1', true);
+    expect(followups.scheduleNext).toHaveBeenCalledWith(WS, 'convo-1');
+  });
+
+  it('COUNTS a nudge it sent, so the cap it is measured against actually moves', async () => {
+    // The platform bumps followupCount after its own send. A nudge sent through
+    // the connector that never counted would let the same customer be chased
+    // forever, whatever their agent's maxFollowups says.
+    const { svc, followups } = build({ conversationId: 'convo-1', reason: 'followup' });
+    await svc.complete(WS, 'job-1', true);
+    expect(followups.countFollowup).toHaveBeenCalledWith(WS, 'convo-1');
+    expect(followups.countFollowup.mock.invocationCallOrder[0]).toBeLessThan(
+      followups.scheduleNext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not count an ordinary reply as a nudge', async () => {
+    const { svc, followups } = build({ conversationId: 'convo-1', reason: 'inbound' });
+    await svc.complete(WS, 'job-1', true);
+    expect(followups.countFollowup).not.toHaveBeenCalled();
+  });
+
+  it('chases nobody when the connector handed the job BACK', async () => {
+    // handled: false means "I did not write to this customer". Scheduling a
+    // follow-up to a message that was never sent would chase a conversation
+    // nothing has happened in.
+    const { svc, followups } = build({ conversationId: 'convo-1' });
+    await svc.complete(WS, 'job-1', false);
+    expect(followups.scheduleNext).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the completion when the bookkeeping throws', async () => {
+    // The customer already has the message. Throwing here would return a
+    // completed job to the queue and send it a second time.
+    const { svc, followups } = build({ conversationId: 'convo-1' });
+    followups.scheduleNext.mockRejectedValue(new Error('db down'));
+    await expect(svc.complete(WS, 'job-1', true)).resolves.toBe(true);
+  });
+
+  it('tells the connector WHY the job is queued', async () => {
+    // "inbound" and "followup" need opposite messages: one answers a waiting
+    // customer, the other nudges a silent one. A connector that cannot tell
+    // them apart writes a reply to a question nobody asked.
+    const nudge = build({ conversationId: 'convo-1', reason: 'followup' });
+    expect((await nudge.svc.claim(WS))?.reason).toBe('followup');
+    const answer = build({ conversationId: 'convo-1' });
+    expect((await answer.svc.claim(WS))?.reason).toBe('inbound');
   });
 });

@@ -112,6 +112,25 @@ model Workspace {
   /// Allowed values are AI_EXECUTION_MODES in `ai/ai-execution.ts`.
   aiExecution String @default("AUTO")
 
+  /// This workspace's OWN Anthropic API key, sealed (AES-256-GCM, see
+  /// `common/crypto/secret-box.helper.ts`). Its own column and never
+  /// `settings`, because settings is platform-PATCHable and API responses
+  /// must mask this.
+  ///
+  /// WHY IT EXISTS: an answer is only instant if something can WRITE it the
+  /// moment the customer's mail lands. There were two writers and each has a
+  /// wait built into it — the platform key (one shared account, and when its
+  /// credit runs out every workspace goes silent at once) and the connector
+  /// (MCP is client-to-server, so nothing can wake it; it has to be polled).
+  /// A key belonging to the workspace is the third: it is present in-process,
+  /// so the reply is composed on the inbound event itself, with no queue, no
+  /// poll and no shared balance to run dry.
+  ///
+  /// A workspace that brings its own key pays the vendor directly, so the
+  /// platform does not also charge it credits for those calls.
+  aiApiKeyEnc   String?
+  aiApiKeySetAt DateTime?
+
   /// WHICH fal.ai model this workspace's generations run on, by kind — the
   /// middle term of `campaign override ?? workspace default ?? code constant`.
   ///
