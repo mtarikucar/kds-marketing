@@ -27,6 +27,7 @@ import { AskAiService } from '../ai/ask-ai.service';
 import { CommandAiService } from '../ai/command-ai.service';
 import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
 import { VendorSpendReportService } from '../wallet/vendor-spend-report.service';
+import { WorkspaceAiKeyService } from '../ai/workspace-ai-key.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
@@ -57,7 +58,42 @@ export class MarketingAiController {
     private readonly command: CommandAiService,
     private readonly aiUsage: AiUsageStatsService,
     private readonly vendorSpend: VendorSpendReportService,
+    private readonly ownKey: WorkspaceAiKeyService,
   ) {}
+
+  // ---- The workspace's own model key ----
+  //
+  // This is what makes a reply instant. The platform key is one shared
+  // account (when its credit runs out, every workspace goes silent together)
+  // and the connector cannot be woken — MCP is client-to-server, so it has to
+  // be polled. A key owned by the workspace is present when the inbound event
+  // fires, so the answer is written on that event.
+  //
+  // REST only, never an MCP tool: a tool argument would carry the secret
+  // through a model's context. The key reaches the server from the person who
+  // owns it, in one hop, and is never returned again.
+
+  @Get('own-key')
+  @MarketingRoles('OWNER')
+  getOwnKey(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.ownKey.get(actor.workspaceId);
+  }
+
+  @Post('own-key')
+  @MarketingRoles('OWNER')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  setOwnKey(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() body: { apiKey?: string },
+  ) {
+    return this.ownKey.set(actor.workspaceId, body?.apiKey ?? '');
+  }
+
+  @Delete('own-key')
+  @MarketingRoles('OWNER')
+  clearOwnKey(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.ownKey.clear(actor.workspaceId);
+  }
 
   // ---- Knowledge base (Agent Studio grounding docs) ----
 

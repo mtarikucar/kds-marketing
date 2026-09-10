@@ -145,6 +145,7 @@ import { EmailService } from '../../common/services/email.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
+import { WorkspaceAiKeyService } from './ai/workspace-ai-key.service';
 import { AiReplyBackfillService } from './ai/ai-reply-backfill.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
@@ -924,6 +925,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiReplyLeaseService,
+    WorkspaceAiKeyService,
     // Conversations that were already waiting when the reply lane was switched
     // on are invisible to it — onInbound only sees messages that ARRIVE.
     AiReplyBackfillService,

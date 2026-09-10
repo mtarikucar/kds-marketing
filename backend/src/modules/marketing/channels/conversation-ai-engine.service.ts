@@ -111,8 +111,24 @@ export class ConversationAiEngineService implements OnModuleInit {
   async aiModeFor(workspaceId: string): Promise<EffectiveAiExecution> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { aiExecution: true },
+      select: { aiExecution: true, aiApiKeyEnc: true },
     });
+    /**
+     * A workspace that brought its OWN key answers in-process, now.
+     *
+     * This is what makes a reply instant. The other two writers each have a
+     * wait built into them: the platform key is one shared account, and the
+     * connector cannot be woken — MCP is client-to-server, so it has to be
+     * polled, which is a queue with a human-scheduled clock on it. A key that
+     * belongs to the workspace is simply present when the inbound event
+     * fires, so the answer is composed on that event.
+     *
+     * It overrides MCP_ONLY, and that is not a violation of it: MCP_ONLY is a
+     * promise that the PLATFORM's key is never spent on this workspace, and
+     * the workspace's own key is not the platform's. What the owner asked to
+     * avoid was our bill, not their own answer.
+     */
+    if (ws?.aiApiKeyEnc) return 'SERVER';
     const stored = ws?.aiExecution;
     if (stored !== 'AUTO') return effectiveAiExecution(stored, false);
     const seen = await this.prisma.agentRun.findFirst({
@@ -232,8 +248,10 @@ export class ConversationAiEngineService implements OnModuleInit {
   }
 
   private async reply(workspaceId: string, conversationId: string): Promise<void> {
-    if (!this.anthropic.isEnabled()) {
-      this.decline(conversationId, 'anthropic not configured (ANTHROPIC_API_KEY)');
+    // Workspace-aware: a workspace with its own key is live even while the
+    // shared platform key is refusing, which is the whole point of having one.
+    if (!(await this.anthropic.isEnabledFor(workspaceId))) {
+      this.decline(conversationId, 'no usable AI key for this workspace');
       return;
     }
 
@@ -692,7 +710,7 @@ export class ConversationAiEngineService implements OnModuleInit {
       this.logger.log(`follow-up queued for the connector convo=${conversationId} mode=${mode}`);
       return;
     }
-    if (!this.anthropic.isEnabled()) return;
+    if (!(await this.anthropic.isEnabledFor(workspaceId))) return;
 
     const cost = creditCost('conversation.followup');
     await this.credits.reserve(workspaceId, cost);

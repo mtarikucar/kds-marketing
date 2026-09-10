@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import Anthropic from '@anthropic-ai/sdk';
+import { openSecret } from '../../../common/crypto/secret-box.helper';
 
 export type AiModelTier = 'default' | 'balanced' | 'light' | 'conversation';
 
@@ -147,10 +148,75 @@ export class AnthropicService {
   private unusableUntil = 0;
   private unusableReason: string | null = null;
 
+  /**
+   * Per-workspace clients, for workspaces that brought their own key.
+   *
+   * An answer is only instant if something can WRITE it the moment the
+   * customer's mail lands, and both existing writers have a wait built in:
+   * the platform key is one shared account, and the connector cannot be woken
+   * because MCP is client-to-server, so it has to be polled. A key owned by
+   * the workspace is the third writer and the only one that is simply THERE —
+   * the reply is composed on the inbound event, with no queue and no poll.
+   *
+   * Cached by workspace id and evicted when the key changes, so a rotated key
+   * takes effect without a restart.
+   */
+  private byoClients = new Map<string, { client: Anthropic; sealed: string }>();
+
+  /**
+   * The circuit breaker is PER KEY, not global.
+   *
+   * A dry platform key must not silence a workspace that is paying its own
+   * vendor bill, and one customer's expired key must not take the platform
+   * down for everyone else. Keyed by workspace id, or `platform` for the
+   * shared key.
+   */
+  private unusableByKey = new Map<string, { until: number; reason: string }>();
+
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /** Which key a call should use — the workspace's own, or the shared one. */
+  private async sealedKeyFor(workspaceId?: string): Promise<string | null> {
+    if (!workspaceId) return null;
+    const ws = await this.prisma.workspace
+      .findUnique({ where: { id: workspaceId }, select: { aiApiKeyEnc: true } })
+      .catch(() => null);
+    return ws?.aiApiKeyEnc ?? null;
+  }
+
+  /**
+   * Does this workspace answer with its own key?
+   *
+   * The reply lane asks this to decide whether it can write NOW or has to
+   * queue for a connector, so it is deliberately a cheap single-column read.
+   */
+  async usesOwnKey(workspaceId: string): Promise<boolean> {
+    return (await this.sealedKeyFor(workspaceId)) !== null;
+  }
+
+  /** Live for this workspace: its own key, or a platform key that is working. */
+  async isEnabledFor(workspaceId: string): Promise<boolean> {
+    const sealed = await this.sealedKeyFor(workspaceId);
+    if (!sealed) return this.isEnabled();
+    const gate = this.unusableByKey.get(workspaceId);
+    if (gate && Date.now() < gate.until) return false;
+    return this.config.get<string>('AI_DISABLED') !== '1';
+  }
+
+  private byoClient(workspaceId: string, sealed: string): Anthropic {
+    const hit = this.byoClients.get(workspaceId);
+    if (hit && hit.sealed === sealed) return hit.client;
+    const client = new Anthropic({
+      apiKey: openSecret(sealed),
+      timeout: 120_000,
+      maxRetries: 2,
+    });
+    this.byoClients.set(workspaceId, { client, sealed });
+    return client;
+  }
 
   /**
    * What the operator has to fix, or null while the platform key is fine.
@@ -276,7 +342,12 @@ export class AnthropicService {
    * arrive pre-parsed on `block.input` — never string-match the raw JSON.
    */
   async complete(opts: AiCallOpts): Promise<AiCompletion> {
-    const client = this.getClient();
+    // The workspace's own key when it has one. `workspaceId` is already on
+    // every metered call (it carries the usage log), so this needed no new
+    // plumbing at the call sites.
+    const sealed = await this.sealedKeyFor(opts.workspaceId);
+    const client = sealed ? this.byoClient(opts.workspaceId!, sealed) : this.getClient();
+    const keyId = sealed ? opts.workspaceId! : 'platform';
     let res: Anthropic.Message;
     try {
       res = await client.messages.create({
@@ -296,6 +367,20 @@ export class AnthropicService {
       // transient blip is a worse outage than the one being prevented.
       const accountLevel = isAccountLevelAiFailure(err);
       if (accountLevel) {
+        // Per KEY. A customer's expired key must not take AI down for every
+        // other workspace, and a dry platform key must not silence a
+        // workspace that is paying its own vendor bill.
+        this.unusableByKey.set(keyId, {
+          until: Date.now() + PLATFORM_AI_COOLDOWN_MS,
+          reason: accountLevel,
+        });
+        if (keyId !== 'platform') {
+          this.logger.error(
+            `workspace ${keyId} AI key unusable — ${accountLevel}. That workspace declines for ` +
+              `${Math.round(PLATFORM_AI_COOLDOWN_MS / 60000)} minutes; other workspaces are unaffected.`,
+          );
+          throw err;
+        }
         this.unusableUntil = Date.now() + PLATFORM_AI_COOLDOWN_MS;
         this.unusableReason = accountLevel;
         // ERROR, and naming the operator's fix: this is a platform-wide
@@ -394,7 +479,11 @@ export class AnthropicService {
    * wants it via the returned async iterator's completion.
    */
   async *streamText(opts: AiCallOpts): AsyncIterable<string> {
-    const client = this.getClient();
+    // Same key resolution as complete(): a workspace that brought its own key
+    // streams on it too, or the two paths would bill different accounts for
+    // the same conversation.
+    const sealed = await this.sealedKeyFor(opts.workspaceId);
+    const client = sealed ? this.byoClient(opts.workspaceId!, sealed) : this.getClient();
     const stream = client.messages.stream({
       model: this.modelFor(opts.tier ?? 'default'),
       max_tokens: opts.maxTokens ?? 1024,

@@ -22,6 +22,10 @@ describe('AiCreditsService — monthly credit metering', () => {
   beforeEach(() => {
     counterValue = 0;
     prisma = {
+      // A workspace that brought its own API key pays the vendor directly, so
+      // reserve() must not also charge our credits. Default: no own key, i.e.
+      // every existing test still describes the metered path.
+      workspace: { findUnique: jest.fn(async () => ({ aiApiKeyEnc: null })) },
       usageCounter: {
         findUnique: jest
           .fn()
@@ -103,6 +107,17 @@ describe('AiCreditsService — monthly credit metering', () => {
     expect(counterValue).toBe(0);
   });
 
+  it('charges NOTHING when the workspace brought its own API key', async () => {
+    // They are billed by the vendor directly; taking our credits as well would
+    // be charging for a call we did not pay for. Checked in reserve() because
+    // that is the single door every metered action goes through — and a
+    // reserve that never happened needs no matching refund.
+    prisma.workspace.findUnique.mockResolvedValue({ aiApiKeyEnc: 'v1:a:b:c' });
+    await svc.reserve('ws-1', 25);
+    expect(prisma.usageCounter.upsert).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('refund returns credits to the pool', async () => {
     withLimit(100);
     await svc.reserve(WS, 5);
@@ -159,6 +174,10 @@ describe('AiCreditsService — prepaid credits', () => {
     const meters: Record<string, number> = {};
     const metricOf = (args: any) => args.where.workspaceId_metric_periodKey.metric;
     prisma = {
+      // A workspace that brought its own API key pays the vendor directly, so
+      // reserve() must not also charge our credits. Default: no own key, i.e.
+      // every existing test still describes the metered path.
+      workspace: { findUnique: jest.fn(async () => ({ aiApiKeyEnc: null })) },
       usageCounter: {
         findUnique: jest.fn().mockImplementation(async (args: any) => {
           const m = metricOf(args);
@@ -284,6 +303,10 @@ describe('AiCreditsService — refund cannot mint credits after an overage', () 
   beforeEach(() => {
     counters = {};
     prisma = {
+      // A workspace that brought its own API key pays the vendor directly, so
+      // reserve() must not also charge our credits. Default: no own key, i.e.
+      // every existing test still describes the metered path.
+      workspace: { findUnique: jest.fn(async () => ({ aiApiKeyEnc: null })) },
       usageCounter: {
         findUnique: jest.fn().mockImplementation(async ({ where }: any) => {
           const m = where.workspaceId_metric_periodKey.metric;
@@ -368,6 +391,10 @@ describe('AiCreditsService — a lapsed plan can still spend prepaid credits', (
 
   beforeEach(() => {
     prisma = {
+      // A workspace that brought its own API key pays the vendor directly, so
+      // reserve() must not also charge our credits. Default: no own key, i.e.
+      // every existing test still describes the metered path.
+      workspace: { findUnique: jest.fn(async () => ({ aiApiKeyEnc: null })) },
       usageCounter: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({ value: 0 }),

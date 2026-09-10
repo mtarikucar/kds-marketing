@@ -46,8 +46,29 @@ export class AiCreditsService {
     private readonly wallet: AiCreditWalletService,
   ) {}
 
+  /** Whether this workspace pays the model vendor itself. Cheap single column;
+   *  a failed read falls back to charging, because silently giving AI away is
+   *  the worse error of the two. */
+  private async usesOwnAiKey(workspaceId: string): Promise<boolean> {
+    try {
+      const ws = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { aiApiKeyEnc: true },
+      });
+      return !!ws?.aiApiKeyEnc;
+    } catch {
+      return false;
+    }
+  }
+
   async reserve(workspaceId: string, cost: number): Promise<void> {
     if (cost <= 0) return;
+    // A workspace that brought its own API key is billed by the vendor
+    // directly, so charging it our credits as well would be taking money for
+    // a call we did not pay for. Checked here rather than at ~26 call sites:
+    // this is the single door every metered action goes through, and a
+    // reserve that is skipped needs no matching refund.
+    if (await this.usesOwnAiKey(workspaceId)) return;
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.aiCreditsMonthly;
     const period = monthKey();

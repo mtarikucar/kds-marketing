@@ -71,6 +71,9 @@ describe('ConversationAiEngineService.reply', () => {
     };
     const anthropic = {
       isEnabled: jest.fn().mockReturnValue(overrides.enabled ?? true),
+      // Workspace-aware gate: a workspace with its own key is live even while
+      // the shared platform key is refusing. The reply path asks this one.
+      isEnabledFor: jest.fn().mockResolvedValue(overrides.enabled ?? true),
       complete: jest.fn().mockResolvedValue(
         overrides.complete ?? { text: 'Merhaba! Size nasıl yardımcı olabilirim?', toolUses: [], stopReason: 'end_turn', usage: { input: 1, output: 1 } },
       ),
@@ -577,7 +580,7 @@ describe('ConversationAiEngineService.reply', () => {
     });
 
     it('says so when Anthropic is unconfigured', async () => {
-      expect(await runDecline({ enabled: false })).toMatch(/anthropic not configured/);
+      expect(await runDecline({ enabled: false })).toMatch(/no usable AI key for this workspace/);
     });
 
     it('reports the cap it hit, with the number', async () => {
@@ -769,15 +772,22 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     mcpSeen = false,
     paused = false,
     queuedReplies: any[] = [],
+    ownKey = false,
   ) {
-    const anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
+    const anthropic = {
+      isEnabled: jest.fn().mockReturnValue(true),
+      isEnabledFor: jest.fn().mockResolvedValue(true),
+      complete: jest.fn(),
+    };
     const scheduledJobs = {
       cancel: jest.fn().mockResolvedValue(undefined),
       cancelById: jest.fn().mockResolvedValue(true),
       schedule: jest.fn().mockResolvedValue('job-1'),
     };
     const prisma: any = {
-      workspace: { findUnique: jest.fn().mockResolvedValue({ aiExecution }) },
+      workspace: {
+        findUnique: jest.fn().mockResolvedValue({ aiExecution, aiApiKeyEnc: ownKey ? 'v1:a:b:c' : null }),
+      },
       agentRun: { findFirst: jest.fn().mockResolvedValue(mcpSeen ? { id: 'r1' } : null) },
       // A nudge already handed to the connector holds this conversation's slot
       // in the reply queue. The customer writing back has to clear it.
@@ -880,6 +890,42 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     const h = build('MCP', false, false, [{ id: 'reply-1', payload: { reason: 'inbound' } }]);
     await h.inbound(event);
     expect(h.scheduledJobs.cancelById).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The third writer, and the only instant one.
+   *
+   * The platform key is one shared account and the connector cannot be woken
+   * (MCP is client-to-server, so it must be polled). A key belonging to the
+   * workspace is present when the inbound event fires, so the reply is written
+   * on that event — no queue, no poll.
+   */
+  it('answers IN-PROCESS when the workspace brought its own key', async () => {
+    const h = build('MCP', false, false, [], true);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'conversation.ai_reply' }),
+    );
+    // reply() ran: it reads the conversation on its very first line.
+    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('own key beats MCP_ONLY, because MCP_ONLY is a promise about OUR bill', async () => {
+    // MCP_ONLY guarantees the PLATFORM key is never spent on this workspace.
+    // The workspace's own key is not the platform's, so honouring the promise
+    // does not require making the customer wait.
+    const h = build('MCP_ONLY', false, false, [], true);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+  });
+
+  it('without an own key MCP still queues — the lane is unchanged', async () => {
+    const h = build('MCP', false, false, [], false);
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'conversation.ai_reply' }),
+    );
   });
 
   it('still cancels a pending proactive follow-up before anything else', async () => {
