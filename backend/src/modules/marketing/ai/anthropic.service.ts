@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
+import { spendAllowed, ACTION_CATEGORY } from './ai-spend-policy';
 
 export type AiModelTier = 'default' | 'balanced' | 'light' | 'conversation';
 
@@ -178,6 +179,33 @@ export class AnthropicService {
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * Refuse a call the workspace has switched off.
+   *
+   * Placed here because this is the ONE door every LLM call already goes
+   * through carrying both `workspaceId` and `action` — they are on the call for
+   * usage logging, so the gate needed no new plumbing at ~24 call sites. Every
+   * caller already reserves credits before this and refunds on a throw, so a
+   * refusal costs the workspace nothing.
+   *
+   * Throws rather than returning empty text: a silent no-op would look to the
+   * caller like a model that answered with nothing, which is the failure this
+   * codebase keeps having to dig out.
+   */
+  private async assertSpendAllowed(opts: AiCallOpts): Promise<void> {
+    if (!opts.workspaceId || !opts.action) return;
+    const ws = await this.prisma.workspace
+      .findUnique({ where: { id: opts.workspaceId }, select: { aiSpendPolicy: true } })
+      .catch(() => null);
+    const policy = (ws?.aiSpendPolicy as Record<string, unknown> | null) ?? null;
+    if (spendAllowed(policy, opts.action)) return;
+    const category = ACTION_CATEGORY[opts.action];
+    throw new Error(
+      `AI_SPEND_DISABLED: "${category}" is switched off for this workspace, so ${opts.action} did not run. ` +
+        'Turn it back on under Settings → AI → spending.',
+    );
+  }
+
   /** Which key a call should use — the workspace's own, or the shared one. */
   private async sealedKeyFor(workspaceId?: string): Promise<string | null> {
     if (!workspaceId) return null;
@@ -342,6 +370,7 @@ export class AnthropicService {
    * arrive pre-parsed on `block.input` — never string-match the raw JSON.
    */
   async complete(opts: AiCallOpts): Promise<AiCompletion> {
+    await this.assertSpendAllowed(opts);
     // The workspace's own key when it has one. `workspaceId` is already on
     // every metered call (it carries the usage log), so this needed no new
     // plumbing at the call sites.
@@ -479,6 +508,7 @@ export class AnthropicService {
    * wants it via the returned async iterator's completion.
    */
   async *streamText(opts: AiCallOpts): AsyncIterable<string> {
+    await this.assertSpendAllowed(opts);
     // Same key resolution as complete(): a workspace that brought its own key
     // streams on it too, or the two paths would bill different accounts for
     // the same conversation.

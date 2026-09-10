@@ -146,6 +146,7 @@ import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.ser
 import { AnthropicService } from './ai/anthropic.service';
 import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
 import { WorkspaceAiKeyService } from './ai/workspace-ai-key.service';
+import { AiSpendSettingsService } from './ai/ai-spend-settings.service';
 import { AiReplyBackfillService } from './ai/ai-reply-backfill.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
@@ -926,6 +927,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     AnthropicService,
     AiReplyLeaseService,
     WorkspaceAiKeyService,
+    AiSpendSettingsService,
     // Conversations that were already waiting when the reply lane was switched
     // on are invisible to it — onInbound only sees messages that ARRIVE.
     AiReplyBackfillService,
@@ -1394,6 +1396,9 @@ export class MarketingModule {
     // Powers jeeta.verify_email_transport — "can we send email at all" was
     // answerable only by waiting for something to try.
     emailService: EmailService,
+    // Powers jeeta.get_ai_spend — where the AI money goes, by job, with the
+    // measured vendor cost beside the credits we charge.
+    aiSpend: AiSpendSettingsService,
     // Faz 5 D1 — the CRM write lane.
     principals: McpPrincipalService,
     activities: MarketingActivitiesService,
@@ -1506,6 +1511,7 @@ export class MarketingModule {
       users: marketingUsers,
       jobs: scheduledJobs,
       email: emailService,
+      aiSpend,
     });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerDeviceTools(registry, { devices, principals });

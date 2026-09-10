@@ -4,8 +4,10 @@ import { MarketingUsersService } from '../../services/marketing-users.service';
 import { ScheduledJobService } from '../../scheduling/scheduled-job.service';
 import { EmailService } from '../../../../common/services/email.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
+import { AiSpendSettingsService } from '../../ai/ai-spend-settings.service';
 
 export interface WorkspaceToolDeps {
+  aiSpend: AiSpendSettingsService;
   entitlements: EntitlementsService;
   users: MarketingUsersService;
   jobs: ScheduledJobService;
@@ -249,5 +251,33 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
     requiresApproval: false,
     inputSchema: z.object({}),
     handler: async () => deps.email.verifyTransport(),
+  });
+
+  registry.register({
+    name: 'jeeta.get_ai_spend',
+    description:
+      'Where this workspace spends AI money, BY JOB, with a switch per job. Each category carries what ' +
+      'the vendor actually billed (measured, from the usage log) next to the credits we charge — the two ' +
+      'differ on purpose, because the credit table is priced from token ceilings. `shareOfBill` names the ' +
+      'one job worth switching off instead of leaving ten dollar figures to compare by eye. A category ' +
+      'showing calls: 0 is UNRUN, not free. Read this before answering "why is the AI bill high" or ' +
+      '"what can we turn off". The switches themselves are set in the panel (Settings > AI), not here. ' +
+      'Read-only.',
+    domain: 'workspace',
+    defer: true,
+    scopes: ['reports.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(365)
+        .optional()
+        .describe('How far back to measure. Defaults to 90 — a month can miss a job that runs weekly.'),
+    }),
+    handler: async (ctx, args) =>
+      deps.aiSpend.get(ctx.workspaceId, (args.days as number | undefined) ?? 90),
   });
 }
