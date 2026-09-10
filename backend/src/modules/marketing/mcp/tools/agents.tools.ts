@@ -151,6 +151,18 @@ export function registerAgentTools(registry: McpToolRegistry, deps: AgentToolDep
       // until now it could be set from the panel and from nowhere else — so a
       // workspace run entirely through the connector could not turn chasing on
       // even though the lane was there the whole time.
+      // Without a calendar the agent is never even SHOWN the booking tools, so
+      // it can answer and capture details but never propose a time — which is
+      // why DEMO_SCHEDULED needed a human every time. Attaching one is what
+      // lets a conversation become a meeting.
+      bookingCalendarId: z
+        .string()
+        .max(64)
+        .optional()
+        .describe(
+          'Booking calendar this agent may offer and reserve real slots from (jeeta.list_booking_calendars). ' +
+            'Without it the agent cannot propose a meeting at all.',
+        ),
       followup: z
         .object({
           enabled: z

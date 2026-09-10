@@ -29,6 +29,7 @@ import { PLACEHOLDER_CONTACT_NAME } from './conversation-ingress.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 import { ConversationFollowupService, FOLLOWUP_KIND } from './conversation-followup.service';
+import { BookingService } from '../sites/booking.service';
 
 
 const HISTORY_LIMIT = 12;
@@ -58,6 +59,50 @@ const TOOLS: Anthropic.Tool[] = [
       type: 'object',
       properties: { reason: { type: 'string' } },
       required: ['reason'],
+    },
+  },
+];
+
+/**
+ * The two tools that let a conversation become a MEETING.
+ *
+ * Handed to the model only when the agent has a booking calendar attached,
+ * because a model offered a booking tool with nowhere to book invents times —
+ * and a slot invented in a chat is worse than no offer at all: the customer
+ * writes it in their diary and nobody is there.
+ *
+ * Until now the funnel simply stopped here. The agent could answer, capture
+ * details and escalate; it could not propose a time, so DEMO_SCHEDULED was
+ * reachable only when a person did it by hand. That is the difference between
+ * an assistant that talks and one that moves a sale.
+ */
+const BOOKING_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'get_meeting_slots',
+    description:
+      'List real, bookable meeting times. ALWAYS call this before naming any time — never invent or guess a slot, and never promise a time you have not seen in this list. Returns ISO 8601 start times honouring the calendar hours, notice period and existing bookings. Offer the customer two of them, in their own words and timezone.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fromISO: { type: 'string', description: 'Window start, ISO 8601. Default: now.' },
+        toISO: { type: 'string', description: 'Window end, ISO 8601. Default: 7 days out.' },
+      },
+    },
+  },
+  {
+    name: 'book_meeting',
+    description:
+      'Reserve one of the slots you were given, once the customer has PICKED a specific time. Use the exact start value from get_meeting_slots. This creates a real appointment and notifies the team, so never call it speculatively, and never to "hold" a slot the customer has not agreed to.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        start: { type: 'string', description: 'Exact ISO start from get_meeting_slots.' },
+        name: { type: 'string', description: "The person's name." },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        notes: { type: 'string', description: 'What they want to see — the context the rep needs.' },
+      },
+      required: ['start', 'name'],
     },
   },
 ];
@@ -93,6 +138,10 @@ export class ConversationAiEngineService implements OnModuleInit {
     private readonly stream: ConversationStreamService,
     private readonly brandContext: BrandContextService,
     private readonly followups: ConversationFollowupService,
+    // Lets a conversation become a MEETING. Without it the funnel stopped at
+    // "interested": the agent could answer and capture details but never
+    // propose a time, so DEMO_SCHEDULED needed a human every time.
+    private readonly bookings: BookingService,
   ) {}
 
   onModuleInit(): void {
@@ -226,6 +275,92 @@ export class ConversationAiEngineService implements OnModuleInit {
    * Logged at `log`, not `debug`: a decline is the answer to "why is the AI
    * silent", and production does not print debug.
    */
+  /**
+   * Real bookable times, or an honest empty answer.
+   *
+   * Returned as text the model reads back, so the failure modes have to speak:
+   * an empty calendar must say so plainly, or the model fills the silence with
+   * a time it made up.
+   */
+  private async meetingSlots(
+    workspaceId: string,
+    calendarId: string,
+    input: { fromISO?: string; toISO?: string },
+  ): Promise<string> {
+    const from = input?.fromISO ? new Date(input.fromISO) : new Date();
+    const to = input?.toISO ? new Date(input.toISO) : new Date(Date.now() + 7 * 86400_000);
+    try {
+      const slots = await this.bookings.availability(
+        workspaceId,
+        calendarId,
+        from.toISOString(),
+        to.toISOString(),
+      );
+      if (!slots.length) {
+        return 'No free slots in that window. Say so honestly and ask what times suit them — do NOT invent a time.';
+      }
+      // Capped: the model needs two to offer, not a timetable to paste.
+      return `Available start times (ISO 8601): ${slots.slice(0, 12).join(', ')}`;
+    } catch (e: any) {
+      this.logger.warn(`meeting slots unavailable: ${e?.message ?? e}`);
+      return 'Could not read the calendar. Do NOT offer a time; say you will confirm and move on.';
+    }
+  }
+
+  /**
+   * Reserve a slot the customer actually chose, and move the lead with it.
+   *
+   * The status advance is the point. A booking that leaves the lead where it
+   * was is the exact failure this whole lane exists to end: an assistant that
+   * did something and told nobody. `updateMany` with a compound WHERE so a
+   * closed or converted lead is never dragged backwards.
+   */
+  private async bookMeeting(
+    workspaceId: string,
+    calendarId: string,
+    conversationId: string,
+    input: { start?: string; name?: string; email?: string; phone?: string; notes?: string },
+  ): Promise<{ content: string; failed?: boolean }> {
+    if (!input?.start || !input?.name) {
+      return { content: 'A start time and a name are required.', failed: true };
+    }
+    try {
+      const booking = await this.bookings.book(workspaceId, calendarId, {
+        start: input.start,
+        name: input.name,
+        email: input.email,
+        phone: input.phone,
+        notes: input.notes,
+      });
+      const convo = await this.prisma.conversation.findFirst({
+        where: { id: conversationId, workspaceId },
+        select: { leadId: true },
+      });
+      if (convo?.leadId) {
+        await this.prisma.lead.updateMany({
+          where: {
+            id: convo.leadId,
+            workspaceId,
+            convertedTenantId: null,
+            status: { notIn: ['DEMO_SCHEDULED', 'WON', 'LOST'] },
+          },
+          data: { status: 'DEMO_SCHEDULED' },
+        });
+      }
+      this.logger.log(`booking ${(booking as any)?.id} from convo=${conversationId}; lead moved to DEMO_SCHEDULED`);
+      return { content: `Booked for ${input.start}. Confirm the time back to the customer.` };
+    } catch (e: any) {
+      // The slot went while they were deciding, or it breached the calendar's
+      // notice policy. Say which, so the model re-offers instead of insisting.
+      const why = e?.message ?? 'unknown error';
+      this.logger.log(`booking refused convo=${conversationId}: ${why}`);
+      return {
+        content: `That slot could not be booked (${why}). Call get_meeting_slots again and offer a different time.`,
+        failed: true,
+      };
+    }
+  }
+
   /** Drop a nudge that is waiting in the reply lane for this conversation.
    *  Only a nudge: a genuine queued reply is the work we still owe. */
   private async dropQueuedFollowupReply(workspaceId: string, conversationId: string): Promise<void> {
@@ -458,7 +593,10 @@ export class ConversationAiEngineService implements OnModuleInit {
     conversationId: string,
     system: string,
     messages: Anthropic.MessageParam[],
-    agent: { id: string },
+    // `bookingCalendarId` decides whether the model is even shown the booking
+    // tools — null means no calendar, and a model that can book nowhere makes
+    // times up.
+    agent: { id: string; bookingCalendarId?: string | null },
   ): Promise<{ text: string; handoff: boolean; handoffReason?: string }> {
     let finalText = '';
     // Whether the loop is exiting while the model was STILL requesting tools
@@ -469,7 +607,10 @@ export class ConversationAiEngineService implements OnModuleInit {
       const res = await this.anthropic.complete({
         system,
         messages,
-        tools: TOOLS,
+        // Booking tools only when there is somewhere to book. A model handed a
+        // booking tool with no calendar invents times, and an invented slot is
+        // worse than no offer: the customer writes it down and nobody is there.
+        tools: agent.bookingCalendarId ? [...TOOLS, ...BOOKING_TOOLS] : TOOLS,
         maxTokens: 700,
         tier: tierFor('conversation.reply'),
         // Measured-usage attribution. Without both of these the call never
@@ -495,6 +636,22 @@ export class ConversationAiEngineService implements OnModuleInit {
         } else if (tu.name === 'capture_lead_fields') {
           await this.captureLeadFields(workspaceId, conversationId, tu.input as any);
           toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: 'Saved.' });
+        } else if (tu.name === 'get_meeting_slots' && agent.bookingCalendarId) {
+          const slots = await this.meetingSlots(workspaceId, agent.bookingCalendarId, tu.input as any);
+          toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: slots });
+        } else if (tu.name === 'book_meeting' && agent.bookingCalendarId) {
+          const outcome = await this.bookMeeting(
+            workspaceId,
+            agent.bookingCalendarId,
+            conversationId,
+            tu.input as any,
+          );
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: outcome.content,
+            ...(outcome.failed ? { is_error: true } : {}),
+          });
         } else {
           toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: 'Unknown tool.', is_error: true });
         }

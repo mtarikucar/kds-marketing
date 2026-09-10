@@ -94,12 +94,18 @@ describe('ConversationAiEngineService.reply', () => {
     // through `agent.followup`, and a double that answered "yes, chase" for
     // every shape would let a broken policy read pass every one of them.
     const followups = new ConversationFollowupService(prisma as any, scheduledJobs as any);
+    // Lets a conversation become a meeting. Only reachable when the agent has
+    // a calendar attached — see the block at the bottom.
+    const bookings = {
+      availability: jest.fn().mockResolvedValue(overrides.slots ?? ['2026-09-15T10:00:00.000Z']),
+      book: jest.fn().mockResolvedValue({ id: 'bk-1' }),
+    };
     const engine = new ConversationAiEngineService(
       prisma, {} as any, anthropic as any, credits as any, knowledge as any,
       sender as any, scheduledJobs as any, runner as any, stream as any,
-      brandContext as any, followups,
+      brandContext as any, followups, bookings as any,
     );
-    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext, followups };
+    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext, followups, bookings };
   }
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
@@ -943,5 +949,110 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     const h = build('MCP', false, true);
     await h.inbound(event);
     expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A conversation becoming a MEETING.
+ *
+ * The funnel used to stop at "interested": the agent could answer, capture
+ * details and escalate, but it could not propose a time — so DEMO_SCHEDULED
+ * was reachable only when a person did it by hand. `bookingCalendarId` was
+ * stored and snapshotted and read by nothing.
+ */
+describe('ConversationAiEngineService — booking', () => {
+  const WS = 'ws-1';
+  const CONVO = 'conv-1';
+  const CAL = 'cal-1';
+
+  function build(withCalendar: boolean, over: any = {}) {
+    const prisma: any = {
+      conversation: { findFirst: jest.fn(async () => ({ leadId: 'lead-1' })) },
+      lead: { updateMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const bookings = {
+      availability: jest.fn(async () => over.slots ?? ['2026-09-15T10:00:00.000Z', '2026-09-15T11:00:00.000Z']),
+      book: over.bookThrows
+        ? jest.fn(async () => { throw new Error('Invalid or past slot'); })
+        : jest.fn(async () => ({ id: 'bk-1' })),
+    };
+    const svc = new (require('./conversation-ai-engine.service').ConversationAiEngineService)(
+      prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      { registerHandler: jest.fn() } as any, {} as any, {} as any, {} as any, bookings as any,
+    );
+    return { svc, prisma, bookings, agent: { id: 'ag-1', bookingCalendarId: withCalendar ? CAL : null } };
+  }
+
+  it('offers only real slots, and says so plainly when there are none', async () => {
+    // A model told nothing fills the silence with a time it invented, and an
+    // invented slot is worse than no offer: the customer writes it down and
+    // nobody is there.
+    const empty = build(true, { slots: [] });
+    const text = await (empty.svc as any).meetingSlots(WS, CAL, {});
+    expect(text).toMatch(/do NOT invent/i);
+    expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+
+    const ok = build(true);
+    const listed = await (ok.svc as any).meetingSlots(WS, CAL, {});
+    expect(listed).toContain('2026-09-15T10:00:00.000Z');
+  });
+
+  it('tells the model NOT to offer a time when the calendar cannot be read', async () => {
+    const h = build(true);
+    h.bookings.availability.mockRejectedValue(new Error('db down'));
+    const text = await (h.svc as any).meetingSlots(WS, CAL, {});
+    expect(text).toMatch(/Do NOT offer a time/i);
+  });
+
+  it('booking MOVES THE LEAD — the whole point', async () => {
+    // A booking that leaves the lead where it was is the exact failure this
+    // lane exists to end: something happened and nobody was told.
+    const h = build(true);
+    const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+      start: '2026-09-15T10:00:00.000Z',
+      name: 'Tarık',
+    });
+    expect(res.failed).toBeUndefined();
+    expect(h.prisma.lead.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'lead-1',
+          convertedTenantId: null,
+          status: { notIn: ['DEMO_SCHEDULED', 'WON', 'LOST'] },
+        }),
+        data: { status: 'DEMO_SCHEDULED' },
+      }),
+    );
+  });
+
+  it('never drags a closed or converted lead backwards', async () => {
+    // The compound WHERE is the guard: a WON lead that books a call again
+    // must not be reopened as DEMO_SCHEDULED.
+    const h = build(true);
+    await (h.svc as any).bookMeeting(WS, CAL, CONVO, { start: '2026-09-15T10:00:00.000Z', name: 'X' });
+    const where = h.prisma.lead.updateMany.mock.calls[0][0].where;
+    expect(where.status.notIn).toContain('WON');
+    expect(where.status.notIn).toContain('LOST');
+    expect(where.convertedTenantId).toBeNull();
+  });
+
+  it('a lost race comes back as an error that says what to do next', async () => {
+    // The slot went while they were deciding. The model must re-offer, not
+    // insist on a time that is gone.
+    const h = build(true, { bookThrows: true });
+    const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+      start: '2020-01-01T10:00:00.000Z',
+      name: 'Tarık',
+    });
+    expect(res.failed).toBe(true);
+    expect(res.content).toMatch(/get_meeting_slots again/);
+    expect(h.prisma.lead.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses to book without a time and a name', async () => {
+    const h = build(true);
+    const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, { name: 'Tarık' });
+    expect(res.failed).toBe(true);
+    expect(h.bookings.book).not.toHaveBeenCalled();
   });
 });
