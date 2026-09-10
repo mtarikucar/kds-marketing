@@ -145,7 +145,8 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     bookings: { listBookings: jest.fn(), availability: jest.fn(), book: jest.fn(), list: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
-  registerWorkspaceTools(registry, { entitlements: { getEffective: jest.fn() } as any });
+  registerWorkspaceTools(registry, {
+    aiSpend: { get: jest.fn() } as any, entitlements: { getEffective: jest.fn() } as any });
   registerContentTools(registry, {
     calendar: { range: jest.fn() } as any,
     media: { requestGeneration: jest.fn(), listAssets: jest.fn() } as any,
@@ -404,6 +405,10 @@ describe('MCP tool catalogue', () => {
         'jeeta.get_funnel',
         'jeeta.get_ai_usage',
         'jeeta.get_vendor_spend',
+        // Where the AI money goes BY JOB, with a switch per job. The credit
+        // table is priced from token ceilings, so the measured vendor cost
+        // sits beside it — the two answer different questions.
+        'jeeta.get_ai_spend',
         'jeeta.search_brand_knowledge',
         'jeeta.search_leads',
         'jeeta.list_conversations',
@@ -644,7 +649,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(160);
+    expect(names).toHaveLength(161);
   });
 
   /**
@@ -764,7 +769,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(160);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(161);
   });
 });
 

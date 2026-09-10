@@ -347,6 +347,7 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.find_tools` | Search the FULL catalogue, deferred tools included, with their input schemas | *(none)* | READ | — | yes |
 | `jeeta.get_ai_usage` | Anthropic spend for this workspace: tokens and real cost per action and model, plus a daily curve | `reports.read` | READ | — | no |
 | `jeeta.get_vendor_spend` | Outside-vendor spend (NetGSM, Meta, fal.ai, Firecrawl, Apify) and which units have no tariff at all | `reports.read` | READ | — | no |
+| `jeeta.get_ai_spend` | Where AI money goes BY JOB, measured vendor cost beside the credits charged, with a switch per job | `reports.read` | READ | — | no |
 | `jeeta.list_background_jobs` | This workspace's background jobs with status, attempts and the error from the last attempt | `reports.read` | READ | — | no |
 | `jeeta.list_scheduled_runs` | The deployment's recurring jobs: last run, last success, failure counts | `reports.read` | READ | — | no |
 | `jeeta.list_team` | List this workspace's team members with their user ids, names, role and status | `reports.read` | READ | — | yes |

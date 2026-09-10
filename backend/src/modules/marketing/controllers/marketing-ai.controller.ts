@@ -28,6 +28,7 @@ import { CommandAiService } from '../ai/command-ai.service';
 import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
 import { VendorSpendReportService } from '../wallet/vendor-spend-report.service';
 import { WorkspaceAiKeyService } from '../ai/workspace-ai-key.service';
+import { AiSpendSettingsService } from '../ai/ai-spend-settings.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
@@ -59,7 +60,34 @@ export class MarketingAiController {
     private readonly aiUsage: AiUsageStatsService,
     private readonly vendorSpend: VendorSpendReportService,
     private readonly ownKey: WorkspaceAiKeyService,
+    private readonly spend: AiSpendSettingsService,
   ) {}
+
+  // ---- What we spend AI money on, and the switch per job ----
+  //
+  // Sits beside the key because it answers the question the key raises: once
+  // the bill is yours, which jobs is it paying for. Every row carries the
+  // MEASURED dollars from AiUsageLog next to the credits we charge, because
+  // the credit table is priced from token ceilings and answers "what do we
+  // charge" when the owner is asking "what does this cost me".
+
+  @Get('spend')
+  @MarketingRoles('MANAGER')
+  getSpend(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Query('days') days?: string,
+  ) {
+    return this.spend.get(actor.workspaceId, days ? Number(days) : 90);
+  }
+
+  @Patch('spend')
+  @MarketingRoles('OWNER')
+  setSpend(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.spend.set(actor.workspaceId, body ?? {});
+  }
 
   // ---- The workspace's own model key ----
   //

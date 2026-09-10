@@ -131,6 +131,20 @@ model Workspace {
   aiApiKeyEnc   String?
   aiApiKeySetAt DateTime?
 
+  /// WHAT this workspace is willing to spend AI money on, by job:
+  /// `{ research: false, content: true, ... }` — see `ai/ai-spend-policy.ts`.
+  ///
+  /// Absent, or a category absent from it, means ON, so no existing workspace
+  /// changes behaviour by upgrading; only an explicit `false` switches a job
+  /// off. Its own column rather than `settings` because the AI gate reads it
+  /// on a hot path and `settings` is platform-PATCHable free shape.
+  ///
+  /// WHY A SWITCH AND NOT JUST A CAP: measured here over 90 days, research was
+  /// 99% of the AI bill and answering customers was $0.00. A credit cap stops
+  /// everything at once, after the money is gone, and cannot say which job
+  /// spent it. This turns off one job and keeps the rest.
+  aiSpendPolicy Json?
+
   /// WHICH fal.ai model this workspace's generations run on, by kind — the
   /// middle term of `campaign override ?? workspace default ?? code constant`.
   ///
