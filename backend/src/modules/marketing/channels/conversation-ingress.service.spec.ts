@@ -97,6 +97,18 @@ describe('ConversationIngressService', () => {
     );
   });
 
+  // An inbound email opens a lead like any other channel, but the funnel's
+  // source map had no EMAIL entry, so every one of them fell through to the
+  // 'OTHER' default — a customer who wrote to the workspace's own inbox was
+  // indistinguishable on the board from a lead with no known origin at all.
+  it('stamps an inbound email lead with the EMAIL source rather than OTHER', async () => {
+    await svc.ingest(
+      { ...channel, type: 'EMAIL' },
+      { ...inbound, kind: 'EMAIL', externalUserId: 'ada@x.com', externalMessageId: '<a@mail>' },
+    );
+    expect(prisma.lead.create.mock.calls[0][0].data.source).toBe('EMAIL');
+  });
+
   it('does not cache a NULL sentinel — a SYSTEM user created after the first message is picked up', async () => {
     // First inbound: the workspace has no SYSTEM user yet → no activity note,
     // and the miss must NOT be cached.

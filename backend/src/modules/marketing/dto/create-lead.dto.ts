@@ -47,6 +47,10 @@ export enum LeadSource {
   // System-set on CSV-import rows with no source column (import.service.ts).
   // Must be a first-class member so editing an imported lead validates.
   IMPORT = 'IMPORT',
+  // Someone who wrote to the workspace's own inbox (ConversationIngressService's
+  // SOURCE_BY_CHANNEL). Like IMPORT, it must be first-class or editing one of
+  // these leads fails validation on a source the system itself assigned.
+  EMAIL = 'EMAIL',
 }
 
 export enum LeadPriority {

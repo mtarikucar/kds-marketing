@@ -21,6 +21,7 @@ const SOURCE_TONE: Record<string, 'neutral' | 'primary' | 'info' | 'warning' | '
   PHONE: 'neutral',
   OTHER: 'neutral',
   AI_RESEARCH: 'info',
+  EMAIL: 'primary',
 };
 
 /**

@@ -36,6 +36,7 @@ const SOURCE_BY_CHANNEL: Record<string, string> = {
   INSTAGRAM: 'INSTAGRAM',
   MESSENGER: 'OTHER',
   LINKEDIN: 'OTHER',
+  EMAIL: 'EMAIL',
 };
 
 /**
