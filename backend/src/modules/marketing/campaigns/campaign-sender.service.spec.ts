@@ -87,6 +87,52 @@ describe('CampaignSenderService.batch', () => {
     );
   });
 
+  /**
+   * The open pixel. Everything downstream of it already exists and has for a
+   * long time: CampaignTrackingService.open() claims `openedAt` race-safely,
+   * the public `t/o/:token` route serves a real 1x1 GIF, recomputeStats counts
+   * the column, and decideAbWinner sorts on the number it produces. The one
+   * thing missing was the `<img>` that would ever cause any of it to fire — so
+   * `openedAt` was structurally always null and every open count was a zero
+   * that looked measured.
+   */
+  describe('renderHtml — the open pixel', () => {
+    const doc = '<html><body><p>Hi</p></body></html>';
+
+    it('embeds the tracking pixel, so an open can be recorded at all', () => {
+      const out = (svc as any).renderHtml(doc, 'tok-1', []);
+      expect(out).toMatch(/<img[^>]+src="https:\/\/m\.test\/api\/public\/t\/o\/tok-1"/);
+    });
+
+    it('puts the pixel INSIDE the document, not after it', () => {
+      // Markup appended past </body> is at the mercy of every client's sanitiser;
+      // the unsubscribe footer is injected before the tag for the same reason.
+      const out = (svc as any).renderHtml(doc, 'tok-1', []);
+      const at = out.indexOf('t/o/tok-1');
+      // Asserted explicitly: a missing pixel gives -1, which would otherwise sail
+      // through the ordering check below and make this test prove nothing.
+      expect(at).toBeGreaterThan(-1);
+      expect(at).toBeLessThan(out.indexOf('</body>'));
+    });
+
+    it('still carries the pixel on a hand-authored fragment with no </body>', () => {
+      const out = (svc as any).renderHtml('<p>Hi</p>', 'tok-2', []);
+      expect(out).toContain('/api/public/t/o/tok-2');
+    });
+
+    it('keeps the click rewriting and the unsubscribe footer it already did', () => {
+      // The pixel is an addition, not a replacement: these two were the whole
+      // job of this method before and must survive it untouched.
+      const out = (svc as any).renderHtml(
+        '<html><body><a href="https://shop.test/x">Buy</a></body></html>',
+        'tok-3',
+        ['https://shop.test/x'],
+      );
+      expect(out).toContain('https://m.test/api/public/t/c/tok-3?i=0');
+      expect(out).toContain('https://m.test/api/public/u/tok-3');
+    });
+  });
+
   // Campaign email used to be the ONLY outbound channel with no meter: the
   // EMAIL branch returned before the reserve, so `messagesMonthly` never saw
   // it. The economics were inverted — SMS/WhatsApp bill to the CUSTOMER's own
@@ -426,6 +472,28 @@ describe('CampaignSenderService.batch', () => {
       expect(release[0].data).toEqual({ status: 'PENDING', variantKey: 'B' });
       // and kicks the send batch
       expect(scheduledJobs.schedule.mock.calls.some((c: any) => c[0].kind === 'campaign.batch')).toBe(true);
+    });
+
+    it('says so when NO variant had any signal, rather than passing the alphabetical tiebreak off as a result', async () => {
+      // The tiebreak exists so a no-data decision is deterministic, and the
+      // remainder must still be released — stranding the held-back majority
+      // would be far worse than sending it the wrong variant. What must not
+      // happen is a coin toss reported in the same words as a measurement.
+      const warn = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abWinnerKey: null, abWinnerMetric: 'OPEN' });
+      prisma.campaignVariant.findMany.mockResolvedValue([
+        { key: 'A', stats: { opened: 0 } },
+        { key: 'B', stats: {} },
+      ]);
+      prisma.campaign.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+
+      await (svc as any).decideAbWinner({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(prisma.campaign.updateMany.mock.calls[0][0]).toMatchObject({ data: { abWinnerKey: 'A' } });
+      const release = prisma.campaignRecipient.updateMany.mock.calls.find((c: any) => c[0].where.status === 'HOLD');
+      expect(release[0].data).toEqual({ status: 'PENDING', variantKey: 'A' });
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/no .*signal/i));
+      warn.mockRestore();
     });
 
     it('does nothing if the winner was already decided (concurrent decide)', async () => {

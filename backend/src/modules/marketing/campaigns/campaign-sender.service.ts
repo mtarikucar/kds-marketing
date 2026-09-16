@@ -157,6 +157,16 @@ export class CampaignSenderService implements OnModuleInit {
       const bv = ((b.stats as any)?.[metric] ?? 0) as number;
       return bv - av || (a.key < b.key ? -1 : 1);
     })[0];
+    // A no-data decision is still a decision that must be MADE — leaving the
+    // remainder HELD would strand the held-back majority forever — but it must
+    // not be reported in the same words as a measured one. With every variant
+    // on zero the sort collapses to the alphabetical tiebreak, so say that.
+    const hadSignal = variants.some((v: any) => (((v.stats as any)?.[metric] ?? 0) as number) > 0);
+    if (!hadSignal) {
+      this.logger.warn(
+        `campaign ${campaignId} A/B: no ${metric} signal on any variant — releasing to '${winner.key}' by the alphabetical tiebreak, not by measurement`,
+      );
+    }
     const claimed = await this.prisma.campaign.updateMany({
       where: { id: campaignId, workspaceId, abWinnerKey: null, status: 'SENDING' },
       data: { abWinnerKey: winner.key },
@@ -1101,9 +1111,16 @@ export class CampaignSenderService implements OnModuleInit {
         out = out.split(esc(url)).join(tracked).split(url).join(tracked);
       }
       const unsub = `${base}/api/public/u/${token}`;
+      // The open pixel. Everything behind it already existed — the public
+      // `t/o/:token` route serves a 1x1 GIF, CampaignTrackingService.open()
+      // claims `openedAt` race-safely, recomputeStats counts the column and the
+      // A/B winner sorts on it — but nothing ever emitted the <img>, so every
+      // open count was a zero that looked measured.
+      const pixel = `${base}/api/public/t/o/${token}`;
       const footer =
         `<table role="presentation" width="100%"><tr><td align="center" style="padding:16px;font-size:12px;color:#94a3b8">` +
-        `<a href="${esc(unsub)}" style="color:#94a3b8">Unsubscribe</a></td></tr></table>`;
+        `<a href="${esc(unsub)}" style="color:#94a3b8">Unsubscribe</a></td></tr></table>` +
+        `<img src="${esc(pixel)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0" />`;
       // The compiled email HTML always has </body>; fall back to appending for a
       // hand-authored fragment so the mandatory unsubscribe link is never lost.
       out = out.includes('</body>') ? out.replace('</body>', `${footer}</body>`) : out + footer;

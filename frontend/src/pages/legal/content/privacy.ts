@@ -44,6 +44,7 @@ const privacyContent: LegalContent = {
           'Ödeme verileri: fatura bilgileri ve ödeme sağlayıcımız aracılığıyla işlenen işlem kayıtları (kart bilgileri tarafımızca saklanmaz).',
           'İletişim/kanal verileri: bağladığınız kanallar (WhatsApp, e-posta, sosyal medya) üzerinden ilettiğiniz mesaj ve içerikler.',
           'Çerez ve benzeri teknolojilerle toplanan veriler.',
+          'Kampanya ölçüm verileri: gönderilen e-postanın açılıp açılmadığı (iletiye gömülü 1x1 piksel görsel) ve içindeki bağlantılara tıklanıp tıklanmadığı. Bu veriler, kampanyayı gönderen hesap sahibi adına ve yalnızca kampanya performansının raporlanması amacıyla işlenir; alıcı, iletideki abonelikten çıkma bağlantısıyla bu iletileri almayı her zaman durdurabilir.',
         ],
       },
       {
@@ -193,6 +194,7 @@ const privacyContent: LegalContent = {
           'Payment data: billing details and transaction records processed via our payment provider (card details are not stored by us).',
           'Communication/channel data: messages and content you send through connected channels (WhatsApp, email, social media).',
           'Data collected via cookies and similar technologies.',
+          'Campaign measurement data: whether a campaign email was opened (via a 1x1 pixel image embedded in the message) and whether the links inside it were clicked. This is processed on behalf of the account holder who sent the campaign and solely to report that campaign’s performance; every such message carries an unsubscribe link the recipient can use at any time.',
         ],
       },
       {
