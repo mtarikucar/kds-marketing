@@ -50,6 +50,12 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
     ({ app, prisma } = await createRealDbTestApp((builder) => {
       builder.overrideProvider(AnthropicService).useValue({
         isEnabled: () => true,
+        // The reply path asks the WORKSPACE-aware gate — a workspace with its
+        // own key is live even while the shared platform key is refusing — which
+        // arrived in a9e5540a. A double that stopped at `isEnabled` made the
+        // engine throw "isEnabledFor is not a function", which is why this job
+        // has been the only red on main since 2026-09-10.
+        isEnabledFor: async () => true,
         complete,
       });
       // Billing is a separate concern with its own tests, and a bare test
