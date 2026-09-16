@@ -19,7 +19,7 @@ describe('WorkspaceMailboxService', () => {
   let svc: WorkspaceMailboxService;
 
   function build(channel: any, secrets: Record<string, unknown> = SMTP) {
-    prisma = { channel: { findFirst: jest.fn().mockResolvedValue(channel) } };
+    prisma = { channel: { findMany: jest.fn().mockResolvedValue(channel ? [channel] : []) } };
     send = jest.fn().mockResolvedValue({ externalMessageId: 'm1', status: 'SENT' });
     registry = {
       get: jest.fn().mockReturnValue({ send }),
@@ -37,13 +37,16 @@ describe('WorkspaceMailboxService', () => {
     // run of 535s with the send already recorded.
     build(CH);
     await svc.resolve(WS);
-    expect(prisma.channel.findFirst).toHaveBeenCalledWith({
+    expect(prisma.channel.findMany).toHaveBeenCalledWith({
       where: {
         workspaceId: WS,
         type: 'EMAIL',
         status: 'ACTIVE',
         lastVerifiedAt: { not: null },
       },
+      // Freshest proven login first, so the choice is deterministic rather than
+      // whatever order the rows happen to come back in.
+      orderBy: { lastVerifiedAt: 'desc' },
     });
   });
 
@@ -69,6 +72,32 @@ describe('WorkspaceMailboxService', () => {
   it('returns null when the SMTP credentials are incomplete', async () => {
     build(CH, { smtpHost: 'h' });
     await expect(svc.resolve(WS)).resolves.toBeNull();
+  });
+
+  it('picks the usable SMTP mailbox even when an OAuth one is stored first', async () => {
+    // `Channel` carries no unique on (workspaceId, type) — only
+    // @@unique([type, externalId]) — so one workspace can legitimately hold a
+    // consent-connected mailbox AND an SMTP one. An unordered findFirst that
+    // inspects whichever row Postgres hands back first, and gives up on it,
+    // sends the ENTIRE workspace's mail from the platform address while its own
+    // verified mailbox sits one row away. Which mailbox wins must not depend on
+    // physical row order.
+    const oauth = { id: 'ch-oauth', type: 'EMAIL' };
+    const smtp = { id: 'ch-smtp', type: 'EMAIL' };
+    prisma = {
+      channel: { findMany: jest.fn().mockResolvedValue([oauth, smtp]) },
+    };
+    registry = {
+      get: jest.fn(),
+      resolveConfig: jest.fn((ch: any) =>
+        ch.id === 'ch-oauth'
+          ? { secrets: { oauthProvider: 'GOOGLE', oauthAccessToken: 't' }, public: {} }
+          : { secrets: SMTP, public: {} },
+      ),
+    };
+    svc = new WorkspaceMailboxService(prisma, registry);
+
+    await expect(svc.resolve(WS)).resolves.toMatchObject({ secrets: SMTP });
   });
 
   describe('send', () => {

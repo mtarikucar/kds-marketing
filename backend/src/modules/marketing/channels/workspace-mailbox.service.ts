@@ -47,16 +47,27 @@ export class WorkspaceMailboxService {
    * Gmail's RFC822 with no HTML part, so routing rich mail there would silently
    * drop the HTML body. Plain text from the right address is worse than
    * formatted from the platform's.
+   *
+   * It SCANS the workspace's verified mailboxes rather than judging whichever
+   * one the database happened to return first. `Channel` has no unique on
+   * (workspaceId, type) — only @@unique([type, externalId]) — so a workspace can
+   * legitimately hold a consent-connected mailbox next to an SMTP one. Taking
+   * the first row and giving up on it sent the entire workspace's mail from the
+   * platform address while its own verified mailbox sat one row away. Freshest
+   * proven login wins, so the answer never depends on physical row order.
    */
   async resolve(workspaceId: string): Promise<ResolvedChannelConfig | null> {
-    const ch = await this.prisma.channel.findFirst({
+    const candidates = await this.prisma.channel.findMany({
       where: { workspaceId, type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } },
+      orderBy: { lastVerifiedAt: 'desc' },
     });
-    if (!ch) return null;
-    const resolved = this.registry.resolveConfig(ch);
-    const s = (resolved.secrets ?? {}) as Record<string, string | undefined>;
-    if (s.oauthProvider) return null;
-    return s.smtpHost?.trim() && s.smtpUser?.trim() && s.smtpPass ? resolved : null;
+    for (const ch of candidates) {
+      const resolved = this.registry.resolveConfig(ch);
+      const s = (resolved.secrets ?? {}) as Record<string, string | undefined>;
+      if (s.oauthProvider) continue; // consent-connected — see above
+      if (s.smtpHost?.trim() && s.smtpUser?.trim() && s.smtpPass) return resolved;
+    }
+    return null;
   }
 
   /**
