@@ -18,6 +18,7 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { EstimatesService } from '../estimates/estimates.service';
+import { DocumentEmailService } from '../invoicing/document-email.service';
 import { CreateEstimateDto, ListEstimatesQueryDto, UpdateEstimateDto } from '../dto/estimate.dto';
 
 /**
@@ -29,7 +30,10 @@ import { CreateEstimateDto, ListEstimatesQueryDto, UpdateEstimateDto } from '../
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class MarketingEstimatesController {
-  constructor(private readonly estimates: EstimatesService) {}
+  constructor(
+    private readonly estimates: EstimatesService,
+    private readonly documentEmail: DocumentEmailService,
+  ) {}
 
   /** `?leadId=` narrows to one contact — the person record card's read. */
   @Get()
@@ -65,6 +69,14 @@ export class MarketingEstimatesController {
   @RequirePermission('leads.write')
   send(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.estimates.send(a.workspaceId, id);
+  }
+
+  /** Email the quote's public accept/decline page to the contact. */
+  @Post(':id/email')
+  @RequirePermission('leads.write')
+  @Audit({ action: 'estimate.email', resourceType: 'estimate' })
+  email(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.documentEmail.sendEstimate(a.workspaceId, id, a.id);
   }
 
   @Post(':id/accept')

@@ -11,6 +11,7 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { InvoicesService } from '../invoicing/invoices.service';
 import { InvoiceTextService } from '../invoicing/invoice-text.service';
+import { DocumentEmailService } from '../invoicing/document-email.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from '../dto/invoice.dto';
 
 class PspConfigDto {
@@ -33,6 +34,7 @@ export class MarketingInvoicesController {
   constructor(
     private readonly invoices: InvoicesService,
     private readonly invoiceText: InvoiceTextService,
+    private readonly documentEmail: DocumentEmailService,
   ) {}
 
   @Get()
@@ -78,5 +80,12 @@ export class MarketingInvoicesController {
     @Body() dto: TextToPayDto,
   ) {
     return this.invoiceText.sendByText(a.workspaceId, id, dto.channel);
+  }
+
+  /** Email-to-pay: send the public pay link to the contact's email address. */
+  @Post(':id/email')
+  @RequirePermission('settings.manage')
+  emailToPay(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.documentEmail.sendInvoice(a.workspaceId, id, a.id);
   }
 }
