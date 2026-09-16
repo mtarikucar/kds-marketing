@@ -413,6 +413,7 @@ import { InvoicesService } from './invoicing/invoices.service';
 import { InvoiceTextService } from './invoicing/invoice-text.service';
 import { DocumentEmailService } from './invoicing/document-email.service';
 import { CommerceTraceService } from './invoicing/commerce-trace.service';
+import { InvoicePaidConsumer } from './invoicing/invoice-paid.consumer';
 
 // Phase F P10 — white-label-lite branding.
 import { MarketingBrandingController } from './controllers/marketing-branding.controller';
@@ -1197,6 +1198,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // commerce rows they leave on the person's timeline.
     DocumentEmailService,
     CommerceTraceService,
+    // Puts the payment itself on the person's stream — every settlement route
+    // (PSP, wallet, manual) reaches it through the one invoice.paid event.
+    InvoicePaidConsumer,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
     // Epic C — memberships.

@@ -397,3 +397,31 @@ export interface MarketingAutocallReportPayload {
    *  AutocallReportConsumer for how it's stored. */
   status: string | null;
 }
+
+/**
+ * End-customer invoice settled (marketing.invoice.paid.v1). Emitted EXACTLY
+ * ONCE per invoice by `InvoicesService.settle()`, inside the transaction that
+ * wins the conditional DRAFT/SENT → PAID claim — so a VOID or already-paid
+ * invoice never produces one, and concurrent PSP retries produce one between
+ * them.
+ *
+ * Deliberately carries no invoice NUMBER: the number is a display string, the
+ * id is the durable handle, so a consumer that wants to show it reads it back
+ * workspace-scoped (see InvoicePaidConsumer). This interface is the canonical
+ * contract both MetaCapiConsumer and InvoicePaidConsumer type their handlers
+ * against — it lived as a private copy in the former until the latter needed
+ * the same shape.
+ */
+export interface MarketingInvoicePaidPayload {
+  workspaceId: string;
+  invoiceId: string;
+  /** Null for a walk-in sale invoiced to nobody. */
+  leadId: string | null;
+  /** Integer MINOR units (kuruş/cents), exactly as `Invoice.total` stores it. */
+  total: number;
+  currency: string;
+  /** How it was settled: manual | wallet | stripe | paytr | iyzico. */
+  via: string;
+  /** ISO-8601, stamped when the claim won. */
+  occurredAt: string;
+}

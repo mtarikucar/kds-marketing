@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
-import { MarketingEventTypes } from './marketing-event-types';
+import { MarketingEventTypes, MarketingInvoicePaidPayload } from './marketing-event-types';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isMetaAdsConfigured, isTiktokAdsConfigured, isGoogleAdsConfigured } from '../ads/ads.types';
 import { isMetaAuthError } from '../../../common/util/meta-graph.util';
@@ -22,16 +22,6 @@ interface OpportunityWonPayload {
   opportunityId: string;
   leadId: string | null;
   value: number; // major units
-  occurredAt: string;
-}
-
-interface InvoicePaidPayload {
-  workspaceId: string;
-  invoiceId: string;
-  leadId: string | null;
-  total: number; // MINOR units (kuruş/cents)
-  currency: string;
-  via: string;
   occurredAt: string;
 }
 
@@ -74,7 +64,7 @@ export class MetaCapiConsumer implements OnModuleInit, OnModuleDestroy {
   private readonly onOpportunityWon = (e: DomainEvent<unknown>) =>
     this.handleWon(e as DomainEvent<OpportunityWonPayload>);
   private readonly onInvoicePaid = (e: DomainEvent<unknown>) =>
-    this.handlePaid(e as DomainEvent<InvoicePaidPayload>);
+    this.handlePaid(e as DomainEvent<MarketingInvoicePaidPayload>);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -98,7 +88,7 @@ export class MetaCapiConsumer implements OnModuleInit, OnModuleDestroy {
     await this.send(event.id, p.workspaceId, p.leadId, { value: p.value, currency: null, occurredAt: p.occurredAt });
   }
 
-  private async handlePaid(event: DomainEvent<InvoicePaidPayload>): Promise<void> {
+  private async handlePaid(event: DomainEvent<MarketingInvoicePaidPayload>): Promise<void> {
     const p = event.payload;
     // Invoice total is MINOR units (kuruş/cents) → convert to major for feedback.
     await this.send(event.id, p.workspaceId, p.leadId, { value: p.total / 100, currency: p.currency, occurredAt: p.occurredAt });
