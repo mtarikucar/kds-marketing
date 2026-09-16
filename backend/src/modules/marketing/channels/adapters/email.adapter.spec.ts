@@ -97,6 +97,61 @@ describe('EmailChannelAdapter', () => {
     expect(res.error).toContain('535');
   });
 
+  describe('healthCheck', () => {
+    const OAUTH = {
+      oauthProvider: 'GOOGLE',
+      oauthAccessToken: 'tok',
+      oauthRefreshToken: 'ref',
+      oauthExpiresAt: String(Date.now() + 3_600_000),
+      fromEmail: 'bot@acme.test',
+    };
+
+    it('verifies the SMTP login and reports what that mailbox can do', async () => {
+      verify.mockResolvedValue(true);
+      const res = await adapter.healthCheck({ secrets: SMTP } as any);
+      expect(res.ok).toBe(true);
+      expect(res.details).toMatchObject({ transport: 'smtp', send: true, receive: true });
+    });
+
+    it('passes a consent-connected mailbox WITHOUT asking it for SMTP credentials', async () => {
+      // EmailOAuthService.handleCallback clears the SMTP keys on purpose, so
+      // judging this mailbox by smtp() answered "SMTP credentials missing" — a
+      // false failure on a mailbox that sends perfectly well over HTTP, and the
+      // one thing the operator sees when they press Verify.
+      const res = await adapter.healthCheck({ secrets: OAUTH } as any);
+      expect(res.ok).toBe(true);
+      expect(createTransport).not.toHaveBeenCalled();
+      expect(res.details).toMatchObject({ transport: 'oauth', provider: 'GOOGLE', send: true });
+    });
+
+    it('says plainly that a consent-connected mailbox cannot RECEIVE', async () => {
+      // email-imap-poll and email-imap-idle both `return null` on oauthProvider
+      // and authenticate with smtpUser/smtpPass — there is no XOAUTH2 anywhere —
+      // so consent buys sending only. The connect dialog promises two-way email;
+      // this is what keeps that promise honest instead of silently half-true.
+      const res = await adapter.healthCheck({ secrets: OAUTH } as any);
+      expect(res.details).toMatchObject({ receive: false });
+      expect(String(res.details?.receiveReason)).toMatch(/webhook/i);
+    });
+
+    it('mirrors send(): an expired token that the cron has not refreshed is not healthy', async () => {
+      // send() refuses the same state with the same reasoning. healthCheck must
+      // not paper over it, and must not refresh the token itself — that belongs
+      // to EmailOAuthRefreshCron, which owns the database.
+      const res = await adapter.healthCheck({
+        secrets: { ...OAUTH, oauthExpiresAt: String(Date.now() - 1_000) },
+      } as any);
+      expect(res.ok).toBe(false);
+      expect(String(res.details?.reason)).toMatch(/refresh/i);
+    });
+
+    it('still refuses a channel with neither consent nor SMTP credentials', async () => {
+      const res = await adapter.healthCheck({ secrets: {} } as any);
+      expect(res.ok).toBe(false);
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+  });
+
   it('parseInbound normalizes a Mailgun-style payload and tags it EMAIL', () => {
     const out = adapter.parseInbound({ secrets: SMTP, externalId: 'support@acme.test' } as any, {
       sender: 'Jane Doe <jane@buyer.test>',

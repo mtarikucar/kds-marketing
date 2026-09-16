@@ -75,6 +75,16 @@ interface VerifyResponse {
     approvedHeaders?: string[];
     message?: string | null;
     code?: string | null;
+    /** EMAIL (email.adapter): send and receive are NOT one answer for a
+     *  mailbox. A consent-connected one sends over HTTP but is skipped by both
+     *  IMAP services, so `receive: false` with `receiveReason` naming the
+     *  inbound webhook as the only way replies come back. `reason` is this
+     *  adapter's own diagnostic, the counterpart of NetGSM's `message`. */
+    transport?: string;
+    send?: boolean;
+    receive?: boolean;
+    receiveReason?: string;
+    reason?: string;
     [key: string]: unknown;
   };
 }
@@ -147,14 +157,29 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
       //    credentials.
       //  - details.credsValid null/undefined: we couldn't reach the provider
       //    at all (transient outage) — distinct from a rejected credential.
+      //  - details.reason (EMAIL): the adapter said WHY in its own words, and
+      //    the NetGSM fallback below would otherwise blame a provider this
+      //    channel has nothing to do with.
+      // On SUCCESS, `receive: false` is not a failure but it is not "verified"
+      // either: a consent-connected mailbox sends and cannot receive, and a
+      // bare tick would read as "two-way email works".
+      const d = data?.details;
       const headline = ok
-        ? t('channels.verifyOk', 'Channel verified ✓')
-        : data?.details?.headerApproved === false
+        ? d?.receive === false
+          ? t('channels.verifySendOnly', 'Verified — this mailbox can send, but not receive')
+          : t('channels.verifyOk', 'Channel verified ✓')
+        : d?.headerApproved === false
           ? t('channels.verifyHeaderNotApproved', 'Sender ID is not approved on this account')
-          : data?.details?.credsValid === false
+          : d?.credsValid === false
             ? t('channels.verifyFailCreds', 'Verification failed — check credentials')
-            : t('channels.verifyUnreachable', 'Could not reach NetGSM — try again');
-      const detail = !ok ? (data?.details?.message ?? undefined) : undefined;
+            : d?.reason
+              ? t('channels.verifyFailed', 'Verification failed')
+              : t('channels.verifyUnreachable', 'Could not reach NetGSM — try again');
+      const detail = ok
+        ? d?.receive === false
+          ? (d?.receiveReason ?? undefined)
+          : undefined
+        : (d?.message ?? d?.reason ?? undefined);
       toast[ok ? 'success' : 'error'](headline, detail ? { description: detail } : undefined);
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFailCreds', 'Verification failed — check credentials')),

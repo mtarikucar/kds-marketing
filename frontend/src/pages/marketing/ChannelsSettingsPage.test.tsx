@@ -117,6 +117,65 @@ describe('ChannelsSettingsPage', () => {
       await userEvent.click(screen.getByRole('button', { name: /verify/i }));
     }
 
+    it('EMAIL: a failing mailbox is never blamed on NetGSM', async () => {
+      // The headline fallback was written for the NetGSM SMS probe and names
+      // that provider outright. An email mailbox has nothing to do with NetGSM,
+      // so a failed token check sent the operator to the wrong screen entirely.
+      const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+      marketingApi.get.mockImplementation((url: string) =>
+        url === '/channels'
+          ? Promise.resolve({
+              data: [
+                { id: 'em1', type: 'EMAIL', name: 'support@acme.test', status: 'ACTIVE', configuredSecrets: ['oauthAccessToken'], configPublic: {}, agentProfileId: null },
+              ],
+            })
+          : Promise.resolve({ data: [] }),
+      );
+      marketingApi.post.mockResolvedValue({
+        data: { ok: false, details: { transport: 'oauth', reason: 'the connected mailbox token has expired' } },
+      });
+      render(<ChannelsSettingsPage />, { wrapper });
+      await screen.findByText('support@acme.test');
+      await userEvent.click(screen.getByRole('button', { name: /verify/i }));
+
+      expect(toast.error).toHaveBeenCalled();
+      expect(String((toast.error as any).mock.calls[0][0])).not.toMatch(/netgsm/i);
+    });
+
+    it('EMAIL: a consent-connected mailbox verifies as SEND-ONLY, not plain "verified"', async () => {
+      // ok:true alone would read as "two-way email works", which for a
+      // consent-connected mailbox is the half that is not true.
+      const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+      marketingApi.get.mockImplementation((url: string) =>
+        url === '/channels'
+          ? Promise.resolve({
+              data: [
+                { id: 'em1', type: 'EMAIL', name: 'support@acme.test', status: 'ACTIVE', configuredSecrets: ['oauthAccessToken'], configPublic: {}, agentProfileId: null },
+              ],
+            })
+          : Promise.resolve({ data: [] }),
+      );
+      marketingApi.post.mockResolvedValue({
+        data: {
+          ok: true,
+          details: {
+            transport: 'oauth',
+            send: true,
+            receive: false,
+            receiveReason: 'replies arrive through the inbound webhook, not IMAP',
+          },
+        },
+      });
+      render(<ChannelsSettingsPage />, { wrapper });
+      await screen.findByText('support@acme.test');
+      await userEvent.click(screen.getByRole('button', { name: /verify/i }));
+
+      expect(toast.success).toHaveBeenCalledWith(
+        'Verified — this mailbox can send, but not receive',
+        expect.objectContaining({ description: expect.stringMatching(/webhook/i) }),
+      );
+    });
+
     it('credsValid: false → the "check credentials" headline', async () => {
       await renderAndVerify({ ok: false, details: { credsValid: false, message: 'Kimlik doğrulama hatası' } });
       expect(toast.error).toHaveBeenCalledWith(

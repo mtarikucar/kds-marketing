@@ -185,9 +185,60 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     ];
   }
 
+  /**
+   * What this mailbox can actually do, answered the way `send()` would answer.
+   *
+   * It asks about CONSENT first. `EmailOAuthService.handleCallback` clears the
+   * SMTP keys on purpose — a password left sealed beside a live token is a
+   * credential nobody is watching — so judging a consent-connected mailbox by
+   * `smtp()` reported "SMTP credentials missing" about a mailbox that sends
+   * perfectly well over HTTP. That was the single thing an operator saw when
+   * they pressed Verify on a mailbox they had just connected successfully.
+   *
+   * `details` reports send and receive SEPARATELY because for this channel they
+   * are not the same answer: `email-imap-poll` and `email-imap-idle` both skip a
+   * consent-connected mailbox (they authenticate with smtpUser/smtpPass; there
+   * is no XOAUTH2 path anywhere), so consent buys sending only and replies have
+   * to come back through the inbound-parse webhook. The connect dialog promises
+   * two-way email; saying so here is what keeps that promise from being
+   * silently half-true.
+   */
   async healthCheck(config: ResolvedChannelConfig) {
+    const oauth = this.oauth(config);
+    if (oauth) {
+      if (needsRefresh(config.secrets as EmailOAuthSecrets)) {
+        // Mirrors send()'s refusal, in the same words. Refreshing is NOT done
+        // here: that belongs to EmailOAuthRefreshCron, which owns the database.
+        return {
+          ok: false,
+          details: {
+            transport: 'oauth',
+            provider: oauth.provider,
+            send: false,
+            receive: false,
+            reason:
+              'the connected mailbox token has expired and has not been refreshed yet — it renews automatically, try again shortly',
+          },
+        };
+      }
+      return {
+        ok: true,
+        details: {
+          transport: 'oauth',
+          provider: oauth.provider,
+          from: oauth.from,
+          send: true,
+          receive: false,
+          receiveReason:
+            'a consent-connected mailbox is send-only here — replies arrive through the inbound webhook, not IMAP',
+        },
+      };
+    }
+
     const smtp = this.smtp(config);
-    if (!smtp) return { ok: false, details: { reason: 'SMTP credentials missing' } };
+    if (!smtp) {
+      return { ok: false, details: { reason: 'SMTP credentials missing', send: false, receive: false } };
+    }
     try {
       const transport = nodemailer.createTransport({
         host: smtp.host,
@@ -201,9 +252,22 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
       });
       await transport.verify();
       transport.close();
-      return { ok: true, details: { host: smtp.host, from: smtp.from } };
+      // The IMAP services reuse these same credentials (host taken from
+      // `imapHost` when set, else discovered), so this is a mailbox they poll.
+      return {
+        ok: true,
+        details: { transport: 'smtp', host: smtp.host, from: smtp.from, send: true, receive: true },
+      };
     } catch (e: any) {
-      return { ok: false, details: { reason: String(e?.message ?? e).slice(0, 200) } };
+      return {
+        ok: false,
+        details: {
+          transport: 'smtp',
+          reason: String(e?.message ?? e).slice(0, 200),
+          send: false,
+          receive: false,
+        },
+      };
     }
   }
 
