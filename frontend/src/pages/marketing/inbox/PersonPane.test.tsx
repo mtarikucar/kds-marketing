@@ -92,6 +92,29 @@ beforeEach(() => {
 });
 
 describe('PersonPane — the middle column is one person’s whole history', () => {
+  it('says why the AI is silent on this thread instead of leaving it a mystery', async () => {
+    // "The AI isn't answering" is a support ticket. The same sentence shown
+    // next to the thread is a fix the person can make themselves — attach an
+    // agent, resume the conversation, top up the key.
+    listConversations.mockResolvedValue([
+      thread({ aiLastDeclineReason: 'no agent profile attached to channel SMS' }),
+    ]);
+
+    renderPane();
+
+    expect(await screen.findByTestId('ai-decline-reason')).toHaveTextContent(
+      'no agent profile attached to channel SMS',
+    );
+  });
+
+  it('shows nothing when the AI has not declined anything', async () => {
+    // The quiet case is the common one; a permanently empty row would be noise
+    // on every healthy thread.
+    renderPane();
+    await screen.findByTestId('stream');
+    expect(screen.queryByTestId('ai-decline-reason')).not.toBeInTheDocument();
+  });
+
   it('asks for nobody until somebody is selected', async () => {
     renderPane({ person: null });
 

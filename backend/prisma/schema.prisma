@@ -1929,6 +1929,12 @@ model Conversation {
   /// UTC day (YYYY-MM-DD) the aiRepliesToday counter belongs to; the engine
   /// resets the counter when the day rolls over.
   aiRepliesDayKey   String?
+  /// Why the AI last declined to answer this thread, and when. `decline()` in
+  /// conversation-ai-engine.service.ts has always named the gate it closed, but
+  /// only to the server log — so "why is the AI silent" was unanswerable from
+  /// the inbox, which is where the person who can fix it is looking.
+  aiLastDeclineReason String?
+  aiLastDeclineAt     DateTime?
   lastMessageAt     DateTime?
   lastInboundAt     DateTime?
   closedAt          DateTime?

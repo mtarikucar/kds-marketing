@@ -263,6 +263,50 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.credits.reserve).not.toHaveBeenCalled();
   });
 
+  it('records WHY it stayed silent ON the conversation, not only in the server log', async () => {
+    // `decline()` already names every gate it closes — but only to the log. The
+    // person who can actually act on it (attach an agent, resume the thread) is
+    // looking at the inbox, where nothing said anything at all. On one workspace
+    // that cost four customers a month of silence before anyone read the source.
+    const h = build({ convo: { aiPaused: true } });
+    await run(h);
+    const write = h.prisma.conversation.update.mock.calls.find(
+      (c: any) => c[0]?.data?.aiLastDeclineReason !== undefined,
+    );
+    expect(write?.[0]).toMatchObject({
+      where: { id: CONVO },
+      data: {
+        aiLastDeclineReason: expect.stringMatching(/paused/i),
+        aiLastDeclineAt: expect.any(Date),
+      },
+    });
+  });
+
+  it('a decline it cannot write down still declines cleanly', async () => {
+    // The record is the story, not the transaction. The engine has already
+    // decided not to answer; a failed write must not turn that decision into a
+    // throw on a job the runner would then retry forever.
+    const h = build({ convo: { aiPaused: true } });
+    h.prisma.conversation.update.mockRejectedValue(new Error('db down'));
+    await expect(run(h)).resolves.toBeUndefined();
+    expect(h.sender.send).not.toHaveBeenCalled();
+  });
+
+  it('…and survives a write that throws on the spot, not only one that rejects', async () => {
+    // The test above passed while the property it describes was NOT guaranteed:
+    // a `.catch()` handles a rejected promise, never a synchronous throw from
+    // the call itself. The suite found the difference — a second engine harness
+    // in this same file builds a leaner prisma double with no
+    // `conversation.update` at all, so the call threw on the spot and took six
+    // unrelated tests down with it.
+    const h = build({ convo: { aiPaused: true } });
+    h.prisma.conversation.update.mockImplementation(() => {
+      throw new TypeError('update is not a function');
+    });
+    await expect(run(h)).resolves.toBeUndefined();
+    expect(h.sender.send).not.toHaveBeenCalled();
+  });
+
   it('gate: no agent attached to the channel → no reply', async () => {
     const h = build({ channel: { agentProfileId: null } });
     await run(h);

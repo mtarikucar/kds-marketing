@@ -380,6 +380,39 @@ export class ConversationAiEngineService implements OnModuleInit {
 
   private decline(conversationId: string, reason: string): void {
     this.logger.log(`ai reply declined convo=${conversationId}: ${reason}`);
+    // …and where the INBOX can read it. The log answers "why is the AI silent"
+    // only for whoever can reach the server; the person who can actually fix it
+    // — attach an agent, resume the thread, add a key — is looking at the
+    // conversation.
+    //
+    // Fire-and-forget on purpose: every caller is a bare `return` on a decision
+    // already made, so this stays sync and cannot fail the decline. The record
+    // is the story, not the transaction — the same reasoning CommerceTraceService
+    // documents for the commerce trail.
+    const shrug = (e: any) =>
+      this.logger.warn(
+        `could not record the decline for convo=${conversationId}: ${e?.message ?? e}`,
+      );
+    // try/catch AND .catch(): the write can fail in two different ways and only
+    // one of them is a rejected promise. A `.catch()` alone still lets a
+    // SYNCHRONOUS throw out of here — which is not hypothetical, it turned six
+    // unrelated tests red the moment this line was added — and an exception
+    // escaping a decline would crash a job the runner then retries forever.
+    try {
+      void this.prisma.conversation
+        .update({
+          where: { id: conversationId },
+          data: {
+            // Bounded: these are our own sentences, but one of them interpolates
+            // a provider/channel name and the column is read straight into the UI.
+            aiLastDeclineReason: reason.slice(0, 500),
+            aiLastDeclineAt: new Date(),
+          },
+        })
+        .catch(shrug);
+    } catch (e) {
+      shrug(e);
+    }
   }
 
   private async reply(workspaceId: string, conversationId: string): Promise<void> {

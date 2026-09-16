@@ -295,6 +295,24 @@ export function PersonPane({ person, className }: PersonPaneProps) {
         )}
       </div>
 
+      {/* Why the AI is silent on this thread. The engine names the gate it closed
+          on every decline — paused by a human, no agent attached, no usable key
+          — and until it surfaced here that sentence lived only in a server log.
+          "The AI isn't answering" was a support ticket; this makes it something
+          the person in front of the thread can fix. */}
+      {active?.aiLastDeclineReason && (
+        <div
+          data-testid="ai-decline-reason"
+          className="flex shrink-0 items-start gap-2 border-b border-border bg-surface-muted px-3 py-1.5 text-xs text-muted-foreground"
+        >
+          <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0">
+            {t('inbox.aiDeclined', 'Yapay zekâ bu konuşmada yanıt vermedi:')}{' '}
+            {active.aiLastDeclineReason}
+          </span>
+        </div>
+      )}
+
       {/* Which conversation the footer is about. Only when there is a choice to
           make: one thread needs no picker, and the composer names its channel
           anyway. */}

@@ -33,6 +33,10 @@ export interface ConversationSummary {
   id: string;
   status: string;
   aiPaused: boolean;
+  /** Why the AI last declined to answer this thread, and when — written by the
+   *  engine's decline path. Absent on a thread it has never declined. */
+  aiLastDeclineReason?: string | null;
+  aiLastDeclineAt?: string | null;
   unreadCount: number;
   lastMessageAt?: string | null;
   lead?: { id?: string; businessName?: string; contactPerson?: string } | null;
