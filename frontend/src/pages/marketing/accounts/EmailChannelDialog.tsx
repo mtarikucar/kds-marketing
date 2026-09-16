@@ -38,6 +38,11 @@ interface SmtpSuggestion {
   secure: boolean;
   provider: string;
   oauth?: 'GOOGLE' | 'MICROSOFT';
+  /** The INCOMING server for the same provider, where one exists — the backend
+   *  has always sent it and this type used to drop it on the floor. Absent for
+   *  a provider the MX table doesn't know and for pure outbound relays, which
+   *  is exactly when the person has to supply it themselves. */
+  imap?: { host: string; port: number };
 }
 
 const EMPTY_FORM = {
@@ -47,6 +52,10 @@ const EMPTY_FORM = {
   smtpPort: '587',
   smtpSecure: false,
   smtpUser: '',
+  // Blank rather than 993: an empty override leaves autodiscovery in charge,
+  // which is the right answer for every provider the MX table already knows.
+  imapHost: '',
+  imapPort: '',
 };
 
 /**
@@ -134,6 +143,10 @@ export function EmailChannelDialog({
         smtpPort: f.smtpPort === '587' ? String(smtp.port) : f.smtpPort,
         smtpSecure: f.smtpHost ? f.smtpSecure : smtp.secure,
         smtpUser: f.smtpUser || address,
+        // Same rule as the host above: a value the person typed themselves wins
+        // over the table's. Left blank when the provider has no known IMAP.
+        imapHost: f.imapHost || smtp.imap?.host || '',
+        imapPort: f.imapPort || (smtp.imap ? String(smtp.imap.port) : ''),
       }));
     },
   });
@@ -159,6 +172,11 @@ export function EmailChannelDialog({
             smtpUser: form.smtpUser.trim() || address,
             smtpPass: form.password,
             fromEmail: address,
+            // Only when actually filled in: an empty string would sit in the
+            // sealed secrets looking like a configured override, and the
+            // poller's `imapHost?.trim()` would read it as one.
+            ...(form.imapHost.trim() ? { imapHost: form.imapHost.trim() } : {}),
+            ...(form.imapPort.trim() ? { imapPort: form.imapPort.trim() } : {}),
           },
         })
         .then((r) => r.data as CreatedEmail);
@@ -340,6 +358,40 @@ export function EmailChannelDialog({
                     />
                   )}
                 </Field>
+
+                {/* Incoming mail. Filled in for a provider we recognise; for one
+                    we don't, this is the only place to say where replies live —
+                    without it the poller has no host and skips the mailbox, so
+                    it would send and never receive. */}
+                <div className="flex gap-2">
+                  <Field
+                    label={t('accounts.email.imapHost', 'IMAP host')}
+                    hint={t(
+                      'accounts.email.imapHint',
+                      'Where replies are read from. Leave blank to use the settings we recognise for this provider.',
+                    )}
+                    className="flex-1"
+                  >
+                    {({ id, describedBy }) => (
+                      <Input
+                        id={id}
+                        aria-describedby={describedBy}
+                        value={form.imapHost}
+                        onChange={(e) => set('imapHost', e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Field label={t('accounts.email.imapPort', 'IMAP port')} className="w-28">
+                    {({ id }) => (
+                      <Input
+                        id={id}
+                        value={form.imapPort}
+                        placeholder="993"
+                        onChange={(e) => set('imapPort', e.target.value)}
+                      />
+                    )}
+                  </Field>
+                </div>
               </div>
             </Disclosure>
             )}

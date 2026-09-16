@@ -190,5 +190,88 @@ describe('EmailChannelDialog — consent first, password as the fallback', () =>
 
       expect(screen.getByRole('button', { name: /^connect$/i })).toBeDisabled();
     });
+
+    it('fills the IMAP server in from the recognised provider', async () => {
+      // The MX table already knows the INCOMING server for every provider it
+      // recognises, and the poller derives it again at read time — but the form
+      // never showed it, so nobody could see or correct where their mailbox
+      // would actually be polled.
+      const user = userEvent.setup();
+      api.post.mockResolvedValue({
+        data: {
+          smtp: {
+            host: 'smtpout.secureserver.net',
+            port: 587,
+            secure: false,
+            provider: 'GoDaddy',
+            imap: { host: 'imap.secureserver.net', port: 993 },
+          },
+        },
+      });
+      wrap([]);
+
+      await user.type(await screen.findByLabelText(/email address/i), 'admin@figurunica.com');
+      await user.tab();
+
+      await waitFor(() =>
+        expect(screen.getByLabelText(/imap host/i)).toHaveValue('imap.secureserver.net'),
+      );
+      expect(screen.getByLabelText(/imap port/i)).toHaveValue('993');
+    });
+
+    it('carries a hand-typed IMAP server so an unrecognised mailbox can still receive', async () => {
+      // imapForSmtpHost() answers null for a provider the table does not know,
+      // and email-imap-poll then skips that mailbox entirely. With nowhere to
+      // say where its IMAP lives, a self-hosted mailbox could send and never
+      // receive — the half of "two-way email" that quietly went missing.
+      const user = userEvent.setup();
+      api.post
+        .mockResolvedValueOnce({ data: { smtp: null } })
+        .mockResolvedValueOnce({
+          data: { id: 'ch1', webhookUrl: null, inboundSecretConfigured: false, inboundAddress: null },
+        });
+      wrap([]);
+
+      await user.type(await screen.findByLabelText(/email address/i), 'admin@tiny-host.example');
+      await user.tab();
+      await user.type(screen.getByLabelText(/smtp host/i), 'mail.tiny-host.example');
+      await user.type(screen.getByLabelText(/mailbox password/i), 'hunter2');
+      await user.type(screen.getByLabelText(/imap host/i), 'imap.tiny-host.example');
+      await user.clear(screen.getByLabelText(/imap port/i));
+      await user.type(screen.getByLabelText(/imap port/i), '143');
+      await user.click(screen.getByRole('button', { name: /^connect$/i }));
+
+      await waitFor(() => expect(api.post).toHaveBeenCalledWith('/channels', expect.anything()));
+      const body = api.post.mock.calls.find((c) => c[0] === '/channels')![1] as any;
+      expect(body.secrets.imapHost).toBe('imap.tiny-host.example');
+      expect(body.secrets.imapPort).toBe('143');
+    });
+
+    it('omits the IMAP keys entirely when they are left blank', async () => {
+      // Sealing an empty string would sit in the secrets looking like a
+      // configured override, and `imapHost?.trim()` would read it as one.
+      // Leaving the keys out keeps autodiscovery in charge, which is the right
+      // default for every provider the table already knows.
+      const user = userEvent.setup();
+      api.post
+        .mockResolvedValueOnce({
+          data: { smtp: { host: 'mail.x.example', port: 587, secure: false, provider: 'X' } },
+        })
+        .mockResolvedValueOnce({
+          data: { id: 'ch1', webhookUrl: null, inboundSecretConfigured: false, inboundAddress: null },
+        });
+      wrap([]);
+
+      await user.type(await screen.findByLabelText(/email address/i), 'admin@x.example');
+      await user.tab();
+      await waitFor(() => expect(screen.getByLabelText(/smtp host/i)).toHaveValue('mail.x.example'));
+      await user.type(screen.getByLabelText(/mailbox password/i), 'hunter2');
+      await user.click(screen.getByRole('button', { name: /^connect$/i }));
+
+      await waitFor(() => expect(api.post).toHaveBeenCalledWith('/channels', expect.anything()));
+      const body = api.post.mock.calls.find((c) => c[0] === '/channels')![1] as any;
+      expect(body.secrets).not.toHaveProperty('imapHost');
+      expect(body.secrets).not.toHaveProperty('imapPort');
+    });
   });
 });

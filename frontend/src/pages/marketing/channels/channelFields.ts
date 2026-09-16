@@ -26,7 +26,10 @@ export const SECRET_FIELDS: Record<ChannelType, string[]> = {
   MESSENGER: ['pageAccessToken'],
   TIKTOK: ['accessToken'],
   LINKEDIN: ['accessToken'],
-  EMAIL: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'fromEmail'],
+  // imapHost/imapPort are OPTIONAL overrides of the autodiscovered incoming
+  // server — the only way to point a mailbox the MX table doesn't recognise at
+  // its own IMAP, which it otherwise cannot receive on.
+  EMAIL: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'fromEmail', 'imapHost', 'imapPort'],
   VOICE: ['accountSid', 'authToken'],
 };
 
@@ -51,6 +54,8 @@ export const SECRET_LABELS: Record<string, string> = {
   smtpUser: 'SMTP username',
   smtpPass: 'SMTP password',
   fromEmail: 'From email',
+  imapHost: 'IMAP host (optional)',
+  imapPort: 'IMAP port (optional)',
   accountSid: 'Twilio Account SID',
   authToken: 'Twilio Auth token',
   accessToken: 'Access token',
