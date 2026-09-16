@@ -59,6 +59,19 @@ export const updateEstimate = (id: string, payload: EstimatePayload): Promise<Es
 export const sendEstimate = (id: string): Promise<{ status: string; publicToken: string }> =>
   marketingApi.post(`/estimates/${id}/send`).then((r) => r.data);
 
+/**
+ * Email the quote's public accept/decline page to the contact.
+ *
+ * Separate from `sendEstimate`, which only moves the status: until this
+ * existed the page discarded the `publicToken` that call returns, so a quote
+ * could be "sent" with nobody told. `via` names which transport carried it —
+ * the workspace's own mailbox, or the platform's.
+ */
+export const emailEstimate = (
+  id: string,
+): Promise<{ sent: true; to: string; via: 'mailbox' | 'platform'; publicUrl: string }> =>
+  marketingApi.post(`/estimates/${id}/email`).then((r) => r.data);
+
 export const acceptEstimate = (id: string): Promise<Estimate> =>
   marketingApi.post(`/estimates/${id}/accept`).then((r) => r.data);
 

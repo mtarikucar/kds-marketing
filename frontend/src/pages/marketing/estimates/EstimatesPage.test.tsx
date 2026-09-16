@@ -122,6 +122,32 @@ describe('EstimatesPage', () => {
     expect(after[0]).toBeDisabled();
     expect(after[1]).not.toBeDisabled();
   });
+
+  // `Send` only flips the status and hands back a publicToken this page threw
+  // away — so a quote could read SENT with nobody told. Email is the delivery.
+  it('emails the quote public link to the contact', async () => {
+    const user = userEvent.setup();
+    render(<EstimatesPage />, { wrapper });
+    await screen.findByText('EST-ABCD');
+
+    await user.click(screen.getByTitle('Email quote'));
+
+    expect(post).toHaveBeenCalledWith('/estimates/e1/email');
+  });
+
+  // The backend refuses to email a quote the customer already answered
+  // ("Estimate already resolved"), so the page must not offer a doomed action.
+  it('hides the email button once the quote has been answered', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/estimates') return Promise.resolve({ data: [{ ...LIST_ROW, status: 'ACCEPTED' }] });
+      if (url === '/tax-rates') return Promise.resolve({ data: TAX_RATES });
+      return Promise.resolve({ data: {} });
+    });
+    render(<EstimatesPage />, { wrapper });
+
+    expect(await screen.findByText('EST-ABCD')).toBeInTheDocument();
+    expect(screen.queryByTitle('Email quote')).not.toBeInTheDocument();
+  });
 });
 
 describe('formFromEstimate', () => {

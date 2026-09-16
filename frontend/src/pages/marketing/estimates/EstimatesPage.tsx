@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Trash2, Send, Check, X, FileOutput, Pencil } from 'lucide-react';
+import { Plus, Trash2, Send, Mail, Check, X, FileOutput, Pencil } from 'lucide-react';
 
 import {
   listEstimates,
@@ -10,6 +10,7 @@ import {
   createEstimate,
   updateEstimate,
   sendEstimate,
+  emailEstimate,
   acceptEstimate,
   declineEstimate,
   convertEstimate,
@@ -251,6 +252,16 @@ export default function EstimatesPage({ embedded }: { embedded?: boolean } = {})
     },
     onError,
   });
+  // `sendMut` only moves the status; this is the one that actually puts the
+  // quote in front of the customer, so it reports the address it reached.
+  const emailMut = useMutation({
+    mutationFn: emailEstimate,
+    onSuccess: (r) => {
+      invalidate();
+      toast.success(t('estimates.emailed', { defaultValue: 'Quote emailed to {{to}}', to: r.to }));
+    },
+    onError,
+  });
   const acceptMut = useMutation({
     mutationFn: acceptEstimate,
     onSuccess: () => {
@@ -408,10 +419,18 @@ export default function EstimatesPage({ embedded }: { embedded?: boolean } = {})
                         — important for Convert, which mints an invoice and whose
                         second request would otherwise surface a spurious error
                         toast after the first already succeeded. */}
+                    {/* Both are offered only before the customer answers: the
+                        backend refuses to email a resolved quote, so don't
+                        present an action that is already doomed. */}
                     {(e.status === 'DRAFT' || e.status === 'SENT') && (
-                      <Button variant="ghost" size="sm" disabled={sendMut.isPending && sendMut.variables === e.id} onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
-                        <Send className="w-4 h-4" aria-hidden="true" />
-                      </Button>
+                      <>
+                        <Button variant="ghost" size="sm" disabled={sendMut.isPending && sendMut.variables === e.id} onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
+                          <Send className="w-4 h-4" aria-hidden="true" />
+                        </Button>
+                        <Button variant="ghost" size="sm" disabled={emailMut.isPending && emailMut.variables === e.id} onClick={() => emailMut.mutate(e.id)} title={t('estimates.email', 'Email quote')}>
+                          <Mail className="w-4 h-4" aria-hidden="true" />
+                        </Button>
+                      </>
                     )}
                     {e.status !== 'ACCEPTED' && e.status !== 'DECLINED' && (
                       <>

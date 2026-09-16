@@ -27,7 +27,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { FileText, Clipboard, CheckCircle, Trash2, Plus, MessageSquare, Wallet } from 'lucide-react';
+import { FileText, Clipboard, CheckCircle, Trash2, Plus, MessageSquare, Mail, Wallet } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -72,12 +72,13 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
   const [showForm, setShowForm] = useState(false);
   const [psp, setPsp] = useState({ provider: 'MANUAL', secretKey: '', instructions: '', merchantId: '', merchantKey: '', merchantSalt: '', apiKey: '' });
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
-  // Confirm gate for the two CONSEQUENTIAL, hard-to-undo actions: paying an
+  // Confirm gate for the CONSEQUENTIAL, hard-to-undo actions: paying an
   // invoice from the contact's store-credit wallet (an irreversible money
-  // movement) and texting the pay link (a billable outbound SMS to a real
-  // customer). A single stray click on an icon button must not do either —
-  // mirrors the `void` action's ConfirmDialog guard in this same file.
-  const [confirmAction, setConfirmAction] = useState<{ inv: InvoiceRow; kind: 'wallet' | 'text' | 'markPaid' } | null>(null);
+  // movement) and putting the pay link in front of a real customer — by SMS or
+  // by email, both metered and neither recallable. A single stray click on an
+  // icon button must not do any of them — mirrors the `void` action's
+  // ConfirmDialog guard in this same file.
+  const [confirmAction, setConfirmAction] = useState<{ inv: InvoiceRow; kind: 'wallet' | 'text' | 'email' | 'markPaid' } | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: invoices, isError, refetch } = useQuery<InvoiceRow[]>({
@@ -131,6 +132,19 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
     mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/text-to-pay`, { channel: 'SMS' }),
     onSuccess: () => { invalidate(); setConfirmAction(null); toast.success(t('invoices.texted', { defaultValue: 'Pay link sent' })); },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.textFailed', { defaultValue: 'Could not send' })),
+  });
+
+  // Email-to-pay: the same public pay link, delivered to the contact's inbox.
+  // The backend answers with the transport that actually carried it, so the
+  // toast can say whether it left the workspace's own mailbox or the platform's.
+  const emailToPay = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/email`),
+    onSuccess: ({ data }) => {
+      invalidate();
+      setConfirmAction(null);
+      toast.success(t('invoices.emailed', { defaultValue: 'Pay link emailed to {{to}}', to: data?.to ?? '' }));
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.emailFailed', { defaultValue: 'Could not email the pay link' })),
   });
 
   // Settle the invoice from the contact's store-credit wallet.
@@ -404,6 +418,14 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
                           >
                             <MessageSquare className="h-4 w-4" aria-hidden />
                           </button>
+                          <button
+                            onClick={() => setConfirmAction({ inv, kind: 'email' })}
+                            disabled={emailToPay.isPending && emailToPay.variables === inv.id}
+                            title={t('invoices.emailToPay', 'Email pay link')}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
+                          >
+                            <Mail className="h-4 w-4" aria-hidden />
+                          </button>
                           {/* Store-credit wallets are TRY-only, so pay-from-wallet
                               is offered only for a TRY invoice — the backend refuses
                               a cross-currency debit, so don't present a doomed action. */}
@@ -466,9 +488,10 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
         loading={voidInv.isPending}
       />
 
-      {/* Confirm the two consequential actions: an irreversible wallet debit and
-          a billable outbound SMS. Distinct confirm labels (not the icon buttons'
-          titles) so the modal button is unambiguous. */}
+      {/* Confirm the consequential actions: an irreversible wallet debit, and a
+          metered outbound message (SMS or email) to a real customer. Distinct
+          confirm labels (not the icon buttons' titles) so the modal button is
+          unambiguous about which transport is about to carry the link. */}
       <ConfirmDialog
         open={!!confirmAction}
         onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
@@ -477,7 +500,9 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
             ? t('invoices.payWalletTitle', 'Pay from store credit?')
             : confirmAction?.kind === 'markPaid'
               ? t('invoices.markPaidTitle', 'Mark this invoice as paid?')
-              : t('invoices.textToPayTitle', 'Text the pay link?')
+              : confirmAction?.kind === 'email'
+                ? t('invoices.emailToPayTitle', 'Email the pay link?')
+                : t('invoices.textToPayTitle', 'Text the pay link?')
         }
         description={
           confirmAction?.kind === 'wallet'
@@ -502,27 +527,38 @@ export default function InvoicesPage({ embedded }: { embedded?: boolean } = {}) 
                     'Send invoice {{number}}’s pay link to the contact by SMS?',
                     { number: confirmAction.inv.number },
                   )
-                : undefined
+                : confirmAction?.kind === 'email'
+                  ? t(
+                      'invoices.emailToPayDesc',
+                      'Email invoice {{number}}’s pay link to the contact?',
+                      { number: confirmAction.inv.number },
+                    )
+                  : undefined
         }
         confirmLabel={
           confirmAction?.kind === 'wallet'
             ? t('invoices.payWalletConfirm', 'Pay now')
             : confirmAction?.kind === 'markPaid'
               ? t('invoices.markPaidConfirm', 'Mark paid')
-              : t('invoices.textToPayConfirm', 'Send SMS')
+              : confirmAction?.kind === 'email'
+                ? t('invoices.emailToPayConfirm', 'Send email')
+                : t('invoices.textToPayConfirm', 'Send SMS')
         }
-        tone={confirmAction?.kind === 'text' ? 'default' : 'danger'}
+        tone={confirmAction?.kind === 'text' || confirmAction?.kind === 'email' ? 'default' : 'danger'}
         loading={
           confirmAction?.kind === 'wallet'
             ? payWallet.isPending
             : confirmAction?.kind === 'markPaid'
               ? markPaid.isPending
-              : textToPay.isPending
+              : confirmAction?.kind === 'email'
+                ? emailToPay.isPending
+                : textToPay.isPending
         }
         onConfirm={() => {
           if (!confirmAction) return;
           if (confirmAction.kind === 'wallet') payWallet.mutate(confirmAction.inv.id);
           else if (confirmAction.kind === 'markPaid') markPaid.mutate(confirmAction.inv.id);
+          else if (confirmAction.kind === 'email') emailToPay.mutate(confirmAction.inv.id);
           else textToPay.mutate(confirmAction.inv.id);
         }}
       />

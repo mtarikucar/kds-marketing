@@ -81,6 +81,21 @@ describe('InvoicesPage — per-invoice action guards', () => {
     expect(post).toHaveBeenCalledWith('/invoices/i1/text-to-pay', { channel: 'SMS' });
   });
 
+  // Email-to-pay is the same class of action as text-to-pay: a metered message
+  // that lands in a real customer's inbox and cannot be recalled. It gets the
+  // same confirm gate, not a bare icon click.
+  it('requires confirmation before emailing the pay link (billable outbound email)', async () => {
+    const user = userEvent.setup();
+    render(<InvoicesPage />, { wrapper });
+
+    const mailBtns = await screen.findAllByTitle('Email pay link');
+    await user.click(mailBtns[0]);
+
+    expect(post).not.toHaveBeenCalledWith('/invoices/i1/email');
+    await user.click(await screen.findByRole('button', { name: 'Send email' }));
+    expect(post).toHaveBeenCalledWith('/invoices/i1/email');
+  });
+
   it("confirming one invoice's wallet debit does not disable another invoice's pay button", async () => {
     const user = userEvent.setup();
     render(<InvoicesPage />, { wrapper });
