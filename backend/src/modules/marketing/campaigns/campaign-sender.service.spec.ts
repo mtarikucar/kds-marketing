@@ -148,6 +148,20 @@ describe('CampaignSenderService.batch', () => {
     expect(quota.refund).not.toHaveBeenCalled();
   });
 
+  it('gives the PLATFORM transport the same unsubscribe URL — bulk is bulk on either route', async () => {
+    // Without this, whether a recipient's client offers an Unsubscribe button
+    // would depend on which transport happened to carry the mail: the workspace
+    // mailbox or ours. Same campaign, same obligation.
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+    expect(email.sendPlainEmail).toHaveBeenCalledWith(
+      'ok@lead.com',
+      'S',
+      expect.any(String),
+      undefined,
+      'https://m.test/api/public/u/t2',
+    );
+  });
+
   /**
    * A campaign writes its error onto EVERY recipient row.
    *
@@ -184,6 +198,15 @@ describe('CampaignSenderService.batch', () => {
       expect(send).toHaveBeenCalledTimes(1);
       expect(email.sendPlainEmail).not.toHaveBeenCalled();
       expect(email.sendCampaignEmail).not.toHaveBeenCalled();
+    });
+
+    it('hands the adapter THIS recipient’s unsubscribe URL, so the mail can carry List-Unsubscribe', async () => {
+      // Per-recipient, because the token is what identifies who is opting out —
+      // a shared campaign-level link could not tell the sender who clicked.
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(send.mock.calls[0][0]).toMatchObject({
+        listUnsubscribeUrl: 'https://m.test/api/public/u/t2',
+      });
     });
 
     it('records the provider’s message id, which is what tells the two paths apart', async () => {
@@ -276,7 +299,15 @@ describe('CampaignSenderService.batch', () => {
 
     // Only the opted-in lead got an email.
     expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
-    expect(email.sendPlainEmail).toHaveBeenCalledWith('ok@lead.com', 'S', expect.any(String), undefined);
+    // The trailing argument is r2's own unsubscribe URL (bulk mail must carry
+    // one); l2 is the opted-in lead here, so the token is t2.
+    expect(email.sendPlainEmail).toHaveBeenCalledWith(
+      'ok@lead.com',
+      'S',
+      expect.any(String),
+      undefined,
+      'https://m.test/api/public/u/t2',
+    );
 
     const statuses = prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status);
     expect(statuses).toContain('SKIPPED'); // the opted-out one
@@ -304,7 +335,15 @@ describe('CampaignSenderService.batch', () => {
 
     // Only the still-active lead is emailed; the deleted one is skipped.
     expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
-    expect(email.sendPlainEmail).toHaveBeenCalledWith('ok@lead.com', 'S', expect.any(String), undefined);
+    // This test inverts the lead fixture: l1 is the surviving lead, so the one
+    // message that goes out belongs to r1 and carries r1's token.
+    expect(email.sendPlainEmail).toHaveBeenCalledWith(
+      'ok@lead.com',
+      'S',
+      expect.any(String),
+      undefined,
+      'https://m.test/api/public/u/t1',
+    );
     const statuses = prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status);
     expect(statuses).toContain('SKIPPED');
   });

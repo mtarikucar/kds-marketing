@@ -376,7 +376,9 @@ export class CampaignSenderService implements OnModuleInit {
         continue;
       }
 
-      const result = await this.send(workspaceId, campaign.channel, to, srcSubject, body, html);
+      // The recipient's own token: it is what the unsubscribe header points at,
+      // and what identifies WHO opted out when they use it.
+      const result = await this.send(workspaceId, campaign.channel, to, srcSubject, body, html, r.token);
       if (result.ok) {
         await this.mark(r.id, 'SENT', { messageId: result.messageId, sentAt: new Date() });
         if (campaign.channel === 'SMS') {
@@ -455,6 +457,10 @@ export class CampaignSenderService implements OnModuleInit {
 
   private async send(
     workspaceId: string, channel: string, to: string, subject: string | null, body: string, html?: string,
+    /** The campaign recipient's token. Its presence is what marks this send as
+     *  BULK: it becomes the RFC 8058 unsubscribe header. Every non-campaign
+     *  caller omits it and therefore cannot claim to be a mailing list. */
+    unsubToken?: string,
   ): Promise<{ ok: boolean; messageId?: string | null; error?: string }> {
     try {
       // The unsubscribe link is mandatory and is built from PUBLIC_BASE_URL; if
@@ -485,6 +491,14 @@ export class CampaignSenderService implements OnModuleInit {
         // CUSTOMER's own provider account, were metered, while email, which
         // leaves on JEETA's SMTP account, was unlimited. Metered exactly like
         // the other channels now, refund on failure included.
+        // The header's URI has to be the SAME link the body already carries, so
+        // it is built from the same base and the same token as render() and
+        // renderHtml() use. Both transports below get it: whether a recipient's
+        // client offers an Unsubscribe button must not depend on which one
+        // happened to carry the mail.
+        const unsubUrl = unsubToken
+          ? `${this.config.get<string>('PUBLIC_BASE_URL') ?? ''}/api/public/u/${unsubToken}`
+          : undefined;
         await this.quota.reserve(workspaceId, 'EMAIL');
         try {
           const own = await this.mailbox.resolve(workspaceId);
@@ -498,6 +512,7 @@ export class CampaignSenderService implements OnModuleInit {
               text: body,
               subject: subject ?? 'Update',
               html,
+              listUnsubscribeUrl: unsubUrl,
             });
             ok = r.status === 'SENT';
             ownError = r.error;
@@ -505,8 +520,8 @@ export class CampaignSenderService implements OnModuleInit {
           } else {
             const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
             ok = html
-              ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
-              : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
+              ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from, unsubUrl)
+              : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from, unsubUrl);
           }
           if (!ok) await this.quota.refund(workspaceId, 'EMAIL');
           // A campaign writes its error onto EVERY recipient row. "email send

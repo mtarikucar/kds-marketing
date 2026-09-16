@@ -121,6 +121,13 @@ export interface OutboundSend {
    */
   subject?: string;
   html?: string;
+  /**
+   * Email-only, and BULK-only. Present turns into the RFC 8058
+   * `List-Unsubscribe` / `List-Unsubscribe-Post` header pair; absent means this
+   * is a one-to-one message, which must never claim to be a mailing list.
+   * Per-recipient, because the token behind it is what identifies who opted out.
+   */
+  listUnsubscribeUrl?: string;
 }
 
 export interface SendResult {

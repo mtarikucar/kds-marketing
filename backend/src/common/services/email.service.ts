@@ -7,6 +7,7 @@ import * as path from "path";
 import * as Handlebars from "handlebars";
 import { maskEmail } from "../helpers/pii-mask.helper";
 import { withTimeout } from "../util/with-timeout";
+import { listUnsubscribeHeaders } from "../util/list-unsubscribe";
 
 // Register Handlebars helpers
 Handlebars.registerHelper("currentYear", () => new Date().getFullYear());
@@ -180,12 +181,15 @@ export class EmailService {
     text: string,
     html?: string,
     fromOverride?: EmailFrom,
+    /** Set for BULK mail only — becomes the RFC 8058 unsubscribe headers. */
+    listUnsubscribeUrl?: string,
   ): Promise<boolean> {
     try {
       if (!this.transporter) {
         this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)} (html=${html ? html.length : 0} chars)`);
         return true;
       }
+      const unsubHeaders = listUnsubscribeHeaders(listUnsubscribeUrl);
       await withTimeout(
         this.transporter.sendMail({
           from: this.fromHeader(fromOverride),
@@ -194,6 +198,7 @@ export class EmailService {
           text,
           ...(html ? { html } : {}),
           ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
+          ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
         }),
         25_000,
         `sendMail to ${maskEmail(to)}`,
@@ -235,6 +240,10 @@ export class EmailService {
     subject: string,
     body: string,
     fromOverride?: EmailFrom,
+    /** Set for BULK mail only — becomes the RFC 8058 unsubscribe headers. A
+     *  transactional notice (password reset, status change) passes nothing, so
+     *  no client is ever invited to "unsubscribe" from one. */
+    listUnsubscribeUrl?: string,
   ): Promise<boolean> {
     try {
       if (!this.transporter) {
@@ -246,6 +255,7 @@ export class EmailService {
         this.logger.log(`[EMAIL MOCK] Body length: ${body.length} chars`);
         return true;
       }
+      const unsubHeaders = listUnsubscribeHeaders(listUnsubscribeUrl);
       await withTimeout(
         this.transporter.sendMail({
           from: this.fromHeader(fromOverride),
@@ -253,6 +263,7 @@ export class EmailService {
           subject,
           text: body,
           ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
+          ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
         }),
         25_000,
         `sendMail to ${maskEmail(to)}`,

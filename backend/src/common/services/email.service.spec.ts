@@ -92,4 +92,48 @@ describe('EmailService template cache (iter-98)', () => {
     expect(b).toBe('<p>Welcome Bob</p>');
     expect(c).toBe('<p>Welcome Carol</p>');
   });
+
+  /**
+   * The platform transport's half of RFC 8058. A workspace without its own
+   * verified mailbox sends its campaigns from here, so the headers have to come
+   * out of these two methods as well as the channel adapter — otherwise whether
+   * a client offers an Unsubscribe button depends on which transport happened
+   * to carry the mail.
+   */
+  describe('List-Unsubscribe on the platform transport', () => {
+    function withTransport() {
+      const svc = newService();
+      const sendMail = jest.fn().mockResolvedValue({ messageId: '<x@y>' });
+      // The constructor builds a transporter from EMAIL_HOST/USER/PASSWORD,
+      // which newService() deliberately leaves unset (the [EMAIL MOCK] path).
+      // Standing one in is what lets these tests see the wire.
+      (svc as any).transporter = { sendMail };
+      return { svc, sendMail };
+    }
+
+    it('sendCampaignEmail carries the pair when given an unsubscribe URL', async () => {
+      const { svc, sendMail } = withTransport();
+      await svc.sendCampaignEmail('a@b.test', 'S', 'text', '<p>rich</p>', undefined, 'https://m.test/api/public/u/tok-1');
+      expect(sendMail.mock.calls[0][0].headers).toEqual({
+        'List-Unsubscribe': '<https://m.test/api/public/u/tok-1>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      });
+    });
+
+    it('sendPlainEmail carries it too — a plain-text campaign is still bulk', async () => {
+      const { svc, sendMail } = withTransport();
+      await svc.sendPlainEmail('a@b.test', 'S', 'text', undefined, 'https://m.test/api/public/u/tok-2');
+      expect(sendMail.mock.calls[0][0].headers).toMatchObject({
+        'List-Unsubscribe': '<https://m.test/api/public/u/tok-2>',
+      });
+    });
+
+    it('omits the headers entirely on a transactional send', async () => {
+      // These same methods carry password resets and status notices. Marking
+      // those as list mail would invite a client to "unsubscribe" from them.
+      const { svc, sendMail } = withTransport();
+      await svc.sendPlainEmail('a@b.test', 'Your code', 'text');
+      expect(sendMail.mock.calls[0][0]).not.toHaveProperty('headers');
+    });
+  });
 });

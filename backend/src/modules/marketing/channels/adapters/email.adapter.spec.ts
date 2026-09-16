@@ -152,6 +152,31 @@ describe('EmailChannelAdapter', () => {
     });
   });
 
+  describe('List-Unsubscribe — bulk sends only', () => {
+    it('turns listUnsubscribeUrl into the RFC 8058 header pair', async () => {
+      sendMail.mockResolvedValue({ messageId: '<a@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'lead@x.test',
+        text: 'body',
+        subject: 'S',
+        listUnsubscribeUrl: 'https://m.test/api/public/u/tok-1',
+      });
+      expect(sendMail.mock.calls[0][0].headers).toEqual({
+        'List-Unsubscribe': '<https://m.test/api/public/u/tok-1>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      });
+    });
+
+    it('sends NO such header on an ordinary one-to-one reply', async () => {
+      // This adapter's day job is answering one person from the inbox. Marking
+      // that as list mail would be a lie to the client AND to the filters.
+      sendMail.mockResolvedValue({ messageId: '<b@acme.test>' });
+      await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'body', subject: 'S' });
+      expect(sendMail.mock.calls[0][0]).not.toHaveProperty('headers');
+    });
+  });
+
   it('parseInbound normalizes a Mailgun-style payload and tags it EMAIL', () => {
     const out = adapter.parseInbound({ secrets: SMTP, externalId: 'support@acme.test' } as any, {
       sender: 'Jane Doe <jane@buyer.test>',

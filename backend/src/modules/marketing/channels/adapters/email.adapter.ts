@@ -3,6 +3,7 @@ import * as nodemailer from 'nodemailer';
 import { ChannelAdapterRegistry } from '../channel-adapter.registry';
 import { EmailOAuthProvider, isEmailOAuthProvider } from '../email-oauth.config';
 import { EmailOAuthSecrets, needsRefresh, sendViaOAuth } from '../email-oauth.sender';
+import { listUnsubscribeHeaders } from '../../../../common/util/list-unsubscribe';
 import {
   ChannelAdapter,
   ChannelCapability,
@@ -70,7 +71,7 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     return { host, port, secure: s.smtpSecure === 'true' || port === 465, user, pass, from };
   }
 
-  async send({ config, to, text, subject: subjectArg, html }: OutboundSend): Promise<SendResult> {
+  async send({ config, to, text, subject: subjectArg, html, listUnsubscribeUrl }: OutboundSend): Promise<SendResult> {
     const recipient = (to || '').trim();
     if (!recipient) {
       return { externalMessageId: null, status: 'FAILED', error: 'recipient email missing' };
@@ -135,12 +136,20 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
       // `text` is always sent alongside `html`: a multipart message is what
       // every client and every spam filter expects, and an HTML-only mail from
       // a brand-new sending identity is a reputation problem on its own.
+      // Bulk mail says so, one-to-one mail stays silent — `listUnsubscribeUrl`
+      // is only ever set by the campaign sender. Note the OAuth branch above
+      // returns before this and carries no such header: that is not a gap, it is
+      // unreachable for bulk. WorkspaceMailboxService.resolve() never hands a
+      // consent-connected mailbox to the campaign sender, and Graph's
+      // sendMail accepts only `x-`-prefixed custom headers anyway.
+      const unsubHeaders = listUnsubscribeHeaders(listUnsubscribeUrl);
       const info = await transport.sendMail({
         from: smtp.from,
         to: recipient,
         subject,
         text,
         ...(html ? { html } : {}),
+        ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
       });
       transport.close();
       return { externalMessageId: info?.messageId ?? null, status: 'SENT' };
