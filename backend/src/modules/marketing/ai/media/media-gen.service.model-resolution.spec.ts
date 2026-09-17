@@ -1,3 +1,4 @@
+import { creditCost } from '../ai-credit-costs';
 import { BadRequestException } from '@nestjs/common';
 import { MediaGenService } from './media-gen.service';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from './media-models.config';
@@ -41,7 +42,7 @@ function makeSvc(workspace: unknown = { defaultImageModel: null, defaultVideoMod
     socialCampaignItem: { findFirst: jest.fn().mockResolvedValue({ id: 'ci-1' }) },
   };
   const credits = {
-    reserve: jest.fn().mockResolvedValue(undefined),
+    reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)),
     refund: jest.fn().mockResolvedValue(undefined),
   };
   const provider = {
@@ -87,7 +88,7 @@ describe('MediaGenService — model resolution order', () => {
     await svc.requestGeneration(WS, { type: 'VIDEO', prompt: 'x', durationSec: 4, createdById: 'u1' });
     expect(modelWritten(prisma)).toBe('fal-ai/veo3.1/fast');
     // And it is PRICED as that model, not as the constant: 15 credits/sec x 4.
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 60);
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 60);
   });
 
   it('picks the default belonging to the kind being generated', async () => {
@@ -111,8 +112,10 @@ describe('MediaGenService — model resolution order', () => {
       createdById: 'u1',
     });
     expect(modelWritten(prisma)).toBe('fal-ai/bytedance/seedance/v1/pro/text-to-video');
-    // The override costs no query — the workspace is not even read.
-    expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
+    // The override avoids loading workspace model defaults; policy still gates it.
+    expect(prisma.workspace.findUnique).not.toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ defaultVideoModel: true }) }),
+    );
   });
 
   /**
@@ -177,7 +180,7 @@ describe('MediaGenService — model resolution order', () => {
         createdById: 'u1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('still refuses an explicit uncatalogued model', async () => {

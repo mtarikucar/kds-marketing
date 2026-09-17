@@ -11,7 +11,7 @@ import { sealSecret } from '../../../common/crypto/secret-box.helper';
 import { OutboxService } from '../../outbox/outbox.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 
 /** Rating at/above which we route to the public review site; below, private. */
@@ -132,10 +132,10 @@ export class ReviewsService {
   }
 
   async draftReply(workspaceId: string, reviewId: string): Promise<{ replyDraft: string }> {
-    if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'review.reply_draft'))) throw new ServiceUnavailableException('AI is not configured');
     const review = await this.prisma.review.findFirst({ where: { id: reviewId, workspaceId } });
     if (!review) throw new NotFoundException('Review not found');
-    await this.credits.reserve(workspaceId, creditCost('review.reply_draft'));
+    const reserved = await this.credits.reserveForJob(workspaceId, 'review.reply_draft');
     try {
       const res = await this.anthropic.complete({
         system: 'You are a business owner replying to a customer review. Write a short, warm, professional reply. If the review is negative, acknowledge + offer to make it right, never argue.',
@@ -147,7 +147,7 @@ export class ReviewsService {
       await this.prisma.review.update({ where: { id: review.id }, data: { replyDraft: draft } });
       return { replyDraft: draft };
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('review.reply_draft'));
+      await this.credits.refund(workspaceId, reserved);
       throw e;
     }
   }

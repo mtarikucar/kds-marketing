@@ -31,6 +31,7 @@ describe('ScheduledJobRunnerService', () => {
 
   beforeEach(() => {
     prisma = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiSpendPolicy: {} }) },
       scheduledJob: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         update: jest.fn().mockResolvedValue({}),
@@ -49,6 +50,43 @@ describe('ScheduledJobRunnerService', () => {
     runner.registerHandler('k', async () => {});
     expect(runner.registeredKinds()).toContain('k');
     expect(() => runner.registerHandler('k', async () => {})).toThrow(/already registered/);
+  });
+
+  it.each([
+    ['conversation.ai_reply', {}, { 'conversation.reply': { enabled: false } }],
+    ['conversation.ai_reply', { reason: 'followup' }, { 'conversation.followup': { enabled: false } }],
+    ['conversation.ai_reply', {}, { 'conversation.reply': { provider: 'MCP' } }],
+    ['conversation.followup', {}, { 'conversation.followup': { enabled: false } }],
+    ['research.run', {}, { 'research.turn': { provider: 'MCP' } }],
+    ['research.run', {}, { 'research.qualify': { enabled: false } }],
+  ])('returns an existing %s claim to PENDING when policy prevents execution: %p %p', async (kind, payload, jobs) => {
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs } });
+    const handler = jest.fn();
+    runner.registerHandler(kind as string, handler);
+    claim([{ id: 'policy-job', workspaceId: WS, kind, payload, attempts: 2 }]);
+    await runner.tick();
+    expect(handler).not.toHaveBeenCalled();
+    expect(prisma.scheduledJob.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PENDING', lockedAt: null }) }));
+    expect(prisma.scheduledJob.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ attempts: 3 }) }));
+  });
+
+  it('does not mark a running action complete if the owner disabled it during the handler', async () => {
+    runner.registerHandler('research.run', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'research.qualify': { enabled: false } } } });
+    });
+    claim([{ id: 'policy-job', workspaceId: WS, kind: 'research.run', payload: {}, attempts: 0 }]);
+    await runner.tick();
+    expect(prisma.scheduledJob.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PENDING' }) }));
+    expect(prisma.scheduledJob.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'DONE' }) }));
+  });
+
+  it('allows a due MCP follow-up trigger to hand off without running a model', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { enabled: false }, 'conversation.followup': { enabled: true, provider: 'MCP' } } } });
+    const handoff = jest.fn();
+    runner.registerHandler('conversation.followup', handoff);
+    claim([{ id: 'policy-job', workspaceId: WS, kind: 'conversation.followup', payload: {}, attempts: 0 }]);
+    await runner.tick();
+    expect(handoff).toHaveBeenCalled();
   });
 
   it('dispatches a claimed job to its handler and marks it DONE', async () => {

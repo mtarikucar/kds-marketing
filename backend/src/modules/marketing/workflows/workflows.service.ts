@@ -9,7 +9,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import {
   parseWorkflowParts,
   TRIGGER_TYPES,
@@ -161,8 +161,8 @@ export class WorkflowsService {
 
   /** NL → DSL. Reserves 2 credits; refunds on a model/parse failure. */
   async draft(workspaceId: string, prompt: string): Promise<WorkflowDsl> {
-    if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
-    await this.credits.reserve(workspaceId, creditCost('workflow.draft'));
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'workflow.draft'))) throw new ServiceUnavailableException('AI is not configured');
+    const reserved = await this.credits.reserveForJob(workspaceId, 'workflow.draft');
     try {
       const res = await this.anthropic.complete({
         system: DSL_GUIDE,
@@ -173,7 +173,7 @@ export class WorkflowsService {
       const json = this.extractJson(res.text);
       return parseWorkflowParts(json.trigger, json.steps); // throws → caught below
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('workflow.draft'));
+      await this.credits.refund(workspaceId, reserved);
       if (e instanceof ZodError) {
         throw new BadRequestException('The AI draft did not match the workflow format — try rephrasing.');
       }

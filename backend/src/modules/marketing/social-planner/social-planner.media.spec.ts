@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { BadRequestException } from '@nestjs/common';
 import { publishToNetwork } from './network-adapters';
 import {
@@ -29,7 +30,7 @@ describe('SocialPlannerService — media + per-target format', () => {
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
     runner = { registerHandler: jest.fn() };
     r2 = { isConfigured: jest.fn().mockReturnValue(true), upload: jest.fn(), deleteKeys: jest.fn().mockResolvedValue(undefined) };
-    const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+    const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
     svc = new SocialPlannerService(prisma, scheduledJobs, runner, r2, credits as any);
     publishToNetworkMock.mockReset();
   });

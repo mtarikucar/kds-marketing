@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { NetgsmIvrService } from './netgsm-ivr.service';
 
 function makeDeps() {
@@ -12,8 +13,8 @@ function makeDeps() {
     voiceCall: { upsert: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
     voiceTranscript: { create: jest.fn().mockResolvedValue({}) },
   };
-  const anthropic = { complete: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const anthropic = { complete: jest.fn(), isEnabledFor: jest.fn().mockReturnValue(true) };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
   const knowledge = { search: jest.fn().mockResolvedValue([]) };
   // Default: no ACTIVE BrandProfile — keeps every pre-existing test's system
   // prompt assertions unaffected. Brand-injection tests override per-case.
@@ -136,7 +137,7 @@ describe('NetgsmIvrService', () => {
 
     expect(r.result).toBe('1');
     expect(r.data).toContain('Çalışma saatlerimiz');
-    expect(credits.reserve).toHaveBeenCalledWith('ws-1', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-1', 'voice.turn');
     expect(credits.refund).not.toHaveBeenCalled();
     expect(knowledge.search).toHaveBeenCalled();
     // system prompt should carry persona
@@ -183,7 +184,7 @@ describe('NetgsmIvrService', () => {
 
     expect(r.status).toBe('success');
     expect(r.result).toBe('1');
-    expect(credits.reserve).toHaveBeenCalledWith('ws-1', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-1', 'voice.turn');
     expect(credits.refund).toHaveBeenCalledWith('ws-1', 2);
   });
 

@@ -27,6 +27,13 @@ describe('marketing AI controller — spend endpoints stay manager-only', () => 
     });
   }
 
+  it('restricts execution-policy writes to owners with settings permission', () => {
+    const fn = MarketingAiController.prototype.setExecutionPolicy;
+    expect(reflector.get<string[]>(MARKETING_ROLES_KEY, fn)).toEqual(['OWNER']);
+    expect(reflector.get<string>(REQUIRE_PERMISSION_KEY, fn)).toBe('settings.manage');
+    expect(reflector.get<string[]>(MARKETING_ROLES_KEY, MarketingAiController.prototype.getExecutionPolicy)).toEqual(['MANAGER']);
+  });
+
   it('leaves the credit-quota read open to everyone who can see the panel', () => {
     const fn = MarketingAiController.prototype.usage;
     expect(reflector.get<string[]>(MARKETING_ROLES_KEY, fn)).toBeUndefined();

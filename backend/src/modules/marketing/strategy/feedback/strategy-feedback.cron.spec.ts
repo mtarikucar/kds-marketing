@@ -19,7 +19,7 @@ function makeDeps(
   } as any;
   const feedback = { refresh: jest.fn().mockResolvedValue({ strategyId: 'strat1', actionCount: 3 }) } as any;
   const sources = { isEnabled: () => cfg.sourcesEnabled ?? true } as any;
-  const anthropic = { isEnabled: () => cfg.aiEnabled ?? true } as any;
+  const anthropic = { isEnabledFor: () => cfg.aiEnabled ?? true } as any;
   return { prisma, feedback, sources, anthropic };
 }
 

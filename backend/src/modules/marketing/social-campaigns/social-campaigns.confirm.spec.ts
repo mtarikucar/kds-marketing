@@ -39,8 +39,8 @@ function build() {
   const runner = { registerHandler: jest.fn() };
   const contentAi = { compose: jest.fn() };
   const planner = { schedulePost: jest.fn().mockResolvedValue({}) };
-  const anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn().mockResolvedValue({ text: 'SAFE' }) };
-  const credits = { reserve: jest.fn(), refund: jest.fn() };
+  const anthropic = { isEnabledFor: jest.fn().mockReturnValue(true), complete: jest.fn().mockResolvedValue({ text: 'SAFE' }) };
+  const credits = { reserveForJob: jest.fn().mockResolvedValue(1), refund: jest.fn() };
   const mediaGen = { requestGeneration: jest.fn() };
   // The REAL arming service, on the same prisma/scheduledJobs fakes: the
   // post-generation branch is a shared autonomy rule now, and a stub here would
@@ -175,7 +175,7 @@ describe('confirmItem — gate, cap rollover, brand-safety', () => {
   it('skips the Claude check (treats as safe) when AI is disabled', async () => {
     const { svc, prisma, planner, anthropic } = build();
     prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(makeItem());
-    anthropic.isEnabled.mockReturnValue(false);
+    anthropic.isEnabledFor.mockReturnValue(false);
     await confirm(svc);
     expect(anthropic.complete).not.toHaveBeenCalled();
     expect(planner.schedulePost).toHaveBeenCalled();

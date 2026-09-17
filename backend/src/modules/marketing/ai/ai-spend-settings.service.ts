@@ -125,17 +125,13 @@ export class AiSpendSettingsService {
       next[key] = value;
     }
 
-    const ws = await this.prisma.workspace.findUnique({
-      where: { id: workspaceId },
-      select: { aiSpendPolicy: true },
-    });
-    const merged = {
-      ...((ws?.aiSpendPolicy as Record<string, unknown> | null) ?? {}),
-      ...next,
-    };
-    await this.prisma.workspace.update({
-      where: { id: workspaceId },
-      data: { aiSpendPolicy: merged as never },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`ai-policy:${workspaceId}`}))::text AS locked`;
+      const ws = await tx.workspace.findUnique({
+        where: { id: workspaceId }, select: { aiSpendPolicy: true },
+      });
+      const merged = { ...((ws?.aiSpendPolicy as Record<string, unknown> | null) ?? {}), ...next };
+      await tx.workspace.update({ where: { id: workspaceId }, data: { aiSpendPolicy: merged as never } });
     });
     return this.get(workspaceId);
   }

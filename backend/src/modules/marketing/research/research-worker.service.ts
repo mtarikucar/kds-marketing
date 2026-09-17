@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { AgentRunService } from '../agents/agent-run.service';
 import { ResearchSourcesService } from './providers/research-sources.service';
 import { ResearchSpendService } from '../budget/research-spend.service';
@@ -58,7 +58,7 @@ export class ResearchWorkerService {
     if (!this.sources.isEnabled()) {
       return { runId: null, researched: 0, staged: 0, duplicates: 0, skipped: 'sources-not-configured' };
     }
-    if (!this.anthropic.isEnabled()) {
+    if (!(await this.anthropic.isEnabledFor(job.workspaceId, 'research.qualify'))) {
       return { runId: null, researched: 0, staged: 0, duplicates: 0, skipped: 'ai-not-configured' };
     }
 
@@ -70,9 +70,8 @@ export class ResearchWorkerService {
         // per-run reserve priced a single credit amount for anywhere between
         // one and MAX_ITERS Opus calls at maxTokens 4000, so a long run cost
         // Jeeta roughly thirty times what it charged.
-        await this.credits.reserve(job.workspaceId, creditCost('research.qualify'));
-        let turnsCharged = 0;
-        let turnsCompleted = 0;
+        const baseReserved = await this.credits.reserveForJob(job.workspaceId, 'research.qualify');
+        let pendingTurnReserved = 0;
         try {
           const geo = (job.profile.geo as ResearchToolCtx['geo']) ?? {};
           const ctx: ResearchToolCtx = { workspaceId: job.workspaceId, runId, geo, budgetId: null };
@@ -90,8 +89,7 @@ export class ResearchWorkerService {
             // spending, not find out afterwards. This runs unattended from the
             // nightly research cron, which is exactly where an unmetered loop
             // does the most damage.
-            await this.credits.reserve(job.workspaceId, creditCost('research.turn'));
-            turnsCharged += 1;
+            pendingTurnReserved = await this.credits.reserveForJob(job.workspaceId, 'research.turn');
             const res = await this.anthropic.complete({
               system: RESEARCH_SYSTEM_PROMPT,
               messages,
@@ -103,9 +101,10 @@ export class ResearchWorkerService {
               cacheConversation: true,
               maxTokens: 4000,
               tier: tierFor('research.turn'), workspaceId: job.workspaceId, action: 'research.turn',
+              idempotencyScope: `research.profile:${job.profile.id}`,
               cacheSystem: true,
             });
-            turnsCompleted += 1;
+            pendingTurnReserved = 0;
             if (!res.toolUses.length) break;
 
             const results: Anthropic.ToolResultBlockParam[] = [];
@@ -118,7 +117,14 @@ export class ResearchWorkerService {
                 everSubmitted = true;
               } else {
                 toolCalls += 1;
-                const out = await dispatchResearchTool(deps, ctx, tu.name, (tu.input ?? {}) as Record<string, unknown>);
+                const dispatch = () => dispatchResearchTool(deps, ctx, tu.name, (tu.input ?? {}) as Record<string, unknown>);
+                const out = res.mcpTaskId
+                  ? await this.anthropic.runMcpToolOnce(job.workspaceId, res.mcpTaskId, tu.id, async () => {
+                    const result = await dispatch();
+                    if (result && typeof result === 'object' && 'error' in result) throw new Error('Research tool outcome unknown');
+                    return result;
+                  }, `research.profile:${job.profile.id}`)
+                  : await dispatch();
                 results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(out).slice(0, 8000) });
               }
             }
@@ -140,8 +146,7 @@ export class ResearchWorkerService {
           // "genuinely none qualify" and must be respected, not overridden.
           if (!everSubmitted && toolCalls > 0 && Date.now() < deadline + FORCE_SUBMIT_GRACE_MS) {
             try {
-              await this.credits.reserve(job.workspaceId, creditCost('research.turn'));
-              turnsCharged += 1;
+              pendingTurnReserved = await this.credits.reserveForJob(job.workspaceId, 'research.turn');
               messages.push({
                 role: 'user',
                 content:
@@ -158,15 +163,19 @@ export class ResearchWorkerService {
                 tier: tierFor('research.turn'),
                 workspaceId: job.workspaceId,
                 action: 'research.turn',
+                idempotencyScope: `research.profile:${job.profile.id}`,
                 cacheSystem: true,
               });
-              turnsCompleted += 1;
+              pendingTurnReserved = 0;
               const submitTu = forced.toolUses.find((t) => t.name === 'submit_candidates');
               if (submitTu) {
                 candidates = (submitTu.input as { candidates?: unknown[] })?.candidates ?? [];
                 this.logger.log(`research run ${runId}: forced submit recovered ${candidates.length} submitted candidate(s), pre-validation (ws ${job.workspaceId})`);
               }
             } catch (e) {
+              const failedTurnReserved = pendingTurnReserved;
+              pendingTurnReserved = 0;
+              await this.credits.refund(job.workspaceId, failedTurnReserved).catch(() => undefined);
               this.logger.warn(`research run ${runId}: forced submit failed (ws ${job.workspaceId}): ${(e as Error)?.message ?? e}`);
             }
           }
@@ -187,8 +196,7 @@ export class ResearchWorkerService {
           await this.credits
             .refund(
               job.workspaceId,
-              creditCost('research.qualify') +
-                Math.max(0, turnsCharged - turnsCompleted) * creditCost('research.turn'),
+              baseReserved + pendingTurnReserved,
             )
             .catch(() => undefined);
           throw e;

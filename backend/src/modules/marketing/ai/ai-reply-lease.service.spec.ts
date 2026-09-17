@@ -15,6 +15,7 @@ describe('AiReplyLeaseService', () => {
   function build(rows: any[] = [], updateCounts: number[] = []) {
     let call = 0;
     const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiSpendPolicy: {} }) },
       scheduledJob: {
         findFirst: jest.fn(async () => rows[Math.min(call, rows.length - 1)] ?? null),
         updateMany: jest.fn(async () => ({ count: updateCounts[call++] ?? 1 })),
@@ -43,6 +44,51 @@ describe('AiReplyLeaseService', () => {
     payload: { conversationId: 'convo-1' },
     createdAt: new Date('2026-09-08T12:00:00Z'),
     ...over,
+  });
+
+  describe('current action policy', () => {
+    it('filters disabled replies before the bounded claim scan so they cannot starve follow-ups', async () => {
+      const h = build();
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { enabled: false }, 'conversation.followup': { provider: 'MCP' } } } });
+      const queue = [...Array.from({ length: 6 }, (_, i) => job({ id: `reply-${i}` })), job({ id: 'followup', payload: { conversationId: 'c2', reason: 'followup' } })];
+      h.prisma.scheduledJob.findFirst.mockImplementation(async ({ where }: any) => queue.find((row) => {
+        if (where.id?.notIn?.includes(row.id)) return false;
+        if (where.payload?.equals !== undefined && row.payload.reason !== where.payload.equals) return false;
+        return true;
+      }) ?? null);
+      expect(await h.svc.claim(WS)).toMatchObject({ jobId: 'followup' });
+    });
+
+    it.each([{ enabled: false, provider: 'MCP' }, { enabled: true, provider: 'API' }])('skips an ineligible reply and still leases an independent follow-up: %p', async (choice) => {
+      const h = build();
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': choice, 'conversation.followup': { enabled: true, provider: 'MCP' } } } });
+      h.prisma.scheduledJob.findFirst.mockResolvedValueOnce(job()).mockResolvedValueOnce(job({ id: 'followup', payload: { conversationId: 'c2', reason: 'followup' } })).mockResolvedValue(null);
+      expect(await h.svc.claim(WS)).toMatchObject({ jobId: 'followup', reason: 'followup' });
+      expect(h.prisma.scheduledJob.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'job-1' }), data: expect.objectContaining({ status: 'CLAIMED' }) }));
+    });
+
+    it.each([{ enabled: false }, { provider: 'API' }])('refuses completion after the reply policy changes: %p', async (choice) => {
+      const h = build([job()]);
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': choice } } });
+      await expect(h.svc.complete(WS, 'job-1', true)).resolves.toBe(false);
+      expect(h.prisma.scheduledJob.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'DONE' }) }));
+      expect(h.followups.scheduleNext).not.toHaveBeenCalled();
+    });
+
+    it('allows returning a lease to PENDING after disabling it, without completing or scheduling more work', async () => {
+      const h = build([job()]);
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { enabled: false } } } });
+      expect(await h.svc.complete(WS, 'job-1', false)).toBe(true);
+      expect(h.prisma.scheduledJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'PENDING', lockedAt: null } }));
+      expect(h.followups.scheduleNext).not.toHaveBeenCalled();
+    });
+
+    it('does not schedule a disabled follow-up after completing an enabled reply', async () => {
+      const h = build([job()]);
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { provider: 'MCP' }, 'conversation.followup': { enabled: false } } } });
+      expect(await h.svc.complete(WS, 'job-1', true)).toBe(true);
+      expect(h.followups.scheduleNext).not.toHaveBeenCalled();
+    });
   });
 
   describe('claim', () => {
@@ -257,6 +303,7 @@ describe('AiReplyLeaseService — chasing a customer who went quiet', () => {
 
   function build(payload: any) {
     const prisma: any = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiSpendPolicy: {} }) },
       scheduledJob: {
         findFirst: jest.fn(async () => ({ id: 'job-1', payload, createdAt: new Date() })),
         updateMany: jest.fn(async () => ({ count: 1 })),

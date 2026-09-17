@@ -13,6 +13,8 @@ describe('ConversationAiEngineService.reply', () => {
   const today = new Date().toISOString().slice(0, 10);
 
   function build(overrides: {
+    aiExecution?: string;
+    slots?: string[];
     convo?: any;
     channel?: any;
     agent?: any;
@@ -78,7 +80,10 @@ describe('ConversationAiEngineService.reply', () => {
         overrides.complete ?? { text: 'Merhaba! Size nasıl yardımcı olabilirim?', toolUses: [], stopReason: 'end_turn', usage: { input: 1, output: 1 } },
       ),
     };
-    const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+    const credits = {
+      reserveForJob: jest.fn().mockResolvedValue(1),
+      refund: jest.fn().mockResolvedValue(undefined),
+    };
     const knowledge = { search: jest.fn().mockResolvedValue([]) };
     // MessageSenderService returns the PERSISTED row, whose status is 'SENT' or
     // 'FAILED' — it does not throw on a provider rejection. The engine reads
@@ -110,6 +115,103 @@ describe('ConversationAiEngineService.reply', () => {
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
 
+  describe.each(['reply', 'followup'] as const)('%s credit reservation receipts', (kind) => {
+    it.each([0, 7])('refunds only the actual receipt (%i) when delivery fails', async (charged) => {
+      const h = build({ sendStatus: 'FAILED', agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      h.credits.reserveForJob.mockResolvedValue(charged);
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'SERVER', aiApiKeyEnc: charged === 0 ? 'byok' : null });
+      if (kind === 'reply') await run(h);
+      else await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+      expect(h.credits.reserveForJob).toHaveBeenCalledWith(WS, `conversation.${kind}`);
+      expect(h.sender.send).toHaveBeenCalled();
+      if (charged === 0) expect(h.credits.refund).not.toHaveBeenCalled();
+      else expect(h.credits.refund).toHaveBeenCalledWith(WS, 7);
+    });
+
+    it('refunds the captured charge when generation throws', async () => {
+      const h = build({ agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      h.credits.reserveForJob.mockResolvedValue(7);
+      h.anthropic.complete.mockRejectedValue(new Error('provider unavailable'));
+      const work = kind === 'reply' ? run(h)
+        : (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+      await expect(work).rejects.toThrow('provider unavailable');
+      expect(h.credits.refund).toHaveBeenCalledWith(WS, 7);
+      expect(h.sender.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('per-action policy', () => {
+    it('does not send a reply disabled while its model call was running', async () => {
+      const h = build();
+      h.anthropic.complete.mockImplementation(async () => {
+        h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { enabled: false } } } });
+        return { text: 'No longer allowed', toolUses: [], stopReason: 'end_turn' };
+      });
+      await expect(run(h)).rejects.toThrow();
+      expect(h.sender.send).not.toHaveBeenCalled();
+    });
+
+    it('does not send a follow-up switched to MCP while its model call was running', async () => {
+      const h = build({ agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      h.anthropic.complete.mockImplementation(async () => {
+        h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.followup': { provider: 'MCP' } } } });
+        return { text: 'No longer allowed', toolUses: [], stopReason: 'end_turn' };
+      });
+      await expect((h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } })).rejects.toThrow();
+      expect(h.sender.send).not.toHaveBeenCalled();
+    });
+
+    it.each(['API', 'MCP'])('does not run a disabled reply (%s)', async (provider) => {
+      const h = build();
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { enabled: false, provider } } } });
+      await expect(run(h)).rejects.toThrow();
+      expect(h.anthropic.complete).not.toHaveBeenCalled();
+      expect(h.credits.reserveForJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses an existing server reply after its provider changes to MCP', async () => {
+      const h = build();
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'conversation.reply': { provider: 'MCP' } } } });
+      await expect(run(h)).rejects.toThrow();
+      expect(h.sender.send).not.toHaveBeenCalled();
+    });
+
+    it('executes a queued follow-up as a follow-up even when replies are disabled', async () => {
+      const h = build({ agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'MCP_ONLY', aiSpendPolicy: { jobs: {
+        'conversation.reply': { enabled: false }, 'conversation.followup': { enabled: true, provider: 'API' },
+      } } });
+      await (h.engine as any).handleAiReplyJob({ workspaceId: WS, payload: { workspaceId: WS, conversationId: CONVO, reason: 'followup' } });
+      expect(h.anthropic.complete).toHaveBeenCalledWith(expect.objectContaining({ action: 'conversation.followup' }));
+      expect(h.sender.send).toHaveBeenCalled();
+    });
+
+    it('does not execute or hand off a disabled follow-up', async () => {
+      const h = build({ aiExecution: 'MCP', agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'MCP', aiSpendPolicy: { jobs: { 'conversation.followup': { enabled: false } } } });
+      await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+      expect(h.credits.reserveForJob).not.toHaveBeenCalled();
+    });
+
+    it('hands off an explicit MCP follow-up despite BYOK and disabled replies', async () => {
+      const h = build({ agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'SERVER', aiApiKeyEnc: 'own-key', aiSpendPolicy: { jobs: {
+        'conversation.reply': { enabled: false, provider: 'API' }, 'conversation.followup': { enabled: true, provider: 'MCP' },
+      } } });
+      await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+      expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ kind: 'conversation.ai_reply', payload: { workspaceId: WS, conversationId: CONVO, reason: 'followup' } }));
+      expect(h.anthropic.complete).not.toHaveBeenCalled();
+    });
+
+    it('executes a legacy follow-up already released by the scheduler without requeueing it to MCP', async () => {
+      const h = build({ aiExecution: 'MCP', agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+      await (h.engine as any).handleAiReplyJob({ workspaceId: WS, payload: { workspaceId: WS, conversationId: CONVO, reason: 'followup' } });
+      expect(h.anthropic.complete).toHaveBeenCalledWith(expect.objectContaining({ action: 'conversation.followup' }));
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'conversation.ai_reply' }));
+    });
+  });
+
   /**
    * A nudge under a connector mode goes to the CONNECTOR.
    *
@@ -135,7 +237,7 @@ describe('ConversationAiEngineService.reply', () => {
         }),
       );
       expect(h.sender.send).not.toHaveBeenCalled();
-      expect(h.credits.reserve).not.toHaveBeenCalled();
+      expect(h.credits.reserveForJob).not.toHaveBeenCalled();
     });
 
     it('carries a reason, because a nudge is not an answer', async () => {
@@ -176,7 +278,7 @@ describe('ConversationAiEngineService.reply', () => {
     h.prisma.lead.findFirst.mockResolvedValue(null); // active predicate excludes the deleted lead
     await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
     expect(h.sender.send).not.toHaveBeenCalled();
-    expect(h.credits.reserve).not.toHaveBeenCalled();
+    expect(h.credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   // İYS/KVKK: a proactive follow-up is an unsolicited COMMERCIAL re-engagement,
@@ -190,7 +292,7 @@ describe('ConversationAiEngineService.reply', () => {
     h.prisma.lead.findFirst.mockResolvedValue({ businessName: 'Acme', contactPerson: 'Ayşe', waOptOut: true });
     await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
     expect(h.sender.send).not.toHaveBeenCalled();
-    expect(h.credits.reserve).not.toHaveBeenCalled();
+    expect(h.credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('proactive follow-up: an opt-out on a DIFFERENT channel does not suppress (per-channel gate)', async () => {
@@ -226,7 +328,7 @@ describe('ConversationAiEngineService.reply', () => {
   it('happy path: claims a daily slot atomically, sends one AI reply, meters a credit', async () => {
     const h = build();
     await run(h);
-    expect(h.credits.reserve).toHaveBeenCalledTimes(1);
+    expect(h.credits.reserveForJob).toHaveBeenCalledTimes(1);
     // The daily-reply cap is now an atomic conditional UPDATE (one claim).
     expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(1);
     expect(h.sender.send).toHaveBeenCalledWith(
@@ -260,7 +362,7 @@ describe('ConversationAiEngineService.reply', () => {
     const h = build({ convo: { aiPaused: true } });
     await run(h);
     expect(h.sender.send).not.toHaveBeenCalled();
-    expect(h.credits.reserve).not.toHaveBeenCalled();
+    expect(h.credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('records WHY it stayed silent ON the conversation, not only in the server log', async () => {
@@ -319,7 +421,7 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(1);
     expect(h.sender.send).not.toHaveBeenCalled();
     // The claim was rejected before reserving a credit.
-    expect(h.credits.reserve).not.toHaveBeenCalled();
+    expect(h.credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   // Every frame this engine pushes lands on the whole-workspace stream that the
@@ -350,7 +452,7 @@ describe('ConversationAiEngineService.reply', () => {
     const h = build({ enabled: false });
     await run(h);
     expect(h.sender.send).not.toHaveBeenCalled();
-    expect(h.credits.reserve).not.toHaveBeenCalled();
+    expect(h.credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('handoff tool pauses the AI, sends nothing, and refunds the credit', async () => {
@@ -391,7 +493,7 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.sender.send).not.toHaveBeenCalled();
     // Escalation happens BEFORE the slot claim / credit reserve.
     expect(h.prisma.$executeRaw).not.toHaveBeenCalled();
-    expect(h.credits.reserve).not.toHaveBeenCalled();
+    expect(h.credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   // --- BUG 1 REGRESSION: scheduleFollowup throws after send() succeeds ---
@@ -412,12 +514,12 @@ describe('ConversationAiEngineService.reply', () => {
   });
 
   // --- BUG 2 REGRESSION: credit reserve throws → slot must be released ---
-  it('BUG 2: credits.reserve() exhaustion after slot claimed → slot released, no send', async () => {
+  it('BUG 2: credits.reserveForJob() exhaustion after slot claimed → slot released, no send', async () => {
     const { ForbiddenException } = await import('@nestjs/common');
     const h = build();
-    // credits.reserve throws the exhausted error AFTER the slot was claimed
+    // credits.reserveForJob throws the exhausted error AFTER the slot was claimed
     // (claimed returns 1 from $executeRaw mock).
-    h.credits.reserve.mockRejectedValue(new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED' }));
+    h.credits.reserveForJob.mockRejectedValue(new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED' }));
 
     // reply() throws (the ForbiddenException re-propagates since it's not the
     // scheduleFollowup path — but the finally must still release the slot).
@@ -427,7 +529,7 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(2); // 1 claim + 1 release
     // No message sent.
     expect(h.sender.send).not.toHaveBeenCalled();
-    // The credit refund is NOT called since creditReserved=false.
+    // The credit refund is NOT called since no charge receipt was returned.
     expect(h.credits.refund).not.toHaveBeenCalled();
   });
 
@@ -913,15 +1015,37 @@ describe('ConversationAiEngineService — who does the thinking', () => {
     expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
   });
 
-  it('falls back to SERVER when the mode cannot be read at all', async () => {
-    // A customer waiting on a reply must not be held hostage to a failed
-    // settings read. Guessing the connector hands the job to a client that may
-    // not exist; guessing the platform only costs money.
+  it('queues for retry without spending when the current policy cannot be read', async () => {
     const h = build('MCP');
     h.prisma.workspace.findUnique.mockRejectedValue(new Error('db down'));
     await h.inbound(event);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ kind: 'conversation.ai_reply' }));
+    expect(h.anthropic.isEnabledFor).not.toHaveBeenCalled();
+  });
+
+  it('explicit API overrides legacy MCP_ONLY', async () => {
+    const h = build('MCP_ONLY');
+    h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'MCP_ONLY', aiSpendPolicy: { jobs: { 'conversation.reply': { provider: 'API' } } } });
+    await h.inbound(event);
     expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
-    expect(h.prisma.conversation.findFirst).toHaveBeenCalled();
+    expect(h.anthropic.isEnabledFor).toHaveBeenCalled();
+  });
+
+  it('explicit MCP overrides BYOK and stays strict without a connected client', async () => {
+    const h = build('SERVER', false, false, [], true);
+    h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'SERVER', aiApiKeyEnc: 'own-key', aiSpendPolicy: { jobs: { 'conversation.reply': { provider: 'MCP' } } } });
+    expect(await h.engine.aiModeFor(WS)).toBe('MCP_ONLY');
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).toHaveBeenCalled();
+    expect(h.anthropic.isEnabledFor).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue an inbound reply when only follow-ups are enabled', async () => {
+    const h = build('MCP');
+    h.prisma.workspace.findUnique.mockResolvedValue({ aiExecution: 'MCP', aiSpendPolicy: { jobs: { 'conversation.reply': { enabled: false }, 'conversation.followup': { enabled: true } } } });
+    await h.inbound(event);
+    expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    expect(h.anthropic.isEnabledFor).not.toHaveBeenCalled();
   });
 
   it('drops a nudge already handed to the connector when the customer writes back', async () => {

@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import {
   ContentConceptsService,
@@ -97,8 +98,8 @@ function deps(
   } = {},
 ) {
   const complete = over.completeImpl ?? jest.fn().mockResolvedValue(over.completion ?? submit(GOOD));
-  const anthropic = { isEnabled: () => over.aiEnabled ?? true, complete };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const anthropic = { isEnabledFor: () => over.aiEnabled ?? true, complete };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
   const prisma = {
     workspace: {
       findUnique: jest
@@ -184,7 +185,7 @@ describe('ContentConceptsService.planConcepts', () => {
     // The campaign's EXISTENCE and STATUS, and nothing about capacity: no extra
     // argument rides along, because there is no capacity refusal left to feed.
     expect(promotion.requireCampaign).toHaveBeenCalledWith('ws1', 'camp-draft');
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });
 
@@ -383,7 +384,7 @@ describe('ContentConceptsService.planConcepts', () => {
     // sitting at its cap replay the call for free.
     const { svc, credits } = deps({ completion: submit(PARAPHRASES) });
     await expect(plan(svc)).rejects.toThrow(BadRequestException);
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
     expect(credits.refund).not.toHaveBeenCalled();
   });
 });
@@ -749,7 +750,7 @@ describe('ContentConceptsService.planConcepts — the persona reaches the shot p
   it('refuses an unknown persona BEFORE reserving credits or calling the model', async () => {
     const { svc, credits, complete } = deps({ personaRow: null });
     await expect(plan(svc, { personaId: 'nope' })).rejects.toThrow(NotFoundException);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });
 
@@ -761,14 +762,14 @@ describe('ContentConceptsService.planConcepts — the persona reaches the shot p
       personaRow: { ...PERSONA, referenceImageUrls: [] },
     });
     await expect(plan(svc, { personaId: 'persona-1' })).rejects.toThrow(/no reference images/i);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });
 
   it('refuses a retired persona rather than quietly planning without it', async () => {
     const { svc, credits } = deps({ personaRow: { ...PERSONA, status: 'ARCHIVED' } });
     await expect(plan(svc, { personaId: 'persona-1' })).rejects.toThrow(/ARCHIVED/);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
   });
 });
 
@@ -1027,7 +1028,7 @@ describe('ContentConceptsService.submitConcepts', () => {
   it('reserves no credits, because nothing was spent', async () => {
     const { svc, credits } = deps({ aiEnabled: false });
     await submitFrom(svc, GOOD);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(credits.refund).not.toHaveBeenCalled();
   });
 

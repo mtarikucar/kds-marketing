@@ -2,7 +2,7 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { BrandSourceResult } from './sources/brand-source';
 
 export interface BrandAnalysisDraft {
@@ -77,12 +77,12 @@ export class BrandSynthesisService {
   ) {}
 
   async synthesize(workspaceId: string, sourceResults: BrandSourceResult[], defaultLanguage: string): Promise<BrandAnalysisDraft> {
-    if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
-    await this.credits.reserve(workspaceId, creditCost('brand.analyze'));
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'brand.analyze'))) throw new ServiceUnavailableException('AI is not configured');
+    const reserved = await this.credits.reserveForJob(workspaceId, 'brand.analyze');
     try {
       return await this.callModel(workspaceId, sourceResults, defaultLanguage);
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('brand.analyze'));
+      await this.credits.refund(workspaceId, reserved);
       throw e;
     }
   }

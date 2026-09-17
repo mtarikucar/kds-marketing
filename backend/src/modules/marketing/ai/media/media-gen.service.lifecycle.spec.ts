@@ -1,3 +1,4 @@
+import { creditCost } from '../ai-credit-costs';
 import { MediaGenService } from './media-gen.service';
 
 const WS = 'ws-1';
@@ -11,7 +12,7 @@ function makeSvc() {
       delete: jest.fn().mockResolvedValue({}),
     },
   };
-  const credits = { reserve: jest.fn(), refund: jest.fn().mockResolvedValue(undefined) };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
   const provider = { name: 'fal', isConfigured: () => true, submit: jest.fn(), getResult: jest.fn() };
   const jobs = { schedule: jest.fn() };
   const r2 = { isConfigured: () => true, deleteKeys: jest.fn().mockResolvedValue(undefined) };

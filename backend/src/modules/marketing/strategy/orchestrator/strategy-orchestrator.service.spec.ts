@@ -93,6 +93,11 @@ afterEach(() => {
 });
 
 describe('StrategyOrchestrator', () => {
+  it('retains queued research as RUNNING with its queue reference instead of declaring it DONE', async () => {
+    const { svc, prisma } = deps({ action: action({ kind: 'LEAD_HUNT' }), leadRun: { pending: true, resultRef: 'research-queued:job1' } });
+    expect(await svc.execute('ws1', 'a1')).toEqual({ status: 'RUNNING', resultRef: 'research-queued:job1' });
+    expect(prisma.strategyAction.update).toHaveBeenLastCalledWith({ where: { id: 'a1' }, data: { status: 'RUNNING', resultRef: 'research-queued:job1' } });
+  });
   it('dispatches to the executor for the action kind, sets RUNNING then DONE + resultRef', async () => {
     const { svc, prisma, content, leadHunt } = deps();
     const r = await svc.execute('ws1', 'a1');
@@ -197,7 +202,7 @@ describe('StrategyOrchestrator.applyPlan (autonomy lanes)', () => {
   it('does nothing when the workspace has no strategy', async () => {
     const { svc, prisma } = applyDeps({ strategy: null });
     const r = await svc.applyPlan('ws1');
-    expect(r).toEqual({ lane: 'NONE', applied: 0, attempted: 0, noResult: 0, failed: 0, noExecutor: 0, skipped: 0, skippedReasons: {} });
+    expect(r).toEqual({ lane: 'NONE', applied: 0, pending: 0, attempted: 0, noResult: 0, failed: 0, noExecutor: 0, skipped: 0, skippedReasons: {} });
     expect(prisma.strategyAction.findMany).not.toHaveBeenCalled();
   });
 
@@ -474,6 +479,14 @@ describe('StrategyOrchestrator.applyPlan (an action is claimed, not just written
  * now draws the same one.
  */
 describe('StrategyOrchestrator.applyPlan (what actually ran)', () => {
+  it('counts queued research as pending, not applied or empty, and still bounds attempts', async () => {
+    const { svc, leadHunt, store } = applyDeps({ actions: Array.from({ length: 11 }, (_, i) => proposed(`a${i}`, 'LEAD_HUNT')) });
+    leadHunt.run.mockResolvedValue({ pending: true, resultRef: 'research-queued:job1' } as any);
+    const result = await svc.applyPlan('ws1');
+    expect(result).toMatchObject({ attempted: 10, pending: 10, applied: 0, noResult: 0, failed: 0, noExecutor: 0, skipped: 1 });
+    expect(store.a0.status).toBe('RUNNING');
+    expect(store.a10.status).toBe('PROPOSED');
+  });
   it('does not count a degraded executor as applied — it counts it as noResult', async () => {
     process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
     const { svc } = applyDeps({
@@ -532,4 +545,3 @@ describe('StrategyOrchestrator.applyPlan (what actually ran)', () => {
     expect(r).toMatchObject({ attempted: 10, applied: 0, noResult: 10, skipped: 4 });
   });
 });
-

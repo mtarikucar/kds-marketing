@@ -1,0 +1,6 @@
+-r requirements-http.txt
+pytest==9.0.2
+httpx==0.28.1
+# Real bounded audio decoding tests; no torch, transformers, or model weights.
+av==16.1.0
+numpy==2.2.6

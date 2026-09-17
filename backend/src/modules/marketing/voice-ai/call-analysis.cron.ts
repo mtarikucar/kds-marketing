@@ -31,7 +31,7 @@ export class CallAnalysisCron {
   @Cron(CronExpression.EVERY_30_MINUTES, { name: 'call-analysis-sweep' })
   async sweep(): Promise<void> {
     // Inert until recordings can be transcribed AND Claude can analyze them.
-    if (!isSttConfigured() || !this.anthropic.isEnabled()) return;
+    if (!isSttConfigured() && !(process.env.LOCAL_AI_URL && process.env.LOCAL_AI_TOKEN)) return;
 
     await withAdvisoryLock(
       this.prisma,

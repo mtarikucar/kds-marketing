@@ -217,6 +217,11 @@ describe('ResearchRunnerService.enqueueNow — the manual stamp', () => {
     );
   });
 
+  it('returns the actual scheduled job id for durable caller tracking', async () => {
+    const { svc } = make();
+    await expect(svc.enqueueNow('ws-1', 'p1')).resolves.toBe('job-1');
+  });
+
   /**
    * The dedup key is UNCHANGED, and that is the point of using a payload flag
    * rather than a second kind: a "Run now" issued while tonight's held nightly

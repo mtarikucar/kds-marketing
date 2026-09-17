@@ -1,3 +1,4 @@
+import { creditCost } from '../ai-credit-costs';
 import { BadRequestException } from '@nestjs/common';
 import { MediaGenService } from './media-gen.service';
 import { MEDIA_MODELS, DEFAULT_VIDEO_MODEL } from './media-models.config';
@@ -28,7 +29,7 @@ function makeSvc(opts: SvcOpts = {}) {
     },
   };
   const credits = {
-    reserve: jest.fn().mockResolvedValue(undefined),
+    reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)),
     refund: jest.fn().mockResolvedValue(undefined),
     chargeOverage: jest.fn().mockResolvedValue(undefined),
   };
@@ -78,7 +79,7 @@ describe('MediaGenService — input contract enforcement', () => {
     await expect(svc.requestGeneration(WS, {
       ...base, type: 'IMAGE', model: 'fal-ai/nano-banana-pro/edit',
     })).rejects.toBeInstanceOf(BadRequestException);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
@@ -130,7 +131,7 @@ describe('MediaGenService — asset typing and pricing', () => {
     }).catch((e) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err.getResponse() as { code: string }).code).toBe('MEDIA_GEN_UNKNOWN_MODEL');
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
@@ -150,7 +151,7 @@ describe('MediaGenService — asset typing and pricing', () => {
       ...base, type: 'VIDEO', model: 'bytedance/seedance-2.5/text-to-video',
       resolution: '1080p', durationSec: 5,
     });
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 585); // 117 credits/s × 5s
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 585); // 117 credits/s × 5s
   });
 
   it('trues the meter up against the SAME tier the reservation used', async () => {
@@ -259,7 +260,7 @@ describe('MediaGenService — withdrawn models', () => {
       .catch((e) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err.getResponse() as { code: string }).code).toBe('MEDIA_GEN_MODEL_WITHHELD');
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
@@ -287,7 +288,7 @@ describe('MediaGenService — withdrawn models', () => {
       },
     });
     await expect(svc.regenerate(WS, 'up-1', 'u1')).rejects.toBeInstanceOf(BadRequestException);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('refuses a withheld model the caller reached by naming NO model at all', async () => {
@@ -308,7 +309,7 @@ describe('MediaGenService — withdrawn models', () => {
       const err = await svc.requestGeneration(WS, { ...base, type: 'VIDEO' }).catch((e) => e);
       expect(err).toBeInstanceOf(BadRequestException);
       expect((err.getResponse() as { code: string }).code).toBe('MEDIA_GEN_MODEL_WITHHELD');
-      expect(credits.reserve).not.toHaveBeenCalled();
+      expect(credits.reserveForJob).not.toHaveBeenCalled();
       expect(provider.submit).not.toHaveBeenCalled();
     } finally {
       if (before === undefined) delete entry.withheld;
@@ -324,7 +325,7 @@ describe('MediaGenService — withdrawn models', () => {
       ...base, type: 'VIDEO', model: 'fal-ai/pixverse/v6/extend',
       videoUrl: 'https://cdn/take.mp4', durationSec: 5,
     });
-    expect(credits.reserve).toHaveBeenCalled();
+    expect(credits.reserveForJob).toHaveBeenCalled();
     expect(provider.submit).toHaveBeenCalled();
   });
 });
@@ -349,7 +350,7 @@ describe('MediaGenService — the metered models that ship', () => {
       type: 'VIDEO', model: 'veed/avatars/text-to-video',
       prompt: 'x'.repeat(720), createdById: 'u1',
     });
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 60); // 720 chars / 12 per sec
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 60); // 720 chars / 12 per sec
   });
 
   it('trues a Kling avatar UP to the length fal says it rendered', async () => {
@@ -437,7 +438,7 @@ describe('MediaGenService — a price that depends on the caller\u2019s file', (
 
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err.getResponse() as { code: string }).code).toBe('MEDIA_GEN_UNMEASURABLE_SOURCE');
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
@@ -453,7 +454,7 @@ describe('MediaGenService — a price that depends on the caller\u2019s file', (
     // 120s of source → 80s past the free 40 → $0.20 + 80 x $0.005 = $0.60.
     const { svc, credits } = makeSvc({ measurement: measured({ durationSec: 120 }) });
     await svc.requestGeneration(WS, { ...base, ...lipsync } as any);
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 60);
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 60);
   });
 
   it('takes the LONGER of the slots the model meters on', async () => {
@@ -465,14 +466,14 @@ describe('MediaGenService — a price that depends on the caller\u2019s file', (
       .mockResolvedValueOnce(measured({ durationSec: 120 })); // audio
     await svc.requestGeneration(WS, { ...base, ...lipsync } as any);
     expect(probe.measure).toHaveBeenCalledTimes(2);
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 60); // the 120s figure
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 60); // the 120s figure
   });
 
   it('prices the upscaler off the source it measured', async () => {
     // 9000x9000 = 81MP source, x4 output = 324MP → the $1.36 band.
     const { svc, credits } = makeSvc({ measurement: measured({ width: 9000, height: 9000 }) });
     await svc.requestGeneration(WS, { ...base, ...upscale } as any);
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 136);
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 136);
   });
 
   it('persists the measurement, so finalize trues up on the same quantity', async () => {

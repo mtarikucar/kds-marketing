@@ -2,6 +2,14 @@ import { NotFoundException } from '@nestjs/common';
 import { StrategySynthesisService } from './strategy-synthesis.service';
 import { creditCost } from '../../ai/ai-credit-costs';
 
+it('refunds only a free base and pending turn after successful paid strategy reasoning', async () => {
+  const { svc, credits, complete } = deps({ completions: [completion([toolUse('s1', 'search_places', { query: 'salon' })])] });
+  credits.reserveForJob.mockResolvedValueOnce(0).mockResolvedValueOnce(15).mockResolvedValueOnce(0);
+  complete.mockRejectedValueOnce(new Error('turn failed'));
+  await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow('turn failed');
+  expect(credits.refund).toHaveBeenCalledWith('ws1', 0);
+});
+
 const ACTION = {
   kind: 'CONTENT',
   title: 'Reveal reel: photo -> figure',
@@ -43,8 +51,8 @@ function deps(
 ) {
   const complete = jest.fn();
   (overrides.completions ?? []).forEach((c) => complete.mockResolvedValueOnce(c));
-  const anthropic = { isEnabled: () => overrides.aiEnabled ?? true, complete };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const anthropic = { isEnabledFor: () => overrides.aiEnabled ?? true, complete };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any) => creditCost(action)), refund: jest.fn().mockResolvedValue(undefined) };
   const runs = {
     track: jest.fn(async (_ws: string, _in: unknown, fn: (id: string) => Promise<unknown>) => fn('run1')),
     recordTool: jest.fn().mockResolvedValue(undefined),
@@ -120,7 +128,7 @@ describe('StrategySynthesisService', () => {
     });
     const r = await svc.synthesize('ws1', 'sess1');
     expect(r).toEqual({ strategyId: 'strat1', actionCount: 2 });
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws1', 'strategy.synthesize');
     expect(prisma.marketingStrategy.upsert).toHaveBeenCalled();
     // No research tools offered when sources are off — only submit_strategy.
     const toolNames = (complete.mock.calls[0][0].tools as Array<{ name: string }>).map((t) => t.name);
@@ -147,7 +155,7 @@ describe('StrategySynthesisService', () => {
     const r = await svc.synthesize('ws1', 'sess1');
 
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws1', 'strategy.synthesize');
     expect(spend.settle).toHaveBeenCalled(); // the research tool metered
 
     const upsert = prisma.marketingStrategy.upsert.mock.calls[0][0];
@@ -201,7 +209,7 @@ describe('StrategySynthesisService', () => {
     });
     const r = await svc.synthesize('ws1', 'sess1');
 
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws1', 'strategy.synthesize');
     const upsert = prisma.marketingStrategy.upsert.mock.calls[0][0];
     expect(upsert.create.archetype).toBe('B2C_COMMUNITY_NICHE');
     // Communities are written into the brief's channels WITH the specific community in the rationale.
@@ -256,7 +264,7 @@ describe('StrategySynthesisService', () => {
     // ~$1.50; the old flat reserve charged 8 credits (~$0.08) for all of it.
     const turns = complete.mock.calls.length;
     expect(turns).toBeGreaterThan(1);
-    expect(credits.reserve).toHaveBeenCalledTimes(1 + turns);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1 + turns);
     // Every one of those turns actually hit Anthropic, so only the base comes
     // back. This is the regression that matters: refunding the turns as well
     // made a capped-out workspace able to burn Opus indefinitely for free.
@@ -469,7 +477,7 @@ describe('StrategySynthesisService.submitStrategy', () => {
     const { svc, complete, credits, runs } = deps();
     await svc.submitStrategy('ws1', SUBMIT);
     expect(complete).not.toHaveBeenCalled();
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(runs.track).not.toHaveBeenCalled();
   });
 

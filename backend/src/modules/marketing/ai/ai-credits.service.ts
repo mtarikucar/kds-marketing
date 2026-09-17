@@ -1,9 +1,19 @@
-import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { AiCreditWalletService } from './ai-credit-wallet.service';
+import { AI_CREDIT_COSTS, creditCost, AiAction } from './ai-credit-costs';
+import { AI_JOBS, jobPolicy } from './ai-job-policy';
 
 export const AI_CREDITS_METRIC = 'ai.credits';
+
+// These services use platform vendor credentials, even when the workspace
+// brings an LLM key. LOCAL STT is exempted by its own provider decision.
+const PLATFORM_SERVICE_ACTIONS = new Set([
+  'media.image.generate', 'media.video.generate', 'media.audio.generate',
+  'social.publish.x', 'social.publish.x_link', 'stt.minute',
+  'research.native_search', 'research.native_scrape',
+]);
 
 /**
  * How much of this period's consumption was funded by the PREPAID WALLET.
@@ -63,12 +73,44 @@ export class AiCreditsService {
 
   async reserve(workspaceId: string, cost: number): Promise<void> {
     if (cost <= 0) return;
-    // A workspace that brought its own API key is billed by the vendor
-    // directly, so charging it our credits as well would be taking money for
-    // a call we did not pay for. Checked here rather than at ~26 call sites:
-    // this is the single door every metered action goes through, and a
-    // reserve that is skipped needs no matching refund.
+    // Legacy LLM callers retain the original BYOK contract. New callers must
+    // use reserveForJob and refund its receipt, never the configured price.
     if (await this.usesOwnAiKey(workspaceId)) return;
+    await this.reservePaid(workspaceId, cost);
+  }
+
+  /** Reserve for one job and return only the credits actually charged.
+   * Keep this receipt for refunds: provider/key settings may change while
+   * work is running, and a free reservation must not refund another job. */
+  async reserveForJob(workspaceId: string, action: string, costOverride?: number): Promise<number> {
+    const definition = Object.prototype.hasOwnProperty.call(AI_JOBS, action) ? AI_JOBS[action] : undefined;
+    if (!definition) throw new BadRequestException(`Unknown AI job: ${action}`);
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { aiApiKeyEnc: true, aiSpendPolicy: true },
+    });
+    const decision = jobPolicy(workspace?.aiSpendPolicy as Record<string, unknown> | null, action);
+    if (!decision.enabled) {
+      throw new ForbiddenException({ code: 'AI_SPEND_DISABLED', action, message: `${definition.label} kapalı.` });
+    }
+    if (!definition.providers.includes(decision.provider)) {
+      throw new BadRequestException(`Invalid provider for AI job: ${action}`);
+    }
+    if (decision.provider === 'MCP' || decision.provider === 'LOCAL') return 0;
+    if (workspace?.aiApiKeyEnc && !PLATFORM_SERVICE_ACTIONS.has(action)) return 0;
+
+    const cost = costOverride ?? (action === 'brand.safety'
+      ? creditCost('workflow.ai_classify')
+      : AI_CREDIT_COSTS[action as AiAction]?.credits);
+    if (cost === undefined || !Number.isFinite(cost) || !Number.isInteger(cost) || cost < 0) {
+      throw new BadRequestException(`Invalid credit cost for AI job: ${action}`);
+    }
+    if (cost === 0) return 0;
+    await this.reservePaid(workspaceId, cost);
+    return cost;
+  }
+
+  private async reservePaid(workspaceId: string, cost: number): Promise<void> {
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.aiCreditsMonthly;
     const period = monthKey();

@@ -1,3 +1,4 @@
+import { creditCost } from '../ai-credit-costs';
 import { MediaGenService, MEDIA_GEN_CLEANUP_KIND } from './media-gen.service';
 
 function makeSvc(readyRows: any[], stuckRows: any[] = []) {
@@ -10,7 +11,7 @@ function makeSvc(readyRows: any[], stuckRows: any[] = []) {
       deleteMany: jest.fn().mockResolvedValue({ count: readyRows.length }),
     },
   };
-  const credits = { reserve: jest.fn(), refund: jest.fn() };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() };
   const jobs = { schedule: jest.fn().mockResolvedValue('job-1') };
   const r2 = { isConfigured: () => true, deleteKeys: jest.fn().mockResolvedValue(undefined) };
   const runner = { registerHandler: jest.fn() };

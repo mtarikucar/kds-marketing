@@ -4,6 +4,8 @@ import { StrategyOrchestrator } from './orchestrator/strategy-orchestrator.servi
 import { claimAutopilotDay } from './orchestrator/strategy-apply.cron';
 import { workspaceLocalParts } from '../../../common/scheduling/workspace-local-day';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
+import { RESEARCH_RUN_KIND } from '../research/research-kinds';
+import { QUEUED_RESEARCH_REF } from './strategy.types';
 
 /** The job the arming path hands its first run to, so a settings write returns
  *  instead of blocking on a plan's worth of executors. */
@@ -52,6 +54,7 @@ export class StrategyService {
   /** The workspace's ActionPlan, optionally filtered by status, ordered by
    *  priority (HIGH→LOW) then createdAt (oldest first). */
   async listActions(workspaceId: string, opts?: { status?: string }) {
+    await this.reconcileQueuedResearch(workspaceId);
     const actions = await this.prisma.strategyAction.findMany({
       where: { workspaceId, ...(opts?.status ? { status: opts.status } : {}) },
       orderBy: { createdAt: 'asc' },
@@ -60,6 +63,34 @@ export class StrategyService {
     return [...actions].sort(
       (a, b) => (PRIORITY_RANK[a.priority] ?? 99) - (PRIORITY_RANK[b.priority] ?? 99),
     );
+  }
+
+  /** Refresh durable handoffs before filtering the plan, without re-execution. */
+  private async reconcileQueuedResearch(workspaceId: string): Promise<void> {
+    const actions = await this.prisma.strategyAction.findMany({
+      where: { workspaceId, kind: 'LEAD_HUNT', status: 'RUNNING', resultRef: { startsWith: QUEUED_RESEARCH_REF } },
+      select: { id: true, resultRef: true },
+    });
+    if (!actions.length) return;
+    const jobs = await this.prisma.scheduledJob.findMany({
+      where: { workspaceId, kind: RESEARCH_RUN_KIND, id: { in: actions.map((action) => action.resultRef!.slice(QUEUED_RESEARCH_REF.length)) } },
+      select: { id: true, status: true, payload: true, lastError: true },
+    });
+    const byId = new Map(jobs.map((job) => [job.id, job]));
+    for (const action of actions) {
+      const job = byId.get(action.resultRef!.slice(QUEUED_RESEARCH_REF.length));
+      if (!job || !['DONE', 'FAILED', 'CANCELLED'].includes(job.status)) continue;
+      const runId = (job.payload as { mcpAgentRunId?: unknown } | null)?.mcpAgentRunId;
+      const done = job.status === 'DONE';
+      await this.prisma.strategyAction.updateMany({
+        where: { workspaceId, id: action.id, status: 'RUNNING', resultRef: action.resultRef },
+        data: {
+          status: done ? 'DONE' : 'FAILED',
+          resultRef: done ? (typeof runId === 'string' && runId ? `research:${runId}` : null)
+            : `error:${job.lastError || `Research job ${job.status.toLowerCase()}`}`.slice(0, 500),
+        },
+      });
+    }
   }
 
   /**

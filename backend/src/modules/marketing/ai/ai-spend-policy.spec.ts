@@ -80,3 +80,7 @@ describe('AI spend policy', () => {
     }
   });
 });
+
+it('honours an individual job switch independently of its category', () => {
+  expect(spendAllowed({ jobs: { 'conversation.followup': { enabled: false } } }, 'conversation.followup')).toBe(false);
+});

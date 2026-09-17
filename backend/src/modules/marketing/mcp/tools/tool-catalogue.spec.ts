@@ -38,6 +38,7 @@ import { registerReadinessTools } from './readiness.tools';
 import { registerSetupWriteTools } from './setup-write.tools';
 import { registerOperationsTools } from './operations.tools';
 import { registerAiLaneTools } from './ai-lane.tools';
+import { registerAiInferenceTools } from './ai-inference.tools';
 import { registerConsentTools } from './consent.tools';
 import { registerOfferTools } from './offers.tools';
 
@@ -272,6 +273,7 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerConsentTools(registry, {
     compliance: { recordConsent: jest.fn(), getConsents: jest.fn() } as any,
   });
+  registerAiInferenceTools(registry, { claim: jest.fn(), complete: jest.fn() } as any);
   registerAiLaneTools(registry, {
     lease: { claim: jest.fn(), complete: jest.fn(), pending: jest.fn() } as any,
     auth: { setAiExecution: jest.fn() } as any,
@@ -574,6 +576,8 @@ describe('MCP tool catalogue', () => {
         // The MCP-first AI lane. All deferred: a connector learns these names
         // from the instruction claim_reply_job hands it, exactly as the
         // research drainer does.
+        'jeeta.claim_ai_task',
+        'jeeta.complete_ai_task',
         'jeeta.claim_reply_job',
         'jeeta.complete_reply_job',
         'jeeta.get_ai_reply_queue',
@@ -649,7 +653,7 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(161);
+    expect(names).toHaveLength(163);
   });
 
   /**
@@ -760,7 +764,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(46);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(46 + DISCOVERY_TOOLS.length);
-    // 133 total, 45 advertised (+2 discovery) and 88 deferred: everything a
+    // 163 total, 46 advertised (+2 discovery) and 115 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
     // hundred. `jeeta.set_channel_agent` is the newest, and deferred for that
@@ -769,7 +773,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(161);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(163);
   });
 });
 

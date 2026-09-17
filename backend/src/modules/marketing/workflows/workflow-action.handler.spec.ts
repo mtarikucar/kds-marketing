@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { WorkflowActionHandler, WorkflowContext } from './workflow-action.handler';
 
 /**
@@ -206,8 +207,8 @@ describe('WorkflowActionHandler ai_classify (category routing)', () => {
     routes: { hot: 5, not_hot: 10 },
     ...over,
   });
-  const mkAi = (text: string) => ({ isEnabled: () => true, complete: jest.fn().mockResolvedValue({ text }) });
-  const mkCredits = () => ({ reserve: jest.fn(), refund: jest.fn() });
+  const mkAi = (text: string) => ({ isEnabledFor: () => true, complete: jest.fn().mockResolvedValue({ text }) });
+  const mkCredits = () => ({ reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() });
 
   // Regression: a category that is a SUBSTRING of another ("hot" ⊂ "not_hot",
   // "new" ⊂ "renew") must not steal the route. A naive `reply.includes(category)`

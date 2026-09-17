@@ -10,6 +10,7 @@ import { SKIP_KILL_SWITCH, SKIP_NO_EXECUTOR, SKIP_RUN_CAP } from './skip-reasons
 
 export type ExecuteResult =
   | { status: 'DONE'; resultRef: string | null }
+  | { status: 'RUNNING'; resultRef: string }
   | { status: 'FAILED'; error: string }
   | { skipped: 'executor-not-available' };
 
@@ -26,13 +27,15 @@ export type ExecuteResult =
  * daily brief already draws the same line between produced and hollow, so both
  * surfaces now count the same thing.
  *
- * INVARIANT: attempted === applied + noResult + failed + noExecutor.
+ * INVARIANT: attempted === applied + pending + noResult + failed + noExecutor.
  */
 export interface ApplyPlanResult {
   /** The strategy's autonomy lane ('NONE' when the workspace has no strategy). */
   lane: string;
   /** Ran AND produced something: DONE with a resultRef. The honest headline. */
   applied: number;
+  /** Queued for a durable runner; no completed output yet. */
+  pending: number;
   /** Handed to an executor at all. THIS is what MAX_AUTO_ACTIONS bounds - the
    *  blast radius of a sweep is what it tried, not what worked. */
   attempted: number;
@@ -51,7 +54,7 @@ export interface ApplyPlanResult {
 
 /** A sweep that did nothing at all, for the lanes that return early. */
 const idleResult = (lane: string): ApplyPlanResult => ({
-  lane, applied: 0, attempted: 0, noResult: 0, failed: 0, noExecutor: 0, skipped: 0, skippedReasons: {},
+  lane, applied: 0, pending: 0, attempted: 0, noResult: 0, failed: 0, noExecutor: 0, skipped: 0, skippedReasons: {},
 });
 
 /** Per-run safety cap: never auto-apply more than this many actions in one
@@ -131,6 +134,7 @@ export class StrategyOrchestrator {
 
     const killSwitchOn = growthAutopilotAutonomyEnabled();
     let applied = 0;
+    let pending = 0;
     let attempted = 0;
     let noResult = 0;
     let failed = 0;
@@ -206,15 +210,16 @@ export class StrategyOrchestrator {
       });
       if ('skipped' in outcome) noExecutor += 1;
       else if (outcome.status === 'FAILED') failed += 1;
+      else if (outcome.status === 'RUNNING') pending += 1;
       else if (outcome.resultRef) applied += 1;
       else noResult += 1;
     }
     this.logger.log(
       `applyPlan ws ${workspaceId}: AUTONOMOUS attempted ${attempted} - ${applied} produced, ` +
-        `${noResult} came back empty, ${failed} failed, ${noExecutor} had no executor; ` +
+        `${pending} pending, ${noResult} came back empty, ${failed} failed, ${noExecutor} had no executor; ` +
         `guardrail-skipped ${skipped} (kill-switch ${killSwitchOn ? 'ON' : 'OFF'})`,
     );
-    return { lane, applied, attempted, noResult, failed, noExecutor, skipped, skippedReasons };
+    return { lane, applied, pending, attempted, noResult, failed, noExecutor, skipped, skippedReasons };
   }
 
   /**
@@ -274,10 +279,19 @@ export class StrategyOrchestrator {
     });
 
     try {
-      const { resultRef } = await executor.run(workspaceId, action.payload, {
+      const result = await executor.run(workspaceId, action.payload, {
         title: action.title,
         rationale: action.rationale,
       });
+      if (result.pending) {
+        await this.prisma.strategyAction.update({
+          where: { id: action.id },
+          data: { status: 'RUNNING', resultRef: result.resultRef },
+        });
+        this.logger.log(`action ${actionId} (${action.kind}) waiting → ${result.resultRef}`);
+        return { status: 'RUNNING', resultRef: result.resultRef };
+      }
+      const { resultRef } = result;
       await this.prisma.strategyAction.update({
         where: { id: action.id },
         data: { status: 'DONE', resultRef: resultRef ?? null },

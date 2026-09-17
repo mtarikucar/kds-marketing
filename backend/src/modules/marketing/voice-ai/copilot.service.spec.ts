@@ -1,12 +1,13 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { CopilotService } from './copilot.service';
 
 function makeDeps() {
   const prisma = {
     agentProfile: { findFirst: jest.fn().mockResolvedValue(null) },
   };
-  const anthropic = { complete: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
+  const anthropic = { complete: jest.fn(), isEnabledFor: jest.fn().mockReturnValue(true) };
   const knowledge = { search: jest.fn().mockResolvedValue([]) };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
   const svc = new CopilotService(prisma as any, anthropic as any, credits as any, knowledge as any);
   return { prisma, anthropic, knowledge, credits, svc };
 }
@@ -16,13 +17,13 @@ const TRANSCRIPT = 'Customer: Fiyat nedir?\nRep: Bir saniye.';
 describe('CopilotService', () => {
   it('inert: returns empty when Anthropic is not enabled (no throw, no spend)', async () => {
     const { anthropic, credits, svc } = makeDeps();
-    anthropic.isEnabled.mockReturnValue(false);
+    anthropic.isEnabledFor.mockReturnValue(false);
 
     const r = await svc.suggest('ws-1', 'agent-1', TRANSCRIPT);
 
     expect(r).toEqual({ suggestions: [], summary: '' });
     expect(anthropic.complete).not.toHaveBeenCalled();
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('happy path: parses suggestions + summary from STRICT JSON', async () => {
@@ -35,7 +36,7 @@ describe('CopilotService', () => {
 
     expect(r.suggestions).toEqual(['Fiyat 100 TL deyin', 'İndirim sunun']);
     expect(r.summary).toBe('Fiyat sorgusu');
-    expect(credits.reserve).toHaveBeenCalledWith('ws-1', 1);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-1', 'voice.copilot');
     expect(credits.refund).not.toHaveBeenCalled();
   });
 
@@ -78,7 +79,7 @@ describe('CopilotService', () => {
     anthropic.complete.mockRejectedValue(new Error('boom'));
 
     await expect(svc.suggest('ws-1', 'agent-1', TRANSCRIPT)).rejects.toThrow('boom');
-    expect(credits.reserve).toHaveBeenCalledWith('ws-1', 1);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-1', 'voice.copilot');
     expect(credits.refund).toHaveBeenCalledWith('ws-1', 1);
   });
 });

@@ -1,0 +1,45 @@
+# Optional overlay. Start only local-ai with --profile local-ai --no-deps.
+services:
+  local-ai:
+    profiles: ['local-ai']
+    build:
+      context: ./local-inference
+    init: true
+    restart: 'no'
+    user: '10001:10001'
+    read_only: true
+    cap_drop: ['ALL']
+    security_opt: ['no-new-privileges:true']
+    cpus: 1.0
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 96
+    stop_grace_period: 10s
+    environment:
+      # Empty is allowed at Compose parse time so disabled profiles need no secret.
+      # Starting the service with an empty/weak token fails closed.
+      LOCAL_AI_TOKEN: ${LOCAL_AI_TOKEN:-}
+      LOCAL_AI_ALLOW_DOWNLOAD: ${LOCAL_AI_ALLOW_DOWNLOAD:-0}
+      LOCAL_AI_WHISPER_SIZE: ${LOCAL_AI_WHISPER_SIZE:-base}
+      LOCAL_AI_TIMEOUT_SECONDS: ${LOCAL_AI_TIMEOUT_SECONDS:-120}
+      LOCAL_AI_UPLOAD_TIMEOUT_SECONDS: ${LOCAL_AI_UPLOAD_TIMEOUT_SECONDS:-15}
+      LOCAL_AI_CACHE_DIR: /models/hub
+    ports:
+      - '127.0.0.1:${LOCAL_AI_PORT:-8099}:8000'
+    volumes:
+      - local_ai_models:/models
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/health',headers={'Authorization':'Bearer '+os.environ['LOCAL_AI_TOKEN']}); urllib.request.urlopen(request,timeout=2).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  local_ai_models:

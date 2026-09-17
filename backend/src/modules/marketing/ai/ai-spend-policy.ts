@@ -132,7 +132,9 @@ export function spendAllowed(
   action: string | undefined,
 ): boolean {
   if (!action || !policy) return true;
-  const category = ACTION_CATEGORY[action];
+  const jobs = policy.jobs as Record<string, { enabled?: unknown }> | undefined;
+  if (typeof jobs?.[action]?.enabled === 'boolean') return jobs[action].enabled as boolean;
+  const category = ACTION_CATEGORY[action] ?? (action === 'brand.safety' ? 'workflow' : action === 'media.audio.generate' ? 'content' : undefined);
   if (!category) return true;
   // Absent means ON. Only an explicit false switches a category off.
   return policy[category] !== false;

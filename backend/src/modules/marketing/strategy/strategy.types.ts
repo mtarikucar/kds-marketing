@@ -39,6 +39,13 @@ export type BusinessArchetype =
  * entity (research run, staged post, ad campaign…). Executors don't know about
  * the Strategy model; they take plain config.
  */
+export type ExecutorResult =
+  | { resultRef?: string; pending?: false }
+  | { resultRef: string; pending: true };
+
+/** Durable research queue reference; never a produced research run. */
+export const QUEUED_RESEARCH_REF = 'research-queued:';
+
 export interface Executor {
   kind: ActionKind;
   /**
@@ -52,7 +59,7 @@ export interface Executor {
     workspaceId: string,
     payload: unknown,
     action?: { title: string; rationale: string },
-  ): Promise<{ resultRef?: string }>;
+  ): Promise<ExecutorResult>;
 }
 
 /** A channel the strategy recommends, with its archetype-adjusted fit score. */

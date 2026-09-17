@@ -8,7 +8,6 @@ import { BrandContextService } from '../brand-brain/brand-context.service';
 import { localMsisdnVariants } from '../utils/lead-normalize';
 
 /** Credit cost per AI-generated IVR turn (literal — voice.* costs registered elsewhere). */
-const TURN_CREDIT = 2;
 /** DTMF digits that mean "transfer me to a human". */
 const AGENT_DIGITS = new Set(['0', '2']);
 
@@ -179,7 +178,7 @@ export class NetgsmIvrService {
     }
 
     // Any other digit → Claude writes an informative answer.
-    if (!this.anthropic.isEnabled()) {
+    if (!(await this.anthropic.isEnabledFor(channel.workspaceId, 'voice.turn'))) {
       return { status: 'success', result: '1', data: 'Şu anda otomatik yanıt veremiyoruz. Bir temsilciye bağlanmak için 2 tuşlayın.' };
     }
 
@@ -313,7 +312,7 @@ export class NetgsmIvrService {
       for (const d of kb) parts.push(`- ${d.title}: ${d.snippet}`);
     }
 
-    await this.credits.reserve(workspaceId, TURN_CREDIT);
+    const reserved = await this.credits.reserveForJob(workspaceId, 'voice.turn');
     try {
       const res = await this.anthropic.complete({
         system: parts.filter(Boolean).join('\n'),
@@ -329,7 +328,7 @@ export class NetgsmIvrService {
       return res.text.trim() || 'Bu konuda size yardımcı olabilmem için lütfen bir temsilciye bağlanmak üzere 2 tuşlayın.';
     } catch (e: any) {
       this.logger.warn(`netgsm-ivr info generation failed ws=${workspaceId}: ${e?.message ?? e}`);
-      await this.credits.refund(workspaceId, TURN_CREDIT);
+      await this.credits.refund(workspaceId, reserved);
       return 'Şu anda yanıt oluşturamadım. Bir temsilciye bağlanmak için 2 tuşlayın.';
     }
   }

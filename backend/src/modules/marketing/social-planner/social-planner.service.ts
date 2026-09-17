@@ -1,3 +1,4 @@
+import { assertJobProvider } from '../ai/ai-job-policy';
 import {
   Injectable,
   Logger,
@@ -25,7 +26,6 @@ import {
 import { queryCreatorInfo } from './tiktok-creator-info.util';
 import { R2StorageService, UploadedMedia, UploadInput } from '../../../common/storage/r2-storage.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost } from '../ai/ai-credit-costs';
 
 /** X (Twitter) is the only publish network with a real per-post API cost. A tweet
  *  carrying a URL is billed by X at ~13× a plain one, so it maps to a pricier
@@ -884,9 +884,11 @@ export class SocialPlannerService implements OnModuleInit {
       // credits BEFORE the vendor call (a link tweet costs more). Every other
       // network publishes for free, so `xAction` is null and nothing is reserved.
       const xAction = twitterPublishAction(target.account.network, post.content);
+      let reserved = 0;
       if (xAction) {
         try {
-          await this.credits.reserve(workspaceId, creditCost(xAction));
+          await assertJobProvider(this.prisma, workspaceId, xAction, 'API');
+          reserved = await this.credits.reserveForJob(workspaceId, xAction);
         } catch (e: any) {
           // AI_CREDITS_EXHAUSTED (or any metering error) → fail THIS Twitter target
           // gracefully like any other publish error; do NOT crash the fan-out so
@@ -931,7 +933,7 @@ export class SocialPlannerService implements OnModuleInit {
         // reserved X credits before propagating — otherwise the charge leaks. This
         // path re-throws (preserving today's behavior), so it can NEVER also reach
         // the returned-error refund below → no double-refund.
-        if (xAction) await this.credits.refund(workspaceId, creditCost(xAction));
+        if (xAction) await this.credits.refund(workspaceId, reserved);
         throw err;
       }
 
@@ -974,7 +976,7 @@ export class SocialPlannerService implements OnModuleInit {
         publishedCount++;
       } else {
         // A failed publish must not be charged — refund the reserved X credits.
-        if (xAction) await this.credits.refund(workspaceId, creditCost(xAction));
+        if (xAction) await this.credits.refund(workspaceId, reserved);
         await this.prisma.socialPostTarget.update({
           where: { id: target.id },
           data: { status: 'FAILED', error: result.error?.slice(0, 500) ?? 'unknown error' },

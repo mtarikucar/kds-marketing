@@ -1,3 +1,4 @@
+import { creditCost } from '../ai-credit-costs';
 import { Prisma } from '@prisma/client';
 import { MediaGenService } from './media-gen.service';
 import { DEFAULT_IMAGE_MODEL } from './media-models.config';
@@ -30,7 +31,7 @@ function makeSvc(opts: { budget?: unknown; walletEntry?: unknown; asset?: unknow
     socialCampaignItem: { findFirst: jest.fn().mockResolvedValue({ id: 'ci-1' }) },
     growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(opts.walletEntry ?? null) },
   };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined), chargeOverage: jest.fn().mockResolvedValue(undefined) };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined), chargeOverage: jest.fn().mockResolvedValue(undefined) };
   const provider = { name: 'fal', isConfigured: jest.fn().mockReturnValue(true), submit: jest.fn().mockResolvedValue({ providerRequestId: 'req-9' }), getResult: jest.fn() };
   const jobs = { schedule: jest.fn().mockResolvedValue('job-1') };
   const r2 = { isConfigured: jest.fn().mockReturnValue(true), upload: jest.fn(), deleteKeys: jest.fn().mockResolvedValue(undefined) };

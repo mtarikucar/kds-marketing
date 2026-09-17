@@ -148,6 +148,10 @@ import { AnthropicService } from './ai/anthropic.service';
 import { AiReplyLeaseService } from './ai/ai-reply-lease.service';
 import { WorkspaceAiKeyService } from './ai/workspace-ai-key.service';
 import { AiSpendSettingsService } from './ai/ai-spend-settings.service';
+import { AiJobSettingsService } from './ai/ai-job-settings.service';
+import { LocalInferenceService } from './ai/local-inference.service';
+import { McpAiTaskService } from './ai/mcp-ai-task.service';
+import { registerAiInferenceTools } from './mcp/tools/ai-inference.tools';
 import { AiReplyBackfillService } from './ai/ai-reply-backfill.service';
 import { AiCreditsService } from './ai/ai-credits.service';
 import { BrandSafetyService } from './ai/brand-safety.service';
@@ -933,6 +937,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     AiReplyLeaseService,
     WorkspaceAiKeyService,
     AiSpendSettingsService,
+    AiJobSettingsService,
+    LocalInferenceService,
+    McpAiTaskService,
     // Conversations that were already waiting when the reply lane was switched
     // on are invisible to it — onInbound only sees messages that ARRIVE.
     AiReplyBackfillService,
@@ -1423,6 +1430,7 @@ export class MarketingModule {
     customFields: CustomFieldsService,
     offers: MarketingOffersService,
     aiReplyLease: AiReplyLeaseService,
+    mcpAiTasks: McpAiTaskService,
     marketingAuth: MarketingAuthService,
     compliance: ComplianceService,
     tags: TagsService,
@@ -1490,6 +1498,7 @@ export class MarketingModule {
     // MCP FIRST: the lane that lets a workspace's own Claude answer its
     // customers, with the platform key as the fallback rather than the default.
     registerAiLaneTools(registry, { lease: aiReplyLease, auth: marketingAuth });
+    registerAiInferenceTools(registry, mcpAiTasks);
     // "Stop emailing me" — the one instruction the connector could read and
     // could not obey. Every send gate reads the opt-out flag; nothing an agent
     // could call ever set one.

@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AnthropicService } from '../../ai/anthropic.service';
 import { AiCreditsService } from '../../ai/ai-credits.service';
-import { creditCost, tierFor } from '../../ai/ai-credit-costs';
+import { tierFor } from '../../ai/ai-credit-costs';
 import { WebsiteBrandSource } from '../../brand-brain/sources/website.source';
 import { SocialBrandSource } from '../../brand-brain/sources/social.source';
 import { BrandSourceInput, BrandSourceResult } from '../../brand-brain/sources/brand-source';
@@ -109,14 +109,13 @@ export class StrategyIntakeService {
   ) {}
 
   async start(workspaceId: string, input: StrategyIntakeInput): Promise<StartResult> {
-    if (!this.anthropic.isEnabled()) return { skipped: 'ai-not-configured' };
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'strategy.interview'))) return { skipped: 'ai-not-configured' };
 
     const session = await this.prisma.strategyIntakeSession.create({
       data: { workspaceId, status: 'IN_PROGRESS', transcript: {} as any },
     });
 
-    const cost = creditCost('strategy.interview');
-    await this.credits.reserve(workspaceId, cost);
+    const cost = await this.credits.reserveForJob(workspaceId, 'strategy.interview');
     try {
       const autoAnalysis = await this.autoAnalyze(workspaceId, input);
 
@@ -167,7 +166,7 @@ export class StrategyIntakeService {
   }
 
   async answer(workspaceId: string, sessionId: string, answers: string[]): Promise<AnswerResult> {
-    if (!this.anthropic.isEnabled()) return { skipped: 'ai-not-configured' };
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'strategy.interview'))) return { skipped: 'ai-not-configured' };
 
     const session = await this.prisma.strategyIntakeSession.findFirst({
       where: { id: sessionId, workspaceId },
@@ -196,8 +195,7 @@ export class StrategyIntakeService {
       return { done: true };
     }
 
-    const cost = creditCost('strategy.interview');
-    await this.credits.reserve(workspaceId, cost);
+    const cost = await this.credits.reserveForJob(workspaceId, 'strategy.interview');
     try {
       const auto = (session.autoAnalysis ?? null) as unknown as StrategyAutoAnalysis | null;
       const deltas = auto?.suggestedArchetype ? archetypeMeta(auto.suggestedArchetype).interviewDeltas : [];

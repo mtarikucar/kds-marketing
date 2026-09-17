@@ -32,11 +32,11 @@ describe('CallAnalysisCron', () => {
     expect(analysis.analyzeSalesCall).not.toHaveBeenCalled();
   });
 
-  it('is INERT when Claude is disabled', async () => {
+  it('defers workspace-specific availability to analysis even when the platform key is unavailable', async () => {
     const { prisma, anthropic, cron } = makeCron();
     anthropic.isEnabled.mockReturnValue(false);
     await cron.sweep();
-    expect(prisma.salesCall.findMany).not.toHaveBeenCalled();
+    expect(prisma.salesCall.findMany).toHaveBeenCalled();
   });
 
   it('queries due calls and analyzes each (capped at 25)', async () => {

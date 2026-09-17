@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { Logger } from '@nestjs/common';
 
 // ── safeFetch mock (audio download) ─────────────────────────────────────────
@@ -95,7 +96,7 @@ describe('NetgsmVoicemailPollService.poll', () => {
     // STT runs on a JEETA-owned key and this poll invokes it unattended for
     // every inbound voicemail, so it is credit-metered now.
     credits = {
-      reserve: jest.fn().mockResolvedValue(undefined),
+      reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)),
       refund: jest.fn().mockResolvedValue(undefined),
     };
     mockSafeFetch.mockReset();

@@ -10,7 +10,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { listSiteTemplates, findSiteTemplate } from './site-templates';
 import { SiteRendererService } from './site-renderer.service';
 import { BrandingService } from '../branding/branding.service';
@@ -171,8 +171,8 @@ export class SitesService {
   }
 
   async draft(workspaceId: string, prompt: string): Promise<{ title: string; blocks: unknown[] }> {
-    if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
-    await this.credits.reserve(workspaceId, creditCost('funnel.draft'));
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'funnel.draft'))) throw new ServiceUnavailableException('AI is not configured');
+    const reserved = await this.credits.reserveForJob(workspaceId, 'funnel.draft');
     try {
       const res = await this.anthropic.complete({
         system: DRAFT_GUIDE,
@@ -200,7 +200,7 @@ export class SitesService {
       }
       return { title: String(json.title ?? 'Landing page'), blocks: json.blocks };
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('funnel.draft'));
+      await this.credits.refund(workspaceId, reserved);
       throw e;
     }
   }

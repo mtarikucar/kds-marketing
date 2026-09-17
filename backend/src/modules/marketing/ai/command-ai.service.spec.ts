@@ -45,8 +45,8 @@ describe('CommandAiService', () => {
     prisma = {
       workspace: { findUnique: jest.fn().mockResolvedValue({ mcpWriteMode: 'APPROVAL' }) },
     };
-    anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
-    credits = { reserve: jest.fn(), refund: jest.fn() };
+    anthropic = { isEnabledFor: jest.fn().mockReturnValue(true), complete: jest.fn() };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any) => creditCost(action)), refund: jest.fn() };
     registry = { listAdvertised: jest.fn().mockReturnValue([TOOL]) };
     broker = { invoke: jest.fn().mockResolvedValue({ status: 'OK', result: { count: 2 } }) };
     runs = { start: jest.fn().mockResolvedValue('run-1'), finish: jest.fn() };
@@ -71,6 +71,13 @@ describe('CommandAiService', () => {
     );
     expect(res.answer).toBe('2 lead buldum.');
     expect(res.actions).toEqual([{ tool: 'jeeta.search_leads', status: 'OK' }]);
+  });
+
+  it('refunds a free pending turn without reversing a successful paid turn', async () => {
+    credits.reserveForJob.mockResolvedValueOnce(0).mockResolvedValueOnce(3).mockResolvedValueOnce(0);
+    anthropic.complete.mockResolvedValueOnce(useTool('jeeta_search_leads')).mockRejectedValueOnce(new Error('turn failed'));
+    await expect(svc.run(WS, 'x', OWNER)).rejects.toThrow('turn failed');
+    expect(credits.refund).toHaveBeenCalledWith(WS, 0);
   });
 
   it('grants the caller\'s own permissions and nothing else', async () => {
@@ -169,10 +176,10 @@ describe('CommandAiService', () => {
 
     await svc.run(WS, 'x', OWNER);
 
-    expect(credits.reserve).toHaveBeenNthCalledWith(1, WS, creditCost('command.request'));
-    expect(credits.reserve).toHaveBeenNthCalledWith(2, WS, creditCost('command.turn'));
-    expect(credits.reserve).toHaveBeenNthCalledWith(3, WS, creditCost('command.turn'));
-    expect(credits.reserve).toHaveBeenCalledTimes(3);
+    expect(credits.reserveForJob).toHaveBeenNthCalledWith(1, WS, 'command.request');
+    expect(credits.reserveForJob).toHaveBeenNthCalledWith(2, WS, 'command.turn');
+    expect(credits.reserveForJob).toHaveBeenNthCalledWith(3, WS, 'command.turn');
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(3);
   });
 
   it('refunds only the turn that never ran, and fails the audit run', async () => {
@@ -192,9 +199,9 @@ describe('CommandAiService', () => {
   });
 
   it('refuses to run when AI is not configured, before charging anything', async () => {
-    anthropic.isEnabled.mockReturnValue(false);
+    anthropic.isEnabledFor.mockReturnValue(false);
     await expect(svc.run(WS, 'x', OWNER)).rejects.toThrow(ServiceUnavailableException);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(runs.start).not.toHaveBeenCalled();
   });
 

@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { spendAllowed, ACTION_CATEGORY } from './ai-spend-policy';
+import { jobPolicy } from './ai-job-policy';
+import { McpAiTaskService } from './mcp-ai-task.service';
+import { LocalInferenceService } from './local-inference.service';
 
 export type AiModelTier = 'default' | 'balanced' | 'light' | 'conversation';
 
@@ -56,9 +59,14 @@ export interface AiCallOpts {
    */
   workspaceId?: string;
   action?: string;
+  /** Stable retry namespace (actor/authorization context for interactive calls). Never use a fresh run ID. */
+  idempotencyScope?: string;
+  classificationLabels?: string[];
 }
 
 export interface AiCompletion {
+  /** Durable MCP response identity. Tool loops must journal executions when present. */
+  mcpTaskId?: string;
   text: string;
   toolUses: Anthropic.ToolUseBlock[];
   stopReason: string | null;
@@ -177,6 +185,8 @@ export class AnthropicService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    @Optional() private readonly mcpTasks?: McpAiTaskService,
+    @Optional() private readonly localInference?: LocalInferenceService,
   ) {}
 
   /**
@@ -192,11 +202,11 @@ export class AnthropicService {
    * caller like a model that answered with nothing, which is the failure this
    * codebase keeps having to dig out.
    */
-  private async assertSpendAllowed(opts: AiCallOpts): Promise<void> {
+  async assertSpendAllowed(opts: AiCallOpts): Promise<void> {
+    if (this.config.get<string>('AI_DISABLED') === '1') throw new Error('AI_DISABLED: AI execution is disabled globally');
     if (!opts.workspaceId || !opts.action) return;
     const ws = await this.prisma.workspace
-      .findUnique({ where: { id: opts.workspaceId }, select: { aiSpendPolicy: true } })
-      .catch(() => null);
+      .findUnique({ where: { id: opts.workspaceId }, select: { aiSpendPolicy: true } });
     const policy = (ws?.aiSpendPolicy as Record<string, unknown> | null) ?? null;
     if (spendAllowed(policy, opts.action)) return;
     const category = ACTION_CATEGORY[opts.action];
@@ -226,7 +236,15 @@ export class AnthropicService {
   }
 
   /** Live for this workspace: its own key, or a platform key that is working. */
-  async isEnabledFor(workspaceId: string): Promise<boolean> {
+  async isEnabledFor(workspaceId: string, action?: string): Promise<boolean> {
+    if (this.config.get<string>('AI_DISABLED') === '1') return false;
+    if (action) {
+      const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { aiSpendPolicy: true } });
+      const decision = jobPolicy(ws?.aiSpendPolicy as any, action);
+      if (!decision.enabled) return false;
+      if (decision.provider === 'MCP') return true;
+      if (decision.provider === 'LOCAL') return !!this.localInference?.isConfigured();
+    }
     const sealed = await this.sealedKeyFor(workspaceId);
     if (!sealed) return this.isEnabled();
     const gate = this.unusableByKey.get(workspaceId);
@@ -371,6 +389,17 @@ export class AnthropicService {
    */
   async complete(opts: AiCallOpts): Promise<AiCompletion> {
     await this.assertSpendAllowed(opts);
+    const provider = await this.providerFor(opts);
+    if (provider === 'MCP') {
+      if (!this.mcpTasks) throw new Error('AI_MCP_NOT_CONFIGURED');
+      return this.mcpTasks.generate(opts);
+    }
+    if (provider === 'LOCAL') {
+      if (opts.action !== 'workflow.ai_classify' || !this.localInference || !opts.classificationLabels) throw new Error('LOCAL_AI_UNSUPPORTED_JOB');
+      const text = opts.messages.filter((m) => m.role === 'user').map((m) => typeof m.content === 'string' ? m.content : '').join('\n');
+      const result = await this.localInference.classify(text, opts.classificationLabels);
+      return { text: result.label, toolUses: [], stopReason: 'end_turn', usage: { input: 0, output: 0 } };
+    }
     // The workspace's own key when it has one. `workspaceId` is already on
     // every metered call (it carries the usage log), so this needed no new
     // plumbing at the call sites.
@@ -502,6 +531,27 @@ export class AnthropicService {
     }
   }
 
+  /** Journal MCP tool execution while preserving authorization in the callback. */
+  async runMcpToolOnce<T>(workspaceId: string, taskId: string, toolId: string, callback: () => Promise<T>, idempotencyScope?: string): Promise<T> {
+    await this.assertSpendAllowed({ workspaceId, system: '', messages: [] });
+    if (!this.mcpTasks) throw new Error('AI_MCP_NOT_CONFIGURED');
+    return this.mcpTasks.runToolOnce(workspaceId, taskId, toolId, callback, idempotencyScope);
+  }
+
+  private async providerFor(opts: AiCallOpts) {
+    if (!opts.workspaceId || !opts.action) return 'API';
+    const ws = await this.prisma.workspace.findUnique({ where: { id: opts.workspaceId }, select: { aiSpendPolicy: true } });
+    const provider = jobPolicy(ws?.aiSpendPolicy as any, opts.action).provider;
+    if (!['API', 'MCP', 'LOCAL'].includes(provider)) throw new Error('AI_PROVIDER_INVALID: Refusing an unknown configured provider');
+    return provider;
+  }
+
+  async assertApiAllowed(workspaceId: string, action: string): Promise<void> {
+    const opts = { workspaceId, action, system: '', messages: [] };
+    await this.assertSpendAllowed(opts);
+    if (await this.providerFor(opts) !== 'API') throw new Error('AI_API_DISABLED_FOR_JOB');
+  }
+
   /**
    * Streaming text generation (no tools) for SSE surfaces. Yields text deltas;
    * `finalMessage()` is awaited internally to surface usage if the caller
@@ -509,6 +559,11 @@ export class AnthropicService {
    */
   async *streamText(opts: AiCallOpts): AsyncIterable<string> {
     await this.assertSpendAllowed(opts);
+    if (await this.providerFor(opts) !== 'API') {
+      const result = await this.complete(opts);
+      if (result.text) yield result.text;
+      return;
+    }
     // Same key resolution as complete(): a workspace that brought its own key
     // streams on it too, or the two paths would bill different accounts for
     // the same conversation.

@@ -3,7 +3,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { KnowledgeService } from '../ai/knowledge.service';
 
 /** The VOICE channel row this bridge serves (shape we actually read). */
@@ -68,7 +68,7 @@ export class VoiceAiBridgeService {
   async complete(channel: BridgeChannel, body: OpenAiChatBody): Promise<OpenAiChatCompletion> {
     // Claude is the brain — fail clean (no credit churn) if it isn't configured,
     // mirroring the netgsm-ivr / copilot services' inert guards.
-    if (!this.anthropic.isEnabled()) {
+    if (!(await this.anthropic.isEnabledFor(channel.workspaceId, 'voice.turn'))) {
       throw new ServiceUnavailableException('Voice AI brain (Claude) is not configured');
     }
     const agent = channel.agentProfileId
@@ -98,7 +98,7 @@ export class VoiceAiBridgeService {
 
     const system = this.buildSystem(agent, kb);
 
-    await this.credits.reserve(channel.workspaceId, creditCost('voice.turn'));
+    const reserved = await this.credits.reserveForJob(channel.workspaceId, 'voice.turn');
     let res: { text: string; usage: { input: number; output: number } };
     try {
       res = await this.anthropic.complete({
@@ -111,7 +111,7 @@ export class VoiceAiBridgeService {
         action: 'voice.turn',
       });
     } catch (e) {
-      await this.credits.refund(channel.workspaceId, creditCost('voice.turn'));
+      await this.credits.refund(channel.workspaceId, reserved);
       throw e;
     }
 

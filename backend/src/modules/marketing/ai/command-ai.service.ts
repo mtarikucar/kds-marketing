@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from './anthropic.service';
 import { AiCreditsService } from './ai-credits.service';
-import { creditCost, tierFor } from './ai-credit-costs';
+import { tierFor } from './ai-credit-costs';
 import { McpToolRegistry } from '../mcp/mcp-tool-registry';
 import { McpBrokerService } from '../mcp/mcp-broker.service';
 import { AgentRunService } from '../agents/agent-run.service';
@@ -77,7 +77,7 @@ export class CommandAiService {
     command: string,
     actor: { id: string; role: string; customRoleId?: string | null },
   ): Promise<CommandResult> {
-    if (!this.anthropic.isEnabled()) {
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'command.request'))) {
       throw new ServiceUnavailableException('AI is not configured');
     }
 
@@ -102,9 +102,8 @@ export class CommandAiService {
       input: { command: command.slice(0, 2000), actorId: actor.id },
     });
 
-    await this.credits.reserve(workspaceId, creditCost('command.request'));
-    let turnsCharged = 0;
-    let turnsCompleted = 0;
+    const baseReserved = await this.credits.reserveForJob(workspaceId, 'command.request');
+    let pendingTurnReserved = 0;
     const actions: CommandAction[] = [];
 
     try {
@@ -114,8 +113,8 @@ export class CommandAiService {
       let answer = '';
 
       for (let i = 0; i < MAX_ITERS; i++) {
-        await this.credits.reserve(workspaceId, creditCost('command.turn'));
-        turnsCharged += 1;
+        pendingTurnReserved = await this.credits.reserveForJob(workspaceId, 'command.turn');
+        const idempotencyScope = JSON.stringify(['command', actor.id, actor.role, actor.customRoleId ?? null, [...grantedScopes].sort(), writeMode]);
         const res = await this.anthropic.complete({
           system: this.systemPrompt(writeMode),
           messages,
@@ -133,19 +132,29 @@ export class CommandAiService {
           tier: tierFor('command.turn'),
           workspaceId,
           action: 'command.turn',
+          idempotencyScope,
         });
-        turnsCompleted += 1;
+        pendingTurnReserved = 0;
         if (res.text) answer = res.text;
         if (!res.toolUses.length) break;
 
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const tu of res.toolUses) {
           const toolName = byFlatName.get(tu.name) ?? tu.name;
-          const { payload, action } = await this.invoke(
+          const invoke = () => this.invoke(
             { workspaceId, userId: actor.id, userRole: actor.role, grantedScopes, writeMode, agentRunId: runId, requireAudit: true },
             toolName,
             tu.input as Record<string, unknown>,
           );
+          const { payload, action } = res.mcpTaskId
+            ? await this.anthropic.runMcpToolOnce(workspaceId, res.mcpTaskId, tu.id, async () => {
+              // invoke retains broker authorization/approval. Its error envelope
+              // cannot prove that an external write did not already happen.
+              const outcome = await invoke();
+              if (outcome.action.status === 'ERROR') throw new Error(outcome.action.error ?? 'Tool outcome unknown');
+              return outcome;
+            }, idempotencyScope)
+            : await invoke();
           actions.push(action);
           results.push({
             type: 'tool_result',
@@ -174,8 +183,7 @@ export class CommandAiService {
       // workspace sitting just under its cap replay the loop for free.
       await this.credits.refund(
         workspaceId,
-        creditCost('command.request') +
-          Math.max(0, turnsCharged - turnsCompleted) * creditCost('command.turn'),
+        baseReserved + pendingTurnReserved,
       );
       await this.runs.finish(runId, {
         status: 'FAILED',

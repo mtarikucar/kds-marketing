@@ -22,8 +22,8 @@ describe('AskAiService', () => {
       marketingTask: { findMany: jest.fn().mockResolvedValue([]) },
       campaign: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
-    credits = { reserve: jest.fn(), refund: jest.fn() };
+    anthropic = { isEnabledFor: jest.fn().mockReturnValue(true), complete: jest.fn() };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any) => creditCost(action)), refund: jest.fn() };
     svc = new AskAiService(prisma as any, anthropic as any, credits as any);
   });
 
@@ -38,10 +38,10 @@ describe('AskAiService', () => {
     // whole loop, so a 4-turn answer cost the same as a 1-turn one while
     // costing Jeeta several times more — the credit ceiling bounded credits,
     // not dollars. Two model calls here → base + 2 turns.
-    expect(credits.reserve).toHaveBeenCalledTimes(3);
-    expect(credits.reserve).toHaveBeenNthCalledWith(1, WS, creditCost('ask_ai.question'));
-    expect(credits.reserve).toHaveBeenNthCalledWith(2, WS, creditCost('ask_ai.turn'));
-    expect(credits.reserve).toHaveBeenNthCalledWith(3, WS, creditCost('ask_ai.turn'));
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(3);
+    expect(credits.reserveForJob).toHaveBeenNthCalledWith(1, WS, 'ask_ai.question');
+    expect(credits.reserveForJob).toHaveBeenNthCalledWith(2, WS, 'ask_ai.turn');
+    expect(credits.reserveForJob).toHaveBeenNthCalledWith(3, WS, 'ask_ai.turn');
     // the read tool ran, workspace-scoped + active leads only
     expect(prisma.lead.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS, deletedAt: null, mergedIntoId: null }) }),
@@ -80,6 +80,22 @@ describe('AskAiService', () => {
       (m: any) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result',
     );
     expect(JSON.stringify(toolResult.content)).toContain('error');
+  });
+
+  it.each([[0, 0, 0], [0, 3, 0], [1, 0, 3]])('refunds only captured base/pending amounts (%s, %s, %s)', async (base, completed, pending) => {
+    credits.reserveForJob.mockResolvedValueOnce(base).mockResolvedValueOnce(completed).mockResolvedValueOnce(pending);
+    anthropic.complete
+      .mockResolvedValueOnce({ text: '', toolUses: [{ type: 'tool_use', id: 't1', name: 'lead_stats', input: {} }] })
+      .mockRejectedValueOnce(new Error('turn failed'));
+    await expect(svc.ask(WS, 'hi')).rejects.toThrow('turn failed');
+    expect(credits.refund).toHaveBeenCalledWith(WS, base + pending);
+  });
+
+  it('does not refund completed turns when the next reservation is refused', async () => {
+    credits.reserveForJob.mockResolvedValueOnce(0).mockResolvedValueOnce(3).mockRejectedValueOnce(new Error('cap'));
+    anthropic.complete.mockResolvedValueOnce({ text: '', toolUses: [{ type: 'tool_use', id: 't1', name: 'lead_stats', input: {} }] });
+    await expect(svc.ask(WS, 'hi')).rejects.toThrow('cap');
+    expect(credits.refund).toHaveBeenCalledWith(WS, 0);
   });
 
   it('search_leads binds the workspaceId (no cross-tenant read)', async () => {

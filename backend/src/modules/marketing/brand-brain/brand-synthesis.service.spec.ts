@@ -22,8 +22,8 @@ describe('BrandSynthesisService', () => {
   };
 
   beforeEach(() => {
-    anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn() };
-    credits = { reserve: jest.fn(), refund: jest.fn() };
+    anthropic = { isEnabledFor: jest.fn().mockReturnValue(true), complete: jest.fn() };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() };
     svc = new BrandSynthesisService(anthropic as any, credits as any);
   });
 
@@ -58,8 +58,8 @@ describe('BrandSynthesisService', () => {
     expect(draft.brandKitHints.palette).toEqual([]);
     expect(draft.knowledgeDocs).toEqual([{ title: 'About', content: '...' }]);
 
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
-    expect(credits.reserve).toHaveBeenCalledWith(WS, creditCost('brand.analyze'));
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, 'brand.analyze');
     expect(credits.refund).not.toHaveBeenCalled();
   });
 
@@ -101,11 +101,11 @@ describe('BrandSynthesisService', () => {
   });
 
   it('rejects with ServiceUnavailableException when AI is disabled, without reserving credits', async () => {
-    anthropic.isEnabled.mockReturnValue(false);
+    anthropic.isEnabledFor.mockReturnValue(false);
 
     await expect(svc.synthesize(WS, [okWebsiteResult], 'tr')).rejects.toThrow('AI is not configured');
 
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('builds a digest that skips inert/error sources and includes ok website markdown', async () => {

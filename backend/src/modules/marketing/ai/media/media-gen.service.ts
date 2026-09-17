@@ -1,3 +1,4 @@
+import { assertJobProvider } from '../ai-job-policy';
 import {
   Injectable, Logger, BadRequestException, ServiceUnavailableException,
   NotFoundException, Inject, OnModuleInit,
@@ -394,6 +395,7 @@ export class MediaGenService implements OnModuleInit {
   }
 
   async requestGeneration(workspaceId: string, dto: RequestGenerationDto): Promise<{ assetId: string }> {
+    await assertJobProvider(this.prisma, workspaceId, dto.type === 'VIDEO' ? 'media.video.generate' : dto.type === 'AUDIO' ? 'media.audio.generate' : 'media.image.generate', 'API');
     if (!this.provider.isConfigured()) {
       throw new ServiceUnavailableException({ code: 'MEDIA_GEN_NOT_CONFIGURED', message: 'Media generation is not configured' });
     }
@@ -535,7 +537,11 @@ export class MediaGenService implements OnModuleInit {
     // so an empty wallet rejects engine work. Manual generations are untouched.
     const engineBudget = dto.campaignItemId ? await this.resolveArmedBudget(workspaceId) : null;
 
-    await this.credits.reserve(workspaceId, estimate);
+    const reserved = await this.credits.reserveForJob(
+      workspaceId,
+      type === 'VIDEO' ? 'media.video.generate' : type === 'AUDIO' ? 'media.audio.generate' : 'media.image.generate',
+      estimate,
+    );
 
     // Everything after the reservation runs under one try so ANY failure —
     // including the create() itself — issues the compensating refund. Otherwise a
@@ -579,7 +585,7 @@ export class MediaGenService implements OnModuleInit {
           negativePrompt: dto.negativePrompt ?? null,
           params,
           durationSec: durationSec ?? null,
-          costCreditsReserved: estimate,
+          costCreditsReserved: reserved,
           costUsd: new Prisma.Decimal(estimateUsd),
           socialCampaignId: dto.socialCampaignId ?? null,
           createdById: dto.createdById,
@@ -638,12 +644,12 @@ export class MediaGenService implements OnModuleInit {
         // params carries the engine hint so a wallet pre-debit is refunded too.
         await this.failTerminal(
           { id: asset.id, workspaceId, params: { campaignItemId: dto.campaignItemId ?? null } },
-          String(e?.message ?? e).slice(0, 500), estimate,
+          String(e?.message ?? e).slice(0, 500), reserved,
         );
       } else {
         // create() itself threw — the reservation exists but no asset row does,
         // so the sweep can't reap it; refund directly (no double-refund possible).
-        await this.credits.refund(workspaceId, estimate);
+        await this.credits.refund(workspaceId, reserved);
       }
       throw e;
     }

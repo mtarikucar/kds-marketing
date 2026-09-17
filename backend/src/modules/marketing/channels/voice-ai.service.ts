@@ -5,7 +5,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { KnowledgeService } from '../ai/knowledge.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
@@ -79,7 +79,7 @@ export class VoiceAiService {
   async handleTurn(callSid: string, speech: string, idempotencyToken?: string): Promise<string> {
     const call = await this.prisma.voiceCall.findUnique({ where: { externalCallId: callSid } });
     if (!call || call.status !== 'IN_PROGRESS') return this.hangupTwiml('Thank you, goodbye.');
-    if (!this.anthropic.isEnabled()) return this.hangupTwiml('Sorry, the assistant is unavailable right now.');
+    if (!(await this.anthropic.isEnabledFor(call.workspaceId, 'voice.turn'))) return this.hangupTwiml('Sorry, the assistant is unavailable right now.');
 
     // BUG 10 FIX: atomic idempotency check using Twilio's i-twilio-idempotency-token.
     // Twilio re-POSTs the gather callback on read-timeout (the Anthropic call can
@@ -113,8 +113,9 @@ export class VoiceAiService {
     if (!text) return this.gatherTwiml('Sorry, could you say that again?');
     await this.saveTurn(call.workspaceId, callSid, 'CUSTOMER', text);
 
+    let reserved = 0;
     try {
-      await this.credits.reserve(call.workspaceId, creditCost('voice.turn'));
+      reserved = await this.credits.reserveForJob(call.workspaceId, 'voice.turn');
     } catch (e) {
       if (e instanceof ForbiddenException) return this.hangupTwiml('I am sorry, I have to end the call now. Goodbye.');
       throw e;
@@ -129,7 +130,7 @@ export class VoiceAiService {
       this.logger.warn(`voice reply failed call=${callSid}: ${e?.message ?? e}`);
       reply = 'Sorry, I had trouble there. Could you repeat that?';
     } finally {
-      if (!sent) await this.credits.refund(call.workspaceId, creditCost('voice.turn'));
+      if (!sent) await this.credits.refund(call.workspaceId, reserved);
     }
     await this.saveTurn(call.workspaceId, callSid, 'AI', reply);
     await this.prisma.voiceCall.update({ where: { id: call.id }, data: { turns: { increment: 1 } } });

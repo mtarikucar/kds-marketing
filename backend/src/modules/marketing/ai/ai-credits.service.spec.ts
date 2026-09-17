@@ -125,6 +125,74 @@ describe('AiCreditsService — monthly credit metering', () => {
     expect(counterValue).toBe(3);
   });
 
+  it.each([
+    ['content.compose', 'MCP'],
+    ['workflow.ai_classify', 'LOCAL'],
+    ['stt.minute', 'LOCAL'],
+  ])('returns a zero receipt for %s on %s even without an allowance', async (action, provider) => {
+    withLimit(0);
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { [action]: { provider } } } });
+    const charged = await svc.reserveForJob(WS, action);
+    expect(charged).toBe(0);
+    expect(counterValue).toBe(0);
+    expect(wallet.debitUpTo).not.toHaveBeenCalled();
+    expect(entitlements.getEffective).not.toHaveBeenCalled();
+  });
+
+  it('meters only the requested job and returns the actual reserved amount', async () => {
+    withLimit(100);
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'content.compose': { provider: 'MCP' } } } });
+    expect(await svc.reserveForJob(WS, 'voice.analysis')).toBe(3);
+    expect(counterValue).toBe(3);
+  });
+
+  it.each(['API', 'MCP', 'LOCAL'])('rejects disabled jobs before charging, including %s jobs', async (provider) => {
+    withLimit(100);
+    prisma.workspace.findUnique.mockResolvedValue({ aiApiKeyEnc: 'own-key', aiSpendPolicy: { jobs: { 'workflow.ai_classify': { enabled: false, provider } } } });
+    await expect(svc.reserveForJob(WS, 'workflow.ai_classify', 0)).rejects.toMatchObject({ response: { code: 'AI_SPEND_DISABLED' } });
+    expect(counterValue).toBe(0);
+  });
+
+  it('honors category disablement at the credit boundary', async () => {
+    withLimit(100);
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { content: false } });
+    await expect(svc.reserveForJob(WS, 'content.compose')).rejects.toMatchObject({ response: { code: 'AI_SPEND_DISABLED' } });
+    expect(counterValue).toBe(0);
+  });
+
+  it('returns zero for an LLM job paid by the workspace key', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({ aiApiKeyEnc: 'own-key' });
+    expect(await svc.reserveForJob(WS, 'content.compose')).toBe(0);
+    expect(counterValue).toBe(0);
+  });
+
+  it.each(['media.image.generate', 'media.video.generate', 'media.audio.generate', 'social.publish.x', 'social.publish.x_link', 'stt.minute', 'research.native_search', 'research.native_scrape'])('still charges %s when the workspace owns an LLM key', async (action) => {
+    withLimit(100);
+    prisma.workspace.findUnique.mockResolvedValue({ aiApiKeyEnc: 'own-key' });
+    expect(await svc.reserveForJob(WS, action, 6)).toBe(6);
+    expect(counterValue).toBe(6);
+  });
+
+  it('a zero receipt cannot refund unrelated consumption after a policy change', async () => {
+    withLimit(100);
+    counterValue = 19;
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: { jobs: { 'content.compose': { provider: 'MCP' } } } });
+    const charged = await svc.reserveForJob(WS, 'content.compose');
+    prisma.workspace.findUnique.mockResolvedValue({ aiSpendPolicy: {} });
+    await svc.refund(WS, charged);
+    expect(counterValue).toBe(19);
+  });
+
+  it('refunds an actual charge even if the job is disabled or switches to BYOK afterwards', async () => {
+    withLimit(100);
+    counterValue = 19;
+    const charged = await svc.reserveForJob(WS, 'content.compose', 8);
+    prisma.workspace.findUnique.mockResolvedValue({ aiApiKeyEnc: 'own-key', aiSpendPolicy: { content: false } });
+    await svc.refund(WS, charged);
+    expect(charged).toBe(8);
+    expect(counterValue).toBe(19);
+  });
+
   it('never drives the meter negative — an over-refund floors at 0', async () => {
     withLimit(100);
     await svc.reserve(WS, 2); // 2

@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { ForbiddenException } from '@nestjs/common';
 import { VoiceAiService } from './voice-ai.service';
 import { validTwilioSignature } from '../controllers/twilio-voice.controller';
@@ -29,8 +30,8 @@ describe('VoiceAiService', () => {
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead1' }) },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
-    anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn().mockResolvedValue({ text: 'How can I help you?' }) };
-    credits = { reserve: jest.fn(), refund: jest.fn() };
+    anthropic = { isEnabledFor: jest.fn().mockReturnValue(true), complete: jest.fn().mockResolvedValue({ text: 'How can I help you?' }) };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() };
     const knowledge = { search: jest.fn().mockResolvedValue([]) };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const config = { get: jest.fn().mockReturnValue('https://m.example') };
@@ -61,7 +62,7 @@ describe('VoiceAiService', () => {
 
   it('handleTurn meters a credit and returns the AI reply + re-opens the mic', async () => {
     const twiml = await svc.handleTurn('CA123', 'Do you have a table for two?');
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
     expect(twiml).toContain('How can I help you?');
     expect(twiml).toContain('<Gather');
     // both the customer turn and the AI turn were transcribed
@@ -69,7 +70,7 @@ describe('VoiceAiService', () => {
   });
 
   it('hangs up when AI credits are exhausted', async () => {
-    credits.reserve.mockRejectedValue(new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED' }));
+    credits.reserveForJob.mockRejectedValue(new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED' }));
     const twiml = await svc.handleTurn('CA123', 'hello');
     expect(twiml).toContain('<Hangup/>');
     expect(twiml).not.toContain('<Gather');
@@ -77,7 +78,7 @@ describe('VoiceAiService', () => {
 
   it('reprompts (no credit) on empty speech', async () => {
     const twiml = await svc.handleTurn('CA123', '   ');
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(twiml).toContain('<Gather');
   });
 
@@ -88,7 +89,7 @@ describe('VoiceAiService', () => {
     // First call: the token claim succeeds (updateMany returns count=1).
     prisma.voiceCall.updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const twiml1 = await svc.handleTurn('CA123', 'Hello there', token);
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
     expect(prisma.voiceTranscript.create).toHaveBeenCalledTimes(2); // CUSTOMER + AI
     expect(prisma.voiceCall.update).toHaveBeenCalledTimes(1); // turns incremented
 
@@ -101,7 +102,7 @@ describe('VoiceAiService', () => {
     const twiml2 = await svc.handleTurn('CA123', 'Hello there', token);
 
     // Short-circuit: no credit metered, no transcript written, turns not bumped.
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(prisma.voiceTranscript.create).not.toHaveBeenCalled();
     expect(prisma.voiceCall.update).not.toHaveBeenCalled();
     // Returns a valid TwiML response (not a hangup).

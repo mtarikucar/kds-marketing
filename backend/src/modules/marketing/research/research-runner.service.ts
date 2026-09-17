@@ -191,8 +191,10 @@ export class ResearchRunnerService implements OnModuleInit {
    * promise the button made, which is that the run starts now rather than in
    * six hours.
    */
-  async enqueueNow(workspaceId: string, profileId: string): Promise<void> {
-    await this.scheduledJob.schedule({
+  async enqueueNow(workspaceId: string, profileId: string): Promise<string> {
+    // Return the durable id so callers can distinguish queued from completed.
+    // The manual flag bypasses legacy grace only; explicit MCP stays held.
+    return this.scheduledJob.schedule({
       workspaceId,
       kind: RESEARCH_RUN_KIND,
       runAt: new Date(),

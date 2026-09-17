@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { BadRequestException } from '@nestjs/common';
 import { WorkflowsService } from './workflows.service';
 
@@ -10,11 +11,11 @@ import { WorkflowsService } from './workflows.service';
 describe('WorkflowsService.draft', () => {
   function setup(modelText: string) {
     const anthropic = {
-      isEnabled: () => true,
+      isEnabledFor: () => true,
       complete: jest.fn().mockResolvedValue({ text: modelText }),
     };
     const credits = {
-      reserve: jest.fn().mockResolvedValue(undefined),
+      reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)),
       refund: jest.fn().mockResolvedValue(undefined),
     };
     const svc = new WorkflowsService(
@@ -47,7 +48,7 @@ describe('WorkflowsService.draft', () => {
     const dsl = await svc.draft('ws-1', 'stop on new lead');
     expect(dsl.trigger.type).toBe('lead.created');
     expect(dsl.steps).toHaveLength(1);
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
     expect(credits.refund).not.toHaveBeenCalled();
   });
 });

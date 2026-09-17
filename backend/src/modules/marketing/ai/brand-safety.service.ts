@@ -59,8 +59,8 @@ export class BrandSafetyService {
 
   /** SAFE/BLOCK copy screen via Claude; UNAVAILABLE when no reviewer could run. */
   async screen(workspaceId: string, copy: string): Promise<BrandSafetyVerdict> {
-    if (!this.anthropic.isEnabled()) return 'UNAVAILABLE';
-    await this.credits.reserve(workspaceId, creditCost('workflow.ai_classify'));
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'brand.safety'))) return 'UNAVAILABLE';
+    const reserved = await this.credits.reserveForJob(workspaceId, 'brand.safety', creditCost('workflow.ai_classify'));
     try {
       const res = await this.anthropic.complete({
         system: 'You are a brand-safety reviewer. Reply with exactly one word: SAFE or BLOCK. '
@@ -72,11 +72,11 @@ export class BrandSafetyService {
         // reaches AiUsageLog: credits are still charged, but nothing records
         // what the vendor billed, so a price can drift from its cost unseen.
         workspaceId: workspaceId,
-        action: 'workflow.ai_classify',
+        action: 'brand.safety',
       });
       return /BLOCK/i.test(res.text) ? 'BLOCK' : 'SAFE';
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('workflow.ai_classify'));
+      await this.credits.refund(workspaceId, reserved);
       this.logger.warn(
         `brand-safety screen unavailable for ws ${workspaceId}: ${e instanceof Error ? e.message : e}`,
       );

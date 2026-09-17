@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ConversationFollowupService } from '../channels/conversation-followup.service';
 import { AI_REPLY_KIND } from './ai-execution';
+import { jobPolicy, readJobPolicy } from './ai-job-policy';
 
 /**
  * The status a queued reply sits in while a connector holds it.
@@ -109,6 +111,22 @@ export class AiReplyLeaseService {
    */
   async claim(workspaceId: string): Promise<ClaimedReply | null> {
     await this.releaseExpired(workspaceId);
+    const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { aiSpendPolicy: true } });
+    const allowed = (action: string) => {
+      const choice = jobPolicy(ws?.aiSpendPolicy as Record<string, unknown> | null, action);
+      return choice.enabled && (!choice.explicit || choice.provider === 'MCP');
+    };
+    const replyAllowed = allowed('conversation.reply');
+    const followupAllowed = allowed('conversation.followup');
+    if (!replyAllowed && !followupAllowed) return null;
+    // Filter before the bounded race loop: disabled replies must not occupy
+    // every poll's first five slots and starve independently enabled follow-ups.
+    const actionFilter: Prisma.ScheduledJobWhereInput = !replyAllowed
+      ? { payload: { path: ['reason'], equals: 'followup' } }
+      : !followupAllowed ? { OR: [
+        { payload: { path: ['reason'], not: 'followup' } },
+        { payload: { path: ['reason'], equals: Prisma.AnyNull } },
+      ] } : {};
 
     const tried: string[] = [];
     for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
@@ -117,13 +135,18 @@ export class AiReplyLeaseService {
           workspaceId,
           kind: AI_REPLY_KIND,
           status: 'PENDING',
-          ...(tried.length ? { id: { notIn: tried } } : {}),
+          ...actionFilter,
+          ...(tried.length ? { id: { notIn: [...tried] } } : {}),
         },
         orderBy: { runAt: 'asc' },
         select: { id: true, payload: true, createdAt: true },
       });
       if (!next) return null;
       tried.push(next.id);
+      const reason = (next.payload as any)?.reason === 'followup' ? 'followup' : 'inbound';
+      const action = reason === 'followup' ? 'conversation.followup' : 'conversation.reply';
+      const choice = await readJobPolicy(this.prisma, workspaceId, action);
+      if (!choice.enabled || (choice.explicit && choice.provider !== 'MCP')) continue;
 
       const { count } = await this.prisma.scheduledJob.updateMany({
         where: { id: next.id, workspaceId, status: 'PENDING' },
@@ -141,7 +164,6 @@ export class AiReplyLeaseService {
         });
         continue;
       }
-      const reason = (next.payload as any)?.reason === 'followup' ? 'followup' : 'inbound';
       return { jobId: next.id, conversationId, queuedAt: next.createdAt, reason };
     }
     return null;
@@ -174,6 +196,11 @@ export class AiReplyLeaseService {
       where: { id: jobId, workspaceId, kind: AI_REPLY_KIND, status: AI_REPLY_CLAIMED },
       select: { payload: true },
     });
+    if (handled) {
+      const action = (job?.payload as any)?.reason === 'followup' ? 'conversation.followup' : 'conversation.reply';
+      const choice = await readJobPolicy(this.prisma, workspaceId, action);
+      if (!choice.enabled || (choice.explicit && choice.provider !== 'MCP')) return false;
+    }
     const { count } = await this.prisma.scheduledJob.updateMany({
       where: { id: jobId, workspaceId, kind: AI_REPLY_KIND, status: AI_REPLY_CLAIMED },
       data: handled
@@ -210,6 +237,7 @@ export class AiReplyLeaseService {
       if (reason === 'followup') {
         await this.followups.countFollowup(workspaceId, conversationId);
       }
+      if (!(await readJobPolicy(this.prisma, workspaceId, 'conversation.followup')).enabled) return;
       await this.followups.scheduleNext(workspaceId, conversationId);
     } catch (e: any) {
       this.logger.warn(`follow-up bookkeeping failed (non-fatal): ${e?.message ?? e}`);

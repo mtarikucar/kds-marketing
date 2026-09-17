@@ -12,7 +12,7 @@ import { Prisma, type ContentConceptStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import {
   ConceptScene,
   DEFAULT_SHOT_ASPECT,
@@ -394,7 +394,7 @@ export class ContentConceptsService {
     // path asks: a caller that brought its own concepts needs nothing from the
     // platform's key, and refusing it for a key it never planned to use is the
     // whole outage this seam exists to end.
-    if (!preplanned && !this.anthropic.isEnabled()) {
+    if (!preplanned && !(await this.anthropic.isEnabledFor(workspaceId, 'content.concepts'))) {
       throw new ServiceUnavailableException(
         'AI is not configured, so no concepts could be planned. This is not a judgement about the idea.',
       );
@@ -535,7 +535,7 @@ export class ContentConceptsService {
     },
   ): Promise<SubmittedConcept[]> {
     const { idea, count, brand, guidance, programme } = ctx;
-    await this.credits.reserve(workspaceId, creditCost('content.concepts'));
+    const reserved = await this.credits.reserveForJob(workspaceId, 'content.concepts');
 
     let res: Awaited<ReturnType<AnthropicService['complete']>>;
     try {
@@ -554,7 +554,7 @@ export class ContentConceptsService {
     } catch (e) {
       // The call never returned — nothing was billed by the vendor, so nothing
       // stays charged here either.
-      await this.credits.refund(workspaceId, creditCost('content.concepts')).catch(() => undefined);
+      await this.credits.refund(workspaceId, reserved).catch(() => undefined);
       throw e;
     }
 

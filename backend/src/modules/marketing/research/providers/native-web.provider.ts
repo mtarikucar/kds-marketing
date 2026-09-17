@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { ScrapeResult, WebHit } from './research-source.provider';
 import { AnthropicService } from '../../ai/anthropic.service';
+import { AiCreditsService } from '../../ai/ai-credits.service';
 
 const MODEL = process.env.NATIVE_RESEARCH_MODEL ?? 'claude-haiku-4-5-20251001';
 const TIMEOUT_MS = Number(process.env.NATIVE_RESEARCH_TIMEOUT_MS ?? 45_000);
@@ -30,7 +31,10 @@ export class NativeWebProvider {
 
   /** Only used to report usage — this provider owns its own request because it
    *  needs SERVER tools, which `complete()` cannot express. */
-  constructor(private readonly anthropic: AnthropicService) {}
+  constructor(
+    private readonly anthropic: AnthropicService,
+    private readonly credits: AiCreditsService,
+  ) {}
 
   /**
    * Fire-and-forget usage reporting. The workspace is passed in per call
@@ -70,8 +74,10 @@ export class NativeWebProvider {
    * user location so Turkish-language, Turkey-local results rank first.
    */
   async searchWeb(query: string, limit = 8, workspaceId?: string): Promise<WebHit[]> {
+    if (workspaceId) await this.anthropic.assertApiAllowed(workspaceId, 'research.native_search');
     const client = this.getClient();
     if (!client || !query.trim()) return [];
+    const reserved = workspaceId ? await this.credits.reserveForJob(workspaceId, 'research.native_search') : 0;
     let res: Anthropic.Message;
     try {
       res = await client.messages.create(
@@ -103,6 +109,7 @@ export class NativeWebProvider {
         { timeout: TIMEOUT_MS },
       );
     } catch (e) {
+      if (workspaceId) await this.credits.refund(workspaceId, reserved);
       this.logger.warn(`native web_search failed: ${e instanceof Error ? e.message : e}`);
       throw new Error(`native web_search failed: ${e instanceof Error ? e.message : 'error'}`);
     }
@@ -132,10 +139,12 @@ export class NativeWebProvider {
    * some other site, and `max_uses: 1` bounds it to the single page asked for.
    */
   async scrape(url: string, workspaceId?: string): Promise<ScrapeResult | null> {
+    if (workspaceId) await this.anthropic.assertApiAllowed(workspaceId, 'research.native_scrape');
     const client = this.getClient();
     if (!client || !url.trim()) return null;
     const host = this.hostOf(url);
     if (!host) return null;
+    const reserved = workspaceId ? await this.credits.reserveForJob(workspaceId, 'research.native_scrape') : 0;
     let res: Anthropic.Message;
     try {
       res = await client.messages.create(
@@ -165,6 +174,7 @@ export class NativeWebProvider {
         { timeout: TIMEOUT_MS },
       );
     } catch (e) {
+      if (workspaceId) await this.credits.refund(workspaceId, reserved);
       this.logger.warn(`native web_fetch failed: ${e instanceof Error ? e.message : e}`);
       throw new Error(`native web_fetch failed: ${e instanceof Error ? e.message : 'error'}`);
     }

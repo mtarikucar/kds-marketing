@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { ResearchWorkerService } from './research-worker.service';
 import { ResearchJob } from './research-job.service';
 import { RESEARCH_SYSTEM_PROMPT, buildResearchBrief, researchBatchCap } from './research-contract';
@@ -13,8 +14,8 @@ const JOB: ResearchJob = {
 function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?: any[] } = {}) {
   const complete = jest.fn();
   (overrides.completions ?? []).forEach((c) => complete.mockResolvedValueOnce(c));
-  const anthropic = { isEnabled: () => overrides.aiEnabled ?? true, complete };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const anthropic = { isEnabledFor: () => overrides.aiEnabled ?? true, complete };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any) => creditCost(action)), refund: jest.fn().mockResolvedValue(undefined) };
   const runs = {
     track: jest.fn(async (_ws: string, _in: unknown, fn: (id: string) => Promise<unknown>) => fn('run1')),
     recordTool: jest.fn().mockResolvedValue(undefined),
@@ -44,11 +45,28 @@ const toolUse = (id: string, name: string, input: unknown) => ({ id, name, input
 const completion = (toolUses: any[]) => ({ text: '', toolUses, stopReason: 'tool_use', usage: { input: 10, output: 10 } });
 
 describe('ResearchWorkerService', () => {
+  it('refunds no credits for a free failed turn after a completed paid turn', async () => {
+    const { svc, credits, complete } = deps({ completions: [completion([toolUse('s1', 'search_places', { query: 'salon' })])] });
+    credits.reserveForJob.mockResolvedValueOnce(0).mockResolvedValueOnce(7).mockResolvedValueOnce(0);
+    complete.mockRejectedValueOnce(new Error('turn failed'));
+    await expect(svc.runProfile(JOB)).rejects.toThrow('turn failed');
+    expect(credits.refund).toHaveBeenCalledWith('ws1', 0);
+  });
+
+  it('refunds a failed forced submit even when the run otherwise succeeds', async () => {
+    const searches = Array.from({ length: 8 }, (_v, i) => completion([toolUse(`s${i}`, 'search_places', { query: 'salon' })]));
+    const { svc, credits, complete } = deps({ completions: searches });
+    complete.mockRejectedValueOnce(new Error('forced turn failed'));
+    await svc.runProfile(JOB);
+    expect(credits.refund).toHaveBeenCalledTimes(1);
+    expect(credits.refund).toHaveBeenCalledWith('ws1', 7);
+  });
+
   it('is inert when no source providers are configured', async () => {
     const { svc, credits } = deps({ enabled: false });
     const r = await svc.runProfile(JOB);
     expect(r).toEqual({ runId: null, researched: 0, staged: 0, duplicates: 0, skipped: 'sources-not-configured' });
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
   });
 
   it('is inert when AI is not configured', async () => {

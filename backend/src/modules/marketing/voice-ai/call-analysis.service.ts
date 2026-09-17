@@ -1,9 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { assertJobProvider } from '../ai/ai-job-policy';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
-import { SttService } from './stt.service';
+import { SttService, SttResult } from './stt.service';
 import { R2StorageService } from '../../../common/storage/r2-storage.service';
 
 export type CallAnalysisStatus = 'OK' | 'SKIPPED' | 'FAILED';
@@ -48,39 +50,54 @@ export class CallAnalysisService {
     const existing = await this.prisma.callAnalysis.findUnique({ where: { salesCallId } });
     if (existing) return { status: 'SKIPPED', reason: 'already analyzed' };
 
-    const audioUrl = call.recordingStorageKey
-      ? this.r2.urlForKey(call.recordingStorageKey)
-      : (call.recordingUrl as string);
+    if (!(await this.anthropic.isEnabledFor(call.workspaceId, 'voice.analysis'))) {
+      return { status: 'SKIPPED', reason: 'AI is disabled or unavailable for this workspace' };
+    }
+
+    const decision = await assertJobProvider(this.prisma, call.workspaceId, 'voice.analysis');
+    const recordingRef = call.recordingStorageKey
+      ? ['storage', call.recordingStorageKey]
+      : ['url', call.recordingUrl];
+    const idempotencyScope = `voice.analysis:${call.id}:${createHash('sha256').update(JSON.stringify(recordingRef)).digest('hex')}`;
+    // MCP already persists the input before returning AI_MCP_WAITING. Recover
+    // only this call's current recording, including the original provenance.
+    // An expired inference result can still hold a valid, paid transcript.
+    let stt = decision.provider === 'MCP'
+      ? await this.persistedTranscript(call.workspaceId, idempotencyScope)
+      : null;
+    let sttReserved = 0;
 
     // Transcription costs Jeeta real money (Deepgram/Whisper on a platform
     // key) and used to be charged to nobody: it ran BEFORE any reserve, so a
     // workspace at zero credits still burned it, and a call whose transcript
     // came back empty returned early and was never billed at all. Charge it
     // per minute of audio, up front, and refund if nothing usable comes back.
-    const sttCost =
-      creditCost('stt.minute') * Math.max(1, Math.ceil((call.durationSec ?? 60) / 60));
-    await this.credits.reserve(call.workspaceId, sttCost);
-
-    let stt: Awaited<ReturnType<SttService['transcribeUrl']>>;
-    try {
-      stt = await this.stt.transcribeUrl(audioUrl);
-    } catch (err) {
-      await this.credits.refund(call.workspaceId, sttCost);
-      throw err;
+    if (!stt) {
+      const audioUrl = call.recordingStorageKey
+        ? this.r2.urlForKey(call.recordingStorageKey)
+        : (call.recordingUrl as string);
+      const sttCost = creditCost('stt.minute') * Math.max(1, Math.ceil((call.durationSec ?? 60) / 60));
+      sttReserved = await this.credits.reserveForJob(call.workspaceId, 'stt.minute', sttCost);
+      try {
+        stt = await this.stt.transcribeUrl(audioUrl, { workspaceId: call.workspaceId });
+      } catch (err) {
+        await this.credits.refund(call.workspaceId, sttReserved);
+        throw err;
+      }
+      if (!stt || !stt.text) {
+        await this.credits.refund(call.workspaceId, sttReserved);
+        return { status: 'FAILED', reason: 'no transcript' };
+      }
     }
-    if (!stt || !stt.text) {
-      await this.credits.refund(call.workspaceId, sttCost);
-      return { status: 'FAILED', reason: 'no transcript' };
-    }
 
-    const cost = creditCost('voice.analysis');
+    let reserved = 0;
     try {
-      await this.credits.reserve(call.workspaceId, cost);
+      reserved = await this.credits.reserveForJob(call.workspaceId, 'voice.analysis');
     } catch (err) {
       // The STT charge was already taken — possibly out of PREPAID credits.
       // Refusing the analysis here without handing it back bills the customer
       // for a transcript that gets discarded.
-      await this.credits.refund(call.workspaceId, sttCost).catch(() => undefined);
+      await this.credits.refund(call.workspaceId, sttReserved).catch(() => undefined);
       throw err;
     }
 
@@ -88,15 +105,22 @@ export class CallAnalysisService {
     try {
       const res = await this.anthropic.complete({
         system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: stt.text }],
+        messages: [{ role: 'user', content: decision.provider === 'MCP'
+          ? JSON.stringify({ transcription: { text: stt.text, provider: stt.provider, language: stt.language ?? null } })
+          : stt.text }],
         maxTokens: 600,
         tier: tierFor('voice.analysis'),
         workspaceId: call.workspaceId,
         action: 'voice.analysis',
+        idempotencyScope,
       });
       parsed = parseAnalysis(res.text);
     } catch (err) {
-      await this.credits.refund(call.workspaceId, cost);
+      await this.credits.refund(call.workspaceId, reserved);
+      const response = err instanceof HttpException ? err.getResponse() : null;
+      if (response && typeof response === 'object' && (response as { code?: string }).code === 'AI_MCP_WAITING') {
+        return { status: 'SKIPPED', reason: 'AI_MCP_WAITING: Bağlı Claude yanıtı bekleniyor.' };
+      }
       this.logger.warn(`call analysis failed for ${salesCallId}: ${err?.message || err}`);
       return { status: 'FAILED', reason: 'analysis error' };
     }
@@ -119,6 +143,33 @@ export class CallAnalysisService {
       update: data,
     });
     return { status: 'OK' };
+  }
+
+  private async persistedTranscript(workspaceId: string, idempotencyScope: string): Promise<SttResult | null> {
+    const task = await this.prisma.scheduledJob.findFirst({
+      where: {
+        workspaceId,
+        kind: 'ai.mcp.inference',
+        AND: [
+          { payload: { path: ['action'], equals: 'voice.analysis' } },
+          { payload: { path: ['idempotencyScope'], equals: idempotencyScope } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { payload: true },
+    });
+    const payload = task?.payload as { input?: { messages?: { role?: string; content?: unknown }[] } } | undefined;
+    const messages = payload?.input?.messages;
+    if (!Array.isArray(messages) || messages.length !== 1 || messages[0]?.role !== 'user' || typeof messages[0].content !== 'string') return null;
+    try {
+      const transcription = JSON.parse(messages[0].content)?.transcription;
+      if (!transcription || typeof transcription.text !== 'string' || !transcription.text.trim() ||
+        typeof transcription.provider !== 'string' ||
+        (transcription.language != null && typeof transcription.language !== 'string')) return null;
+      return { text: transcription.text, provider: transcription.provider, language: transcription.language ?? undefined };
+    } catch {
+      return null;
+    }
   }
 }
 

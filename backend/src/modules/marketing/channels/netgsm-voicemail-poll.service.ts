@@ -323,21 +323,22 @@ export class NetgsmVoicemailPollService {
 
     const cost =
       creditCost('stt.minute') * Math.max(1, Math.ceil((row.durationSec ?? 60) / 60));
+    let reserved = 0;
     try {
-      await this.credits.reserve(workspaceId, cost);
+      reserved = await this.credits.reserveForJob(workspaceId, 'stt.minute', cost);
     } catch {
       // Out of credits (or not entitled) — skip the preview, keep the message.
       return null;
     }
 
     try {
-      const result = await this.stt.transcribeUrl(row.audioUrl);
+      const result = await this.stt.transcribeUrl(row.audioUrl, { workspaceId });
       const text = result?.text?.trim() || null;
       // Nothing usable came back — don't bill for it.
-      if (!text) await this.credits.refund(workspaceId, cost).catch(() => undefined);
+      if (!text) await this.credits.refund(workspaceId, reserved).catch(() => undefined);
       return text;
     } catch {
-      await this.credits.refund(workspaceId, cost).catch(() => undefined);
+      await this.credits.refund(workspaceId, reserved).catch(() => undefined);
       return null;
     }
   }

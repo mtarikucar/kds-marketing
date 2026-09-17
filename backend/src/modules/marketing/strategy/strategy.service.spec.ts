@@ -8,6 +8,7 @@ function deps(overrides: { strategy?: any; action?: any } = {}) {
   // claim from a plain write, which is the whole difference being asserted.
   let current: any = overrides.action ?? null;
   const prisma = {
+    scheduledJob: { findMany: jest.fn().mockResolvedValue([]) },
     marketingStrategy: {
       findUnique: jest.fn().mockResolvedValue(overrides.strategy ?? null),
       update: jest.fn().mockImplementation(async ({ data }: any) => ({ id: 'strat1', ...data })),
@@ -68,6 +69,59 @@ describe('StrategyService', () => {
   });
 
   describe('listActions', () => {
+    function queuedDeps(status: string, payload: unknown = { mcpAgentRunId: 'run1' }) {
+      const queued = action({ kind: 'LEAD_HUNT', status: 'RUNNING', resultRef: 'research-queued:job1' });
+      const d = deps({ action: queued });
+      d.prisma.strategyAction.findMany.mockImplementation(async ({ where }: any) => {
+        const current = await d.prisma.strategyAction.findFirst();
+        if (where.status && current.status !== where.status) return [];
+        if (where.resultRef && !current.resultRef?.startsWith(where.resultRef.startsWith)) return [];
+        return [current];
+      });
+      d.prisma.scheduledJob.findMany.mockResolvedValue([{ id: 'job1', status, payload, lastError: 'research failed' }] as any);
+      return d;
+    }
+
+    it.each(['PENDING', 'CLAIMED', 'RUNNING'])('keeps %s research pending without another execution', async (status) => {
+      const { svc, prisma, orchestrator } = queuedDeps(status);
+      expect(await svc.listActions('ws1')).toEqual([expect.objectContaining({ status: 'RUNNING', resultRef: 'research-queued:job1' })]);
+      expect(prisma.scheduledJob.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { workspaceId: 'ws1', kind: 'research.run', id: { in: ['job1'] } } }));
+      expect(prisma.strategyAction.updateMany).not.toHaveBeenCalled();
+      expect(orchestrator.execute).not.toHaveBeenCalled();
+    });
+
+    it('reconciles completed MCP research before applying the action status filter', async () => {
+      const { svc, prisma } = queuedDeps('DONE');
+      expect(await svc.listActions('ws1', { status: 'DONE' })).toEqual([expect.objectContaining({ status: 'DONE', resultRef: 'research:run1' })]);
+      expect(prisma.strategyAction.updateMany).toHaveBeenCalledWith({
+        where: { workspaceId: 'ws1', id: 'a1', status: 'RUNNING', resultRef: 'research-queued:job1' },
+        data: { status: 'DONE', resultRef: 'research:run1' },
+      });
+    });
+
+    it.each(['FAILED', 'CANCELLED'])('exposes %s research as a failed strategy action', async (status) => {
+      const { svc } = queuedDeps(status);
+      expect(await svc.listActions('ws1')).toEqual([expect.objectContaining({ status: 'FAILED', resultRef: expect.stringMatching(/^error:/) })]);
+    });
+
+    it('does not invent a research run when a queued job finishes without one', async () => {
+      const { svc } = queuedDeps('DONE', { profileId: 'prof1' });
+      expect(await svc.listActions('ws1')).toEqual([expect.objectContaining({ status: 'DONE', resultRef: null })]);
+    });
+
+    it('does not repeatedly rewrite a completed action on subsequent reads', async () => {
+      const { svc, prisma } = queuedDeps('DONE');
+      await svc.listActions('ws1');
+      await svc.listActions('ws1');
+      expect(prisma.strategyAction.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not query scheduled jobs when no research actions are queued', async () => {
+      const { svc, prisma } = deps();
+      await svc.listActions('ws1');
+      expect(prisma.scheduledJob.findMany).not.toHaveBeenCalled();
+    });
+
     it('scopes to the workspace and passes the status filter through', async () => {
       const { svc, prisma } = deps();
       await svc.listActions('ws1', { status: 'PROPOSED' });
@@ -88,7 +142,7 @@ describe('StrategyService', () => {
 
     it('orders by priority HIGH → MEDIUM → LOW', async () => {
       const { svc, prisma } = deps();
-      prisma.strategyAction.findMany.mockResolvedValue([
+      prisma.strategyAction.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
         action({ id: 'low', priority: 'LOW' }),
         action({ id: 'high', priority: 'HIGH' }),
         action({ id: 'med', priority: 'MEDIUM' }),

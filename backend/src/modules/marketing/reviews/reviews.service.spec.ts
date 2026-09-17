@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { BadRequestException } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 
@@ -25,8 +26,8 @@ describe('ReviewsService', () => {
       },
     };
     outbox = { append: jest.fn().mockResolvedValue('e') };
-    anthropic = { isEnabled: jest.fn().mockReturnValue(true), complete: jest.fn().mockResolvedValue({ text: 'Thank you for the kind words!' }) };
-    credits = { reserve: jest.fn(), refund: jest.fn() };
+    anthropic = { isEnabledFor: jest.fn().mockReturnValue(true), complete: jest.fn().mockResolvedValue({ text: 'Thank you for the kind words!' }) };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() };
     const config = { get: jest.fn().mockReturnValue('https://m.example') };
     svc = new ReviewsService(prisma as any, config as any, outbox as any, anthropic as any, credits as any);
   });
@@ -82,7 +83,7 @@ describe('ReviewsService', () => {
     prisma.review.findFirst.mockResolvedValue({ id: 'rev1', rating: 5, text: 'great' });
     const res = await svc.draftReply(WS, 'rev1');
     expect(res.replyDraft).toContain('Thank you');
-    expect(credits.reserve).toHaveBeenCalled();
+    expect(credits.reserveForJob).toHaveBeenCalled();
     expect(prisma.review.update).toHaveBeenCalledWith(expect.objectContaining({ data: { replyDraft: expect.any(String) } }));
   });
 });

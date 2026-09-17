@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AnthropicService } from '../../ai/anthropic.service';
 import { AiCreditsService } from '../../ai/ai-credits.service';
-import { creditCost, tierFor } from '../../ai/ai-credit-costs';
+import { tierFor } from '../../ai/ai-credit-costs';
 import { AgentRunService } from '../../agents/agent-run.service';
 import { ResearchSourcesService } from '../../research/providers/research-sources.service';
 import { ResearchSpendService } from '../../budget/research-spend.service';
@@ -320,7 +320,7 @@ export class StrategySynthesisService {
     // (Gating on sources here is what left prod unable to create ANY strategy when
     // firecrawl/apify keys weren't wired — the interview ran, but finish always
     // "skipped".)
-    if (!this.anthropic.isEnabled()) return { strategyId: null, actionCount: 0, skipped: 'ai-not-configured' };
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'strategy.synthesize'))) return { strategyId: null, actionCount: 0, skipped: 'ai-not-configured' };
     const researchEnabled = this.sources.isEnabled();
 
     const session = await this.prisma.strategyIntakeSession.findFirst({ where: { id: sessionId, workspaceId } });
@@ -347,9 +347,8 @@ export class StrategySynthesisService {
         // charged PER TURN: a single flat per-run reserve priced one credit
         // amount for anywhere between one and MAX_ITERS Opus calls at
         // maxTokens 4000, so the credit ceiling was not a spend ceiling.
-        await this.credits.reserve(workspaceId, creditCost('strategy.synthesize'));
-        let turnsCharged = 0;
-        let turnsCompleted = 0;
+        const baseReserved = await this.credits.reserveForJob(workspaceId, 'strategy.synthesize');
+        let pendingTurnReserved = 0;
         try {
           const ctx: ResearchToolCtx = { workspaceId, runId, geo: {}, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
@@ -377,8 +376,7 @@ export class StrategySynthesisService {
             // stop spending Jeeta's money, not discover the limit afterwards.
             // Letting this throw is deliberate — the caller gets a truthful
             // AI_CREDITS_EXHAUSTED rather than "synthesis produced no strategy".
-            await this.credits.reserve(workspaceId, creditCost('strategy.turn'));
-            turnsCharged += 1;
+            pendingTurnReserved = await this.credits.reserveForJob(workspaceId, 'strategy.turn');
             const res = await this.anthropic.complete({
               system: this.SYSTEM,
               messages,
@@ -392,9 +390,10 @@ export class StrategySynthesisService {
               // syntheses produced rich briefs + raw=0 actions.)
               maxTokens: 8000,
               tier: tierFor('strategy.turn'), workspaceId: workspaceId, action: 'strategy.turn',
+              idempotencyScope: `strategy.session:${sessionId}`,
               cacheSystem: true,
             });
-            turnsCompleted += 1;
+            pendingTurnReserved = 0;
             if (!res.toolUses.length) break;
 
             const results: Anthropic.ToolResultBlockParam[] = [];
@@ -438,7 +437,14 @@ export class StrategySynthesisService {
                 submitted = true;
               } else {
                 toolCalls += 1;
-                const out = await dispatchResearchTool(deps, ctx, tu.name, (tu.input ?? {}) as Record<string, unknown>);
+                const dispatch = () => dispatchResearchTool(deps, ctx, tu.name, (tu.input ?? {}) as Record<string, unknown>);
+                const out = res.mcpTaskId
+                  ? await this.anthropic.runMcpToolOnce(workspaceId, res.mcpTaskId, tu.id, async () => {
+                    const result = await dispatch();
+                    if (result && typeof result === 'object' && 'error' in result) throw new Error('Strategy research tool outcome unknown');
+                    return result;
+                  }, `strategy.session:${sessionId}`)
+                  : await dispatch();
                 results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(out).slice(0, 8000) });
               }
             }
@@ -487,8 +493,7 @@ export class StrategySynthesisService {
           await this.credits
             .refund(
               workspaceId,
-              creditCost('strategy.synthesize') +
-                Math.max(0, turnsCharged - turnsCompleted) * creditCost('strategy.turn'),
+              baseReserved + pendingTurnReserved,
             )
             .catch(() => undefined);
           throw e;

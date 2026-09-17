@@ -9,7 +9,7 @@ import {
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { KnowledgeService } from '../ai/knowledge.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import {
   AI_REPLY_KIND,
   effectiveAiExecution,
@@ -30,6 +30,7 @@ import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 import { ConversationFollowupService, FOLLOWUP_KIND } from './conversation-followup.service';
 import { BookingService } from '../sites/booking.service';
+import { assertJobProvider, jobPolicy, readJobPolicy } from '../ai/ai-job-policy';
 
 
 const HISTORY_LIMIT = 12;
@@ -157,11 +158,13 @@ export class ConversationAiEngineService implements OnModuleInit {
    * exactly, against `aiExecution` instead of `researchExecution`, because the
    * question and its fail-safe direction are the same one.
    */
-  async aiModeFor(workspaceId: string): Promise<EffectiveAiExecution> {
+  async aiModeFor(workspaceId: string, action = 'conversation.reply'): Promise<EffectiveAiExecution> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { aiExecution: true, aiApiKeyEnc: true },
+      select: { aiExecution: true, aiApiKeyEnc: true, aiSpendPolicy: true },
     });
+    const choice = jobPolicy(ws?.aiSpendPolicy as Record<string, unknown> | null, action);
+    if (choice.explicit) return choice.provider === 'API' ? 'SERVER' : 'MCP_ONLY';
     /**
      * A workspace that brought its OWN key answers in-process, now.
      *
@@ -209,36 +212,41 @@ export class ConversationAiEngineService implements OnModuleInit {
      * Enqueue-and-return rather than enqueue-and-also-try: trying first would
      * spend the key on every message and make the queue decorative.
      */
-    const mode = await this.aiModeFor(p.workspaceId).catch(() => 'SERVER' as const);
-    if (mode !== 'SERVER') {
-      // A human took this thread over. `reply()` declines on the same flag and
-      // the backfill sweep skips it; queueing anyway would hand the connector
-      // work the platform would have refused, which is the two answerers
-      // disagreeing about who is allowed to speak.
-      const convo = await this.prisma.conversation.findFirst({
-        where: { id: p.conversationId, workspaceId: p.workspaceId },
-        select: { aiPaused: true },
-      });
-      if (convo?.aiPaused) {
-        this.decline(p.conversationId, 'AI paused on this conversation (a human took over)');
+    try {
+      const choice = await readJobPolicy(this.prisma, p.workspaceId, 'conversation.reply');
+      if (!choice.enabled) {
+        this.decline(p.conversationId, 'conversation.reply is disabled');
         return;
       }
-      await this.scheduledJobs
-        .schedule({
-          workspaceId: p.workspaceId,
-          kind: AI_REPLY_KIND,
-          runAt: new Date(),
-          dedupKey: p.conversationId,
-          payload: { workspaceId: p.workspaceId, conversationId: p.conversationId },
-        })
-        .catch((err) =>
-          this.logger.error(`could not queue ai_reply for the connector: ${err?.message ?? err}`),
-        );
-      this.logger.log(`ai reply queued for the connector convo=${p.conversationId} mode=${mode}`);
-      return;
-    }
+      const mode = await this.aiModeFor(p.workspaceId);
+      if (mode !== 'SERVER') {
+        // A human took this thread over. `reply()` declines on the same flag and
+        // the backfill sweep skips it; queueing anyway would hand the connector
+        // work the platform would have refused, which is the two answerers
+        // disagreeing about who is allowed to speak.
+        const convo = await this.prisma.conversation.findFirst({
+          where: { id: p.conversationId, workspaceId: p.workspaceId },
+          select: { aiPaused: true },
+        });
+        if (convo?.aiPaused) {
+          this.decline(p.conversationId, 'AI paused on this conversation (a human took over)');
+          return;
+        }
+        await this.scheduledJobs
+          .schedule({
+            workspaceId: p.workspaceId,
+            kind: AI_REPLY_KIND,
+            runAt: new Date(),
+            dedupKey: p.conversationId,
+            payload: { workspaceId: p.workspaceId, conversationId: p.conversationId },
+          })
+          .catch((err) =>
+            this.logger.error(`could not queue ai_reply for the connector: ${err?.message ?? err}`),
+          );
+        this.logger.log(`ai reply queued for the connector convo=${p.conversationId} mode=${mode}`);
+        return;
+      }
 
-    try {
       await this.reply(p.workspaceId, p.conversationId);
     } catch (e: any) {
       this.logger.warn(
@@ -257,6 +265,10 @@ export class ConversationAiEngineService implements OnModuleInit {
   }
 
   private async handleAiReplyJob(job: ClaimedJob): Promise<void> {
+    if (job.payload.reason === 'followup') {
+      await this.handleFollowupJob(job, true);
+      return;
+    }
     await this.reply(job.payload.workspaceId, job.payload.conversationId);
   }
 
@@ -416,6 +428,7 @@ export class ConversationAiEngineService implements OnModuleInit {
   }
 
   private async reply(workspaceId: string, conversationId: string): Promise<void> {
+    await assertJobProvider(this.prisma, workspaceId, 'conversation.reply', 'API');
     // Workspace-aware: a workspace with its own key is live even while the
     // shared platform key is refusing, which is the whole point of having one.
     if (!(await this.anthropic.isEnabledFor(workspaceId))) {
@@ -507,11 +520,10 @@ export class ConversationAiEngineService implements OnModuleInit {
     });
 
     // BUG 2 FIX: Both the slot claim and the credit reserve must be inside the
-    // same try/finally so that a credits.reserve() throw still releases the slot.
-    const cost = creditCost('conversation.reply');
+    // same try/finally so that a failed reservation still releases the slot.
     let sent = false;
     let slotClaimed = false;
-    let creditReserved = false;
+    let charged = 0;
 
     this.stream.push(workspaceId, {
       kind: 'ai_typing',
@@ -540,9 +552,8 @@ export class ConversationAiEngineService implements OnModuleInit {
       }
       slotClaimed = true;
 
-      // Reserve a credit BEFORE the call; refund if we end up not sending.
-      await this.credits.reserve(workspaceId, cost);
-      creditReserved = true;
+      // Keep the actual charge: a BYOK reservation can return zero.
+      charged = await this.credits.reserveForJob(workspaceId, 'conversation.reply');
 
       const kb = await this.knowledge.search(
         workspaceId,
@@ -572,6 +583,7 @@ export class ConversationAiEngineService implements OnModuleInit {
         // for a conversation that had never been answered. On web chat a send
         // effectively cannot fail; on Meta channels (24h window, revoked token,
         // template rejected) it can and does.
+        await assertJobProvider(this.prisma, workspaceId, 'conversation.reply', 'API');
         const outbound = await this.sender.send({
           workspaceId,
           conversationId,
@@ -596,8 +608,8 @@ export class ConversationAiEngineService implements OnModuleInit {
     } finally {
       if (!sent) {
         // No reply went out — release the slot we claimed and refund the credit.
-        if (creditReserved) {
-          await this.credits.refund(workspaceId, cost).catch((e: any) =>
+        if (charged > 0) {
+          await this.credits.refund(workspaceId, charged).catch((e: any) =>
             this.logger.error(`credit refund failed: ${(e as Error).message}`),
           );
         }
@@ -816,11 +828,17 @@ export class ConversationAiEngineService implements OnModuleInit {
     conversationId: string,
     agent: { followup: unknown },
   ): Promise<void> {
+    if (!(await readJobPolicy(this.prisma, workspaceId, 'conversation.followup')).enabled) return;
     await this.followups.scheduleNext(workspaceId, conversationId, agent);
   }
 
-  private async handleFollowupJob(job: ClaimedJob): Promise<void> {
+  private async handleFollowupJob(job: ClaimedJob, fromReplyQueue = false): Promise<void> {
     const { workspaceId, conversationId } = job.payload;
+    const choice = await readJobPolicy(this.prisma, workspaceId, 'conversation.followup');
+    if (!choice.enabled) return;
+    // A queued follow-up reached this handler only after the scheduler released
+    // it. Keep legacy grace fallback, but recheck strict choices before spending.
+    if (fromReplyQueue) await assertJobProvider(this.prisma, workspaceId, 'conversation.followup', 'API');
     // The platform-key check used to stand HERE, ahead of everything. On a
     // workspace whose Claude answers through the connector — the direction this
     // product is deliberately moving in — that meant every scheduled nudge was
@@ -884,7 +902,7 @@ export class ConversationAiEngineService implements OnModuleInit {
      * Handing over first and hoping the client re-checks would put a legal
      * obligation on the far side of an interface we do not control.
      */
-    const mode = await this.aiModeFor(workspaceId).catch(() => 'SERVER' as const);
+    const mode = fromReplyQueue ? 'SERVER' : await this.aiModeFor(workspaceId, 'conversation.followup');
     if (mode !== 'SERVER') {
       await this.scheduledJobs
         .schedule({
@@ -901,9 +919,9 @@ export class ConversationAiEngineService implements OnModuleInit {
       return;
     }
     if (!(await this.anthropic.isEnabledFor(workspaceId))) return;
+    await assertJobProvider(this.prisma, workspaceId, 'conversation.followup', 'API');
 
-    const cost = creditCost('conversation.followup');
-    await this.credits.reserve(workspaceId, cost);
+    const charged = await this.credits.reserveForJob(workspaceId, 'conversation.followup');
     let sent = false;
     try {
       const history = await this.prisma.message.findMany({
@@ -932,6 +950,7 @@ export class ConversationAiEngineService implements OnModuleInit {
         // Same as reply(): a provider rejection returns a FAILED row rather
         // than throwing, and counting it as sent would keep the credit for a
         // nudge nobody received.
+        await assertJobProvider(this.prisma, workspaceId, 'conversation.followup', 'API');
         const outbound = await this.sender.send({
           workspaceId,
           conversationId,
@@ -965,7 +984,7 @@ export class ConversationAiEngineService implements OnModuleInit {
         }
       }
     } finally {
-      if (!sent) await this.credits.refund(workspaceId, cost);
+      if (!sent && charged > 0) await this.credits.refund(workspaceId, charged);
     }
   }
 

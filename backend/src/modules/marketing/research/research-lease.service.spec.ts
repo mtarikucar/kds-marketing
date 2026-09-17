@@ -141,6 +141,58 @@ function build(
   return { svc, prisma, jobs, finalize, runs, brandContext, updateMany, findFirst, table };
 }
 
+describe('ResearchLeaseService — per-action policy', () => {
+  it.each(['research.turn', 'research.qualify'])('keeps explicit MCP for %s strict even with legacy SERVER and no client', async (action) => {
+    const h = build({ mode: 'SERVER', rows: [{ ...ROW }] });
+    h.prisma.workspace.findUnique.mockResolvedValue({ researchExecution: 'SERVER', aiSpendPolicy: { jobs: { [action]: { enabled: true, provider: 'MCP' } } } });
+    expect(await h.svc.modeFor(WS)).toBe('MCP');
+    expect(await h.svc.executionPolicyFor(WS)).toMatchObject({ mode: 'MCP', strict: true, enabled: true });
+    expect((await h.svc.claim(WS)).job?.jobId).toBe('job-1');
+  });
+
+  it.each(['research.turn', 'research.qualify'])('explicit API for %s bypasses legacy MCP', async (action) => {
+    const h = build();
+    h.prisma.workspace.findUnique.mockResolvedValue({ researchExecution: 'MCP', aiSpendPolicy: { jobs: { [action]: { provider: 'API' } } } });
+    expect(await h.svc.modeFor(WS)).toBe('SERVER');
+    expect(await h.svc.claim(WS)).toEqual({ job: null, reason: 'not-in-mcp-mode' });
+  });
+
+  it.each(['research.turn', 'research.qualify'])('does not lease or finalize when %s is disabled', async (action) => {
+    const h = build();
+    h.prisma.workspace.findUnique.mockResolvedValue({ researchExecution: 'MCP', aiSpendPolicy: { jobs: { [action]: { enabled: false } } } });
+    await expect(h.svc.claim(WS)).rejects.toThrow(/disabled/i);
+    await expect(h.svc.submit(WS, 'job-1', [])).rejects.toThrow(/disabled/i);
+    await expect(h.svc.complete(WS, 'job-1', { status: 'DONE' })).rejects.toThrow(/disabled/i);
+    await expect(h.svc.toolContext(WS, 'job-1')).rejects.toThrow(/disabled/i);
+    expect(h.finalize.finalize).not.toHaveBeenCalled();
+    expect(h.runs.start).not.toHaveBeenCalled();
+    expect(h.runs.finish).not.toHaveBeenCalled();
+  });
+
+  it('rejects a held lease after a provider change to API', async () => {
+    const h = build();
+    h.prisma.workspace.findUnique.mockResolvedValue({ researchExecution: 'MCP', aiSpendPolicy: { jobs: { 'research.turn': { provider: 'API' } } } });
+    await expect(h.svc.complete(WS, 'job-1', { status: 'DONE' })).rejects.toThrow(/MCP/i);
+    await expect(h.svc.submit(WS, 'job-1', [])).rejects.toThrow(/MCP/i);
+    expect(h.table[0].status).toBe('CLAIMED');
+  });
+
+  it('holds mixed explicit providers instead of executing one action on the wrong provider', async () => {
+    const h = build();
+    h.prisma.workspace.findUnique.mockResolvedValue({ researchExecution: 'MCP', aiSpendPolicy: { jobs: { 'research.turn': { provider: 'MCP' }, 'research.qualify': { provider: 'API' } } } });
+    await expect(h.svc.claim(WS)).rejects.toThrow(/conflict/i);
+    expect(h.runs.start).not.toHaveBeenCalled();
+  });
+
+  it('returns expired disabled work to PENDING without closing or running it', async () => {
+    const h = build();
+    h.prisma.workspace.findUnique.mockResolvedValue({ researchExecution: 'MCP', aiSpendPolicy: { jobs: { 'research.turn': { enabled: false } } } });
+    await (h.svc as any).releaseExpired(WS);
+    expect(h.table[0].status).toBe('PENDING');
+    expect(h.runs.finish).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * The MCP research lane's lease.
  *

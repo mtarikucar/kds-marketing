@@ -29,6 +29,7 @@ import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
 import { VendorSpendReportService } from '../wallet/vendor-spend-report.service';
 import { WorkspaceAiKeyService } from '../ai/workspace-ai-key.service';
 import { AiSpendSettingsService } from '../ai/ai-spend-settings.service';
+import { AiJobSettingsService } from '../ai/ai-job-settings.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
@@ -61,7 +62,21 @@ export class MarketingAiController {
     private readonly vendorSpend: VendorSpendReportService,
     private readonly ownKey: WorkspaceAiKeyService,
     private readonly spend: AiSpendSettingsService,
+    private readonly jobSettings: AiJobSettingsService,
   ) {}
+
+  @Get('execution-policy')
+  @MarketingRoles('MANAGER')
+  getExecutionPolicy(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.jobSettings.get(actor.workspaceId);
+  }
+
+  @Patch('execution-policy')
+  @MarketingRoles('OWNER')
+  @RequirePermission('settings.manage')
+  setExecutionPolicy(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() body: unknown) {
+    return this.jobSettings.set(actor.workspaceId, body);
+  }
 
   // ---- What we spend AI money on, and the switch per job ----
   //

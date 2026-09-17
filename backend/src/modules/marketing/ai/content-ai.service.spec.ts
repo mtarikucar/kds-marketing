@@ -1,3 +1,4 @@
+import { creditCost } from './ai-credit-costs';
 import { ContentAiService } from './content-ai.service';
 
 /**
@@ -24,10 +25,10 @@ describe('ContentAiService', () => {
       },
     };
     anthropic = {
-      isEnabled: jest.fn().mockReturnValue(true),
+      isEnabledFor: jest.fn().mockReturnValue(true),
       complete: jest.fn().mockResolvedValue({ text: 'BODY line' }),
     };
-    credits = { reserve: jest.fn(), refund: jest.fn() };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() };
     brandContext = { summaryFor: jest.fn() };
     svc = new ContentAiService(prisma as any, anthropic as any, credits as any, brandContext as any);
   });
@@ -41,7 +42,14 @@ describe('ContentAiService', () => {
     expect(system).toContain('Brand: Acme');
     expect(system).toContain('writing on behalf of this brand');
     expect(system).not.toContain('Product: A widget');
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refund the configured price for a free failed reservation', async () => {
+    credits.reserveForJob.mockResolvedValueOnce(0);
+    anthropic.complete.mockRejectedValueOnce(new Error('provider failed'));
+    await expect(svc.compose(WS, { kind: 'social', goal: 'promo' })).rejects.toThrow('provider failed');
+    expect(credits.refund).toHaveBeenCalledWith(WS, 0);
   });
 
   it('falls back to the plain productName/description form when there is no brand', async () => {

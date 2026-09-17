@@ -13,13 +13,13 @@ import { creditCost } from './ai-credit-costs';
  */
 function deps(over: { enabled?: boolean; text?: string; error?: Error } = {}) {
   const anthropic = {
-    isEnabled: jest.fn().mockReturnValue(over.enabled ?? true),
+    isEnabledFor: jest.fn().mockReturnValue(over.enabled ?? true),
     complete: jest.fn(async () => {
       if (over.error) throw over.error;
       return { text: over.text ?? 'SAFE' };
     }),
   };
-  const credits = { reserve: jest.fn(), refund: jest.fn() };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() };
   return { svc: new BrandSafetyService(anthropic as never, credits as never), anthropic, credits };
 }
 
@@ -29,12 +29,12 @@ describe('BrandSafetyService.screen', () => {
   it('SAFE copy → SAFE, charged once, attributed to the workspace', async () => {
     const { svc, anthropic, credits } = deps({ text: 'SAFE' });
     await expect(svc.screen('ws1', 'perfectly ordinary copy')).resolves.toBe('SAFE');
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', COST);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws1', 'brand.safety', COST);
     expect(credits.refund).not.toHaveBeenCalled();
     // Without BOTH of these the vendor cost never reaches AiUsageLog: the
     // credit is charged and nothing records what it cost us.
     expect(anthropic.complete).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: 'ws1', action: 'workflow.ai_classify' }),
+      expect.objectContaining({ workspaceId: 'ws1', action: 'brand.safety' }),
     );
   });
 
@@ -48,22 +48,22 @@ describe('BrandSafetyService.screen', () => {
     // decides what to do about that, and the two callers decide differently.
     const { svc, anthropic, credits } = deps({ enabled: false });
     await expect(svc.screen('ws1', 'copy')).resolves.toBe('UNAVAILABLE');
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(anthropic.complete).not.toHaveBeenCalled();
   });
 
   it('a provider error → UNAVAILABLE, and the reserved credit is refunded', async () => {
     const { svc, credits } = deps({ error: new Error('529 overloaded') });
     await expect(svc.screen('ws1', 'copy')).resolves.toBe('UNAVAILABLE');
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', COST);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws1', 'brand.safety', COST);
     expect(credits.refund).toHaveBeenCalledWith('ws1', COST);
   });
 
   it('lets an exhausted-credits refusal out — being unable to PAY for the screen is not a verdict', async () => {
     const refund = jest.fn();
     const svc = new BrandSafetyService(
-      { isEnabled: () => true, complete: jest.fn() } as never,
-      { reserve: jest.fn().mockRejectedValue(new Error('AI_CREDITS_EXHAUSTED')), refund } as never,
+      { isEnabledFor: () => true, complete: jest.fn() } as never,
+      { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)).mockRejectedValue(new Error('AI_CREDITS_EXHAUSTED')), refund } as never,
     );
     await expect(svc.screen('ws1', 'copy')).rejects.toThrow('AI_CREDITS_EXHAUSTED');
     // And it is not swallowed into a refund of a reservation that never happened.

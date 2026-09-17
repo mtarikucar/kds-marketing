@@ -1,3 +1,4 @@
+import { creditCost } from '../../ai/ai-credit-costs';
 import { NotFoundException } from '@nestjs/common';
 import { StrategyIntakeService, StrategyIntakeInput } from './strategy-intake.service';
 
@@ -13,8 +14,8 @@ const completion = (toolUses: any[]) => ({ text: '', toolUses, stopReason: 'tool
 function deps(overrides: { aiEnabled?: boolean; completions?: any[]; session?: any } = {}) {
   const complete = jest.fn();
   (overrides.completions ?? []).forEach((c) => complete.mockResolvedValueOnce(c));
-  const anthropic = { isEnabled: () => overrides.aiEnabled ?? true, complete };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const anthropic = { isEnabledFor: () => overrides.aiEnabled ?? true, complete };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
 
   const created = { id: 'sess1' };
   const store: { current: any } = { current: overrides.session ?? null };
@@ -60,7 +61,7 @@ describe('StrategyIntakeService', () => {
     it('gracefully skips when AI is not configured', async () => {
       const { svc, credits } = deps({ aiEnabled: false });
       expect(await svc.start('ws1', INPUT)).toEqual({ skipped: 'ai-not-configured' });
-      expect(credits.reserve).not.toHaveBeenCalled();
+      expect(credits.reserveForJob).not.toHaveBeenCalled();
     });
 
     it('creates a session, runs auto-analysis, reserves credit, returns first questions', async () => {
@@ -72,7 +73,7 @@ describe('StrategyIntakeService', () => {
       expect('sessionId' in r && r.sessionId).toBe('sess1');
       expect('questions' in r && r.questions).toEqual(['What is your monthly budget?', 'Who is the core audience?']);
       expect('autoAnalysis' in r && r.autoAnalysis.suggestedArchetype).toBe('B2C_COMMUNITY_NICHE');
-      expect(credits.reserve).toHaveBeenCalledWith('ws1', 2);
+      expect(credits.reserveForJob).toHaveBeenCalledWith('ws1', 'strategy.interview');
       expect(complete).toHaveBeenCalledTimes(2); // auto-analysis + first interview turn
       expect(website.collect).toHaveBeenCalled();
       // autoAnalysis + transcript persisted, status still IN_PROGRESS
@@ -106,7 +107,7 @@ describe('StrategyIntakeService', () => {
       await svc.start('ws1', INPUT);
       const r = await svc.answer('ws1', 'sess1', ['$500/mo']);
       expect(r).toEqual({ done: true });
-      expect(credits.reserve).toHaveBeenCalledTimes(2); // start + this answer turn
+      expect(credits.reserveForJob).toHaveBeenCalledTimes(2); // start + this answer turn
     });
 
     it('throws NotFound for an unknown session', async () => {

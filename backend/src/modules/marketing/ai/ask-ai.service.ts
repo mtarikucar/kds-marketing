@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from './anthropic.service';
 import { AiCreditsService } from './ai-credits.service';
-import { creditCost, tierFor } from './ai-credit-costs';
+import { tierFor } from './ai-credit-costs';
 
 const MAX_ITERS = 4;
 
@@ -57,13 +57,12 @@ export class AskAiService {
     question: string,
     actor?: { id: string; role: string },
   ): Promise<{ answer: string }> {
-    if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'ask_ai.question'))) throw new ServiceUnavailableException('AI is not configured');
     // Base only — the loop below charges per turn. One flat reserve covered
     // up to MAX_ITERS Opus calls whose tool results are sliced to 6.000 chars
     // each, so context (and cost) grew every turn while the price did not.
-    await this.credits.reserve(workspaceId, creditCost('ask_ai.question'));
-    let turnsCharged = 0;
-    let turnsCompleted = 0;
+    const baseReserved = await this.credits.reserveForJob(workspaceId, 'ask_ai.question');
+    let pendingTurnReserved = 0;
     try {
       const system =
         'You are an analyst assistant inside a marketing CRM. Answer the user about THEIR data using the tools. ' +
@@ -73,16 +72,21 @@ export class AskAiService {
       let answer = '';
       for (let i = 0; i < MAX_ITERS; i++) {
         // Charge before the call so an exhausted workspace stops spending.
-        await this.credits.reserve(workspaceId, creditCost('ask_ai.turn'));
-        turnsCharged += 1;
-        const res = await this.anthropic.complete({ system, messages, tools: TOOLS, cacheSystem: true, cacheTools: true, cacheConversation: true, maxTokens: 800, tier: tierFor('ask_ai.turn'), workspaceId: workspaceId, action: 'ask_ai.turn' });
-        turnsCompleted += 1;
+        pendingTurnReserved = await this.credits.reserveForJob(workspaceId, 'ask_ai.turn');
+        const idempotencyScope = JSON.stringify(['ask', actor?.id ?? null, actor?.role ?? null]);
+        const res = await this.anthropic.complete({ system, messages, tools: TOOLS, cacheSystem: true, cacheTools: true, cacheConversation: true, maxTokens: 800, tier: tierFor('ask_ai.turn'), workspaceId: workspaceId, action: 'ask_ai.turn', idempotencyScope });
+        pendingTurnReserved = 0;
         if (res.text) answer = res.text;
         if (!res.toolUses.length) break;
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const tu of res.toolUses) {
           let out: unknown;
-          try {
+          if (res.mcpTaskId) {
+            // Replay the original read result so later prompts remain stable.
+            // Uncertain journal errors must escape, not become model feedback.
+            out = await this.anthropic.runMcpToolOnce(workspaceId, res.mcpTaskId, tu.id,
+              () => this.runTool(workspaceId, tu.name, tu.input as any, actor), idempotencyScope);
+          } else try {
             out = await this.runTool(workspaceId, tu.name, tu.input as any, actor);
           } catch (err) {
             // A single tool failure (e.g. the model guessed an invalid status
@@ -110,8 +114,7 @@ export class AskAiService {
       // hit AI_CREDITS_EXHAUSTED on the next one, get everything back.
       await this.credits.refund(
         workspaceId,
-        creditCost('ask_ai.question') +
-          Math.max(0, turnsCharged - turnsCompleted) * creditCost('ask_ai.turn'),
+        baseReserved + pendingTurnReserved,
       );
       throw e;
     }

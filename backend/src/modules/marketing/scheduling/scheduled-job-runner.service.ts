@@ -10,6 +10,8 @@ import {
   researchGraceCutoff,
 } from '../research/research-execution';
 import { AI_REPLY_KIND, aiGraceCutoff } from '../ai/ai-execution';
+import { jobPolicy } from '../ai/ai-job-policy';
+import { FOLLOWUP_KIND } from '../channels/conversation-followup.service';
 
 export interface ClaimedJob {
   id: string;
@@ -329,35 +331,75 @@ export class ScheduledJobRunnerService {
        WHERE "id" IN (
          SELECT s."id" FROM "scheduled_jobs" s
           WHERE s."status" = 'PENDING' AND s."runAt" <= ${now}
-            /**
-             * The AI reply lane, same shape as research below and one
-             * difference that matters: MCP_ONLY has NO grace term. Research's
-             * invariant is "never silently stops", so its MCP mode always
-             * hands back eventually. A workspace on MCP_ONLY has asked for the
-             * opposite guarantee — the platform key is not used, full stop —
-             * and a window that eventually fires would make that a preference
-             * rather than a promise. The queue waits, and the setup list
-             * reports the depth so the waiting is visible.
-             *
-             * This predicate is the SQL twin of platformMayRun() in
-             * ai/ai-execution.ts -- note the plain text: a backtick inside this
-             * template literal would end the SQL string. Two implementations of
-             * one rule drift unless something pins them together, which is what
-             * the test beside this file is for.
-             */
+            /* A due follow-up trigger only hands off to the reply queue. Its
+             * enabled flag applies here; its provider applies to that queue. */
             AND NOT (
-              s."kind" = ${AI_REPLY_KIND}
+              s."kind" IN (${AI_REPLY_KIND}, ${FOLLOWUP_KIND})
               AND EXISTS (
                 SELECT 1 FROM "workspaces" w
+                CROSS JOIN LATERAL (
+                  SELECT w."aiSpendPolicy"->'jobs'->(
+                    CASE WHEN s."kind" = ${FOLLOWUP_KIND} OR s."payload"->>'reason' = 'followup'
+                         THEN 'conversation.followup' ELSE 'conversation.reply' END
+                  ) AS choice
+                ) p
                  WHERE w."id" = s."workspaceId"
                    AND (
-                     w."aiExecution" = 'MCP_ONLY'
-                     OR (
-                       s."createdAt" > ${aiCutoff}
-                       AND (
-                         w."aiExecution" = 'MCP'
+                     CASE WHEN jsonb_typeof(p.choice->'enabled') = 'boolean'
+                          THEN p.choice->'enabled' = 'false'::jsonb
+                          ELSE w."aiSpendPolicy"->'conversation' = 'false'::jsonb END IS TRUE
+                     OR (s."kind" = ${AI_REPLY_KIND} AND (
+                       (p.choice->>'provider' IS NOT NULL AND p.choice->>'provider' <> 'API')
+                       OR (p.choice->>'provider' IS NULL AND (
+                         w."aiExecution" = 'MCP_ONLY'
                          OR (
-                           w."aiExecution" = 'AUTO'
+                           s."createdAt" > ${aiCutoff}
+                           AND (
+                             w."aiExecution" = 'MCP'
+                             OR (
+                               w."aiExecution" = 'AUTO'
+                               AND EXISTS (
+                                 SELECT 1 FROM "agent_runs" r
+                                  WHERE r."workspaceId" = w."id"
+                                    AND r."agent" = ${MCP_ACTIVITY_AGENT}
+                                    AND r."startedAt" > ${mcpSeenSince}
+                               )
+                             )
+                           )
+                         )
+                       ))
+                     ))
+                   )
+              )
+            )
+            AND NOT (
+              s."kind" = ${RESEARCH_RUN_KIND}
+              AND EXISTS (
+                SELECT 1 FROM "workspaces" w
+                CROSS JOIN LATERAL (
+                  SELECT w."aiSpendPolicy"->'jobs'->'research.turn' AS turn,
+                         w."aiSpendPolicy"->'jobs'->'research.qualify' AS qualify
+                ) p
+                 WHERE w."id" = s."workspaceId"
+                   AND (
+                     CASE WHEN jsonb_typeof(p.turn->'enabled') = 'boolean'
+                          THEN p.turn->'enabled' = 'false'::jsonb
+                          ELSE w."aiSpendPolicy"->'research' = 'false'::jsonb END IS TRUE
+                     OR CASE WHEN jsonb_typeof(p.qualify->'enabled') = 'boolean'
+                             THEN p.qualify->'enabled' = 'false'::jsonb
+                             ELSE w."aiSpendPolicy"->'research' = 'false'::jsonb END IS TRUE
+                     /* Strict providers take precedence over manual runs and
+                      * grace. A mixed-provider job cannot run on the server. */
+                     OR (p.turn->>'provider' IS NOT NULL AND p.turn->>'provider' <> 'API')
+                     OR (p.qualify->>'provider' IS NOT NULL AND p.qualify->>'provider' <> 'API')
+                     OR (
+                       p.turn->>'provider' IS NULL AND p.qualify->>'provider' IS NULL
+                       AND s."payload"->>${RESEARCH_MANUAL_KEY} IS DISTINCT FROM 'true'
+                       AND s."createdAt" > ${graceCutoff}
+                       AND (
+                         w."researchExecution" = 'MCP'
+                         OR (
+                           w."researchExecution" = 'AUTO'
                            AND EXISTS (
                              SELECT 1 FROM "agent_runs" r
                               WHERE r."workspaceId" = w."id"
@@ -370,27 +412,6 @@ export class ScheduledJobRunnerService {
                    )
               )
             )
-            AND NOT (
-              s."kind" = ${RESEARCH_RUN_KIND}
-              AND s."payload"->>${RESEARCH_MANUAL_KEY} IS DISTINCT FROM 'true'
-              AND s."createdAt" > ${graceCutoff}
-              AND EXISTS (
-                SELECT 1 FROM "workspaces" w
-                 WHERE w."id" = s."workspaceId"
-                   AND (
-                     w."researchExecution" = 'MCP'
-                     OR (
-                       w."researchExecution" = 'AUTO'
-                       AND EXISTS (
-                         SELECT 1 FROM "agent_runs" r
-                          WHERE r."workspaceId" = w."id"
-                            AND r."agent" = ${MCP_ACTIVITY_AGENT}
-                            AND r."startedAt" > ${mcpSeenSince}
-                       )
-                     )
-                   )
-              )
-            )
           ORDER BY s."runAt"
           FOR UPDATE SKIP LOCKED
           LIMIT ${BATCH}
@@ -398,6 +419,28 @@ export class ScheduledJobRunnerService {
        RETURNING "id", "workspaceId", "kind", "payload", "attempts";
     `;
     return rows;
+  }
+
+  /** A batch may wait behind another handler while the owner changes policy. */
+  private async heldByPolicy(job: ClaimedJob): Promise<boolean> {
+    const actions = job.kind === RESEARCH_RUN_KIND ? ['research.turn', 'research.qualify']
+      : job.kind === FOLLOWUP_KIND ? ['conversation.followup']
+      : job.kind === AI_REPLY_KIND ? [job.payload?.reason === 'followup' ? 'conversation.followup' : 'conversation.reply']
+      : [];
+    if (!actions.length) return false;
+    const ws = await this.prisma.workspace.findUnique({ where: { id: job.workspaceId }, select: { aiSpendPolicy: true } });
+    return actions.some((action) => {
+      const choice = jobPolicy(ws?.aiSpendPolicy as Record<string, unknown> | null, action);
+      // FOLLOWUP_KIND is a durable handoff trigger, not a model invocation.
+      return !choice.enabled || (job.kind !== FOLLOWUP_KIND && choice.explicit && choice.provider !== 'API');
+    });
+  }
+
+  private async hold(job: ClaimedJob): Promise<void> {
+    await this.prisma.scheduledJob.update({
+      where: { id: job.id },
+      data: { status: 'PENDING', lockedAt: null, lastError: 'Waiting for the configured AI action policy' },
+    });
   }
 
   private async run(job: ClaimedJob): Promise<void> {
@@ -415,6 +458,7 @@ export class ScheduledJobRunnerService {
       return;
     }
     try {
+      if (await this.heldByPolicy(job)) { await this.hold(job); return; }
       // Heartbeat: claimBatch stamps lockedAt ONCE for up to 100 rows, but a
       // row can wait many minutes in this in-memory queue behind slow
       // handlers. Without a re-stamp it would look stale (>15 min) to another
@@ -426,6 +470,7 @@ export class ScheduledJobRunnerService {
         data: { lockedAt: new Date() },
       });
       const result = await handler(job);
+      if (await this.heldByPolicy(job)) { await this.hold(job); return; }
       if (result && typeof result === 'object' && 'reschedule' in result && result.reschedule) {
         // Self-rescheduling chain: advance THIS row in place rather than creating
         // a child PENDING, so the chain is always exactly one row. attempts resets
@@ -449,6 +494,8 @@ export class ScheduledJobRunnerService {
         data: { status: 'DONE', completedAt: new Date(), lastError: null },
       });
     } catch (e: any) {
+      // Policy changes do not consume retry attempts or dead-letter held work.
+      if (await this.heldByPolicy(job)) { await this.hold(job); return; }
       const attempts = job.attempts + 1;
       const fresh = await this.prisma.scheduledJob.findUnique({
         where: { id: job.id },

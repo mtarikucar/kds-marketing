@@ -33,7 +33,7 @@ const mockStream = mockCtor.__stream;
 describe('AnthropicService', () => {
   function make(env: Record<string, string | undefined>) {
     const config = { get: jest.fn((k: string) => env[k]) };
-    return new AnthropicService(config as any);
+    return new AnthropicService(config as any, undefined as any);
   }
 
   beforeEach(() => {
@@ -176,7 +176,7 @@ describe('AnthropicService — tier model ids are resolvable', () => {
     });
     const svc = new AnthropicService({
       get: (k: string) => ({ ANTHROPIC_API_KEY: 'sk-x', ...env })[k],
-    } as never);
+    } as never, undefined as any);
     await svc.complete({
       system: 's',
       messages: [{ role: 'user', content: 'x' }],
@@ -304,5 +304,49 @@ describe('AnthropicService — tier model ids are resolvable', () => {
       const svc = make({ ...KEY, AI_DISABLED: '1' });
       expect(svc.isEnabled()).toBe(false);
     });
+  });
+});
+
+describe('per-job provider selection', () => {
+  function make(provider: string, enabled = true) {
+    const prisma = { workspace: { findUnique: jest.fn().mockResolvedValue({ aiSpendPolicy: { jobs: { 'content.compose': { provider, enabled } } }, aiApiKeyEnc: 'must-not-read-for-mcp' }) } };
+    const mcp = { generate: jest.fn().mockResolvedValue({ text: 'from own Claude', toolUses: [], stopReason: 'end_turn', usage: { input: 0, output: 0 } }) };
+    const svc = new AnthropicService({ get: () => undefined } as any, prisma as any, mcp as any);
+    return { svc, mcp };
+  }
+  it('uses the connected assistant without constructing an API client, even with BYOK', async () => {
+    mockCtor.mockClear(); const { svc, mcp } = make('MCP');
+    expect(await svc.complete({ workspaceId: 'ws', action: 'content.compose', system: 's', messages: [{ role: 'user', content: 'x' }] })).toMatchObject({ text: 'from own Claude' });
+    expect(mcp.generate).toHaveBeenCalled(); expect(mockCtor).not.toHaveBeenCalled();
+  });
+  it('refuses disabled work before contacting either provider', async () => {
+    mockCtor.mockClear(); const { svc, mcp } = make('MCP', false);
+    await expect(svc.complete({ workspaceId: 'ws', action: 'content.compose', system: 's', messages: [] })).rejects.toThrow('AI_SPEND_DISABLED');
+    expect(mcp.generate).not.toHaveBeenCalled(); expect(mockCtor).not.toHaveBeenCalled();
+  });
+  it('fails closed for an unknown persisted provider instead of spending through the API', async () => {
+    mockCtor.mockClear(); const { svc, mcp } = make('UNKNOWN');
+    await expect(svc.complete({ workspaceId: 'ws', action: 'content.compose', system: 's', messages: [] })).rejects.toThrow('AI_PROVIDER_INVALID');
+    expect(mcp.generate).not.toHaveBeenCalled(); expect(mockCtor).not.toHaveBeenCalled();
+  });
+  it('honors AI_DISABLED at direct completion and streaming boundaries, including MCP', async () => {
+    for (const provider of ['API', 'MCP']) {
+      mockCtor.mockClear();
+      const mcp = { generate: jest.fn() };
+      const prisma = { workspace: { findUnique: jest.fn(async () => ({ aiSpendPolicy: { jobs: { 'content.compose': { provider } } } })) } };
+      const svc = new AnthropicService({ get: (key: string) => key === 'AI_DISABLED' ? '1' : undefined } as any, prisma as any, mcp as any);
+      const opts = { workspaceId: 'ws', action: 'content.compose', system: 's', messages: [] };
+      await expect(svc.complete(opts)).rejects.toThrow('AI_DISABLED');
+      await expect(svc.streamText(opts)[Symbol.asyncIterator]().next()).rejects.toThrow('AI_DISABLED');
+      expect(mcp.generate).not.toHaveBeenCalled(); expect(mockCtor).not.toHaveBeenCalled();
+    }
+  });
+  it('passes task identity, actor scope and the original callback to the durable tool helper', async () => {
+    const callback = jest.fn(async () => ({ done: true }));
+    const mcp = { runToolOnce: jest.fn(async () => ({ done: true })) };
+    const svc = new AnthropicService({ get: () => undefined } as any, {} as any, mcp as any);
+    await expect(svc.runMcpToolOnce('ws', 'task', 'tool', callback, 'actor:alice')).resolves.toEqual({ done: true });
+    expect(mcp.runToolOnce).toHaveBeenCalledWith('ws', 'task', 'tool', callback, 'actor:alice');
+    expect(callback).not.toHaveBeenCalled();
   });
 });

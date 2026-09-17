@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AgentRunService } from '../agents/agent-run.service';
 import { BrandContextService } from '../brand-brain/brand-context.service';
@@ -14,6 +14,7 @@ import {
 } from './research-execution';
 import { buildMcpResearchInstruction, researchTargetVolume } from './research-contract';
 import { usdFor } from '../ai/ai-model-prices';
+import { jobPolicy } from '../ai/ai-job-policy';
 
 /**
  * The `ScheduledJob.status` a job sits in while an MCP client holds it.
@@ -287,12 +288,29 @@ export class ResearchLeaseService {
    * `research-mcp-fallback.realdb.e2e-spec.ts`.
    */
   async modeFor(workspaceId: string): Promise<EffectiveResearchExecution> {
+    return (await this.executionPolicyFor(workspaceId)).mode;
+  }
+
+  /** Both actions share a durable job. Explicit MCP never expires into API. */
+  async executionPolicyFor(workspaceId: string): Promise<{
+    mode: EffectiveResearchExecution;
+    strict: boolean;
+    enabled: boolean;
+    conflict: boolean;
+  }> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { researchExecution: true },
+      select: { researchExecution: true, aiSpendPolicy: true },
     });
+    const policy = ws?.aiSpendPolicy as Record<string, unknown> | null;
+    const choices = ['research.turn', 'research.qualify'].map((action) => jobPolicy(policy, action));
+    const providers = new Set(choices.filter((choice) => choice.explicit).map((choice) => choice.provider));
+    const enabled = choices.every((choice) => choice.enabled);
+    const strict = providers.has('MCP');
+    const conflict = providers.size > 1 || providers.has('LOCAL');
+    if (providers.size) return { mode: strict ? 'MCP' : 'SERVER', strict, enabled, conflict };
     const stored = ws?.researchExecution;
-    if (stored !== 'AUTO') return effectiveResearchExecution(stored, false);
+    if (stored !== 'AUTO') return { mode: effectiveResearchExecution(stored, false), strict, enabled, conflict };
 
     const seen = await this.prisma.agentRun.findFirst({
       where: {
@@ -302,12 +320,19 @@ export class ResearchLeaseService {
       },
       select: { id: true },
     });
-    return effectiveResearchExecution(stored, seen !== null);
+    return { mode: effectiveResearchExecution(stored, seen !== null), strict, enabled, conflict };
+  }
+
+  private assertRunnable(policy: Awaited<ReturnType<ResearchLeaseService['executionPolicyFor']>>): void {
+    if (!policy.enabled) throw new ForbiddenException('Research action is disabled by the current policy.');
+    if (policy.conflict) throw new ServiceUnavailableException('Research provider conflict: both actions share one job and must use the same provider.');
   }
 
   /** Lease the next queued research job for this workspace, with its brief. */
   async claim(workspaceId: string): Promise<ClaimResult> {
-    if ((await this.modeFor(workspaceId)) !== 'MCP') {
+    const policy = await this.executionPolicyFor(workspaceId);
+    this.assertRunnable(policy);
+    if (policy.mode !== 'MCP') {
       return { job: null, reason: 'not-in-mcp-mode' };
     }
 
@@ -832,6 +857,9 @@ export class ResearchLeaseService {
     jobId: string,
     statuses: string[],
   ): Promise<{ job: ResearchJob; runId: string | null; status: string }> {
+    const policy = await this.executionPolicyFor(workspaceId);
+    this.assertRunnable(policy);
+    if (policy.mode !== 'MCP') throw new ForbiddenException('Research is no longer assigned to the MCP lane.');
     const row = await this.prisma.scheduledJob.findFirst({
       where: { id: jobId, workspaceId, kind: RESEARCH_RUN_KIND, status: { in: statuses } },
       select: { id: true, payload: true, status: true },

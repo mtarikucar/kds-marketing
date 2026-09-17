@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { toast } from 'sonner';
 import { Image as ImageIcon, Clapperboard } from 'lucide-react';
+import { AiExecutionPolicyCard } from './AiExecutionPolicyCard';
 import {
   getMediaModelDefaults,
   setMediaModelDefaults,
@@ -128,12 +129,14 @@ export default function AiModelsPage() {
   return (
     <div className="space-y-5 p-4 md:p-6">
       <PageHeader
-        title={t('aiModels.title', 'AI generation models')}
+        title={t('aiModels.title', 'AI settings')}
         description={t(
           'aiModels.subtitle',
-          'Which model this workspace generates images and videos with, and what each one costs. A campaign can still override it; anything with no campaign uses what you choose here.',
+          'Manage AI actions and default image and video models.',
         )}
       />
+
+      <AiExecutionPolicyCard />
 
       <QueryStateBoundary
         isLoading={q.isLoading}

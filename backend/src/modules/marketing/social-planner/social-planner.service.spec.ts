@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import {
   SocialPlannerService,
@@ -94,6 +95,7 @@ describe('SocialPlannerService', () => {
 
   beforeEach(() => {
     prisma = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiSpendPolicy: null }) },
       socialPost: {
         create: jest.fn(),
         findMany: jest.fn(),
@@ -121,7 +123,7 @@ describe('SocialPlannerService', () => {
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
     runner = { registerHandler: jest.fn() };
     const r2 = { isConfigured: () => false, upload: jest.fn(), deleteKeys: jest.fn() };
-    credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+    credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
 
     svc = new SocialPlannerService(prisma as any, scheduledJobs as any, runner as any, r2 as any, credits as any);
   });
@@ -399,7 +401,7 @@ describe('SocialPlannerService', () => {
     // The vendor is never called at all — nothing goes out.
     expect(mockPublish).not.toHaveBeenCalled();
     // ...and X's per-post charge is never reserved for a publish that never ran.
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     const call = prisma.socialPostTarget.update.mock.calls.at(-1)[0];
     expect(call.where.id).toBe('tgt-x');
     expect(call.data.status).toBe('FAILED');
@@ -667,8 +669,8 @@ describe('SocialPlannerService', () => {
 
     await svc.publishDuePost('post-1', 'ws-a');
 
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
-    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledTimes(1);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-a', 'social.publish.x');
     expect(credits.refund).not.toHaveBeenCalled();
     mockPublish.mockReset();
   });
@@ -682,7 +684,7 @@ describe('SocialPlannerService', () => {
 
     await svc.publishDuePost('post-1', 'ws-a');
 
-    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 20);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-a', 'social.publish.x_link');
     expect(credits.refund).not.toHaveBeenCalled();
     mockPublish.mockReset();
   });
@@ -696,7 +698,7 @@ describe('SocialPlannerService', () => {
 
     await svc.publishDuePost('post-1', 'ws-a');
 
-    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-a', 'social.publish.x');
     expect(credits.refund).toHaveBeenCalledWith('ws-a', 2);
     expect(prisma.socialPostTarget.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -718,7 +720,7 @@ describe('SocialPlannerService', () => {
     // The throw still propagates the same way it does today (no swallow).
     await expect(svc.publishDuePost('post-1', 'ws-a')).rejects.toThrow(boom);
 
-    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-a', 'social.publish.x');
     // Refunded exactly once — the thrown-error path must not also reach the
     // returned-{ok:false} refund branch (no double-refund).
     expect(credits.refund).toHaveBeenCalledTimes(1);
@@ -743,7 +745,7 @@ describe('SocialPlannerService', () => {
 
     await svc.publishDuePost('post-1', 'ws-a');
 
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(credits.refund).not.toHaveBeenCalled();
     mockPublish.mockReset();
   });
@@ -751,7 +753,7 @@ describe('SocialPlannerService', () => {
   it('publishDuePost marks the TWITTER target FAILED (not a crash) when credits are exhausted, and still publishes other targets', async () => {
     const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'ext-fb' });
-    credits.reserve.mockRejectedValue(
+    credits.reserveForJob.mockRejectedValue(
       new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED', message: 'Monthly AI credit limit reached (100)' }),
     );
 

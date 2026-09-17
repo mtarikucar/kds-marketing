@@ -413,6 +413,8 @@ Gated on the `conversationAi` package feature, matching the REST controller.
 | `jeeta.message_lead` | Start a conversation with a chosen lead on SMS, WhatsApp or email | `contacts.write` | WRITE | SEND | no |
 | `jeeta.set_channel_status` | Enable or disable a channel | `settings.manage` | WRITE | — | no |
 | `jeeta.set_channel_agent` | Choose which AI agent auto-replies on a channel (null = manual only) | `settings.manage` | WRITE | — | no |
+| `jeeta.claim_ai_task` | Claim model work assigned to your own connected Claude; use your model, then return the response. Polling is required; there is no paid API fallback | `settings.manage` | WRITE | — | no |
+| `jeeta.complete_ai_task` | Return the claimed generation with its task ID and lease token (24 KiB UTF-8 JSON maximum). This stores a response; Jeeta validates and executes tool calls. Do not execute them separately | `settings.manage` | WRITE | — | no |
 | `jeeta.claim_reply_job` | Take the next customer message awaiting an answer and hold it while you write one | `contacts.write` | WRITE | — | no |
 | `jeeta.complete_reply_job` | Close a claimed reply, or return it to the queue | `contacts.write` | WRITE | — | no |
 | `jeeta.get_ai_reply_queue` | How many replies are waiting, and how long the oldest has waited | `reports.read` | READ | — | no |

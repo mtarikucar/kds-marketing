@@ -1,3 +1,4 @@
+import { creditCost } from '../ai-credit-costs';
 import { ServiceUnavailableException, BadRequestException } from '@nestjs/common';
 import { MediaGenService, MEDIA_GEN_POLL_KIND } from './media-gen.service';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, RETIRED_SEEDANCE_LITE_MODEL } from './media-models.config';
@@ -28,7 +29,7 @@ function makeSvc(links: { campaign?: unknown; item?: unknown } = {}) {
         .mockResolvedValue(links.item === undefined ? { id: 'ci-1' } : links.item),
     },
   };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
   const provider = { name: 'fal', isConfigured: jest.fn().mockReturnValue(true), submit: jest.fn().mockResolvedValue({ providerRequestId: 'req-9' }), getResult: jest.fn() };
   const jobs = { schedule: jest.fn().mockResolvedValue('job-1') };
   const r2 = { isConfigured: jest.fn().mockReturnValue(true) };
@@ -58,7 +59,7 @@ describe('MediaGenService.requestGeneration', () => {
 
     expect(res).toEqual({ assetId: 'asset-1' });
     // reserve BEFORE submit, with the per-model estimate (default image model → 3)
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 3);
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 3);
     expect(prisma.generatedAsset.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ workspaceId: WS, status: 'QUEUED', provider: 'fal', model: DEFAULT_IMAGE_MODEL, costCreditsReserved: 3 }),
     }));
@@ -100,7 +101,7 @@ describe('MediaGenService.requestGeneration', () => {
     const { svc, prisma, credits, provider } = makeSvc();
     prisma.generatedAsset.create.mockRejectedValue(new Error('DB down'));
     await expect(svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' })).rejects.toThrow('DB down');
-    expect(credits.reserve).toHaveBeenCalledWith(WS, 3);
+    expect(credits.reserveForJob).toHaveBeenCalledWith(WS, expect.stringMatching(/^media\./), 3);
     expect(credits.refund).toHaveBeenCalledWith(WS, 3);
     expect(provider.submit).not.toHaveBeenCalled();
   });
@@ -141,14 +142,14 @@ describe('MediaGenService.requestGeneration — the campaign linkage is proven, 
     await expect(svc.requestGeneration(WS, linked)).rejects.toBeInstanceOf(BadRequestException);
     // Nothing spent, nothing submitted: an unowned id is a rejected request,
     // not a refunded one.
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
   it('refuses a neighbour campaign ITEM id BEFORE reserving anything', async () => {
     const { svc, credits, provider } = makeSvc({ item: null });
     await expect(svc.requestGeneration(WS, linked)).rejects.toBeInstanceOf(BadRequestException);
-    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.reserveForJob).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
   });
 

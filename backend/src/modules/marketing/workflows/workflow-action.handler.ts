@@ -4,7 +4,7 @@ import { WorkspaceMailboxService } from '../channels/workspace-mailbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from '../channels/message-sender.service';
@@ -225,8 +225,8 @@ export class WorkflowActionHandler {
   }
 
   private async aiGenerate(step: any, ctx: WorkflowContext): Promise<StepOutcome> {
-    if (!this.anthropic.isEnabled()) return { output: { result: 'skipped (AI off)' } };
-    await this.credits.reserve(ctx.workspaceId, creditCost('workflow.ai_generate'));
+    if (!(await this.anthropic.isEnabledFor(ctx.workspaceId, 'workflow.ai_generate'))) return { output: { result: 'skipped (AI off)' } };
+    const reserved = await this.credits.reserveForJob(ctx.workspaceId, 'workflow.ai_generate');
     try {
       const res = await this.anthropic.complete({
         system: `You generate short marketing copy for an automation. Context: ${this.leadBlurb(ctx)}`,
@@ -242,14 +242,15 @@ export class WorkflowActionHandler {
       ctx.context[step.saveAs ?? 'ai_output'] = res.text;
       return { output: { [step.saveAs ?? 'ai_output']: res.text } };
     } catch (e) {
-      await this.credits.refund(ctx.workspaceId, creditCost('workflow.ai_generate'));
+      await this.credits.refund(ctx.workspaceId, reserved);
       throw e;
     }
   }
 
   private async aiClassify(step: any, ctx: WorkflowContext): Promise<StepOutcome> {
-    if (!this.anthropic.isEnabled() || !step.routes) return {};
-    await this.credits.reserve(ctx.workspaceId, creditCost('workflow.ai_classify'));
+    if (!step.routes) return {};
+    if (!(await this.anthropic.isEnabledFor(ctx.workspaceId, 'workflow.ai_classify'))) return {};
+    const reserved = await this.credits.reserveForJob(ctx.workspaceId, 'workflow.ai_classify');
     try {
       const cats = (step.categories as string[]).join(', ');
       const res = await this.anthropic.complete({
@@ -262,6 +263,7 @@ export class WorkflowActionHandler {
         // what the vendor billed, so a price can drift from its cost unseen.
         workspaceId: ctx.workspaceId,
         action: 'workflow.ai_classify',
+        classificationLabels: step.categories as string[],
       });
       const reply = res.text.trim().toLowerCase();
       const catList = step.categories as string[];
@@ -283,7 +285,7 @@ export class WorkflowActionHandler {
       const goto = picked ? step.routes[picked] : undefined;
       return { goto, output: { category: picked ?? null } };
     } catch (e) {
-      await this.credits.refund(ctx.workspaceId, creditCost('workflow.ai_classify'));
+      await this.credits.refund(ctx.workspaceId, reserved);
       throw e;
     }
   }

@@ -2,7 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from './anthropic.service';
 import { AiCreditsService } from './ai-credits.service';
-import { creditCost, tierFor } from './ai-credit-costs';
+import { tierFor } from './ai-credit-costs';
 import { BrandContextService } from '../brand-brain/brand-context.service';
 
 export interface ComposeDto {
@@ -38,7 +38,7 @@ export class ContentAiService {
   ) {}
 
   async compose(workspaceId: string, dto: ComposeDto): Promise<ComposeResult> {
-    if (!this.anthropic.isEnabled()) {
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'content.compose'))) {
       throw new ServiceUnavailableException('AI is not configured');
     }
     const ws = await this.prisma.workspace.findUnique({
@@ -47,7 +47,7 @@ export class ContentAiService {
     });
     const brand = await this.brandContext.summaryFor(workspaceId);
 
-    await this.credits.reserve(workspaceId, creditCost('content.compose'));
+    const reserved = await this.credits.reserveForJob(workspaceId, 'content.compose');
     try {
       const lang = ws?.defaultLanguage ?? 'tr';
       const limits =
@@ -83,7 +83,7 @@ export class ContentAiService {
 
       return this.parse(res.text, dto.kind, n);
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('content.compose'));
+      await this.credits.refund(workspaceId, reserved);
       throw e;
     }
   }

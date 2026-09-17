@@ -1,3 +1,4 @@
+import { creditCost } from '../ai/ai-credit-costs';
 import { VoiceAiBridgeService } from './voice-ai-bridge.service';
 
 function makeDeps() {
@@ -6,7 +7,7 @@ function makeDeps() {
     voiceTranscript: { create: jest.fn().mockResolvedValue({}) },
   };
   const anthropic = {
-    isEnabled: jest.fn().mockReturnValue(true),
+    isEnabledFor: jest.fn().mockReturnValue(true),
     complete: jest.fn().mockResolvedValue({
       text: 'Merhaba, size nasıl yardımcı olabilirim?',
       toolUses: [],
@@ -15,7 +16,7 @@ function makeDeps() {
     }),
   };
   const knowledge = { search: jest.fn().mockResolvedValue([]) };
-  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+  const credits = { reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn().mockResolvedValue(undefined) };
   const svc = new VoiceAiBridgeService(prisma as any, anthropic as any, knowledge as any, credits as any);
   return { prisma, anthropic, knowledge, credits, svc };
 }
@@ -79,7 +80,7 @@ describe('VoiceAiBridgeService', () => {
     expect(typeof out.id).toBe('string');
     expect(typeof out.created).toBe('number');
 
-    expect(credits.reserve).toHaveBeenCalledWith('ws-1', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-1', 'voice.turn');
     expect(credits.refund).not.toHaveBeenCalled();
   });
 
@@ -87,7 +88,7 @@ describe('VoiceAiBridgeService', () => {
     const { anthropic, credits, svc } = makeDeps();
     anthropic.complete.mockRejectedValue(new Error('boom'));
     await expect(svc.complete(CHANNEL as any, BODY as any)).rejects.toThrow('boom');
-    expect(credits.reserve).toHaveBeenCalledWith('ws-1', 2);
+    expect(credits.reserveForJob).toHaveBeenCalledWith('ws-1', 'voice.turn');
     expect(credits.refund).toHaveBeenCalledWith('ws-1', 2);
   });
 

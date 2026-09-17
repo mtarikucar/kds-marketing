@@ -242,6 +242,9 @@ jobs:
           # Post-call AI analysis STT (optional; unset = transcription disabled).
           STT_PROVIDER: ${{ secrets.STT_PROVIDER }}
           STT_API_KEY: ${{ secrets.STT_API_KEY }}
+          LOCAL_AI_URL: ${{ vars.LOCAL_AI_URL }}
+          LOCAL_AI_TOKEN: ${{ secrets.LOCAL_AI_TOKEN }}
+          LOCAL_AI_WHISPER_SIZE: ${{ vars.LOCAL_AI_WHISPER_SIZE }}
           # External AI-voice partner bridge (VAPI/Retell/ElevenLabs custom-LLM)
           # shared secret (optional; unset = bridge endpoints stay inert).
           VOICE_AI_BRIDGE_SECRET: ${{ secrets.VOICE_AI_BRIDGE_SECRET }}
@@ -387,6 +390,9 @@ jobs:
           NETGSM_IVR_TOKEN=${NETGSM_IVR_TOKEN}
           STT_PROVIDER=${STT_PROVIDER}
           STT_API_KEY=${STT_API_KEY}
+          LOCAL_AI_URL=${LOCAL_AI_URL}
+          LOCAL_AI_TOKEN=${LOCAL_AI_TOKEN}
+          LOCAL_AI_WHISPER_SIZE=${LOCAL_AI_WHISPER_SIZE}
           VOICE_AI_BRIDGE_SECRET=${VOICE_AI_BRIDGE_SECRET}
           # Growth Autopilot autonomy (repo Variable GROWTH_AUTOPILOT_AUTONOMY).
           # '1' arms the AUTONOMOUS lane; empty/0 = ASSISTED fallback everywhere.

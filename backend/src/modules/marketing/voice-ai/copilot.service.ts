@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
-import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { tierFor } from '../ai/ai-credit-costs';
 import { KnowledgeService } from '../ai/knowledge.service';
 
 export interface CopilotSuggestion {
@@ -36,7 +36,7 @@ export class CopilotService {
     agentProfileId: string | null,
     transcriptSoFar: string,
   ): Promise<CopilotSuggestion> {
-    if (!this.anthropic.isEnabled()) return { suggestions: [], summary: '' };
+    if (!(await this.anthropic.isEnabledFor(workspaceId, 'voice.copilot'))) return { suggestions: [], summary: '' };
 
     const agent = agentProfileId
       ? await this.prisma.agentProfile.findFirst({ where: { id: agentProfileId, workspaceId } })
@@ -58,8 +58,7 @@ export class CopilotService {
       for (const d of kb) parts.push(`- ${d.title}: ${d.snippet}`);
     }
 
-    const cost = creditCost('voice.copilot');
-    await this.credits.reserve(workspaceId, cost);
+    const cost = await this.credits.reserveForJob(workspaceId, 'voice.copilot');
 
     let res: { text: string };
     try {

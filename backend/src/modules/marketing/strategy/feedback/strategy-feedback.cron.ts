@@ -55,7 +55,7 @@ export class StrategyFeedbackCron {
   async runAll(): Promise<number> {
     // Inert unless the strategist brain can actually run — no source money spent,
     // no pointless scans while the feature is unconfigured.
-    if (!this.sources.isEnabled() || !this.anthropic.isEnabled()) return 0;
+    if (!this.sources.isEnabled()) return 0;
 
     const strategies = await this.prisma.marketingStrategy.findMany({
       where: { status: 'ACTIVE' },
@@ -66,6 +66,7 @@ export class StrategyFeedbackCron {
     let refreshed = 0;
     let skipped = 0;
     for (const s of strategies) {
+      if (!(await this.anthropic.isEnabledFor(s.workspaceId, 'strategy.synthesize'))) continue;
       // Only re-synthesize when the plan has actually moved since it was last
       // written. `updatedAt` is bumped by the re-synthesis itself, so this
       // compares against the strategy as we last left it — an idle workspace
