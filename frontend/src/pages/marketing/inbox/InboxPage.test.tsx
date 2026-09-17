@@ -894,3 +894,34 @@ describe('The person surface — the embedded views keep a door to their own pag
     expect(fullPage()).toHaveAttribute('href', href);
   });
 });
+
+vi.mock('../crm/BusinessTypesPage', () => ({ default: ({ embedded }: { embedded?: boolean }) => <div>types-embedded:{String(embedded)}</div> }));
+
+describe('Business types settings access', () => {
+  it('opens from the gear without conversation entitlement and preserves unrelated params', async () => {
+    FEATURES.clear();
+    const user = userEvent.setup();
+    renderAt('/inbox?left=board&group=company');
+    await user.click(await screen.findByRole('button', { name: /inbox settings/i }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Business types' }));
+    expect(await screen.findByText('types-embedded:true')).toBeInTheDocument();
+    expect(seenPath).toContain('left=board');
+    expect(seenPath).toContain('group=company');
+    await user.click(screen.getByRole('button', { name: /back to inbox/i }));
+    expect(await screen.findByTestId('view-board')).toBeInTheDocument();
+  });
+
+  it.each(['MANAGER', 'OWNER'])('honours a deep link for %s without conversation entitlement', async (role) => {
+    auth.role = role;
+    FEATURES.clear();
+    renderAt('/inbox?tab=types');
+    expect(await screen.findByText('types-embedded:true')).toBeInTheDocument();
+  });
+
+  it('does not open types settings for reps', async () => {
+    auth.role = 'REP';
+    renderAt('/inbox?tab=types');
+    expect(await screen.findByTestId('person-surface')).toBeInTheDocument();
+    expect(screen.queryByText('types-embedded:true')).not.toBeInTheDocument();
+  });
+});

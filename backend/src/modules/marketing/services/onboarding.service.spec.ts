@@ -4,6 +4,7 @@ const WS = 'ws-1';
 
 function makeSvc(settings: unknown) {
   const prisma = {
+    $executeRaw: jest.fn().mockResolvedValue(1),
     workspace: {
       findUnique: jest.fn().mockResolvedValue({ settings, mcpWriteMode: 'AUTONOMOUS' }),
       update: jest.fn().mockResolvedValue({}),
@@ -26,48 +27,18 @@ describe('OnboardingService', () => {
     expect(await svc.get(WS)).toMatchObject({ dismissed: true });
   });
 
-  /**
-   * `settings` is a shared free-shape bag (businessTypes and whatever else has
-   * been parked there). Writing the onboarding flag must MERGE — replacing the
-   * object would silently wipe unrelated workspace configuration, and nothing
-   * in the schema would complain.
-   */
-  it('preserves the rest of settings when writing the flag', async () => {
-    const { svc, prisma } = makeSvc({
-      businessTypes: ['restaurant'],
-      somethingElse: { a: 1 },
-      onboarding: { dismissed: false, other: 'keep me' },
-    });
-
-    await svc.setDismissed(WS, true);
-
-    expect(prisma.workspace.update).toHaveBeenCalledWith({
-      where: { id: WS },
-      data: {
-        settings: {
-          businessTypes: ['restaurant'],
-          somethingElse: { a: 1 },
-          onboarding: { dismissed: true, other: 'keep me' },
-        },
-      },
-    });
-  });
-
-  it('creates the settings bag when the workspace has none', async () => {
+  it.each([true, false])('writes dismissal %s only for the requested workspace', async (dismissed) => {
     const { svc, prisma } = makeSvc(null);
-    await svc.setDismissed(WS, true);
-    expect(prisma.workspace.update).toHaveBeenCalledWith({
-      where: { id: WS },
-      data: { settings: { onboarding: { dismissed: true } } },
-    });
+    expect(await svc.setDismissed(WS, dismissed)).toEqual({ dismissed });
+    const [, ...parameters] = prisma.$executeRaw.mock.calls[0];
+    expect(parameters).toEqual([dismissed, WS]);
+    expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
   });
 
-  it('can un-dismiss (the header\'s "show setup guide" path)', async () => {
-    const { svc, prisma } = makeSvc({ onboarding: { dismissed: true } });
-    expect(await svc.setDismissed(WS, false)).toEqual({ dismissed: false });
-    expect(prisma.workspace.update.mock.calls[0][0].data.settings).toEqual({
-      onboarding: { dismissed: false },
-    });
+  it('does not report success for a missing workspace', async () => {
+    const { svc, prisma } = makeSvc(null);
+    prisma.$executeRaw.mockResolvedValue(0);
+    await expect(svc.setDismissed(WS, true)).rejects.toThrow('Workspace not found');
   });
 
   it('treats a non-object settings value as empty rather than throwing', async () => {

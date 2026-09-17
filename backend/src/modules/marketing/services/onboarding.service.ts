@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MCP_RESEARCH_AGENT } from '../research/research-execution';
 
@@ -90,25 +89,19 @@ export class OnboardingService {
     workspaceId: string,
     dismissed: boolean,
   ): Promise<Pick<OnboardingState, 'dismissed'>> {
-    const ws = await this.prisma.workspace.findUnique({
-      where: { id: workspaceId },
-      select: { settings: true },
-    });
-
-    // Merge rather than replace: `settings` is shared with businessTypes and
-    // whatever else has been parked there, and clobbering it would silently
-    // wipe unrelated workspace configuration.
-    const current = this.asObject(ws?.settings);
-    const onboarding = this.asObject(current.onboarding);
-    const next: Prisma.InputJsonValue = {
-      ...current,
-      onboarding: { ...onboarding, dismissed },
-    };
-
-    await this.prisma.workspace.update({
-      where: { id: workspaceId },
-      data: { settings: next },
-    });
+    // Merge in PostgreSQL under its row lock so a concurrent settings write
+    // cannot be lost between reading the workspace and hiding the guide.
+    const updated = await this.prisma.$executeRaw`
+      UPDATE "workspaces" SET "settings" =
+        (CASE WHEN jsonb_typeof("settings") = 'object' THEN "settings" ELSE '{}'::jsonb END)
+        || jsonb_build_object('onboarding',
+          (CASE WHEN jsonb_typeof("settings"->'onboarding') = 'object'
+            THEN "settings"->'onboarding' ELSE '{}'::jsonb END)
+          || jsonb_build_object('dismissed', ${dismissed}::boolean)),
+        "updatedAt" = NOW()
+      WHERE id = ${workspaceId}
+    `;
+    if (!updated) throw new NotFoundException('Workspace not found');
     return { dismissed };
   }
 

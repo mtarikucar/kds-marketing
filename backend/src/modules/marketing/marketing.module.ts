@@ -124,6 +124,7 @@ import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.cont
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 import { OnboardingController } from './controllers/onboarding.controller';
 import { OnboardingService } from './services/onboarding.service';
+import { WorkspaceBusinessTypesService } from './services/workspace-business-types.service';
 import { WorkspaceReadinessService } from './services/workspace-readiness.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
@@ -912,6 +913,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     NetgsmOnboardingService,
     OnboardingService,
     WorkspaceReadinessService,
+    WorkspaceBusinessTypesService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,

@@ -1,4 +1,22 @@
 {
+  "businessTypes": {
+    "readOnly": "İşletme türlerini görüntüleyebilirsiniz. Düzenlemek için çalışma alanı ayarlarını yönetme izni gerekir.",
+    "title": "İşletme türleri",
+    "description": "Her satıra bir anahtar girin (1–100 benzersiz anahtar, her biri en fazla 60 karakter). Büyük İngilizce harfler, rakamlar ve alt çizgi kullanın; harf veya rakamla başlayın. Örnek: CONSULTING veya ECOMMERCE. Bu liste yeni lead seçeneklerini belirler; mevcut kayıtların türleri korunur.",
+    "label": "İşletme türü anahtarları",
+    "loading": "İşletme türleri yükleniyor…",
+    "loadError": "İşletme türleri yüklenemedi.",
+    "retry": "Tekrar dene",
+    "save": "Kaydet",
+    "saving": "Kaydediliyor…",
+    "saved": "İşletme türleri kaydedildi.",
+    "saveError": "İşletme türleri kaydedilemedi. Lütfen tekrar deneyin.",
+    "validation": {
+      "count": "1 ile 100 arasında işletme türü girin.",
+      "format": "Her anahtarda 1–60 büyük İngilizce harf, rakam veya alt çizgi kullanın; harf veya rakamla başlayın.",
+      "duplicate": "Her anahtar yalnızca bir kez kullanılabilir."
+    }
+  },
   "commandPalette": {
     "title": "Komut menüsü",
     "search": "Ara",

@@ -265,6 +265,7 @@ export default function App() {
             <Route path="/users"       element={<S><TeamPage /></S>} />
             <Route path="/targets"     element={<RedirectMergingParams to="/users" set={{ tab: 'targets' }} />} />
             <Route path="/accounts"    element={<S><AccountCenterPage /></S>} />
+            <Route path="/settings/business-types" element={<RedirectMergingParams to="/inbox" set={{ tab: 'types' }} />} />
             <Route path="/settings/custom-fields" element={<RedirectMergingParams to="/inbox" set={{ tab: 'fields' }} />} />
             <Route path="/settings/pipelines" element={<RedirectMergingParams to="/branding" set={{ tab: 'pipelines' }} />} />
             <Route path="/tags" element={<RedirectMergingParams to="/inbox" set={{ tab: 'audience', sub: 'tags' }} />} />

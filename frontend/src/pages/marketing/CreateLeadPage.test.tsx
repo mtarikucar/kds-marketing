@@ -24,6 +24,10 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
   },
 }));
 
+vi.mock('../../store/marketingAuthStore', () => ({
+  useMarketingAuthStore: (select: (state: unknown) => unknown) => select({ user: { workspaceId: 'w1' } }),
+}));
+
 // Stub sonner so toasts don't complain in jsdom.
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -47,11 +51,55 @@ function renderCreate() {
 }
 
 describe('CreateLeadPage', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { default: api } = await import('../../features/marketing/api/marketingApi');
+    vi.mocked(api.get).mockImplementation(() => Promise.resolve({ data: [] }));
+  });
 
   it('mounts in create mode and shows the page header title', () => {
     renderCreate();
     expect(screen.getByText('createLead.titleNew')).toBeInTheDocument();
+  });
+
+  it('does not ask generic leads for restaurant-specific fields', () => {
+    renderCreate();
+    for (const field of ['tableCount', 'branchCount', 'currentSystem']) {
+      expect(screen.queryByLabelText(new RegExp(`createLead.fields.${field}`))).not.toBeInTheDocument();
+    }
+  });
+
+  it('uses the workspace business type when creating a generic lead', async () => {
+    const { default: api } = await import('../../features/marketing/api/marketingApi');
+    vi.mocked(api.get).mockImplementation((url: string) => Promise.resolve({ data:
+      url.includes('/business-types') ? { businessTypes: ['CONSULTING'] } : [] }));
+    const user = userEvent.setup();
+    renderCreate();
+    await waitFor(() => expect(screen.getByLabelText(/createLead.fields.businessType/i)).toHaveTextContent('CONSULTING'));
+    await user.type(screen.getByLabelText(/createLead.fields.businessName/i), 'Acme');
+    await user.type(screen.getByLabelText(/createLead.fields.contactPerson/i), 'Ada');
+    await user.click(screen.getByRole('button', { name: /createLead.submitCreate/i }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/leads', expect.objectContaining({ businessType: 'CONSULTING' })));
+  });
+
+  it('keeps a historical business type that is no longer offered by the workspace', async () => {
+    const { default: api } = await import('../../features/marketing/api/marketingApi');
+    vi.mocked(api.get).mockImplementation((url: string) => Promise.resolve({ data:
+      url.includes('/business-types') ? { businessTypes: ['CONSULTING'] } :
+      url === '/leads/5' ? { id: '5', businessName: 'Acme', contactPerson: 'Ada', businessType: 'LEGACY_TYPE', tableCount: 12, currentSystem: 'POS' } : [] }));
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={makeClient()}><MemoryRouter initialEntries={['/leads/5/edit']}><Routes>
+      <Route path="/leads/:id/edit" element={<CreateLeadPage />} />
+      <Route path="/leads/:id" element={<div>Detail</div>} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByLabelText(/createLead.fields.businessType/i)).toHaveTextContent('LEGACY TYPE'));
+    await user.click(screen.getByLabelText(/createLead.fields.businessType/i));
+    await user.click(screen.getByRole('option', { name: 'CONSULTING' }));
+    await user.click(screen.getByLabelText(/createLead.fields.businessType/i));
+    await user.click(screen.getByRole('option', { name: 'LEGACY TYPE' }));
+    await user.click(screen.getByRole('button', { name: /createLead.submitUpdate/i }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/leads/5', expect.objectContaining({ businessType: 'LEGACY_TYPE' })));
+    expect(vi.mocked(api.patch).mock.calls[0][1]).not.toHaveProperty('currentSystem');
   });
 
   it('fires zod validation and shows an error when required fields are empty on submit', async () => {

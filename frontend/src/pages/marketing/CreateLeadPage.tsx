@@ -7,8 +7,9 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
-import { BusinessType, LeadSource } from '../../features/marketing/types';
+import { LeadSource } from '../../features/marketing/types';
 import { leadSchema, type LeadFormValues } from '../../features/marketing/schemas';
+import { useBusinessTypes } from './crm/businessTypes';
 import { useCustomFields } from './crm/hooks';
 import { CustomFieldValueInput, seedCustomFieldValues } from './crm/CustomFieldValueInput';
 import {
@@ -38,7 +39,7 @@ import {
 const EMPTY_LEAD_VALUES: LeadFormValues = {
   businessName: '',
   contactPerson: '',
-  businessType: 'RESTAURANT',
+  businessType: 'OTHER',
   source: 'PHONE',
   priority: 'MEDIUM',
   phone: '',
@@ -47,17 +48,12 @@ const EMPTY_LEAD_VALUES: LeadFormValues = {
   address: '',
   city: '',
   region: '',
-  tableCount: '',
-  branchCount: '',
-  currentSystem: '',
   notes: '',
   nextFollowUp: '',
 };
 
 /** The optional string/date fields whose emptied value must be sent as an
- *  explicit `null` on EDIT so a previously-set value is actually cleared (the
- *  numeric tableCount/branchCount can't be cleared this way — the backend's
- *  @EmptyStringToNumber transform maps null/'' → undefined = unchanged). */
+ *  explicit `null` on EDIT so a previously-set value is actually cleared. */
 const CLEARABLE_TEXT_FIELDS = [
   'phone',
   'whatsapp',
@@ -65,7 +61,6 @@ const CLEARABLE_TEXT_FIELDS = [
   'address',
   'city',
   'region',
-  'currentSystem',
   'notes',
   'nextFollowUp',
 ] as const;
@@ -90,9 +85,6 @@ export function buildLeadPayload(
     source: values.source,
     priority: values.priority,
   };
-  // Numeric optionals — only set when present (see CLEARABLE_TEXT_FIELDS note).
-  if (values.tableCount) payload.tableCount = parseInt(values.tableCount, 10);
-  if (values.branchCount) payload.branchCount = parseInt(values.branchCount, 10);
   if (opts.customFields) payload.customFields = opts.customFields;
 
   for (const key of CLEARABLE_TEXT_FIELDS) {
@@ -110,6 +102,7 @@ export default function CreateLeadPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const isEdit = !!id;
+  const { businessTypes } = useBusinessTypes();
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema),
@@ -117,11 +110,19 @@ export default function CreateLeadPage() {
     defaultValues: EMPTY_LEAD_VALUES,
   });
 
+  const selectedBusinessType = form.watch('businessType');
   const { data: existingLead } = useQuery({
     queryKey: ['marketing', 'lead', id],
     queryFn: () => marketingApi.get(`/leads/${id}`).then((r) => r.data),
     enabled: isEdit,
   });
+
+  // Preserve the original type even after selecting another option, until save.
+  const typeOptions = Array.from(new Set([
+    ...businessTypes,
+    ...(existingLead?.businessType ? [existingLead.businessType as string] : []),
+    ...(isEdit && selectedBusinessType ? [selectedBusinessType] : []),
+  ]));
 
   // Lead custom-field defs + their values. Without rendering these, a workspace
   // with a REQUIRED custom field could never create a lead from this form (the
@@ -144,7 +145,7 @@ export default function CreateLeadPage() {
       form.reset({
         businessName: existingLead.businessName || '',
         contactPerson: existingLead.contactPerson || '',
-        businessType: existingLead.businessType || 'RESTAURANT',
+        businessType: existingLead.businessType || 'OTHER',
         source: existingLead.source || 'PHONE',
         priority: existingLead.priority || 'MEDIUM',
         phone: existingLead.phone || '',
@@ -153,9 +154,6 @@ export default function CreateLeadPage() {
         address: existingLead.address || '',
         city: existingLead.city || '',
         region: existingLead.region || '',
-        tableCount: existingLead.tableCount?.toString() || '',
-        branchCount: existingLead.branchCount?.toString() || '',
-        currentSystem: existingLead.currentSystem || '',
         notes: existingLead.notes || '',
         nextFollowUp: existingLead.nextFollowUp ? existingLead.nextFollowUp.split('T')[0] : '',
       });
@@ -168,6 +166,12 @@ export default function CreateLeadPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existingLead, isEdit]);
+
+  useEffect(() => {
+    if (!isEdit && !form.getFieldState('businessType').isDirty) {
+      form.setValue('businessType', businessTypes.includes('OTHER') ? 'OTHER' : businessTypes[0]);
+    }
+  }, [businessTypes, isEdit, form]);
 
   const mutation = useMutation({
     mutationFn: (data: unknown) =>
@@ -266,18 +270,24 @@ export default function CreateLeadPage() {
                       control={form.control}
                       name="businessType"
                       render={({ field }) => (
-                        <Select value={field.value} onValueChange={field.onChange}>
+                        <Select value={field.value} onValueChange={(value) => {
+                          // The native select bridge can emit an empty value while
+                          // async options mount; business type is required.
+                          if (value) field.onChange(value);
+                        }}>
                           <SelectTrigger
                             id={id}
                             aria-invalid={invalid || undefined}
                             ref={field.ref}
                           >
-                            <SelectValue />
+                            <SelectValue>
+                              {t(`businessType.${field.value}`, { defaultValue: field.value.replace(/_/g, ' ') })}
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
-                            {Object.values(BusinessType).map((b) => (
+                            {typeOptions.map((b) => (
                               <SelectItem key={b} value={b}>
-                                {t(`businessType.${b}`)}
+                                {t(`businessType.${b}`, { defaultValue: b.replace(/_/g, ' ') })}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -286,46 +296,6 @@ export default function CreateLeadPage() {
                     />
                   )}
                 </Field>
-
-                <Field
-                  label={t('createLead.fields.tableCount')}
-                  error={fieldErr(errors.tableCount?.message)}
-                >
-                  {({ id, describedBy, invalid }) => (
-                    <Input
-                      id={id}
-                      type="number"
-                      min={0}
-                      aria-describedby={describedBy}
-                      aria-invalid={invalid || undefined}
-                      {...form.register('tableCount')}
-                    />
-                  )}
-                </Field>
-
-                <Field
-                  label={t('createLead.fields.branchCount')}
-                  error={fieldErr(errors.branchCount?.message)}
-                >
-                  {({ id, describedBy, invalid }) => (
-                    <Input
-                      id={id}
-                      type="number"
-                      min={0}
-                      aria-describedby={describedBy}
-                      aria-invalid={invalid || undefined}
-                      {...form.register('branchCount')}
-                    />
-                  )}
-                </Field>
-
-                <div className="sm:col-span-2">
-                  <Field label={t('createLead.fields.currentSystem')}>
-                    {({ id }) => (
-                      <Input id={id} {...form.register('currentSystem')} />
-                    )}
-                  </Field>
-                </div>
               </div>
             </section>
 

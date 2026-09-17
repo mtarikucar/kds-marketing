@@ -23,16 +23,11 @@ const optionalPhone = z
   .optional()
   .refine((v) => !v || PHONE_REGEX.test(v), { message: 'phoneInvalid' });
 
-const optionalIntString = z
-  .string()
-  .optional()
-  .refine((v) => !v || /^\d+$/.test(v), { message: 'numberPositive' });
-
 export const leadSchema = z.object({
   businessName: z.string().trim().min(1, 'required').max(200),
   contactPerson: z.string().trim().min(1, 'required').max(120),
   // Workspace-defined taxonomy key (UPPER_SNAKE) — mirrors the backend's
-  // BUSINESS_TYPE_PATTERN; the select still offers the default list, but any
+  // BUSINESS_TYPE_PATTERN; the select offers workspace choices, and any
   // workspace-configured value round-trips through edits unchanged.
   businessType: z.string().regex(/^[A-Z0-9][A-Z0-9_]{0,59}$/, 'required'),
   // Mirror the backend LeadSource enum (incl. the system-set AI_RESEARCH /
@@ -47,9 +42,6 @@ export const leadSchema = z.object({
   address: z.string().trim().max(255).optional(),
   city: z.string().trim().max(100).optional(),
   region: z.string().trim().max(100).optional(),
-  tableCount: optionalIntString,
-  branchCount: optionalIntString,
-  currentSystem: z.string().trim().max(120).optional(),
   notes: z.string().trim().max(2000).optional(),
   nextFollowUp: z.string().optional(),
 });

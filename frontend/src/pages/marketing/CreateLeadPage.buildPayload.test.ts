@@ -14,9 +14,6 @@ const base: LeadFormValues = {
   address: '',
   city: '',
   region: '',
-  tableCount: '',
-  branchCount: '',
-  currentSystem: '',
   notes: '',
   nextFollowUp: '',
 };
@@ -38,7 +35,7 @@ describe('buildLeadPayload', () => {
   it('EDIT: sends explicit null for each emptied optional so it is actually cleared', () => {
     const p = buildLeadPayload({ ...base, phone: '' }, { isEdit: true });
     // every clearable text/date field present as null
-    for (const k of ['phone', 'whatsapp', 'email', 'address', 'city', 'region', 'currentSystem', 'notes', 'nextFollowUp']) {
+    for (const k of ['phone', 'whatsapp', 'email', 'address', 'city', 'region', 'notes', 'nextFollowUp']) {
       expect(p[k]).toBeNull();
     }
   });
@@ -53,12 +50,14 @@ describe('buildLeadPayload', () => {
     expect(p.notes).toBeNull();
   });
 
-  it('numeric optionals are only set when present and are NEVER sent as null (backend can not clear them)', () => {
-    const created = buildLeadPayload({ ...base, tableCount: '12' }, { isEdit: false });
-    expect(created.tableCount).toBe(12);
-    const edited = buildLeadPayload({ ...base, tableCount: '' }, { isEdit: true });
-    expect(edited).not.toHaveProperty('tableCount');
-    expect(edited).not.toHaveProperty('branchCount');
+  it('does not write or clear legacy sector fields on create or edit', () => {
+    const legacy = { ...base, tableCount: '12', branchCount: '2', currentSystem: 'POS' };
+    for (const isEdit of [false, true]) {
+      const payload = buildLeadPayload(legacy, { isEdit });
+      for (const key of ['tableCount', 'branchCount', 'currentSystem']) {
+        expect(payload).not.toHaveProperty(key);
+      }
+    }
   });
 
   it('includes customFields only when provided', () => {

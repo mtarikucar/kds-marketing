@@ -41,6 +41,7 @@ const LeadsPage = lazy(() => import('../leads/LeadsPage'));
  */
 const ImportWizardPage = lazy(() => import('../imports'));
 const AudiencePage = lazy(() => import('../crm/AudiencePage'));
+const BusinessTypesPage = lazy(() => import('../crm/BusinessTypesPage'));
 const CustomFieldsPage = lazy(() => import('../crm/customFields'));
 
 /**
@@ -56,7 +57,7 @@ const CustomFieldsPage = lazy(() => import('../crm/customFields'));
 export const CONFIG_TABS = [
   'channels', 'snippets', 'agents', 'knowledge',
   // What shapes the people on this surface, rather than what talks to them.
-  'import', 'audience', 'fields',
+  'import', 'audience', 'fields', 'types',
 ] as const;
 type ConfigTab = (typeof CONFIG_TABS)[number];
 const isConfigTab = (v: string | null): v is ConfigTab =>
@@ -225,7 +226,7 @@ export default function InboxPage() {
   // Guard the RENDER, not just the menu: a deep link to a config surface a rep
   // may not open has to land on the surface rather than on a blank panel.
   const configTab: ConfigTab | null =
-    isConfigTab(requestedTab) && offersConfig ? requestedTab : null;
+    isConfigTab(requestedTab) && (requestedTab === 'types' ? isManager : offersConfig) ? requestedTab : null;
   const tableView = params.get('view') === 'table';
   // Unknown values fall back to the list rather than blanking the column —
   // same rule as `?tab=`, and the same reason: a stale or mistyped deep link
@@ -482,6 +483,10 @@ export default function InboxPage() {
                     : t('surface.view.table', 'Tablo')}
                 </DropdownMenuItem>
 
+                <DropdownMenuItem onClick={() => setTab('types')}>
+                  {t('businessTypes.title', 'Business types')}
+                </DropdownMenuItem>
+
                 {offersConfig && (
                   <>
                     <DropdownMenuItem onClick={() => setTab('channels')}>
@@ -526,7 +531,9 @@ export default function InboxPage() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Lazy>
-              {configTab === 'channels' ? (
+              {configTab === 'types' ? (
+                <BusinessTypesPage embedded />
+              ) : configTab === 'channels' ? (
                 <ChannelsSettingsPage embedded />
               ) : configTab === 'snippets' ? (
                 <SnippetsPage embedded />

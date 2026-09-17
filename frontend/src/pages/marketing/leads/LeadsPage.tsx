@@ -23,10 +23,8 @@ import {
 } from '../../../features/marketing/components';
 import {
   LeadStatus,
-  BusinessType,
   LeadSource,
   LEAD_STATUS_LABELS,
-  BUSINESS_TYPE_LABELS,
   LEAD_SOURCE_LABELS,
 } from '../../../features/marketing/types';
 import type { Lead, MarketingUserInfo, PaginatedResponse } from '../../../features/marketing/types';
@@ -52,6 +50,7 @@ import {
   PopoverContent,
 } from '@/components/ui';
 
+import { useBusinessTypes } from '../crm/businessTypes';
 import { buildLeadsColumns } from './leadsColumns';
 import { bulkDeleteToast, bulkAssignToast } from './leadsBulkToast';
 
@@ -81,6 +80,7 @@ const LIMIT = 20;
  */
 export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
+  const { filterBusinessTypes } = useBusinessTypes();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const user = useMarketingAuthStore((s) => s.user);
@@ -483,9 +483,9 @@ export default function LeadsPage({ embedded }: { embedded?: boolean } = {}) {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all__">{t('leads.filterBusinessType')}</SelectItem>
-                {Object.values(BusinessType).map((b) => (
+                {Array.from(new Set([...filterBusinessTypes, ...(businessType ? [businessType] : [])])).map((b) => (
                   <SelectItem key={b} value={b}>
-                    {t(`businessType.${b}`, { defaultValue: BUSINESS_TYPE_LABELS[b] })}
+                    {t(`businessType.${b}`, { defaultValue: b.replace(/_/g, ' ') })}
                   </SelectItem>
                 ))}
               </SelectContent>

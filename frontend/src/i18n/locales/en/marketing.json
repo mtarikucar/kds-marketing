@@ -1,4 +1,22 @@
 {
+  "businessTypes": {
+    "readOnly": "You can view business types. Managing them requires workspace settings permission.",
+    "title": "Business types",
+    "description": "Enter one key per line (1–100 unique keys, up to 60 characters each). Use uppercase letters, digits and underscores; start with a letter or digit. Example: CONSULTING or ECOMMERCE. This list controls new lead choices; existing records keep their types.",
+    "label": "Business type keys",
+    "loading": "Loading business types…",
+    "loadError": "Could not load business types.",
+    "retry": "Try again",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Business types saved.",
+    "saveError": "Could not save business types. Please try again.",
+    "validation": {
+      "count": "Enter between 1 and 100 business types.",
+      "format": "Use 1–60 uppercase letters, digits or underscores per key; start with a letter or digit.",
+      "duplicate": "Each key must be unique."
+    }
+  },
   "commandPalette": {
     "title": "Command menu",
     "search": "Search",

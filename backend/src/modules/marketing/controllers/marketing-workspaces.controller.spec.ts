@@ -3,6 +3,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, INestApplication } f
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { WorkspaceBusinessTypesService } from '../services/workspace-business-types.service';
 import { MediaModelDefaultsService } from '../ai/media/media-model-defaults.service';
 import { MarketingWorkspacesController } from './marketing-workspaces.controller';
 import { MarketingGuard } from '../guards/marketing.guard';
@@ -188,6 +189,7 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
       const moduleRef = await Test.createTestingModule({
         controllers: [MarketingWorkspacesController],
         providers: [
+          { provide: WorkspaceBusinessTypesService, useValue: {} },
           { provide: MarketingAuthService, useValue: authService },
           // The media-model routes' service. Inert here: this block is about
           // the GUARD STACK, and a handler that is never reached because a

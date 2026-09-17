@@ -1,6 +1,7 @@
 import { Controller, Get, Patch, Post, Body, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { RolesService } from '../roles/roles.service';
 import { PermissionsGuard } from '../roles/permissions.guard';
 import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
@@ -14,6 +15,8 @@ import { SetResearchExecutionDto } from '../dto/set-research-execution.dto';
 import { SetWorkspaceTimezoneDto } from '../dto/set-workspace-timezone.dto';
 import { SetMediaModelDefaultsDto } from '../dto/set-media-model-defaults.dto';
 import { MediaModelDefaultsService } from '../ai/media/media-model-defaults.service';
+import { SetWorkspaceBusinessTypesDto } from '../dto/set-workspace-business-types.dto';
+import { WorkspaceBusinessTypesService } from '../services/workspace-business-types.service';
 import { MarketingUserPayload } from '../types';
 
 /**
@@ -39,7 +42,33 @@ export class MarketingWorkspacesController {
   constructor(
     private readonly authService: MarketingAuthService,
     private readonly mediaModels: MediaModelDefaultsService,
+    private readonly businessTypes: WorkspaceBusinessTypesService,
+    private readonly roles: RolesService,
   ) {}
+
+  @Get('business-types')
+  @MarketingRoles('REP')
+  async getWorkspaceBusinessTypes(@CurrentMarketingUser() user: MarketingUserPayload) {
+    const data = await this.businessTypes.get(user.workspaceId);
+    const canManage = ['OWNER', 'MANAGER'].includes(user.role) &&
+      await this.roles.hasPermission(user, 'settings.manage');
+    return { ...data, canManage };
+  }
+
+  @Patch('business-types')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({
+    action: 'workspace.business_types.update',
+    resourceType: 'workspace',
+    captureBody: ['businessTypes'],
+  })
+  setWorkspaceBusinessTypes(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Body() dto: SetWorkspaceBusinessTypesDto,
+  ) {
+    return this.businessTypes.set(user.workspaceId, dto.businessTypes);
+  }
 
   @Post()
   @Audit({ action: 'workspace.create', resourceType: 'workspace' })
