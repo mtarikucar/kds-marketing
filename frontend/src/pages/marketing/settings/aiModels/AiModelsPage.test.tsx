@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -30,6 +30,14 @@ import {
   setMediaModelDefaults,
 } from '../../../../features/marketing/api/mediaModels.service';
 import AiModelsPage from './AiModelsPage';
+import { useMarketingAuthStore } from '@/store/marketingAuthStore';
+vi.mock('@/features/marketing/api/marketingApi', () => ({
+  default: { get: vi.fn(async (url: string) => {
+    if (url === '/ai/execution-policy') return { data: { jobs: [], mcp: { connected: false }, local: { configured: false, models: {} } } };
+    if (url === '/mcp-console/overview') return { data: { canToggle: true } };
+    throw new Error('unavailable');
+  }) },
+}));
 
 const CATALOGUE = [
   { id: 'fal-ai/qwen-image', type: 'IMAGE' as const, label: 'Draft image', priceUsd: 0.02, credits: 2, isPlatformDefault: false },
@@ -55,16 +63,21 @@ function renderPage() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
-    <MemoryRouter>
+  const view = render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <QueryClientProvider client={qc}>
         <AiModelsPage />
       </QueryClientProvider>
     </MemoryRouter>,
   );
+  return { ...view, qc };
 }
 
 beforeEach(() => {
+  useMarketingAuthStore.setState({ user: {
+    id: 'manager', workspaceId: 'workspace', role: 'MANAGER',
+    email: 'manager@example.com', firstName: 'Test', lastName: 'Manager',
+  } });
   vi.mocked(getMediaModelDefaults).mockReset();
   vi.mocked(setMediaModelDefaults).mockReset();
 });
@@ -97,7 +110,54 @@ function badgedInUse(name: string): string | null {
   return label?.textContent ?? null;
 }
 
+async function openCatalogue(name: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Choose ${name.toLowerCase()}` }));
+  await screen.findByRole('dialog', { name });
+}
+
 describe('AiModelsPage', () => {
+  it('shows the flat per-run tariff for a video model instead of an unknown per-second rate', async () => {
+    vi.mocked(getMediaModelDefaults).mockResolvedValue(payload({ models: [...CATALOGUE,
+      { id: 'flat-video', type: 'VIDEO', label: 'Flat video', priceUsd: .4, credits: 40, isPlatformDefault: false },
+    ] }) as never);
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Choose video model' }));
+    expect(screen.getByRole('radio', { name: /Flat video 40 credits \/ run \(\$0.4\)/ })).toBeVisible();
+  });
+  it('keeps catalogues in a keyboard-accessible sheet and preserves a choice when reopening', async () => {
+    vi.mocked(getMediaModelDefaults).mockResolvedValue(payload() as never);
+    renderPage();
+    const trigger = await screen.findByRole('button', { name: 'Choose video model' });
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    await userEvent.click(card('Video model').getByRole('radio', { name: /Video \+ audio/ }));
+    await userEvent.keyboard('{Escape}');
+    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Media models' })).toHaveTextContent('Video + audio');
+    await openCatalogue('Video model');
+    expect(card('Video model').getByRole('radio', { name: /Video \+ audio/ })).toBeChecked();
+  });
+
+  it('keeps a media draft after failure and clears it on workspace changes', async () => {
+    vi.mocked(getMediaModelDefaults).mockResolvedValue(payload() as never);
+    vi.mocked(setMediaModelDefaults).mockRejectedValue(new Error('offline'));
+    const { qc } = renderPage();
+    await openCatalogue('Video model');
+    await userEvent.click(card('Video model').getByRole('radio', { name: /Video \+ audio/ }));
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText(/model defaults could not be saved/i)).toBeInTheDocument();
+    await openCatalogue('Video model');
+    expect(card('Video model').getByRole('radio', { name: /Video \+ audio/ })).toBeChecked();
+    await userEvent.keyboard('{Escape}');
+    await act(async () => useMarketingAuthStore.getState().updateUser({ workspaceId: 'other' }));
+    await openCatalogue('Video model');
+    expect(card('Video model').getByRole('radio', { name: /Platform default/ })).toBeChecked();
+    expect(qc.getQueryData(['marketing', 'workspace', 'media-models', 'other', 'manager'])).toBeDefined();
+  });
+
   /**
    * The whole reason this screen exists rather than a dropdown of ids: video is
    * the most expensive action in the product and the catalogue spans a 10x
@@ -107,7 +167,7 @@ describe('AiModelsPage', () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(payload() as never);
     renderPage();
 
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
 
     // The price is part of the radio's ACCESSIBLE NAME, not merely somewhere on
     // the page — so this cannot pass with the number rendered next to the wrong
@@ -117,6 +177,8 @@ describe('AiModelsPage', () => {
     expect(video.getByRole('radio', { name: /^Short video .*3 credits\/sec \(\$0\.025\/sec\)/ })).toBeInTheDocument();
 
     // Images bill FLAT, per image — a different unit, said differently.
+    await userEvent.keyboard('{Escape}');
+    await openCatalogue('Image model');
     const image = card('Image model');
     expect(image.getByRole('radio', { name: /Draft image.*2 credits \/ image \(\$0\.02\)/ })).toBeInTheDocument();
     expect(image.getByRole('radio', { name: /^Final image .*3 credits \/ image \(\$0\.03\)/ })).toBeInTheDocument();
@@ -131,7 +193,7 @@ describe('AiModelsPage', () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(payload() as never);
     renderPage();
 
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
     // It NAMES what it currently is. "Platform default" on its own would be the
     // one blind option on the screen that exists to stop the choice being blind.
     const videoDefault = card('Video model').getByRole('radio', {
@@ -146,7 +208,7 @@ describe('AiModelsPage', () => {
     );
     renderPage();
 
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
     const chosen = card('Video model').getByRole('radio', { name: /Video \+ audio/ });
     expect(chosen).toHaveAttribute('aria-checked', 'true');
     // And the platform row is no longer the selected one.
@@ -167,9 +229,10 @@ describe('AiModelsPage', () => {
     );
     renderPage();
 
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
     await userEvent.click(card('Video model').getByRole('radio', { name: /Video \+ audio/ }));
-    await userEvent.click(screen.getByRole('button', { name: /Save/i }));
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(setMediaModelDefaults).toHaveBeenCalledTimes(1));
     expect(setMediaModelDefaults).toHaveBeenCalledWith({ defaultVideoModel: 'fal-ai/veo3.1/fast' });
@@ -182,9 +245,10 @@ describe('AiModelsPage', () => {
     vi.mocked(setMediaModelDefaults).mockResolvedValue(payload() as never);
     renderPage();
 
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
     await userEvent.click(card('Video model').getByRole('radio', { name: /Platform default/ }));
-    await userEvent.click(screen.getByRole('button', { name: /Save/i }));
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(setMediaModelDefaults).toHaveBeenCalledTimes(1));
     expect(setMediaModelDefaults).toHaveBeenCalledWith({ defaultVideoModel: null });
@@ -193,8 +257,9 @@ describe('AiModelsPage', () => {
   it('leaves Save inert until something actually changed', async () => {
     vi.mocked(getMediaModelDefaults).mockResolvedValue(payload() as never);
     renderPage();
-    await screen.findByRole('radiogroup', { name: 'Video model' });
-    expect(screen.getByRole('button', { name: /Save/i })).toBeDisabled();
+    await openCatalogue('Video model');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
   /**
@@ -235,7 +300,7 @@ describe('AiModelsPage', () => {
     );
     renderPage();
 
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
 
     // Names the choice that no longer exists...
     expect(await screen.findByText(/fal-ai\/kling-v1-retired/)).toBeInTheDocument();
@@ -257,7 +322,7 @@ describe('AiModelsPage', () => {
       }) as never,
     );
     renderPage();
-    await screen.findByRole('radiogroup', { name: 'Video model' });
+    await openCatalogue('Video model');
     expect(screen.queryByText(/no longer in the catalogue/i)).not.toBeInTheDocument();
     expect(badgedInUse('Video model')).toBe('Video + audio');
   });

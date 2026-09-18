@@ -10,6 +10,7 @@ import { useMarketingAuthStore } from "@/store/marketingAuthStore";
 import en from "@/i18n/locales/en/marketing.json";
 import tr from "@/i18n/locales/tr/marketing.json";
 import AiModelsPage from "./AiModelsPage";
+import { usageDashboardFixture } from "./usageDashboard.fixture";
 
 vi.mock("@/features/marketing/api/marketingApi", () => ({
   default: { get: vi.fn(), patch: vi.fn() },
@@ -83,6 +84,8 @@ const media = {
   ],
 };
 
+let readUsage: () => Promise<{ data: ReturnType<typeof usageDashboardFixture> }>;
+
 let readPolicy: () => Promise<{ data: ReturnType<typeof policy> }>;
 let readPermissions: () => Promise<{ data: { canToggle: boolean } }>;
 
@@ -98,9 +101,11 @@ beforeEach(() => {
       lastName: "Owner",
     },
   });
+  readUsage = async () => ({ data: usageDashboardFixture() });
   readPolicy = async () => ({ data: policy() });
   readPermissions = async () => ({ data: { canToggle: true } });
   vi.mocked(marketingApi.get).mockImplementation(async (url) => {
+    if (url === "/ai/usage-dashboard") return readUsage();
     if (url === "/ai/execution-policy") return readPolicy();
     if (url === "/mcp-console/overview") return readPermissions();
     if (url === "/workspaces/media-models") return { data: media };
@@ -154,10 +159,11 @@ describe("AI execution policy on the AI models page", () => {
     expect(
       await card.findByRole("switch", { name: "Future action: active" }),
     ).toBeChecked();
-    expect(
-      card.getByText("An action added by the server."),
-    ).toBeInTheDocument();
-    expect(card.getByText("New category")).toBeInTheDocument();
+    expect(card.queryByText("An action added by the server.")).not.toBeInTheDocument();
+    await userEvent.click(card.getByRole("button", { name: "Future action: details" }));
+    expect(screen.getByRole("dialog", { name: "Future action" })).toHaveTextContent("An action added by the server.");
+    await userEvent.keyboard("{Escape}");
+    expect(card.getByRole("row", { name: /Future action/ })).toHaveTextContent("New category");
     expect(card.getAllByRole("switch")).toHaveLength(3);
     expect(
       card.getByRole("combobox", { name: "Future action: provider" }),
@@ -172,10 +178,10 @@ describe("AI execution policy on the AI models page", () => {
     expect(screen.getByRole("option", { name: "API" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(
-      screen.getByRole("radiogroup", { name: "Video model" }),
+      screen.getByRole("button", { name: "Choose video model" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("radiogroup", { name: "Image model" }),
+      screen.getByRole("button", { name: "Choose image model" }),
     ).toBeInTheDocument();
   });
 
@@ -317,7 +323,7 @@ describe("AI execution policy on the AI models page", () => {
       await card.findByRole("switch", { name: "Future action: active" }),
     ).toBeDisabled();
     expect(card.getByText(/Only an owner/)).toBeInTheDocument();
-    for (const control of card.getAllByRole("combobox"))
+    for (const control of card.getAllByRole("combobox", { name: /: provider$/ }))
       expect(control).toBeDisabled();
     expect(
       card.queryByRole("button", { name: "Save actions" }),
@@ -373,7 +379,7 @@ describe("AI execution policy on the AI models page", () => {
     );
     expect(card.queryByRole("switch")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("radiogroup", { name: "Video model" }),
+      screen.getByRole("button", { name: "Choose video model" }),
     ).toBeInTheDocument();
     readPolicy = async () => ({ data: policy() });
     await userEvent.click(card.getByRole("button", { name: "Retry" }));
@@ -384,6 +390,7 @@ describe("AI execution policy on the AI models page", () => {
 
   it("does not invent rows when the server returns no actions", async () => {
     readPolicy = async () => ({ data: { ...policy(), jobs: [] } });
+    readUsage = async () => ({ data: { ...usageDashboardFixture(), rows: [] } });
     await renderPage();
     const card = await actions();
     expect(
@@ -459,10 +466,224 @@ describe("AI execution policy on the AI models page", () => {
       expect(card.getByRole("combobox", { name: provider })).toHaveTextContent(
         notReady,
       );
+      await userEvent.click(card.getByText(language === "tr" ? "Sağlayıcılar ve ücretler" : "Providers and fees"));
       expect(card.getByText(mcp)).toBeInTheDocument();
       expect(card.getByText(local)).toBeInTheDocument();
       expect(card.getByText(waiting)).toBeInTheDocument();
       expect(card.getByText(mediaFees)).toBeInTheDocument();
     },
   );
+});
+
+
+describe("monthly usage beside policy controls", () => {
+  it("shows measured usage, partial forecasts and read-only historical rows without hiding their costs", async () => {
+    await renderPage();
+    const overview = within(await screen.findByRole('region', { name: 'Monthly usage' }));
+    expect(await overview.findByText('12,000')).toBeInTheDocument();
+    expect(overview.getByText('$4.50')).toBeInTheDocument();
+    expect(overview.getByText('36,000')).toBeInTheDocument();
+    expect(overview.getByText('$13.50')).toBeInTheDocument();
+    expect(overview.getByText('Partial estimate')).toBeInTheDocument();
+    expect(overview.getByText(/10 observed days/)).toBeInTheDocument();
+    expect(overview.getByText(/Europe\/Istanbul/)).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'AI action usage and settings' });
+    const row = within(table).getByRole('row', { name: /Future action/ });
+    expect(row).toHaveTextContent('12,000');
+    expect(row).toHaveTextContent('$3.50');
+    const historical = within(table).getByRole('row', { name: /Legacy research/ });
+    expect(historical).toHaveTextContent('$1.00');
+    expect(within(historical).queryByRole('switch')).not.toBeInTheDocument();
+    const local = within(table).getByRole('row', { name: /Transcribe calls/ });
+    expect(local).not.toHaveTextContent('$0');
+    expect(within(local).getAllByText('—').length).toBeGreaterThan(0);
+    await userEvent.click(within(row).getByRole('button', { name: 'Future action: details' }));
+    const detail = within(screen.getByRole('dialog', { name: 'Future action' }));
+    expect(detail.getByText('Cache read')).toBeInTheDocument();
+    expect(detail.getByText('4,000')).toBeInTheDocument();
+    expect(detail.getByText('claude-test')).toBeInTheDocument();
+    expect(detail.getByText(/Billing credits are separate/)).toBeInTheDocument();
+  });
+
+  it('filters rows without discarding edits, and keeps monthly totals unfiltered', async () => {
+    await renderPage();
+    const card = await actions();
+    await card.findByRole('switch', { name: 'Future action: active' });
+    await choose('Future action', /^Local/);
+    const search = card.getByRole('searchbox', { name: 'Search actions' });
+    await userEvent.type(search, 'legacy');
+    expect(card.queryByRole('switch')).not.toBeInTheDocument();
+    expect(card.getByRole('row', { name: /Legacy research/ })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Monthly usage' })).toHaveTextContent('12,000');
+    await userEvent.clear(search);
+    expect(card.getByRole('combobox', { name: 'Future action: provider' })).toHaveTextContent('Local');
+    await userEvent.selectOptions(card.getByRole('combobox', { name: 'Category' }), 'Media');
+    expect(card.getAllByRole('switch')).toHaveLength(1);
+    expect(card.getByRole('button', { name: 'Save actions' })).toBeEnabled();
+  });
+
+  it('reports unavailable analytics after a failed refresh while keeping policy drafts usable', async () => {
+    await renderPage();
+    const card = await actions();
+    await card.findByRole('switch', { name: 'Future action: active' });
+    await choose('Future action', /^Local/);
+    readUsage = async () => { throw new Error('offline'); };
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh usage' }));
+    const overview = screen.getByRole('region', { name: 'Monthly usage' });
+    expect(await within(overview).findByRole('alert')).toHaveTextContent(/Usage is unavailable/);
+    expect(within(overview).queryByText('$4.50')).not.toBeInTheDocument();
+    expect(card.getByRole('row', { name: /Future action/ })).not.toHaveTextContent('$3.50');
+    expect(card.getByRole('combobox', { name: 'Future action: provider' })).toHaveTextContent('Local');
+    expect(card.getByRole('button', { name: 'Save actions' })).toBeEnabled();
+    readUsage = async () => ({ data: usageDashboardFixture() });
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh usage' }));
+    expect(await within(overview).findByText('$4.50')).toBeInTheDocument();
+  });
+
+  it.each(['INSUFFICIENT_HISTORY', 'NO_ACTIVITY'] as const)('does not invent a forecast for %s', async (reason) => {
+    const data = usageDashboardFixture();
+    data.forecast = { ...data.forecast, tokens: null, costUsd: null, dailyTokens: null, dailyCostUsd: null, reason };
+    readUsage = async () => ({ data });
+    await renderPage();
+    const overview = within(await screen.findByRole('region', { name: 'Monthly usage' }));
+    expect(await overview.findByText(reason === 'NO_ACTIVITY' ? /No measured activity yet/ : /At least 24 hours/)).toBeInTheDocument();
+    expect(overview.queryByText('$13.50')).not.toBeInTheDocument();
+    expect(overview.getAllByText('—')).toHaveLength(2);
+  });
+
+  it.each([{ workspaceId: 'other' }, { id: 'other-user' }])('isolates usage and policy drafts when identity changes: %j', async (change) => {
+    const qc = await renderPage();
+    const card = await actions();
+    await card.findByRole('switch', { name: 'Future action: active' });
+    await choose('Future action', /^Local/);
+    const data = usageDashboardFixture();
+    data.totals.tokens = 345;
+    readUsage = async () => ({ data });
+    await act(async () => useMarketingAuthStore.getState().updateUser(change));
+    expect(await screen.findByText('345')).toBeInTheDocument();
+    const newCard = await actions();
+    expect(await newCard.findByRole('combobox', { name: 'Future action: provider' })).toHaveTextContent('MCP');
+    expect(newCard.getByRole('button', { name: 'Save actions' })).toBeDisabled();
+    expect(qc.getQueryData(['marketing', 'ai', 'usage-dashboard', change.workspaceId ?? 'workspace', change.id ?? 'owner'])).toBeDefined();
+  });
+});
+
+
+describe('usage coverage and polling', () => {
+  it.each(['MCP', 'LOCAL'] as const)('shows an unmeasured API-history zero for %s but keeps nonzero API history visible', async (provider) => {
+    const data = usageDashboardFixture();
+    Object.assign(data.rows[0], { calls: 0, tokens: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, models: [] });
+    readUsage = async () => ({ data });
+    const current = policy();
+    current.jobs[0].provider = provider;
+    readPolicy = async () => ({ data: current });
+    const qc = await renderPage();
+    const card = await actions();
+    const row = await card.findByRole('row', { name: /Future action/ });
+    expect(row).not.toHaveTextContent('$0');
+    expect(within(row).getAllByText('—')).toHaveLength(3);
+    expect(row).toHaveTextContent('Unmeasured');
+    readUsage = async () => ({ data: usageDashboardFixture() });
+    await act(async () => { await qc.refetchQueries({ type: 'active' }); });
+    await waitFor(() => expect(row).toHaveTextContent('12,000'));
+    expect(row).toHaveTextContent('$3.50');
+  });
+
+  it('does not imply that entirely unpriced observations cost zero', async () => {
+    const data = usageDashboardFixture();
+    for (const row of data.rows) Object.assign(row, { costUsd: null, averageCostUsd: null });
+    Object.assign(data.totals, { llmCostUsd: 0, mediaCostUsd: 0, knownCostUsd: 0, unpricedCalls: 4, unpricedMediaJobs: 1 });
+    data.forecast.costUsd = null;
+    readUsage = async () => ({ data });
+    await renderPage();
+    const overview = within(await screen.findByRole('region', { name: 'Monthly usage' }));
+    expect(await overview.findByText(/Cost forecast unavailable/)).toBeInTheDocument();
+    expect(overview.queryByText('$0.00')).not.toBeInTheDocument();
+    expect(overview.getAllByText('—')).toHaveLength(2);
+  });
+
+  it('refreshes every minute only while the page is visible', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    try {
+      await renderPage();
+      expect(await screen.findByText('36,000')).toBeInTheDocument();
+      vi.useFakeTimers();
+      // Recreate the interval after switching clocks; the first one used real timers.
+      visibility.mockReturnValue('hidden');
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      visibility.mockReturnValue('visible');
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      const refreshed = usageDashboardFixture();
+      refreshed.totals.tokens = 13000;
+      readUsage = async () => ({ data: refreshed });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_001); });
+      expect(screen.getByText('13,000')).toBeInTheDocument();
+      visibility.mockReturnValue('hidden');
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      readUsage = async () => ({ data: { ...refreshed, totals: { ...refreshed.totals, tokens: 14000 } } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      expect(screen.getByText('13,000')).toBeInTheDocument();
+      visibility.mockReturnValue('visible');
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_001); });
+      expect(screen.getByText('14,000')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      visibility.mockRestore();
+    }
+  });
+});
+
+
+it.each([
+  { language: 'en', method: 'How usage is measured', overview: 'Monthly usage', detail: 'Future action: details', average: 'USD / priced request' },
+  { language: 'tr', method: 'Kullanım nasıl ölçülür?', overview: 'Aylık kullanım', detail: 'Future action: ayrıntılar', average: 'USD / fiyatlı istek' },
+])('discloses external research exclusions and priced-call averages in $language', async ({ language, method, overview, detail, average }) => {
+  const data = usageDashboardFixture();
+  data.rows[0].unpricedCalls = 1;
+  data.rows[0].averageCostUsd = 1.75;
+  readUsage = async () => ({ data });
+  await renderPage(language);
+  const summary = within(await screen.findByRole('region', { name: overview }));
+  await userEvent.click(await summary.findByText(method));
+  expect(summary.getByText(/Firecrawl.*Apify/)).toBeVisible();
+  expect(summary.getByText(language === 'tr' ? /oluşturulma tarihine.*READY.*silindiğinde/i : /retained READY.*creation date.*Deleting/i)).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: detail }));
+  const sheet = within(screen.getByRole('dialog', { name: 'Future action' }));
+  expect(sheet.getByText(average)).toBeInTheDocument();
+  expect(sheet.getByText(language === 'tr' ? '$1,75' : '$1.75')).toBeInTheDocument();
+});
+
+it.each([
+  {
+    language: 'en', title: 'AI actions', category: 'Category', search: 'Search actions',
+    labels: ['Customer conversations', 'Research', 'Content', 'Strategy & brand', 'Panel assistant', 'Automation', 'Voice & calls', 'Review replies', 'Landing pages', 'Social publishing', 'Panel assistant'],
+  },
+  {
+    language: 'tr', title: 'Yapay zeka işlemleri', category: 'Kategori', search: 'İşlem ara',
+    labels: ['Müşteri görüşmeleri', 'Araştırma', 'İçerik', 'Strateji ve marka', 'Panel asistanı', 'Otomasyon', 'Ses ve çağrılar', 'Yorum yanıtları', 'Açılış sayfaları', 'Sosyal paylaşım', 'Panel asistanı'],
+  },
+])('localizes server category codes in the table, filter and search in $language, preserving unknown categories', async ({ language, title, category, search, labels }) => {
+  const codes = ['conversation', 'research', 'content', 'strategy', 'assistant', 'workflow', 'voice', 'reviews', 'funnel', 'social', 'askAi', 'future.category'];
+  const current = policy();
+  current.jobs = codes.map((code, index) => ({ ...current.jobs[0], id: `task.${index}`, label: `Task ${index}`, category: code }));
+  readPolicy = async () => ({ data: current });
+  readUsage = async () => ({ data: { ...usageDashboardFixture(), rows: [] } });
+  await renderPage(language);
+  const card = within(await screen.findByRole('region', { name: title }));
+  const filter = await card.findByRole('combobox', { name: category });
+  for (const [index, label] of [...labels, 'future.category'].entries()) {
+    expect(card.getByRole('row', { name: new RegExp(`Task ${index}[: ]`) })).toHaveTextContent(label);
+    const option = within(filter).getAllByRole('option', { name: label }).find(node => (node as HTMLOptionElement).value === codes[index]);
+    expect(option).toBeDefined();
+  }
+  await userEvent.type(card.getByRole('searchbox', { name: search }), labels[0]);
+  expect(card.getAllByRole('switch')).toHaveLength(1);
+  expect(card.getByRole('row', { name: /Task 0/ })).toBeInTheDocument();
+  await userEvent.clear(card.getByRole('searchbox', { name: search }));
+  await userEvent.selectOptions(filter, 'askAi');
+  expect(card.getAllByRole('switch')).toHaveLength(1);
+  expect(card.getByRole('row', { name: /Task 10/ })).toBeInTheDocument();
+  await userEvent.selectOptions(filter, 'future.category');
+  expect(card.getByRole('row', { name: /Task 11/ })).toHaveTextContent('future.category');
 });

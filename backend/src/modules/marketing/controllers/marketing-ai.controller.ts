@@ -26,6 +26,7 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { AskAiService } from '../ai/ask-ai.service';
 import { CommandAiService } from '../ai/command-ai.service';
 import { AiUsageStatsService } from '../ai/ai-usage-stats.service';
+import { AiUsageDashboardService } from '../ai/ai-usage-dashboard.service';
 import { VendorSpendReportService } from '../wallet/vendor-spend-report.service';
 import { WorkspaceAiKeyService } from '../ai/workspace-ai-key.service';
 import { AiSpendSettingsService } from '../ai/ai-spend-settings.service';
@@ -63,7 +64,14 @@ export class MarketingAiController {
     private readonly ownKey: WorkspaceAiKeyService,
     private readonly spend: AiSpendSettingsService,
     private readonly jobSettings: AiJobSettingsService,
+    private readonly usageDashboard: AiUsageDashboardService,
   ) {}
+
+  @Get('usage-dashboard')
+  @MarketingRoles('MANAGER')
+  getUsageDashboard(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.usageDashboard.get(actor.workspaceId);
+  }
 
   @Get('execution-policy')
   @MarketingRoles('MANAGER')

@@ -20,7 +20,7 @@ export interface PricedMediaModel {
   id: string;
   type: MediaModelType;
   label: string;
-  /** IMAGE: flat, per image. */
+  /** Flat: per image for IMAGE, per run for some VIDEO tools. */
   priceUsd?: number;
   credits?: number;
   /** VIDEO: per second of clip. */

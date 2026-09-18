@@ -484,6 +484,7 @@ import { GamificationService } from './memberships/gamification.service';
 import { AnalyticsController } from './analytics/analytics.controller';
 import { AnalyticsService } from './analytics/analytics.service';
 import { AiUsageStatsService } from './ai/ai-usage-stats.service';
+import { AiUsageDashboardService } from './ai/ai-usage-dashboard.service';
 import { DailyDigestService } from './analytics/daily-digest.service';
 import { DailyDigestCron } from './analytics/daily-digest.cron';
 import { PlatformAiSpendService } from './ai/platform-ai-spend.service';
@@ -1220,6 +1221,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // Epic G — analytics.
     AnalyticsService,
     AiUsageStatsService,
+    AiUsageDashboardService,
     DailyDigestService,
     DailyDigestCron,
     PlatformAiSpendService,

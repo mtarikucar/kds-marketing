@@ -1,106 +1,54 @@
-/**
- * The AI model settings card, in a real browser — the price witness.
- *
- * ## Why a browser test, and why THIS assertion
- *
- * jsdom does not apply Tailwind. A view shipped earlier in this session rendered
- * nothing on screen while 126 jsdom tests stayed green, because every class that
- * decides whether an element is visible simply does not exist in that
- * environment. `AiModelsPage.test.tsx` therefore proves the component's LOGIC —
- * which option is checked, what the PATCH sends — and cannot prove that a
- * manager can see any of it.
- *
- * What only a browser can answer here:
- *
- *   1. the lazy chunk registered in App.tsx actually loads and mounts at
- *      `/settings/ai-models` (a wrong import path or a bad default export
- *      compiles, passes vitest against the mock, and fails only here);
- *   2. the catalogue is served by the REAL endpoint — the whole point of the
- *      screen is that the price comes from the backend rather than a fourth
- *      hardcoded copy of the model list, and only the real request path proves
- *      the route exists, is reachable at the MANAGER floor, and returns prices;
- *   3. **the price is visible INSIDE the control being chosen with.** Not
- *      "somewhere on the page" — inside the radiogroup, on the option. Video is
- *      the most expensive action in this product and choosing a model is the
- *      spending decision; a picker that renders its prices into a collapsed or
- *      clipped container is exactly the failure jsdom cannot see.
- *
- * Locale is pinned tr-TR by playwright.config.ts, so every string asserted here
- * is the Turkish one and lives in src/i18n/locales/tr/marketing.json:
- * `nav.aiModels`, `aiModels.title`, `aiModels.video.title`,
- * `aiModels.platformDefaultIs`, `aiModels.priceVideo`, `settingsGroup.automation`.
- *
- * If this fails: either the chunk does not load, the endpoint is not reachable
- * from the panel, or the prices are no longer on the options — and the third is
- * the one that would make the card actively misleading rather than merely
- * broken.
- */
+/** Real API/browser checks. Run only against the dedicated E2E stack. */
 import { test, expect } from './support/fixtures';
 
-/** The lazy settings chunk pays a Vite on-demand transform on first mount. */
 const LAZY = { timeout: 20_000 };
 
-test('the model picker shows each model’s price on the option itself', async ({ app }) => {
+test('compact media summaries open priced catalogues and preserve a saved choice', async ({ app }) => {
   await app.goto('/settings/ai-models');
-
   await expect(app.getByRole('heading', { name: 'Yapay zeka ayarları' })).toBeVisible(LAZY);
-
-  // The video card, located by the accessible name its own RadioGroup carries.
-  const video = app.getByRole('radiogroup', { name: 'Video modeli' });
-  await expect(video).toBeVisible(LAZY);
-
-  /*
-   * The assertion that matters. The price is part of each radio's accessible
-   * name (aria-labelledby spans the label AND the price element), so a radio
-   * that is visible with this name is a radio whose price a person can read —
-   * it cannot pass with the number rendered outside the control, or with the
-   * control rendered and the price container collapsed.
-   *
-   * Two options, two different prices, so this also fails if every row is given
-   * the same number.
-   */
-  const priced = video.getByRole('radio', { name: /saniyede \d+ kredi \(\$[\d.]+\/sn\)/ });
+  await expect(app.getByRole('radiogroup')).toHaveCount(0);
+  const trigger = app.getByRole('button', { name: 'Video modeli seç' });
+  await trigger.focus();
+  await app.keyboard.press('Enter');
+  const sheet = app.getByRole('dialog', { name: 'Video modeli' });
+  await expect(sheet).toBeVisible();
+  const video = sheet.getByRole('radiogroup', { name: 'Video modeli' });
+  const priced = video.getByRole('radio', { name: /(?:saniyede|işlem başına) \d+ kredi \(\$[\d.]+(?:\/sn)?\)/ });
   await expect(priced).toHaveCount(await video.getByRole('radio').count());
-  // Anchored, because the platform row legitimately quotes the SAME number as
-  // the model it currently points at — two rows, one price, on purpose.
-  // Veo 3 Fast ("Video + audio", 25 credits/s) was retired by fal and left the
-  // menu; its successor Veo 3.1 Fast is the premium row now.
-  await expect(video.getByRole('radio', { name: /^Veo 3\.1 Fast — draft tier saniyede 15 kredi/ })).toBeVisible();
+  const premium = video.getByRole('radio', { name: /^Veo 3\.1 Fast — draft tier saniyede 15 kredi/ });
+  await expect(premium).toBeVisible();
   await expect(video.getByRole('radio', { name: /^Short video saniyede 3 kredi/ })).toBeVisible();
-
-  // A workspace that has chosen nothing sits on a NAMED platform default, not
-  // an empty picker — the state that keeps it following the platform constant.
-  await expect(
-    video.getByRole('radio', { name: /^Platform varsayılanı \(/ }),
-  ).toHaveAttribute('aria-checked', 'true');
-
-  // Images bill in a different unit, and the card says so rather than reusing
-  // the per-second wording.
+  await expect(video.getByRole('radio', { name: /^Wan FLF2V.*işlem başına 40 kredi \(\$0.4\)/ })).toBeAttached();
+  await expect(video.getByRole('radio', { name: /^Platform varsayılanı \(/ })).toBeChecked();
+  await premium.click();
+  await app.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+  await expect(app.getByRole('radiogroup')).toHaveCount(0);
+  const saved = app.waitForResponse(response => response.url().endsWith('/marketing/workspaces/media-models') && response.request().method() === 'PATCH');
+  await app.getByRole('button', { name: 'Kaydet', exact: true }).click();
+  const response = await saved;
+  expect(response.status()).toBe(200);
+  expect(Object.keys(response.request().postDataJSON())).toEqual(['defaultVideoModel']);
+  await app.reload();
+  await trigger.click();
+  await expect(premium).toBeChecked();
+  await app.keyboard.press('Escape');
+  await app.getByRole('button', { name: 'Görsel modeli seç' }).click();
   const image = app.getByRole('radiogroup', { name: 'Görsel modeli' });
   await expect(image.getByRole('radio', { name: /^Draft image görsel başına \d+ kredi/ })).toBeVisible();
-
-  // Nothing has changed yet, so the save affordance is inert.
-  await expect(app.getByRole('button', { name: 'Kaydet', exact: true })).toBeDisabled();
 });
 
-test('the card has a door in the Settings menu, under a real group', async ({ app }) => {
-  // Desktop width: SettingsLayout's sidebar is `hidden … md:flex`, so below md
-  // the entry that is on screen is the mobile strip's, not this one.
-  await app.setViewportSize({ width: 1440, height: 900 });
+test('the page has a door in the Settings menu', async ({ app }) => {
   await app.goto('/branding');
-
   const nav = app.getByRole('navigation', { name: 'Ayarlar' });
-  const link = nav.getByRole('link', { name: 'Yapay zeka modelleri' });
-  await expect(link).toBeVisible(LAZY);
-
-  await link.click();
+  await nav.getByRole('link', { name: 'Yapay zeka modelleri' }).click();
   await expect(app).toHaveURL(/\/settings\/ai-models$/);
   await expect(app.getByRole('heading', { name: 'Yapay zeka ayarları' })).toBeVisible(LAZY);
 });
 
-test('an owner can save an action switch and the connected-assistant provider', async ({ app }) => {
+test('an owner can filter, inspect, save and reload an action without losing its draft', async ({ app }) => {
   await app.goto('/settings/ai-models');
-  const actions = app.getByRole('region', { name: 'Yapay zeka işlemleri' });
+  const actions = app.getByRole('region', { name: 'Yapay zeka işlemleri', exact: true });
   await expect(actions.getByRole('switch')).toHaveCount(31, LAZY);
   const enabled = actions.getByRole('switch', { name: 'Sosyal içerik metni: etkin', exact: true });
   const provider = actions.getByRole('combobox', { name: 'Sosyal içerik metni: sağlayıcı', exact: true });
@@ -108,12 +56,89 @@ test('an owner can save an action switch and the connected-assistant provider', 
   await provider.click();
   await app.getByRole('option', { name: /^MCP/ }).click();
   await enabled.click();
-  const saved = app.waitForResponse((response) =>
-    response.url().endsWith('/marketing/ai/execution-policy') && response.request().method() === 'PATCH',
-  );
+  const search = actions.getByRole('searchbox', { name: 'İşlem ara' });
+  await search.fill('does-not-exist');
+  await expect(actions.getByRole('switch')).toHaveCount(0);
+  await search.clear();
+  await expect(enabled).not.toBeChecked();
+  await expect(provider).toContainText('MCP');
+  await actions.getByRole('button', { name: 'Sosyal içerik metni: ayrıntılar' }).click();
+  await expect(app.getByRole('dialog', { name: 'Sosyal içerik metni', exact: true })).toBeVisible();
+  await expect(app.getByText('Kredi tarifesi', { exact: true })).toBeVisible();
+  await app.keyboard.press('Escape');
+  const saved = app.waitForResponse(response => response.url().endsWith('/marketing/ai/execution-policy') && response.request().method() === 'PATCH');
   await actions.getByRole('button', { name: 'İşlemleri kaydet', exact: true }).click();
-  expect((await saved).status()).toBe(200);
+  const response = await saved;
+  expect(response.status()).toBe(200);
+  const jobs = response.request().postDataJSON().jobs;
+  expect(Object.values(jobs)).toEqual([{ enabled: false, provider: 'MCP' }]);
   await app.reload();
   await expect(enabled).not.toBeChecked();
   await expect(provider).toContainText('MCP');
+});
+
+test('the overview, media controls and internally scrolling table fit the desktop viewport', async ({ app }) => {
+  await app.setViewportSize({ width: 1366, height: 768 });
+  const loaded = app.waitForResponse(response => response.url().endsWith('/marketing/ai/usage-dashboard'));
+  await app.goto('/settings/ai-models');
+  const response = await loaded;
+  expect(response.status()).toBe(200);
+  const dashboard = await response.json();
+  expect(dashboard.currency).toBe('USD');
+  const overview = app.getByRole('region', { name: 'Aylık kullanım' });
+  await expect(overview.getByText('Kayıtlı API tokenı', { exact: true })).toBeVisible(LAZY);
+  await expect(overview).toContainText(dashboard.period.month);
+  const actions = app.getByRole('region', { name: 'Yapay zeka işlemleri', exact: true });
+  await expect(actions.getByRole('switch')).toHaveCount(31, LAZY);
+  const box = await actions.boundingBox();
+  expect(box!.y + box!.height).toBeLessThanOrEqual(768);
+  await expect(app.getByRole('button', { name: 'Video modeli seç' })).toBeInViewport();
+  const scroll = app.getByRole('region', { name: 'Kaydırılabilir işlem tablosu' });
+  expect(await scroll.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  expect((await scroll.boundingBox())!.height).toBeLessThan(450);
+  const heading = app.getByRole('columnheader', { name: 'İşlem / kategori' });
+  const before = await heading.boundingBox();
+  await scroll.evaluate(node => { node.scrollTop = 300; });
+  expect((await heading.boundingBox())!.y).toBeCloseTo(before!.y, 0);
+  await overview.getByText('Kullanım nasıl ölçülür?', { exact: true }).click();
+  await expect(overview.getByText(/Firecrawl.*Apify/)).toBeVisible();
+  await overview.getByText('Kullanım nasıl ölçülür?', { exact: true }).click();
+  await actions.getByText('Sağlayıcılar ve ücretler', { exact: true }).click();
+  await expect(actions.getByText(/çağrı başına.*barındırma/)).toBeVisible();
+});
+
+test('on mobile the table scrolls horizontally and details remain keyboard accessible', async ({ app }) => {
+  await app.setViewportSize({ width: 390, height: 844 });
+  await app.goto('/settings/ai-models');
+  const scroll = app.getByRole('region', { name: 'Kaydırılabilir işlem tablosu' });
+  await expect(scroll).toBeVisible(LAZY);
+  expect(await scroll.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
+  const box = await scroll.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  expect(await app.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  const details = app.getByRole('button', { name: 'Sosyal içerik metni: ayrıntılar' });
+  await details.focus();
+  await app.keyboard.press('Enter');
+  await expect(app.getByRole('dialog', { name: 'Sosyal içerik metni', exact: true })).toBeVisible();
+  await app.keyboard.press('Escape');
+  await expect(details).toBeFocused();
+  await expect(app.getByRole('dialog')).toHaveCount(0);
+  expect(await app.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('analytics failure is explicit while settings stay usable, and refresh recovers', async ({ app }) => {
+  let failed = true;
+  await app.route('**/marketing/ai/usage-dashboard', route => failed
+    ? route.fulfill({ status: 503, json: { message: 'unavailable' } }) : route.continue());
+  await app.goto('/settings/ai-models');
+  const overview = app.getByRole('region', { name: 'Aylık kullanım' });
+  await expect(overview.getByRole('alert')).toContainText('Kullanım verileri alınamadı', LAZY);
+  const enabled = app.getByRole('switch', { name: 'Sosyal içerik metni: etkin', exact: true });
+  await expect(enabled).toBeEnabled();
+  await enabled.click();
+  await expect(app.getByRole('button', { name: 'İşlemleri kaydet', exact: true })).toBeEnabled();
+  failed = false;
+  await overview.getByRole('button', { name: 'Kullanımı yenile' }).click();
+  await expect(overview.getByText('Kayıtlı API tokenı', { exact: true })).toBeVisible();
+  await expect(enabled).not.toBeChecked();
 });
