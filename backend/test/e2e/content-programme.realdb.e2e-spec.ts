@@ -217,7 +217,7 @@ describeRealDb('Content programme — the autonomous loop on real rows (e2e)', (
   const fakeRunner = { registerHandler: jest.fn() };
 
   const fakeAnthropic = {
-    isEnabled: () => true,
+    isEnabledFor: async () => true,
     complete: jest.fn().mockResolvedValue(submission(PROGRAMME_CONCEPTS)),
   };
 

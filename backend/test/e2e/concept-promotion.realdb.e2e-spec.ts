@@ -186,7 +186,7 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     new ContentConceptsService(
       prisma,
       {
-        isEnabled: () => true,
+        isEnabledFor: async () => true,
         complete: jest.fn().mockResolvedValue(completion ?? submission(GOOD_CONCEPTS)),
       } as never,
       credits,
@@ -894,7 +894,7 @@ describeRealDb('Concept promotion — approved idea to produced clips, real DB (
     const draftCampaign = await seedCampaign('DRAFT', 'Draft for planning');
     const before = await prisma.contentConcept.count({ where: { workspaceId } });
     const anthropic = {
-      isEnabled: () => true,
+      isEnabledFor: async () => true,
       complete: jest.fn().mockResolvedValue(submission(GOOD_CONCEPTS)),
     };
     const svc = new ContentConceptsService(
@@ -1226,7 +1226,7 @@ describeRealDb('MediaGenService — the campaign linkage proven against real row
   beforeEach(() => {
     if (!realDbEnabled()) return;
     // A spy on a real class method, not on a Prisma delegate — so it sticks.
-    reserveSpy = jest.spyOn(credits, 'reserve');
+    reserveSpy = jest.spyOn(credits, 'reserveForJob');
   });
 
   afterEach(() => reserveSpy?.mockRestore());

@@ -59,11 +59,11 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
         complete,
       });
       // Billing is a separate concern with its own tests, and a bare test
-      // workspace has no plan — reserve() throws AI_CREDITS_EXHAUSTED before the
+      // workspace has no plan — reserveForJob() throws AI_CREDITS_EXHAUSTED before the
       // model is ever reached. Stubbed so this spec measures what it is for:
       // whether the four reply-path fixes compose.
       builder.overrideProvider(AiCreditsService).useValue({
-        reserve: jest.fn().mockResolvedValue(undefined),
+        reserveForJob: jest.fn().mockResolvedValue(1),
         refund: jest.fn().mockResolvedValue(undefined),
       });
     }));

@@ -150,7 +150,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
       typeof completion === 'function'
         ? jest.fn().mockImplementation(completion as () => Promise<never>)
         : jest.fn().mockResolvedValue(completion);
-    const anthropic = { isEnabled: () => true, complete };
+    const anthropic = { isEnabledFor: async () => true, complete };
     return {
       svc: new ContentConceptsService(
         client,
@@ -167,7 +167,7 @@ describeRealDb('Content concepts — idea to reviewable concepts, real DB (e2e)'
   const reader = () =>
     new ContentConceptsService(
       prisma,
-      { isEnabled: () => true, complete: jest.fn() } as never,
+      { isEnabledFor: async () => true, complete: jest.fn() } as never,
       credits,
       pipeline,
       promotion(),
