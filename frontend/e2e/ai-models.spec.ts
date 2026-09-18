@@ -43,7 +43,7 @@ const LAZY = { timeout: 20_000 };
 test('the model picker shows each model’s price on the option itself', async ({ app }) => {
   await app.goto('/settings/ai-models');
 
-  await expect(app.getByRole('heading', { name: 'Yapay zeka üretim modelleri' })).toBeVisible(LAZY);
+  await expect(app.getByRole('heading', { name: 'Yapay zeka ayarları' })).toBeVisible(LAZY);
 
   // The video card, located by the accessible name its own RadioGroup carries.
   const video = app.getByRole('radiogroup', { name: 'Video modeli' });
@@ -80,7 +80,7 @@ test('the model picker shows each model’s price on the option itself', async (
   await expect(image.getByRole('radio', { name: /^Draft image görsel başına \d+ kredi/ })).toBeVisible();
 
   // Nothing has changed yet, so the save affordance is inert.
-  await expect(app.getByRole('button', { name: 'Kaydet' })).toBeDisabled();
+  await expect(app.getByRole('button', { name: 'Kaydet', exact: true })).toBeDisabled();
 });
 
 test('the card has a door in the Settings menu, under a real group', async ({ app }) => {
@@ -95,5 +95,25 @@ test('the card has a door in the Settings menu, under a real group', async ({ ap
 
   await link.click();
   await expect(app).toHaveURL(/\/settings\/ai-models$/);
-  await expect(app.getByRole('heading', { name: 'Yapay zeka üretim modelleri' })).toBeVisible(LAZY);
+  await expect(app.getByRole('heading', { name: 'Yapay zeka ayarları' })).toBeVisible(LAZY);
+});
+
+test('an owner can save an action switch and the connected-assistant provider', async ({ app }) => {
+  await app.goto('/settings/ai-models');
+  const actions = app.getByRole('region', { name: 'Yapay zeka işlemleri' });
+  await expect(actions.getByRole('switch')).toHaveCount(31, LAZY);
+  const enabled = actions.getByRole('switch', { name: 'Sosyal içerik metni: etkin', exact: true });
+  const provider = actions.getByRole('combobox', { name: 'Sosyal içerik metni: sağlayıcı', exact: true });
+  await expect(enabled).toBeChecked();
+  await provider.click();
+  await app.getByRole('option', { name: /^MCP/ }).click();
+  await enabled.click();
+  const saved = app.waitForResponse((response) =>
+    response.url().endsWith('/marketing/ai/execution-policy') && response.request().method() === 'PATCH',
+  );
+  await actions.getByRole('button', { name: 'İşlemleri kaydet', exact: true }).click();
+  expect((await saved).status()).toBe(200);
+  await app.reload();
+  await expect(enabled).not.toBeChecked();
+  await expect(provider).toContainText('MCP');
 });
