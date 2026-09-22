@@ -23,6 +23,11 @@ describe('ConversationAiEngineService.reply', () => {
     history?: any;
     claimed?: number;
     sendStatus?: 'SENT' | 'FAILED';
+    sendRetriable?: boolean;
+    metered?: boolean;
+    usage?: { limit: number; used: number; remaining: number };
+    /** The thread's lead row, for the deleted/merged gate. */
+    lead?: any;
   } = {}) {
     const convo = {
       id: CONVO,
@@ -66,11 +71,36 @@ describe('ConversationAiEngineService.reply', () => {
       message: {
         findMany: jest.fn().mockResolvedValue(overrides.history ?? [{ direction: 'INBOUND', body: 'Merhaba' }]),
       },
-      lead: { findFirst: jest.fn().mockResolvedValue({ businessName: 'Acme', contactPerson: 'Ayşe' }) },
+      lead: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            overrides.lead === undefined
+              ? { businessName: 'Acme', contactPerson: 'Ayşe' }
+              : overrides.lead,
+          ),
+        // "Does another live lead already hold this dedup key?" — 0 = free.
+        count: jest.fn().mockResolvedValue(0),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      booking: { findFirst: jest.fn().mockResolvedValue(null) },
+      // The audit trail a capture now leaves. Needs the workspace SYSTEM
+      // sentinel, because LeadActivity.createdById is a required FK.
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sys-1' }) },
+      marketingNotification: { create: jest.fn().mockResolvedValue({}) },
+      conversationNote: { create: jest.fn().mockResolvedValue({}) },
       // Atomic daily-reply-cap claim: returns rows-affected (1 = slot claimed,
       // 0 = at cap / lost race). Default 1; the cap-hit test overrides to 0.
       $executeRaw: jest.fn().mockResolvedValue(overrides.claimed ?? 1),
     };
+    // The monthly message pool. Unlimited by default so every test written
+    // before the headroom gate existed still describes the old behaviour.
+    const quota = {
+      isMetered: jest.fn().mockReturnValue(overrides.metered ?? true),
+      usage: jest.fn().mockResolvedValue(overrides.usage ?? { limit: -1, used: 0, remaining: -1 }),
+    };
+    const outbox = { append: jest.fn().mockResolvedValue(undefined) };
     const anthropic = {
       isEnabled: jest.fn().mockReturnValue(overrides.enabled ?? true),
       // Workspace-aware gate: a workspace with its own key is live even while
@@ -89,7 +119,14 @@ describe('ConversationAiEngineService.reply', () => {
     // 'FAILED' — it does not throw on a provider rejection. The engine reads
     // that status, so the double must carry it.
     const sender = {
-      send: jest.fn().mockResolvedValue({ id: 'out-1', status: overrides.sendStatus ?? 'SENT' }),
+      send: jest.fn().mockResolvedValue({
+        id: 'out-1',
+        status: overrides.sendStatus ?? 'SENT',
+        // Whether sending THIS message again, unchanged, could have a different
+        // answer. Absent (the default) means the dispatcher could not tell, and
+        // the engine must then treat the failure as final — today's behaviour.
+        ...(overrides.sendRetriable === undefined ? {} : { retriable: overrides.sendRetriable }),
+      }),
     };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
     const runner = { registerHandler: jest.fn() };
@@ -108,9 +145,9 @@ describe('ConversationAiEngineService.reply', () => {
     const engine = new ConversationAiEngineService(
       prisma, {} as any, anthropic as any, credits as any, knowledge as any,
       sender as any, scheduledJobs as any, runner as any, stream as any,
-      brandContext as any, followups, bookings as any,
+      brandContext as any, followups, bookings as any, quota as any, outbox as any,
     );
-    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext, followups, bookings };
+    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext, followups, bookings, quota, outbox };
   }
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
@@ -334,8 +371,12 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.sender.send).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: WS, conversationId: CONVO, authorType: 'AI' }),
     );
-    // No post-send read-modify-write counter bump remains.
-    expect(h.prisma.conversation.update).not.toHaveBeenCalled();
+    // No post-send read-modify-write counter bump remains. The one write left
+    // on this path clears the "AI did not respond" banner, which is the point
+    // of it — nothing reads or increments anything.
+    expect(h.prisma.conversation.update.mock.calls.map((c: any[]) => c[0].data)).toEqual([
+      { aiLastDeclineReason: null, aiLastDeclineAt: null },
+    ]);
     expect(h.credits.refund).not.toHaveBeenCalled();
   });
 
@@ -557,6 +598,7 @@ describe('ConversationAiEngineService.reply', () => {
     // Prisma lead mock for captureLeadFields (called during tool execution)
     h.prisma.lead = {
       findFirst: jest.fn().mockResolvedValue({ contactPerson: null, email: null, phone: null, city: null, notes: null }),
+      count: jest.fn().mockResolvedValue(0),
       updateMany: jest.fn().mockResolvedValue({}),
     };
     h.anthropic.complete.mockImplementation(() => {
@@ -601,6 +643,7 @@ describe('ConversationAiEngineService.reply', () => {
     const h = build({ complete: undefined });
     h.prisma.lead = {
       findFirst: jest.fn().mockResolvedValue({ contactPerson: null, email: null, phone: null, city: null, notes: null }),
+      count: jest.fn().mockResolvedValue(0),
       updateMany: jest.fn().mockResolvedValue({}),
     };
     h.anthropic.complete.mockImplementation(() => {
@@ -638,6 +681,7 @@ describe('ConversationAiEngineService.reply', () => {
     const h = build();
     h.prisma.lead = {
       findFirst: jest.fn().mockResolvedValue({ contactPerson: null, email: null, phone: null, city: null, notes: null }),
+      count: jest.fn().mockResolvedValue(0),
       updateMany: jest.fn().mockResolvedValue({}),
     };
     let n = 0;
@@ -719,6 +763,22 @@ describe('ConversationAiEngineService.reply', () => {
     it('distinguishes a human takeover from a closed thread', async () => {
       // Two very different situations that both used to produce silence.
       expect(await runDecline({ convo: { aiPaused: true } })).toMatch(/AI paused/);
+    });
+
+    it('will not answer for a lead the business has deleted', async () => {
+      // The ingress withholds the inbound EVENT for a hidden lead, but this
+      // lane is also reached by the hourly backfill sweep, the connector's
+      // claimed job and a manual re-run. Answering as the business to a record
+      // the business has hidden is the same defect through a different door.
+      expect(
+        await runDecline({ lead: { businessName: 'Acme', deletedAt: new Date() } }),
+      ).toMatch(/deleted or merged/);
+    });
+
+    it('will not answer on a thread whose lead was merged away', async () => {
+      expect(
+        await runDecline({ lead: { businessName: 'Acme', mergedIntoId: 'lead-9' } }),
+      ).toMatch(/deleted or merged/);
     });
 
     it('names the channel when no agent is attached', async () => {
@@ -903,6 +963,350 @@ describe('ConversationAiEngineService.reply', () => {
     it('does NOT overwrite a real name a human may have corrected', async () => {
       const data = await capture('Mehmet Demir');
       expect(data?.contactPerson).toBeUndefined();
+    });
+  });
+
+  /**
+   * THE OUTBOUND OPENER.
+   *
+   * The Messages API needs a leading USER turn, so `buildHistory` shifts any
+   * outbound turns off the front — and threw the text away. On every
+   * outbound-first thread (a campaign, a distribution mail, `jeeta_send_message`)
+   * that is the whole context: the customer answers "Evet, detayları gönderir
+   * misiniz?" and the model has never seen the offer they are answering.
+   */
+  describe('the outbound opener the model was answering', () => {
+    // A fresh array per test: the service reverses the rows findMany hands it,
+    // in place, so a shared fixture would arrive the other way round.
+    const openerHistory = () => [
+      // findMany is DESC (newest first); the service reverses it.
+      { direction: 'INBOUND', body: 'Evet, detayları gönderir misiniz?' },
+      { direction: 'OUTBOUND', body: 'Merhaba, size %20 indirimli bir paket hazırladık.' },
+    ];
+
+    it('is folded into the system prompt, as OUR copy', async () => {
+      const h = build({ history: openerHistory() });
+      await run(h);
+      const call = h.anthropic.complete.mock.calls[0][0];
+      expect(call.system).toContain('%20 indirimli bir paket');
+      // …and as our own words, not as a customer turn: the system prompt
+      // declares every user turn untrusted, so folding our offer in there would
+      // let the model conclude the CUSTOMER proposed it.
+      expect(JSON.stringify(call.messages)).not.toContain('%20 indirimli');
+      expect(call.messages[0].role).toBe('user');
+    });
+
+    it('the follow-up prompt sees it too — that is the turn told not to repeat it', async () => {
+      const h = build({
+        history: openerHistory(),
+        agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } },
+      });
+      await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+      expect(h.anthropic.complete.mock.calls[0][0].system).toContain('%20 indirimli bir paket');
+    });
+
+    it('an outbound-only thread says the customer has not replied, not that they opened it', async () => {
+      const h = build({ history: [{ direction: 'OUTBOUND', body: 'Merhaba, bir teklifimiz var.' }] });
+      await run(h);
+      const call = h.anthropic.complete.mock.calls[0][0];
+      expect(call.messages[0].content).toMatch(/has not replied/i);
+      expect(call.system).toContain('bir teklifimiz var');
+    });
+
+    it('a send the provider REFUSED is not history — the model must re-answer the question', async () => {
+      const h = build({
+        history: [
+          { direction: 'INBOUND', body: 'Fiyat nedir?' },
+          { direction: 'OUTBOUND', body: 'Bu asla gitmedi', status: 'FAILED' },
+        ],
+      });
+      await run(h);
+      const call = h.anthropic.complete.mock.calls[0][0];
+      expect(JSON.stringify(call.messages)).not.toContain('asla gitmedi');
+      expect(call.system).not.toContain('asla gitmedi');
+    });
+  });
+
+  /**
+   * A 4xx / timeout is not a final answer.
+   *
+   * `MessageSenderService` persists a FAILED row and returns normally, so a
+   * relay that blinked cost the customer their answer for good. The retry is
+   * BOUNDED: one more attempt, then the decline stands.
+   */
+  describe('a transient refusal reschedules — once', () => {
+    it('reschedules the reply when the dispatcher says the failure was transient', async () => {
+      const h = build({ sendStatus: 'FAILED', sendRetriable: true });
+      await run(h);
+      const retries = h.scheduledJobs.schedule.mock.calls.filter(
+        (c: any[]) => c[0]?.payload?.sendRetry === 1,
+      );
+      expect(retries).toHaveLength(1);
+      expect(retries[0][0].dedupKey).toBe(CONVO);
+      expect(retries[0][0].runAt.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('…and only once: the retry that fails again is final', async () => {
+      const h = build({ sendStatus: 'FAILED', sendRetriable: true });
+      await (h.engine as any).handleAiReplyJob({
+        payload: { workspaceId: WS, conversationId: CONVO, sendRetry: 1 },
+      });
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('a PERMANENT refusal is still final (unchanged behaviour)', async () => {
+      const h = build({ sendStatus: 'FAILED', sendRetriable: false });
+      await run(h);
+      expect(h.scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * An exhausted message allowance used to cost SIX Claude runs per inbound:
+   * the send threw MESSAGES_EXHAUSTED out of the engine, onInbound rescheduled,
+   * and the runner retried five times — each one generating a fresh reply
+   * nobody could ever receive.
+   */
+  describe('the monthly message allowance', () => {
+    it('costs ZERO model calls when it is already spent', async () => {
+      const h = build({ usage: { limit: 500, used: 500, remaining: 0 } });
+      await run(h);
+      expect(h.anthropic.complete).not.toHaveBeenCalled();
+      expect(h.credits.reserveForJob).not.toHaveBeenCalled();
+      expect(h.sender.send).not.toHaveBeenCalled();
+      const write = h.prisma.conversation.update.mock.calls.find(
+        (c: any) => c[0]?.data?.aiLastDeclineReason !== undefined,
+      );
+      expect(write?.[0].data.aiLastDeclineReason).toMatch(/allowance/i);
+    });
+
+    it('never gates WEB CHAT, which reserves nothing', async () => {
+      // The sibling path the obvious fix breaks: an unmetered channel would
+      // otherwise go silent the moment the pool ran dry.
+      const h = build({ metered: false, usage: { limit: 500, used: 500, remaining: 0 } });
+      await run(h);
+      expect(h.sender.send).toHaveBeenCalled();
+    });
+
+    it('an unlimited plan is not gated', async () => {
+      const h = build({ usage: { limit: -1, used: 9999, remaining: -1 } });
+      await run(h);
+      expect(h.sender.send).toHaveBeenCalled();
+    });
+
+    it('a send that races the cap declines instead of escaping the engine', async () => {
+      const { ForbiddenException } = await import('@nestjs/common');
+      const h = build();
+      h.sender.send.mockRejectedValue(
+        new ForbiddenException({ code: 'MESSAGES_EXHAUSTED', message: 'Monthly message limit reached (500)' }),
+      );
+      await expect(run(h)).resolves.toBeUndefined();
+      expect(h.credits.refund).toHaveBeenCalled();
+      const write = h.prisma.conversation.update.mock.calls.find(
+        (c: any) => c[0]?.data?.aiLastDeclineReason !== undefined,
+      );
+      expect(write?.[0].data.aiLastDeclineReason).toMatch(/allowance/i);
+    });
+
+    it('any OTHER send error still escapes — a bookkeeping failure must not be swallowed', async () => {
+      const h = build();
+      h.sender.send.mockRejectedValue(new Error('message row update failed after the provider accepted'));
+      await expect(run(h)).rejects.toThrow(/after the provider accepted/);
+    });
+  });
+
+  /**
+   * The banner said "the AI did not respond" forever, because nothing ever
+   * cleared it — and it said it for workspaces that had simply never switched
+   * conversation AI on.
+   */
+  describe('the decline banner', () => {
+    it('is cleared the moment a reply DOES go out', async () => {
+      const h = build({ convo: { aiLastDeclineReason: 'something old' } });
+      await run(h);
+      const cleared = h.prisma.conversation.update.mock.calls.find(
+        (c: any) => c[0]?.data?.aiLastDeclineReason === null,
+      );
+      expect(cleared?.[0].data).toMatchObject({ aiLastDeclineReason: null, aiLastDeclineAt: null });
+    });
+
+    it('is NOT written for a workspace that never opted into conversation AI', async () => {
+      // "no agent profile attached" and "no usable AI key" are configuration,
+      // not silence — persisting them puts a permanent red banner on every
+      // thread of every tenant who never asked for an AI.
+      for (const overrides of [{ channel: { agentProfileId: null } }, { enabled: false }]) {
+        const h = build(overrides as any);
+        await run(h);
+        const write = h.prisma.conversation.update.mock.calls.find(
+          (c: any) => c[0]?.data?.aiLastDeclineReason !== undefined,
+        );
+        expect(write).toBeUndefined();
+      }
+    });
+  });
+
+  /**
+   * A handoff used to throw the model's own acknowledgement away, so the
+   * customer who asked for a human got silence and no one was told.
+   */
+  describe('a handoff is visible', () => {
+    const handoffRun = async (over: any = {}) => {
+      const h = build({
+        complete: {
+          text: 'Elbette, sizi bir yetkiliye aktarıyorum.',
+          toolUses: [{ type: 'tool_use', id: 't1', name: 'request_human_handoff', input: { reason: 'wants a human' } }],
+          stopReason: 'tool_use',
+          usage: { input: 1, output: 1 },
+        },
+        ...over,
+      });
+      await run(h);
+      return h;
+    };
+
+    it('sends the acknowledgement the model wrote, and still costs nothing', async () => {
+      const h = await handoffRun();
+      expect(h.sender.send).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Elbette, sizi bir yetkiliye aktarıyorum.', authorType: 'AI' }),
+      );
+      // The escalation is still free: the credit comes back and the daily slot
+      // is released, exactly as when the handoff produced no text.
+      expect(h.credits.refund).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes the reason down and tells the lead’s owner', async () => {
+      const h = await handoffRun();
+      h.prisma.lead.findFirst.mockResolvedValue({ assignedToId: 'u-1', businessName: 'Acme' });
+      expect(h.prisma.conversationNote.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ body: expect.stringContaining('wants a human') }),
+        }),
+      );
+    });
+
+    it('an escalation with nothing to say sends nothing (unchanged)', async () => {
+      const h = await handoffRun({ complete: {
+        text: '',
+        toolUses: [{ type: 'tool_use', id: 't1', name: 'request_human_handoff', input: { reason: 'angry' } }],
+        stopReason: 'tool_use',
+        usage: { input: 1, output: 1 },
+      } });
+      expect(h.sender.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('an email reply is written like an email', () => {
+    it('is always authored as AI — the flag that gates Auto-Submitted', () => {
+      // RFC 3834's `Auto-Submitted: auto-replied` must ride on an automatic
+      // reply and NEVER on a human's, or the peer's own auto-reply filter
+      // silently drops a rep's answer. The dispatcher derives it from
+      // `authorType`, so this engine's half of the contract is to say 'AI' on
+      // BOTH of its send paths — and a human reply comes in as 'AGENT' through
+      // a different caller entirely.
+      const sendCalls = (h: any) => h.sender.send.mock.calls.map((c: any[]) => c[0].authorType);
+      return (async () => {
+        const reply = build({ channel: { type: 'EMAIL' } });
+        await run(reply);
+        expect(sendCalls(reply)).toEqual(['AI']);
+
+        const nudge = build({
+          channel: { type: 'EMAIL' },
+          agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } },
+        });
+        await (nudge.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+        expect(sendCalls(nudge)).toEqual(['AI']);
+      })();
+    });
+
+    it('gets paragraph structure, not chat register', async () => {
+      const h = build({ channel: { type: 'EMAIL' } });
+      await run(h);
+      const system = h.anthropic.complete.mock.calls[0][0].system as string;
+      expect(system).toMatch(/paragraph/i);
+      expect(system).not.toMatch(/chat-appropriate/i);
+    });
+
+    it('a chat channel keeps its short-reply instruction', async () => {
+      const h = build({ channel: { type: 'WEBCHAT' } });
+      await run(h);
+      expect(h.anthropic.complete.mock.calls[0][0].system).toMatch(/chat-appropriate/i);
+    });
+  });
+
+  /**
+   * capture_lead_fields writes the lead's DEDUP KEYS. On a thread that adopted
+   * an existing CRM record, a phone number lifted out of message text is enough
+   * to redirect that customer's SMS quotes and merge an attacker's WhatsApp
+   * into their lead.
+   */
+  describe('capture_lead_fields cannot repoint an existing record', () => {
+    const captureOn = async (lead: any, input: any) => {
+      const h = build({
+        convo: { createdAt: new Date('2026-09-20T00:00:00Z') },
+        complete: {
+          text: '',
+          toolUses: [{ type: 'tool_use', id: 't1', name: 'capture_lead_fields', input }],
+          stopReason: 'tool_use',
+          usage: { input: 1, output: 1 },
+        },
+      });
+      h.prisma.lead.findFirst.mockResolvedValue(lead);
+      await run(h);
+      const write = h.prisma.lead.updateMany.mock.calls[0];
+      return { h, data: write ? write[0].data : null };
+    };
+
+    const ADOPTED = {
+      contactPerson: 'Mehmet', email: null, phone: null, city: null, notes: null,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+
+    it('a phone in body text does not become the dedup key of an adopted lead', async () => {
+      const { h, data } = await captureOn(ADOPTED, { phone: '+90 555 000 11 22' });
+      expect(data?.phoneNormalized).toBeUndefined();
+      expect(data?.phone).toBeUndefined();
+      // …but it is not lost: a rep can read it and promote it by hand.
+      expect(h.prisma.leadActivity.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ type: 'NOTE', description: expect.stringContaining('555 000 11 22') }),
+        }),
+      );
+    });
+
+    it('the conversation’s OWN new lead still gets its keys (the web-chat case)', async () => {
+      const { data } = await captureOn(
+        { contactPerson: null, email: null, phone: null, city: null, notes: null, createdAt: new Date('2026-09-20T00:00:01Z') },
+        { phone: '+90 555 000 11 22' },
+      );
+      expect(data?.phoneNormalized).toBe('905550001122');
+    });
+
+    it('never writes a key another live lead already holds', async () => {
+      const h = build({
+        convo: { createdAt: new Date('2026-09-20T00:00:00Z') },
+        complete: {
+          text: '',
+          toolUses: [{ type: 'tool_use', id: 't1', name: 'capture_lead_fields', input: { email: 'rakip@x.com' } }],
+          stopReason: 'tool_use',
+          usage: { input: 1, output: 1 },
+        },
+      });
+      h.prisma.lead.findFirst.mockResolvedValue({
+        contactPerson: null, email: null, phone: null, city: null, notes: null,
+        createdAt: new Date('2026-09-20T00:00:01Z'),
+      });
+      h.prisma.lead.count.mockResolvedValue(1);
+      await run(h);
+      const write = h.prisma.lead.updateMany.mock.calls[0];
+      expect(write ? write[0].data.emailNormalized : undefined).toBeUndefined();
+    });
+
+    it('never evicts a rep’s own notes to make room for AI text', async () => {
+      const { data } = await captureOn(
+        { contactPerson: null, email: null, phone: null, city: null, notes: 'x'.repeat(1990), createdAt: null },
+        { notes: 'a long captured note that cannot fit under the cap' },
+      );
+      expect(data?.notes).toBeUndefined();
     });
   });
 });
@@ -1136,19 +1540,37 @@ describe('ConversationAiEngineService — booking', () => {
   function build(withCalendar: boolean, over: any = {}) {
     const prisma: any = {
       conversation: { findFirst: jest.fn(async () => ({ leadId: 'lead-1' })) },
-      lead: { updateMany: jest.fn(async () => ({ count: 1 })) },
+      lead: {
+        // The THREAD's contact — what the booking must be made for, whatever
+        // the model typed into the tool call.
+        findFirst: jest.fn(async () =>
+          over.lead === undefined
+            ? { id: 'lead-1', contactPerson: 'Tarık', email: 'tarik@thread.test', phone: null, status: 'NEW', assignedToId: null, businessName: 'Acme' }
+            : over.lead,
+        ),
+        count: jest.fn(async () => 0),
+        updateMany: jest.fn(async () => ({ count: over.claimCount ?? 1 })),
+      },
+      booking: { findFirst: jest.fn(async () => over.activeBooking ?? null) },
+      leadActivity: { create: jest.fn(async () => ({})) },
+      marketingUser: { findFirst: jest.fn(async () => ({ id: 'sys-1' })) },
+      marketingNotification: { create: jest.fn(async () => ({})) },
     };
     const bookings = {
       availability: jest.fn(async () => over.slots ?? ['2026-09-15T10:00:00.000Z', '2026-09-15T11:00:00.000Z']),
       book: over.bookThrows
         ? jest.fn(async () => { throw new Error('Invalid or past slot'); })
         : jest.fn(async () => ({ id: 'bk-1' })),
+      reschedule: jest.fn(async () => ({ id: over.activeBooking?.id ?? 'bk-0' })),
+      cancel: jest.fn(async () => ({ id: over.activeBooking?.id ?? 'bk-0' })),
     };
+    const outbox = { append: jest.fn(async () => undefined) };
     const svc = new (require('./conversation-ai-engine.service').ConversationAiEngineService)(
       prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       { registerHandler: jest.fn() } as any, {} as any, {} as any, {} as any, bookings as any,
+      {} as any, outbox as any,
     );
-    return { svc, prisma, bookings, agent: { id: 'ag-1', bookingCalendarId: withCalendar ? CAL : null } };
+    return { svc, prisma, bookings, outbox, agent: { id: 'ag-1', bookingCalendarId: withCalendar ? CAL : null } };
   }
 
   it('offers only real slots, and says so plainly when there are none', async () => {
@@ -1222,5 +1644,144 @@ describe('ConversationAiEngineService — booking', () => {
     const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, { name: 'Tarık' });
     expect(res.failed).toBe(true);
     expect(h.bookings.book).not.toHaveBeenCalled();
+  });
+
+  /**
+   * WHOSE booking this is comes from the THREAD, never from the tool call.
+   *
+   * The model's arguments are downstream of customer text: an injected mail
+   * saying "book it for ceo@victim.test" would have minted a lead, mailed a
+   * stranger an ICS and left the real customer with nothing.
+   */
+  describe('identity comes from the thread', () => {
+    it('books the thread’s contact, not the model’s', async () => {
+      const h = build(true);
+      await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+        start: '2026-09-15T10:00:00.000Z',
+        name: 'Someone Else',
+        email: 'attacker@evil.test',
+      });
+      expect(h.bookings.book).toHaveBeenCalledWith(WS, CAL, expect.objectContaining({
+        email: 'tarik@thread.test',
+        name: 'Tarık',
+      }));
+    });
+
+    it('uses what the model learned only where the record is EMPTY', async () => {
+      const h = build(true, { lead: { id: 'lead-1', contactPerson: null, email: null, phone: null, status: 'NEW' } });
+      await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+        start: '2026-09-15T10:00:00.000Z',
+        name: 'Ayşe',
+        email: 'ayse@musteri.test',
+      });
+      expect(h.bookings.book).toHaveBeenCalledWith(WS, CAL, expect.objectContaining({
+        email: 'ayse@musteri.test',
+        name: 'Ayşe',
+      }));
+      // …and it is written back, so the NEXT inbound message dedups here.
+      expect(h.prisma.lead.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ emailNormalized: 'ayse@musteri.test' }) }),
+      );
+    });
+
+    it('never hands the meeting to whoever already owns that address', async () => {
+      // book() dedups on emailNormalized. Passing an address another live lead
+      // holds would attach THIS customer's appointment to that person — the
+      // same key-poisoning the capture path refuses, one call further on.
+      const h = build(true, { lead: { id: 'lead-1', contactPerson: null, email: null, phone: null, status: 'NEW' } });
+      h.prisma.lead.count.mockResolvedValue(1);
+      await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+        start: '2026-09-15T10:00:00.000Z',
+        name: 'Ayşe',
+        email: 'baskasi@x.test',
+      });
+      expect(h.bookings.book).toHaveBeenCalledWith(WS, CAL, expect.objectContaining({ email: undefined }));
+      expect(h.prisma.lead.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ emailNormalized: 'baskasi@x.test' }) }),
+      );
+    });
+
+    it('refuses a malformed address rather than booking a meeting nobody is told about', async () => {
+      const h = build(true, { lead: { id: 'lead-1', contactPerson: null, email: null, phone: null, status: 'NEW' } });
+      const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+        start: '2026-09-15T10:00:00.000Z',
+        name: 'Ayşe',
+        email: 'ayse at musteri',
+      });
+      expect(res.failed).toBe(true);
+      expect(h.bookings.book).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * "Move it to Thursday" used to ADD a second booking: the first kept its
+   * slot, its ICS and its reminder mail, and nobody could see why.
+   */
+  describe('a change of mind moves the meeting instead of adding one', () => {
+    it('reschedules the lead’s live booking on this calendar', async () => {
+      const h = build(true, { activeBooking: { id: 'bk-old', startAt: new Date('2026-09-15T10:00:00.000Z') } });
+      const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, {
+        start: '2026-09-17T10:00:00.000Z',
+        name: 'Tarık',
+      });
+      expect(res.failed).toBeUndefined();
+      expect(h.bookings.reschedule).toHaveBeenCalledWith(WS, 'bk-old', '2026-09-17T10:00:00.000Z');
+      expect(h.bookings.book).not.toHaveBeenCalled();
+    });
+
+    it('cancel_meeting resolves the booking SERVER-SIDE, never from the model', async () => {
+      const h = build(true, { activeBooking: { id: 'bk-old', startAt: new Date('2026-09-15T10:00:00.000Z') } });
+      const res = await (h.svc as any).cancelMeeting(WS, CAL, CONVO);
+      expect(res.failed).toBeUndefined();
+      expect(h.bookings.cancel).toHaveBeenCalledWith(WS, 'bk-old');
+      const where = h.prisma.booking.findFirst.mock.calls[0][0].where;
+      expect(where).toMatchObject({ workspaceId: WS, calendarId: CAL, leadId: 'lead-1' });
+    });
+
+    it('says so plainly when there is nothing to cancel', async () => {
+      const h = build(true);
+      const res = await (h.svc as any).cancelMeeting(WS, CAL, CONVO);
+      expect(res.failed).toBe(true);
+      expect(h.bookings.cancel).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * A booking that moves the lead silently breaks every status-driven
+   * automation and tells the rep nothing.
+   */
+  describe('a booking is announced', () => {
+    it('writes a timeline row and fires lead.status_changed once per booking', async () => {
+      const h = build(true, {
+        lead: { id: 'lead-1', contactPerson: 'Tarık', email: 'tarik@thread.test', phone: null, status: 'NEW', assignedToId: 'u-1', businessName: 'Acme' },
+      });
+      await (h.svc as any).bookMeeting(WS, CAL, CONVO, { start: '2026-09-15T10:00:00.000Z', name: 'Tarık' });
+      expect(h.prisma.leadActivity.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ type: 'STATUS_CHANGE', createdById: 'sys-1' }) }),
+      );
+      expect(h.prisma.marketingNotification.create).toHaveBeenCalled();
+      expect(h.outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotencyKey: 'lead-status:lead-1:booking:bk-1',
+          payload: expect.objectContaining({ fromStatus: 'NEW', toStatus: 'DEMO_SCHEDULED' }),
+        }),
+      );
+    });
+
+    it('a re-booking on an already-scheduled lead fires no phantom transition', async () => {
+      const h = build(true, { claimCount: 0 });
+      await (h.svc as any).bookMeeting(WS, CAL, CONVO, { start: '2026-09-15T10:00:00.000Z', name: 'Tarık' });
+      expect(h.prisma.leadActivity.create).not.toHaveBeenCalled();
+      expect(h.outbox.append).not.toHaveBeenCalled();
+    });
+
+    it('a bookkeeping failure never tells the model the slot was refused', async () => {
+      // The slot IS reserved by then. Reporting failure makes the AI re-offer a
+      // time it already took and mail the customer the wrong one.
+      const h = build(true);
+      h.prisma.lead.updateMany.mockRejectedValue(new Error('db down'));
+      const res = await (h.svc as any).bookMeeting(WS, CAL, CONVO, { start: '2026-09-15T10:00:00.000Z', name: 'Tarık' });
+      expect(res.failed).toBeUndefined();
+    });
   });
 });
