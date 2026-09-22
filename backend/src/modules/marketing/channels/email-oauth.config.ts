@@ -43,8 +43,24 @@ export interface EmailOAuthProviderConfig {
    * Send-only, deliberately. A broader scope would read the customer's mail —
    * which this product has no use for and no business holding — and for Google
    * would also move the app onto the paid verification track.
+   *
+   * A scope here is a contract with `email-oauth.sender.ts`: whatever endpoint
+   * that file calls for this provider must be covered by this list, or connect
+   * fails for every user and only at the provider. `email-oauth.config.spec.ts`
+   * pins the pairs, because nothing at runtime can.
    */
   scopes: readonly string[];
+  /**
+   * What the consent gives us on the INBOUND side — 'NONE' for both providers,
+   * and the dialog has to SAY so. A mailbox that sends but never receives is
+   * the most confusing outcome of this flow, and the owner should learn it at
+   * connect time rather than when the first reply fails to arrive. Replies for
+   * a consent mailbox come from an IMAP app password sealed beside the token
+   * (see `imap-target.ts`), not from a wider consent.
+   */
+  receive: 'NONE';
+  /** Machine code for that fact; the words are the frontend's (i18n). */
+  receiveReason: 'GMAIL_READ_NEEDS_CASA' | 'GRAPH_MAIL_READ_NOT_REQUESTED';
   /** Env names for the app registration the workspace owner creates. */
   clientIdEnv: string;
   clientSecretEnv: string;
@@ -61,6 +77,12 @@ export const EMAIL_OAUTH: Readonly<Record<EmailOAuthProvider, EmailOAuthProvider
     // connected — without it we would have to ask the owner to type the address
     // they just authenticated, and a typo there sends from the wrong account.
     scopes: ['https://www.googleapis.com/auth/gmail.send', 'openid', 'email'],
+    // Reading a Gmail inbox needs `gmail.readonly` (or `https://mail.google.com/`),
+    // and both are RESTRICTED — the annual CASA Tier 2 assessment described at
+    // the top of this file. So Gmail consent is send-only, permanently as far
+    // as this product is concerned, and the connect dialog says it out loud.
+    receive: 'NONE',
+    receiveReason: 'GMAIL_READ_NEEDS_CASA',
     clientIdEnv: 'GOOGLE_MAIL_CLIENT_ID',
     clientSecretEnv: 'GOOGLE_MAIL_CLIENT_SECRET',
     // Google returns a refresh token ONLY on the first consent unless both of
@@ -76,7 +98,28 @@ export const EMAIL_OAUTH: Readonly<Record<EmailOAuthProvider, EmailOAuthProvider
     tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     // `offline_access` is what mints the refresh token here — Microsoft has no
     // access_type parameter.
-    scopes: ['https://graph.microsoft.com/Mail.Send', 'openid', 'email', 'offline_access'],
+    //
+    // `User.Read` is NOT scope creep, and the next reader should not delete it:
+    // the callback learns which mailbox consented from Graph's `/v1.0/me`
+    // (`email-oauth.sender.ts`), and Graph refuses `/me` with 403 unless this
+    // scope was granted. Without it EVERY Microsoft connect ends in "Could not
+    // read the address of the connected mailbox". It reads the directory
+    // profile — display name, UPN, mail — and never a message, so the
+    // send-only principle above still holds.
+    //
+    // `https://graph.microsoft.com/Mail.Read` is the scope that would make a
+    // Microsoft mailbox two-way. It is deliberately NOT requested yet: inbound
+    // over Graph is a separate piece of work, and asking for mail-read consent
+    // before anything reads mail is consent we would not be using.
+    scopes: [
+      'https://graph.microsoft.com/Mail.Send',
+      'https://graph.microsoft.com/User.Read',
+      'openid',
+      'email',
+      'offline_access',
+    ],
+    receive: 'NONE',
+    receiveReason: 'GRAPH_MAIL_READ_NOT_REQUESTED',
     clientIdEnv: 'MICROSOFT_MAIL_CLIENT_ID',
     clientSecretEnv: 'MICROSOFT_MAIL_CLIENT_SECRET',
     authParams: {},
