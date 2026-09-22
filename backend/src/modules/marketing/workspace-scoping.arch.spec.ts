@@ -239,6 +239,18 @@ const OWNED_DELEGATES = [
   // (Discord webhook / Reddit OAuth), sealed. One row per (workspaceId, provider);
   // every findMany/deleteMany/upsert carries a literal workspaceId.
   'communityChannelConfig',
+  // Email programme: suppression is per WORKSPACE, never global — an opt-out is
+  // a tenant-relationship fact, and a global row would both block tenant B from
+  // mailing their own consented customer and leak that the address exists
+  // elsewhere. Global hard-bounce suppression stays in esp-feedback.service.ts,
+  // which keeps the one exemption it already has below and gets no company.
+  'contactSuppression',
+  // The outbound mail ledger and the inbound examine-ledger. Both are written by
+  // crons and pollers that walk every tenant, which is exactly the shape that
+  // needs a guard rather than trust: the ops snapshot reads them by workspace,
+  // and a read that forgets the scope would show one tenant another's recipients.
+  'mailLog',
+  'emailInboundItem',
 ] as const;
 
 /**
@@ -300,8 +312,11 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // The hourly sweep that keeps consent-connected mailboxes sending. A system
   // job, like SocialTokenRefreshService: it must see every tenant's due tokens
   // or those mailboxes go quiet an hour after they are connected. It selects
-  // `id` + the sealed box only — no row data crosses a tenant boundary — and
-  // every write it makes is keyed by that id. Deliberately UNFILTERED and
+  // the id, the owning workspace and the sealed box only — no row data crosses
+  // a tenant boundary — and every write it makes is keyed by that id, or is a
+  // scoped re-read that the projected workspace is there to make possible.
+  // (Projected, never filtered on: that is what keeps this a system sweep.)
+  // Deliberately UNFILTERED and
   // un-take()d: the expiry lives inside the AES box, so there is no column to
   // page on, and a take(N) here would pin the sweep to the same N rows forever.
   'channels/email-oauth-refresh.service.ts:channel.findMany':

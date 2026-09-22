@@ -374,6 +374,13 @@ model Lead {
   emailBouncedAt      DateTime?
   smsOptOut           Boolean   @default(false)
   waOptOut            Boolean   @default(false)
+  /// İYS (İleti Yönetim Sistemi) EPOSTA consent, cached from the last lookup:
+  /// ONAY | RET | UNKNOWN, null = never asked. A live İYS search per recipient
+  /// would starve the shared NetGSM rate budget on a 50-recipient tick, so the
+  /// answer is cached here and only a miss (or a stale `iysEmailCheckedAt`)
+  /// goes out to İYS. Null everywhere until a workspace arms the EPOSTA gate.
+  iysEmailStatus      String?
+  iysEmailCheckedAt   DateTime?
   /// NetGSM SMS v2 Task 12 — stamped when a rep confirms a live SMS OTP sent to
   /// `phone` (SmsOtpService, gated by the `smsOtp` add-on). Null = unverified.
   /// Cleared back to null whenever `phone` is edited to a different number, so
@@ -2310,6 +2317,20 @@ model CampaignRecipient {
   voiceState     String?
   pushButton     String?
   talkSec        Int?
+
+  /// The campaign's channel, frozen onto the recipient at launch (EMAIL | SMS |
+  /// WHATSAPP | VOICE). Denormalised so a feedback event — a bounce report, an
+  /// ESP complaint — can find the right rows without joining back through
+  /// `campaigns`, and so a channel edit on the campaign never rewrites what a
+  /// recipient was actually sent. Backfilled from the campaign for existing rows.
+  channel      String?
+  /// Email deliverability outcome for THIS recipient, stamped by the one bounce
+  /// writer. `status` stays the send outcome; these two say what happened after.
+  bouncedAt    DateTime?
+  complainedAt DateTime?
+  /// The MailLog row this recipient's mail was sent as — the attribution hop a
+  /// DSN takes to get back here (Message-ID → MailLog → recipient).
+  mailLogId    String?
 
   createdAt DateTime @default(now())
 
@@ -5716,4 +5737,128 @@ model DeviceCommand {
   @@index([deviceId, status, createdAt])
   @@index([workspaceId, createdAt])
   @@map("device_commands")
+}
+
+/// Address/phone-level suppression. The unit is an ADDRESS, not a lead row — a
+/// person on file twice unsubscribed once, and today only the row they clicked
+/// stops being mailed (optout-per-lead-row). Per-WORKSPACE on purpose: a global
+/// row would block tenant B from mailing their own consented customer AND leak
+/// that the address exists elsewhere. Global hard-bounce suppression stays in
+/// EspFeedbackService, which already has its arch-spec exemption.
+model ContactSuppression {
+  id          String    @id @default(uuid())
+  workspaceId String
+  /// EMAIL | PHONE — the erasure tombstone needs both, so the kind is part of
+  /// the identity and not implied by the caller.
+  kind        String
+  /// HMAC-SHA256(derived key, normalized value), lowercase hex. Hashed so an
+  /// erased subject leaves no readable address behind. The key is DERIVED from
+  /// MARKETING_SECRET_KEY with the label "contact-suppression" — never a new
+  /// env var, or the guarantee ships inert in prod exactly as ESP_FEEDBACK_SECRET did.
+  hash        String
+  /// OPT_OUT | HARD_BOUNCE | COMPLAINT | INVALID | ERASURE | MANUAL
+  reason      String
+  /// Where the row came from: 'lead-token', 'reply-keyword', 'dsn', 'esp:<provider>', …
+  source      String?
+  note        String?
+  /// Set when the suppression is withdrawn (re-consent). ERASURE never lifts.
+  liftedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  /// `reason` is IN the key: without it an ERASURE tombstone and a HARD_BOUNCE
+  /// for the same address collide, and the KVKK tombstone is the one that loses.
+  @@unique([workspaceId, kind, hash, reason])
+  @@index([workspaceId, kind, hash])
+  @@map("contact_suppressions")
+}
+
+/// The outbound mail ledger — one row per mail the gateway was asked to send,
+/// whatever happened to it. The gateway is the only writer.
+///
+/// LeadActivity stays the TENANT-visible trace, but `LeadActivity.leadId` is NOT
+/// NULL, so digests, host reminders, team invites and AUTH mail would otherwise
+/// leave no queryable row anywhere — and "why did nothing send in the last hour"
+/// would stay unanswerable for exactly the mail an operator gets paged about.
+/// This is the ops/attribution record and the only source the mail snapshot needs.
+model MailLog {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  /// AUTH | INTERNAL | TRANSACTIONAL | CONVERSATIONAL | BULK — the gate set
+  /// this mail was sent under (mail-class.ts).
+  mailClass      String
+  /// 'campaign:<id>' | 'workflow:<id>' | 'booking:<id>' | 'digest' | …
+  source         String
+  /// OPTIONAL, never required: only booking/invoice/workflow pass one, and a
+  /// repeat under the same key settles as DEDUPED instead of a second mail.
+  idempotencyKey String?
+  toAddress      String
+  toAddressNorm  String
+  leadId         String?
+  fromAddress    String
+  replyTo        String?
+  /// MAILBOX_SMTP | MAILBOX_OAUTH | PLATFORM | NONE
+  transport      String
+  channelId      String?
+  subject        String    @db.Text
+  /// Deterministic, brackets stripped — the key a bounce report is attributed by.
+  messageId      String?
+  /// PENDING | SENT | REFUSED | FAILED_PERMANENT | FAILED_TRANSIENT | DEDUPED
+  status         String    @default("PENDING")
+  /// The gate that refused, or the classified SMTP failure. A code, never prose.
+  reason         String?
+  error          String?   @db.Text
+  attempts       Int       @default(0)
+  sentAt         DateTime?
+  softBounces    Int       @default(0)
+  bouncedAt      DateTime?
+  complainedAt   DateTime?
+
+  campaignRecipientId   String?
+  workflowRunId         String?
+  conversationMessageId String?
+  meta                  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, messageId])
+  @@index([workspaceId, toAddressNorm, createdAt])
+  @@map("mail_log")
+}
+
+/// One row per inbound item the pipeline EXAMINED — ingested, skipped, failed
+/// or quarantined. Today a mail that throws mid-ingest leaves a `logger.warn`
+/// and nothing else, so "where did my customer's mail go?" has no answer a
+/// tenant can be given. `state` + `reason` + `attempts` is that answer, and the
+/// row is what the retry job re-fetches.
+///
+/// The IMAP cursor itself stays in `channel.configPublic`, so losing this table
+/// loses the retry ledger, never the position.
+model EmailInboundItem {
+  id          String    @id @default(uuid())
+  workspaceId String
+  channelId   String
+  /// imap | imap-sent | webhook | gmail | graph
+  source      String
+  /// uidValidity:uid, a provider historyId, or a delivery id — whatever
+  /// identifies the item on the source it came from.
+  itemKey     String
+  messageId   String?
+  /// NEW | DONE | SKIPPED | FAILED | QUARANTINED
+  state       String    @default("NEW")
+  /// 'auto-reply' | 'dsn' | 'oversize-truncated' | 'policy-not-a-lead' | …
+  reason      String?
+  attempts    Int       @default(0)
+  lastError   String?   @db.Text
+  fromAddress String?
+  subject     String?   @db.Text
+  receivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([channelId, source, itemKey])
+  @@index([workspaceId, state, updatedAt])
+  @@map("email_inbound_items")
 }
