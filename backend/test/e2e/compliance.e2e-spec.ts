@@ -66,9 +66,16 @@ describe('Compliance (e2e)', () => {
       'certificate', 'communityMember', 'earnedBadge', 'customerSubscription', 'customerWallet',
       'pointsLedger', 'customObjectLink', 'triggerLinkClick', 'couponRedemption',
       'campaignRecipient', 'leadTag', 'communityPost', 'communityComment', 'walletLedgerEntry',
+      // The automation trail, drafts, data sources and merged duplicates the
+      // DSAR used to omit (dsar-export-incomplete).
+      'workflowRun', 'workflowStepRun', 'distributionDraft', 'importJobRow', 'researchCandidate',
+      'campaign', 'lead',
     ]) {
       ((ctx.prisma as any)[m].findMany as jest.Mock).mockResolvedValue([]);
     }
+    (ctx.prisma.leadAttribution.findUnique as jest.Mock).mockResolvedValue(null);
+    // The export-payload TTL sweep (export-stored-forever) runs after the write.
+    (ctx.prisma.dataRequest.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
     (ctx.prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
 
     const res = await request(app.getHttpServer())

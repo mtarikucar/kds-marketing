@@ -112,6 +112,10 @@ describeRealDb('Meta data-deletion callback — real DB (e2e)', () => {
         prisma.platformDeletionRequest.deleteMany({ where: { receivedAt: { gte: testStart } } }),
       );
       await del(() => prisma.dataRequest.deleteMany({ where: { workspaceId: { in: [wsA, wsB] } } }));
+      // The erasure now leaves an ERASURE tombstone behind on purpose
+      // (erasure-no-suppression) — it outlives the lead row by design, so the
+      // teardown has to name it or this spec stops restoring its baseline.
+      await del(() => prisma.contactSuppression.deleteMany({ where: { workspaceId: { in: [wsA, wsB] } } }));
       await del(() => prisma.contactIdentity.deleteMany({ where: { workspaceId: { in: [wsA, wsB] } } }));
       await del(() => prisma.leadActivity.deleteMany({ where: { leadId: { in: [leadA, leadB, leadUntouched] } } }));
       await del(() => prisma.lead.deleteMany({ where: { workspaceId: { in: [wsA, wsB] } } }));

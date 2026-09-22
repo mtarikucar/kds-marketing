@@ -17,7 +17,17 @@ function makeSvc() {
   (prisma.$transaction as unknown as jest.Mock) = jest.fn((fn: any) => fn(prisma));
   const outbox = { append: jest.fn().mockResolvedValue('evt-1') };
   const iysSync = { enqueueConsent: jest.fn().mockResolvedValue(undefined), retryDlq: jest.fn() };
-  return { prisma, outbox, iysSync, svc: new ComplianceService(prisma as any, outbox as any, iysSync as any) };
+  const suppression = {
+    suppress: jest.fn().mockResolvedValue(undefined),
+    lift: jest.fn().mockResolvedValue(undefined),
+  };
+  return {
+    prisma,
+    outbox,
+    iysSync,
+    suppression,
+    svc: new ComplianceService(prisma as any, outbox as any, iysSync as any, suppression as any),
+  };
 }
 
 // requestExport now reads every personal-data category in parallel; default them
@@ -30,9 +40,14 @@ function mockExportTablesEmpty(prisma: MockPrismaClient) {
     'customerSubscription', 'customerWallet', 'pointsLedger', 'customObjectLink',
     'triggerLinkClick', 'couponRedemption',
     'campaignRecipient', 'leadTag', 'communityPost', 'communityComment', 'walletLedgerEntry',
+    // The categories the DSAR used to omit (dsar-export-incomplete).
+    'workflowRun', 'workflowStepRun', 'distributionDraft', 'importJobRow', 'researchCandidate',
+    'campaign', 'lead',
   ] as const) {
     (prisma as any)[t].findMany.mockResolvedValue([]);
   }
+  (prisma.leadAttribution.findUnique as jest.Mock).mockResolvedValue(null);
+  (prisma.dataRequest.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
 }
 
 describe('ComplianceService', () => {
@@ -62,6 +77,88 @@ describe('ComplianceService', () => {
     expect(prisma.lead.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'lead-1' }, data: { emailOptOut: true } }),
     );
+  });
+
+  // R3 — the drift the verifier predicted by name: `recordConsent(granted:true)`
+  // clears `emailOptOut`, so a ContactSuppression OPT_OUT row left standing would
+  // make a re-consented lead permanently unmailable (SuppressionService.check
+  // reads the union of the row AND the flag).
+  describe('R3 — re-consent lifts the address suppression', () => {
+    it('lifts the EMAIL OPT_OUT suppression for the lead’s address, inside the same transaction', async () => {
+      const { prisma, suppression, svc } = makeSvc();
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+      (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-r3' });
+      (prisma.lead.update as jest.Mock).mockResolvedValue({});
+      (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ emailNormalized: 'ali@acme.com' });
+
+      await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', true, { source: 'form' });
+
+      expect(suppression.lift).toHaveBeenCalledWith(
+        WS,
+        'ali@acme.com',
+        'EMAIL',
+        'OPT_OUT',
+        expect.stringContaining('consent'),
+        prisma, // the tx client the record + flip + lift all share
+      );
+    });
+
+    it('flips the lead BEFORE lifting, so the re-consented lead gets one ConsentRecord, not two', async () => {
+      const { prisma, suppression, svc } = makeSvc();
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+      (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-r3b' });
+      const order: string[] = [];
+      (prisma.lead.update as jest.Mock).mockImplementation(async () => {
+        order.push('flip');
+        return {};
+      });
+      suppression.lift.mockImplementation(async () => {
+        order.push('lift');
+      });
+      (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ emailNormalized: 'ali@acme.com' });
+
+      await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', true);
+
+      // SuppressionService.lift writes a granted:true ledger row for every lead
+      // that still CARRIES the flag. Clearing this lead first keeps it out of
+      // that sweep — its own ConsentRecord was written one line earlier.
+      expect(order).toEqual(['flip', 'lift']);
+    });
+
+    it('does NOT lift on an opt-OUT (granted:false) — that direction suppresses, it does not restore', async () => {
+      const { prisma, suppression, svc } = makeSvc();
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+      (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-r3c' });
+      (prisma.lead.update as jest.Mock).mockResolvedValue({});
+
+      await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false);
+
+      expect(suppression.lift).not.toHaveBeenCalled();
+    });
+
+    it('does not lift when the lead has no address to lift', async () => {
+      const { prisma, suppression, svc } = makeSvc();
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+      (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-r3d' });
+      (prisma.lead.update as jest.Mock).mockResolvedValue({});
+      (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ emailNormalized: null });
+
+      await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', true);
+
+      expect(suppression.lift).not.toHaveBeenCalled();
+    });
+
+    it('leaves the SMS branch alone — an İYS/NetGSM withdrawal owns its own eventing', async () => {
+      const { prisma, suppression, svc } = makeSvc();
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+      (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-r3e' });
+      (prisma.lead.update as jest.Mock).mockResolvedValue({});
+      (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+
+      await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', true);
+
+      expect(suppression.lift).not.toHaveBeenCalled();
+    });
   });
 
   it('MARKETING_SMS opt-out enqueues marketing.sms.optout.v1 with the lead phone', async () => {
@@ -418,6 +515,120 @@ describe('ComplianceService', () => {
     );
   });
 
+  // dsar-export-incomplete — an Art. 15 / KVKK access request was answered
+  // without the automation trail, the drafts written about the subject, the
+  // duplicates merged into them, where their data came from, or which campaign
+  // mail actually reached them.
+  it('exports the automation trail, drafts, data sources and attribution', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    prisma.workflowRun.findMany.mockResolvedValue([{ id: 'wr-1' }] as any);
+    prisma.workflowStepRun.findMany.mockResolvedValue([{ id: 'ws-1', runId: 'wr-1' }] as any);
+    prisma.distributionDraft.findMany.mockResolvedValue([{ id: 'dd-1' }] as any);
+    prisma.importJobRow.findMany.mockResolvedValue([{ id: 'ir-1' }] as any);
+    prisma.researchCandidate.findMany.mockResolvedValue([{ id: 'rc-1' }] as any);
+    (prisma.leadAttribution.findUnique as jest.Mock).mockResolvedValue({ leadId: 'lead-1', utmSource: 'ads' });
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    const out: any = await svc.requestExport(WS, 'lead-1', 'u1');
+
+    expect(out.workflowRuns).toEqual([{ id: 'wr-1' }]);
+    expect(out.workflowStepRuns).toEqual([{ id: 'ws-1', runId: 'wr-1' }]);
+    expect(out.distributionDrafts).toEqual([{ id: 'dd-1' }]);
+    expect(out.importJobRows).toEqual([{ id: 'ir-1' }]);
+    expect(out.researchCandidates).toEqual([{ id: 'rc-1' }]);
+    expect(out.attribution).toEqual({ leadId: 'lead-1', utmSource: 'ads' });
+    // step runs are id-scoped off the subject's own runs, like messages off
+    // conversations
+    expect(prisma.workflowStepRun.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, runId: { in: ['wr-1'] } } }),
+    );
+    // ImportJobRow has NO workspaceId column — scoped through its job, exactly
+    // as CommunityMember is scoped through its community.
+    expect(prisma.importJobRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { leadId: 'lead-1', job: { workspaceId: WS } } }),
+    );
+    // LeadAttribution is @unique on leadId — a 1:1 read, not a list.
+    expect(prisma.leadAttribution.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { leadId: 'lead-1' } }),
+    );
+  });
+
+  it('exports the duplicates merged into the subject, following the chain past one level', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    // A→B then B→C leaves a depth-2 chain: lead-1 ← dup-1 ← dup-2.
+    prisma.lead.findMany.mockImplementation((async (args: any) => {
+      const frontier = args?.where?.mergedIntoId?.in ?? [];
+      if (frontier.includes('lead-1')) return [{ id: 'dup-1', email: 'dup@acme.com' }];
+      if (frontier.includes('dup-1')) return [{ id: 'dup-2', email: 'dup2@acme.com' }];
+      return [];
+    }) as any);
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    const out: any = await svc.requestExport(WS, 'lead-1', 'u1');
+
+    expect(out.mergedDuplicates.map((l: any) => l.id)).toEqual(['dup-1', 'dup-2']);
+  });
+
+  it('exports the subject line of the campaign mail that reached them', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    prisma.campaignRecipient.findMany.mockResolvedValue([{ id: 'cr-1', campaignId: 'cmp-1' }] as any);
+    prisma.campaign.findMany.mockResolvedValue([{ id: 'cmp-1', subject: 'Bahar kampanyası' }] as any);
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    const out: any = await svc.requestExport(WS, 'lead-1', 'u1');
+
+    expect(out.campaigns).toEqual([{ id: 'cmp-1', subject: 'Bahar kampanyası' }]);
+    expect(prisma.campaign.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, id: { in: ['cmp-1'] } } }),
+    );
+  });
+
+  // export-stored-forever — the payload is the Art.15 disclosure record, so it
+  // is still persisted; it just stops being kept forever.
+  it('retires export payloads older than the TTL when a new export is taken', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    await svc.requestExport(WS, 'lead-1', 'u1');
+
+    const call = (prisma.dataRequest.updateMany as jest.Mock).mock.calls.find(
+      (c) => c[0]?.data?.payload === Prisma.JsonNull,
+    );
+    expect(call).toBeDefined();
+    expect(call[0].where).toMatchObject({ workspaceId: WS, kind: 'EXPORT' });
+    expect(call[0].where.requestedAt.lt).toBeInstanceOf(Date);
+  });
+
+  it('never fails an export because the TTL sweep did', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    (prisma.dataRequest.updateMany as jest.Mock).mockRejectedValue(new Error('db down'));
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    await expect(svc.requestExport(WS, 'lead-1', 'u1')).resolves.toMatchObject({ lead: { id: 'lead-1' } });
+  });
+
+  it('lists data requests WITHOUT their PII payload', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.dataRequest.findMany as jest.Mock).mockResolvedValue([]);
+    await svc.listRequests(WS);
+    const args = (prisma.dataRequest.findMany as jest.Mock).mock.calls[0][0];
+    // An explicit select is the whole fix: the history tab mirrors this shape
+    // (frontend .../compliance/types.ts) and never needed the bodies.
+    expect(args.select).toBeDefined();
+    expect(args.select.payload).toBeUndefined();
+    expect(args.select).toMatchObject({ id: true, leadId: true, kind: true, status: true });
+  });
+
   it('records an erasure request as PENDING (no deletion)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
@@ -434,13 +645,32 @@ describe('ComplianceService', () => {
   });
 
   describe('fulfillErasure', () => {
-    const armPendingErasure = (prisma: MockPrismaClient, over: any = {}) => {
+    /**
+     * @param chain  mergedIntoId edges, parent → children, so a test can build
+     *               the A→B→C tombstone chain the erasure has to follow.
+     * @param subjects what the pre-scrub address read returns.
+     */
+    const armPendingErasure = (
+      prisma: MockPrismaClient,
+      over: any = {},
+      chain: Record<string, string[]> = {},
+      subjects: any[] = [{ emailNormalized: 'ali@acme.com', phoneNormalized: '05551112233' }],
+    ) => {
       (prisma.dataRequest.findFirst as jest.Mock).mockResolvedValue({
         id: 'dr1', workspaceId: WS, leadId: 'lead-1', kind: 'ERASURE', status: 'PENDING', ...over,
       });
       (prisma.conversation.findMany as jest.Mock).mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
       (prisma.dataRequest.updateMany as jest.Mock).mockResolvedValue({ count: 1 }); // wins the atomic claim
+      (prisma.lead.findMany as jest.Mock).mockImplementation(async (args: any) => {
+        const frontier: string[] = args?.where?.mergedIntoId?.in ?? [];
+        if (frontier.length) return frontier.flatMap((id) => (chain[id] ?? []).map((c) => ({ id: c })));
+        return subjects;
+      });
+      (prisma.workflowRun.findMany as jest.Mock).mockResolvedValue([{ id: 'wr-1' }]);
     };
+
+    /** Every id the erasure must treat as the same person. */
+    const ONE = { in: ['lead-1'] };
 
     it('anonymises the lead, deletes communication PII, keeps financial rows, and completes the request', async () => {
       const { prisma, svc } = makeSvc();
@@ -454,22 +684,22 @@ describe('ComplianceService', () => {
         expect.objectContaining({ where: { workspaceId: WS, conversationId: { in: ['c1', 'c2'] } } }),
       );
       expect(prisma.conversation.deleteMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { workspaceId: WS, leadId: 'lead-1' } }),
+        expect.objectContaining({ where: { workspaceId: WS, leadId: ONE } }),
       );
       // Communication / behavioural / identity PII deleted.
       for (const t of ['voiceCall', 'salesCall', 'contactIdentity', 'leadAttribution', 'triggerLinkClick', 'surveyResponse']) {
         expect((prisma as any)[t].deleteMany).toHaveBeenCalledWith(
-          expect.objectContaining({ where: { workspaceId: WS, leadId: 'lead-1' } }),
+          expect.objectContaining({ where: { workspaceId: WS, leadId: ONE } }),
         );
       }
       // LeadActivity has no workspaceId column — scoped by the (workspace-bound) leadId.
       expect(prisma.leadActivity.deleteMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { leadId: 'lead-1' } }),
+        expect.objectContaining({ where: { leadId: ONE } }),
       );
       // Booking PII scrubbed (row retained).
       expect(prisma.booking.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workspaceId: WS, leadId: 'lead-1' },
+          where: { workspaceId: WS, leadId: ONE },
           data: expect.objectContaining({ email: null, phone: null, notes: null }),
         }),
       );
@@ -504,14 +734,182 @@ describe('ComplianceService', () => {
       // the "erased" subject survives — and listRequests would re-serve it.
       expect(prisma.dataRequest.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { workspaceId: WS, leadId: 'lead-1', kind: 'EXPORT' },
+          where: { workspaceId: WS, leadId: ONE, kind: 'EXPORT' },
           data: expect.objectContaining({ payload: Prisma.JsonNull }),
         }),
       );
     });
 
-    it('is race-safe: a concurrent fulfil that loses the atomic claim (count 0) does no erasure', async () => {
+    // erasure-no-suppression — the lead row is the only place the address was
+    // written down, and erasure nulls it. Without a tombstone the same person
+    // re-enters through an import, a form or their next inbound mail as a
+    // brand-new, mailable lead.
+    describe('the tombstone (erasure-no-suppression, R4)', () => {
+      it('writes an EMAIL and a PHONE ERASURE tombstone from the values read BEFORE the scrub', async () => {
+        const { prisma, suppression, svc } = makeSvc();
+        armPendingErasure(prisma);
+
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+
+        expect(suppression.suppress).toHaveBeenCalledWith(
+          WS, 'ali@acme.com', 'EMAIL', 'ERASURE',
+          expect.objectContaining({ tx: prisma, source: 'erasure:dr1' }),
+        );
+        expect(suppression.suppress).toHaveBeenCalledWith(
+          WS, '05551112233', 'PHONE', 'ERASURE',
+          expect.objectContaining({ tx: prisma, source: 'erasure:dr1' }),
+        );
+        // The address read has to happen while the values still exist.
+        const readAt = (prisma.lead.findMany as jest.Mock).mock.invocationCallOrder.at(-1)!;
+        const scrubAt = (prisma.lead.updateMany as jest.Mock).mock.invocationCallOrder[0];
+        expect(readAt).toBeLessThan(scrubAt);
+      });
+
+      it('tombstones every address in the merge chain, once each', async () => {
+        const { prisma, suppression, svc } = makeSvc();
+        armPendingErasure(prisma, {}, { 'lead-1': ['dup-1'] }, [
+          { emailNormalized: 'ali@acme.com', phoneNormalized: '05551112233' },
+          { emailNormalized: 'ali@acme.com', phoneNormalized: null },
+          { emailNormalized: 'ali.veli@acme.com', phoneNormalized: null },
+        ]);
+
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+
+        const emails = suppression.suppress.mock.calls.filter((c) => c[2] === 'EMAIL').map((c) => c[1]);
+        expect(emails.sort()).toEqual(['ali.veli@acme.com', 'ali@acme.com']);
+      });
+
+      it('writes no tombstone for a subject with nothing left to tombstone', async () => {
+        const { prisma, suppression, svc } = makeSvc();
+        armPendingErasure(prisma, {}, {}, [{ emailNormalized: null, phoneNormalized: null }]);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(suppression.suppress).not.toHaveBeenCalled();
+      });
+    });
+
+    // erasure-one-row — `lead-dedupe.service.ts` only refuses a canonical that
+    // is CURRENTLY merged, so A→B and later B→C leaves a depth-2 chain whose
+    // grandchild kept full PII and stayed mailable.
+    it('scrubs a two-level merge chain, not just the row the request names', async () => {
       const { prisma, svc } = makeSvc();
+      armPendingErasure(prisma, {}, { 'lead-1': ['dup-1'], 'dup-1': ['dup-2'] });
+
+      await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+
+      const SUBJECTS = { in: ['lead-1', 'dup-1', 'dup-2'] };
+      expect(prisma.lead.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: SUBJECTS, workspaceId: WS } }),
+      );
+      expect(prisma.conversation.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, leadId: SUBJECTS } }),
+      );
+      expect(prisma.leadActivity.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { leadId: SUBJECTS } }),
+      );
+      expect(prisma.booking.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, leadId: SUBJECTS } }),
+      );
+      expect(prisma.dataRequest.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, leadId: SUBJECTS, kind: 'EXPORT' } }),
+      );
+    });
+
+    it('stops following the chain at a cycle instead of looping', async () => {
+      const { prisma, svc } = makeSvc();
+      armPendingErasure(prisma, {}, { 'lead-1': ['dup-1'], 'dup-1': ['lead-1', 'dup-1'] });
+      await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+      expect((prisma.lead.updateMany as jest.Mock).mock.calls[0][0].where.id).toEqual({
+        in: ['lead-1', 'dup-1'],
+      });
+    });
+
+    // erasure-residual-pii — every one of these is SCRUBBED, never deleted:
+    // each row is load-bearing for a sibling guarantee (a unique key that stops
+    // a re-ingest, a progress counter, a CHECK constraint, a campaign report).
+    describe('residual PII (erasure-residual-pii)', () => {
+      it('scrubs the research candidate that produced the lead without deleting its dedupe key', async () => {
+        const { prisma, svc } = makeSvc();
+        armPendingErasure(prisma);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(prisma.researchCandidate.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { workspaceId: WS, leadId: ONE },
+            data: expect.objectContaining({ businessName: '[Silinmiş]', email: null, phone: null }),
+          }),
+        );
+        expect(prisma.researchCandidate.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('scrubs the import row that created the lead, scoped through its job', async () => {
+        const { prisma, svc } = makeSvc();
+        armPendingErasure(prisma);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(prisma.importJobRow.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { leadId: ONE, job: { workspaceId: WS } },
+            data: expect.objectContaining({ error: null }),
+          }),
+        );
+        expect(prisma.importJobRow.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('scrubs distribution drafts and dismisses the ones still inviting a send', async () => {
+        const { prisma, svc } = makeSvc();
+        armPendingErasure(prisma);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(prisma.distributionDraft.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { workspaceId: WS, leadId: ONE },
+            data: expect.objectContaining({ toAddress: '[Silinmiş]', body: '', error: null }),
+          }),
+        );
+        expect(prisma.distributionDraft.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { workspaceId: WS, leadId: ONE, status: 'DRAFT' },
+            data: { status: 'DISMISSED' },
+          }),
+        );
+      });
+
+      it('nulls the provider error line on retained campaign recipients, keeping the stats row', async () => {
+        const { prisma, svc } = makeSvc();
+        armPendingErasure(prisma);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { workspaceId: WS, leadId: ONE }, data: { error: null } }),
+        );
+        expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('empties the workflow run context and deletes the step trail, keeping the run row', async () => {
+        const { prisma, svc } = makeSvc();
+        armPendingErasure(prisma);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(prisma.workflowRun.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { workspaceId: WS, leadId: ONE },
+            data: expect.objectContaining({ lastError: null }),
+          }),
+        );
+        expect(prisma.workflowStepRun.deleteMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { workspaceId: WS, runId: { in: ['wr-1'] } } }),
+        );
+        // The run row itself stays: workflow-executor stops a WAITING run of a
+        // deleted lead on resume, and it needs the row to do that.
+        expect(prisma.workflowRun.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('skips the step-trail delete when the subject has no runs', async () => {
+        const { prisma, svc } = makeSvc();
+        armPendingErasure(prisma);
+        (prisma.workflowRun.findMany as jest.Mock).mockResolvedValue([]);
+        await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+        expect(prisma.workflowStepRun.deleteMany).not.toHaveBeenCalled();
+      });
+    });
+
+    it('is race-safe: a concurrent fulfil that loses the atomic claim (count 0) does no erasure', async () => {
+      const { prisma, suppression, svc } = makeSvc();
       armPendingErasure(prisma);
       (prisma.dataRequest.updateMany as jest.Mock).mockResolvedValue({ count: 0 }); // sibling already claimed
       const out: any = await svc.fulfillErasure(WS, 'dr1', 'mgr-2');
@@ -520,6 +918,9 @@ describe('ComplianceService', () => {
       expect(prisma.lead.updateMany).not.toHaveBeenCalled();
       expect(prisma.conversation.deleteMany).not.toHaveBeenCalled();
       expect(prisma.message.deleteMany).not.toHaveBeenCalled();
+      // …and must NOT re-tombstone: the sibling already did, and this one no
+      // longer has the addresses to do it with.
+      expect(suppression.suppress).not.toHaveBeenCalled();
     });
 
     it('404s when the erasure request does not exist (or is an EXPORT, filtered by kind)', async () => {

@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Lead } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
 import { IysSyncService } from './iys-sync.service';
+import { SuppressionService } from './suppression.service';
 
 /** Placeholder written over a name once its owner has exercised erasure. */
 const ERASED_MARKER = '[Silinmiş]';
@@ -13,6 +14,27 @@ const OPT_OUT_FIELD: Record<string, 'emailOptOut' | 'smsOptOut' | 'waOptOut'> = 
   MARKETING_SMS: 'smsOptOut',
   MARKETING_WHATSAPP: 'waOptOut',
 };
+
+/**
+ * How far the erasure follows `mergedIntoId`.
+ *
+ * `lead-dedupe.service.ts` only refuses a canonical that is CURRENTLY merged,
+ * so A→B followed by B→C is legal and leaves a depth-2 chain. The cap is
+ * insurance against a cycle an older merge could have left behind, not a
+ * statement about how deep real chains go — visited ids are tracked anyway,
+ * so a cycle terminates on its own.
+ */
+const MERGE_CHAIN_MAX_HOPS = 10;
+
+/**
+ * How long an export body is kept (`export-stored-forever`).
+ *
+ * The payload is the artifact proving WHAT was disclosed under Art. 15, so it
+ * is still written — it just stops being a plaintext copy of the subject that
+ * outlives every purpose it had. The audit row (kind / leadId / completedAt)
+ * is never touched.
+ */
+const EXPORT_PAYLOAD_TTL_DAYS = 90;
 
 interface ConsentMeta {
   source?: string;
@@ -33,6 +55,7 @@ export class ComplianceService {
     private prisma: PrismaService,
     private readonly outbox: OutboxService,
     private readonly iysSync: IysSyncService,
+    private readonly suppression: SuppressionService,
   ) {}
 
   private async assertLead(workspaceId: string, leadId: string) {
@@ -76,8 +99,53 @@ export class ComplianceService {
         // granted=false → opted OUT (true); granted=true → opted IN (false).
         await tx.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
       }
+      if (type === 'MARKETING_EMAIL' && granted) {
+        await this.liftEmailSuppression(tx, workspaceId, leadId, record.id);
+      }
       return record;
     });
+  }
+
+  /**
+   * R3 — fresh consent has to reach the suppression list, not just the flag.
+   *
+   * `SuppressionService.check` answers with the UNION of the ContactSuppression
+   * row and the denormalised `emailOptOut` column, so clearing the flag alone
+   * would leave a re-consented lead permanently unmailable behind a row nobody
+   * ever withdrew — the exact drift three reviewers named in advance.
+   *
+   * It runs in the caller's transaction on purpose: a consent that half-applied
+   * is worse than one that failed, and the record+flip pair above already
+   * demands that atomicity.
+   *
+   * Order matters. The flag flip happens FIRST (above), so this lead no longer
+   * carries `emailOptOut` when `lift` sweeps the leads that still do — it keeps
+   * its own ConsentRecord, written one line earlier, instead of collecting a
+   * second one from the ledger. Every OTHER lead on the same address is exactly
+   * who the sweep is for (`optout-per-lead-row`): consent belongs to the person,
+   * not to whichever copy of their row the click came through.
+   *
+   * SMS is deliberately NOT wired here. Nothing reads a PHONE suppression yet
+   * (`check`/`checkMany` are EMAIL-only), so there is no stale row to clear —
+   * and an SMS withdrawal owns İYS + the NetGSM account blacklist through
+   * `emitSmsOptEvent`, which a silent flag sweep must not step around.
+   */
+  private async liftEmailSuppression(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    leadId: string,
+    recordId: string,
+  ) {
+    const lead = await tx.lead.findUnique({ where: { id: leadId }, select: { emailNormalized: true } });
+    if (!lead?.emailNormalized) return;
+    await this.suppression.lift(
+      workspaceId,
+      lead.emailNormalized,
+      'EMAIL',
+      'OPT_OUT',
+      `consent:${recordId}`,
+      tx,
+    );
   }
 
   /**
@@ -286,6 +354,44 @@ export class ComplianceService {
           : Promise.resolve([] as unknown[]),
       ]);
 
+    // What Art. 15 still did not answer: which automation ran against them,
+    // what was drafted about them, where their record came from, which
+    // duplicates were folded into it, and — for the campaign mail already
+    // exported as bare recipient rows — what that mail actually SAID
+    // (`dsar-export-incomplete`).
+    const campaignIds = [...new Set(campaignRecipients.map((r) => r.campaignId))];
+    const [
+      attribution,
+      workflowRuns,
+      distributionDrafts,
+      importJobRows,
+      researchCandidates,
+      mergedDuplicates,
+      campaigns,
+    ] = await Promise.all([
+      // LeadAttribution is @unique on leadId — a 1:1 read, not a list.
+      this.prisma.leadAttribution.findUnique({ where: { leadId } }),
+      this.prisma.workflowRun.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.distributionDraft.findMany({ where: { workspaceId, leadId } }),
+      // ImportJobRow has NO workspaceId column — scoped through its job, the
+      // same way CommunityMember is scoped through its community above.
+      this.prisma.importJobRow.findMany({ where: { leadId, job: { workspaceId } } }),
+      this.prisma.researchCandidate.findMany({ where: { workspaceId, leadId } }),
+      this.mergedDuplicates(workspaceId, leadId),
+      campaignIds.length
+        ? this.prisma.campaign.findMany({
+            where: { workspaceId, id: { in: campaignIds } },
+            select: { id: true, name: true, channel: true, subject: true, body: true, bodyHtml: true, createdAt: true },
+          })
+        : Promise.resolve([] as unknown[]),
+    ]);
+
+    // The per-step trail hangs off the runs, like messages off conversations.
+    const runIds = workflowRuns.map((r) => r.id);
+    const workflowStepRuns = runIds.length
+      ? await this.prisma.workflowStepRun.findMany({ where: { workspaceId, runId: { in: runIds } } })
+      : [];
+
     const payload = {
       lead,
       consents,
@@ -316,6 +422,14 @@ export class ComplianceService {
       communityPosts,
       communityComments,
       walletLedgerEntries,
+      attribution,
+      workflowRuns,
+      workflowStepRuns,
+      distributionDrafts,
+      importJobRows,
+      researchCandidates,
+      mergedDuplicates,
+      campaigns,
     };
     await this.prisma.dataRequest.create({
       data: {
@@ -328,7 +442,57 @@ export class ComplianceService {
         completedAt: new Date(),
       },
     });
+    await this.retireOldExportPayloads(workspaceId);
     return payload;
+  }
+
+  /**
+   * The duplicates folded INTO this subject, transitively.
+   *
+   * Merges chain (`lead-dedupe.service.ts` excludes an already-tombstoned lead
+   * from a new merge), so a row merged into B that was later merged into C
+   * still points at B — reading one level would answer the access request
+   * without the grandchildren.
+   */
+  private async mergedDuplicates(workspaceId: string, leadId: string) {
+    const out: Lead[] = [];
+    const seen = new Set([leadId]);
+    let frontier = [leadId];
+    for (let hop = 0; hop < MERGE_CHAIN_MAX_HOPS && frontier.length; hop++) {
+      const merged = await this.prisma.lead.findMany({
+        where: { workspaceId, mergedIntoId: { in: frontier } },
+      });
+      const fresh = merged.filter((l) => !seen.has(l.id));
+      for (const l of fresh) seen.add(l.id);
+      out.push(...fresh);
+      frontier = fresh.map((l) => l.id);
+    }
+    return out;
+  }
+
+  /**
+   * Retire export bodies past the TTL (`export-stored-forever`).
+   *
+   * Opportunistic rather than scheduled: the workspace that just took an export
+   * is exactly the workspace whose older ones are due, and this keeps the
+   * guarantee inside the service that made the promise instead of depending on
+   * a cron being armed. The audit row survives — only the payload goes, the
+   * same scrub `fulfillErasure` already performs for the same reason.
+   *
+   * Best-effort on purpose: an export that a housekeeping sweep could fail is
+   * a data-subject right denied for an operational reason.
+   */
+  private async retireOldExportPayloads(workspaceId: string): Promise<void> {
+    const cutoff = new Date(Date.now() - EXPORT_PAYLOAD_TTL_DAYS * 24 * 60 * 60 * 1000);
+    try {
+      const { count } = await this.prisma.dataRequest.updateMany({
+        where: { workspaceId, kind: 'EXPORT', requestedAt: { lt: cutoff } },
+        data: { payload: Prisma.JsonNull },
+      });
+      if (count) this.logger.log(`retired ${count} export payload(s) past ${EXPORT_PAYLOAD_TTL_DAYS}d in ws=${workspaceId}`);
+    } catch (e: any) {
+      this.logger.warn(`export payload TTL sweep failed for ws=${workspaceId}: ${e?.message ?? e}`);
+    }
   }
 
   async requestErasure(workspaceId: string, leadId: string, requestedById?: string) {
@@ -350,12 +514,19 @@ export class ComplianceService {
    * that isn't a live PENDING ERASURE is rejected, so a double-fulfil can't
    * re-run (or re-scrub an already-anonymised lead).
    *
+   * The SUBJECT is the whole merge chain, not the one row the request names
+   * (`erasure-one-row`), and the addresses are read BEFORE the scrub so an
+   * ERASURE tombstone can outlive them (`erasure-no-suppression`) — the person
+   * has to stay unmailable without us keeping what they asked us to forget.
+   *
    * Tiers (each explicitly workspace+lead scoped):
    *  - DELETE (no retention value): conversations + their messages, lead
    *    activities, voice/sales calls, contact identities, first-touch
-   *    attribution, tracked link clicks, survey responses.
+   *    attribution, tracked link clicks, survey responses, workflow step runs.
    *  - SCRUB in place (retained rows that embed PII): bookings (attendee
-   *    name/contact/notes).
+   *    name/contact/notes), research candidates, import rows, distribution
+   *    drafts, campaign-recipient errors, workflow-run context — see
+   *    `scrubResidualPii` for why each row must survive its own scrub.
    *  - RETAIN untouched (legal retention + memberships — now pointing at the
    *    anonymised lead): invoices, estimates, commissions, wallet + ledger,
    *    subscriptions, coupon redemptions, points, opportunities, enrolments,
@@ -385,41 +556,58 @@ export class ComplianceService {
       });
       if (claim.count === 0) return false;
 
+      // A merge only sets `mergedIntoId`; it never scrubs the row it folded
+      // away. Every id in that chain is the SAME person — the merge already
+      // asserted it — so the erasure covers all of them, or the duplicate
+      // stays readable through `GET /leads/:id` and mailable by the next
+      // campaign (`erasure-one-row`).
+      const subjectIds = await this.resolveSubjectIds(tx, workspaceId, leadId);
+      const subjects = { in: subjectIds };
+
+      // The LAST moment the addresses still exist. `fulfillErasure` is handed
+      // a leadId and nothing else, so without this read the scrub below
+      // destroys the only copy of the one thing a tombstone needs.
+      await this.writeErasureTombstones(tx, workspaceId, subjectIds, req.id);
+
       // Messages carry no leadId of their own — they belong to the subject's
       // conversations, so delete them by those conversation ids before the
       // conversations themselves.
       const convos = await tx.conversation.findMany({
-        where: { workspaceId, leadId },
+        where: { workspaceId, leadId: subjects },
         select: { id: true },
       });
       const convoIds = convos.map((c) => c.id);
       if (convoIds.length) {
         await tx.message.deleteMany({ where: { workspaceId, conversationId: { in: convoIds } } });
       }
-      await tx.conversation.deleteMany({ where: { workspaceId, leadId } });
+      await tx.conversation.deleteMany({ where: { workspaceId, leadId: subjects } });
 
       // The remaining pure communication / behavioural / identity PII.
       // (LeadActivity has no workspaceId column — leadId, resolved from the
       // workspace-scoped request above, already binds it to this tenant.)
-      await tx.leadActivity.deleteMany({ where: { leadId } });
-      await tx.voiceCall.deleteMany({ where: { workspaceId, leadId } });
-      await tx.salesCall.deleteMany({ where: { workspaceId, leadId } });
-      await tx.contactIdentity.deleteMany({ where: { workspaceId, leadId } });
-      await tx.leadAttribution.deleteMany({ where: { workspaceId, leadId } });
-      await tx.triggerLinkClick.deleteMany({ where: { workspaceId, leadId } });
-      await tx.surveyResponse.deleteMany({ where: { workspaceId, leadId } });
+      await tx.leadActivity.deleteMany({ where: { leadId: subjects } });
+      await tx.voiceCall.deleteMany({ where: { workspaceId, leadId: subjects } });
+      await tx.salesCall.deleteMany({ where: { workspaceId, leadId: subjects } });
+      await tx.contactIdentity.deleteMany({ where: { workspaceId, leadId: subjects } });
+      await tx.leadAttribution.deleteMany({ where: { workspaceId, leadId: subjects } });
+      await tx.triggerLinkClick.deleteMany({ where: { workspaceId, leadId: subjects } });
+      await tx.surveyResponse.deleteMany({ where: { workspaceId, leadId: subjects } });
+
+      await this.scrubResidualPii(tx, workspaceId, subjects);
 
       // Scrub PII off retained bookings (kept for the operator's calendar history).
       await tx.booking.updateMany({
-        where: { workspaceId, leadId },
+        where: { workspaceId, leadId: subjects },
         data: { name: ERASED_MARKER, email: null, phone: null, notes: null },
       });
 
       // Anonymise the lead itself: scrub every PII field, suppress all future
       // contact, and hide it (deletedAt). Retained financial/membership rows keep
       // referencing this now-anonymised row, so referential integrity holds.
+      // `mergedIntoId` is left alone: the chain is still how an old link
+      // resolves to the canonical, and every row in it is now anonymised.
       await tx.lead.updateMany({
-        where: { id: leadId, workspaceId },
+        where: { id: subjects, workspaceId },
         data: {
           businessName: ERASED_MARKER,
           contactPerson: ERASED_MARKER,
@@ -446,7 +634,7 @@ export class ComplianceService {
       // of the "erased" subject survives, defeating KVKK/GDPR Art.17. Keep the
       // audit rows (kind/leadId/completedAt), drop only the PII payload.
       await tx.dataRequest.updateMany({
-        where: { workspaceId, leadId, kind: 'EXPORT' },
+        where: { workspaceId, leadId: subjects, kind: 'EXPORT' },
         data: { payload: Prisma.JsonNull },
       });
 
@@ -461,9 +649,177 @@ export class ComplianceService {
     return { id: req.id, status: 'COMPLETED', leadId };
   }
 
+  /**
+   * Every lead id that IS this person: the named row plus the tombstone chain
+   * merged into it, followed transitively.
+   *
+   * One level is not enough. `lead-dedupe.service.ts` refuses only a canonical
+   * that is *currently* merged, so A→B and, later, B→C is a legal pair of
+   * merges and leaves C's PII two hops from the id the request names.
+   *
+   * Same-address duplicates that were never merged are deliberately NOT
+   * included: nothing has asserted they are the same human, and auto-scrubbing
+   * a stranger who shares `info@` with the subject would be its own breach.
+   * They are covered instead by the ERASURE tombstone, which is keyed on the
+   * address rather than on the row.
+   */
+  private async resolveSubjectIds(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    leadId: string,
+  ): Promise<string[]> {
+    const ids = [leadId];
+    let frontier = [leadId];
+    for (let hop = 0; hop < MERGE_CHAIN_MAX_HOPS && frontier.length; hop++) {
+      const merged = await tx.lead.findMany({
+        where: { workspaceId, mergedIntoId: { in: frontier } },
+        select: { id: true },
+      });
+      // Filtering against what we have already seen is what makes a cycle
+      // terminate rather than spin until the hop cap.
+      frontier = merged.map((m) => m.id).filter((id) => !ids.includes(id));
+      ids.push(...frontier);
+    }
+    if (frontier.length) {
+      this.logger.warn(`Merge chain for lead=${leadId} exceeded ${MERGE_CHAIN_MAX_HOPS} hops — erasure may be partial`);
+    }
+    return ids;
+  }
+
+  /**
+   * The tombstone that makes an erased person unmailable WITHOUT keeping their
+   * address (§A3.6, R4).
+   *
+   * Erasure nulls `emailNormalized`/`phoneNormalized`, which are the only keys
+   * every create path dedupes on — so today the same person walks back in
+   * through an import, a form or their next inbound mail as a brand-new,
+   * opted-IN lead, and the AI or a campaign mails someone who asked to be
+   * forgotten (`erasure-no-suppression`).
+   *
+   * `SuppressionService` stores an HMAC of the value, never the value, so the
+   * tombstone answers "is this address erased?" without being a readable copy
+   * of the person we just erased. PHONE is written too: SMS/WhatsApp have the
+   * identical hole, and İYS only covers someone who previously opted out, not
+   * someone merely erased.
+   */
+  private async writeErasureTombstones(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    subjectIds: string[],
+    requestId: string,
+  ): Promise<void> {
+    const subjects = await tx.lead.findMany({
+      where: { workspaceId, id: { in: subjectIds } },
+      select: { emailNormalized: true, phoneNormalized: true },
+    });
+    const source = `erasure:${requestId}`;
+    const emails = new Set(subjects.map((s) => s.emailNormalized).filter((v): v is string => !!v));
+    const phones = new Set(subjects.map((s) => s.phoneNormalized).filter((v): v is string => !!v));
+    for (const email of emails) {
+      await this.suppression.suppress(workspaceId, email, 'EMAIL', 'ERASURE', { source, tx });
+    }
+    for (const phone of phones) {
+      await this.suppression.suppress(workspaceId, phone, 'PHONE', 'ERASURE', { source, tx });
+    }
+  }
+
+  /**
+   * The PII a "permanent deletion" used to leave behind (`erasure-residual-pii`):
+   * the address in the row that created the lead, the body of a draft written
+   * about them, the trigger payload a workflow run is still carrying.
+   *
+   * Every one of these is SCRUBBED, never deleted, and each for its own
+   * sibling-breaking reason:
+   *  - `ResearchCandidate` — its `@@unique([workspaceId, profileId, externalRef])`
+   *    is the ONLY thing stopping the next research run re-ingesting the same
+   *    prospect, and the lead's own dedupe keys are about to be nulled. A
+   *    delete here literally recreates the person we are erasing.
+   *  - `ImportJobRow` — `processBatch` counts remaining work by row status;
+   *    deleting rows corrupts a running import's progress. No `workspaceId`
+   *    column, so it is scoped through its job.
+   *  - `DistributionDraft` — `@@unique([planId, leadId, channelType])` is the
+   *    anti-restack guard, and a Postgres CHECK requires a SENT row to keep
+   *    `sentById`. Drafts still inviting a send are dismissed as well, so
+   *    nobody is offered a "send" against a contact who is gone.
+   *  - `CampaignRecipient` — the row is retained on purpose for campaign stats;
+   *    only the free-text provider line carries the subject's words.
+   *  - `WorkflowRun` — the run row is what lets `workflow-executor` STOP a
+   *    WAITING run of a deleted lead on resume. Its `context` (the trigger
+   *    payload) and `lastError` are the PII; the step trail is deleted outright.
+   */
+  private async scrubResidualPii(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    subjects: { in: string[] },
+  ): Promise<void> {
+    await tx.researchCandidate.updateMany({
+      where: { workspaceId, leadId: subjects },
+      data: {
+        businessName: ERASED_MARKER,
+        email: null,
+        phone: null,
+        instagram: null,
+        website: null,
+        painPoint: '',
+        evidence: '',
+        pitch: '',
+      },
+    });
+
+    await tx.importJobRow.updateMany({
+      where: { leadId: subjects, job: { workspaceId } },
+      data: { raw: {} as Prisma.InputJsonValue, error: null },
+    });
+
+    await tx.distributionDraft.updateMany({
+      where: { workspaceId, leadId: subjects },
+      data: { toAddress: ERASED_MARKER, body: '', error: null },
+    });
+    await tx.distributionDraft.updateMany({
+      where: { workspaceId, leadId: subjects, status: 'DRAFT' },
+      data: { status: 'DISMISSED' },
+    });
+
+    await tx.campaignRecipient.updateMany({
+      where: { workspaceId, leadId: subjects },
+      data: { error: null },
+    });
+
+    const runs = await tx.workflowRun.findMany({
+      where: { workspaceId, leadId: subjects },
+      select: { id: true },
+    });
+    await tx.workflowRun.updateMany({
+      where: { workspaceId, leadId: subjects },
+      data: { context: {} as Prisma.InputJsonValue, lastError: null },
+    });
+    if (runs.length) {
+      await tx.workflowStepRun.deleteMany({
+        where: { workspaceId, runId: { in: runs.map((r) => r.id) } },
+      });
+    }
+  }
+
+  /**
+   * The request history — WITHOUT the bodies (`export-stored-forever`).
+   *
+   * `DataRequest.payload` is a full plaintext snapshot of one subject, and this
+   * list was handing 100 of them to anyone who could open the Compliance tab.
+   * The select mirrors the frontend's own `DataRequest` interface
+   * (pages/marketing/settings/compliance/types.ts), which never asked for more.
+   */
   listRequests(workspaceId: string) {
     return this.prisma.dataRequest.findMany({
       where: { workspaceId },
+      select: {
+        id: true,
+        leadId: true,
+        kind: true,
+        status: true,
+        requestedAt: true,
+        completedAt: true,
+        requestedById: true,
+      },
       orderBy: { requestedAt: 'desc' },
       take: 100,
     });
