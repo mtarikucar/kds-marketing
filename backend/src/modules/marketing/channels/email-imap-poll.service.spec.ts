@@ -98,7 +98,11 @@ function build(over: { secrets?: Record<string, any>; configPublic?: any; channe
   };
   const registry: any = {
     has: jest.fn().mockReturnValue(true),
-    get: jest.fn().mockReturnValue(new EmailChannelAdapter({ register: jest.fn() } as any)),
+    get: jest
+      .fn()
+      .mockReturnValue(
+        new EmailChannelAdapter({ register: jest.fn() } as any, { refreshNow: jest.fn() } as any),
+      ),
     resolveConfig: jest.fn((ch: any) => ({
       secrets: ch.id === CH_ID ? secrets : GODADDY,
       public: {},

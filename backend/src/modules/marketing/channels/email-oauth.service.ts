@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
+import { MailboxHealthService } from './mailbox-health.service';
 import { signState, verifyState } from '../social-planner/oauth/social-oauth-state.util';
 import {
   EMAIL_OAUTH,
@@ -37,6 +38,7 @@ export class EmailOAuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly channels: ChannelsService,
+    private readonly health: MailboxHealthService,
   ) {}
 
   /** Which connect buttons this deployment can actually show. */
@@ -110,11 +112,22 @@ export class EmailOAuthService {
       // stranger's would. SMTP credentials are cleared in the same write: the
       // owner has chosen consent, and a password left sealed beside a live
       // token is a credential nobody is watching any more.
+      //
+      // `oauthError` goes with them. Secrets MERGE, and the refresh sweep's
+      // record of a revoked consent is what WorkspaceMailboxService refuses a
+      // mailbox on — left standing, the owner reconnects successfully and the
+      // sender still will not use the mailbox.
       await this.channels.update(parsed.workspaceId, existing.id, {
         secrets,
-        clearSecretKeys: SMTP_KEYS,
+        clearSecretKeys: [...SMTP_KEYS, 'oauthError'],
         status: 'ACTIVE',
       });
+      // The same news outside the box, where the channel card reads it. Waiting
+      // for the next successful sweep would leave a freshly reconnected mailbox
+      // asking to be reconnected.
+      await this.health
+        .clearOAuthReauthRequired({ id: existing.id, workspaceId: parsed.workspaceId })
+        .catch(() => undefined);
       return { channelId: existing.id, address };
     }
 

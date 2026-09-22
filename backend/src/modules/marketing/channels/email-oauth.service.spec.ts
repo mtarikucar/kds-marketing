@@ -33,6 +33,7 @@ const GOOD_TOKENS = { accessToken: 'at', refreshToken: 'rt', expiresAt: 1_700_00
 describe('connecting a mailbox by consent', () => {
   let prisma: any;
   let channels: any;
+  let health: any;
   let svc: EmailOAuthService;
 
   beforeEach(() => {
@@ -46,7 +47,8 @@ describe('connecting a mailbox by consent', () => {
       create: jest.fn().mockResolvedValue({ id: 'ch-new' }),
       update: jest.fn().mockResolvedValue({ id: 'ch-old' }),
     };
-    svc = new EmailOAuthService(prisma, channels);
+    health = { clearOAuthReauthRequired: jest.fn().mockResolvedValue(undefined) };
+    svc = new EmailOAuthService(prisma, channels, health);
   });
 
   afterEach(() => {
@@ -172,6 +174,34 @@ describe('connecting a mailbox by consent', () => {
       expect(channels.update.mock.calls[0][2].clearSecretKeys).toEqual(
         expect.arrayContaining(['smtpHost', 'smtpUser', 'smtpPass']),
       );
+    });
+
+    it('drops the old refusal, so a reconnected mailbox is allowed to send again', async () => {
+      // `oauthError` is what the refresh sweep writes when consent is revoked,
+      // and WorkspaceMailboxService refuses any mailbox carrying one. Secrets
+      // MERGE, so a reconnect that left it standing would produce a channel the
+      // owner just fixed and the sender still will not use.
+      verifyStateMock.mockReturnValue({ workspaceId: WS, network: 'email-google' });
+      exchangeMock.mockResolvedValue(GOOD_TOKENS);
+      addressMock.mockResolvedValue(ADDRESS);
+      prisma.channel.findFirst.mockResolvedValue({ id: 'ch-old' });
+
+      await svc.handleCallback('code', 's');
+
+      expect(channels.update.mock.calls[0][2].clearSecretKeys).toContain('oauthError');
+      // …and the marker outside the box comes down with it, rather than waiting
+      // for whichever sweep happens to succeed next.
+      expect(health.clearOAuthReauthRequired).toHaveBeenCalledWith({ id: 'ch-old', workspaceId: WS });
+    });
+
+    it('never fails a reconnect because the marker could not be cleared', async () => {
+      verifyStateMock.mockReturnValue({ workspaceId: WS, network: 'email-google' });
+      exchangeMock.mockResolvedValue(GOOD_TOKENS);
+      addressMock.mockResolvedValue(ADDRESS);
+      prisma.channel.findFirst.mockResolvedValue({ id: 'ch-old' });
+      health.clearOAuthReauthRequired.mockRejectedValue(new Error('db down'));
+
+      await expect(svc.handleCallback('code', 's')).resolves.toMatchObject({ channelId: 'ch-old' });
     });
 
     it('looks the channel up inside the state workspace only', async () => {
