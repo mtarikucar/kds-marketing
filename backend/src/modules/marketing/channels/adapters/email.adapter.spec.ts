@@ -1,9 +1,31 @@
 // nodemailer mock — capture sendMail / verify calls without a real SMTP server.
+// The options are captured too: `forceAuth` is the difference between "this
+// mailbox accepted our password" and "some open relay said hello".
 const sendMail = jest.fn();
 const verify = jest.fn();
 const close = jest.fn();
-const createTransport = jest.fn(() => ({ sendMail, verify, close }));
-jest.mock('nodemailer', () => ({ createTransport: () => createTransport() }));
+const createTransport = jest.fn((_opts?: any) => ({ sendMail, verify, close }));
+jest.mock('nodemailer', () => ({ createTransport: (opts: any) => createTransport(opts) }));
+
+// imapflow mock — the RECEIVE half of the probe, without a mail server.
+const mockImap = {
+  opts: null as any,
+  built: 0,
+  connect: jest.fn(async () => undefined),
+  mailboxOpen: jest.fn(async () => ({ exists: 0 })),
+  logout: jest.fn(async () => undefined),
+};
+jest.mock('imapflow', () => ({
+  ImapFlow: jest.fn().mockImplementation((opts: any) => {
+    mockImap.opts = opts;
+    mockImap.built++;
+    return {
+      connect: mockImap.connect,
+      mailboxOpen: mockImap.mailboxOpen,
+      logout: mockImap.logout,
+    };
+  }),
+}));
 
 import { EmailChannelAdapter } from './email.adapter';
 
@@ -15,13 +37,22 @@ const SMTP = {
   fromEmail: 'bot@acme.test',
 };
 
+/** The same mailbox with an incoming server the operator typed in. */
+const SMTP_WITH_IMAP = { ...SMTP, imapHost: 'imap.acme.test', imapPort: '993' };
+
 describe('EmailChannelAdapter', () => {
   const registry = { register: jest.fn() } as any;
+  const oauthRefresh = { refreshNow: jest.fn() } as any;
   let adapter: EmailChannelAdapter;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    adapter = new EmailChannelAdapter(registry);
+    mockImap.built = 0;
+    mockImap.opts = null;
+    mockImap.connect.mockResolvedValue(undefined);
+    mockImap.mailboxOpen.mockResolvedValue({ exists: 0 } as any);
+    mockImap.logout.mockResolvedValue(undefined);
+    adapter = new EmailChannelAdapter(registry, oauthRefresh);
   });
 
   it('registers itself on module init as EMAIL', () => {
@@ -41,13 +72,52 @@ describe('EmailChannelAdapter', () => {
     sendMail.mockResolvedValue({ messageId: '<abc@acme.test>' });
     const res = await adapter.send({
       config: { secrets: SMTP, public: { subject: 'Re: hello' } } as any,
-      to: 'Lead <lead@x.test>',
+      to: 'lead@x.test',
       text: 'thanks!',
     });
     expect(res.status).toBe('SENT');
     expect(res.externalMessageId).toBe('<abc@acme.test>');
     const mail = sendMail.mock.calls[0][0];
-    expect(mail).toMatchObject({ from: 'bot@acme.test', to: 'Lead <lead@x.test>', subject: 'Re: hello', text: 'thanks!' });
+    expect(mail).toMatchObject({ from: 'bot@acme.test', to: 'lead@x.test', subject: 'Re: hello', text: 'thanks!' });
+  });
+
+  describe('one recipient, always', () => {
+    it('refuses a comma-separated list instead of mailing two people on one token', async () => {
+      // One `to`, one unsubscribe token, one trace row. A list here sends the
+      // second person a link that speaks for the first.
+      const res = await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'info@x.test, satis@x.test',
+        text: 'hi',
+        subject: 'S',
+      });
+      expect(res.status).toBe('FAILED');
+      expect(res.error).toMatch(/one email address/i);
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('refuses a recipient carrying a header break', async () => {
+      const res = await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'lead@x.test\r\nBcc: victim@x.test',
+        text: 'hi',
+        subject: 'S',
+      });
+      expect(res.status).toBe('FAILED');
+      expect(res.retriable).toBe(false);
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('refuses the display-name form, which nodemailer would expand', async () => {
+      const res = await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'Lead <lead@x.test>',
+        text: 'hi',
+        subject: 'S',
+      });
+      expect(res.status).toBe('FAILED');
+      expect(createTransport).not.toHaveBeenCalled();
+    });
   });
 
   it('send prefers a per-call subject over the thread default', async () => {
@@ -63,6 +133,16 @@ describe('EmailChannelAdapter', () => {
       subject: 'Kâğıt adisyon yerine mutfak ekranı',
     });
     expect(sendMail.mock.calls[0][0].subject).toBe('Kâğıt adisyon yerine mutfak ekranı');
+  });
+
+  it('never invents a "Re:" on a first-contact mail', async () => {
+    // A Turkish prospect who has never written to us received an English fake
+    // reply, and every later message in the thread kept it (`fake-re-subject`).
+    sendMail.mockResolvedValue({ messageId: '<x@acme.test>' });
+    await adapter.send({ config: { secrets: SMTP, public: {} } as any, to: 'lead@x.test', text: 'body' });
+    const subject = String(sendMail.mock.calls[0][0].subject);
+    expect(subject).not.toMatch(/^re:/i);
+    expect(subject.trim()).not.toBe('');
   });
 
   it('send carries an HTML body ALONGSIDE the text one', async () => {
@@ -97,6 +177,110 @@ describe('EmailChannelAdapter', () => {
     expect(res.error).toContain('535');
   });
 
+  describe('the identity on the envelope', () => {
+    it('sends with a display name when the caller supplies one', async () => {
+      // nodemailer's object form, never a hand-built `"Name" <a@b>` string: a
+      // workspace called `Şen "Pide" A.Ş.` produces a malformed header that way.
+      sendMail.mockResolvedValue({ messageId: '<n@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'lead@x.test',
+        text: 'body',
+        subject: 'S',
+        fromName: 'Şen "Pide" A.Ş.',
+      });
+      expect(sendMail.mock.calls[0][0].from).toEqual({
+        name: 'Şen "Pide" A.Ş.',
+        address: 'bot@acme.test',
+      });
+    });
+
+    it('falls back to the name stored on the channel', async () => {
+      sendMail.mockResolvedValue({ messageId: '<n2@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP, public: { fromName: 'Acme Kitchen' } } as any,
+        to: 'lead@x.test',
+        text: 'body',
+        subject: 'S',
+      });
+      expect(sendMail.mock.calls[0][0].from).toEqual({ name: 'Acme Kitchen', address: 'bot@acme.test' });
+    });
+
+    it('carries a Reply-To when the caller supplies one', async () => {
+      sendMail.mockResolvedValue({ messageId: '<n3@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'lead@x.test',
+        text: 'body',
+        subject: 'S',
+        replyTo: 'satis@acme.test',
+      });
+      expect(sendMail.mock.calls[0][0].replyTo).toBe('satis@acme.test');
+    });
+
+    it('sends no Reply-To at all when none is given', async () => {
+      sendMail.mockResolvedValue({ messageId: '<n4@acme.test>' });
+      await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'body', subject: 'S' });
+      expect(sendMail.mock.calls[0][0]).not.toHaveProperty('replyTo');
+    });
+  });
+
+  describe('threading', () => {
+    it('puts In-Reply-To/References at the top level, beside the unsubscribe pair', async () => {
+      // Inside `headers` they would overwrite (or be overwritten by) the
+      // List-Unsubscribe pair, which is built as a whole object.
+      sendMail.mockResolvedValue({ messageId: '<t@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'lead@x.test',
+        text: 'body',
+        subject: 'S',
+        inReplyTo: '<prev@buyer.test>',
+        references: ['<first@buyer.test>', '<prev@buyer.test>'],
+        autoSubmitted: 'auto-replied',
+        listUnsubscribeUrl: 'https://m.test/api/public/u/tok-1',
+      });
+      const mail = sendMail.mock.calls[0][0];
+      expect(mail.inReplyTo).toBe('<prev@buyer.test>');
+      expect(mail.references).toEqual(['<first@buyer.test>', '<prev@buyer.test>']);
+      expect(mail.headers).toEqual({
+        'List-Unsubscribe': '<https://m.test/api/public/u/tok-1>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        'Auto-Submitted': 'auto-replied',
+      });
+    });
+
+    it('sends the Message-ID the ledger already recorded', async () => {
+      sendMail.mockResolvedValue({ messageId: '<mail-1@jeetagrowth.com>' });
+      await adapter.send({
+        config: { secrets: SMTP } as any,
+        to: 'lead@x.test',
+        text: 'body',
+        subject: 'S',
+        messageId: '<mail-1@jeetagrowth.com>',
+      });
+      expect(sendMail.mock.calls[0][0].messageId).toBe('<mail-1@jeetagrowth.com>');
+    });
+  });
+
+  describe('what the caller is told about a failure', () => {
+    it('marks a 4xx as worth retrying', async () => {
+      sendMail.mockRejectedValue(
+        Object.assign(new Error('450 4.2.1 mailbox busy'), { responseCode: 450 }),
+      );
+      const res = await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'hi' });
+      expect(res).toMatchObject({ status: 'FAILED', retriable: true, smtpCode: 450 });
+    });
+
+    it('marks a dead mailbox as terminal and names the enhanced code', async () => {
+      sendMail.mockRejectedValue(
+        Object.assign(new Error('550 5.1.1 User unknown'), { responseCode: 550 }),
+      );
+      const res = await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'hi' });
+      expect(res).toMatchObject({ status: 'FAILED', retriable: false, smtpCode: 550, smtpEnhanced: '5.1.1' });
+    });
+  });
+
   describe('healthCheck', () => {
     const OAUTH = {
       oauthProvider: 'GOOGLE',
@@ -106,11 +290,64 @@ describe('EmailChannelAdapter', () => {
       fromEmail: 'bot@acme.test',
     };
 
-    it('verifies the SMTP login and reports what that mailbox can do', async () => {
+    it('authenticates the probe connection instead of trusting the server', async () => {
+      // A host that never offers AUTH used to pass Verify, and `lastVerifiedAt`
+      // is what four other paths read as "this workspace owns this mailbox"
+      // (`mailbox-any-host-verify`).
+      verify.mockResolvedValue(true);
+      await adapter.healthCheck({ secrets: SMTP } as any);
+      expect(createTransport.mock.calls[0][0]).toMatchObject({ forceAuth: true });
+    });
+
+    it('authenticates the SEND connection too', async () => {
+      // healthCheck alone is useless: message-sender and outbound-conversation
+      // both send without ever consulting lastVerifiedAt.
+      sendMail.mockResolvedValue({ messageId: '<f@acme.test>' });
+      await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'hi', subject: 'S' });
+      expect(createTransport.mock.calls[0][0]).toMatchObject({ forceAuth: true });
+    });
+
+    it('verifies the SMTP login and says the mailbox cannot RECEIVE without an IMAP host', async () => {
+      // `smtp.acme.test` is not in the autodiscover table, so there is no
+      // incoming server to try. Claiming receive:true here is what left a cPanel
+      // SMB looking at "Channel verified ✓" while no reply was ever ingested.
       verify.mockResolvedValue(true);
       const res = await adapter.healthCheck({ secrets: SMTP } as any);
       expect(res.ok).toBe(true);
-      expect(res.details).toMatchObject({ transport: 'smtp', send: true, receive: true });
+      expect(res.details).toMatchObject({ transport: 'smtp', send: true, receive: false });
+      expect(String(res.details?.receiveReason)).toMatch(/IMAP/i);
+    });
+
+    it('does NOT guess the IMAP host from the SMTP host', async () => {
+      // A blanket default would start logins against hosts nobody proved —
+      // including pure relays that have no IMAP at all.
+      verify.mockResolvedValue(true);
+      await adapter.healthCheck({ secrets: SMTP } as any);
+      expect(mockImap.built).toBe(0);
+    });
+
+    it('reports receive:true once the IMAP login actually works', async () => {
+      verify.mockResolvedValue(true);
+      const res = await adapter.healthCheck({ secrets: SMTP_WITH_IMAP } as any);
+      expect(res.ok).toBe(true);
+      expect(res.details).toMatchObject({ send: true, receive: true });
+      expect(mockImap.mailboxOpen).toHaveBeenCalledWith('INBOX', { readOnly: true });
+      expect(mockImap.opts).toMatchObject({ host: 'imap.acme.test', port: 993, secure: true });
+      expect(mockImap.logout).toHaveBeenCalled();
+    });
+
+    it('keeps ok TRUE when only the IMAP login fails, and says why', async () => {
+      // `ok` is SEND-truth. channels.service stamps lastVerifiedAt on it, and
+      // that column is what routes a tenant's mail through their own address —
+      // flipping it would silently reroute every tenant mail to the platform.
+      verify.mockResolvedValue(true);
+      mockImap.connect.mockRejectedValue(new Error('AUTHENTICATIONFAILED'));
+      const res = await adapter.healthCheck({ secrets: SMTP_WITH_IMAP } as any);
+      expect(res.ok).toBe(true);
+      expect(res.details).toMatchObject({ send: true, receive: false });
+      expect(String(res.details?.receiveReason)).toMatch(/IMAP/i);
+      // Even a failed probe hangs a socket open until it is told not to.
+      expect(mockImap.logout).toHaveBeenCalled();
     });
 
     it('passes a consent-connected mailbox WITHOUT asking it for SMTP credentials', async () => {
@@ -134,21 +371,36 @@ describe('EmailChannelAdapter', () => {
       expect(String(res.details?.receiveReason)).toMatch(/webhook/i);
     });
 
-    it('mirrors send(): an expired token that the cron has not refreshed is not healthy', async () => {
-      // send() refuses the same state with the same reasoning. healthCheck must
-      // not paper over it, and must not refresh the token itself — that belongs
-      // to EmailOAuthRefreshCron, which owns the database.
+    it('mirrors send(): an expired token the provider will not renew is not healthy', async () => {
+      // healthCheck asks for a fresh token exactly as send() does (see the
+      // consent-transport block below) and reports the provider's refusal when
+      // there is one. What it must never do is paper over the failure.
+      oauthRefresh.refreshNow.mockResolvedValue({
+        accessToken: null,
+        expiresAt: null,
+        error: 'invalid_grant: Token has been expired or revoked.',
+      });
       const res = await adapter.healthCheck({
+        channelId: 'ch-1',
+        workspaceId: 'ws-1',
         secrets: { ...OAUTH, oauthExpiresAt: String(Date.now() - 1_000) },
       } as any);
       expect(res.ok).toBe(false);
-      expect(String(res.details?.reason)).toMatch(/refresh/i);
+      expect(String(res.details?.reason)).toContain('invalid_grant');
     });
 
     it('still refuses a channel with neither consent nor SMTP credentials', async () => {
       const res = await adapter.healthCheck({ secrets: {} } as any);
       expect(res.ok).toBe(false);
       expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('does not probe IMAP when the SMTP login itself failed', async () => {
+      verify.mockRejectedValue(new Error('535 Invalid login'));
+      const res = await adapter.healthCheck({ secrets: SMTP_WITH_IMAP } as any);
+      expect(res.ok).toBe(false);
+      expect(res.details).toMatchObject({ send: false, receive: false });
+      expect(mockImap.built).toBe(0);
     });
   });
 
@@ -196,6 +448,20 @@ describe('EmailChannelAdapter', () => {
     expect(out[0].text).toContain('Do you ship to TR?');
   });
 
+  it('parseInbound attributes a spoofed display name to the REAL sender', () => {
+    // The old first-`<>` regex read the address out of the display name, so
+    // `"<ceo@victim>" <attacker@evil>` filed the mail under the CEO — and the
+    // same regex picks the tenant on the inbound webhook.
+    const out = adapter.parseInbound({ secrets: SMTP } as any, {
+      from: '"<ceo@victim.test>" <attacker@evil.test>',
+      text: 'wire me the money',
+    });
+    expect(out[0]).toMatchObject({
+      externalUserId: 'attacker@evil.test',
+      displayName: '<ceo@victim.test>',
+    });
+  });
+
   it('parseInbound supports a Postmark-style payload', () => {
     const out = adapter.parseInbound({ secrets: SMTP } as any, {
       From: 'buyer@x.test',
@@ -226,5 +492,113 @@ describe('EmailChannelAdapter', () => {
   it('parseInbound ignores empty/whitespace bodies', () => {
     const out = adapter.parseInbound({ secrets: SMTP } as any, { from: 'a@b.test', text: '   ' });
     expect(out).toHaveLength(0);
+  });
+
+  describe('consent-connected mailbox (OAuth transport)', () => {
+    const realFetch = global.fetch;
+    const OAUTH = {
+      oauthProvider: 'GOOGLE',
+      oauthAccessToken: 'tok',
+      oauthRefreshToken: 'ref',
+      oauthExpiresAt: String(Date.now() + 3_600_000),
+      fromEmail: 'bot@acme.test',
+    };
+    const DEAD = { ...OAUTH, oauthExpiresAt: String(Date.now() - 1_000) };
+    const cfg = (secrets: Record<string, string>, pub: Record<string, unknown> = {}) =>
+      ({ channelId: 'ch-1', workspaceId: 'ws-1', secrets, public: pub }) as any;
+
+    /** What actually went to Gmail, decoded back out of base64url. */
+    const wire = () => {
+      const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+      const raw = JSON.parse(init.body as string).raw as string;
+      return Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    };
+
+    beforeEach(() => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'g-1' }) }) as never;
+    });
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('forwards the HTML part, the display name and the Reply-To', async () => {
+      // The OAuth branch used to forward {from,to,subject,text} and nothing
+      // else, so a consent-connected mailbox sent bare-From and text-only while
+      // an SMTP one carried both (`no-display-name`).
+      const res = await adapter.send({
+        config: cfg(OAUTH, { fromName: 'Tenant Co' }),
+        to: 'lead@x.test',
+        subject: 'Teklifiniz',
+        text: 'merhaba',
+        html: '<p>merhaba</p>',
+        replyTo: 'sales@tenant.test',
+      });
+      expect(res).toMatchObject({ status: 'SENT', externalMessageId: 'g-1' });
+      const raw = wire();
+      expect(raw).toContain('Content-Type: multipart/alternative;');
+      expect(raw).toContain('Content-Type: text/html; charset="UTF-8"');
+      expect(raw).toContain('<bot@acme.test>');
+      expect(raw).toContain('Reply-To: sales@tenant.test');
+    });
+
+    it("puts the gateway's Message-ID and the threading headers on the wire", async () => {
+      await adapter.send({
+        config: cfg(OAUTH),
+        to: 'lead@x.test',
+        subject: 'Re: teklif',
+        text: 'merhaba',
+        messageId: '<ml-1@jeetagrowth.com>',
+        inReplyTo: 'prev@x.test',
+        references: ['prev@x.test'],
+        autoSubmitted: 'auto-replied',
+      });
+      const raw = wire();
+      expect(raw).toContain('Message-ID: <ml-1@jeetagrowth.com>');
+      expect(raw).toContain('In-Reply-To: <prev@x.test>');
+      expect(raw).toContain('Auto-Submitted: auto-replied');
+    });
+
+    it('refreshes an expired token on demand and sends with the one it got back', async () => {
+      // "try again shortly" was a real failure on a real customer's mail: the
+      // sweep is the floor, not the ceiling.
+      oauthRefresh.refreshNow.mockResolvedValue({ accessToken: 'fresh', expiresAt: null, error: null });
+      const res = await adapter.send({ config: cfg(DEAD), to: 'lead@x.test', text: 'hi', subject: 'S' });
+      expect(res.status).toBe('SENT');
+      expect(oauthRefresh.refreshNow).toHaveBeenCalledWith('ws-1', 'ch-1');
+      const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer fresh');
+    });
+
+    it('does not ask for a refresh while the stored token is still good', async () => {
+      await adapter.send({ config: cfg(OAUTH), to: 'lead@x.test', text: 'hi', subject: 'S' });
+      expect(oauthRefresh.refreshNow).not.toHaveBeenCalled();
+    });
+
+    it("reports the provider's own refusal when the token cannot be refreshed", async () => {
+      oauthRefresh.refreshNow.mockResolvedValue({
+        accessToken: null,
+        expiresAt: null,
+        error: 'invalid_grant: Token has been expired or revoked.',
+      });
+      const res = await adapter.send({ config: cfg(DEAD), to: 'lead@x.test', text: 'hi', subject: 'S' });
+      expect(res).toMatchObject({ status: 'FAILED', error: expect.stringContaining('invalid_grant') });
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('refreshes on healthCheck too, so a mailbox that only needs a token is not called broken', async () => {
+      oauthRefresh.refreshNow.mockResolvedValue({ accessToken: 'fresh', expiresAt: null, error: null });
+      const res = await adapter.healthCheck(cfg(DEAD));
+      expect(res.ok).toBe(true);
+      expect(res.details).toMatchObject({ transport: 'oauth', send: true });
+    });
+
+    it('still reports a mailbox whose consent was revoked as unhealthy', async () => {
+      oauthRefresh.refreshNow.mockResolvedValue({ accessToken: null, expiresAt: null, error: 'invalid_grant' });
+      const res = await adapter.healthCheck(cfg(DEAD));
+      expect(res.ok).toBe(false);
+      expect(String(res.details?.reason)).toContain('invalid_grant');
+    });
   });
 });

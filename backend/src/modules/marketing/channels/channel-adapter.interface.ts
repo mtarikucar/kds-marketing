@@ -122,6 +122,37 @@ export interface OutboundSend {
   subject?: string;
   html?: string;
   /**
+   * Email-only. The display name beside the From address — a SEPARATE field,
+   * never folded into the address itself: the OAuth transports want a bare
+   * address, and the inbound echo guard parses the stored one.
+   */
+  fromName?: string;
+  /**
+   * Email-only. Where a human reply should land when it is not the address the
+   * mail was sent from — the platform transport sends as `jeetagrowth.com`
+   * (DMARC `p=reject`, so the From cannot change) and points replies at the
+   * tenant.
+   */
+  replyTo?: string;
+  /**
+   * Email-only. Threading: the Message-ID this mail answers, and the chain
+   * behind it. Top-level rather than raw headers, because the transport owns
+   * the bracket spelling.
+   */
+  inReplyTo?: string;
+  references?: string[];
+  /**
+   * Email-only, RFC 3834. Set when a machine wrote the body, so the other
+   * side's auto-responder does not answer ours forever.
+   */
+  autoSubmitted?: 'auto-generated' | 'auto-replied';
+  /**
+   * Email-only. The Message-ID the ledger already recorded for this mail, so
+   * a bounce report and a Sent-folder copy point back at the same row instead
+   * of at an id only the transport ever saw.
+   */
+  messageId?: string;
+  /**
    * Email-only, and BULK-only. Present turns into the RFC 8058
    * `List-Unsubscribe` / `List-Unsubscribe-Post` header pair; absent means this
    * is a one-to-one message, which must never claim to be a mailing list.
@@ -134,6 +165,20 @@ export interface SendResult {
   externalMessageId: string | null;
   status: 'SENT' | 'FAILED';
   error?: string;
+  /**
+   * Would sending THIS message again, unchanged, have a different answer?
+   * A bare `false` used to mean all three of "the relay blinked", "this mailbox
+   * is gone" and "the password is wrong", so the campaign sender retried what
+   * could never work and gave up on what would have. Optional: an adapter that
+   * cannot tell says nothing rather than guessing.
+   */
+  retriable?: boolean;
+  /** The 3-digit SMTP status the server answered with, when there was one. */
+  smtpCode?: number;
+  /** Its enhanced status code (RFC 3463) — `5.1.1` is a dead mailbox, `5.7.1`
+   *  is a policy refusal, and treating the second as the first suppresses an
+   *  address that was never invalid. */
+  smtpEnhanced?: string;
 }
 
 /** A provider delivery/read receipt, transport-agnostic. Advances an OUTBOUND
