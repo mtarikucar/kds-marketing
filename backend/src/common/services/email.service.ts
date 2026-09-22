@@ -8,9 +8,28 @@ import * as Handlebars from "handlebars";
 import { maskEmail } from "../helpers/pii-mask.helper";
 import { withTimeout } from "../util/with-timeout";
 import { listUnsubscribeHeaders } from "../util/list-unsubscribe";
+import { isSingleAddress } from "../util/email-address";
 
 // Register Handlebars helpers
 Handlebars.registerHelper("currentYear", () => new Date().getFullYear());
+
+/**
+ * The RFC 4871 §5.5 field list nodemailer signs by default
+ * (`lib/dkim/sign.js`), plus `List-Unsubscribe-Post`. Nodemailer signs
+ * `List-Unsubscribe` but not its `-Post` sibling, and Gmail and Yahoo refuse
+ * one-click unsubscribe unless BOTH are covered by the signature — so without
+ * this override the RFC 8058 headers this service already emits stay inert.
+ */
+export const DKIM_HEADER_FIELD_NAMES =
+  "From:Sender:Reply-To:Subject:Date:Message-ID:To:" +
+  "Cc:MIME-Version:Content-Type:Content-Transfer-Encoding:Content-ID:" +
+  "Content-Description:Resent-Date:Resent-From:Resent-Sender:" +
+  "Resent-To:Resent-Cc:Resent-Message-ID:In-Reply-To:References:" +
+  "List-Id:List-Help:List-Unsubscribe:List-Subscribe:List-Post:" +
+  "List-Owner:List-Archive:List-Unsubscribe-Post";
+
+/** What the single-recipient guard writes as the failure reason. */
+const NOT_SINGLE_ADDRESS = "recipient address is not a single valid address";
 
 export interface EmailOptions {
   to: string;
@@ -26,7 +45,40 @@ export interface EmailOptions {
 export interface EmailFrom {
   email: string;
   name?: string;
-  dkim?: { domainName: string; keySelector: string; privateKey: string };
+  /** Where a reply goes. The From address is fixed by DMARC alignment, so this
+   *  is the only way a tenant's mail comes back to the tenant. */
+  replyTo?: string;
+  dkim?: {
+    domainName: string;
+    keySelector: string;
+    privateKey: string;
+    headerFieldNames?: string;
+  };
+}
+
+/** How the attached invite is meant to be read. A cancellation sent as a
+ *  REQUEST re-adds the appointment the customer just cancelled. */
+export interface IcsOptions {
+  method?: "REQUEST" | "CANCEL";
+  filename?: string;
+}
+
+/**
+ * What one send actually did.
+ *
+ * The boolean senders keep their signatures because four call sites branch on
+ * truthiness (`.then(ok => { if (!ok) … })`, `delivered ? 'sent' : 'NOT sent'`)
+ * and an object is always truthy — TypeScript flags neither. The `*Result`
+ * names exist so that migration is compiler-checked, one caller at a time
+ * (`send-error-race`).
+ */
+export interface MailSendResult {
+  ok: boolean;
+  /** The provider's own words, truncated — never a paraphrase. */
+  error?: string;
+  messageId?: string | null;
+  /** The 3-digit SMTP status, when nodemailer reported one. */
+  smtpCode?: number;
 }
 
 @Injectable()
@@ -57,7 +109,10 @@ export class EmailService {
 
   private initializeTransporter() {
     const host = this.configService.get<string>("EMAIL_HOST");
-    const port = this.configService.get<number>("EMAIL_PORT");
+    // Env values arrive as strings, so the old `port === 465` was never true
+    // and switching the deploy to implicit TLS would have timed out every
+    // send. NaN falls back to 587, nodemailer's own default (email-port-string).
+    const port = Number(this.configService.get("EMAIL_PORT")) || 587;
     const user = this.configService.get<string>("EMAIL_USER");
     const pass = this.configService.get<string>("EMAIL_PASSWORD");
 
@@ -68,10 +123,20 @@ export class EmailService {
       return;
     }
 
+    // Implicit TLS follows the port unless EMAIL_SECURE says otherwise, for
+    // providers that run implicit TLS on a non-standard port.
+    const secureRaw = this.configService.get("EMAIL_SECURE");
+    const secure =
+      secureRaw === undefined || secureRaw === null || secureRaw === ""
+        ? port === 465
+        : String(secureRaw).toLowerCase() === "true";
+
+    const dkim = this.platformDkim();
+
     this.transporter = nodemailer.createTransport({
       host,
       port,
-      secure: port === 465, // true for 465, false for other ports
+      secure,
       auth: {
         user,
         pass,
@@ -81,6 +146,11 @@ export class EmailService {
       connectionTimeout: 10_000,
       greetingTimeout: 10_000,
       socketTimeout: 20_000,
+      // Signing at the TRANSPORT covers sendEmail too — the path that carries
+      // verification, reset and temp-password mail, which takes no per-message
+      // override. A per-message tenant key still wins over this one
+      // (nodemailer/lib/mailer/index.js:208), which is what alignment needs.
+      ...(dkim ? { dkim } : {}),
     });
 
     // Verify connection
@@ -94,11 +164,189 @@ export class EmailService {
   }
 
   /**
+   * The platform's own DKIM key, or null.
+   *
+   * Both halves must be present or nothing is built: a half-configured deploy
+   * must stay byte-identical to an unsigned one. The domain defaults to the
+   * From domain because a signature whose `d=` does not align with From buys
+   * nothing under DMARC (`no-dkim`).
+   */
+  private platformDkim(): {
+    domainName: string;
+    keySelector: string;
+    privateKey: string;
+    headerFieldNames: string;
+  } | null {
+    const keySelector = (
+      this.configService.get<string>("EMAIL_DKIM_SELECTOR") || ""
+    ).trim();
+    const privateKey = this.dkimPrivateKey();
+    if (!keySelector || !privateKey) return null;
+
+    const fromAddress =
+      this.configService.get<string>("EMAIL_FROM") ||
+      this.configService.get<string>("EMAIL_USER") ||
+      "";
+    const domainName =
+      (this.configService.get<string>("EMAIL_DKIM_DOMAIN") || "").trim() ||
+      fromAddress.split("@")[1]?.trim() ||
+      "";
+    if (!domainName) return null;
+
+    return {
+      domainName,
+      keySelector,
+      privateKey,
+      headerFieldNames: DKIM_HEADER_FIELD_NAMES,
+    };
+  }
+
+  /**
+   * The PEM, however the deploy shipped it.
+   *
+   * The key is multi-line and the deploy writes .env with echo/printf, so it
+   * travels base64 (EMAIL_DKIM_PRIVATE_KEY_B64) exactly as EMAIL_PASSWORD_B64
+   * already does. A value that does not decode to a PEM is REFUSED rather than
+   * used: every message signed with a broken key is measurably worse than an
+   * unsigned one.
+   */
+  private dkimPrivateKey(): string | null {
+    const b64 = (
+      this.configService.get<string>("EMAIL_DKIM_PRIVATE_KEY_B64") || ""
+    ).trim();
+    const raw = (
+      this.configService.get<string>("EMAIL_DKIM_PRIVATE_KEY") || ""
+    ).trim();
+
+    let candidate = "";
+    if (b64) {
+      candidate = b64.includes("BEGIN")
+        ? b64
+        : Buffer.from(b64, "base64").toString("utf8");
+    } else {
+      candidate = raw;
+    }
+    if (!candidate) return null;
+
+    // A .env round-trip turns real newlines into the two characters \n.
+    candidate = candidate.replace(/\\n/g, "\n").trim();
+    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(candidate)) {
+      this.logger.warn(
+        "EMAIL_DKIM key is not a PEM private key — sending unsigned rather than with a broken signature.",
+      );
+      return null;
+    }
+    return candidate;
+  }
+
+  /**
+   * Exactly one recipient, at the platform transport.
+   *
+   * `info@x.com; satis@x.com` used to go out as one message to two people —
+   * one unsubscribe token covering both — and a CR/LF in the value let the
+   * recipient field write its own headers. Returns false rather than throwing:
+   * every caller here already treats false as handled.
+   *
+   * The breadcrumb matters as much as the refusal. `campaign-sender` writes
+   * `consumeLastPlainSendError()` onto EVERY recipient row, so a bare false
+   * gives the tenant hundreds of blank reasons (`single-recipient-check`).
+   * The value itself is never logged — a log line is a place an attacker would
+   * like their text to appear.
+   */
+  private guardRecipient(to: string, label: string): boolean {
+    if (isSingleAddress(to)) return true;
+    this.lastPlainSendError = NOT_SINGLE_ADDRESS;
+    this.logger.warn(`Refusing ${label}: ${NOT_SINGLE_ADDRESS}`);
+    return false;
+  }
+
+  /**
+   * The one body the three tenant-facing senders share.
+   *
+   * Mock-mode behaviour is deliberately unchanged (`{ ok: true }`, the same
+   * [EMAIL MOCK] lines): `isConfigured()` is how a caller asks whether a
+   * message can really leave the building, and moving that decision in here
+   * would break dev, CI and every inert deploy.
+   */
+  private async deliver(args: {
+    /** Used in the failure log line: "Failed to send <label> to …". */
+    label: string;
+    to: string;
+    subject: string;
+    /** Built only when there is no transporter — a production send should not
+     *  pay to format log lines it will never print. */
+    mockLines: () => string[];
+    /** The body parts — text/html/icalEvent — of the nodemailer payload. */
+    message: Record<string, any>;
+    fromOverride?: EmailFrom;
+    listUnsubscribeUrl?: string;
+    /**
+     * The caller's own Message-ID, bracketed. The outbound gateway mints a
+     * deterministic one, stores it on the ledger row and matches bounces and
+     * Sent-folder copies against it — which only works if it is the id that
+     * actually goes out. Absent, nodemailer mints its own, as it always has.
+     */
+    messageId?: string;
+  }): Promise<MailSendResult> {
+    const { label, to, subject, fromOverride } = args;
+    if (!this.guardRecipient(to, label)) {
+      return { ok: false, error: NOT_SINGLE_ADDRESS };
+    }
+    if (!this.transporter) {
+      for (const line of args.mockLines()) this.logger.log(line);
+      return { ok: true };
+    }
+    const unsubHeaders = listUnsubscribeHeaders(args.listUnsubscribeUrl);
+    try {
+      const info = await withTimeout(
+        this.transporter.sendMail({
+          from: this.fromHeader(fromOverride),
+          to,
+          subject,
+          ...args.message,
+          ...(args.messageId ? { messageId: args.messageId } : {}),
+          ...(fromOverride?.replyTo ? { replyTo: fromOverride.replyTo } : {}),
+          // The tenant key gets the same signed-header list as the platform
+          // one, or the ESP path ships with the identical one-click hole.
+          ...(fromOverride?.dkim
+            ? {
+                dkim: {
+                  headerFieldNames: DKIM_HEADER_FIELD_NAMES,
+                  ...fromOverride.dkim,
+                },
+              }
+            : {}),
+          ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
+        }),
+        25_000,
+        `sendMail to ${maskEmail(to)}`,
+      );
+      return { ok: true, messageId: (info as any)?.messageId ?? null };
+    } catch (error) {
+      this.logger.error(
+        `Failed to send ${label} to ${maskEmail(to)}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      const message = error instanceof Error ? error.message : String(error);
+      // The singleton breadcrumb stays until the last caller has moved to the
+      // *Result names; the reason now also travels with its own send.
+      this.lastPlainSendError = message;
+      const code = (error as any)?.responseCode;
+      return {
+        ok: false,
+        error: message.slice(0, 300),
+        ...(Number.isFinite(code) ? { smtpCode: Number(code) } : {}),
+      };
+    }
+  }
+
+  /**
    * Send email using template
    */
   async sendEmail(options: EmailOptions): Promise<boolean> {
     try {
       const { to, subject, template, context } = options;
+      if (!this.guardRecipient(to, "email")) return false;
 
       // Compile template
       const html = await this.compileTemplate(template, context);
@@ -184,37 +432,39 @@ export class EmailService {
     /** Set for BULK mail only — becomes the RFC 8058 unsubscribe headers. */
     listUnsubscribeUrl?: string,
   ): Promise<boolean> {
-    try {
-      if (!this.transporter) {
-        this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)} (html=${html ? html.length : 0} chars)`);
-        return true;
-      }
-      const unsubHeaders = listUnsubscribeHeaders(listUnsubscribeUrl);
-      await withTimeout(
-        this.transporter.sendMail({
-          from: this.fromHeader(fromOverride),
-          to,
-          subject,
-          text,
-          ...(html ? { html } : {}),
-          ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
-          ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
-        }),
-        25_000,
-        `sendMail to ${maskEmail(to)}`,
-      );
-      return true;
-    } catch (error) {
-      this.logger.error(
-        `Failed to send campaign email to ${maskEmail(to)}`,
-        error instanceof Error ? error.stack : String(error),
-      );
-      // Same breadcrumb as the plain sender: a campaign writes its error onto
-      // EVERY recipient row, so without the reason a broken mailer produces
-      // hundreds of identical, causeless "email send failed" lines.
-      this.lastPlainSendError = error instanceof Error ? error.message : String(error);
-      return false;
-    }
+    const r = await this.sendCampaignEmailResult(
+      to,
+      subject,
+      text,
+      html,
+      fromOverride,
+      listUnsubscribeUrl,
+    );
+    return r.ok;
+  }
+
+  /** `sendCampaignEmail`, with the reason the send failed attached to it. */
+  async sendCampaignEmailResult(
+    to: string,
+    subject: string,
+    text: string,
+    html?: string,
+    fromOverride?: EmailFrom,
+    listUnsubscribeUrl?: string,
+    messageId?: string,
+  ): Promise<MailSendResult> {
+    return this.deliver({
+      label: "campaign email",
+      to,
+      subject,
+      mockLines: () => [
+        `[EMAIL MOCK] To: ${maskEmail(to)} (html=${html ? html.length : 0} chars)`,
+      ],
+      message: { text, ...(html ? { html } : {}) },
+      fromOverride,
+      listUnsubscribeUrl,
+      messageId,
+    });
   }
 
   /**
@@ -245,43 +495,42 @@ export class EmailService {
      *  no client is ever invited to "unsubscribe" from one. */
     listUnsubscribeUrl?: string,
   ): Promise<boolean> {
-    try {
-      if (!this.transporter) {
-        // v2.8.97 — same masking as sendEmail above. Body length is
-        // logged in place of the body so ops can sanity-check "the
-        // message wasn't truncated" without exposing OTP/token text.
-        this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)}`);
-        this.logger.log(`[EMAIL MOCK] Subject: ${subject}`);
-        this.logger.log(`[EMAIL MOCK] Body length: ${body.length} chars`);
-        return true;
-      }
-      const unsubHeaders = listUnsubscribeHeaders(listUnsubscribeUrl);
-      await withTimeout(
-        this.transporter.sendMail({
-          from: this.fromHeader(fromOverride),
-          to,
-          subject,
-          text: body,
-          ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
-          ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
-        }),
-        25_000,
-        `sendMail to ${maskEmail(to)}`,
-      );
-      return true;
-    } catch (error) {
-      this.logger.error(
-        `Failed to send plain email to ${maskEmail(to)}`,
-        error instanceof Error ? error.stack : String(error),
-      );
-      // Keep the reason where a caller can reach it. The boolean says a send
-      // failed; only this says WHY, and the difference between "email is
-      // broken" and "SMTP auth was rejected" is the difference between a guess
-      // and a fix. Overwritten each failure on purpose: this is a breadcrumb
-      // for the caller that just failed, not a log.
-      this.lastPlainSendError = error instanceof Error ? error.message : String(error);
-      return false;
-    }
+    const r = await this.sendPlainEmailResult(
+      to,
+      subject,
+      body,
+      fromOverride,
+      listUnsubscribeUrl,
+    );
+    return r.ok;
+  }
+
+  /** `sendPlainEmail`, with the reason the send failed attached to it. */
+  async sendPlainEmailResult(
+    to: string,
+    subject: string,
+    body: string,
+    fromOverride?: EmailFrom,
+    listUnsubscribeUrl?: string,
+    messageId?: string,
+  ): Promise<MailSendResult> {
+    return this.deliver({
+      label: "plain email",
+      to,
+      subject,
+      // v2.8.97 — same masking as sendEmail above. Body length is logged in
+      // place of the body so ops can sanity-check "the message wasn't
+      // truncated" without exposing OTP/token text.
+      mockLines: () => [
+        `[EMAIL MOCK] To: ${maskEmail(to)}`,
+        `[EMAIL MOCK] Subject: ${subject}`,
+        `[EMAIL MOCK] Body length: ${body.length} chars`,
+      ],
+      message: { text: body },
+      fromOverride,
+      listUnsubscribeUrl,
+      messageId,
+    });
   }
 
   /**
@@ -374,40 +623,49 @@ export class EmailService {
     body: string,
     ics: string,
     fromOverride?: EmailFrom,
+    ical?: IcsOptions,
   ): Promise<boolean> {
-    try {
-      if (!this.transporter) {
-        this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)}`);
-        this.logger.log(`[EMAIL MOCK] Subject: ${subject}`);
-        this.logger.log(
-          `[EMAIL MOCK] Body length: ${body.length} chars, ics: ${ics.length} chars`,
-        );
-        return true;
-      }
-      await withTimeout(
-        this.transporter.sendMail({
-          from: this.fromHeader(fromOverride),
-          to,
-          subject,
-          text: body,
-          icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: ics },
-          ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
-        }),
-        25_000,
-        `sendMail to ${maskEmail(to)}`,
-      );
-      return true;
-    } catch (error) {
-      this.logger.error(
-        `Failed to send ics email to ${maskEmail(to)}`,
-        error instanceof Error ? error.stack : String(error),
-      );
-      // Third and last sender to leave the breadcrumb: the booking-confirmed
-      // mail carries the calendar invite, so its silent loss is the one a
-      // customer notices — they simply never get the appointment.
-      this.lastPlainSendError = error instanceof Error ? error.message : String(error);
-      return false;
-    }
+    const r = await this.sendPlainEmailWithIcsResult(
+      to,
+      subject,
+      body,
+      ics,
+      fromOverride,
+      ical,
+    );
+    return r.ok;
+  }
+
+  /** `sendPlainEmailWithIcs`, with the reason the send failed attached to it. */
+  async sendPlainEmailWithIcsResult(
+    to: string,
+    subject: string,
+    body: string,
+    ics: string,
+    fromOverride?: EmailFrom,
+    ical?: IcsOptions,
+    messageId?: string,
+  ): Promise<MailSendResult> {
+    return this.deliver({
+      label: "ics email",
+      to,
+      subject,
+      mockLines: () => [
+        `[EMAIL MOCK] To: ${maskEmail(to)}`,
+        `[EMAIL MOCK] Subject: ${subject}`,
+        `[EMAIL MOCK] Body length: ${body.length} chars, ics: ${ics.length} chars`,
+      ],
+      message: {
+        text: body,
+        icalEvent: {
+          method: ical?.method ?? "REQUEST",
+          filename: ical?.filename ?? "invite.ics",
+          content: ics,
+        },
+      },
+      fromOverride,
+      messageId,
+    });
   }
 
   /**
