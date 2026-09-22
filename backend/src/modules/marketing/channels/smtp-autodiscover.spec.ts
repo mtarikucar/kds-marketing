@@ -1,4 +1,4 @@
-import { domainOf, suggestFromMxHosts, suggestSmtp, imapForSmtpHost } from './smtp-autodiscover';
+import { domainOf, isFreemailDomain, suggestFromMxHosts, suggestSmtp, imapForSmtpHost } from './smtp-autodiscover';
 
 describe('SMTP autodiscovery — the server is a property of the domain, not the person', () => {
   describe('domainOf', () => {
@@ -117,5 +117,39 @@ describe('imapForSmtpHost', () => {
       host: 'imap.secureserver.net',
       port: 993,
     });
+  });
+});
+
+/**
+ * The exception that keeps a small business's leads. The ingress policy
+ * excludes a sender who shares the mailbox's own domain — right for
+ * `info@firma.com`, catastrophic for a tenant whose mailbox IS a gmail.com
+ * address, where it would exclude every prospect on the internet.
+ */
+describe('isFreemailDomain', () => {
+  it('knows the consumer providers a tenant actually runs their business on', () => {
+    expect(isFreemailDomain('gmail.com')).toBe(true);
+    expect(isFreemailDomain('hotmail.com')).toBe(true);
+    expect(isFreemailDomain('outlook.com')).toBe(true);
+    expect(isFreemailDomain('yandex.com.tr')).toBe(true);
+    expect(isFreemailDomain('mynet.com')).toBe(true);
+  });
+
+  it('takes an ADDRESS as readily as a domain — every caller holds one or the other', () => {
+    expect(isFreemailDomain('Satis@GMail.Com')).toBe(true);
+    expect(isFreemailDomain('  hotmail.com. ')).toBe(true);
+  });
+
+  it('says no to a company domain, and to nonsense', () => {
+    expect(isFreemailDomain('figurunica.com')).toBe(false);
+    expect(isFreemailDomain('notgmail.com')).toBe(false);
+    expect(isFreemailDomain('')).toBe(false);
+    expect(isFreemailDomain(undefined)).toBe(false);
+  });
+
+  it('does not match a subdomain of a freemail host', () => {
+    // `mail.gmail.com.attacker.example` is not Gmail, and neither is a
+    // company that happens to sit under a provider's domain.
+    expect(isFreemailDomain('corp.gmail.com')).toBe(false);
   });
 });

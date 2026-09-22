@@ -4,10 +4,8 @@ import { ImapFlow } from 'imapflow';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { EmailImapPollService } from './email-imap-poll.service';
-import { imapForSmtpHost } from './smtp-autodiscover';
-
-/** Bounded so a mail host that stops answering cannot hold a socket forever. */
-const CONNECT_TIMEOUT_MS = 20_000;
+import { classifyImapError, imapConnectOptions, imapTarget, ImapTarget } from './imap-target';
+import { isMailboxBackedOff, MailboxHealthService } from './mailbox-health.service';
 
 /**
  * Debounce. A mail server can announce several messages in a burst, and each
@@ -54,7 +52,22 @@ const SETTLE_MS = 1_000;
  * for a few seconds is the cheaper mistake.
  *
  * It also holds nothing for a mailbox it cannot recognise: the same
- * `imapForSmtpHost` table the poller uses, with the same refusal to guess.
+ * `imapTarget()` resolver the poller uses, with the same refusal to guess.
+ *
+ * ## A failing login waits; it never gives up
+ *
+ * A password changed at the provider used to mean a login attempt every
+ * minute, forever — about 1,700 a day, which is how an account gets locked at
+ * the provider, SMTP included, with nothing but warn lines to show for it. So
+ * a failed HOLD earns a capped exponential wait (`MailboxHealthService`) and
+ * records what the server said, where the tenant can see it.
+ *
+ * Two things that wait deliberately does NOT do. It does not stop on a
+ * credential error: one transient `AUTHENTICATIONFAILED` would then kill
+ * inbound permanently, and silently missing mail is far worse than log noise.
+ * And it does not count a DROPPED socket — those are routine (see above), and
+ * charging them would back a healthy mailbox off to the ceiling and degrade
+ * the fast path into the five-minute poll for no reason.
  */
 @Injectable()
 export class EmailImapIdleService implements OnModuleDestroy {
@@ -64,12 +77,18 @@ export class EmailImapIdleService implements OnModuleDestroy {
   private readonly held = new Map<string, { client: ImapFlow; workspaceId: string }>();
   /** channelId -> pending debounce timer. */
   private readonly settling = new Map<string, NodeJS.Timeout>();
+  /** Channels whose handshake is in flight. The tick is every minute and a
+   *  dead host takes twenty seconds to answer, so runs DO overlap: without
+   *  this each overlapping run opens another socket for the same mailbox, and
+   *  none of them is in `held` to be let go of. */
+  private readonly connecting = new Set<string>();
   private closing = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly poller: EmailImapPollService,
+    private readonly health: MailboxHealthService,
   ) {}
 
   /**
@@ -91,15 +110,45 @@ export class EmailImapIdleService implements OnModuleDestroy {
     const wanted = new Set<string>();
 
     for (const channel of eligible) {
-      const target = this.imapTarget(channel);
-      if (!target) continue; // unrecognised provider, or a consent-connected mailbox
+      const resolved = imapTarget(this.registry.resolveConfig(channel).secrets);
+      // An unrecognised provider, a half-configured mailbox, or a
+      // consent-connected one with no receive credential sealed beside its
+      // token. A string discriminant, so this actually narrows under this
+      // project's `strictNullChecks: false`.
+      if (resolved.kind !== 'ok') continue;
+      // `wanted` BEFORE the waiting checks: a mailbox we are deliberately not
+      // dialling right now still deserves the socket it already has. A live
+      // connection is proof the mailbox answers, and dropping it because the
+      // poller wrote a backoff would make the fast path worse than the bug.
       wanted.add(channel.id);
-      if (this.held.has(channel.id)) continue;
-      await this.hold(channel.id, channel.workspaceId, target).catch((e) =>
+      if (this.held.has(channel.id) || this.connecting.has(channel.id)) continue;
+      if (isMailboxBackedOff(channel.configPublic)) continue;
+
+      this.connecting.add(channel.id);
+      let holding = false;
+      try {
+        await this.hold(channel.id, channel.workspaceId, resolved.target);
+        holding = true;
+      } catch (e) {
+        const failure = classifyImapError(e);
+        // Recorded where the tenant can read it, not only in a log line nobody
+        // is paged for, and the wait it returns is what stops the storm.
+        await this.health.recordBackoff(
+          { id: channel.id, workspaceId: channel.workspaceId },
+          failure,
+        );
         this.logger.warn(
-          `email-imap-idle: could not hold channel=${channel.id}: ${String(e?.message ?? e).slice(0, 200)}`,
-        ),
-      );
+          `email-imap-idle: could not hold channel=${channel.id} (${failure.reason}): ${failure.error.slice(0, 200)}`,
+        );
+      } finally {
+        this.connecting.delete(channel.id);
+      }
+      // Outside the try on purpose: a health-write that went wrong is not a
+      // mailbox that went wrong, and must never be recorded as one.
+      if (holding) {
+        // The hold worked, so whatever wait the failures before it earned is over.
+        await this.health.recordOk({ id: channel.id, workspaceId: channel.workspaceId }, 'receive');
+      }
     }
 
     // A mailbox that was disabled, unverified or deleted must not keep a socket.
@@ -108,38 +157,11 @@ export class EmailImapIdleService implements OnModuleDestroy {
     }
   }
 
-  /** The host/port/credentials for a channel, or null when it is not ours to hold. */
-  private imapTarget(
-    channel: any,
-  ): { host: string; port: number; user: string; pass: string } | null {
-    const s = (this.registry.resolveConfig(channel).secrets ?? {}) as Record<string, string | undefined>;
-    // Consent-connected mailboxes belong to EmailOAuthRefreshCron, exactly as
-    // in the poller — a second service authenticating with those tokens would
-    // be the only place in this module that reads another's credentials.
-    if (s.oauthProvider) return null;
-    const user = s.smtpUser?.trim();
-    const pass = s.smtpPass;
-    if (!user || !pass) return null;
-    const discovered = imapForSmtpHost(s.smtpHost ?? '');
-    const host = s.imapHost?.trim() || discovered?.host;
-    if (!host) return null;
-    return { host, port: Number(s.imapPort) || discovered?.port || 993, user, pass };
-  }
-
-  private async hold(
-    channelId: string,
-    workspaceId: string,
-    target: { host: string; port: number; user: string; pass: string },
-  ): Promise<void> {
-    const client = new ImapFlow({
-      host: target.host,
-      port: target.port,
-      secure: true,
-      auth: { user: target.user, pass: target.pass },
-      logger: false,
-      greetingTimeout: CONNECT_TIMEOUT_MS,
-      connectionTimeout: CONNECT_TIMEOUT_MS,
-    } as any);
+  private async hold(channelId: string, workspaceId: string, target: ImapTarget): Promise<void> {
+    // No `socketTimeout`: a held connection is SILENT by design — that is what
+    // IDLE is — and bounding the socket would cut off every healthy mailbox
+    // every twenty seconds.
+    const client = new ImapFlow(imapConnectOptions(target) as any);
 
     // Registered BEFORE connect: a socket that dies during the handshake must
     // still drop out of the map, or the reconcile loop will never retry it.
@@ -153,10 +175,18 @@ export class EmailImapIdleService implements OnModuleDestroy {
     // this when the server reports the message count has grown.
     client.on('exists', () => this.onAnnouncement(channelId));
 
-    await client.connect();
-    // READ-ONLY, for the same reason the poller is: a human reads this inbox,
-    // and holding it open must not change what their mail client shows them.
-    await (client as any).mailboxOpen('INBOX', { readOnly: true });
+    try {
+      await client.connect();
+      // READ-ONLY, for the same reason the poller is: a human reads this inbox,
+      // and holding it open must not change what their mail client shows them.
+      await (client as any).mailboxOpen('INBOX', { readOnly: true });
+    } catch (e) {
+      // Connected but INBOX refused is the leak the `close` handler cannot
+      // catch: the socket is alive, nothing holds it, and the next minute
+      // opens another one.
+      await client.logout().catch(() => undefined);
+      throw e;
+    }
     this.held.set(channelId, { client, workspaceId });
     this.logger.log(`email-imap-idle: holding ${target.host} for channel=${channelId}`);
   }

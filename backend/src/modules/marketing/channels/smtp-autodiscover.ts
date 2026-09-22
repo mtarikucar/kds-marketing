@@ -155,3 +155,68 @@ export function imapForSmtpHost(smtpHost: string): { host: string; port: number 
   }
   return null;
 }
+
+/**
+ * Domains where sharing the mailbox's domain proves nothing about the sender.
+ *
+ * The inbound policy excludes senders on the mailbox's OWN domain — a
+ * colleague mailing `info@firma.com` is not a new customer. On a consumer
+ * provider that rule inverts: a tenant running the business from
+ * `info@gmail.com` would have every gmail.com prospect on earth excluded as
+ * "one of us". So the policy asks this first.
+ *
+ * It is an exact-domain list on purpose. `corp.gmail.com` is not Gmail, and a
+ * suffix match here would hand any `*.gmail.com.attacker.example` sender the
+ * exception.
+ */
+const FREEMAIL_DOMAINS: ReadonlySet<string> = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'hotmail.com',
+  'hotmail.co.uk',
+  'hotmail.fr',
+  'hotmail.de',
+  'outlook.com',
+  'outlook.com.tr',
+  'live.com',
+  'live.nl',
+  'msn.com',
+  'windowslive.com',
+  'yahoo.com',
+  'yahoo.co.uk',
+  'yahoo.com.tr',
+  'ymail.com',
+  'rocketmail.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'aol.com',
+  'gmx.com',
+  'gmx.net',
+  'gmx.de',
+  'web.de',
+  'mail.com',
+  'mail.ru',
+  'yandex.com',
+  'yandex.ru',
+  'yandex.com.tr',
+  'protonmail.com',
+  'protonmail.ch',
+  'proton.me',
+  'zoho.com',
+  // Turkish consumer mail, still in daily business use.
+  'mynet.com',
+  'superonline.com',
+  'ttmail.com',
+  'turk.net',
+  'e-kolay.net',
+]);
+
+/** True for a consumer mailbox provider. Takes an address or a bare domain —
+ *  callers hold one or the other and should not have to know which. */
+export function isFreemailDomain(addressOrDomain: string | null | undefined): boolean {
+  const raw = String(addressOrDomain ?? '').trim().toLowerCase().replace(/\.$/, '');
+  if (!raw) return false;
+  const domain = raw.includes('@') ? domainOf(raw) : raw;
+  return !!domain && FREEMAIL_DOMAINS.has(domain);
+}
