@@ -163,4 +163,41 @@ describe('EntitlementsService — fold semantics', () => {
     const e = await svc.getEffective('ws-1');
     expect(Object.keys(e.features).sort()).toEqual([...FEATURE_KEYS].sort());
   });
+
+  /**
+   * `suspension-doesnt-stop` / `no-per-tenant-control`: suspending a workspace
+   * did not stop its outbound mail. The floor itself belongs at the send path
+   * (MessageQuotaService), NOT here — zeroing entitlements on Workspace.status
+   * would also blank the operator console's view of what a suspended workspace
+   * is entitled to, and would silently change every other limit consumer.
+   * What this service contributes is the STATUS, folded into the read the send
+   * path already makes, so the per-recipient loop gains no query.
+   */
+  describe('workspaceStatus — carried, never acted on here', () => {
+    it('reports the workspace status alongside the entitlements it already read', async () => {
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(sub());
+      prisma.workspace.findUnique.mockResolvedValue({ activatedModules: null, status: 'SUSPENDED' });
+      const e = await svc.getEffective('ws-1');
+      expect(e.workspaceStatus).toBe('SUSPENDED');
+      // Entitlements are untouched: the console still shows what the tenant owns.
+      expect(e.dailyLeadQuota).toBe(25);
+      expect(e.features.telephony).toBe(true);
+    });
+
+    it('costs no extra query — the status rides the activation lookup', async () => {
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(sub());
+      await svc.getEffective('ws-1');
+      expect(prisma.workspace.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.workspace.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ select: { activatedModules: true, status: true } }),
+      );
+    });
+
+    it('is null when there is nothing to compute — the zero path never reads the workspace', async () => {
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+      const e = await svc.getEffective('ws-1');
+      expect(e.workspaceStatus).toBeNull();
+      expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
+    });
+  });
 });

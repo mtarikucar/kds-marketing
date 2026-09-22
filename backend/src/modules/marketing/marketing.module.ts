@@ -185,6 +185,10 @@ import { MailTraceService } from './channels/outbound/mail-trace.service';
 import { OutboundMailService } from './channels/outbound/outbound-mail.service';
 import { SuppressionService } from './compliance/suppression.service';
 import { ConsentLedgerService } from './compliance/consent-ledger.service';
+// Email flawless wave 2 — the policy layer over that seam.
+import { MailBudgetService } from './channels/outbound/mail-budget.service';
+import { IYS_EMAIL_PORT } from './compliance/iys-email.port';
+import { IysEmailAdapter } from './compliance/iys-email.adapter';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
 import { OutboundConversationService } from './channels/outbound-conversation.service';
@@ -996,6 +1000,15 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     MailTraceService,
     MailGuardService,
     OutboundMailService,
+    // Email flawless wave 2 — the policy layer. The nine callers now go
+    // through the gateway, so this is what keeps one of them from spending the
+    // whole shared relay: the per-tenant + platform daily budget
+    // (`shared-godaddy-mailbox`, `no-per-tenant-control`) and the İYS `EPOSTA`
+    // verdict the BULK gate asks for. The İYS port is bound by its symbol so
+    // the gate depends on the contract, not on the NetGSM adapter behind it —
+    // and it stays inert until a workspace arms `settings.email.iys.eposta`.
+    MailBudgetService,
+    { provide: IYS_EMAIL_PORT, useClass: IysEmailAdapter },
     ChannelsService,
     ConversationStreamService,
     MessageSenderService,

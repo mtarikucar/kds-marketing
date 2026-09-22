@@ -16,6 +16,12 @@ function escapeLockKey(key: string): string {
  * (WhatsApp/SMS/Instagram/Messenger) costs one message. reserve() BEFORE the
  * adapter.send (throws MESSAGES_EXHAUSTED at the cap); refund() if the send
  * then fails so a customer isn't metered for an undelivered message.
+ *
+ * reserve() also carries the workspace-status floor (see below). Both refusals
+ * are thrown, as they always have been — `MailGuardService` catches
+ * MESSAGES_EXHAUSTED and turns it into a refusal the caller can read (PLAN
+ * G2), and every non-gateway caller already handles a ForbiddenException from
+ * here.
  */
 @Injectable()
 export class MessageQuotaService {
@@ -34,6 +40,31 @@ export class MessageQuotaService {
   async reserve(workspaceId: string, channelType: string, count = 1): Promise<void> {
     if (!this.isMetered(channelType) || count <= 0) return;
     const effective = await this.entitlements.getEffective(workspaceId);
+
+    // The workspace-status floor — the outbound twin of the ingest floor in
+    // `lead-quota.resolver.ts`. Suspending a workspace or expiring its trial
+    // used to stop LOGIN and nothing else, so an abusive tenant kept sending
+    // campaigns and automations from the shared platform relay after the
+    // operator had already switched it off (`suspension-doesnt-stop`).
+    //
+    // Here, and not in `EntitlementsService.compute()`: that read also feeds
+    // seat counts, feature flags and the billing UI, and zeroing it on status
+    // would blank the console's view of a suspended workspace and change every
+    // other limit consumer. This is the narrowest chokepoint every outbound
+    // channel already passes through. The status rides along on the
+    // entitlements object precisely so the per-recipient campaign loop gains
+    // no query of its own (`no-per-tenant-control`).
+    //
+    // `null` means the status was never read (the zero-entitlement paths
+    // return before that lookup), and those already refuse on `limit === 0`.
+    // An unknown status must not start refusing sends that work today.
+    if (effective.workspaceStatus && effective.workspaceStatus !== 'ACTIVE') {
+      throw new ForbiddenException({
+        code: 'WORKSPACE_INACTIVE',
+        message: `Workspace is ${effective.workspaceStatus}, so outbound messages are suspended`,
+      });
+    }
+
     const limit = effective.limits.messagesMonthly;
     const period = monthKey();
 

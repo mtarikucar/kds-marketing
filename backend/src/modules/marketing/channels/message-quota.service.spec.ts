@@ -93,4 +93,58 @@ describe('MessageQuotaService', () => {
   it('meters under the canonical metric name', () => {
     expect(MESSAGES_METRIC).toBe('messages.sent');
   });
+
+  /**
+   * `suspension-doesnt-stop` / `no-per-tenant-control`: suspending a workspace
+   * or expiring its trial stopped LOGIN but not SENDING, so an abusive tenant
+   * kept mailing from the shared platform relay after the operator had already
+   * switched it off. This is the narrowest chokepoint that every outbound
+   * channel already passes through — the outbound twin of the ingest floor in
+   * `lead-quota.resolver.ts`.
+   */
+  describe('the workspace-status floor', () => {
+    const withStatus = (workspaceStatus: string | null, messagesMonthly = 100) =>
+      entitlements.getEffective.mockResolvedValue({ limits: { messagesMonthly }, workspaceStatus });
+
+    it('refuses a SUSPENDED workspace before it spends anything', async () => {
+      withStatus('SUSPENDED');
+      await expect(svc.reserve(WS, 'EMAIL')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(counterValue).toBe(0);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('names WORKSPACE_INACTIVE, so a caller can tell it from a spent plan', async () => {
+      withStatus('CLOSED');
+      await expect(svc.reserve(WS, 'SMS')).rejects.toMatchObject({
+        response: { code: 'WORKSPACE_INACTIVE' },
+      });
+    });
+
+    it('an ACTIVE workspace behaves exactly as before', async () => {
+      withStatus('ACTIVE');
+      await svc.reserve(WS, 'WHATSAPP');
+      expect(counterValue).toBe(1);
+    });
+
+    it('an unknown status changes nothing — the floor refuses only what it can prove', async () => {
+      // The zero-entitlement paths never read the workspace row, and a plan
+      // with no messages already refuses on its own (limit 0). A missing
+      // status must not start refusing sends that work today.
+      withStatus(null);
+      await svc.reserve(WS, 'WHATSAPP');
+      expect(counterValue).toBe(1);
+    });
+
+    it('reads the status from the entitlements call it already makes, not a second query', async () => {
+      withStatus('ACTIVE');
+      await svc.reserve(WS, 'EMAIL');
+      expect(entitlements.getEffective).toHaveBeenCalledTimes(1);
+    });
+
+    it('still never touches web-chat: free is free, suspended or not', async () => {
+      withStatus('SUSPENDED');
+      await svc.reserve(WS, 'WEBCHAT');
+      expect(entitlements.getEffective).not.toHaveBeenCalled();
+    });
+  });
 });

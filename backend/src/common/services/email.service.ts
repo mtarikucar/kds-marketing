@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import * as nodemailer from "nodemailer";
 import { Transporter } from "nodemailer";
@@ -82,8 +82,27 @@ export interface MailSendResult {
 }
 
 @Injectable()
-export class EmailService {
+export class EmailService implements OnModuleDestroy {
   private transporter: Transporter;
+  /**
+   * The SECOND transport: pooled, rate-limited, and carrying bulk only.
+   *
+   * `shared-godaddy-mailbox` — one un-pooled transporter carried a campaign
+   * blast, a password reset and an invoice down the same connection, opening a
+   * fresh TCP + TLS + AUTH handshake per recipient, with no throttle of any
+   * kind (nodemailer's rate limiting only EXISTS on a pooled transport). The
+   * fix is NOT to pool the shared one: that would queue a password-reset OTP
+   * behind five thousand campaign messages. It is a separate pool that bulk
+   * uses and nothing else does.
+   *
+   * Opened lazily on the first bulk send, so an app that never sends a
+   * campaign — and every test that does not — builds exactly one transport,
+   * as before.
+   */
+  private bulkTransporter: Transporter | null = null;
+  /** What the shared transport was built from, so the bulk pool is the SAME
+   *  identity — same host, credentials, TLS and DKIM, different connection. */
+  private baseTransportOptions: Record<string, any> | null = null;
   /** Reason the last plain/campaign send threw — see consumeLastPlainSendError. */
   private lastPlainSendError: string | null = null;
   private readonly logger = new Logger(EmailService.name);
@@ -133,7 +152,7 @@ export class EmailService {
 
     const dkim = this.platformDkim();
 
-    this.transporter = nodemailer.createTransport({
+    this.baseTransportOptions = {
       host,
       port,
       secure,
@@ -151,7 +170,8 @@ export class EmailService {
       // override. A per-message tenant key still wins over this one
       // (nodemailer/lib/mailer/index.js:208), which is what alignment needs.
       ...(dkim ? { dkim } : {}),
-    });
+    };
+    this.transporter = nodemailer.createTransport(this.baseTransportOptions);
 
     // Verify connection
     this.transporter.verify((error) => {
@@ -161,6 +181,65 @@ export class EmailService {
         this.logger.log("Email transporter is ready to send emails");
       }
     });
+  }
+
+  /**
+   * The bulk pool, built on first use — or the shared transport when pooling
+   * is switched off.
+   *
+   * Pooling is what makes a throttle possible at all: nodemailer applies
+   * `rateLimit`/`rateDelta` only on a pooled transport.
+   *
+   * 60 messages a minute is chosen to sit just ABOVE one campaign's own
+   * cadence (`campaign-sender.service.ts` sends 50 per 60s tick), so a single
+   * campaign is never slowed by it — and to BIND when several campaigns, or
+   * several tenants, overlap, which is the case that trips the shared relay.
+   * Two connections, and a fresh one every 100 messages so a long campaign
+   * cannot sit on a socket the relay wants back. An operator whose relay
+   * allows less narrows them; `EMAIL_BULK_POOL=false` puts every send back on
+   * the single shared transport, byte-identically to before.
+   */
+  private bulkTransport(): Transporter {
+    if (this.bulkTransporter) return this.bulkTransporter;
+    if (!this.baseTransportOptions) return this.transporter;
+    if (String(this.configService.get("EMAIL_BULK_POOL") ?? "true").toLowerCase() === "false") {
+      return this.transporter;
+    }
+
+    this.bulkTransporter = nodemailer.createTransport({
+      ...this.baseTransportOptions,
+      pool: true,
+      maxConnections: this.positive("EMAIL_BULK_MAX_CONNECTIONS", 2),
+      maxMessages: this.positive("EMAIL_BULK_MAX_MESSAGES", 100),
+      // The window nodemailer measures `rateLimit` over. A minute, so the knob
+      // reads as "messages per minute" rather than as a nodemailer internal.
+      rateDelta: 60_000,
+      rateLimit: this.positive("EMAIL_BULK_RATE_PER_MINUTE", 60),
+    });
+    this.logger.log("Bulk email transport (pooled) opened");
+    return this.bulkTransporter;
+  }
+
+  /** A positive integer from the env, or the default. Junk is never a cap. */
+  private positive(key: string, fallback: number): number {
+    const n = Number(this.configService.get(key));
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  }
+
+  /**
+   * Shutdown closes the pool. An un-closed pooled transport holds its sockets
+   * open, which keeps the process alive past `app.close()`.
+   */
+  async onModuleDestroy(): Promise<void> {
+    const pool = this.bulkTransporter;
+    this.bulkTransporter = null;
+    try {
+      (pool as any)?.close?.();
+    } catch (e) {
+      this.logger.warn(
+        `Closing the bulk email transport failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**
@@ -297,9 +376,21 @@ export class EmailService {
       return { ok: true };
     }
     const unsubHeaders = listUnsubscribeHeaders(args.listUnsubscribeUrl);
+    // Which of the two transports carries this one.
+    //
+    // An unsubscribe URL at the platform transport means BULK, exactly: the
+    // gate matrix makes `List-Unsubscribe` REQUIRED for BULK and forbidden for
+    // every other class, and `MailGuardService` fails a BULK mail closed
+    // without one. So this routes campaigns onto the pool and leaves invoices,
+    // booking confirmations and password resets on the shared transport, where
+    // they are never behind a blast — including the HTML invoices that share
+    // `sendCampaignEmailResult` with campaigns.
+    const transporter = args.listUnsubscribeUrl
+      ? this.bulkTransport()
+      : this.transporter;
     try {
       const info = await withTimeout(
-        this.transporter.sendMail({
+        transporter.sendMail({
           from: this.fromHeader(fromOverride),
           to,
           subject,

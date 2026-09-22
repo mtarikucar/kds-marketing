@@ -106,6 +106,108 @@ describe('WorkspacesAdminService.updateStatus — suspension takes effect immedi
     await svc.updateStatus('ws-1', 'ACTIVE');
     expect(prisma.marketingUser.updateMany).not.toHaveBeenCalled();
   });
+
+  /**
+   * `suspension-doesnt-stop`: the send-path floor reads the workspace status
+   * through the 30s entitlement cache, so without an explicit invalidate a
+   * suspension took up to half a minute to bite — and, worse, a REACTIVATION
+   * took up to half a minute to release. Both directions, or the operator
+   * presses the button and watches nothing happen.
+   */
+  it('invalidates the entitlement cache on suspend AND on reactivation', async () => {
+    const { prisma, entitlements, svc } = makeSvc();
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', slug: 's', name: 'W', status: 'SUSPENDED' });
+    await svc.updateStatus('ws-1', 'SUSPENDED');
+    expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+
+    entitlements.invalidate.mockClear();
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', slug: 's', name: 'W', status: 'ACTIVE' });
+    await svc.updateStatus('ws-1', 'ACTIVE');
+    expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('does not invalidate anything for a workspace that does not exist', async () => {
+    const { prisma, entitlements, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    await expect(svc.updateStatus('nope', 'SUSPENDED')).rejects.toBeInstanceOf(NotFoundException);
+    expect(entitlements.invalidate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `no-per-tenant-control`: when the shared relay throttles, the operator needs
+ * a lever narrower than suspending the whole workspace — stop the mail, leave
+ * the product working. `settings.email.paused` is that lever; the gate
+ * (MailGuardService) and the campaign sender already read it, and this is
+ * where it is written.
+ */
+describe('WorkspacesAdminService.setEmailSendingPaused — the narrow lever', () => {
+  it('pauses email without touching anything else in settings', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      settings: { replyTo: 'a@b.test', email: { iys: { eposta: true } } },
+    });
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', settings: {} });
+
+    await svc.setEmailSendingPaused('ws-1', true);
+
+    expect(prisma.workspace.update).toHaveBeenCalledWith({
+      where: { id: 'ws-1' },
+      data: { settings: { replyTo: 'a@b.test', email: { iys: { eposta: true }, paused: true } } },
+      select: { id: true, settings: true },
+    });
+  });
+
+  it('resuming REMOVES the flag rather than writing false, so an untouched tenant looks untouched', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      settings: { replyTo: 'a@b.test', email: { paused: true } },
+    });
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', settings: {} });
+
+    await svc.setEmailSendingPaused('ws-1', false);
+
+    // The now-empty `email` block goes too, and nothing else is disturbed.
+    expect(prisma.workspace.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { settings: { replyTo: 'a@b.test' } } }),
+    );
+  });
+
+  it('resuming keeps the rest of the email block — only the flag is removed', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      settings: { email: { paused: true, iys: { eposta: true } } },
+    });
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', settings: {} });
+
+    await svc.setEmailSendingPaused('ws-1', false);
+
+    expect(prisma.workspace.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { settings: { email: { iys: { eposta: true } } } } }),
+    );
+  });
+
+  it('starts from nothing when the workspace has no settings at all', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'ws-1', settings: null });
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', settings: {} });
+
+    await svc.setEmailSendingPaused('ws-1', true);
+
+    expect(prisma.workspace.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { settings: { email: { paused: true } } } }),
+    );
+  });
+
+  it('refuses an unknown workspace', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue(null);
+    await expect(svc.setEmailSendingPaused('nope', true)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('WorkspacesAdminService.findOne — current subscription', () => {

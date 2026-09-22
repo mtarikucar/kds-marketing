@@ -134,6 +134,20 @@ export interface EffectiveEntitlements {
   workspaceId: string;
   packageCode: string | null;
   subscriptionStatus: string | null;
+  /**
+   * `Workspace.status` — carried, never acted on here.
+   *
+   * The outbound floor (`MessageQuotaService.reserve`) has to know whether the
+   * workspace is suspended, and it runs once PER RECIPIENT in the campaign
+   * loop — a `findUnique` of its own would be a query per recipient. So the
+   * status rides along on this read, which is already made and already cached
+   * for 30s. It is deliberately NOT folded into the entitlements themselves:
+   * zeroing them on status would blank the operator console's view of what a
+   * suspended workspace owns and would silently change every other limit
+   * consumer (AI credits, lead ingest, seats). Keep the blast radius at the
+   * send path. `null` = not read (the zero paths return before the lookup).
+   */
+  workspaceStatus: string | null;
   dailyLeadQuota: number; // -1 = unlimited
   maxUsers: number;
   maxResearchProfiles: number;
@@ -156,6 +170,7 @@ function zeroEntitlements(workspaceId: string, status: string | null): Effective
     workspaceId,
     packageCode: null,
     subscriptionStatus: status,
+    workspaceStatus: null,
     dailyLeadQuota: 0,
     maxUsers: 1,
     maxResearchProfiles: 0,
@@ -303,7 +318,7 @@ export class EntitlementsService {
     // the SPA nav, since both read this one features map.
     const workspace = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { activatedModules: true },
+      select: { activatedModules: true, status: true },
     });
     const activated = Array.isArray(workspace?.activatedModules)
       ? (workspace!.activatedModules as unknown[]).filter(
@@ -320,6 +335,7 @@ export class EntitlementsService {
       workspaceId,
       packageCode: pkg.code,
       subscriptionStatus: sub.status,
+      workspaceStatus: workspace?.status ?? null,
       dailyLeadQuota,
       maxUsers,
       maxResearchProfiles,

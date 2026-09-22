@@ -150,7 +150,60 @@ export class WorkspacesAdminService {
       });
     }
 
+    // The outbound floor (MessageQuotaService.reserve) reads the status
+    // through the 30s entitlement cache, so without this a suspension takes up
+    // to half a minute to stop the tenant's mail — and a REACTIVATION takes up
+    // to half a minute to release it, which is the operator pressing a button
+    // and watching nothing happen. Both directions, on purpose
+    // (`suspension-doesnt-stop`).
+    this.entitlements.invalidate(id);
+
     return updated;
+  }
+
+  /**
+   * Stop (or resume) this tenant's outbound mail without suspending the whole
+   * workspace.
+   *
+   * When the shared relay throttles, suspending the tenant is a sledgehammer:
+   * it revokes every login too. `settings.email.paused` is the narrow lever —
+   * the console keeps working, the mail stops. The gate
+   * (`MailGuardService`) and the campaign sender both already read this flag;
+   * this is the only thing that writes it (`no-per-tenant-control`).
+   *
+   * Resuming DELETES the key rather than writing `false`, so a workspace that
+   * was paused once and released is indistinguishable from one that was never
+   * touched — nothing has to know that `false` and absent mean the same thing.
+   */
+  async setEmailSendingPaused(id: string, paused: boolean) {
+    const existing = await this.prisma.workspace.findUnique({
+      where: { id },
+      select: { id: true, settings: true },
+    });
+    if (!existing) throw new NotFoundException('Workspace not found');
+
+    // Spread-first merge: an operator toggling mail must not drop the İYS
+    // credentials, the reply-to or anything else a tenant has set.
+    const settings =
+      existing.settings && typeof existing.settings === 'object' && !Array.isArray(existing.settings)
+        ? { ...(existing.settings as Record<string, unknown>) }
+        : {};
+    const email =
+      settings.email && typeof settings.email === 'object' && !Array.isArray(settings.email)
+        ? { ...(settings.email as Record<string, unknown>) }
+        : {};
+    if (paused) email.paused = true;
+    else delete email.paused;
+    // An `email` block that now holds nothing goes away with the flag, so a
+    // released workspace's settings look exactly like an untouched one's.
+    if (Object.keys(email).length) settings.email = email;
+    else delete settings.email;
+
+    return this.prisma.workspace.update({
+      where: { id },
+      data: { settings: settings as Prisma.InputJsonValue },
+      select: { id: true, settings: true },
+    });
   }
 
   /**
