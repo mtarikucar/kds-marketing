@@ -3,11 +3,10 @@ import { MessageSenderService } from './message-sender.service';
 
 /**
  * Outbound 1:1 send pipeline. The reserved message quota must never leak: a send
- * that fails is refunded, and — critically — a SUCCESSFUL provider send whose
- * persistence then fails must also refund (otherwise the customer is metered for
- * a message that vanished, and a caller retry compounds the leak). The message
- * row + its domain event are written in one transaction so a crash can't lose
- * the event.
+ * that fails is refunded, and a mail that actually reached the customer is NOT
+ * (the record of it now survives a bookkeeping failure, so refunding it would
+ * hand back quota for a message the customer is holding). The message row + its
+ * domain event are written in one transaction so a crash can't lose the event.
  */
 describe('MessageSenderService.send', () => {
   let prisma: any;
@@ -16,6 +15,7 @@ describe('MessageSenderService.send', () => {
   let outbox: any;
   let stream: any;
   let conversationSpend: any;
+  let suppression: any;
   let adapter: any;
   let tx: any;
   let service: MessageSenderService;
@@ -28,13 +28,17 @@ describe('MessageSenderService.send', () => {
   beforeEach(() => {
     adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'bulk-1', status: 'SENT' }) };
     tx = {
-      message: { create: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+      message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
       conversation: { update: jest.fn().mockResolvedValue({}) },
     };
     prisma = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
       channel: { findFirst: jest.fn().mockResolvedValue(channel) },
       contactIdentity: { findFirst: jest.fn().mockResolvedValue(identity) },
+      message: {
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn(async (cb: any) => cb(tx)),
     };
     registry = {
@@ -45,19 +49,31 @@ describe('MessageSenderService.send', () => {
     outbox = { append: jest.fn().mockResolvedValue('evt-1') };
     stream = { push: jest.fn() };
     conversationSpend = { settleSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
-    service = new MessageSenderService(prisma, registry, quota, outbox, stream, conversationSpend);
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    service = new MessageSenderService(
+      prisma,
+      registry,
+      quota,
+      outbox,
+      stream,
+      conversationSpend,
+      suppression,
+    );
   });
 
   // Let any fire-and-forget settleSms promise (and its .catch handler) drain
   // before assertions run — `send()` does not await it.
   const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-  it('reserves, sends, persists message + outbox event in one tx, and does not refund', async () => {
+  it('reserves, sends, settles message + outbox event in one tx, and does not refund', async () => {
     const msg = await service.send(input);
     expect(quota.reserve).toHaveBeenCalledWith('w1', 'SMS');
     expect(adapter.send).toHaveBeenCalledWith({ config: { secrets: {} }, to: '+905551112233', text: 'hi' });
-    expect(tx.message.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'SENT', externalMessageId: 'bulk-1' }) }),
+    expect(tx.message.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'm1' },
+        data: expect.objectContaining({ status: 'SENT', externalMessageId: 'bulk-1' }),
+      }),
     );
     expect(outbox.append).toHaveBeenCalledWith(
       expect.objectContaining({ idempotencyKey: 'conv-msg-sent:m1' }),
@@ -69,27 +85,29 @@ describe('MessageSenderService.send', () => {
 
   it('refunds exactly once and still persists a FAILED send', async () => {
     adapter.send.mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: 'NetGSM 30' });
-    tx.message.create.mockResolvedValue({ id: 'm2', status: 'FAILED' });
+    tx.message.update.mockResolvedValue({ id: 'm2', status: 'FAILED' });
     const msg = await service.send(input);
     expect(quota.refund).toHaveBeenCalledTimes(1);
     expect(quota.refund).toHaveBeenCalledWith('w1', 'SMS');
-    expect(tx.message.create).toHaveBeenCalledWith(
+    expect(tx.message.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
     );
     expect(msg).toEqual({ id: 'm2', status: 'FAILED' });
-  });
-
-  it('[P0] refunds the reserved quota when persistence fails after a successful send', async () => {
-    prisma.$transaction.mockRejectedValue(new Error('DB write failed'));
-    await expect(service.send(input)).rejects.toThrow('DB write failed');
-    expect(quota.refund).toHaveBeenCalledTimes(1);
-    expect(quota.refund).toHaveBeenCalledWith('w1', 'SMS');
   });
 
   it('[P0] does not double-refund when persistence fails after an already-refunded FAILED send', async () => {
     adapter.send.mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: 'x' });
     prisma.$transaction.mockRejectedValue(new Error('DB write failed'));
     await expect(service.send(input)).rejects.toThrow('DB write failed');
+    expect(quota.refund).toHaveBeenCalledTimes(1);
+  });
+
+  it('[P0] refunds the reserve when the record of the send cannot even be opened', async () => {
+    // Nothing was sent, so the reserve has to come back — the old code could
+    // only reach this state after the provider call, where it already did.
+    prisma.message.create.mockRejectedValue(new Error('DB write failed'));
+    await expect(service.send(input)).rejects.toThrow('DB write failed');
+    expect(adapter.send).not.toHaveBeenCalled();
     expect(quota.refund).toHaveBeenCalledTimes(1);
   });
 
@@ -130,7 +148,7 @@ describe('MessageSenderService.send', () => {
 
     it('does not settle a FAILED send', async () => {
       adapter.send.mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: 'NetGSM 30' });
-      tx.message.create.mockResolvedValue({ id: 'm2', status: 'FAILED' });
+      tx.message.update.mockResolvedValue({ id: 'm2', status: 'FAILED' });
       await service.send(input);
       expect(conversationSpend.settleSms).not.toHaveBeenCalled();
     });
@@ -149,6 +167,104 @@ describe('MessageSenderService.send', () => {
       await flush();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('SMS settlement failed'));
     });
+  });
+});
+
+/**
+ * The record of the send is opened BEFORE the provider is called.
+ *
+ * `adapter.send` used to run before any durable write, so a bookkeeping failure
+ * in the gap left a mail that had reached the customer with nothing on file at
+ * all — and the AI retry, seeing no message, generated and sent a SECOND,
+ * different one (`pending-row`). The row is now created PENDING first and
+ * settled afterwards, so the worst case is a row that says "we do not know how
+ * this ended" rather than a mail nobody can account for.
+ */
+describe('MessageSenderService.send — the row before the send', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
+  const input = { workspaceId: 'w1', conversationId: 'c1', text: 'hi', authorType: 'AI' as const };
+
+  const build = () => {
+    const order: string[] = [];
+    const adapter = {
+      send: jest.fn(async () => {
+        order.push('provider');
+        return { externalMessageId: 'x', status: 'SENT' };
+      }),
+    };
+    const created: any[] = [];
+    const tx = {
+      message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1', workspaceId: 'w1', type: 'SMS', status: 'ACTIVE', configSealed: 'x',
+        }),
+      },
+      contactIdentity: { findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: '+90555' }) },
+      message: {
+        create: jest.fn(async (args: any) => {
+          order.push('row');
+          created.push(args.data);
+          return { id: 'm1', status: 'PENDING' };
+        }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+    const quota = { reserve: jest.fn(), refund: jest.fn() };
+    const svc = new MessageSenderService(
+      prisma,
+      { get: () => adapter, resolveConfig: () => ({ secrets: {} }) } as any,
+      quota as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue(null) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
+    );
+    return { svc, prisma, quota, adapter, tx, created, order };
+  };
+
+  it('writes the PENDING row before the provider call', async () => {
+    const { svc, created, order } = build();
+    await svc.send(input);
+    expect(order).toEqual(['row', 'provider']);
+    expect(created[0]).toEqual(
+      expect.objectContaining({ status: 'PENDING', externalMessageId: null, direction: 'OUTBOUND' }),
+    );
+  });
+
+  it('settles that same row instead of writing a second one', async () => {
+    const { svc, prisma, tx } = build();
+    await svc.send(input);
+    expect(prisma.message.create).toHaveBeenCalledTimes(1);
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { status: 'SENT', externalMessageId: 'x', error: null },
+    });
+  });
+
+  it('[P0] a provider success with a DB failure leaves the row, not a lost send', async () => {
+    const { svc, prisma } = build();
+    prisma.$transaction.mockRejectedValue(new Error('Timed out fetching a connection'));
+    await expect(svc.send(input)).rejects.toThrow('Timed out fetching a connection');
+    // The mail went out and there IS a row for it — PENDING, which is the
+    // honest answer, and the one a retry can recognise.
+    expect(prisma.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'PENDING' }) }),
+    );
+  });
+
+  it('[P0] does not refund quota for a mail that reached the customer', async () => {
+    // The old code refunded here because the send was otherwise unrecorded.
+    // Now the row survives, so the message is real and it is metered.
+    const { svc, prisma, quota } = build();
+    prisma.$transaction.mockRejectedValue(new Error('DB write failed'));
+    await expect(svc.send(input)).rejects.toThrow('DB write failed');
+    expect(quota.refund).not.toHaveBeenCalled();
   });
 });
 
@@ -179,8 +295,12 @@ describe('MessageSenderService.send — channel status', () => {
         }),
       },
       contactIdentity: { findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: '+905551112233' }) },
+      message: {
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn(async (cb: any) => cb({
-        message: { create: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+        message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
         conversation: { update: jest.fn().mockResolvedValue({}) },
       })),
     };
@@ -191,8 +311,9 @@ describe('MessageSenderService.send — channel status', () => {
       { append: jest.fn().mockResolvedValue('e') } as any,
       { push: jest.fn() } as any,
       { settleSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
     );
-    return { svc, adapter, quota };
+    return { svc, adapter, quota, prisma };
   };
 
   it('refuses to send on a DISABLED channel', async () => {
@@ -205,6 +326,12 @@ describe('MessageSenderService.send — channel status', () => {
     const { svc, quota } = build('DISABLED');
     await expect(svc.send(input)).rejects.toThrow(BadRequestException);
     expect(quota.reserve).not.toHaveBeenCalled();
+  });
+
+  it('refuses before writing any row for it', async () => {
+    const { svc, prisma } = build('DISABLED');
+    await expect(svc.send(input)).rejects.toThrow(BadRequestException);
+    expect(prisma.message.create).not.toHaveBeenCalled();
   });
 
   it('sends normally on an ACTIVE channel', async () => {
@@ -244,14 +371,16 @@ describe('MessageSenderService.send — template body', () => {
         }),
       },
       contactIdentity: { findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: '+905551112233' }) },
+      message: {
+        create: jest.fn(async (args: any) => {
+          created.push(args.data);
+          return { id: 'm1', status: 'PENDING' };
+        }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn(async (cb: any) =>
         cb({
-          message: {
-            create: jest.fn(async (args: any) => {
-              created.push(args.data);
-              return { id: 'm1', status: 'SENT' };
-            }),
-          },
+          message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
           conversation: { update: jest.fn() },
         }),
       ),
@@ -266,6 +395,7 @@ describe('MessageSenderService.send — template body', () => {
       { append: jest.fn().mockResolvedValue('e') } as any,
       { push: jest.fn() } as any,
       { settleSms: jest.fn().mockResolvedValue({ amount: 0, quantity: 0, unitCost: 0 }) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
     );
     return { svc, created };
   };
@@ -312,6 +442,9 @@ describe('MessageSenderService.send — template body', () => {
  * last-resort fallback — because nothing on this path ever passed a subject. To
  * the recipient that is a new thread with an English placeholder on it, which
  * is not the thread the conversation view claims to be continuing.
+ *
+ * The subject is one half of the reply context; the threading headers below are
+ * the other, and both are read off the SAME last inbound row.
  */
 describe('MessageSenderService.send — the subject of an email reply', () => {
   const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
@@ -326,10 +459,13 @@ describe('MessageSenderService.send — the subject of an email reply', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }),
       },
       contactIdentity: { findFirst: jest.fn().mockResolvedValue(identity) },
-      message: { findFirst: jest.fn().mockResolvedValue(lastInbound) },
+      message: {
+        findFirst: jest.fn().mockResolvedValue(lastInbound),
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+      },
       $transaction: jest.fn(async (cb: any) =>
         cb({
-          message: { create: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+          message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
           conversation: { update: jest.fn().mockResolvedValue({}) },
         }),
       ),
@@ -341,6 +477,7 @@ describe('MessageSenderService.send — the subject of an email reply', () => {
       { append: jest.fn().mockResolvedValue('e') } as any,
       { push: jest.fn() } as any,
       { settleSms: jest.fn().mockResolvedValue(null) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
     );
     return { service, prisma, adapter };
   }
@@ -361,12 +498,52 @@ describe('MessageSenderService.send — the subject of an email reply', () => {
     expect(adapter.send.mock.calls[0][0].subject).toBe('RE: Teklif');
   });
 
+  it('reads the capitalised Subject the Postmark payload carries', async () => {
+    // `meta.raw` is the provider body VERBATIM, so the key spelling is the
+    // provider's. Only the lowercase one was read, so every Postmark-delivered
+    // thread fell back to "Re: your message" (`reply-subject-prefix`).
+    const { service, adapter } = build('EMAIL', {
+      meta: { raw: { Subject: 'Fiyat listesi hakkında', From: 'x@y.com', TextBody: 'merhaba' } },
+    });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].subject).toBe('Re: Fiyat listesi hakkında');
+  });
+
+  it.each([
+    ['YNT: Teklif'],
+    ['AW: Angebot'],
+    ['Yanıt: Teklif'],
+    ['SV: Tilbud'],
+    ['Re[2]: Teklif'],
+  ])('detects %s as an existing reply prefix and leaves it alone', async (subject) => {
+    // DETECT, never rewrite: with no In-Reply-To on the older mail in the
+    // thread, the subject is the only handle the recipient's client has, and
+    // turning "YNT:" into "Re:" would mutate the customer's own subject.
+    const { service, adapter } = build('EMAIL', { meta: { raw: { subject } } });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].subject).toBe(subject);
+  });
+
   it('leaves the adapter fallback alone when there is nothing to reply to', async () => {
     // An outbound thread the customer has not answered yet. Inventing a subject
     // here would put this service in the business of writing copy.
     const { service, adapter } = build('EMAIL', null);
     await service.send(input);
     expect(adapter.send.mock.calls[0][0].subject).toBeUndefined();
+  });
+
+  it('uses a caller-supplied subject only when the thread has none', async () => {
+    const { service, adapter } = build('EMAIL', null);
+    await service.send({ ...input, subject: 'Teklifiniz hazır' });
+    expect(adapter.send.mock.calls[0][0].subject).toBe('Teklifiniz hazır');
+  });
+
+  it('prefers the thread over a caller-supplied subject', async () => {
+    // The thread the customer opened is the thread we are in. A caller's own
+    // subject would start a second one in their mail client.
+    const { service, adapter } = build('EMAIL', { meta: { raw: { subject: 'Fiyat' } } });
+    await service.send({ ...input, subject: 'Teklifiniz hazır' });
+    expect(adapter.send.mock.calls[0][0].subject).toBe('Re: Fiyat');
   });
 
   it('reads the LATEST inbound message, scoped to the workspace', async () => {
@@ -385,5 +562,241 @@ describe('MessageSenderService.send — the subject of an email reply', () => {
     await service.send(input);
     expect(prisma.message.findFirst).not.toHaveBeenCalled();
     expect(adapter.send.mock.calls[0][0].subject).toBeUndefined();
+  });
+});
+
+/**
+ * A reply has to land IN the thread it answers.
+ *
+ * Nothing in this codebase has ever set `In-Reply-To` or `References`
+ * (`no-threading-headers`), so every AI answer arrived in the customer's client
+ * as a brand-new message that merely happened to quote theirs — and a subject
+ * beginning "Re:" with no In-Reply-To is exactly what rspamd scores as
+ * FAKE_REPLY. Both headers come off the same inbound row the subject does.
+ */
+describe('MessageSenderService.send — threading headers', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', contactIdentityId: 'ci1' };
+  const input = { workspaceId: 'w1', conversationId: 'c1', text: 'merhaba', authorType: 'AI' as const };
+
+  function build(lastInbound: any, type = 'EMAIL') {
+    const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'm', status: 'SENT' }) };
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }) },
+      contactIdentity: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: 'tarik@example.com' }),
+      },
+      message: {
+        findFirst: jest.fn().mockResolvedValue(lastInbound),
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+      },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({
+          message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+          conversation: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      ),
+    };
+    const service = new MessageSenderService(
+      prisma,
+      { get: () => adapter, resolveConfig: () => ({ secrets: {} }) } as any,
+      { reserve: jest.fn(), refund: jest.fn() } as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue(null) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
+    );
+    return { service, adapter };
+  }
+
+  it('answers the message it is replying to', async () => {
+    const { service, adapter } = build({
+      externalMessageId: 'CAF1@mail.example.com',
+      meta: { raw: { subject: 'Teklif' } },
+    });
+    await service.send(input);
+    const sent = adapter.send.mock.calls[0][0];
+    expect(sent.inReplyTo).toBe('CAF1@mail.example.com');
+    expect(sent.references).toEqual(['CAF1@mail.example.com']);
+  });
+
+  it("carries the thread's own References, with the parent last", async () => {
+    // RFC 5322 §3.6.4: a reply's References is the parent's References plus the
+    // parent's own Message-ID. That chain is what a client walks to file the
+    // mail under the conversation the customer already has open.
+    const { service, adapter } = build({
+      externalMessageId: 'c@x.test',
+      meta: { raw: { subject: 'Teklif', references: '<a@x.test> <b@x.test>' } },
+    });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].references).toEqual(['a@x.test', 'b@x.test', 'c@x.test']);
+  });
+
+  it('reads the provider spelling of the id when the column is empty', async () => {
+    // The webhook path stores the provider body verbatim; older rows predate
+    // the externalMessageId column being filled in on this path.
+    const { service, adapter } = build({
+      externalMessageId: null,
+      meta: { raw: { Subject: 'Teklif', MessageID: '<pm-99@example.net>' } },
+    });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].inReplyTo).toBe('pm-99@example.net');
+  });
+
+  it('normalizes the stored id — one spelling on both sides of the lookup', async () => {
+    // Inbound ids are persisted stripped and outbound ones with brackets; a
+    // header built from the raw value would never match either.
+    const { service, adapter } = build({
+      externalMessageId: '  <CAF1@MAIL.Example.COM>  ',
+      meta: { raw: { subject: 'Teklif' } },
+    });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].inReplyTo).toBe('CAF1@mail.example.com');
+  });
+
+  it('sends no threading headers when there is nothing to reply to', async () => {
+    const { service, adapter } = build(null);
+    await service.send(input);
+    const sent = adapter.send.mock.calls[0][0];
+    expect(sent.inReplyTo).toBeUndefined();
+    expect(sent.references).toBeUndefined();
+  });
+
+  it('sends no threading headers when the inbound mail carried no id', async () => {
+    const { service, adapter } = build({ externalMessageId: null, meta: { raw: { subject: 'Teklif' } } });
+    await service.send(input);
+    expect(adapter.send.mock.calls[0][0].inReplyTo).toBeUndefined();
+  });
+
+  it('keeps the chain inside a header a receiver will accept', async () => {
+    const long = Array.from({ length: 40 }, (_, i) => `<r${i}@x.test>`).join(' ');
+    const { service, adapter } = build({
+      externalMessageId: 'last@x.test',
+      meta: { raw: { subject: 'Teklif', References: long } },
+    });
+    await service.send(input);
+    const refs = adapter.send.mock.calls[0][0].references;
+    expect(refs).toHaveLength(20);
+    // The root anchors the thread and the recent ids are what clients match on,
+    // so the middle is what gets dropped.
+    expect(refs[0]).toBe('r0@x.test');
+    expect(refs[refs.length - 1]).toBe('last@x.test');
+  });
+
+  it('says nothing about threading on a channel that has no headers', async () => {
+    const { service, adapter } = build({ externalMessageId: 'x@y.test' }, 'SMS');
+    await service.send(input);
+    const sent = adapter.send.mock.calls[0][0];
+    expect(sent.inReplyTo).toBeUndefined();
+    expect(sent.references).toBeUndefined();
+  });
+});
+
+/**
+ * The consent gate on the 1:1 lane (`replies-skip-consent`).
+ *
+ * The Inbox composer, `jeeta.send_message` and the AI's queued follow-up all
+ * reach `send()` directly, and `send()` checked nothing but the channel status
+ * and the quota — so commercial mail kept going to a lead who had unsubscribed.
+ * The gate runs BEFORE the reserve: a mail we were never allowed to send must
+ * cost the tenant nothing.
+ */
+describe('MessageSenderService.send — consent before quota', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
+  const input = { workspaceId: 'w1', conversationId: 'c1', text: 'merhaba', authorType: 'AI' as const };
+
+  function build(verdict: any, type = 'EMAIL') {
+    const order: string[] = [];
+    const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'm', status: 'SENT' }) };
+    const suppression = {
+      check: jest.fn(async () => {
+        order.push('consent');
+        return verdict;
+      }),
+    };
+    const quota = {
+      reserve: jest.fn(async () => {
+        order.push('quota');
+      }),
+      refund: jest.fn(),
+    };
+    const settled: any[] = [];
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }) },
+      contactIdentity: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: 'tarik@example.com' }),
+      },
+      message: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+      },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({
+          message: {
+            update: jest.fn(async (args: any) => {
+              settled.push(args.data);
+              return { id: 'm1', ...args.data };
+            }),
+          },
+          conversation: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      ),
+    };
+    const service = new MessageSenderService(
+      prisma,
+      { get: () => adapter, resolveConfig: () => ({ secrets: {} }) } as any,
+      quota as any,
+      { append: jest.fn().mockResolvedValue('e') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue(null) } as any,
+      suppression as any,
+    );
+    return { service, adapter, quota, suppression, settled, order };
+  }
+
+  it('asks about consent BEFORE it spends the tenant’s quota', async () => {
+    const { service, order } = build({ suppressed: false });
+    await service.send(input);
+    expect(order).toEqual(['consent', 'quota']);
+  });
+
+  it('asks as CONVERSATIONAL, naming the thread that can earn the reply exemption', async () => {
+    const { service, suppression } = build({ suppressed: false });
+    await service.send(input);
+    expect(suppression.check).toHaveBeenCalledWith('w1', 'tarik@example.com', 'CONVERSATIONAL', {
+      conversationId: 'c1',
+    });
+  });
+
+  it('refuses a suppressed recipient without sending or metering', async () => {
+    const { service, adapter, quota } = build({ suppressed: true, reason: 'OPT_OUT' });
+    await service.send(input);
+    expect(adapter.send).not.toHaveBeenCalled();
+    expect(quota.reserve).not.toHaveBeenCalled();
+    expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  it('writes the refusal into the thread instead of throwing it at the rep', async () => {
+    // G2: nothing new throws. The rep sees WHY in the thread, where the send is.
+    const { service, settled } = build({ suppressed: true, reason: 'OPT_OUT' });
+    const msg: any = await service.send(input);
+    expect(msg.status).toBe('FAILED');
+    expect(settled[0].error).toMatch(/opted out/i);
+  });
+
+  it('does not ask on a channel this gate does not cover', async () => {
+    const { service, suppression } = build({ suppressed: false }, 'SMS');
+    await service.send(input);
+    expect(suppression.check).not.toHaveBeenCalled();
+  });
+
+  it('sends anyway when the consent read itself fails', async () => {
+    // A database hiccup is not a customer's refusal, and refusing on it would
+    // silence a whole workspace's inbox.
+    const { service, adapter, suppression } = build({ suppressed: false });
+    suppression.check.mockRejectedValue(new Error('connection pool timeout'));
+    await service.send(input);
+    expect(adapter.send).toHaveBeenCalled();
   });
 });

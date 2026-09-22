@@ -1,8 +1,9 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MessageSenderService } from './message-sender.service';
 import { ChannelType, ContactKind, OutboundTemplate } from './channel-adapter.interface';
 import { normalizeEmail, phoneIdentityVariants, toE164 } from '../utils/lead-normalize';
+import { SuppressionReason, SuppressionService } from '../compliance/suppression.service';
 
 /**
  * Which channels a conversation can be STARTED on, and what address each needs.
@@ -65,6 +66,41 @@ export interface StartConversationInput {
 }
 
 /**
+ * Who is opening this thread.
+ *
+ * A separate PARAMETER rather than a field on `StartConversationInput`, which
+ * is a client-supplied body: a rep could otherwise put another user's id on a
+ * customer-facing message. The caller states the author from what it
+ * authenticated, and only that.
+ */
+export interface ConversationAuthor {
+  authorType: 'AI' | 'AGENT';
+  authorId: string | null;
+}
+
+/** Nobody named an author, so nobody is claimed — `jeeta.message_lead` runs on
+ *  an API key with no human behind it, and a synthetic agent id would be a lie
+ *  in the one place a customer-facing message records who wrote it. */
+const UNATTRIBUTED: ConversationAuthor = { authorType: 'AI', authorId: null };
+
+/**
+ * Why an address cannot be opened a thread with, in the words this path has
+ * always used. The suppression table answers with a machine reason; a refusal
+ * a rep reads has to be a sentence (PLAN G8), and it has to be the SAME
+ * sentence the denormalised lead flags produce, or the same refusal reads as
+ * two different rules depending on where it was recorded.
+ */
+const REFUSAL: Record<SuppressionReason, string> = {
+  OPT_OUT: 'This lead opted out of email messages, so a conversation cannot be started.',
+  MANUAL: 'This lead opted out of email messages, so a conversation cannot be started.',
+  HARD_BOUNCE: 'This email address has hard-bounced, so a conversation cannot be started.',
+  INVALID: 'This email address failed verification, so a conversation cannot be started.',
+  COMPLAINT:
+    'This recipient reported an earlier message as spam, so a conversation cannot be started.',
+  ERASURE: 'This contact asked to be erased, so a conversation cannot be started.',
+};
+
+/**
  * Starting a conversation with a lead we chose, rather than waiting to be
  * messaged.
  *
@@ -82,9 +118,12 @@ export interface StartConversationInput {
  */
 @Injectable()
 export class OutboundConversationService {
+  private readonly logger = new Logger(OutboundConversationService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sender: MessageSenderService,
+    private readonly suppression: SuppressionService,
   ) {}
 
   /**
@@ -130,7 +169,39 @@ export class OutboundConversationService {
     return variants.length ? variants : [address];
   }
 
-  async start(workspaceId: string, input: StartConversationInput) {
+  /**
+   * The address-level half of "may we contact this person".
+   *
+   * The lead flags read below are the row-local half: they live on the record
+   * in hand and cost nothing. They cannot see a second row for the same person
+   * (`optout-per-lead-row`), or a hard bounce recorded against the address with
+   * no lead attached — which is what `SuppressionService` holds. Both halves
+   * refuse in the same words.
+   *
+   * Fails OPEN: there was no table read here at all until now, so a query that
+   * cannot complete leaves this path's previous behaviour rather than
+   * pretending a database hiccup was a customer's refusal.
+   */
+  private async suppressionRefusal(workspaceId: string, address: string): Promise<string | null> {
+    try {
+      const verdict = await this.suppression.check(workspaceId, address, 'CONVERSATIONAL', {
+        // Opening a thread IS reaching out: there is no inbound message that
+        // could have earned the reply exemption.
+        proactive: true,
+      });
+      if (!verdict.suppressed || !verdict.reason) return null;
+      return REFUSAL[verdict.reason] ?? 'This address cannot be messaged.';
+    } catch (e: any) {
+      this.logger.warn(`suppression check failed (lead address): ${e?.message ?? e}`);
+      return null;
+    }
+  }
+
+  async start(
+    workspaceId: string,
+    input: StartConversationInput,
+    author: ConversationAuthor = UNATTRIBUTED,
+  ) {
     if (!input.text?.trim() && !input.template) {
       throw new BadRequestException('Provide message text or a template');
     }
@@ -218,6 +289,14 @@ export class OutboundConversationService {
       );
     }
 
+    // The same two questions asked of the ADDRESS rather than of this one lead
+    // row. EMAIL only: SMS and WhatsApp opt-out live in İYS and the NetGSM
+    // blacklist, which `SuppressionService` deliberately does not touch.
+    if (channel.type === 'EMAIL') {
+      const refusal = await this.suppressionRefusal(workspaceId, address);
+      if (refusal) throw new BadRequestException(refusal);
+    }
+
     // An identity is unique per (channel, address). If one already exists on
     // another lead, the same person is on file twice — sending would attach
     // this thread to the wrong record, so refuse and let a human merge them.
@@ -277,8 +356,8 @@ export class OutboundConversationService {
       conversationId: conversation.id,
       text: input.text ?? '',
       template: input.template,
-      authorType: 'AI',
-      authorId: null,
+      authorType: author.authorType,
+      authorId: author.authorId,
     });
 
     return {

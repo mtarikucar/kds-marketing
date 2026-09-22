@@ -14,6 +14,7 @@ describe('OutboundConversationService', () => {
   let prisma: any;
   let sender: { send: jest.Mock };
   let svc: OutboundConversationService;
+  let suppression: { check: jest.Mock };
 
   const channelOf = (type: string) => ({ id: 'ch-1', type, status: 'ACTIVE' });
 
@@ -32,7 +33,8 @@ describe('OutboundConversationService', () => {
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
       },
     };
-    svc = new OutboundConversationService(prisma, sender as never);
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    svc = new OutboundConversationService(prisma, sender as never, suppression as never);
   });
 
   it('opens a thread and sends through the normal sender', async () => {
@@ -154,6 +156,7 @@ describe('OutboundConversationService — address form', () => {
   let prisma: any;
   let sender: { send: jest.Mock };
   let svc: OutboundConversationService;
+  let suppression: { check: jest.Mock };
 
   beforeEach(() => {
     sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
@@ -170,7 +173,8 @@ describe('OutboundConversationService — address form', () => {
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
       },
     };
-    svc = new OutboundConversationService(prisma, sender as any);
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    svc = new OutboundConversationService(prisma, sender as any, suppression as any);
   });
 
   it('stores the identity in canonical E.164, the shape ingress writes', async () => {
@@ -208,6 +212,7 @@ describe('OutboundConversationService — opt-out', () => {
   let prisma: any;
   let sender: { send: jest.Mock };
   let svc: OutboundConversationService;
+  let suppression: { check: jest.Mock };
 
   const build = (lead: any, type = 'SMS') => {
     sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
@@ -224,7 +229,8 @@ describe('OutboundConversationService — opt-out', () => {
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
       },
     };
-    svc = new OutboundConversationService(prisma, sender as any);
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    svc = new OutboundConversationService(prisma, sender as any, suppression as any);
   };
 
   const LEAD = {
@@ -294,6 +300,7 @@ describe('OutboundConversationService — template support', () => {
   let prisma: any;
   let sender: { send: jest.Mock };
   let svc: OutboundConversationService;
+  let suppression: { check: jest.Mock };
 
   const build = (type: string) => {
     sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
@@ -315,7 +322,8 @@ describe('OutboundConversationService — template support', () => {
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
       },
     };
-    svc = new OutboundConversationService(prisma, sender as any);
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    svc = new OutboundConversationService(prisma, sender as any, suppression as any);
   };
 
   const TPL = { name: 'intro', language: 'tr' } as any;
@@ -366,6 +374,7 @@ describe('OutboundConversationService — email hygiene', () => {
   let prisma: any;
   let sender: { send: jest.Mock };
   let svc: OutboundConversationService;
+  let suppression: { check: jest.Mock };
 
   const build = (lead: any, type = 'EMAIL') => {
     sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
@@ -382,7 +391,8 @@ describe('OutboundConversationService — email hygiene', () => {
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
       },
     };
-    svc = new OutboundConversationService(prisma, sender as any);
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    svc = new OutboundConversationService(prisma, sender as any, suppression as any);
   };
 
   const LEAD = {
@@ -416,6 +426,168 @@ describe('OutboundConversationService — email hygiene', () => {
 
   it('allows UNKNOWN — unverified is not the same as invalid', async () => {
     build({ ...LEAD, emailVerifiedStatus: 'UNKNOWN' });
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
+    expect(sender.send).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Who wrote the first message.
+ *
+ * `start()` hard-coded `authorType: 'AI'`, so a rep pressing "Mesaj" in the
+ * panel and a distribution send by a named human both landed in the stream as
+ * the assistant's work (`human-start-recorded-ai`). Attribution is a parameter
+ * now — a THIRD one rather than a DTO field, because a client-supplied
+ * `authorId` would let a rep forge another user's name onto a customer-facing
+ * message.
+ */
+describe('OutboundConversationService — authorship', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let sender: { send: jest.Mock };
+  let suppression: { check: jest.Mock };
+  let svc: OutboundConversationService;
+
+  beforeEach(() => {
+    sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1', status: 'SENT' }) };
+    suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
+    prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1', type: 'SMS', status: 'ACTIVE' }) },
+      lead: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'lead-1', phone: '05551112233', whatsapp: null, email: 'a@b.com',
+          smsOptOut: false, waOptOut: false, emailOptOut: false,
+          emailVerifiedStatus: 'VALID', emailBouncedAt: null,
+        }),
+      },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+    svc = new OutboundConversationService(prisma, sender as any, suppression as any);
+  });
+
+  it('records the human who actually pressed send', async () => {
+    await svc.start(
+      WS,
+      { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' },
+      { authorType: 'AGENT', authorId: 'user-7' },
+    );
+    expect(sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({ authorType: 'AGENT', authorId: 'user-7' }),
+    );
+  });
+
+  it('still defaults to the assistant when no author is named', async () => {
+    // `jeeta.message_lead` runs on an API key and carries no human at all;
+    // inventing a synthetic agent id there would be the worse error.
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
+    expect(sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({ authorType: 'AI', authorId: null }),
+    );
+  });
+
+  it('does not pause the AI on an outbound-first thread', async () => {
+    // A reply INTO a thread is a takeover; opening one deliberately leaves the
+    // AI free to follow up, so attribution must not quietly change that.
+    await svc.start(
+      WS,
+      { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' },
+      { authorType: 'AGENT', authorId: 'user-7' },
+    );
+    expect(prisma.conversation.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.not.objectContaining({ aiPaused: true }) }),
+    );
+  });
+});
+
+/**
+ * Suppression is per ADDRESS, not per lead row.
+ *
+ * The lead flags below are the row-local half of the answer and stay exactly as
+ * they were. They cannot see the other half: the same person on file twice
+ * unsubscribed once (`optout-per-lead-row`), and a hard bounce or a spam report
+ * recorded against the address itself belongs to no particular row. Both halves
+ * refuse with the same sentences the flags always used.
+ */
+describe('OutboundConversationService — address-level suppression', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let sender: { send: jest.Mock };
+  let suppression: { check: jest.Mock };
+  let svc: OutboundConversationService;
+
+  const LEAD = {
+    id: 'lead-1', phone: '05551112233', whatsapp: '05551112233', email: 'A@B.com',
+    emailOptOut: false, smsOptOut: false, waOptOut: false,
+    emailVerifiedStatus: 'VALID', emailBouncedAt: null,
+  };
+
+  const build = (verdict: any, type = 'EMAIL') => {
+    sender = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };
+    suppression = { check: jest.fn().mockResolvedValue(verdict) };
+    prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1', type, status: 'ACTIVE' }) },
+      lead: { findFirst: jest.fn().mockResolvedValue(LEAD) },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+    svc = new OutboundConversationService(prisma, sender as any, suppression as any);
+  };
+
+  it('asks about the canonical address, as a proactive CONVERSATIONAL send', async () => {
+    build({ suppressed: false });
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
+    // Opening a thread IS reaching out, so the reply exemption cannot apply:
+    // there is no inbound message to have earned it.
+    expect(suppression.check).toHaveBeenCalledWith(WS, 'a@b.com', 'CONVERSATIONAL', {
+      proactive: true,
+    });
+  });
+
+  it.each([
+    ['OPT_OUT', /opted out of email/i],
+    ['MANUAL', /opted out of email/i],
+    ['HARD_BOUNCE', /hard-bounced/i],
+    ['INVALID', /failed verification/i],
+    ['COMPLAINT', /spam/i],
+    ['ERASURE', /erased/i],
+  ])('refuses a %s row and says so in the same words the flags use', async (reason, message) => {
+    build({ suppressed: true, reason });
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' }),
+    ).rejects.toThrow(message);
+    expect(sender.send).not.toHaveBeenCalled();
+    // Refused before any identity or thread is written, so a suppressed
+    // address does not accumulate half-built conversations.
+    expect(prisma.contactIdentity.create).not.toHaveBeenCalled();
+    expect(prisma.conversation.create).not.toHaveBeenCalled();
+  });
+
+  it('does not ask on a channel this gate does not cover', async () => {
+    build({ suppressed: false }, 'SMS');
+    await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
+    expect(suppression.check).not.toHaveBeenCalled();
+  });
+
+  it('opens the thread anyway when the suppression read itself fails', async () => {
+    // A database hiccup is not a customer's refusal. There was no check here at
+    // all until now, so failing open is this path's own previous behaviour.
+    build({ suppressed: false });
+    suppression.check.mockRejectedValue(new Error('connection pool timeout'));
     await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'merhaba' });
     expect(sender.send).toHaveBeenCalled();
   });
