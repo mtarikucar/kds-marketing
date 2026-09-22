@@ -29,3 +29,22 @@ export const PUBLIC_WRITE_THROTTLE = {
 export const ONE_CLICK_UNSUBSCRIBE_THROTTLE = {
   default: { limit: 240, ttl: 60_000 },
 };
+
+/**
+ * The per-channel inbound-mail callback, in a bucket of its own.
+ *
+ * It is a MACHINE callback, not a form submit, so the 20/min public-write bucket
+ * is the wrong shape twice over: a relay delivers a busy mailbox's mail from one
+ * egress IP, so a single tenant's morning post would exhaust it, and the
+ * `blockDuration` those routes carry would then blackhole the next full minute
+ * of mail. A 429 here is a lost customer reply — the same reasoning that gave
+ * one-click unsubscribe its own bucket, for the same reason.
+ *
+ * It is still per-route rather than exempt: `@Throttle` overrides the single
+ * global throttler, so dropping the decorator would leave an unauthenticated,
+ * DB-writing, outbox-emitting route with no limit at all. The token in the URL
+ * is the real gate; this is the bound on what an unauthenticated flood can cost.
+ */
+export const EMAIL_INBOUND_THROTTLE = {
+  default: { limit: 600, ttl: 60_000 },
+};

@@ -43,9 +43,22 @@ export class PublicChannelResolverService {
     });
   }
 
-  /** NetGSM MO webhook → the channel by its id (carried, token-signed, in the
-   *  callback URL). Cross-workspace by id here; the caller authenticates via the
-   *  per-channel token and scopes all downstream work to the row's workspaceId. */
+  /**
+   * A TOKENIZED callback URL → the channel it names. Used by NetGSM's inbound
+   * SMS (MO) route and by the per-channel inbound-mail route.
+   *
+   * Cross-workspace by id here, and deliberately blind to `type` and `status`:
+   * the caller has already authenticated with the per-channel token (only the
+   * holder of MARKETING_SECRET_KEY can mint one), and it is the caller that
+   * knows which type it will accept and how it wants to answer a channel that
+   * is disabled — NetGSM and email both ACK an empty result rather than 404,
+   * so a relay does not retry a mail we will never take. Everything downstream
+   * is scoped to this row's `workspaceId`.
+   *
+   * This lookup is what makes the URL the tenant boundary: the id comes from a
+   * path only we could have signed, so — unlike `byExternalId` — nothing a
+   * sender writes can steer it into another tenant's row.
+   */
   async channelForInbound(channelId: string) {
     return this.prisma.channel.findUnique({ where: { id: channelId } });
   }

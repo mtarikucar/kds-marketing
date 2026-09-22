@@ -50,8 +50,16 @@ export function configureApp(app: NestExpressApplication): void {
   app.use('/api/public/channels/meta/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
   // TikTok DM webhook — HMAC-SHA256 over the raw body, same raw-before-JSON rule.
   app.use('/api/public/channels/tiktok/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
-  // Inbound Email webhook — HMAC-SHA256 over the raw body (EMAIL_INBOUND_SECRET).
-  app.use('/api/public/channels/email/webhook', bodyParser.raw({ type: '*/*', limit: '2mb' }));
+  // Inbound email — the WHOLE prefix, not just `/webhook`.
+  //
+  // `app.use` is PREFIX matching, so the old `…/email/webhook` mount covered the
+  // legacy HMAC route (whose signature is computed over these exact bytes) and
+  // nothing else: the per-channel `…/email/:channelId/:token/inbound` route
+  // would have fallen through to the 200kb JSON parser below and rejected every
+  // real mail. The prefix covers both, and the legacy path still lands on raw
+  // because it sits under the same prefix (locked by the mount spec in
+  // `email-webhook.controller.spec.ts`).
+  app.use('/api/public/channels/email', bodyParser.raw({ type: '*/*', limit: '2mb' }));
   // ESP delivery-feedback (bounces/complaints) — HMAC over the raw body too.
   app.use('/api/public/esp/feedback', bodyParser.raw({ type: '*/*', limit: '2mb' }));
 
