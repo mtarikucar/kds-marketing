@@ -150,9 +150,64 @@ const StepSchema = z.discriminatedUnion('type', [
 ]);
 export type WorkflowStep = z.infer<typeof StepSchema>;
 
+/**
+ * Optional per-workflow quiet hours: local hours this automation's mail may
+ * leave in (`no-send-window`). Outside them a send is queued FORWARD to the
+ * next opening, never dropped.
+ *
+ * It rides on the trigger rather than on a column of its own because the
+ * Workflow row has no jsonb to spare and the programme adds no migration —
+ * and because "when may this automation act" is a property of the trigger
+ * rather than of any one step. `tz` is optional: absent, the workspace's own
+ * timezone answers (resolved by `normalizeSendWindow`, which is the single
+ * reader both this and `settings.email.sendWindow` go through).
+ *
+ * `to` is EXCLUSIVE and `from > to` wraps midnight. Equal bounds describe
+ * either "always" or "never", and since there is no way to tell which was
+ * meant, saving one is a 400 rather than a guess acted on at 02:30.
+ */
+export const SendWindowSchema = z
+  .object({
+    /** IANA zone. Omitted ⇒ the workspace timezone. */
+    tz: z.string().min(1).max(64).optional(),
+    /** Local hour the window opens, 0-23. */
+    from: z.number().int().min(0).max(23),
+    /** Local hour the window closes, exclusive, 1-24. */
+    to: z.number().int().min(1).max(24),
+  })
+  .refine((w) => w.from !== w.to, {
+    message: 'sendWindow.from and sendWindow.to must differ',
+    path: ['to'],
+  });
+export type WorkflowSendWindow = z.infer<typeof SendWindowSchema>;
+
+/**
+ * May the same lead start this workflow again?
+ *
+ * `link.clicked` is the trigger that loops: a drip mails a link, the lead
+ * clicks it, the click re-enrols the lead, and the drip mails the link again.
+ * The executor enforces `cooldown`/1h by default even for the workflows saved
+ * before this knob existed, so an author only comes here to widen or narrow it.
+ *
+ * The default is `cooldown` rather than `once_per_lead` on purpose: a customer
+ * who clicks the same offer six months later is a new opportunity, not a
+ * duplicate, and a once-per-lifetime rule silently retires an evergreen
+ * nurture for everyone who ever touched it.
+ */
+export const ReentrySchema = z.object({
+  mode: z.enum(['always', 'once_per_lead', 'cooldown']).default('cooldown'),
+  /** Bounded to match the executor's own clamp: a minute to thirty days. */
+  cooldownSeconds: z.number().int().min(60).max(2_592_000).default(3600),
+});
+export type WorkflowReentry = z.infer<typeof ReentrySchema>;
+
 export const TriggerSchema = z.object({
   type: z.enum(TRIGGER_TYPES),
   filters: z.array(FilterSchema).max(20).default([]),
+  /** Optional quiet hours for this workflow's sends. Absent = send whenever. */
+  sendWindow: SendWindowSchema.optional(),
+  /** Absent = the executor's default (cooldown, one hour, `link.clicked` only). */
+  reentry: ReentrySchema.optional(),
 });
 export type WorkflowTrigger = z.infer<typeof TriggerSchema>;
 
