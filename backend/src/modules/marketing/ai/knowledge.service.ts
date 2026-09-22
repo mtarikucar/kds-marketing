@@ -19,6 +19,58 @@ function escapeLockKey(key: string): string {
   return `'${key.replace(/'/g, "''")}'`;
 }
 
+/** Upper bounds on a retrieval query that may be a whole inbound message. */
+export const MAX_QUERY_CHARS = 400;
+export const MAX_QUERY_TERMS = 24;
+/** A tsvector lexeme has no business being longer than this; Postgres caps at 2046 bytes. */
+const MAX_TERM_CHARS = 64;
+
+/**
+ * Neutralise a retrieval query that a stranger wrote.
+ *
+ * `search()` is reached with whatever the customer typed — an inbound email
+ * body, a webchat line, the synthetic prompt built from an IVR keypress. Two
+ * consequences follow, and neither is hypothetical:
+ *
+ * 1. `websearch_to_tsquery` has an operator language: `"phrase"`, `-negation`,
+ *    `or`. Passing sender text verbatim hands the sender that language, so the
+ *    message gets a say in which of the workspace's docs are pasted into the
+ *    model's prompt. Reduced to a bag of words every term is ANDed, which can
+ *    only ever retrieve LESS than the sender asked for, never more.
+ * 2. The text is unbounded. A 100 KB body becomes a 100 KB tsquery evaluated
+ *    against every ACTIVE doc of the workspace three times over (headline, rank,
+ *    match) on the inbound path — a CPU bill anyone can trigger for free.
+ *
+ * Returns `''` when nothing usable survives; `search()` then short-circuits
+ * before touching the database.
+ */
+export function sanitizeSearchQuery(raw: string): string {
+  if (typeof raw !== 'string' || !raw) return '';
+  const words = raw
+    // Bound the work before splitting: the input may be a whole message.
+    .slice(0, MAX_QUERY_CHARS * MAX_QUERY_TERMS)
+    // Control characters are never part of a term and poison logs.
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    // Phrase pinning and the quote forms that reach it.
+    .replace(/["'`‘’“”]+/g, ' ')
+    .split(/\s+/)
+    // `-term` excludes, `+term` requires — drop the sign, keep the word.
+    .map((t) => t.replace(/^[-+]+/, '').slice(0, MAX_TERM_CHARS))
+    // A bare OR is the one operator that WIDENS the match.
+    .filter((t) => t.length > 0 && !/^or$/i.test(t));
+
+  const kept: string[] = [];
+  let budget = MAX_QUERY_CHARS;
+  for (const word of words) {
+    if (kept.length >= MAX_QUERY_TERMS) break;
+    const cost = kept.length ? word.length + 1 : word.length;
+    if (cost > budget) break;
+    kept.push(word);
+    budget -= cost;
+  }
+  return kept.join(' ');
+}
+
 /**
  * Workspace knowledge base + FTS retrieval (Postgres tsvector). The agent
  * engine calls `search()` to ground replies; CRUD is the Agent Studio UI.
@@ -120,6 +172,12 @@ export class KnowledgeService {
    * query string; `ts_rank` orders; `ts_headline` extracts a snippet. The doc
    * row's own searchVector (language-aware via the trigger) is matched against
    * a query parsed with the matching regconfig per row. ALWAYS workspace-scoped.
+   *
+   * `query` arrives from untrusted senders on every AI lane, so it is bounded
+   * and stripped of the websearch operator alphabet first — see
+   * `sanitizeSearchQuery`. The workspace scope and `status = 'ACTIVE'` are the
+   * only things that decide WHICH docs are reachable; the sender's text only
+   * ever narrows within that set.
    */
   async search(
     workspaceId: string,
@@ -127,7 +185,14 @@ export class KnowledgeService {
     docIds?: string[],
     limit = 4,
   ): Promise<KnowledgeSnippet[]> {
-    if (!query.trim()) return [];
+    const q = sanitizeSearchQuery(query);
+    if (!q) return [];
+    // Empty selection = every ACTIVE doc, deliberately. Every agent saved
+    // through the Agent Studio posts `kbDocIds: []`, the live one included, so
+    // reading empty as "no knowledge" would un-ground every deployed agent at
+    // once. Keeping a customer-facing agent away from an internal doc needs a
+    // per-doc audience flag on `knowledge_docs` (a schema change, handed off),
+    // not a re-reading of this filter.
     const idFilter =
       docIds && docIds.length
         ? Prisma.sql`AND "id" = ANY(${docIds})`
@@ -149,7 +214,7 @@ export class KnowledgeService {
                                  WHEN 'en' THEN 'english'::regconfig
                                  WHEN 'ru' THEN 'russian'::regconfig
                                  ELSE 'simple'::regconfig END,
-                 ${query}),
+                 ${q}),
                'MaxFragments=2,MaxWords=40,MinWords=15'
              ) AS snippet,
              ts_rank("searchVector",
@@ -158,7 +223,7 @@ export class KnowledgeService {
                                  WHEN 'en' THEN 'english'::regconfig
                                  WHEN 'ru' THEN 'russian'::regconfig
                                  ELSE 'simple'::regconfig END,
-                 ${query})) AS rank
+                 ${q})) AS rank
         FROM "knowledge_docs"
        WHERE "workspaceId" = ${workspaceId}
          AND "status" = 'ACTIVE'
@@ -168,7 +233,7 @@ export class KnowledgeService {
                                WHEN 'en' THEN 'english'::regconfig
                                WHEN 'ru' THEN 'russian'::regconfig
                                ELSE 'simple'::regconfig END,
-               ${query})
+               ${q})
        ORDER BY rank DESC
        LIMIT ${limit};
     `;

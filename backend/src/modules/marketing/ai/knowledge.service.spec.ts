@@ -1,5 +1,10 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { KnowledgeService } from './knowledge.service';
+import {
+  KnowledgeService,
+  sanitizeSearchQuery,
+  MAX_QUERY_CHARS,
+  MAX_QUERY_TERMS,
+} from './knowledge.service';
 
 /**
  * Knowledge base CRUD + FTS retrieval. The multi-tenant invariant is the
@@ -82,6 +87,93 @@ describe('KnowledgeService', () => {
       const values = prisma.$queryRaw.mock.calls[0].slice(1);
       expect(values).toContain(WS); // workspace-scoped — never spans tenants
       expect(values).toContain('pizza'); // the query string is bound, not interpolated
+    });
+  });
+
+  /**
+   * `search()` is called with whatever a stranger typed — an inbound email body,
+   * a webchat line, an IVR prompt (conversation-ai-engine.service.ts:558,
+   * voice-ai.service.ts:174, netgsm-ivr.service.ts:295, voice-ai-bridge.service.ts:97,
+   * copilot.service.ts:46). Handing that text to `websearch_to_tsquery` verbatim
+   * hands the SENDER its operator language and an unbounded amount of work.
+   */
+  describe('search — the query is never taken verbatim from sender-controlled text', () => {
+    /** The bound query value, as it actually reaches Postgres. */
+    function boundQuery(): string {
+      const values = prisma.$queryRaw.mock.calls[0].slice(1);
+      // The query is bound four times (headline, rank, match); they are all the
+      // same string, and none of them may be the raw sender text.
+      const strings = values.filter((v: unknown) => typeof v === 'string' && v !== WS);
+      expect(new Set(strings).size).toBe(1);
+      return strings[0] as string;
+    }
+
+    it('caps a runaway body instead of building a tsquery out of a whole email', async () => {
+      await svc.search(WS, 'pizza '.repeat(5000));
+      const q = boundQuery();
+      expect(q.split(' ')).toHaveLength(MAX_QUERY_TERMS);
+      expect(q.length).toBeLessThanOrEqual(MAX_QUERY_CHARS);
+    });
+
+    it('strips the websearch operator alphabet so the sender cannot steer retrieval', async () => {
+      await svc.search(WS, '"indirim tabanı" -menü or marj');
+      const q = boundQuery();
+      expect(q).not.toContain('"');
+      expect(q).not.toMatch(/(^|\s)-/); // negation sign gone, the word kept
+      expect(q).not.toMatch(/(^|\s)or(\s|$)/i); // the one operator that WIDENS a match
+      expect(q).toBe('indirim tabanı menü marj');
+    });
+
+    it('returns nothing, and touches no DB, when only operators survive', async () => {
+      await expect(svc.search(WS, '  "" -- or  ')).resolves.toEqual([]);
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('leaves ordinary Turkish words exactly as typed', () => {
+      expect(sanitizeSearchQuery('çalışma saatleri ve fiyat listesi')).toBe(
+        'çalışma saatleri ve fiyat listesi',
+      );
+    });
+
+    it('drops control characters rather than binding them', () => {
+      expect(sanitizeSearchQuery('fiyat\u0000\u001blistesi')).toBe('fiyat listesi');
+    });
+
+    it('survives a non-string query without throwing', () => {
+      expect(sanitizeSearchQuery(undefined as never)).toBe('');
+      expect(sanitizeSearchQuery(null as never)).toBe('');
+    });
+  });
+
+  /**
+   * The doc-scope contract, pinned so a refactor cannot flip it silently.
+   *
+   * Empty selection = every ACTIVE doc. It is the maximal default and it looks
+   * wrong at first glance, but every agent saved through the Agent Studio posts
+   * `kbDocIds: []` (AgentStudioPage.tsx:85/153) — including the live one — so
+   * "empty means nothing" would un-ground every deployed agent at once.
+   * Restricting what a customer-facing agent may quote needs a per-doc audience
+   * flag, not a re-reading of this argument (see the handoff).
+   */
+  describe('search — doc scoping', () => {
+    /** The embedded `Prisma.sql` fragment carrying the id filter, if any. */
+    function idFilterSql(): string {
+      const values = prisma.$queryRaw.mock.calls[0].slice(1);
+      const frag = values.find(
+        (v: unknown) => v && typeof v === 'object' && typeof (v as { sql?: unknown }).sql === 'string',
+      );
+      return frag ? ((frag as { sql: string }).sql as string) : '';
+    }
+
+    it('searches every ACTIVE doc when no selection is given', async () => {
+      await svc.search(WS, 'pizza', []);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(idFilterSql()).toBe('');
+    });
+
+    it('restricts to the selected docs when the agent named some', async () => {
+      await svc.search(WS, 'pizza', ['d1', 'd2']);
+      expect(idFilterSql()).toContain('"id" = ANY(');
     });
   });
 
