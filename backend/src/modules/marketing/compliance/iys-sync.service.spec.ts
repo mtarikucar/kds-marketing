@@ -410,6 +410,124 @@ describe('IysSyncService', () => {
     });
   });
 
+  /**
+   * EPOSTA (`w2-iys-email`). İYS's email lane rides the same worker, but it may
+   * never ride the same rate budget: the shared `(usercode, 'iys')` bucket is
+   * what the TİCARİ SMS and voice preflights fail closed on, so an email
+   * consent push draining it would visibly stall an unrelated SMS campaign.
+   */
+  describe('EPOSTA consent rows', () => {
+    function emailJob(overrides: Record<string, unknown> = {}) {
+      return job({ id: 'job-e1', recipient: 'musteri@acme.com', type: 'EPOSTA', ...overrides });
+    }
+
+    function credsResolve() {
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
+      registry.resolveConfig.mockReturnValue({
+        secrets: { usercode: 'u1', password: 'p1' },
+        public: { brandCode: 'BR1' },
+      });
+    }
+
+    it('enqueues an EPOSTA row for an email recipient', async () => {
+      const tx = { iysSyncJob: { create: jest.fn().mockResolvedValue({}) } };
+      await svc.enqueueConsent(tx as any, {
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        recipient: 'Musteri@Acme.com',
+        type: 'EPOSTA',
+        direction: 'RET',
+        source: 'HS_WEB',
+      });
+      const data = tx.iysSyncJob.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({ recipient: 'Musteri@Acme.com', type: 'EPOSTA', direction: 'RET' });
+      expect(data.status).toBeUndefined(); // PENDING — an address is not a phone, and must not be judged as one
+    });
+
+    it('fails an EPOSTA row whose recipient is not an address, with its own reason', async () => {
+      const tx = { iysSyncJob: { create: jest.fn().mockResolvedValue({}) } };
+      await svc.enqueueConsent(tx as any, {
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        recipient: 'not an address',
+        type: 'EPOSTA',
+        direction: 'ONAY',
+        source: 'HS_WEB',
+      });
+      expect(tx.iysSyncJob.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ status: 'FAILED', lastError: 'invalid recipient email' }),
+      });
+    });
+
+    it('spends the EPOSTA budget bucket, never the shared İYS one', async () => {
+      prisma.iysSyncJob.findMany.mockResolvedValue([emailJob()] as any);
+      credsResolve();
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: ['ref-1'], message: null });
+
+      await svc.drain();
+
+      expect(budgeter.tryTake).toHaveBeenCalledTimes(1);
+      expect(budgeter.tryTake).toHaveBeenCalledWith('u1', 'iys:eposta', 10, 60_000);
+    });
+
+    it('sends the address as typed — an email is never reduced to a TR mobile', async () => {
+      prisma.iysSyncJob.findMany.mockResolvedValue([emailJob()] as any);
+      credsResolve();
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: ['ref-1'], message: null });
+
+      await svc.drain();
+
+      expect(client.add.mock.calls[0][1]).toEqual([
+        { recipient: 'musteri@acme.com', type: 'EPOSTA', status: 'ONAY', consentDate: '2026-07-08 13:00:00', source: 'HS_WEB' },
+      ]);
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({
+        where: { id: 'job-e1' },
+        data: { status: 'SENT', refid: 'ref-1' },
+      });
+    });
+
+    it('batches the two types apart, each against its own bucket', async () => {
+      prisma.iysSyncJob.findMany.mockResolvedValue([job(), emailJob()] as any);
+      credsResolve();
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: ['ref-1'], message: null });
+
+      await svc.drain();
+
+      expect(client.add).toHaveBeenCalledTimes(2);
+      const buckets = budgeter.tryTake.mock.calls.map((c: unknown[]) => c[1]);
+      expect(buckets.sort()).toEqual(['iys', 'iys:eposta']);
+    });
+
+    it('a spent EPOSTA bucket leaves the SMS lane alone', async () => {
+      prisma.iysSyncJob.findMany.mockResolvedValue([job(), emailJob()] as any);
+      credsResolve();
+      budgeter.tryTake.mockImplementation((_u: string, bucket: string) => bucket !== 'iys:eposta');
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: ['ref-1'], message: null });
+
+      await svc.drain();
+
+      expect(client.add).toHaveBeenCalledTimes(1);
+      expect(client.add.mock.calls[0][1][0].type).toBe('MESAJ');
+      // The email row is untouched — no attempt spent, picked up next tick.
+      expect(prisma.iysSyncJob.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'job-e1' } }),
+      );
+    });
+
+    it('fails an unsendable EPOSTA row through the same backoff machinery', async () => {
+      prisma.iysSyncJob.findMany.mockResolvedValue([emailJob({ id: 'job-bad', recipient: 'nonsense' })] as any);
+      credsResolve();
+
+      await svc.drain();
+
+      expect(client.add).not.toHaveBeenCalled();
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({
+        where: { id: 'job-bad' },
+        data: { status: 'FAILED', attempts: 1, lastError: 'invalid recipient email' },
+      });
+    });
+  });
+
   describe('dlqCount', () => {
     it('counts DLQ jobs scoped to the workspace', async () => {
       prisma.iysSyncJob.count = jest.fn().mockResolvedValue(4);

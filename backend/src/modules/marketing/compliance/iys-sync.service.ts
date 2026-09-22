@@ -6,15 +6,21 @@ import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { IysClient, IysConsentRow, IysConsentType } from '../../netgsm/iys/iys.client';
+import { isSingleAddress, normalizeAddress } from '../../../common/util/email-address';
 import { toIysMsisdn } from '../utils/lead-normalize';
+import { IYS_EPOSTA_BUDGET_BUCKET } from './iys-email.port';
 
 export type IysConsentDirection = 'ONAY' | 'RET';
 
 export interface IysConsentEnqueueParams {
   workspaceId: string;
   leadId: string;
-  /** Lead's phone. Absent/null → nothing to prove to İYS, so this is a no-op. */
+  /** The lead's phone (MESAJ) or address (EPOSTA). Absent/null → nothing to
+   *  prove to İYS, so this is a no-op. */
   recipient: string | null | undefined;
+  /** Defaults to `MESAJ`: every existing caller is the SMS consent branch, and
+   *  its rows must keep being written exactly as they are today. */
+  type?: 'MESAJ' | 'EPOSTA';
   direction: IysConsentDirection;
   /** İYS source code (e.g. `HS_WEB` / `HS_MESAJ`) — the PRODUCER decides this
    *  (it knows whether the consent came from the dashboard, a public
@@ -53,6 +59,41 @@ const BACKOFF_CAP_MS = 3_600_000;
  *  NetgsmDlrPollService's per-tick candidate cap philosophy). */
 const MAX_CANDIDATES_PER_TICK = 5_000;
 
+/**
+ * What one consent type needs that the others do not: its wire shape, the
+ * reason a recipient it cannot use is rejected for, and — the load-bearing
+ * one — which `AccountRateBudgeter` bucket it spends.
+ *
+ * EPOSTA gets its own bucket (`${usercode}:iys:eposta`). The shared
+ * `(usercode, 'iys')` bucket is 10 calls/minute and the TİCARİ SMS and voice
+ * preflights fail CLOSED on it, so an email consent push draining it would
+ * stall an unrelated SMS campaign that has nothing to do with email
+ * (`tr-commercial-compliance`, defect A).
+ */
+interface ConsentLane {
+  bucket: string;
+  toWire: (recipient: string) => string | null;
+  invalidReason: string;
+}
+
+const CONSENT_LANES: Record<string, ConsentLane> = {
+  MESAJ: { bucket: 'iys', toWire: toIysMsisdn, invalidReason: 'invalid recipient phone' },
+  EPOSTA: {
+    bucket: IYS_EPOSTA_BUDGET_BUCKET,
+    toWire: (recipient) => {
+      const address = normalizeAddress(recipient);
+      return address && isSingleAddress(address) ? address : null;
+    },
+    invalidReason: 'invalid recipient email',
+  },
+};
+
+/** `ARAMA` (voice consent) is a phone against the shared bucket, like `MESAJ` —
+ *  so is any type a future writer invents, which is the safe default. */
+function laneFor(type: string): ConsentLane {
+  return CONSENT_LANES[type] ?? CONSENT_LANES.MESAJ;
+}
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -81,21 +122,24 @@ function fmtIysDate(d: Date): string {
  *    INSIDE those callers' own `$transaction` (same savepoint idiom they already
  *    use for the NetGSM blacklist-sync outbox mirror) so the İYS proof-of-consent
  *    row is written atomically with the underlying `smsOptOut` flip, yet a
- *    failure to enqueue can never abort that flip. ONLY `MARKETING_SMS` consent
- *    maps to İYS in this phase (`type: 'MESAJ'`) — `ARAMA` (call consent) lands
- *    with Phase 5's voice campaigns; this is a deliberate YAGNI deferral, not an
- *    oversight.
+ *    failure to enqueue can never abort that flip. `MARKETING_SMS` consent maps
+ *    to `type: 'MESAJ'` and is what every caller writes today; `EPOSTA` is the
+ *    email lane the İYS EPOSTA gate opens (`iys-email.port.ts`) and is written
+ *    only by a caller that asks for it, so an existing writer's rows are
+ *    unchanged. `ARAMA` (call consent) lands with Phase 5's voice campaigns;
+ *    this is a deliberate YAGNI deferral, not an oversight.
  *
  * 2. A 1-minute advisory-locked cron worker that drains due `IysSyncJob` rows
  *    (`status` PENDING fresh, or FAILED retried with backoff — see the model's
  *    own doc-comment for the full state machine) grouped by workspace, resolves
  *    each workspace's NetGSM İYS credentials (usercode/password from the ACTIVE
  *    SMS channel's sealed secrets + `brandCode` from that same channel's
- *    `configPublic` — Task 6 lands the settings-card UI for it), chunks ≤500,
- *    spends one `AccountRateBudgeter` `iys` budget unit (10/min/account) per
- *    `IysClient.add` call, and stamps the outcome back onto each row. A budget
- *    denial simply stops that workspace's batches for this tick — the rows are
- *    untouched and picked up again next tick. Every other failure (missing
+ *    `configPublic` — Task 6 lands the settings-card UI for it), groups by
+ *    consent type, chunks ≤500, spends one `AccountRateBudgeter` budget unit
+ *    (10/min/account) from THAT TYPE'S bucket per `IysClient.add` call, and
+ *    stamps the outcome back onto each row. A budget denial simply stops that
+ *    lane's batches for this tick — the rows are untouched and picked up again
+ *    next tick, and one lane running dry never stops another (`CONSENT_LANES`). Every other failure (missing
  *    creds/brandCode, a NetGSM add() error, OR an `ok:true` response whose
  *    `refids` array is shorter than the batch — `IysClient`'s refid
  *    extraction drops any row whose refid key it didn't recognize, which
@@ -107,11 +151,12 @@ function fmtIysDate(d: Date): string {
  *    `POST /marketing/compliance/iys/retry`). A row is ONLY ever stamped
  *    `SENT` when the batch's `refids` count matches exactly — never on a
  *    guess — so a consent proof can never be silently and permanently
- *    misattributed or dropped. Every recipient is normalized to İYS's
- *    canonical `90XXXXXXXXXX` wire shape (`toIysMsisdn`) right before it's
- *    sent — a phone that can't reduce to a TR mobile at all is never
- *    forwarded to İYS; it fails immediately (both here and at enqueue time
- *    in `enqueueConsent`) with `lastError: 'invalid recipient phone'`.
+ *    misattributed or dropped. Every recipient is normalized into its type's
+ *    wire shape right before it's sent — İYS's canonical `90XXXXXXXXXX` for a
+ *    phone (`toIysMsisdn`), a single lower-cased address for `EPOSTA`. A
+ *    recipient that cannot reduce to that shape is never forwarded to İYS; it
+ *    fails immediately (both here and at enqueue time in `enqueueConsent`)
+ *    with `lastError: 'invalid recipient phone'` / `'invalid recipient email'`.
  *
  * The worker never throws out of a tick: a bad workspace/account is caught and
  * logged so it can never stall another workspace's turn, and the top-level
@@ -145,23 +190,25 @@ export class IysSyncService {
     // to İYS via /iys/add would be pointless at best (İYS already knows) and
     // a genuine feedback loop at worst — so it is never enqueued.
     if (params.source?.startsWith('IYS_')) return;
-    // A phone that can never reduce to İYS's canonical 90XXXXXXXXXX
-    // domestic-mobile wire shape (garbage, a landline, a foreign number) must
-    // never sit as a silently-retrying PENDING row — `drainWorkspace` would
-    // just fail it forever anyway (it normalizes/validates again right
-    // before the wire send). Fail it here instead, immediately, with a
-    // `lastError` an operator can act on straight away.
-    const valid = toIysMsisdn(params.recipient) !== null;
+    // A recipient İYS can never accept for this type (garbage, a landline or a
+    // foreign number for MESAJ; anything that is not one address for EPOSTA)
+    // must never sit as a silently-retrying PENDING row — the worker would
+    // just fail it forever anyway (it normalizes/validates again right before
+    // the wire send). Fail it here instead, immediately, with a `lastError` an
+    // operator can act on straight away.
+    const type = params.type ?? 'MESAJ';
+    const lane = laneFor(type);
+    const valid = lane.toWire(params.recipient) !== null;
     await tx.iysSyncJob.create({
       data: {
         workspaceId: params.workspaceId,
         leadId: params.leadId,
         recipient: params.recipient,
-        type: 'MESAJ', // ONLY MARKETING_SMS→MESAJ this phase — see class docstring.
+        type,
         direction: params.direction,
         consentAt: params.consentAt ?? new Date(),
         source: params.source,
-        ...(valid ? {} : { status: 'FAILED', lastError: 'invalid recipient phone' }),
+        ...(valid ? {} : { status: 'FAILED', lastError: lane.invalidReason }),
       },
     });
   }
@@ -247,28 +294,57 @@ export class IysSyncService {
       return { processed: 0, sent: 0 };
     }
 
-    // Defense in depth: normalize (and validate) every job's recipient to
-    // İYS's canonical 90XXXXXXXXXX wire shape right before it's ever sent —
-    // `enqueueConsent` already rejects an unnormalizable phone up front, but
-    // a row written before that check shipped (or by some future path that
-    // bypasses `enqueueConsent`) must still never reach `/iys/add` with a raw,
-    // un-normalized (or outright invalid) phone. Fails through the SAME
-    // backoff/DLQ machinery as any other error, never silently dropped.
+    // One lane per consent type, because the two do not share a wire shape OR
+    // a rate budget (see `laneFor`). Grouping first also keeps a batch
+    // single-typed, which `/iys/add` is happier with and which makes a refid
+    // mismatch attributable to one lane.
+    const byType = new Map<string, PendingJob[]>();
+    for (const j of jobs) {
+      const list = byType.get(j.type);
+      if (list) list.push(j);
+      else byType.set(j.type, [j]);
+    }
+
+    let processed = 0;
+    let sent = 0;
+    for (const [type, typeJobs] of byType) {
+      const r = await this.drainLane(creds, type, typeJobs);
+      processed += r.processed;
+      sent += r.sent;
+    }
+    return { processed, sent };
+  }
+
+  /** One consent type's rows, against that type's own budget bucket. */
+  private async drainLane(
+    creds: { usercode?: string; password?: string; brandCode?: string },
+    type: string,
+    jobs: PendingJob[],
+  ): Promise<{ processed: number; sent: number }> {
+    const lane = laneFor(type);
+
+    // Defense in depth: normalize (and validate) every job's recipient into
+    // İYS's wire shape for its type right before it's ever sent —
+    // `enqueueConsent` already rejects an unusable recipient up front, but a
+    // row written before that check shipped (or by some future path that
+    // bypasses `enqueueConsent`) must still never reach `/iys/add` raw. Fails
+    // through the SAME backoff/DLQ machinery as any other error, never
+    // silently dropped.
     const prepared: Array<{ job: PendingJob; wireRecipient: string }> = [];
     const invalid: PendingJob[] = [];
     for (const j of jobs) {
-      const wireRecipient = toIysMsisdn(j.recipient);
+      const wireRecipient = lane.toWire(j.recipient);
       if (wireRecipient) prepared.push({ job: j, wireRecipient });
       else invalid.push(j);
     }
     if (invalid.length > 0) {
-      await this.markFailedBatch(invalid, 'invalid recipient phone');
+      await this.markFailedBatch(invalid, lane.invalidReason);
     }
 
     let processed = 0;
     let sent = 0;
     for (const batch of chunk(prepared, IYS_ADD_MAX_ROWS)) {
-      if (!this.budgeter.tryTake(creds.usercode, 'iys', IYS_BUDGET_LIMIT, IYS_BUDGET_WINDOW_MS)) {
+      if (!this.budgeter.tryTake(creds.usercode, lane.bucket, IYS_BUDGET_LIMIT, IYS_BUDGET_WINDOW_MS)) {
         break; // account budget exhausted this minute — remaining batches resume next tick, untouched
       }
       processed += batch.length;
