@@ -1,23 +1,69 @@
 import { creditCost } from '../ai/ai-credit-costs';
+import { verifyLeadUnsubscribeToken } from '../channels/lead-unsubscribe.token';
+import { safeFetch } from '../../../common/util/safe-fetch';
 import { WorkflowActionHandler, WorkflowContext } from './workflow-action.handler';
 
+// The webhook step is the one leaf that talks to the outside world. Only the
+// transport is faked — SsrfBlockedError stays the real class, because the
+// handler branches on `instanceof`.
+jest.mock('../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+
 /**
- * interpolate() feeds PLAIN-TEXT sinks only (sendPlainEmail text body, SMS /
+ * The constructor is ten arguments wide and positional, so every test builds
+ * the handler by NAME. A silently shifted argument is a test that proves
+ * nothing, and this file has moved a dependency once already (the raw mailer
+ * and the mailbox became the outbound gateway).
+ */
+interface HandlerDeps {
+  prisma?: unknown;
+  outboundMail?: unknown;
+  config?: unknown;
+  anthropic?: unknown;
+  credits?: unknown;
+  autoAssigner?: unknown;
+  notifications?: unknown;
+  sender?: unknown;
+  reviews?: unknown;
+  tags?: unknown;
+}
+
+/** A gateway that would fail the test loudly if a send reached it. */
+const GATEWAY_UNUSED = {
+  send: jest.fn(async () => {
+    throw new Error('outboundMail.send must not be reached in this test');
+  }),
+};
+const NO_CONFIG = { get: () => undefined };
+
+function mkHandler(deps: HandlerDeps = {}): WorkflowActionHandler {
+  return new WorkflowActionHandler(
+    (deps.prisma ?? null) as any,
+    (deps.outboundMail ?? GATEWAY_UNUSED) as any,
+    (deps.config ?? NO_CONFIG) as any,
+    (deps.anthropic ?? null) as any,
+    (deps.credits ?? null) as any,
+    (deps.autoAssigner ?? null) as any,
+    (deps.notifications ?? null) as any,
+    (deps.sender ?? null) as any,
+    (deps.reviews ?? null) as any,
+    (deps.tags ?? null) as any,
+  );
+}
+
+/**
+ * interpolate() feeds PLAIN-TEXT sinks only (the mail's text body, SMS /
  * WhatsApp / webchat). It must NOT HTML-escape — escaping there corrupts
  * legitimate content while adding no safety (the sink isn't HTML). The
  * whitelist token replace (resolveField, lead/trigger/context roots only) is
  * the injection-safe part and is exercised here implicitly.
  */
-const MAILBOX_NONE = { resolve: async () => null, send: async () => null };
-
 describe('WorkflowActionHandler.interpolate', () => {
   // interpolate() only touches ctx via resolveField, so the injected services
   // are irrelevant here — construct with nulls and reach the private method.
-  const handler = new WorkflowActionHandler(
-    null as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-    null as any, null as any, null as any, null as any,
-    null as any,
-  );
+  const handler = mkHandler();
   const interpolate = (tpl: string, ctx: WorkflowContext): string =>
     (handler as any).interpolate(tpl, ctx);
 
@@ -66,10 +112,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
     // on it, which is how the handler got away with reporting every send as
     // successful.
     const sender = { send: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) };
-    const handler = new WorkflowActionHandler(
-      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, sender as any, null as any, null as any,
-    );
+    const handler = mkHandler({ prisma, sender });
     const ctx: WorkflowContext = {
       workspaceId: 'ws-1',
       lead: { id: 'lead-1', phone: '5551112233' },
@@ -81,34 +124,10 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
     expect(sender.send).toHaveBeenCalled();
   });
 
-  // Compliance: a lead who unsubscribed must NOT receive automation messages —
-  // the workflow send path (drip / nurture) has to honor the same per-channel
-  // opt-out the campaign sender does. The unsubscribe flow flips these flags
-  // precisely so future sends stop.
-  it('send_email skips a lead who opted out of email (never sends)', async () => {
-    const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
-    const handler = new WorkflowActionHandler(
-      {} as any, email as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, null as any, null as any, null as any,
-    );
-    const ctx: WorkflowContext = {
-      workspaceId: 'ws-1',
-      lead: { id: 'lead-1', email: 'x@y.com', emailOptOut: true },
-      trigger: {},
-      context: {},
-    };
-    const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
-    expect(email.sendPlainEmail).not.toHaveBeenCalled();
-    expect(String(res.output?.result)).toContain('opted out');
-  });
-
   it('send_sms skips a lead who opted out of SMS (no channel send)', async () => {
     const prisma = { channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) } };
     const sender = { send: jest.fn().mockResolvedValue(undefined) };
-    const handler = new WorkflowActionHandler(
-      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, sender as any, null as any, null as any,
-    );
+    const handler = mkHandler({ prisma, sender });
     const ctx: WorkflowContext = {
       workspaceId: 'ws-1',
       lead: { id: 'lead-1', phone: '5551112233', smsOptOut: true },
@@ -133,10 +152,7 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
       conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'co-other-customer' }) },
     };
     const sender = { send: jest.fn().mockResolvedValue(undefined) };
-    const handler = new WorkflowActionHandler(
-      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, sender as any, null as any, null as any,
-    );
+    const handler = mkHandler({ prisma, sender });
     const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: null, trigger: {}, context: {} };
 
     const res = await handler.execute({ type: 'send_webchat', body: 'hi' } as any, ctx);
@@ -148,11 +164,6 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
 });
 
 describe('WorkflowActionHandler assign_lead', () => {
-  const mkHandler = (prisma: any, autoAssigner: any) =>
-    new WorkflowActionHandler(
-      prisma, null as any, MAILBOX_NONE as any, null as any, null as any,
-      autoAssigner, null as any, null as any, null as any, null as any,
-    );
   const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
 
   // A workflow assign_lead must enforce the SAME "assignee is an ACTIVE REP"
@@ -167,7 +178,7 @@ describe('WorkflowActionHandler assign_lead', () => {
       lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue('rep-fallback') };
-    const handler = mkHandler(prisma, autoAssigner);
+    const handler = mkHandler({ prisma, autoAssigner });
 
     await handler.execute({ type: 'assign_lead', strategy: 'user', userId: 'mgr-1' } as any, ctx);
 
@@ -184,7 +195,7 @@ describe('WorkflowActionHandler assign_lead', () => {
       lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const autoAssigner = { pickAssignee: jest.fn() };
-    const handler = mkHandler(prisma, autoAssigner);
+    const handler = mkHandler({ prisma, autoAssigner });
 
     await handler.execute({ type: 'assign_lead', strategy: 'user', userId: 'rep-1' } as any, ctx);
 
@@ -194,11 +205,6 @@ describe('WorkflowActionHandler assign_lead', () => {
 });
 
 describe('WorkflowActionHandler ai_classify (category routing)', () => {
-  const mkHandler = (anthropic: any, credits: any) =>
-    new WorkflowActionHandler(
-      null as any, null as any, MAILBOX_NONE as any, anthropic, credits,
-      null as any, null as any, null as any, null as any, null as any,
-    );
   const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
   const step = (over: any = {}) => ({
     type: 'ai_classify',
@@ -209,6 +215,7 @@ describe('WorkflowActionHandler ai_classify (category routing)', () => {
   });
   const mkAi = (text: string) => ({ isEnabledFor: () => true, complete: jest.fn().mockResolvedValue({ text }) });
   const mkCredits = () => ({ reserveForJob: jest.fn(async (_ws: string, action: any, override?: number) => override ?? creditCost(action === 'brand.safety' ? 'workflow.ai_classify' : action)), refund: jest.fn() });
+  const mkAiHandler = (anthropic: any, credits: any) => mkHandler({ anthropic, credits });
 
   // Regression: a category that is a SUBSTRING of another ("hot" ⊂ "not_hot",
   // "new" ⊂ "renew") must not steal the route. A naive `reply.includes(category)`
@@ -216,14 +223,14 @@ describe('WorkflowActionHandler ai_classify (category routing)', () => {
   // CONTAINING category — mis-routing e.g. a "not interested" lead into the
   // "interested → aggressive follow-up" branch. Exact match must win.
   it('routes an exact reply to its own category even when another category is a substring', async () => {
-    const handler = mkHandler(mkAi('not_hot'), mkCredits());
+    const handler = mkAiHandler(mkAi('not_hot'), mkCredits());
     const res = await handler.execute(step() as any, ctx);
     expect(res.output?.category).toBe('not_hot');
     expect(res.goto).toBe(10);
   });
 
   it('routing is independent of category declaration order (substring listed first)', async () => {
-    const handler = mkHandler(mkAi('renew'), mkCredits());
+    const handler = mkAiHandler(mkAi('renew'), mkCredits());
     const res = await handler.execute(
       step({ categories: ['new', 'renew'], routes: { new: 1, renew: 2 } }) as any, ctx,
     );
@@ -235,14 +242,14 @@ describe('WorkflowActionHandler ai_classify (category routing)', () => {
   // in prose ("the category is: not_hot."). The LONGEST matching category wins
   // so specificity beats a shorter substring regardless of order.
   it('falls back to the LONGEST substring match for a chatty reply', async () => {
-    const handler = mkHandler(mkAi('The category is: not_hot.'), mkCredits());
+    const handler = mkAiHandler(mkAi('The category is: not_hot.'), mkCredits());
     const res = await handler.execute(step() as any, ctx);
     expect(res.output?.category).toBe('not_hot');
     expect(res.goto).toBe(10);
   });
 
   it('no matching category → no goto, category null (falls through to next step)', async () => {
-    const handler = mkHandler(mkAi('cold'), mkCredits());
+    const handler = mkAiHandler(mkAi('cold'), mkCredits());
     const res = await handler.execute(step() as any, ctx);
     expect(res.output?.category).toBeNull();
     expect(res.goto).toBeUndefined();
@@ -250,12 +257,6 @@ describe('WorkflowActionHandler ai_classify (category routing)', () => {
 });
 
 describe('WorkflowActionHandler tag actions', () => {
-  const mkHandler = (tags: any) =>
-    new WorkflowActionHandler(
-      null as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, null as any, null as any,
-      tags,
-    );
   const ctx = (lead: any): WorkflowContext => ({
     workspaceId: 'ws-1',
     lead,
@@ -265,7 +266,7 @@ describe('WorkflowActionHandler tag actions', () => {
 
   it('add_tag assigns the (interpolated) tag to the lead via TagsService', async () => {
     const tags = { assignToLead: jest.fn().mockResolvedValue([]) };
-    const handler = mkHandler(tags);
+    const handler = mkHandler({ tags });
     const res = await handler.execute(
       { type: 'add_tag', tag: 'VIP' } as any,
       ctx({ id: 'lead-1' }),
@@ -276,7 +277,7 @@ describe('WorkflowActionHandler tag actions', () => {
 
   it('add_tag is a no-op when the run has no lead', async () => {
     const tags = { assignToLead: jest.fn() };
-    const handler = mkHandler(tags);
+    const handler = mkHandler({ tags });
     const res = await handler.execute({ type: 'add_tag', tag: 'VIP' } as any, ctx(null));
     expect(tags.assignToLead).not.toHaveBeenCalled();
     expect(res.output?.result).toContain('skipped');
@@ -287,7 +288,7 @@ describe('WorkflowActionHandler tag actions', () => {
       getLeadTags: jest.fn().mockResolvedValue([{ id: 't-9', name: 'Vip' }]),
       unassignFromLead: jest.fn().mockResolvedValue({ removed: 1 }),
     };
-    const handler = mkHandler(tags);
+    const handler = mkHandler({ tags });
     const res = await handler.execute(
       { type: 'remove_tag', tag: 'vip' } as any,
       ctx({ id: 'lead-1' }),
@@ -301,7 +302,7 @@ describe('WorkflowActionHandler tag actions', () => {
       getLeadTags: jest.fn().mockResolvedValue([{ id: 't-1', name: 'Other' }]),
       unassignFromLead: jest.fn(),
     };
-    const handler = mkHandler(tags);
+    const handler = mkHandler({ tags });
     const res = await handler.execute(
       { type: 'remove_tag', tag: 'VIP' } as any,
       ctx({ id: 'lead-1' }),
@@ -321,10 +322,7 @@ describe('WorkflowActionHandler tag actions', () => {
  */
 describe('WorkflowActionHandler create_task', () => {
   const mkTaskHandler = (prisma: any, autoAssigner: any, notifications: any = { create: jest.fn().mockResolvedValue({}) }) =>
-    new WorkflowActionHandler(
-      prisma, null as any, MAILBOX_NONE as any, null as any, null as any,
-      autoAssigner, notifications, null as any, null as any, null as any,
-    );
+    mkHandler({ prisma, autoAssigner, notifications });
   const taskCtx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
 
   it('falls back to the workspace OWNER when there is no rep, and notifies them', async () => {
@@ -395,41 +393,15 @@ describe('WorkflowActionHandler create_task', () => {
 });
 
 /**
- * A workflow step must report what actually happened.
- *
- * Every other branch of send() already does — "skipped (no lead email)",
- * "skipped (lead opted out of email)", "skipped (no active SMS channel)". The
- * email branch returned "email sent" whether or not it was, because it ignored
- * sendPlainEmail's return value. A workflow run could therefore show a customer
- * as contacted when nothing reached them, which is worse than a visible
- * failure: it stops anyone from trying again.
+ * A workflow step must report what actually happened, and now it has to report
+ * it in a shape the executor can read without sniffing English prose: `ok:
+ * false` + `error` for a failure, a `skipped (…)` string for a no-op.
  */
-describe('WorkflowActionHandler.send_email — honest result', () => {
-  const make = (sendOk: boolean) => {
-    const email = { sendPlainEmail: jest.fn().mockResolvedValue(sendOk) };
-    const handler = new WorkflowActionHandler(
-      {} as any, email as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, null as any, null as any, null as any,
-    );
-    const ctx: WorkflowContext = {
-      workspaceId: 'ws-1',
-      lead: { id: 'lead-1', email: 'x@y.com', emailOptOut: false },
-      trigger: {},
-      context: {},
-    };
-    return { handler, ctx, email };
-  };
-
-  it('says sent when it went', async () => {
-    const { handler, ctx } = make(true);
-    const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
-    expect(String(res.output?.result)).toBe('email sent');
-  });
-
-  it('reports an SMS the provider refused as NOT sent', async () => {
-    // The channel branches had the same bug as the email branch one level up,
-    // and it bites harder here: SMS and WhatsApp refuse routinely — a number
-    // the carrier rejects, a WhatsApp 24-hour window that has closed.
+describe('WorkflowActionHandler — an honest channel result', () => {
+  it('reports an SMS the provider refused as NOT sent, and as a FAILURE', async () => {
+    // SMS and WhatsApp refuse routinely — a number the carrier rejects, a
+    // WhatsApp 24-hour window that has closed. Reporting that as success stops
+    // anyone from trying again.
     const prisma = {
       channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) },
       contactIdentity: { findUnique: jest.fn().mockResolvedValue({ id: 'ci-1' }) },
@@ -438,11 +410,10 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
         create: jest.fn().mockResolvedValue({ id: 'convo-1' }),
       },
     };
-    const sender = { send: jest.fn().mockResolvedValue({ id: 'm1', status: 'FAILED' }) };
-    const handler = new WorkflowActionHandler(
-      prisma as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, null as any, sender as any, null as any, null as any,
-    );
+    const sender = {
+      send: jest.fn().mockResolvedValue({ id: 'm1', status: 'FAILED', error: 'carrier rejected 0000' }),
+    };
+    const handler = mkHandler({ prisma, sender });
     const ctx: WorkflowContext = {
       workspaceId: 'ws-1',
       lead: { id: 'lead-1', phone: '+905551112233', smsOptOut: false },
@@ -453,14 +424,200 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
     const res = await handler.execute({ type: 'send_sms', body: 'hi' } as any, ctx);
 
     expect(String(res.output?.result)).toContain('NOT sent');
+    expect(res.output?.ok).toBe(false);
+    expect(String(res.output?.error)).toContain('carrier rejected');
   });
 
-  it('says NOT sent when delivery failed', async () => {
-    const { handler, ctx, email } = make(false);
-    const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
+  it('reports a webhook the far end refused as a failure, with its status', async () => {
+    (safeFetch as jest.Mock).mockResolvedValue({ ok: false, status: 500 });
+    const res = await mkHandler().execute(
+      { type: 'http_webhook_out', url: 'https://example.com/hook' } as any,
+      { workspaceId: 'ws-1', lead: null, trigger: {}, context: {} },
+    );
+    expect(res.output?.ok).toBe(false);
+    expect(String(res.output?.result)).toContain('500');
+  });
 
-    expect(email.sendPlainEmail).toHaveBeenCalled();
+  it('a webhook the far end accepted is still a plain success', async () => {
+    (safeFetch as jest.Mock).mockResolvedValue({ ok: true, status: 202 });
+    const res = await mkHandler().execute(
+      { type: 'http_webhook_out', url: 'https://example.com/hook' } as any,
+      { workspaceId: 'ws-1', lead: null, trigger: {}, context: {} },
+    );
+    expect(res.output?.ok).not.toBe(false);
+    expect(String(res.output?.result)).toBe('webhook 202');
+  });
+});
+
+/**
+ * THE CRITICAL (`workflow-email-noncompliant`).
+ *
+ * Automation mail is marketing mail to a list. It used to leave with no
+ * unsubscribe link, no header, no suppression check and no meter. It now goes
+ * through the outbound gateway as BULK, which is what attaches all four — and
+ * the footer link is a LEAD-scoped signed token, because a drip has no
+ * CampaignRecipient row to mint one from.
+ */
+describe('WorkflowActionHandler.send_email — the compliant path', () => {
+  const KEY = Buffer.alloc(32, 11).toString('base64');
+  const BASE = 'https://app.example.com';
+
+  beforeEach(() => {
+    process.env.MARKETING_SECRET_KEY = KEY;
+  });
+  afterEach(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  const config = { get: (k: string) => (k === 'PUBLIC_BASE_URL' ? BASE : undefined) };
+  const receipt = (over: Record<string, unknown> = {}) => ({
+    outcome: 'SENT',
+    ok: true,
+    mailLogId: 'ml-1',
+    messageId: 'abc@jeeta',
+    transport: 'PLATFORM',
+    retriable: false,
+    ...over,
+  });
+  const gateway = (r: Record<string, unknown> = {}) => ({ send: jest.fn().mockResolvedValue(receipt(r)) });
+  const ctx = (lead: any = { id: 'lead-1', email: 'x@y.com' }): WorkflowContext => ({
+    workspaceId: 'ws-1',
+    lead,
+    trigger: {},
+    context: {},
+    run: { id: 'run-1', workflowId: 'wf-1', stepIndex: 3 },
+  });
+  const step = { type: 'send_email', subject: 'Hello', body: 'hi' } as any;
+
+  it('sends as BULK with a lead-scoped unsubscribe link the public route can resolve', async () => {
+    const outboundMail = gateway();
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx());
+
+    const mail = outboundMail.send.mock.calls[0][0];
+    expect(mail.mailClass).toBe('BULK');
+    expect(mail.to).toBe('x@y.com');
+    expect(mail.leadId).toBe('lead-1');
+    expect(mail.source).toBe('workflow:wf-1');
+    // The link is the whole point: a footer nobody can act on is worse than no
+    // footer at all, so the token has to round-trip to THIS lead.
+    expect(mail.unsubscribe.url).toBe(`${BASE}/api/public/ul/${mail.unsubscribe.token}`);
+    expect(verifyLeadUnsubscribeToken(mail.unsubscribe.token)).toEqual({
+      workspaceId: 'ws-1',
+      leadId: 'lead-1',
+      channel: 'EMAIL',
+    });
+    expect(String(res.output?.result)).toBe('email sent');
+    expect(res.output?.ok).not.toBe(false);
+  });
+
+  it('keys idempotency on (run, step, lead) so a replayed step cannot mail twice', async () => {
+    const outboundMail = gateway();
+    await mkHandler({ outboundMail, config }).execute(step, ctx());
+    expect(outboundMail.send.mock.calls[0][0].idempotencyKey).toBe('wf:run-1:3:lead-1');
+  });
+
+  it('treats a deduped send as sent, not as a failure', async () => {
+    const outboundMail = gateway({ outcome: 'DEDUPED', ok: true });
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx());
+    expect(res.output?.ok).not.toBe(false);
+    expect(String(res.output?.result)).toContain('already sent');
+  });
+
+  // The local `if (lead.emailOptOut)` gate is gone ON PURPOSE: suppression is
+  // one decision in one place now (the address, not the lead row, is the unit
+  // of consent), and the gateway reads the same flag plus the suppression
+  // table. The step must still refuse — as a SKIP, not a failure, and without
+  // throwing (a throw here FAILS the whole run).
+  it('reports an opted-out lead as skipped, never as a failure and never as a throw', async () => {
+    const outboundMail = gateway({
+      outcome: 'REFUSED',
+      ok: false,
+      reason: 'SUPPRESSED_OPT_OUT',
+      transport: 'NONE',
+    });
+    const res = await mkHandler({ outboundMail, config }).execute(
+      step,
+      ctx({ id: 'lead-1', email: 'x@y.com', emailOptOut: true }),
+    );
+
+    expect(outboundMail.send).toHaveBeenCalledTimes(1); // the decision is the gateway's
+    expect(String(res.output?.result)).toMatch(/^skipped/);
+    expect(String(res.output?.result)).toContain('opted out');
+    expect(res.output?.ok).not.toBe(false);
+  });
+
+  it('reports an exhausted message quota as skipped — one step, not the whole run', async () => {
+    const outboundMail = gateway({
+      outcome: 'REFUSED',
+      ok: false,
+      reason: 'QUOTA_EXHAUSTED',
+      transport: 'NONE',
+    });
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx());
+    expect(String(res.output?.result)).toMatch(/^skipped/);
+    expect(res.output?.ok).not.toBe(false);
+  });
+
+  it('records a failed send as FAILED, in the provider’s own words', async () => {
+    const outboundMail = gateway({
+      outcome: 'FAILED_TRANSIENT',
+      ok: false,
+      reason: 'TRANSIENT',
+      error: '451 4.7.1 Greylisted, try again later',
+      retriable: true,
+    });
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx());
+    expect(res.output?.ok).toBe(false);
     expect(String(res.output?.result)).toContain('NOT sent');
+    expect(String(res.output?.error)).toContain('Greylisted');
+  });
+
+  it('fails closed when PUBLIC_BASE_URL is unset — nothing is sent at all', async () => {
+    const outboundMail = gateway();
+    const res = await mkHandler({ outboundMail, config: NO_CONFIG }).execute(step, ctx());
+    expect(outboundMail.send).not.toHaveBeenCalled();
+    expect(res.output?.ok).toBe(false);
+    expect(String(res.output?.error)).toContain('PUBLIC_BASE_URL');
+  });
+
+  it('fails closed when no key can sign the token — never mails without a way out', async () => {
+    delete process.env.MARKETING_SECRET_KEY;
+    const outboundMail = gateway();
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx());
+    expect(outboundMail.send).not.toHaveBeenCalled();
+    expect(res.output?.ok).toBe(false);
+  });
+
+  // The gateway is built not to throw. This is the backstop for the day
+  // something under it does: a throw here would FAIL the run and drop every
+  // later step of the drip.
+  it('never lets an unexpected gateway error escape as a throw', async () => {
+    const outboundMail = { send: jest.fn().mockRejectedValue(new Error('prisma is down')) };
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx());
+    expect(res.output?.ok).toBe(false);
+    expect(String(res.output?.error)).toContain('prisma is down');
+  });
+
+  it('still skips a lead with no address, before minting anything', async () => {
+    const outboundMail = gateway();
+    const res = await mkHandler({ outboundMail, config }).execute(step, ctx({ id: 'lead-1' }));
+    expect(outboundMail.send).not.toHaveBeenCalled();
+    expect(String(res.output?.result)).toBe('skipped (no lead email)');
+  });
+
+  // A run started before this shipped, or a direct execute() in a test, has no
+  // run identity. The mail must still go — it simply cannot be deduped.
+  it('sends without an idempotency key when the step has no run identity', async () => {
+    const outboundMail = gateway();
+    await mkHandler({ outboundMail, config }).execute(step, {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', email: 'x@y.com' },
+      trigger: {},
+      context: {},
+    });
+    const mail = outboundMail.send.mock.calls[0][0];
+    expect(mail.idempotencyKey).toBeUndefined();
+    expect(mail.source).toBe('workflow');
   });
 });
 
@@ -472,11 +629,7 @@ describe('WorkflowActionHandler.send_email — honest result', () => {
 describe('WorkflowActionHandler notify_user', () => {
   const make = () => {
     const notifications = { create: jest.fn().mockResolvedValue({}) };
-    const handler = new WorkflowActionHandler(
-      null as any, null as any, MAILBOX_NONE as any, null as any, null as any,
-      null as any, notifications as any, null as any, null as any, null as any,
-    );
-    return { handler, notifications };
+    return { handler: mkHandler({ notifications }), notifications };
   };
 
   it('stamps the lead it fired on so the notification has somewhere to go', async () => {

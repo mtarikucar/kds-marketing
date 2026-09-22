@@ -1,13 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { WorkspaceMailboxService } from '../channels/workspace-mailbox.service';
-import { EmailService } from '../../../common/services/email.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { tierFor } from '../ai/ai-credit-costs';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from '../channels/message-sender.service';
+import { signLeadUnsubscribeToken } from '../channels/lead-unsubscribe.token';
+import { OutboundMailService } from '../channels/outbound/outbound-mail.service';
+import { MailReason, MailReceipt } from '../channels/outbound/outbound-mail.types';
 import { ReviewsService } from '../reviews/reviews.service';
 import { TagsService } from '../services/tags.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
@@ -19,13 +21,50 @@ export interface WorkflowContext {
   lead: any | null;
   trigger: Record<string, any>;
   context: Record<string, any>;
+  /**
+   * Which run and which step this call is. Optional because
+   * `WorkflowTriggerService` builds a context purely to evaluate trigger
+   * filters — nothing is executed against it. When it IS present it gives a
+   * mail its idempotency key and its source label.
+   */
+  run?: { id: string; workflowId: string; stepIndex: number };
 }
+
+/**
+ * What one leaf action did.
+ *
+ * `ok: false` is the ONLY failure signal the executor reads. It used to read
+ * the prose — `result.startsWith('skipped')` — so "email NOT sent (…)" was
+ * recorded DONE and an operator saw "120 → 120 completed" while SMTP had been
+ * broken for a week (`failed-automation-done`). SKIPPED and FAILED are
+ * different states: policy said no, versus nothing worked.
+ */
+export type StepResult = {
+  result: string;
+  /** Explicit `false` = this step failed. Absent = it did its job (or skipped). */
+  ok?: boolean;
+  error?: string;
+  /** The ledger row a mail left behind, so "where did it go" has an answer. */
+  mailLogId?: string;
+  /**
+   * The gate deferred rather than refused: try THIS step again at this time.
+   * Stripped before the output is persisted — it is a control signal, not a
+   * fact about what happened.
+   */
+  retryAt?: Date;
+};
 
 /** Control signal a step can return to the executor. */
 export interface StepOutcome {
   goto?: number;
   stop?: boolean;
   wait?: { seconds?: number; untilReply?: boolean; timeoutSeconds?: number };
+  /**
+   * Re-run the SAME step at `at`, rather than advancing past it. The send
+   * window is the only thing that asks for this: a mail held until 09:00 is
+   * queued forward, never dropped (PLAN `mail-window.ts`).
+   */
+  retryStep?: { at: Date };
   startWorkflowId?: string;
   output?: Record<string, unknown>;
 }
@@ -33,6 +72,34 @@ export interface StepOutcome {
 const LEAD_WRITABLE = new Set([
   'status', 'priority', 'notes', 'nextFollowUp', 'businessName', 'contactPerson', 'city', 'region',
 ]);
+
+/**
+ * What a gateway refusal means on a step-history line. The machine code stays
+ * on the `MailLog` row for the tenant-facing surfaces to localise (PLAN G8);
+ * this is the sentence the operator reads in the run drawer.
+ */
+const REFUSAL_TEXT: Record<MailReason, string> = {
+  SUPPRESSED_OPT_OUT: 'lead opted out of email',
+  SUPPRESSED_BOUNCE: 'address previously hard-bounced',
+  SUPPRESSED_INVALID: 'address is not deliverable',
+  SUPPRESSED_COMPLAINT: 'recipient reported spam',
+  SUPPRESSED_ERASED: 'contact was erased',
+  IYS_RET: 'İYS: commercial email refused for this address',
+  CONSENT_REQUIRED: 'no recorded consent for marketing email',
+  QUOTA_EXHAUSTED: 'message quota exhausted',
+  DAILY_CAP: 'daily email cap reached',
+  QUIET_HOURS: 'outside the send window',
+  WORKSPACE_INACTIVE: 'workspace is not active',
+  SENDING_PAUSED: 'email sending is paused',
+  NO_RECIPIENT: 'no recipient address',
+  BAD_RECIPIENT: 'invalid recipient address',
+  NO_UNSUBSCRIBE: 'no unsubscribe link',
+  MISSING_PUBLIC_BASE_URL: 'PUBLIC_BASE_URL is not configured',
+  NOT_CONFIGURED: 'email is not configured',
+  TRANSIENT: 'temporary delivery failure',
+  SYSTEMIC: 'the mail transport is failing',
+  PERMANENT: 'delivery failed',
+};
 
 /**
  * Executes a single leaf step against the run context and returns a control
@@ -47,8 +114,8 @@ export class WorkflowActionHandler {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly email: EmailService,
-    private readonly mailbox: WorkspaceMailboxService,
+    private readonly outboundMail: OutboundMailService,
+    private readonly config: ConfigService,
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
     private readonly autoAssigner: LeadAutoAssignerService,
@@ -63,8 +130,13 @@ export class WorkflowActionHandler {
       case 'send_email':
       case 'send_sms':
       case 'send_whatsapp':
-      case 'send_webchat':
-        return { output: { result: await this.send(step.type, step, ctx) } };
+      case 'send_webchat': {
+        // `retryAt` is a control signal and never a step output: persisted, it
+        // would put a Date in the run's jsonb and read as if something had
+        // happened when the whole point is that nothing did yet.
+        const { retryAt, ...output } = await this.send(step.type, step, ctx);
+        return retryAt ? { output, retryStep: { at: retryAt } } : { output };
+      }
       case 'ai_generate':
         return this.aiGenerate(step, ctx);
       case 'ai_classify':
@@ -80,7 +152,7 @@ export class WorkflowActionHandler {
       case 'notify_user':
         return { output: { result: await this.notify(step, ctx) } };
       case 'http_webhook_out':
-        return { output: { result: await this.webhook(step, ctx) } };
+        return { output: await this.webhook(step, ctx) };
       case 'wait':
         return { wait: { seconds: step.seconds, untilReply: step.mode === 'until_reply', timeoutSeconds: step.timeoutSeconds } };
       case 'stop_workflow':
@@ -100,52 +172,16 @@ export class WorkflowActionHandler {
 
   // ---- leaf actions ----
 
-  private async send(type: string, step: any, ctx: WorkflowContext): Promise<string> {
+  private async send(type: string, step: any, ctx: WorkflowContext): Promise<StepResult> {
     const body = this.interpolate(step.body, ctx);
     const subject = step.subject ? this.interpolate(step.subject, ctx) : undefined;
     const lead = ctx.lead;
-    if (type === 'send_email') {
-      if (!lead?.email) return 'skipped (no lead email)';
-      // Honor the per-channel opt-out — a lead who unsubscribed must not receive
-      // automation mail either (campaign-tracking's unsubscribe flips this flag
-      // precisely so "future sends" stop). The campaign sender already skips
-      // opted-out recipients; this was the sibling send path that didn't.
-      if (lead.emailOptOut) return 'skipped (lead opted out of email)';
-      // Every other branch here reports what actually happened — "skipped (no
-      // lead email)", "skipped (lead opted out)". This one said "email sent"
-      // whether or not it was, so a workflow run could show a customer as
-      // contacted when nothing reached them.
-      // The workspace's OWN mailbox first, so an automation's mail leaves from
-      // the same address its campaigns do. This path used to go straight to the
-      // platform mailer, so a workspace that had connected its own address
-      // watched its CAMPAIGNS arrive from itself and its AUTOMATIONS arrive
-      // from the platform — the same decision made twice, fixed once.
-      //
-      // `null` means the workspace has no usable mailbox, which is a normal
-      // state and not a reason to skip the send.
-      const own = await this.mailbox.send({
-        workspaceId: ctx.workspaceId,
-        to: lead.email,
-        subject: subject ?? 'Message',
-        text: body,
-      });
-      if (own) {
-        return own.ok
-          ? 'email sent (workspace mailbox)'
-          : `email NOT sent (${own.error ?? 'delivery failed'})`;
-      }
-      const delivered = await this.email.sendPlainEmail(
-        lead.email,
-        subject ?? 'Message',
-        body,
-      );
-      return delivered ? 'email sent' : 'email NOT sent (delivery failed)';
-    }
+    if (type === 'send_email') return this.sendEmail(subject, body, ctx);
     const channelType = type === 'send_sms' ? 'SMS' : type === 'send_whatsapp' ? 'WHATSAPP' : 'WEBCHAT';
     const channel = await this.prisma.channel.findFirst({
       where: { workspaceId: ctx.workspaceId, type: channelType, status: 'ACTIVE' },
     });
-    if (!channel) return `skipped (no active ${channelType} channel)`;
+    if (!channel) return { result: `skipped (no active ${channelType} channel)` };
 
     let conversationId: string | null = null;
     if (channelType === 'WEBCHAT') {
@@ -154,38 +190,160 @@ export class WorkflowActionHandler {
       // Prisma DROPS from the where — matching ANY open web-chat session in the
       // workspace and leaking the message to an unrelated customer. Skip instead
       // (mirrors the no-email / no-phone guards on the other channels).
-      if (!lead?.id) return 'skipped (no lead for web-chat)';
+      if (!lead?.id) return { result: 'skipped (no lead for web-chat)' };
       const convo = await this.prisma.conversation.findFirst({
         where: { workspaceId: ctx.workspaceId, channelId: channel.id, leadId: lead.id, status: 'OPEN' },
         orderBy: { createdAt: 'desc' },
       });
       conversationId = convo?.id ?? null;
-      if (!conversationId) return 'skipped (no open web-chat session)';
+      if (!conversationId) return { result: 'skipped (no open web-chat session)' };
     } else {
       const value = channelType === 'WHATSAPP' ? lead?.whatsapp || lead?.phone : lead?.phone;
-      if (!value) return `skipped (lead has no ${channelType === 'WHATSAPP' ? 'whatsapp/phone' : 'phone'})`;
-      // Honor the per-channel opt-out (parity with send_email + the campaign sender)
-      // — a lead who unsubscribed from SMS/WhatsApp must not get automation messages.
-      if (channelType === 'SMS' && lead?.smsOptOut) return 'skipped (lead opted out of sms)';
-      if (channelType === 'WHATSAPP' && lead?.waOptOut) return 'skipped (lead opted out of whatsapp)';
+      if (!value) return { result: `skipped (lead has no ${channelType === 'WHATSAPP' ? 'whatsapp/phone' : 'phone'})` };
+      // Honor the per-channel opt-out (parity with the campaign sender) — a
+      // lead who unsubscribed from SMS/WhatsApp must not get automation
+      // messages. Email's copy of this gate now lives in the outbound gateway,
+      // which reads the same flag AND the suppression table; SMS/WhatsApp
+      // opt-out is İYS/NetGSM territory and stays here.
+      if (channelType === 'SMS' && lead?.smsOptOut) return { result: 'skipped (lead opted out of sms)' };
+      if (channelType === 'WHATSAPP' && lead?.waOptOut) return { result: 'skipped (lead opted out of whatsapp)' };
       conversationId = await this.ensureConversation(
         ctx.workspaceId, channel.id, channelType === 'WHATSAPP' ? 'WA' : 'PHONE', value, lead.id,
       );
     }
-    // Same as the send_email branch above: MessageSenderService returns a row
-    // whose status is SENT or FAILED and does NOT throw on a provider
-    // rejection, so reporting "sent" unconditionally records a customer as
-    // contacted when nothing reached them. SMS and WhatsApp refuse routinely —
-    // a number the carrier rejects, a WhatsApp 24-hour window that has closed.
+    // MessageSenderService returns a row whose status is SENT or FAILED and
+    // does NOT throw on a provider rejection, so reporting "sent"
+    // unconditionally records a customer as contacted when nothing reached
+    // them. SMS and WhatsApp refuse routinely — a number the carrier rejects, a
+    // WhatsApp 24-hour window that has closed.
     const outbound = await this.sender.send({
       workspaceId: ctx.workspaceId,
       conversationId,
       text: body,
       authorType: 'SYSTEM',
     });
-    return outbound?.status === 'SENT'
-      ? `${channelType} sent`
-      : `${channelType} NOT sent (delivery failed)`;
+    if (outbound?.status === 'SENT') return { result: `${channelType} sent` };
+    // The provider's own words, not a paraphrase: this is the string an
+    // operator pastes into a support thread.
+    const error = ((outbound as { error?: string } | null)?.error ?? 'delivery failed').slice(0, 200);
+    return { result: `${channelType} NOT sent (${error})`, ok: false, error };
+  }
+
+  /**
+   * Automation mail is marketing mail to a list, and it left with no way off
+   * that list at all: no footer link, no `List-Unsubscribe` header, no
+   * suppression check and no meter (`workflow-email-noncompliant`, the one
+   * CRITICAL). It now goes through the outbound gateway as `BULK`, which is
+   * what attaches all four plus the ledger row and the lead-timeline trace.
+   *
+   * Two jobs are left here. The first is the one thing a drip cannot borrow
+   * from a campaign: the unsubscribe token. There is no `CampaignRecipient`
+   * row behind an automation, so the link is a signed LEAD-scoped token
+   * (`lead-unsubscribe.token.ts`) resolved by the public `ul/:token` route.
+   * The second is PLAN A7: map the receipt back onto this caller's own shape —
+   * a string the executor can show, and never a throw. The executor turns a
+   * thrown step into a whole-run FAILED, which would drop every later step of
+   * the drip.
+   */
+  private async sendEmail(
+    subject: string | undefined,
+    text: string,
+    ctx: WorkflowContext,
+  ): Promise<StepResult> {
+    const lead = ctx.lead;
+    if (!lead?.email) return { result: 'skipped (no lead email)' };
+    // The token is lead-scoped, so a subject with no lead row has no link and
+    // therefore no send. (A leadless run cannot reach here — `lead.email` is
+    // already required — but the token is only as good as the id inside it.)
+    if (!lead.id) return { result: 'skipped (no lead)' };
+
+    // Fail closed, mirroring campaign-sender.service.ts:466-470. Mail a
+    // recipient cannot opt out of IS the breach, so a deploy that cannot build
+    // the link does not send — and because that is a misconfiguration rather
+    // than a policy decision, it is recorded FAILED and stays visible instead
+    // of quietly reading as "skipped".
+    const link = this.unsubscribeLink(ctx.workspaceId, String(lead.id));
+    if ('error' in link) {
+      return { result: `email NOT sent (${link.error})`, ok: false, error: link.error };
+    }
+
+    try {
+      const receipt = await this.outboundMail.send({
+        workspaceId: ctx.workspaceId,
+        mailClass: 'BULK',
+        to: String(lead.email),
+        subject: subject ?? 'Message',
+        text,
+        leadId: String(lead.id),
+        unsubscribe: link,
+        source: ctx.run ? `workflow:${ctx.run.workflowId}` : 'workflow',
+        // A step has a real domain key, so a replayed advance() after a crash
+        // re-sends nothing. Absent when the caller has no run identity: never
+        // invent a content-derived key, since a drip legitimately repeats a
+        // body. The deliberate trade-off is a step re-entered by a backward
+        // `goto` within ONE run, which is deduped rather than re-sent — the
+        // accidental loop that MAX_GOAL_JUMPS_PER_RUN exists for is far more
+        // likely than a workflow that means to mail the same step twice.
+        ...(ctx.run ? { idempotencyKey: `wf:${ctx.run.id}:${ctx.run.stepIndex}:${lead.id}` } : {}),
+      });
+      return this.stepResultFor(receipt);
+    } catch (e: any) {
+      // The gateway is built not to throw (PLAN G2), and this is the backstop
+      // for the day something under it does anyway: one mail step is worth a
+      // FAILED step, never a FAILED run — the tag-add, the task and the
+      // update_lead after it still have to happen.
+      const error = String(e?.message ?? e).slice(0, 200);
+      this.logger.error(`workflow send_email failed for workspace=${ctx.workspaceId}: ${error}`);
+      return { result: `email NOT sent (${error})`, ok: false, error };
+    }
+  }
+
+  /** The receipt, in the words a run's step history uses. */
+  private stepResultFor(receipt: MailReceipt): StepResult {
+    const ref = receipt.mailLogId ? { mailLogId: receipt.mailLogId } : {};
+    switch (receipt.outcome) {
+      case 'SENT':
+        return { result: 'email sent', ...ref };
+      case 'DEDUPED':
+        // This step already mailed this lead. Saying "sent" is the truth.
+        return { result: 'email already sent (same step, same lead)', ...ref };
+      case 'REFUSED': {
+        // The send window is the one refusal that is not an answer: the mail
+        // is still going, just not at 02:30. Dropping it here would turn the
+        // quiet-hours gate into the broken automation it exists to prevent.
+        if (receipt.retriable && receipt.retryAt) {
+          return { result: `deferred (${receipt.reason ? REFUSAL_TEXT[receipt.reason] : 'deferred'})`, ...ref, retryAt: receipt.retryAt };
+        }
+        // Policy said no. That is terminal, it is not a failure, and it must
+        // not fail the run: one opted-out lead is one skipped step, while the
+        // tag-add and the follow-up task after it still have to happen.
+        const why = receipt.reason ? REFUSAL_TEXT[receipt.reason] : 'refused';
+        return { result: `skipped (${why})`, ...ref };
+      }
+      default: {
+        const why = receipt.error ?? (receipt.reason ? REFUSAL_TEXT[receipt.reason] : 'delivery failed');
+        const error = String(why).slice(0, 200);
+        return { result: `email NOT sent (${error})`, ok: false, error, ...ref };
+      }
+    }
+  }
+
+  /**
+   * The footer link, or the reason there isn't one. Both halves have to exist
+   * — a public base URL to point at and a key to sign with — because a link
+   * that 404s reads to the recipient as contempt, which is worse than no link.
+   */
+  private unsubscribeLink(
+    workspaceId: string,
+    leadId: string,
+  ): { token: string; url: string } | { error: string } {
+    const base = (this.config.get<string>('PUBLIC_BASE_URL') ?? '').trim().replace(/\/+$/, '');
+    if (!base) return { error: 'PUBLIC_BASE_URL not configured (unsubscribe link required)' };
+    const token = signLeadUnsubscribeToken(workspaceId, leadId, 'EMAIL');
+    if (!token) return { error: 'MARKETING_SECRET_KEY not configured (unsubscribe link required)' };
+    // The same pair the public route resolves (campaign mail uses `u/`, which
+    // carries a recipient token; this is the lead-scoped sibling).
+    return { token, url: `${base}/api/public/ul/${token}` };
   }
 
   private async ensureConversation(
@@ -478,7 +636,7 @@ export class WorkflowActionHandler {
     return 'review request created';
   }
 
-  private async webhook(step: any, ctx: WorkflowContext): Promise<string> {
+  private async webhook(step: any, ctx: WorkflowContext): Promise<StepResult> {
     // step.url is operator-controlled, so route the call through the SSRF guard
     // (scheme allow-list + private/metadata-IP rejection + redirect re-validation).
     try {
@@ -488,13 +646,25 @@ export class WorkflowActionHandler {
         body: JSON.stringify({ payload: step.payload ?? null, lead: ctx.lead, trigger: ctx.trigger }),
         timeoutMs: 10_000,
       });
-      return `webhook ${res.status}`;
+      // A 500 from the far end is not a completed step. The status was already
+      // in the result string; what was missing is the flag that makes the run
+      // record it as FAILED instead of DONE.
+      if (!res.ok) {
+        return {
+          result: `webhook ${res.status}`,
+          ok: false,
+          error: `webhook responded ${res.status}`,
+        };
+      }
+      return { result: `webhook ${res.status}` };
     } catch (e: any) {
       if (e instanceof SsrfBlockedError) {
         this.logger.warn(`webhook blocked for workspace=${ctx.workspaceId}: ${e.message}`);
-        return `webhook blocked: ${e.message.slice(0, 120)}`;
+        const error = `blocked: ${e.message.slice(0, 120)}`;
+        return { result: `webhook ${error}`, ok: false, error };
       }
-      return `webhook failed: ${(e?.message ?? e).toString().slice(0, 120)}`;
+      const error = `failed: ${(e?.message ?? e).toString().slice(0, 120)}`;
+      return { result: `webhook ${error}`, ok: false, error };
     }
   }
 

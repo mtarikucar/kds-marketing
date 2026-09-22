@@ -8,6 +8,13 @@ import type { WorkflowGoal, WorkflowStep, WorkflowTriggerType, WorkflowFilter } 
  * against the Zod DSL in workflow-templates.spec.ts so a malformed recipe can
  * never ship. Bodies use the same {{lead.*}} interpolation tokens as authored
  * workflows; the operator edits freely before saving.
+ *
+ * One token is deliberately absent: the SENDER's brand. `{{lead.businessName}}`
+ * is the PROSPECT's company, so using it as the sender produced "Welcome to
+ * Ayşe Yılmaz 👋" — the recipient greeted with their own name as if it were
+ * ours — and the DSL has no workspace root to swap it for. Starter copy
+ * therefore makes no brand claim at all; the operator adds their own words
+ * before saving (`workflow-templates-branding`).
  */
 export interface WorkflowTemplate {
   /** Stable identifier (kebab-case), safe to reference from the UI. */
@@ -30,11 +37,22 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     key: 'welcome-nurture',
     name: 'Welcome nurture (5-touch)',
     description:
-      'Greets every new lead, then drips value over a few days across email and WhatsApp. Exits automatically once the lead is marked WON.',
+      'Greets a lead who came to you — a form, a referral, an inbound call — then drips value over a few days across email and WhatsApp. Skips scraped and imported contacts, and exits automatically once the lead is marked WON.',
     category: 'Nurture',
-    trigger: { type: 'lead.created', filters: [] },
+    // "Thanks for your interest" is a lie to a prospect the research engine
+    // scraped or a rep bulk-imported: they never showed any. A starter recipe
+    // is copied into the create form and edited there, so this is the default
+    // an operator starts from, not a cage — widening it is one deleted filter
+    // (`workflow-templates-branding`).
+    trigger: {
+      type: 'lead.created',
+      filters: [
+        { field: 'lead.source', op: 'neq', value: 'AI_RESEARCH' },
+        { field: 'lead.source', op: 'neq', value: 'IMPORT' },
+      ],
+    },
     steps: [
-      { type: 'send_email', subject: 'Welcome to {{lead.businessName}} 👋', body: 'Hi {{lead.contactPerson}},\n\nThanks for your interest — we’re glad you’re here. Over the next few days we’ll share a few things that help you get the most out of working with us.\n\nTalk soon!' },
+      { type: 'send_email', subject: 'Welcome 👋', body: 'Hi {{lead.contactPerson}},\n\nThanks for your interest — we’re glad you’re here. Over the next few days we’ll share a few things that help you get the most out of working with us.\n\nTalk soon!' },
       { type: 'wait', mode: 'duration', seconds: ONE_DAY },
       { type: 'send_email', subject: 'Getting started', body: 'Hi {{lead.contactPerson}}, here’s the one thing most customers do first. Reply to this email if you have any questions.' },
       { type: 'wait', mode: 'duration', seconds: TWO_DAYS },
@@ -51,7 +69,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     category: 'Speed to lead',
     trigger: { type: 'lead.created', filters: [] },
     steps: [
-      { type: 'send_sms', body: 'Hi {{lead.contactPerson}}, thanks for reaching out to {{lead.businessName}}! A team member will be in touch shortly. Reply here any time.' },
+      { type: 'send_sms', body: 'Hi {{lead.contactPerson}}, thanks for reaching out! A team member will be in touch shortly. Reply here any time.' },
       { type: 'wait', mode: 'until_reply', timeoutSeconds: ONE_DAY },
       { type: 'notify_user', message: 'New lead {{lead.contactPerson}} has not replied in 24h — follow up.' },
       { type: 'create_task', title: 'Call {{lead.contactPerson}} ({{lead.businessName}})', dueInHours: 4 },
@@ -81,7 +99,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     steps: [
       { type: 'send_whatsapp', body: 'Hi {{lead.contactPerson}}, your appointment is booked ✅ See you soon!' },
       { type: 'wait', mode: 'duration', seconds: ONE_DAY },
-      { type: 'send_sms', body: 'Reminder: your appointment with {{lead.businessName}} is coming up. Reply here if you need to reschedule.' },
+      { type: 'send_sms', body: 'Reminder: your appointment is coming up. Reply here if you need to reschedule.' },
     ],
   },
   {
@@ -93,7 +111,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     trigger: { type: 'opportunity.won', filters: [] },
     steps: [
       { type: 'add_tag', tag: 'customer' },
-      { type: 'send_email', subject: 'Welcome aboard 🎉', body: 'Hi {{lead.contactPerson}}, welcome to {{lead.businessName}}! Here’s what happens next…' },
+      { type: 'send_email', subject: 'Welcome aboard 🎉', body: 'Hi {{lead.contactPerson}}, thanks for choosing us! Here’s what happens next…' },
       { type: 'create_task', title: 'Onboard {{lead.contactPerson}}', dueInHours: 48 },
     ],
   },

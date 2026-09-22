@@ -29,6 +29,22 @@ describe('workflow templates', () => {
     },
   );
 
+  /**
+   * `Lead.businessName` is the PROSPECT's company, not the workspace's. Used as
+   * the sender brand it produced "Welcome to Ayşe Yılmaz 👋" — the recipient
+   * greeted with their own name as if it were ours. There is no workspace token
+   * in the DSL to swap it for, so the starter copy carries no brand claim at
+   * all (`workflow-templates-branding`).
+   */
+  it('never uses the lead’s own business name as the sender brand', () => {
+    for (const t of WORKFLOW_TEMPLATES) {
+      for (const step of t.steps as any[]) {
+        expect(String(step.subject ?? '')).not.toContain('{{lead.businessName}}');
+        expect(String(step.body ?? '')).not.toContain('{{lead.businessName}}');
+      }
+    }
+  });
+
   it('every template has a name, description and category', () => {
     for (const t of WORKFLOW_TEMPLATES) {
       expect(t.name).toBeTruthy();

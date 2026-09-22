@@ -16,6 +16,18 @@ const MAX_STEPS_PER_ADVANCE = 200;
 // resume and re-fire forever. This is the cross-checkpoint backstop.
 const MAX_GOAL_JUMPS_PER_RUN = 100;
 const UNTIL_REPLY_FALLBACK_SEC = 86_400;
+/**
+ * How long one lead is left alone after a `link.clicked` run, unless the
+ * author says otherwise. An hour is short enough that "click here to request a
+ * callback" still works the second time somebody means it, and long enough
+ * that a scanner prefetch plus the human's own click is one enrolment, not two
+ * (`link-clicked-reenroll`).
+ */
+const LINK_CLICK_COOLDOWN_SEC = 3600;
+const MIN_REENTRY_COOLDOWN_SEC = 60;
+const MAX_REENTRY_COOLDOWN_SEC = 2_592_000;
+/** How often one step may be queued forward by the send window before it just goes. */
+const MAX_DEFERRALS_PER_STEP = 3;
 
 interface StartSubject {
   leadId?: string | null;
@@ -59,6 +71,9 @@ export class WorkflowExecutorService implements OnModuleInit {
       this.logger.warn(`workflow ${workflow.id} exceeded max chain depth ${MAX_WORKFLOW_DEPTH}`);
       return null;
     }
+    // Only a root enrolment is re-entry-governed: a child start is the
+    // parent's decision, already made.
+    if (depth === 0 && (await this.reentryBlocked(workflow, subject))) return null;
     let run;
     try {
       run = await this.prisma.workflowRun.create({
@@ -93,6 +108,73 @@ export class WorkflowExecutorService implements OnModuleInit {
 
   private async resume(job: ClaimedJob): Promise<void> {
     await this.advance(job.payload.runId);
+  }
+
+  /**
+   * Has this lead been enrolled too recently to be enrolled again?
+   *
+   * Asked of `link.clicked` alone, because it is the one trigger a single lead
+   * fires over and over: every other trigger type fires once per real-world
+   * event, and a blanket cooldown would break the ones that legitimately
+   * repeat (a status flipped back and forth, a second booking).
+   *
+   * The two existing guards do not cover it. `workflow_runs_active_per_lead`
+   * frees the moment the prior run finishes, and a one-step send workflow
+   * finishes inside `start()` in milliseconds; `workflow_runs_trigger_event`
+   * keys on the source event id, and every click is a new `TriggerLinkClick`
+   * and so a new id. Result: a scanner prefetch plus the human's own click
+   * sent two codes, and a link INSIDE the mail re-enrolled the lead every time
+   * it was followed (`link-clicked-reenroll`).
+   *
+   * `cooldown` is the default and `once_per_lead` is an author's choice, never
+   * ours: "click here to request a callback" is a legitimate repeat-use
+   * pattern that once-per-lead would break forever. A LEADLESS click has
+   * nothing to key on and is left exactly as it was — the source-event id
+   * still dedupes a redelivery.
+   */
+  private async reentryBlocked(
+    workflow: { id: string; workspaceId: string; trigger: unknown },
+    subject: StartSubject,
+  ): Promise<boolean> {
+    const trigger = (workflow.trigger ?? {}) as {
+      type?: string;
+      reentry?: { mode?: string; cooldownSeconds?: number };
+    };
+    if (trigger.type !== 'link.clicked') return false;
+    const leadId = subject.leadId;
+    if (!leadId) return false;
+
+    const mode = trigger.reentry?.mode ?? 'cooldown';
+    if (mode === 'always') return false;
+
+    // Only the time window is hoisted. `workspaceId` is spelled out inside the
+    // findFirst argument below because workspace-scoping.arch.spec.ts reads the
+    // call's literal argument object and cannot follow a hoisted `where`.
+    const window: Prisma.WorkflowRunWhereInput = {};
+    if (mode !== 'once_per_lead') {
+      const seconds = Math.min(
+        MAX_REENTRY_COOLDOWN_SEC,
+        Math.max(MIN_REENTRY_COOLDOWN_SEC, Number(trigger.reentry?.cooldownSeconds) || LINK_CLICK_COOLDOWN_SEC),
+      );
+      window.createdAt = { gte: new Date(Date.now() - seconds * 1000) };
+    }
+
+    try {
+      const prior = await this.prisma.workflowRun.findFirst({
+        where: { workspaceId: workflow.workspaceId, workflowId: workflow.id, leadId, ...window },
+        select: { id: true },
+      });
+      if (!prior) return false;
+      this.logger.warn(
+        `workflow ${workflow.id} skipped re-enrolling lead ${leadId} (${mode}); prior run ${prior.id}`,
+      );
+      return true;
+    } catch (e: any) {
+      // A guard we cannot read is not a reason to stop enrolling — that would
+      // turn a transient DB hiccup into silently dead automations.
+      this.logger.warn(`re-entry check failed for workflow ${workflow.id}: ${e?.message ?? e}`);
+      return false;
+    }
   }
 
   private async advance(runId: string): Promise<void> {
@@ -176,16 +258,20 @@ export class WorkflowExecutorService implements OnModuleInit {
           }
           await this.recordStep(run.workspaceId, runId, stepIndex, 'goal', 'DONE', { met: true });
           await this.persistContext(runId, ctx, stepIndex);
-          await this.finish(runId, 'DONE', null);
+          await this.finish(runId, 'DONE', stepFailure(ctx));
           return;
         }
       }
       if (stepIndex >= steps.length) {
         await this.persistContext(runId, ctx, stepIndex);
-        await this.finish(runId, 'DONE', null);
+        await this.finish(runId, 'DONE', stepFailure(ctx));
         return;
       }
       const step = steps[stepIndex];
+      // Which run and which step this is. A mail needs both: they are its
+      // idempotency key, so a replayed advance() after a crash re-sends
+      // nothing (the gateway dedupes on it).
+      ctx.run = { id: runId, workflowId: run.workflowId, stepIndex };
       let outcome;
       try {
         outcome = await this.handler.execute(step, ctx);
@@ -194,16 +280,40 @@ export class WorkflowExecutorService implements OnModuleInit {
         await this.finish(runId, 'FAILED', `step ${stepIndex} (${step.type}): ${e?.message ?? e}`);
         return;
       }
-      // A leaf action that could not do its job says so in its output string
-      // rather than throwing (a missing assignee is not worth failing the whole
-      // automation over). Recording that as DONE made a no-op indistinguishable
-      // from success: an operator arms "create a follow-up task", the run
-      // reports DONE, every step shows green — and no task exists. Seen live:
-      // create_task skipped because the workspace has no rep to own the task,
-      // and nothing anywhere said so.
-      const result = (outcome.output as { result?: unknown } | null)?.result;
-      const skipped = typeof result === 'string' && result.startsWith('skipped');
-      if (skipped) {
+      // A leaf action that could not do its job says so in its OUTPUT rather
+      // than throwing (a missing assignee is not worth failing the whole
+      // automation over), and there are two different ways it can fail to do
+      // it. `skipped (…)` is policy — nothing was supposed to happen. `ok:
+      // false` is a failure — something was supposed to happen and didn't.
+      // Both were recorded DONE: an operator armed "create a follow-up task",
+      // the run reported DONE, every step showed green and no task existed;
+      // and worse, SMTP could be broken for a week while the list read
+      // "120 → 120 completed" (`failed-automation-done`). The flag is
+      // structural on purpose — the status must never be derived by matching
+      // English prose, which is what caused this in the first place.
+      // A deferral is not a step that happened. It is recorded WAITING so the
+      // run drawer says "held until 09:00" rather than showing a green step
+      // for a mail still sitting in the queue.
+      const deferral = this.deferralFor(outcome, ctx, stepIndex);
+
+      const output = (outcome.output ?? null) as { result?: unknown; ok?: unknown; error?: unknown } | null;
+      const result = output?.result;
+      const failed = output?.ok === false;
+      const skipped = !failed && typeof result === 'string' && result.startsWith('skipped');
+      const stepError = failed ? String(output?.error ?? result ?? 'step failed') : undefined;
+      if (failed) {
+        this.logger.warn(
+          `workflow run ${runId} step ${stepIndex} (${step.type}) FAILED: ${stepError}`,
+        );
+        // The breadcrumb the runs list reads. A run that completes with a
+        // failed step used to end DONE / lastError: null, so the one run an
+        // owner needed to find looked exactly like the 119 that worked. First
+        // error wins: it is the one that explains the rest.
+        if (!ctx.context.__lastStepError) {
+          ctx.context.__lastStepError = `step ${stepIndex} (${step.type}): ${stepError}`.slice(0, 500);
+        }
+        ctx.context.__hadFailures = true;
+      } else if (skipped) {
         this.logger.warn(
           `workflow run ${runId} step ${stepIndex} (${step.type}) did nothing: ${result as string}`,
         );
@@ -213,13 +323,30 @@ export class WorkflowExecutorService implements OnModuleInit {
         runId,
         stepIndex,
         step.type,
-        skipped ? 'SKIPPED' : 'DONE',
+        deferral ? 'WAITING' : failed ? 'FAILED' : skipped ? 'SKIPPED' : 'DONE',
         outcome.output ?? null,
+        stepError,
       );
+
+      if (deferral) {
+        // Resume at THIS step, not the next one: nothing was sent, so nothing
+        // has been done.
+        ctx.context.__resumeIndex = stepIndex;
+        await this.persistContext(runId, ctx, stepIndex);
+        await this.prisma.workflowRun.update({ where: { id: runId }, data: { status: 'WAITING' } });
+        await this.scheduledJobs.schedule({
+          workspaceId: run.workspaceId,
+          kind: RESUME_KIND,
+          runAt: deferral,
+          dedupKey: runId,
+          payload: { runId },
+        });
+        return;
+      }
 
       if (outcome.stop) {
         await this.persistContext(runId, ctx, stepIndex);
-        await this.finish(runId, 'STOPPED', null);
+        await this.finish(runId, 'STOPPED', stepFailure(ctx));
         return;
       }
       if (outcome.startWorkflowId) {
@@ -300,6 +427,32 @@ export class WorkflowExecutorService implements OnModuleInit {
     `;
   }
 
+  /**
+   * When a deferred step should be tried again, or `null` to let it fall
+   * through as an ordinary result.
+   *
+   * Bounded, because a deferral re-runs the same step and an unbounded one is a
+   * loop that never sends and never stops. `clampToSendWindow` always answers
+   * with the next OPENING, so a healthy window costs exactly one deferral; the
+   * cap is only ever reached by a window that moved under the run, and when it
+   * is, the step goes ahead rather than being dropped — the customer getting
+   * their mail an hour early beats never getting it.
+   */
+  private deferralFor(outcome: { retryStep?: { at: Date } }, ctx: WorkflowContext, stepIndex: number): Date | null {
+    const at = outcome.retryStep?.at;
+    if (!at) return null;
+    const key = `__deferrals_${stepIndex}`;
+    const seen = Number((ctx.context as Record<string, unknown>)[key] ?? 0);
+    if (seen >= MAX_DEFERRALS_PER_STEP) {
+      this.logger.warn(`workflow step ${stepIndex} deferred ${seen} times; sending anyway`);
+      return null;
+    }
+    (ctx.context as Record<string, unknown>)[key] = seen + 1;
+    // Never behind the clock: a retryAt in the past would have the runner pick
+    // the job straight back up and spin.
+    return at.getTime() > Date.now() ? at : new Date(Date.now() + 60_000);
+  }
+
   private async recordStep(
     workspaceId: string, runId: string, stepIndex: number, stepType: string,
     status: string, output: any, error?: string,
@@ -308,4 +461,19 @@ export class WorkflowExecutorService implements OnModuleInit {
       data: { workspaceId, runId, stepIndex, stepType, status, output: output ?? undefined, error: error?.slice(0, 500) ?? null },
     });
   }
+}
+
+/**
+ * The first failed step's error, carried onto the run even when the run itself
+ * finishes DONE.
+ *
+ * A run that sent nothing because SMTP was down still completes — every later
+ * step has to keep working — so without this breadcrumb the one run an owner
+ * needs to find looks exactly like the hundred that worked. `GET
+ * /workflows/:id/runs` already selects `lastError`; it simply had nothing to
+ * show (`failed-automation-done`).
+ */
+function stepFailure(ctx: WorkflowContext): string | null {
+  const err = ctx.context?.__lastStepError;
+  return typeof err === 'string' && err ? err : null;
 }
