@@ -2,11 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
+import { SuppressionService } from '../compliance/suppression.service';
 import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ConversationStreamService } from './conversation-stream.service';
 import { ChannelType, InboundMessage } from './channel-adapter.interface';
+import { detectOptOut } from './inbound/optout-keywords';
 import {
   normalizePhone,
   normalizeEmail,
@@ -27,6 +29,27 @@ export interface IngressResult {
   isNewConversation: boolean;
   deduped: boolean;
 }
+
+export interface IngestOptions {
+  /**
+   * Record the message, but do not wake the automation: no
+   * `ConversationMessageReceived`, so no AI answer and no message-triggered
+   * workflow.
+   *
+   * Used for a mailbox's FIRST poll, where the backlog is weeks of mail nobody
+   * expects an answer to. It is an argument rather than a field on
+   * `InboundMessage` on purpose — it is a property of the RUN (this is a
+   * catch-up tick), not of the message, and the same mail replayed later must
+   * behave normally.
+   */
+  suppressAutomation?: boolean;
+}
+
+/** `MarketingNotification.type` for "somebody wrote to you". */
+export const INBOUND_MESSAGE_NOTIFICATION = 'INBOUND_MESSAGE';
+
+/** How many owners/managers one inbound message may ring at once. */
+const NOTIFY_FANOUT_MAX = 25;
 
 /** Lead.source value for a first-touch on each channel type. */
 const SOURCE_BY_CHANNEL: Record<string, string> = {
@@ -73,6 +96,10 @@ export class ConversationIngressService {
     private readonly outbox: OutboxService,
     private readonly stream: ConversationStreamService,
     private readonly leadAttribution: LeadAttributionService,
+    // An opt-out written in a reply is a suppression, never a raw flag write:
+    // `suppress()` owns the ContactSuppression row, the projection onto every
+    // lead that shares the address, and the ConsentRecord that proves it.
+    private readonly suppression: SuppressionService,
   ) {}
 
   private async resolveSentinel(workspaceId: string): Promise<string | null> {
@@ -92,7 +119,11 @@ export class ConversationIngressService {
     return id;
   }
 
-  async ingest(channel: IngressChannel, inbound: InboundMessage): Promise<IngressResult | null> {
+  async ingest(
+    channel: IngressChannel,
+    inbound: InboundMessage,
+    opts: IngestOptions = {},
+  ): Promise<IngressResult | null> {
     const workspaceId = channel.workspaceId;
 
     // Cap oversize inbound text once, for ALL channels, BEFORE dedup/persist/emit
@@ -132,7 +163,7 @@ export class ConversationIngressService {
     let result: IngressResult;
     try {
       result = await this.prisma.$transaction((tx) =>
-        this.ingestInTx(tx, channel, inbound, sentinelId),
+        this.ingestInTx(tx, channel, inbound, sentinelId, opts),
       );
     } catch (e: any) {
       // Concurrent double-delivery lost the race on the externalMessageId unique
@@ -176,7 +207,155 @@ export class ConversationIngressService {
         ? { id: result.messageId, direction: 'OUTBOUND', authorType: 'AGENT', body: inbound.text }
         : { id: result.messageId, direction: 'INBOUND', authorType: 'CUSTOMER', body: inbound.text },
     });
+
+    // Everything below is AFTER the commit and MUST NOT throw: the message is
+    // already persisted, and `workflow-executor` turns a throw into a whole-run
+    // FAILED (G2). A missed bell or a missed opt-out is recoverable; losing the
+    // message is not.
+    if (!inbound.echo) {
+      await this.recordReplyOptOut(channel, inbound, result).catch((e: any) =>
+        this.logger.error(
+          `conversation-ingress: opt-out write failed for conversation=${result.conversationId}: ${String(e?.message ?? e).slice(0, 200)}`,
+        ),
+      );
+      await this.notifyInbound(channel, inbound, result).catch((e: any) =>
+        this.logger.warn(
+          `conversation-ingress: inbound notification failed for conversation=${result.conversationId}: ${String(e?.message ?? e).slice(0, 200)}`,
+        ),
+      );
+    }
     return result;
+  }
+
+  /**
+   * "Beni listeden çıkarın", written into a reply.
+   *
+   * EMAIL only, and that is a safety rule rather than a scope one: the SMS
+   * branch of consent mirrors to the NetGSM ACCOUNT blacklist and enqueues an
+   * İYS push, so a false positive there is not a wrong row, it is an operator
+   * incident. Email's blast radius is one workspace's own list.
+   *
+   * The write goes through `SuppressionService` — never `lead.update({
+   * emailOptOut: true })` — because that is what also writes the
+   * `ContactSuppression` row (which the outbound gate reads for addresses with
+   * no lead at all) and the `ConsentRecord` that proves when and why.
+   */
+  private async recordReplyOptOut(
+    channel: IngressChannel,
+    inbound: InboundMessage,
+    result: IngressResult,
+  ): Promise<void> {
+    if (channel.type !== 'EMAIL' || inbound.kind !== 'EMAIL') return;
+    // `parseInbound` prepends the subject to the body, so a reply to a campaign
+    // titled "Listeden çıkmak için tıklayın" would opt the sender out of the
+    // mail they were answering.
+    const hit = detectOptOut(inbound.text, { skipFirstLine: true });
+    if (!hit.matched) return;
+
+    await this.suppression.suppress(channel.workspaceId, inbound.externalUserId, 'EMAIL', 'OPT_OUT', {
+      source: 'reply-keyword',
+      note: hit.phrase,
+      leadId: result.leadId || null,
+    });
+    this.logger.log(
+      `conversation-ingress: opt-out recorded from a reply (workspace=${channel.workspaceId}, conversation=${result.conversationId})`,
+    );
+  }
+
+  /**
+   * Ring somebody. A 21:00 reply to a quote sat unseen until the morning
+   * because nothing in this path ever told a human it had arrived.
+   *
+   * Three traps, all of them load-bearing:
+   * - **Never for an echo.** The echo path writes the OWNER's own message
+   *   (`direction: 'OUTBOUND'`), so notifying here would alert them about
+   *   themselves. The caller gates on `!inbound.echo` for exactly that reason.
+   * - **One unread bell per conversation.** Outbox delivery is at-least-once
+   *   and a five-message burst is still one interruption, so an existing
+   *   UNREAD row for this conversation is the dedup key — and it re-arms once
+   *   the row is read.
+   * - **Recipients come from `WorkspaceMembership`, not `MarketingUser.
+   *   workspaceId`.** Since multi-workspace membership the latter is only a
+   *   user's HOME workspace, so resolving owners through it would silently miss
+   *   everyone who joined this workspace as their second.
+   */
+  private async notifyInbound(
+    channel: IngressChannel,
+    inbound: InboundMessage,
+    result: IngressResult,
+  ): Promise<void> {
+    if (!result.leadId) return;
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: result.leadId },
+      select: { workspaceId: true, deletedAt: true, businessName: true, contactPerson: true, assignedToId: true },
+    });
+    // A lead nobody can open is a notification nobody can act on.
+    if (!lead || lead.workspaceId !== channel.workspaceId || lead.deletedAt) return;
+
+    const recipients = await this.notifyRecipients(channel.workspaceId, lead.assignedToId);
+    const preview = String(inbound.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    for (const userId of recipients) {
+      const pending = await this.prisma.marketingNotification.findFirst({
+        where: {
+          workspaceId: channel.workspaceId,
+          userId,
+          type: INBOUND_MESSAGE_NOTIFICATION,
+          isRead: false,
+          metadata: { path: ['conversationId'], equals: result.conversationId } as any,
+        },
+        select: { id: true },
+      });
+      if (pending) continue;
+      await this.prisma.marketingNotification.create({
+        data: {
+          workspaceId: channel.workspaceId,
+          userId,
+          type: INBOUND_MESSAGE_NOTIFICATION,
+          title: `New ${this.label(channel.type)} message`,
+          message: `${lead.businessName || lead.contactPerson || ''}${preview ? ` — ${preview}` : ''}`.trim(),
+          metadata: {
+            conversationId: result.conversationId,
+            leadId: result.leadId,
+            channelType: channel.type,
+          },
+        },
+      });
+    }
+  }
+
+  /**
+   * The assignee if there is one, else this workspace's owners and managers.
+   *
+   * Both lanes read the user THROUGH `WorkspaceMembership`, never by id off
+   * `MarketingUser`. Membership is the only proof that a user belongs to this
+   * workspace: `Lead.assignedToId` is a soft column, so a stale or transplanted
+   * id read by id alone would ring somebody in another tenant with a preview of
+   * this tenant's mail. (`MarketingUser.workspaceId` cannot stand in for it —
+   * since multi-workspace membership it is only a user's HOME workspace, so it
+   * would silently miss everyone who joined this workspace as their second.)
+   * The SYSTEM sentinel owns rows and reads no notifications.
+   */
+  private async notifyRecipients(workspaceId: string, assignedToId: string | null): Promise<string[]> {
+    const withUser = { user: { select: { id: true, status: true, role: true } } };
+    if (assignedToId) {
+      const membership = await this.prisma.workspaceMembership.findFirst({
+        where: { workspaceId, userId: assignedToId, status: 'ACTIVE' },
+        select: withUser,
+      });
+      const rep = membership?.user;
+      // An inactive or sentinel assignee falls through to the managers rather
+      // than swallowing the alert.
+      if (rep && rep.status === 'ACTIVE' && rep.role !== 'SYSTEM') return [rep.id];
+    }
+    const memberships = await this.prisma.workspaceMembership.findMany({
+      where: { workspaceId, status: 'ACTIVE', role: { in: ['OWNER', 'MANAGER'] } },
+      select: withUser,
+      take: NOTIFY_FANOUT_MAX,
+    });
+    return memberships
+      .map((m) => m.user)
+      .filter((u) => u && u.status === 'ACTIVE' && u.role !== 'SYSTEM')
+      .map((u) => u.id);
   }
 
   /**
@@ -278,16 +457,62 @@ export class ConversationIngressService {
   }
 
 
+  /**
+   * Is this identity's lead one nobody can see any more?
+   *
+   * A bulk delete tombstones the lead and leaves the ContactIdentity behind, so
+   * a later mail from that vendor still resolves to it — and the AI answered,
+   * invisibly, while the unread count climbed on a record the CRM no longer
+   * shows. Identity resolution itself must NOT change: it is the threading and
+   * dedup key, and nulling it collides with `@@unique([channelId, value])` and
+   * drops the reply for good. So the mail is still filed; only the automation
+   * is held back.
+   */
+  private async leadIsHidden(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    leadId: string,
+  ): Promise<boolean> {
+    const lead = await tx.lead.findUnique({
+      where: { id: leadId },
+      select: { workspaceId: true, deletedAt: true },
+    });
+    // A missing row keeps today's behaviour, deliberately: `lead === null` is
+    // not evidence of a deletion, and silencing it would be a new failure.
+    if (!lead) return false;
+    return lead.workspaceId !== workspaceId || lead.deletedAt !== null;
+  }
+
   private async ingestInTx(
     tx: Prisma.TransactionClient,
     channel: IngressChannel,
     inbound: InboundMessage,
     sentinelId: string | null,
+    opts: IngestOptions = {},
   ): Promise<IngressResult> {
     const workspaceId = channel.workspaceId;
+    /**
+     * The transport could not prove the sender is who the From claims — a
+     * DMARC fail, or SPF and DKIM both failing (`inbound/mail-auth.ts`).
+     *
+     * The mail is still written and still attached to its lead. What stops is
+     * everything that would ACT on it unattended: the `LeadCreated` fan-out
+     * (so a forged first contact does not start a nurture sequence) and the
+     * `ConversationMessageReceived` emit the AI reply hangs off. A human still
+     * sees it, with the badge, and can answer it.
+     *
+     * `undefined` is not `false`. Every non-email channel and most mail leaves
+     * this unset, and unset means "no opinion" — today's behaviour exactly.
+     */
+    const unverified = inbound.senderVerified === false;
 
     // 1. Resolve (or create) the contact identity → lead.
     let identity = await this.findIdentity(tx, workspaceId, channel.id, inbound);
+    // Only a PRE-EXISTING identity can point at a tombstoned lead: adoption
+    // (`findLeadByContact`) already excludes `deletedAt`, and a lead created a
+    // line later cannot be deleted yet. Asking only here keeps the extra read
+    // off the first-touch path.
+    const hidden = identity ? await this.leadIsHidden(tx, workspaceId, identity.leadId) : false;
     let createdNewLead = false;
 
     if (!identity) {
@@ -330,7 +555,20 @@ export class ConversationIngressService {
         const lead = await tx.lead.create({
           data: {
             workspaceId,
-            businessName: displayName || `${this.label(channel.type)} contact`,
+            // An email sender with no display name is identifiable — the
+            // address IS the name here, and "Channel contact" is not a name at
+            // all. The address (not its local part: "info" says nothing) is
+            // what a rep can act on.
+            businessName:
+              displayName ||
+              (inbound.kind === 'EMAIL'
+                ? inbound.externalUserId
+                : `${this.label(channel.type)} contact`),
+            // contactPerson stays the placeholder on purpose: `nameIsUnset()`
+            // in the AI engine compares it against PLACEHOLDER_CONTACT_NAME to
+            // decide whether `capture_lead_fields` may write the name the
+            // customer gives. Writing the address here would fill the slot
+            // forever and leave the agent addressing somebody as "info".
             contactPerson: displayName || PLACEHOLDER_CONTACT_NAME,
             businessType: 'OTHER',
             source: SOURCE_BY_CHANNEL[channel.type] ?? 'OTHER',
@@ -435,7 +673,21 @@ export class ConversationIngressService {
         body: inbound.text,
         externalMessageId: inbound.externalMessageId,
         status: inbound.echo ? 'SENT' : 'RECEIVED',
-        meta: inbound.raw ? ({ raw: inbound.raw } as Prisma.InputJsonValue) : undefined,
+        // `senderVerified` sits at the TOP of meta, not buried in the
+        // provider-shaped `raw`, because the inbox badge has to read it
+        // without knowing which provider posted the mail.
+        // The `raw` half keeps its original TRUTHINESS test, not a
+        // `!== undefined` one: an adapter that hands over an empty or null
+        // `raw` has always left `meta` unset, and starting to write `{raw:
+        // null}` would change what every non-email channel stores.
+        meta: (inbound.raw || inbound.senderVerified !== undefined
+          ? {
+              ...(inbound.raw ? { raw: inbound.raw } : {}),
+              ...(inbound.senderVerified === undefined
+                ? {}
+                : { senderVerified: inbound.senderVerified }),
+            }
+          : undefined) as Prisma.InputJsonValue | undefined,
       },
     });
 
@@ -457,7 +709,9 @@ export class ConversationIngressService {
 
     // 5. Emit domain events in the same tx (fire only on commit).
     const occurredAt = new Date().toISOString();
-    if (createdNewLead) {
+    // An unverifiable sender does not get to start a workflow. The lead row
+    // exists either way — only the fan-out that would act on it is held.
+    if (createdNewLead && !unverified) {
       // A first-touch from a channel is a new lead → workflow trigger source.
       await this.outbox.append(
         {
@@ -494,7 +748,13 @@ export class ConversationIngressService {
     // NOT for an echo. This event is what the AI engine replies to, so emitting
     // it here would have the assistant answer its own owner — and, because each
     // reply is itself echoed back, do it again on the next webhook.
-    if (!inbound.echo) {
+    //
+    // Nor for a first-run backlog (`suppressAutomation`), nor for a lead
+    // somebody deleted, nor for a sender the transport could not authenticate.
+    // All still WROTE the message above — the gate is on the automation only,
+    // because skipping the ingest would lose the mail and, in the poller, pin
+    // the cursor behind it forever.
+    if (!inbound.echo && !opts.suppressAutomation && !hidden && !unverified) {
       await this.outbox.append(
         {
           type: MarketingEventTypes.ConversationMessageReceived,
@@ -538,6 +798,14 @@ export class ConversationIngressService {
         return 'Messenger';
       case 'LINKEDIN':
         return 'LinkedIn';
+      case 'EMAIL':
+        return 'Email';
+      // TIKTOK has the identical defect for free: `tiktok-webhook.controller`
+      // ingests on it, so without a case every TikTok DM opened a "New Channel
+      // conversation". VOICE stays out — `voice-ai.service` names its own leads
+      // and never calls this.
+      case 'TIKTOK':
+        return 'TikTok';
       default:
         return 'Channel';
     }

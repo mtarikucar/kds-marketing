@@ -16,6 +16,7 @@ describe('ConversationIngressService', () => {
   let outbox: { append: jest.Mock };
   let stream: { push: jest.Mock };
   let leadAttribution: { capture: jest.Mock };
+  let suppression: { suppress: jest.Mock };
   let svc: ConversationIngressService;
 
   const inbound: InboundMessage = {
@@ -39,6 +40,7 @@ describe('ConversationIngressService', () => {
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
       lead: {
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'lead-1' }),
         findFirst: jest.fn().mockResolvedValue(null),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -56,12 +58,14 @@ describe('ConversationIngressService', () => {
     outbox = { append: jest.fn().mockResolvedValue('evt') };
     stream = { push: jest.fn() };
     leadAttribution = { capture: jest.fn().mockResolvedValue(undefined) };
+    suppression = { suppress: jest.fn().mockResolvedValue(undefined) };
     svc = new ConversationIngressService(
       prisma as any,
       autoAssigner as any,
       outbox as any,
       stream as any,
       leadAttribution as any,
+      suppression as any,
     );
   });
 
@@ -261,6 +265,7 @@ describe('ConversationIngressService — phone identity matching', () => {
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
       lead: {
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'lead-new' }),
         findFirst: jest.fn().mockResolvedValue(null),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -280,6 +285,7 @@ describe('ConversationIngressService — phone identity matching', () => {
       { append: jest.fn().mockResolvedValue('evt') } as any,
       { push: jest.fn() } as any,
       { capture: jest.fn().mockResolvedValue(undefined) } as any,
+      { suppress: jest.fn().mockResolvedValue(undefined) } as any,
     );
   });
 
@@ -361,6 +367,7 @@ describe('ConversationIngressService — P2002 handling', () => {
       { append: jest.fn().mockResolvedValue('e') } as any,
       { push: jest.fn() } as any,
       { capture: jest.fn().mockResolvedValue(undefined) } as any,
+      { suppress: jest.fn().mockResolvedValue(undefined) } as any,
     );
     return { svc, prisma };
   };
@@ -416,6 +423,7 @@ describe('ConversationIngressService — the owner replying from their phone', (
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
       },
       lead: {
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'lead-1' }),
         findFirst: jest.fn().mockResolvedValue(null),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -437,6 +445,7 @@ describe('ConversationIngressService — the owner replying from their phone', (
       outbox as any,
       stream as any,
       { capture: jest.fn().mockResolvedValue(undefined) } as any,
+      { suppress: jest.fn().mockResolvedValue(undefined) } as any,
     );
   });
 
@@ -549,6 +558,7 @@ describe('ConversationIngressService — a reply adopts the lead you already hav
         create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: existingLead?.id ?? 'lead-new' }),
       },
       lead: {
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'lead-new' }),
         findFirst: jest.fn().mockResolvedValue(existingLead),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -571,6 +581,7 @@ describe('ConversationIngressService — a reply adopts the lead you already hav
       outbox as any,
       { push: jest.fn() } as any,
       attribution as any,
+      { suppress: jest.fn().mockResolvedValue(undefined) } as any,
     );
   }
 
@@ -706,5 +717,378 @@ describe('ConversationIngressService — a reply adopts the lead you already hav
     expect(outbox.append.mock.calls.map((c: any) => c[0].type)).toContain(
       'marketing.lead.created.v1',
     );
+  });
+});
+
+/**
+ * Wave 3 — routing. Who becomes a lead, what they are called, whether the
+ * automation wakes up, and what happens when the reply says "stop".
+ */
+describe('ConversationIngressService — routing', () => {
+  const WS = 'ws-1';
+  const emailChannel = { id: 'ch-mail', workspaceId: WS, type: 'EMAIL' };
+  let prisma: any;
+  let outbox: { append: jest.Mock };
+  let suppression: { suppress: jest.Mock };
+  let svc: ConversationIngressService;
+
+  const mail = (over: Partial<InboundMessage> = {}): InboundMessage => ({
+    externalUserId: 'ada@x.com',
+    kind: 'EMAIL',
+    externalMessageId: 'mid-1',
+    text: 'Merhaba, fiyat listesi rica ederim.',
+    displayName: null,
+    ...over,
+  });
+
+  const build = (over: Record<string, any> = {}) => {
+    prisma = {
+      message: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+      },
+      contactIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ci-1', leadId: 'lead-1' }),
+      },
+      lead: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'lead-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      marketingUser: {
+        findFirst: jest.fn(async (args: any) =>
+          args?.where?.role === 'SYSTEM' ? { id: 'sys-1' } : { id: 'rep-1' },
+        ),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      workspaceMembership: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ user: { id: 'rep-1', status: 'ACTIVE', role: 'REP' } }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      marketingNotification: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ntf-1' }),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      ...over,
+    };
+    outbox = { append: jest.fn().mockResolvedValue('evt') };
+    suppression = { suppress: jest.fn().mockResolvedValue(undefined) };
+    svc = new ConversationIngressService(
+      prisma as any,
+      { pickAssignee: jest.fn().mockResolvedValue(null) } as any,
+      outbox as any,
+      { push: jest.fn() } as any,
+      { capture: jest.fn().mockResolvedValue(undefined) } as any,
+      suppression as any,
+    );
+  };
+
+  const emitted = () => outbox.append.mock.calls.map((c: any) => c[0].type);
+
+  describe('what an email lead is called', () => {
+    it('names a sender with no display name after their ADDRESS, not "Channel contact"', async () => {
+      build();
+      await svc.ingest(emailChannel, mail());
+      const lead = prisma.lead.create.mock.calls[0][0].data;
+      expect(lead.businessName).toBe('ada@x.com');
+      // The name slot must stay empty, or `capture_lead_fields` will never fill
+      // it and the agent addresses the person as "info" forever.
+      expect(lead.contactPerson).toBe('Unknown');
+      expect(prisma.leadActivity.create.mock.calls[0][0].data.title).toBe('New Email conversation');
+    });
+
+    it('still prefers a display name when the mail carried one', async () => {
+      build();
+      await svc.ingest(emailChannel, mail({ displayName: 'Ada Lovelace' }));
+      expect(prisma.lead.create.mock.calls[0][0].data.businessName).toBe('Ada Lovelace');
+    });
+
+    it('names a TikTok DM too — the other channel type with no case', async () => {
+      build();
+      await svc.ingest({ id: 'ch-tt', workspaceId: WS, type: 'TIKTOK' }, {
+        externalUserId: 'TTID_9',
+        kind: 'TIKTOKID',
+        externalMessageId: 'tt-1',
+        text: 'selam',
+      });
+      expect(prisma.leadActivity.create.mock.calls[0][0].data.title).toBe('New TikTok conversation');
+      expect(prisma.lead.create.mock.calls[0][0].data.businessName).toBe('TikTok contact');
+    });
+  });
+
+  describe('the first-run backlog', () => {
+    it('records the message but does not wake the automation', async () => {
+      build();
+      await svc.ingest(emailChannel, mail(), { suppressAutomation: true });
+      // The mail is filed — skipping the ingest would lose it AND pin the
+      // poller's cursor behind it forever.
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(emitted()).not.toContain('marketing.conversation.message.received.v1');
+      // Only the trigger is held back; the record itself is still announced.
+      expect(emitted()).toContain('marketing.lead.created.v1');
+    });
+
+    it('wakes it normally without the flag', async () => {
+      build();
+      await svc.ingest(emailChannel, mail());
+      expect(emitted()).toContain('marketing.conversation.message.received.v1');
+    });
+  });
+
+  describe("a deleted lead's mail", () => {
+    const hidden = { workspaceId: WS, deletedAt: new Date(), businessName: 'Vendor', contactPerson: 'X', assignedToId: null };
+
+    it('is still filed, but neither answered nor announced', async () => {
+      build();
+      prisma.contactIdentity.findUnique.mockResolvedValue({ id: 'ci-9', leadId: 'lead-dead' });
+      prisma.lead.findUnique.mockResolvedValue(hidden);
+
+      const res = await svc.ingest(emailChannel, mail());
+
+      expect(res).toMatchObject({ messageId: 'msg-1', deduped: false });
+      expect(prisma.message.create).toHaveBeenCalled();
+      // The AI answered a deleted vendor invisibly while the unread count rose.
+      expect(emitted()).not.toContain('marketing.conversation.message.received.v1');
+      // …and nobody is rung about a record they cannot open.
+      expect(prisma.marketingNotification.create).not.toHaveBeenCalled();
+    });
+
+    it('leaves identity resolution alone — the thread is not forked', async () => {
+      build();
+      prisma.contactIdentity.findUnique.mockResolvedValue({ id: 'ci-9', leadId: 'lead-dead' });
+      prisma.lead.findUnique.mockResolvedValue(hidden);
+      await svc.ingest(emailChannel, mail());
+      // Nulling the identity would collide with @@unique([channelId, value])
+      // and drop the reply for good.
+      expect(prisma.contactIdentity.create).not.toHaveBeenCalled();
+      expect(prisma.lead.create).not.toHaveBeenCalled();
+    });
+
+    it('a live lead is unaffected', async () => {
+      build();
+      prisma.contactIdentity.findUnique.mockResolvedValue({ id: 'ci-9', leadId: 'lead-1' });
+      prisma.lead.findUnique.mockResolvedValue({ ...hidden, deletedAt: null });
+      await svc.ingest(emailChannel, mail());
+      expect(emitted()).toContain('marketing.conversation.message.received.v1');
+    });
+  });
+
+  describe('a sender the transport could not authenticate', () => {
+    it('is still filed and still attached to the lead', async () => {
+      // Silence is the failure mode being removed. A customer whose own mail
+      // server is misconfigured must still reach a human.
+      build();
+      const res = await svc.ingest(emailChannel, mail({ senderVerified: false }));
+      expect(res).toMatchObject({ messageId: 'msg-1', deduped: false });
+      expect(prisma.message.create).toHaveBeenCalled();
+    });
+
+    it('wakes no automation — no AI answer, no lead.created fan-out', async () => {
+      build();
+      await svc.ingest(emailChannel, mail({ senderVerified: false }));
+      expect(emitted()).not.toContain('marketing.conversation.message.received.v1');
+      expect(emitted()).not.toContain('marketing.lead.created.v1');
+    });
+
+    it('still rings a human, who can read the badge and answer', async () => {
+      build();
+      prisma.lead.findUnique.mockResolvedValue({
+        workspaceId: WS,
+        deletedAt: null,
+        businessName: 'Acme',
+        contactPerson: 'Ada',
+        assignedToId: 'rep-1',
+      });
+      await svc.ingest(emailChannel, mail({ senderVerified: false }));
+      expect(prisma.marketingNotification.create).toHaveBeenCalled();
+    });
+
+    it('records the verdict where the inbox badge can read it', async () => {
+      build();
+      await svc.ingest(emailChannel, mail({ senderVerified: false }));
+      expect(prisma.message.create.mock.calls[0][0].data.meta).toMatchObject({
+        senderVerified: false,
+      });
+    });
+
+    it('changes nothing when the transport had no opinion', async () => {
+      // `undefined` is not `false`: every non-email channel and most mail
+      // leaves this unset, and unset must behave exactly as it always has.
+      build();
+      await svc.ingest(emailChannel, mail());
+      expect(emitted()).toContain('marketing.conversation.message.received.v1');
+      expect(prisma.message.create.mock.calls[0][0].data.meta).toBeUndefined();
+    });
+
+    it('changes nothing when the transport DID authenticate the sender', async () => {
+      build();
+      await svc.ingest(emailChannel, mail({ senderVerified: true }));
+      expect(emitted()).toContain('marketing.conversation.message.received.v1');
+    });
+  });
+
+  describe('an opt-out written in a reply', () => {
+    const optOut = 'Re: Kampanya\n\nBeni listeden çıkarın lütfen.';
+
+    it('suppresses the address and says where it came from', async () => {
+      build();
+      await svc.ingest(emailChannel, mail({ text: optOut }));
+      expect(suppression.suppress).toHaveBeenCalledWith(
+        WS,
+        'ada@x.com',
+        'EMAIL',
+        'OPT_OUT',
+        expect.objectContaining({ source: 'reply-keyword', leadId: 'lead-1' }),
+      );
+    });
+
+    it('is not fooled by the footer the reply quoted back', async () => {
+      build();
+      await svc.ingest(
+        emailChannel,
+        mail({ text: 'Re: Kampanya\n\nTeşekkürler.\n\n> Listeden çıkmak için tıklayın\n> unsubscribe' }),
+      );
+      expect(suppression.suppress).not.toHaveBeenCalled();
+    });
+
+    it('never fires on an SMS thread', async () => {
+      // The SMS branch of consent reaches the NetGSM ACCOUNT blacklist and İYS.
+      // A false positive there is an operator incident, not a wrong row.
+      build();
+      await svc.ingest({ id: 'ch-sms', workspaceId: WS, type: 'SMS' }, {
+        externalUserId: '+905551112233',
+        kind: 'PHONE',
+        externalMessageId: 'sms-1',
+        text: 'beni listeden çıkarın',
+      });
+      expect(suppression.suppress).not.toHaveBeenCalled();
+    });
+
+    it('never fires on the owner own echo', async () => {
+      build();
+      await svc.ingest(emailChannel, mail({ text: optOut, echo: true }));
+      expect(suppression.suppress).not.toHaveBeenCalled();
+    });
+
+    it('does not lose the message when the suppression write fails', async () => {
+      build();
+      suppression.suppress.mockRejectedValue(new Error('P1001'));
+      await expect(svc.ingest(emailChannel, mail({ text: optOut }))).resolves.toMatchObject({
+        messageId: 'msg-1',
+      });
+    });
+  });
+
+  describe('somebody has to be told', () => {
+    const live = { workspaceId: WS, deletedAt: null, businessName: 'Acme', contactPerson: 'Ada', assignedToId: 'rep-1' };
+
+    it('rings the assignee', async () => {
+      build();
+      prisma.lead.findUnique.mockResolvedValue(live);
+      await svc.ingest(emailChannel, mail());
+      expect(prisma.marketingNotification.create.mock.calls[0][0].data).toMatchObject({
+        workspaceId: WS,
+        userId: 'rep-1',
+        type: 'INBOUND_MESSAGE',
+        metadata: { conversationId: 'conv-1', leadId: 'lead-1', channelType: 'EMAIL' },
+      });
+    });
+
+    it('rings once per conversation until it is read', async () => {
+      // Outbox delivery is at-least-once and a five-message burst is one
+      // interruption, not five.
+      build();
+      prisma.lead.findUnique.mockResolvedValue(live);
+      prisma.marketingNotification.findFirst.mockResolvedValue({ id: 'ntf-old' });
+      await svc.ingest(emailChannel, mail());
+      expect(prisma.marketingNotification.create).not.toHaveBeenCalled();
+      expect(prisma.marketingNotification.findFirst.mock.calls[0][0].where).toMatchObject({
+        workspaceId: WS,
+        isRead: false,
+      });
+    });
+
+    it('falls back to the workspace owners and managers — through the MEMBERSHIP', async () => {
+      // `MarketingUser.workspaceId` is only a user's HOME workspace since
+      // multi-workspace membership, so resolving owners through it would miss
+      // everyone who joined this workspace as their second.
+      build();
+      prisma.lead.findUnique.mockResolvedValue({ ...live, assignedToId: null });
+      prisma.workspaceMembership.findMany.mockResolvedValue([
+        { user: { id: 'own-1', status: 'ACTIVE', role: 'OWNER' } },
+        { user: { id: 'sys-1', status: 'ACTIVE', role: 'SYSTEM' } },
+        { user: { id: 'gone-1', status: 'INACTIVE', role: 'MANAGER' } },
+      ]);
+
+      await svc.ingest(emailChannel, mail());
+
+      expect(prisma.workspaceMembership.findMany.mock.calls[0][0].where).toMatchObject({
+        workspaceId: WS,
+        status: 'ACTIVE',
+        role: { in: ['OWNER', 'MANAGER'] },
+      });
+      // The SYSTEM sentinel owns rows and reads no notifications, and a
+      // deactivated manager is nobody to ring.
+      expect(prisma.marketingNotification.create.mock.calls.map((c: any) => c[0].data.userId)).toEqual([
+        'own-1',
+      ]);
+      // Membership is the proof of belonging: no read reaches MarketingUser by
+      // id, so a stale assignedToId cannot address another tenant's user.
+      expect(prisma.marketingUser.findMany).not.toHaveBeenCalled();
+    });
+
+    it('resolves the assignee through their membership in THIS workspace', async () => {
+      // `Lead.assignedToId` is a soft column. Reading the user by id alone
+      // would ring somebody in another tenant with a preview of this tenant's
+      // mail; the membership row is what proves they belong here.
+      build();
+      prisma.lead.findUnique.mockResolvedValue(live);
+      await svc.ingest(emailChannel, mail());
+      expect(prisma.workspaceMembership.findFirst.mock.calls[0][0].where).toMatchObject({
+        workspaceId: WS,
+        userId: 'rep-1',
+        status: 'ACTIVE',
+      });
+      expect(prisma.marketingNotification.create.mock.calls[0][0].data.userId).toBe('rep-1');
+    });
+
+    it('falls through to the managers when the assignee is no longer a member', async () => {
+      build();
+      prisma.lead.findUnique.mockResolvedValue(live);
+      prisma.workspaceMembership.findFirst.mockResolvedValue(null);
+      prisma.workspaceMembership.findMany.mockResolvedValue([
+        { user: { id: 'own-1', status: 'ACTIVE', role: 'OWNER' } },
+      ]);
+      await svc.ingest(emailChannel, mail());
+      expect(prisma.marketingNotification.create.mock.calls.map((c: any) => c[0].data.userId)).toEqual([
+        'own-1',
+      ]);
+    });
+
+    it('never rings the owner about their own message', async () => {
+      build();
+      prisma.lead.findUnique.mockResolvedValue(live);
+      await svc.ingest(emailChannel, mail({ echo: true }));
+      expect(prisma.marketingNotification.create).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the ingest when the notification write fails', async () => {
+      build();
+      prisma.lead.findUnique.mockResolvedValue(live);
+      prisma.marketingNotification.create.mockRejectedValue(new Error('P2024'));
+      await expect(svc.ingest(emailChannel, mail())).resolves.toMatchObject({ messageId: 'msg-1' });
+    });
   });
 });
