@@ -1,3 +1,6 @@
+import { randomBytes } from 'crypto';
+import { assertNoHeaderInjection } from '../../../common/util/email-address';
+import { toHeaderMessageId } from './email-message-id';
 import { EMAIL_OAUTH, EmailOAuthProvider } from './email-oauth.config';
 
 /**
@@ -10,6 +13,16 @@ import { EMAIL_OAUTH, EmailOAuthProvider } from './email-oauth.config';
  */
 
 const SEND_TIMEOUT_MS = 20_000;
+const GRAPH_SEND_URL = 'https://graph.microsoft.com/v1.0/me/sendMail';
+
+/**
+ * What a provider grants when it says nothing, and how early a token is called
+ * dead. Exported because `email-oauth-refresh.service.ts` times its sweep
+ * against them: the tick has to be shorter than `TTL - slack` or a refreshed
+ * token dies before the sweep comes back to it.
+ */
+export const DEFAULT_TOKEN_TTL_SECONDS = 3600;
+export const ACCESS_TOKEN_SLACK_SECONDS = 60;
 
 /** What a channel's sealed secrets carry once a mailbox is connected. */
 export interface EmailOAuthSecrets {
@@ -34,7 +47,22 @@ export interface OAuthSendInput {
   to: string;
   subject: string;
   text: string;
+  /** The display name beside `from`, never folded into it — see `buildRfc822`. */
+  fromName?: string;
+  /** Where an answer should go when that is not the sending mailbox. */
+  replyTo?: string;
+  /** Sent ALONGSIDE `text`, never instead of it — see `buildRfc822`. */
+  html?: string;
+  /** Bare or bracketed; this file writes the brackets. */
+  inReplyTo?: string | null;
+  references?: string[];
+  /** The gateway's own deterministic id, bare — this file writes the brackets. */
+  messageId?: string;
+  autoSubmitted?: 'auto-generated' | 'auto-replied';
 }
+
+/** Everything `buildRfc822` needs — the transport fields are not its business. */
+export type Rfc822Input = Omit<OAuthSendInput, 'provider' | 'accessToken'>;
 
 /**
  * Flat, like `OAuthSendResult` and for the same reason: `strictNullChecks` is
@@ -59,25 +87,144 @@ function base64url(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/** RFC 5322 §2.1.1 hard-limits a line to 998 characters; RFC 2045 §6.8 limits
+ *  a base64 line to 76. A relay with a shorter limit chops the line, which
+ *  breaks the body hash of the provider's DKIM signature and fails DMARC. */
+const BASE64_LINE_RE = /.{1,76}/g;
+/** An encoded-word is at most 75 characters, of which `=?UTF-8?B?` + `?=` take
+ *  12. That leaves 63, rounded down to a whole base64 quantum: 60 characters,
+ *  which is 45 bytes of subject. */
+const SUBJECT_CHUNK_BYTES = 45;
+/** Where a list header starts a continuation line. Well under 998, so a long
+ *  References chain never reaches the hard limit. */
+const FOLD_AT = 78;
+
+function base64Lines(value: string): string {
+  return (Buffer.from(value, 'utf8').toString('base64').match(BASE64_LINE_RE) ?? []).join('\r\n');
+}
+
 /**
- * RFC 822 for the Gmail API.
+ * A header's text as one or more RFC 2047 encoded-words.
  *
- * The subject is encoded even when it looks plain: this product's customers
- * write Turkish, and a bare `Subject: Ücretsiz çekirdek` is 8-bit in a header
- * that is specified as ASCII — some servers pass it, some mangle it, and the
- * ones that mangle it do so silently.
+ * Chunked on CODE POINTS rather than bytes: splitting mid-sequence corrupts
+ * exactly the Turkish letters this encoding exists to carry. Adjacent words
+ * separated by folding whitespace are concatenated on decode (RFC 2047 §5).
  */
-export function buildRfc822({ from, to, subject, text }: Omit<OAuthSendInput, 'provider' | 'accessToken'>): string {
-  const encoded = `=?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
+function encodeWords(subject: string): string {
+  const chunks: string[] = [];
+  let chunk = '';
+  let bytes = 0;
+  for (const ch of subject) {
+    const size = Buffer.byteLength(ch, 'utf8');
+    if (chunk && bytes + size > SUBJECT_CHUNK_BYTES) {
+      chunks.push(chunk);
+      chunk = '';
+      bytes = 0;
+    }
+    chunk += ch;
+    bytes += size;
+  }
+  if (chunk || !chunks.length) chunks.push(chunk);
+  return chunks.map((c) => `=?UTF-8?B?${Buffer.from(c, 'utf8').toString('base64')}?=`).join('\r\n ');
+}
+
+/** A list header folded onto continuation lines (RFC 5322 §2.2.3) — a
+ *  References chain outgrows one line after a few dozen replies. */
+function foldList(name: string, values: string[]): string {
+  const lines: string[] = [];
+  let line = `${name}:`;
+  for (const v of values) {
+    if (line !== `${name}:` && line.length + 1 + v.length > FOLD_AT) {
+      lines.push(line);
+      line = '';
+    }
+    line += ` ${v}`;
+  }
+  lines.push(line);
+  return lines.join('\r\n');
+}
+
+/** Threading headers, bracketed here so callers can hold the id either way.
+ *  An empty value produces no header at all: an empty `In-Reply-To` threads
+ *  nowhere and some receivers reject it outright. */
+function threadingHeaders(inReplyTo?: string | null, references?: string[]): string[] {
+  const out: string[] = [];
+  const irt = toHeaderMessageId(inReplyTo);
+  if (irt) out.push(`In-Reply-To: ${irt}`);
+  const refs = (references ?? []).map((r) => toHeaderMessageId(r)).filter(Boolean) as string[];
+  if (refs.length) out.push(foldList('References', refs));
+  return out;
+}
+
+/**
+ * The From header value: the address alone, or an encoded display name in
+ * front of an angle-bracketed address.
+ *
+ * ALWAYS encoded, never quoted. A tenant's trade name routinely carries a
+ * Turkish letter (8-bit in a header specified as ASCII) or a quote character,
+ * and a hand-built `"name" <addr>` gets the second one wrong in a way that
+ * rewrites the address (`no-display-name`). nodemailer does this for the SMTP
+ * transport; here there is no nodemailer.
+ */
+function fromHeader(address: string, name?: string): string {
+  const display = (name ?? '').trim();
+  return display ? `${encodeWords(display)} <${address}>` : address;
+}
+
+function bodyPart(contentType: string, content: string): string[] {
   return [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${encoded}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset="UTF-8"',
+    `Content-Type: ${contentType}; charset="UTF-8"`,
     'Content-Transfer-Encoding: base64',
     '',
-    Buffer.from(text, 'utf8').toString('base64'),
+    base64Lines(content),
+  ];
+}
+
+/**
+ * RFC 822 for the provider APIs.
+ *
+ * Three things this has to get right, because it composes a message by joining
+ * strings and nothing downstream re-checks it:
+ *
+ * - A CR/LF in a header value writes headers. That is real injection, not a
+ *   theory, so every caller-supplied header value is refused here as well as
+ *   at whatever guard the caller passed first.
+ * - The subject is encoded even when it looks plain: this product's customers
+ *   write Turkish, and a bare `Subject: Ücretsiz çekirdek` is 8-bit in a header
+ *   specified as ASCII — some servers pass it, some mangle it silently.
+ * - HTML goes out as a real `multipart/alternative` beside the text, which is
+ *   what a consent-connected mailbox needs in order to stop being text-only.
+ */
+export function buildRfc822(input: Rfc822Input): string {
+  const { from, fromName, replyTo, to, subject, text, html, inReplyTo, references } = input;
+  const headers = [
+    `From: ${fromHeader(
+      assertNoHeaderInjection(from ?? '', 'From'),
+      assertNoHeaderInjection(fromName ?? '', 'From'),
+    )}`,
+    `To: ${assertNoHeaderInjection(to ?? '', 'To')}`,
+    ...(replyTo?.trim() ? [`Reply-To: ${assertNoHeaderInjection(replyTo, 'Reply-To')}`] : []),
+    `Subject: ${encodeWords(assertNoHeaderInjection(subject ?? '', 'Subject'))}`,
+    ...(toHeaderMessageId(input.messageId) ? [`Message-ID: ${toHeaderMessageId(input.messageId)}`] : []),
+    ...(input.autoSubmitted ? [`Auto-Submitted: ${input.autoSubmitted}`] : []),
+    ...threadingHeaders(inReplyTo, references),
+    'MIME-Version: 1.0',
+  ];
+  const markup = (html ?? '').trim();
+  if (!markup) return [...headers, ...bodyPart('text/plain', text ?? '')].join('\r\n');
+
+  const boundary = `----=_Part_${randomBytes(12).toString('hex')}`;
+  return [
+    ...headers,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    // Least rich first: that is what "alternative" asks a client to prefer.
+    `--${boundary}`,
+    ...bodyPart('text/plain', text ?? ''),
+    `--${boundary}`,
+    ...bodyPart('text/html', markup),
+    `--${boundary}--`,
+    '',
   ].join('\r\n');
 }
 
@@ -102,7 +249,31 @@ export interface OAuthSendResult {
   error: string | null;
 }
 
+/**
+ * The header values a caller supplied, refused before anything is composed.
+ *
+ * Checked here rather than only inside `buildRfc822` because the Graph JSON
+ * shape builds no MIME at all and would hand the poisoned value straight to
+ * the provider. Returns the message instead of throwing: nothing new throws
+ * out of a transport (G2).
+ */
+function headerRefusal(input: OAuthSendInput): string | null {
+  try {
+    assertNoHeaderInjection(input.from ?? '', 'From');
+    assertNoHeaderInjection(input.fromName ?? '', 'From');
+    assertNoHeaderInjection(input.replyTo ?? '', 'Reply-To');
+    assertNoHeaderInjection(input.to ?? '', 'To');
+    assertNoHeaderInjection(input.subject ?? '', 'Subject');
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
 export async function sendViaOAuth(input: OAuthSendInput): Promise<OAuthSendResult> {
+  const refusal = headerRefusal(input);
+  if (refusal) return { ok: false, externalId: null, error: refusal };
+
   if (input.provider === 'GOOGLE') {
     const raw = base64url(buildRfc822(input));
     const r = await post('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
@@ -114,17 +285,44 @@ export async function sendViaOAuth(input: OAuthSendInput): Promise<OAuthSendResu
     return { ok: true, externalId: r.body?.id ? String(r.body.id) : null, error: null };
   }
 
-  const r = await post('https://graph.microsoft.com/v1.0/me/sendMail', {
+  // Graph's JSON `message` carries ONE body, so an HTML mail sent that way
+  // loses its plain part, and `internetMessageHeaders` accepts `x-`-prefixed
+  // names only — so a Message-ID, Auto-Submitted or a threading header has no
+  // field to live in either. MIME is the only shape that holds all of them, and
+  // it is taken only when one is actually asked for: a plain mail keeps the
+  // request proven against Graph. A MIME send is filed in Sent Items too, same
+  // as `saveToSentItems: true`.
+  const needsMime = !!(
+    (input.html ?? '').trim() ||
+    input.messageId ||
+    input.autoSubmitted ||
+    input.inReplyTo ||
+    input.references?.length
+  );
+  const mime = needsMime ? Buffer.from(buildRfc822(input), 'utf8').toString('base64') : null;
+  const name = (input.fromName ?? '').trim();
+  const replyTo = (input.replyTo ?? '').trim();
+  const r = await post(GRAPH_SEND_URL, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: {
-        subject: input.subject,
-        body: { contentType: 'Text', content: input.text },
-        toRecipients: [{ emailAddress: { address: input.to } }],
-      },
-      saveToSentItems: true,
-    }),
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      // A MIME send posts the base64 message as the whole body.
+      'Content-Type': mime ? 'text/plain' : 'application/json',
+    },
+    body:
+      mime ??
+      JSON.stringify({
+          message: {
+            subject: input.subject,
+            body: { contentType: 'Text', content: input.text },
+            toRecipients: [{ emailAddress: { address: input.to } }],
+            // Graph composes the From itself, so the display name and the
+            // Reply-To are fields here rather than headers.
+            ...(name ? { from: { emailAddress: { address: input.from, name } } } : {}),
+            ...(replyTo ? { replyTo: [{ emailAddress: { address: replyTo } }] } : {}),
+          },
+          saveToSentItems: true,
+        }),
   });
   // Graph answers 202 with an EMPTY body and no message id. There is nothing to
   // return, and inventing one would put a fake id on the row.
@@ -197,10 +395,10 @@ async function tokenRequest(
 
   // 60s of slack: a token that expires while in flight fails the send, and the
   // cost of refreshing a minute early is one extra HTTP call.
-  const ttl = Number(r.body.expires_in) || 3600;
+  const ttl = Number(r.body.expires_in) || DEFAULT_TOKEN_TTL_SECONDS;
   return {
     accessToken: String(r.body.access_token),
-    expiresAt: Date.now() + Math.max(0, ttl - 60) * 1000,
+    expiresAt: Date.now() + Math.max(0, ttl - ACCESS_TOKEN_SLACK_SECONDS) * 1000,
     refreshToken: r.body.refresh_token ? String(r.body.refresh_token) : null,
     error: null,
   };
