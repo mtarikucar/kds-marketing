@@ -1,3 +1,13 @@
+const mockLookup = jest.fn();
+
+// Save-time validation resolves every mail host it is given. Real DNS in a unit
+// suite is a flake waiting to happen, so the resolver answers "a public address"
+// unless a case says otherwise.
+jest.mock('node:dns/promises', () => ({
+  __esModule: true,
+  lookup: (...args: unknown[]) => mockLookup(...args),
+}));
+
 import {
   BadRequestException,
   ConflictException,
@@ -35,6 +45,12 @@ function makeEntitlements(features: Record<string, boolean> = { conversationAi: 
   return { getEffective: jest.fn().mockResolvedValue({ features }) } as any;
 }
 
+/** The health writer. It only ever DESCRIBES a mailbox, so every suite that is
+ *  not about health can hand the service a stub and ignore it. */
+function makeHealth() {
+  return { clearBackoff: jest.fn().mockResolvedValue(undefined) } as any;
+}
+
 /**
  * Focused tests for ChannelsService.mask() — the public view of a channel.
  * mask() is private, so we drive it through list() with a stubbed Prisma.
@@ -47,7 +63,7 @@ describe('ChannelsService — mask()', () => {
     const registry = {} as any;
     const resolver = {} as any;
     const iysClient = {} as any;
-    return new ChannelsService(prisma, registry, resolver, makeEntitlements(), iysClient);
+    return new ChannelsService(prisma, registry, resolver, makeEntitlements(), iysClient, makeHealth());
   }
 
   beforeEach(() => {
@@ -208,7 +224,7 @@ describe('ChannelsService — verify()', () => {
     const resolver = {} as any;
     const iysClient = { registerWebhook: jest.fn() } as any;
     return {
-      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient),
+      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient, makeHealth()),
       prisma,
       registry,
       entitlements,
@@ -333,7 +349,7 @@ describe('ChannelsService — create()/update() feature gate', () => {
     } as any;
     const iysClient = { registerWebhook: jest.fn() } as any;
     return {
-      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient),
+      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient, makeHealth()),
       prisma,
       registry,
       entitlements,
@@ -413,7 +429,7 @@ describe('ChannelsService — registerIysWebhook()', () => {
     } as any;
     const resolver = {} as any;
     return {
-      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient as any),
+      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient as any, makeHealth()),
       prisma,
       registry,
     };
@@ -562,7 +578,7 @@ describe('ChannelsService — provider identity cannot be claimed twice', () => 
       anyByExternalId: jest.fn().mockResolvedValue(null),
     } as any;
     const iysClient = { registerWebhook: jest.fn() } as any;
-    const svc = new ChannelsService(prisma, registry, resolver, makeEntitlements(), iysClient);
+    const svc = new ChannelsService(prisma, registry, resolver, makeEntitlements(), iysClient, makeHealth());
     return { svc, prisma, resolver };
   }
 
@@ -665,6 +681,7 @@ describe('ChannelsService — VOICE channels', () => {
       resolver,
       makeEntitlements(features),
       { registerWebhook: jest.fn() } as any,
+      makeHealth(),
     );
     return { svc, prisma };
   }
@@ -710,7 +727,7 @@ describe('ChannelsService.update — binding an answering agent', () => {
       },
       agentProfile: { findFirst: jest.fn().mockResolvedValue(agentRow) },
     } as any;
-    const svc = new ChannelsService(prisma, {} as any, {} as any, makeEntitlements(), {} as any);
+    const svc = new ChannelsService(prisma, {} as any, {} as any, makeEntitlements(), {} as any, makeHealth());
     return { svc, prisma };
   }
 
@@ -753,5 +770,636 @@ describe('ChannelsService.update — binding an answering agent', () => {
     await svc.update(WS, 'ch-1', { name: 'yeni ad' } as any);
     expect(prisma.agentProfile.findFirst).not.toHaveBeenCalled();
     expect('agentProfileId' in prisma.channel.update.mock.calls[0][0].data).toBe(false);
+  });
+});
+
+/**
+ * Connecting a mailbox, end to end.
+ *
+ * Four separate defects meet in `create()`/`update()`, and they all have the
+ * same shape: the save succeeds and the truth arrives later, somewhere the
+ * person who typed it will never look.
+ *
+ *  - `smtp-ssrf` — an unchecked host makes Verify an internal port scanner, and
+ *    the write path is the choke point that closes verify, send and both IMAP
+ *    services at once.
+ *  - `mailbox-not-auto-verified` — nothing proved the mailbox, so
+ *    `lastVerifiedAt` stayed null, so the pollers and the sender skipped it
+ *    while the dialog said "replies will flow".
+ *  - `externalid-claim` — the address was claimed on nothing but the claim.
+ *  - `email-gated-conversationai` — the refusal did not say what was missing.
+ */
+describe('ChannelsService — connecting a mailbox', () => {
+  const PUBLIC_DNS = [{ address: '93.184.216.34', family: 4 }];
+  const SMTP = {
+    smtpHost: 'smtp.firma.com.tr',
+    smtpPort: '587',
+    smtpUser: 'info@firma.com.tr',
+    smtpPass: 'hunter2',
+    fromEmail: 'info@firma.com.tr',
+  };
+
+  function make(opts: {
+    health?: { ok: boolean; details?: Record<string, unknown> };
+    healthCheck?: jest.Mock;
+    existing?: any;
+    pendingRows?: any[];
+    sendingDomain?: any;
+    entitlements?: any;
+  } = {}) {
+    const healthCheck =
+      opts.healthCheck ?? jest.fn().mockResolvedValue(opts.health ?? { ok: true, details: {} });
+    const prisma = {
+      channel: {
+        create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data, id: 'ch-new' })),
+        update: jest.fn().mockImplementation(({ where, data }: any) =>
+          Promise.resolve({ ...(opts.existing ?? {}), id: where.id, ...data }),
+        ),
+        findFirst: jest.fn().mockResolvedValue(opts.existing ?? null),
+        findMany: jest.fn().mockResolvedValue(opts.pendingRows ?? []),
+      },
+      sendingDomain: { findFirst: jest.fn().mockResolvedValue(opts.sendingDomain ?? null) },
+    } as any;
+    const registry = {
+      has: jest.fn().mockReturnValue(true),
+      get: jest.fn().mockReturnValue({ healthCheck }),
+      resolveConfig: jest.fn().mockReturnValue({ secrets: {}, public: {} }),
+    } as any;
+    const resolver = { anyByExternalId: jest.fn().mockResolvedValue(null), byExternalId: jest.fn() } as any;
+    const health = makeHealth();
+    const svc = new ChannelsService(
+      prisma,
+      registry,
+      resolver,
+      opts.entitlements ?? makeEntitlements(),
+      { registerWebhook: jest.fn() } as any,
+      health,
+    );
+    return { svc, prisma, registry, resolver, health, healthCheck };
+  }
+
+  beforeEach(() => {
+    mockLookup.mockReset();
+    mockLookup.mockResolvedValue(PUBLIC_DNS);
+    process.env.MARKETING_SECRET_KEY = Buffer.alloc(32).toString('base64');
+    process.env.PUBLIC_BASE_URL = 'https://app.example.com';
+    isSecretBoxConfiguredMock.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.EMAIL_FROM;
+  });
+
+  describe('the credentials are checked before they are sealed', () => {
+    it('refuses an SMTP host that resolves inside our own network', async () => {
+      mockLookup.mockResolvedValue([{ address: '10.0.0.5', family: 4 }]);
+      const { svc, prisma } = make();
+
+      await expect(
+        svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.channel.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a From that is not an address', async () => {
+      const { svc, prisma } = make();
+
+      await expect(
+        svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: { ...SMTP, fromEmail: 'hi there' } }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.channel.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses a From on the platform's own domain", async () => {
+      // jeetagrowth.com is DMARC p=reject with SPF -all and no tenant key: mail
+      // sent as it from a tenant's relay is rejected outright, and it would let
+      // one tenant mail the world as the platform.
+      process.env.EMAIL_FROM = 'no-reply@jeetagrowth.com';
+      const { svc } = make();
+
+      await expect(
+        svc.create('ws-1', {
+          type: 'EMAIL',
+          name: 'Mailbox',
+          secrets: { ...SMTP, fromEmail: 'destek@jeetagrowth.com' },
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('accepts an ESP relay whose login is not an address', async () => {
+      const { svc, prisma } = make();
+
+      await svc.create('ws-1', {
+        type: 'EMAIL',
+        name: 'Mailbox',
+        secrets: { ...SMTP, smtpUser: 'apikey', smtpPass: 'SG.xxx' },
+      });
+
+      expect(prisma.channel.create).toHaveBeenCalled();
+    });
+
+    it('checks the MERGED secrets on update, not just the ones being written', async () => {
+      mockLookup.mockImplementation(async (host: string) =>
+        host === 'imap.internal' ? [{ address: '127.0.0.1', family: 4 }] : PUBLIC_DNS,
+      );
+      const { svc, prisma } = make({
+        existing: { id: 'ch-1', workspaceId: 'ws-1', type: 'EMAIL', configSealed: null, configPublic: null },
+      });
+
+      await expect(
+        svc.update('ws-1', 'ch-1', { secrets: { imapHost: 'imap.internal' } }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.channel.update).not.toHaveBeenCalled();
+    });
+
+    it('leaves a non-EMAIL channel alone', async () => {
+      mockLookup.mockResolvedValue([{ address: '10.0.0.5', family: 4 }]);
+      const { svc, prisma } = make();
+
+      await svc.create('ws-1', {
+        type: 'WEBCHAT',
+        name: 'Widget',
+        secrets: { smtpHost: 'mail.internal' },
+      });
+
+      expect(prisma.channel.create).toHaveBeenCalled();
+    });
+  });
+
+  describe('a mailbox proves itself on save', () => {
+    it('verifies a new channel and stamps lastVerifiedAt', async () => {
+      const { svc, prisma, healthCheck } = make({ health: { ok: true, details: { send: true } } });
+
+      const result: any = await svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP });
+
+      expect(healthCheck).toHaveBeenCalled();
+      expect(prisma.channel.update).toHaveBeenCalledWith({
+        where: { id: 'ch-new' },
+        data: { lastVerifiedAt: expect.any(Date) },
+      });
+      // The dialog cannot say "replies will flow" honestly without this.
+      expect(result.health).toMatchObject({ ok: true, details: { send: true } });
+    });
+
+    it('keeps the channel when the check fails, and does not claim it is verified', async () => {
+      // Losing the row would discard the typed password and the imapHost the
+      // operator just entered — and would break the WhatsApp signup, where the
+      // channel must exist before the WABA subscription propagates.
+      const { svc, prisma } = make({ health: { ok: false, details: { reason: '535 bad password' } } });
+
+      const result: any = await svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP });
+
+      expect(result.id).toBe('ch-new');
+      expect(result.health).toMatchObject({ ok: false });
+      expect(prisma.channel.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the channel when the check THROWS', async () => {
+      const { svc } = make({ healthCheck: jest.fn().mockRejectedValue(new Error('boom')) });
+
+      const result: any = await svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP });
+
+      expect(result.id).toBe('ch-new');
+      expect(result.health.ok).toBe(false);
+    });
+
+    it('does not hang the save on a mail server that never answers', async () => {
+      jest.useFakeTimers();
+      try {
+        const { svc } = make({ healthCheck: jest.fn().mockReturnValue(new Promise(() => undefined)) });
+
+        const pending = svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP });
+        await jest.advanceTimersByTimeAsync(60_000);
+
+        const result: any = await pending;
+        expect(result.id).toBe('ch-new');
+        expect(result.health.ok).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('proves nothing when there is nothing to prove', async () => {
+      const { svc, healthCheck } = make();
+
+      await svc.create('ws-1', { type: 'WEBCHAT', name: 'Widget' });
+
+      expect(healthCheck).not.toHaveBeenCalled();
+    });
+
+    it('re-verifies on a credential edit only', async () => {
+      const existing = { id: 'ch-1', workspaceId: 'ws-1', type: 'EMAIL', configSealed: null, configPublic: null };
+      const { svc, healthCheck } = make({ existing });
+
+      await svc.update('ws-1', 'ch-1', { name: 'Yeni ad' });
+      expect(healthCheck).not.toHaveBeenCalled();
+
+      await svc.update('ws-1', 'ch-1', { secrets: SMTP });
+      expect(healthCheck).toHaveBeenCalled();
+    });
+
+    it('unplugs a mailbox whose password was rotated away', async () => {
+      // The hole workspace-readiness documents: a rotated password kept reading
+      // READY forever because nothing ever cleared the stamp.
+      const existing = {
+        id: 'ch-1',
+        workspaceId: 'ws-1',
+        type: 'EMAIL',
+        configSealed: null,
+        configPublic: null,
+        lastVerifiedAt: new Date('2026-01-01'),
+      };
+      const { svc, prisma } = make({
+        existing,
+        health: { ok: false, details: { transport: 'smtp', reason: '535 Username and Password not accepted' } },
+      });
+
+      await svc.update('ws-1', 'ch-1', { secrets: SMTP });
+
+      expect(prisma.channel.update).toHaveBeenLastCalledWith({
+        where: { id: 'ch-1' },
+        data: { lastVerifiedAt: null },
+      });
+    });
+
+    it('does NOT unplug a working mailbox over an unreachable probe', async () => {
+      // A DNS blip or a timeout is not evidence that the credentials are wrong,
+      // and clearing the stamp would stop IMAP for every reply until a human
+      // noticed and pressed Verify.
+      const existing = {
+        id: 'ch-1',
+        workspaceId: 'ws-1',
+        type: 'EMAIL',
+        configSealed: null,
+        configPublic: null,
+        lastVerifiedAt: new Date('2026-01-01'),
+      };
+      const { svc, prisma } = make({
+        existing,
+        health: { ok: false, details: { transport: 'smtp', reason: 'getaddrinfo EAI_AGAIN smtp.firma.com.tr' } },
+      });
+
+      await svc.update('ws-1', 'ch-1', { secrets: SMTP });
+
+      expect(prisma.channel.update).toHaveBeenCalledTimes(1); // the secrets write only
+    });
+  });
+
+  describe('the address is claimed only with proof', () => {
+    it('parks an unproven address instead of claiming it', async () => {
+      const { svc, prisma } = make();
+
+      await svc.create('ws-1', {
+        type: 'EMAIL',
+        name: 'Mailbox',
+        externalId: 'INFO@firma.com.tr',
+        secrets: SMTP,
+      });
+
+      const { data } = prisma.channel.create.mock.calls[0][0];
+      expect(data.externalId).toBeNull();
+      expect(data.configPublic).toMatchObject({ pendingAddress: 'info@firma.com.tr' });
+    });
+
+    it('does not block the real owner with a stranger\'s claim', async () => {
+      // The defect: a rival registered info@rakip.com.tr — no secrets needed —
+      // and the real business got a 409 forever.
+      const { svc, prisma, resolver } = make();
+      resolver.anyByExternalId.mockResolvedValue({ id: 'ch-squat', workspaceId: 'ws-2' });
+
+      await svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', externalId: 'info@firma.com.tr' });
+
+      expect(prisma.channel.create).toHaveBeenCalled();
+    });
+
+    it('claims the address when a verified sending domain proves it', async () => {
+      const { svc, prisma } = make({ sendingDomain: { id: 'sd-1' } });
+
+      await svc.create('ws-1', {
+        type: 'EMAIL',
+        name: 'Mailbox',
+        externalId: 'info@firma.com.tr',
+        secrets: SMTP,
+      });
+
+      const { data } = prisma.channel.create.mock.calls[0][0];
+      expect(data.externalId).toBe('info@firma.com.tr');
+      expect(data.configPublic?.pendingAddress).toBeUndefined();
+    });
+
+    it('still refuses a proven claim on an address another channel owns', async () => {
+      const { svc, resolver } = make({ sendingDomain: { id: 'sd-1' } });
+      resolver.anyByExternalId.mockResolvedValue({ id: 'ch-other', workspaceId: 'ws-2' });
+
+      await expect(
+        svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', externalId: 'info@firma.com.tr' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('re-connects the parked mailbox instead of parking it twice', async () => {
+      // Unproven both times: the row that is already waiting on this address is
+      // the row this connect means, and a second parked row would split one
+      // mailbox in two (nothing collides on the unique index any more).
+      const parked = {
+        id: 'ch-parked',
+        workspaceId: 'ws-1',
+        type: 'EMAIL',
+        externalId: null,
+        configSealed: null,
+        configPublic: { pendingAddress: 'info@firma.com.tr', inboundPolicy: 'REPLIES_AND_KNOWN' },
+      };
+      const { svc, prisma } = make({ existing: parked, pendingRows: [parked] });
+
+      const result: any = await svc.create('ws-1', {
+        type: 'EMAIL',
+        name: 'Mailbox',
+        externalId: 'info@firma.com.tr',
+        secrets: SMTP,
+      });
+
+      expect(prisma.channel.create).not.toHaveBeenCalled();
+      expect(result.id).toBe('ch-parked');
+      const { data } = prisma.channel.update.mock.calls[0][0];
+      expect(data.externalId).toBeNull();
+      expect(data.configPublic.pendingAddress).toBe('info@firma.com.tr');
+    });
+
+    it('promotes the parked channel when proof arrives, instead of making a second one', async () => {
+      // EmailOAuthService looks its channel up by externalId; against a parked
+      // row that misses, and a blind create would leave the workspace with two
+      // channels for one mailbox.
+      const parked = {
+        id: 'ch-parked',
+        workspaceId: 'ws-1',
+        type: 'EMAIL',
+        externalId: null,
+        configSealed: null,
+        configPublic: { pendingAddress: 'info@firma.com.tr', inboundPolicy: 'REPLIES_AND_KNOWN' },
+      };
+      const { svc, prisma } = make({
+        existing: parked,
+        pendingRows: [parked],
+        sendingDomain: { id: 'sd-1' },
+      });
+
+      const result: any = await svc.create('ws-1', {
+        type: 'EMAIL',
+        name: 'Mailbox',
+        externalId: 'info@firma.com.tr',
+        secrets: SMTP,
+      });
+
+      expect(prisma.channel.create).not.toHaveBeenCalled();
+      expect(result.id).toBe('ch-parked');
+      const { data } = prisma.channel.update.mock.calls[0][0];
+      expect(data.externalId).toBe('info@firma.com.tr');
+      expect(data.configPublic.pendingAddress).toBeUndefined();
+      expect(data.configPublic.inboundPolicy).toBe('REPLIES_AND_KNOWN');
+    });
+  });
+
+  describe('a new mailbox starts on the narrow inbound policy', () => {
+    it('stamps REPLIES_AND_KNOWN on a channel connected from now on', async () => {
+      const { svc, prisma } = make();
+
+      await svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP });
+
+      expect(prisma.channel.create.mock.calls[0][0].data.configPublic).toMatchObject({
+        inboundPolicy: 'REPLIES_AND_KNOWN',
+      });
+    });
+
+    it('keeps an explicit choice', async () => {
+      const { svc, prisma } = make();
+
+      await svc.create('ws-1', {
+        type: 'EMAIL',
+        name: 'Mailbox',
+        secrets: SMTP,
+        configPublic: { inboundPolicy: 'ALL_SENDERS' },
+      });
+
+      expect(prisma.channel.create.mock.calls[0][0].data.configPublic).toMatchObject({
+        inboundPolicy: 'ALL_SENDERS',
+      });
+    });
+
+    it('does not put the knob on a channel that has no inbox', async () => {
+      const { svc, prisma } = make();
+
+      await svc.create('ws-1', { type: 'WEBCHAT', name: 'Widget' });
+
+      expect(prisma.channel.create.mock.calls[0][0].data.configPublic).toBeUndefined();
+    });
+  });
+
+  describe('verify() lets a fixed mailbox try again at once', () => {
+    it('clears the inbound backoff when the operator re-proves the credentials', async () => {
+      const { svc, health } = make({
+        existing: { id: 'ch-1', workspaceId: 'ws-1', type: 'EMAIL' },
+        health: { ok: true, details: {} },
+      });
+
+      await svc.verify('ws-1', 'ch-1');
+
+      expect(health.clearBackoff).toHaveBeenCalledWith({ id: 'ch-1', workspaceId: 'ws-1' });
+    });
+
+    it('does not clear it on a failed verify', async () => {
+      const { svc, health } = make({
+        existing: { id: 'ch-1', workspaceId: 'ws-1', type: 'EMAIL' },
+        health: { ok: false, details: {} },
+      });
+
+      await svc.verify('ws-1', 'ch-1');
+
+      expect(health.clearBackoff).not.toHaveBeenCalled();
+    });
+
+    it('answers with a reason instead of a 500 when the adapter throws', async () => {
+      const { svc } = make({
+        existing: { id: 'ch-1', workspaceId: 'ws-1', type: 'EMAIL' },
+        healthCheck: jest.fn().mockRejectedValue(new Error('socket hang up')),
+      });
+
+      const result = await svc.verify('ws-1', 'ch-1');
+
+      expect(result.ok).toBe(false);
+      expect(String(result.details?.reason)).toContain('socket hang up');
+    });
+  });
+
+  describe('the refusal names what is missing', () => {
+    it('says which plan item a mailbox needs, not "a higher package"', async () => {
+      // The live workspace hits this and has to know WHAT to switch on. The
+      // gate itself stays where it is: `assertChannelFeature` covers create,
+      // update and verify, while the channel list, the delete route and every
+      // conversations route gate on `conversationAi` independently — so moving
+      // EMAIL onto its own key would only buy a connect-succeeds/inbox-403.
+      const { svc } = make({ entitlements: makeEntitlements({ conversationAi: false }) });
+
+      await expect(
+        svc.create('ws-1', { type: 'EMAIL', name: 'Mailbox', secrets: SMTP }),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'FEATURE_NOT_IN_PACKAGE',
+          feature: 'conversationAi',
+          featureLabel: expect.stringMatching(/Conversations/i),
+        },
+      });
+    });
+  });
+});
+
+/**
+ * The inbound URL the tenant actually pastes into their relay.
+ *
+ * The legacy `POST webhook` needs a platform-global HMAC no inbound-parse
+ * provider can produce, so every tenant who followed the dialog got a silent
+ * 401 — and sharing that one secret would let any holder forge mail into any
+ * workspace. The per-channel URL names the tenant, so it needs no secret of its
+ * own and cannot address anybody else's mailbox.
+ */
+describe('ChannelsService — mask() exposes the tokenized inbound URL', () => {
+  beforeEach(() => {
+    process.env.PUBLIC_BASE_URL = 'https://app.example.com';
+    process.env.MARKETING_SECRET_KEY = Buffer.alloc(32).toString('base64');
+    isSecretBoxConfiguredMock.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  function make(row: any) {
+    const prisma = { channel: { findMany: jest.fn().mockResolvedValue([row]) } } as any;
+    return new ChannelsService(prisma, {} as any, {} as any, makeEntitlements(), {} as any, makeHealth());
+  }
+
+  it('gives an EMAIL channel a URL that carries its own id and token', async () => {
+    const svc = make({
+      id: 'ch-mail',
+      type: 'EMAIL',
+      name: 'Mailbox',
+      status: 'ACTIVE',
+      externalId: 'info@firma.com.tr',
+      configPublic: null,
+      configSealed: null,
+    });
+
+    const [result] = await svc.list('ws-1');
+
+    expect(result.inboundUrl).toMatch(
+      /^https:\/\/app\.example\.com\/api\/public\/channels\/email\/ch-mail\/[0-9a-f]{64}\/inbound$/,
+    );
+    // The legacy signed route keeps its place — a custom relay may already sign it.
+    expect(result.webhookUrl).toBe('https://app.example.com/api/public/channels/email/webhook');
+  });
+
+  it('surfaces a parked address so the card can say which mailbox is meant', async () => {
+    const svc = make({
+      id: 'ch-mail',
+      type: 'EMAIL',
+      name: 'Mailbox',
+      status: 'ACTIVE',
+      externalId: null,
+      configPublic: { pendingAddress: 'info@firma.com.tr' },
+      configSealed: null,
+    });
+
+    const [result] = await svc.list('ws-1');
+
+    expect(result.inboundAddress).toBeNull();
+    expect(result.pendingAddress).toBe('info@firma.com.tr');
+  });
+
+  it('gives a non-EMAIL channel no inbound URL at all', async () => {
+    const svc = make({
+      id: 'ch-sms',
+      type: 'SMS',
+      name: 'SMS',
+      status: 'ACTIVE',
+      externalId: null,
+      configPublic: null,
+      configSealed: null,
+    });
+
+    const [result] = await svc.list('ws-1');
+
+    expect(result).not.toHaveProperty('inboundUrl');
+  });
+});
+
+describe('ChannelsService — a settings save must not wipe the machines\' place', () => {
+  function make(existing: any) {
+    const prisma = {
+      channel: {
+        create: jest.fn(),
+        update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: 'ch-1', ...data })),
+        findFirst: jest.fn().mockResolvedValue(existing),
+      },
+    } as any;
+    const registry = { has: jest.fn().mockReturnValue(true) } as any;
+    const resolver = {
+      byExternalId: jest.fn().mockResolvedValue(null),
+      anyByExternalId: jest.fn().mockResolvedValue(null),
+    } as any;
+    const svc = new ChannelsService(
+      prisma,
+      registry,
+      resolver,
+      makeEntitlements(),
+      { registerWebhook: jest.fn() } as any,
+      makeHealth(),
+    );
+    return { svc, prisma };
+  }
+
+  const MAILBOX = {
+    id: 'ch-1',
+    workspaceId: 'ws-1',
+    type: 'EMAIL',
+    status: 'ACTIVE',
+    externalId: 'destek@acme.test',
+    configSealed: null,
+    configPublic: {
+      imapLastUid: 4210,
+      imapUidValidity: '42',
+      imapFailUid: 4211,
+      imapFailCount: 2,
+      imapSentLastUid: 900,
+      health: { receive: { ok: false, backoffUntil: '2026-09-23T10:00:00.000Z' } },
+      fromName: 'Acme',
+    },
+  };
+
+  it('keeps the IMAP cursor, the poison counters and the health block', async () => {
+    // Replacing the whole JSON resets the cursor, so the next tick reads the
+    // mailbox as a FIRST RUN and holds the automation on a week of live
+    // replies — and drops the backoff a dead credential earned.
+    const { svc, prisma } = make(MAILBOX);
+    await svc.update('ws-1', 'ch-1', { configPublic: { inboundPolicy: 'REPLIES_AND_KNOWN' } });
+    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
+    expect(written).toMatchObject({
+      imapLastUid: 4210,
+      imapUidValidity: '42',
+      imapFailUid: 4211,
+      imapFailCount: 2,
+      imapSentLastUid: 900,
+      health: { receive: { ok: false, backoffUntil: '2026-09-23T10:00:00.000Z' } },
+    });
+  });
+
+  it('still applies what the dialog actually changed', async () => {
+    const { svc, prisma } = make(MAILBOX);
+    await svc.update('ws-1', 'ch-1', {
+      configPublic: { inboundPolicy: 'REPLIES_AND_KNOWN', fromName: 'Acme Destek' },
+    });
+    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
+    expect(written.inboundPolicy).toBe('REPLIES_AND_KNOWN');
+    expect(written.fromName).toBe('Acme Destek');
   });
 });

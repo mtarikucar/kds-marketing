@@ -15,9 +15,16 @@ import {
   isSecretBoxConfigured,
 } from '../../../common/crypto/secret-box.helper';
 import { metaGraphFetch, graphApiVersion } from '../../../common/util/meta-graph.util';
+import { withTimeout } from '../../../common/util/with-timeout';
 import { EntitlementsService, FeatureKey } from '../../billing/entitlements.service';
-import { ChannelAdapterRegistry } from './channel-adapter.registry';
+import { ChannelAdapterRegistry, ChannelRowLike } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
+import { MailboxHealthService } from './mailbox-health.service';
+import { assertEmailSecrets } from './email-config.util';
+import { emailInboundCallbackUrl } from './email-inbound-callback.util';
+import { NEW_CHANNEL_INBOUND_POLICY } from './inbound/inbound-policy';
+import { classifySmtpError } from './outbound/smtp-error';
+import { domainOf } from './smtp-autodiscover';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
 import { assertTiktokDmSecrets } from './tiktok-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
@@ -28,6 +35,18 @@ import { tiktokWebhookCallbackUrl } from './tiktok-callback.util';
 import { IysClient } from '../../netgsm/iys/iys.client';
 import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 
+/**
+ * How an EMAIL channel proved it owns the address it is claiming.
+ *
+ * `'oauth'` is the provider's own answer to "whose mailbox is this" and is
+ * NEVER derivable from the payload: `secrets` is a free-form object on the
+ * public DTO, so a caller can seal `oauthProvider` next to any address it
+ * likes. Only an in-process caller that actually completed the consent flow
+ * may pass this, which the global `forbidNonWhitelisted` ValidationPipe makes
+ * true by construction — an HTTP body carrying `addressProof` is a 400.
+ */
+export type EmailAddressProof = 'oauth';
+
 export interface CreateChannelInput {
   type: string;
   name: string;
@@ -35,6 +54,8 @@ export interface CreateChannelInput {
   externalId?: string | null;
   secrets?: Record<string, string>;
   configPublic?: Record<string, unknown>;
+  /** Internal only — see `EmailAddressProof`. Never reachable from the API. */
+  addressProof?: EmailAddressProof;
 }
 export interface UpdateChannelInput {
   name?: string;
@@ -51,7 +72,40 @@ export interface UpdateChannelInput {
    */
   clearSecretKeys?: string[];
   configPublic?: Record<string, unknown>;
+  /** Internal only — see `EmailAddressProof`. Never reachable from the API. */
+  addressProof?: EmailAddressProof;
 }
+
+/**
+ * A health check that was run, and whether we got an ANSWER at all.
+ *
+ * `reached` is the difference between "the mail server refused these
+ * credentials" and "nothing answered": the first is grounds for unplugging a
+ * mailbox, the second is a DNS blip that must not stop every reply arriving.
+ */
+interface HealthOutcome {
+  ok: boolean;
+  details?: Record<string, unknown>;
+  reached: boolean;
+}
+
+/**
+ * How long a SAVE may wait on a mail server before it stops being a save.
+ *
+ * The SMTP branch allows 15s each for connection, greeting and socket, and
+ * then probes IMAP, so an unbounded check could hold `POST /channels` open for
+ * the better part of a minute over nothing but a typo in the host.
+ */
+const CONNECT_CHECK_TIMEOUT_MS = 10_000;
+
+/** What the plan item is CALLED, so a refusal can name it instead of saying
+ *  "a higher package" and leaving the owner to guess which switch to find. */
+const FEATURE_LABEL: Partial<Record<FeatureKey, string>> = {
+  conversationAi: 'Conversations & Inbox',
+  campaigns: 'Campaigns',
+  sms: 'SMS',
+  telephony: 'Telephony',
+};
 
 /**
  * Channel CRUD + verify. Secrets are AES-256-GCM sealed into `configSealed`
@@ -69,6 +123,7 @@ export class ChannelsService {
     private readonly resolver: PublicChannelResolverService,
     private readonly entitlements: EntitlementsService,
     private readonly iysClient: IysClient,
+    private readonly mailboxHealth: MailboxHealthService,
   ) {}
 
   /**
@@ -78,6 +133,15 @@ export class ChannelsService {
    * program); every other type keeps requiring `conversationAi`, unchanged.
    */
   private async assertChannelFeature(workspaceId: string, type: string): Promise<void> {
+    // The gate STAYS where it is, deliberately. Moving EMAIL onto its own key
+    // would change create/update/verify and nothing else: the channel list, the
+    // delete route and every `marketing-conversations.controller.ts` method
+    // carry `@RequiresFeature('conversationAi')` of their own, so the workspace
+    // would end up with a mailbox it can connect and cannot see — connect
+    // succeeds, inbox 403s, and inbound mail is written into a surface nobody
+    // can open. A clean refusal that NAMES the missing plan item is the honest
+    // half of `email-gated-conversationai`; the other half is an operator
+    // granting the package (PLAN §E #1).
     // VOICE is gated on `telephony`, the same key the /calls nav item, the
     // webphone, the dialer and NetGSM onboarding all use — not on
     // `conversationAi`. Falling through to the default would have let a
@@ -94,9 +158,16 @@ export class ChannelsService {
   private async assertFeature(workspaceId: string, feature: FeatureKey): Promise<void> {
     const effective = await this.entitlements.getEffective(workspaceId);
     if (!effective.features[feature]) {
+      const label = FEATURE_LABEL[feature];
       throw new ForbiddenException({
-        message: 'This feature requires a higher package',
+        // The panel localises off `code`; this sentence is the fallback, and it
+        // has to be actionable on its own — "requires a higher package" sent
+        // the live workspace looking for a switch it could not name.
+        message: label
+          ? `This needs the "${label}" plan item, which this workspace's package does not include.`
+          : `This needs the "${feature}" plan item, which this workspace's package does not include.`,
         feature,
+        ...(label ? { featureLabel: label } : {}),
         code: 'FEATURE_NOT_IN_PACKAGE',
       });
     }
@@ -152,29 +223,57 @@ export class ChannelsService {
       throw new NotFoundException(`Unsupported channel type: ${dto.type}`);
     }
     await this.assertChannelFeature(workspaceId, dto.type);
-    const externalId = this.normalizeExternalId(dto.type, dto.externalId);
-    await this.assertExternalIdFree(dto.type, externalId);
+    const hasSecrets = !!(dto.secrets && Object.keys(dto.secrets).length);
+    // Before anything is sealed: a host that answers inside our own network, a
+    // From that is prose, a port with a stray digit. The operator is still
+    // looking at the form, which is the only moment the answer is useful.
+    if (hasSecrets) await this.assertSecrets(dto.type, dto.secrets!);
+
+    const requested = this.normalizeExternalId(dto.type, dto.externalId);
+
+    // An address this workspace has already parked belongs to the row that
+    // parked it. `EmailOAuthService` looks its channel up by `externalId`,
+    // misses a parked row and lands here, so without this a reconnect would
+    // leave the workspace with two channels for one mailbox — and the parked
+    // row no longer collides on the unique index to stop it. Re-connecting
+    // rotates the credentials and promotes the claim if proof arrived with it,
+    // exactly as `completeWhatsappSignup` re-connects a phone number.
+    if (requested) {
+      const parked = await this.findParkedEmailChannel(workspaceId, dto.type, requested);
+      if (parked) {
+        return this.update(workspaceId, parked.id, {
+          name: dto.name,
+          status: 'ACTIVE',
+          externalId: requested,
+          ...(dto.addressProof ? { addressProof: dto.addressProof } : {}),
+          ...(hasSecrets ? { secrets: dto.secrets } : {}),
+        });
+      }
+    }
+
+    const claim = await this.resolveEmailClaim(workspaceId, dto.type, requested, dto.addressProof);
+    await this.assertExternalIdFree(dto.type, claim.externalId);
     const data: any = {
       workspaceId,
       type: dto.type,
       name: dto.name,
       status: 'ACTIVE',
       agentProfileId: dto.agentProfileId ?? null,
-      externalId,
-      configPublic: dto.configPublic ?? undefined,
+      externalId: claim.externalId,
+      configPublic: this.initialConfigPublic(dto, claim.pendingAddress),
     };
     if (dto.type === 'WEBCHAT') {
       data.widgetKey = `wc_${randomBytes(16).toString('hex')}`;
     }
-    if (dto.secrets && Object.keys(dto.secrets).length) {
-      if (dto.type === 'SMS') assertNetgsmSmsSecrets(dto.secrets);
-      else if (dto.type === 'TIKTOK') assertTiktokDmSecrets(dto.secrets);
-      else if (isMetaChannelType(dto.type)) assertMetaSecrets(dto.type, dto.secrets);
-      else if (dto.type === 'LINKEDIN') assertLinkedinEngagementSecrets(dto.secrets);
-      data.configSealed = this.seal(dto.secrets);
+    if (hasSecrets) {
+      data.configSealed = this.seal(dto.secrets!);
     }
     const c = await this.prisma.channel.create({ data: { ...data, workspaceId } });
-    return this.mask(c);
+    // Nothing to prove without credentials (a WEBCHAT has none), and the row
+    // must survive whatever the proof attempt does — see `proveMailbox`.
+    if (!hasSecrets) return this.mask(c);
+    const proved = await this.proveMailbox(workspaceId, c, null);
+    return { ...this.mask(proved.row), health: proved.health };
   }
 
   /**
@@ -295,10 +394,20 @@ export class ChannelsService {
       }
       data.agentProfileId = dto.agentProfileId;
     }
+    let pendingAddress: string | null = null;
+    let identityWritten = false;
     if (dto.externalId !== undefined) {
-      const externalId = this.normalizeExternalId(existing.type, dto.externalId);
-      await this.assertExternalIdFree(existing.type, externalId, existing.id);
-      data.externalId = externalId;
+      const requested = this.normalizeExternalId(existing.type, dto.externalId);
+      const claim = await this.resolveEmailClaim(
+        workspaceId,
+        existing.type,
+        requested,
+        dto.addressProof,
+      );
+      await this.assertExternalIdFree(existing.type, claim.externalId, existing.id);
+      data.externalId = claim.externalId;
+      pendingAddress = claim.pendingAddress;
+      identityWritten = true;
     } else if (dto.status === 'ACTIVE' && existing.status !== 'ACTIVE' && existing.externalId) {
       // Re-activation is a registration too. The identity was NOT held while
       // this row sat DISABLED, so someone else may legitimately have taken it
@@ -308,8 +417,42 @@ export class ChannelsService {
       // number with `update(ws, id, { secrets, status: 'ACTIVE' })`.
       await this.assertExternalIdFree(existing.type, existing.externalId, existing.id);
     }
-    if (dto.configPublic !== undefined) data.configPublic = dto.configPublic;
-    if ((dto.secrets && Object.keys(dto.secrets).length) || dto.clearSecretKeys?.length) {
+    if (dto.configPublic !== undefined) {
+      /**
+       * MERGE, never replace.
+       *
+       * `configPublic` is a settings object to a tenant, but it is also where
+       * the machines keep their place: `imapLastUid`/`imapUidValidity`, the
+       * poison-pill counters `imapFailUid`/`imapFailCount`, the Sent
+       * reconciler's `imapSentLastUid`, and the `health` block the mailbox card
+       * reads. A settings save that posts only the keys the dialog knows about
+       * used to wipe every one of them — which resets the cursor, so the next
+       * tick reads the mailbox as a FIRST RUN and holds the automation on a
+       * week of live replies, and drops the backoff a dead credential earned.
+       *
+       * Merging costs the ability to DELETE a key from the client, which no
+       * caller does; `pendingAddress` below is removed explicitly, which is
+       * how a key that genuinely has to go is removed.
+       */
+      data.configPublic = {
+        ...((existing.configPublic as Record<string, unknown> | null) ?? {}),
+        ...dto.configPublic,
+      };
+    }
+    // The parked address travels WITH the identity write, so the card never
+    // shows a mailbox that is both claimed and still waiting to be proven.
+    if (existing.type === 'EMAIL' && identityWritten) {
+      const base = (data.configPublic ?? existing.configPublic ?? {}) as Record<string, unknown>;
+      const next = { ...base };
+      if (pendingAddress) next.pendingAddress = pendingAddress;
+      else delete next.pendingAddress;
+      data.configPublic = next;
+    }
+    const secretsWritten = !!(
+      (dto.secrets && Object.keys(dto.secrets).length) ||
+      dto.clearSecretKeys?.length
+    );
+    if (secretsWritten) {
       // Merge onto existing secrets so a partial update (e.g. rotate one key)
       // doesn't wipe the rest.
       let current: Record<string, string> = {};
@@ -324,14 +467,19 @@ export class ChannelsService {
       // After the merge, so a key named in both is dropped rather than set —
       // a caller asking to clear something means it, whatever else it sent.
       for (const k of dto.clearSecretKeys ?? []) delete merged[k];
-      if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
-      else if (existing.type === 'TIKTOK') assertTiktokDmSecrets(merged);
-      else if (isMetaChannelType(existing.type)) assertMetaSecrets(existing.type, merged);
-      else if (existing.type === 'LINKEDIN') assertLinkedinEngagementSecrets(merged);
+      // The MERGED result is what the transports will use, so it is what gets
+      // validated — rotating one field must not be able to leave the row in a
+      // state a fresh save would have refused.
+      await this.assertSecrets(existing.type, merged);
       data.configSealed = this.seal(merged);
     }
     const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
-    return this.mask(c);
+    if (!secretsWritten) return this.mask(c);
+    // Re-prove ONLY on a credential rewrite. This is what closes the "rotated
+    // password keeps reading READY" hole that workspace-readiness documents,
+    // without re-dialling a mail server every time somebody renames a channel.
+    const proved = await this.proveMailbox(workspaceId, c, existing);
+    return { ...this.mask(proved.row), health: proved.health };
   }
 
   async remove(workspaceId: string, id: string) {
@@ -344,15 +492,186 @@ export class ChannelsService {
     const c = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
     if (!c) throw new NotFoundException('Channel not found');
     await this.assertChannelFeature(workspaceId, c.type);
-    const adapter = this.registry.get(c.type);
-    const health = await adapter.healthCheck(this.registry.resolveConfig(c));
-    if (health.ok) {
-      await this.prisma.channel.update({
-        where: { id: c.id },
-        data: { lastVerifiedAt: new Date() },
-      });
+    // No timeout here, unlike a save: Verify is an explicit act by somebody who
+    // is waiting for the answer, and the adapter bounds its own dials.
+    const outcome = await this.runHealthCheck(c);
+    if (outcome.ok) {
+      await this.stampVerified(workspaceId, c, new Date());
     }
-    return health;
+    return { ok: outcome.ok, ...(outcome.details !== undefined ? { details: outcome.details } : {}) };
+  }
+
+  /**
+   * Run an adapter's health check and never let it become an exception.
+   *
+   * A throw here used to be a 500 with nothing in it. The panel is built to
+   * read `details` — a rejected credential says one thing, an unreachable host
+   * another — so a failure that cannot be described is the one outcome worth
+   * avoiding. `reached: false` marks the answers we invented.
+   */
+  private async runHealthCheck(row: ChannelRowLike, timeoutMs?: number): Promise<HealthOutcome> {
+    try {
+      const adapter = this.registry.get(row.type);
+      const call = adapter.healthCheck(this.registry.resolveConfig(row));
+      const health = timeoutMs
+        ? await withTimeout(call, timeoutMs, `${row.type} health check`)
+        : await call;
+      return { ok: !!health?.ok, details: health?.details, reached: true };
+    } catch (e: any) {
+      const reason = String(e?.message ?? e).slice(0, 200);
+      this.logger.warn(`channel ${row.id} health check failed: ${reason}`);
+      return { ok: false, details: { reason }, reached: false };
+    }
+  }
+
+  /**
+   * Prove a mailbox the moment its credentials are written, and be the ONE
+   * writer of `lastVerifiedAt`.
+   *
+   * That column is not decoration: `EmailImapPollService`, `EmailImapIdleService`
+   * and `WorkspaceMailboxService.resolve` all select on it, so an unproven
+   * mailbox is silently skipped — replies sit in it forever while the dialog
+   * says "replies will flow" (`mailbox-not-auto-verified`). The invariant is
+   * that `lastVerifiedAt` means A CHECK PASSED; it is satisfied by proving the
+   * mailbox, never by loosening the filter.
+   *
+   * Three rules, each of them a defect avoided:
+   *  - NON-FATAL. A failed or throwing check must still leave the row, or the
+   *    save would discard the password and the IMAP overrides just typed — and
+   *    `completeWhatsappSignup` needs the channel to exist before the WABA
+   *    subscription propagates.
+   *  - TIMEBOXED, so a wrong host cannot hold the request open.
+   *  - The stamp is CLEARED only on a credential refusal. An unreachable probe
+   *    is not evidence that a working mailbox is broken, and unplugging it
+   *    would stop every reply until a human noticed.
+   */
+  private async proveMailbox(
+    workspaceId: string,
+    row: any,
+    previous: { lastVerifiedAt?: Date | null } | null,
+  ): Promise<{ row: any; health: { ok: boolean; details?: Record<string, unknown> } }> {
+    const outcome = await this.runHealthCheck(row, CONNECT_CHECK_TIMEOUT_MS);
+    let current = row;
+    try {
+      if (outcome.ok) {
+        current = await this.stampVerified(workspaceId, row, new Date());
+      } else if (previous?.lastVerifiedAt && this.isCredentialRefusal(outcome)) {
+        current = await this.prisma.channel.update({
+          where: { id: row.id },
+          data: { lastVerifiedAt: null },
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`channel ${row.id}: could not record the health check: ${e?.message ?? e}`);
+    }
+    return {
+      row: current,
+      health: { ok: outcome.ok, ...(outcome.details !== undefined ? { details: outcome.details } : {}) },
+    };
+  }
+
+  /** The single `lastVerifiedAt` write, plus the one thing that goes with it:
+   *  credentials the operator has just re-proven should let inbound try again
+   *  now rather than serve out a backoff earned under the old password. */
+  private async stampVerified(workspaceId: string, row: any, at: Date) {
+    const updated = await this.prisma.channel.update({
+      where: { id: row.id },
+      data: { lastVerifiedAt: at },
+    });
+    if (row.type === 'EMAIL') {
+      await this.mailboxHealth
+        .clearBackoff({ id: row.id, workspaceId })
+        .catch(() => undefined);
+    }
+    return updated;
+  }
+
+  /** Did the server ANSWER and refuse the credentials? Only that unplugs a
+   *  mailbox — a timeout, a DNS failure or an unknown 5xx does not. */
+  private isCredentialRefusal(outcome: HealthOutcome): boolean {
+    if (!outcome.reached || outcome.ok) return false;
+    const d = outcome.details ?? {};
+    if (d.credsValid === false) return true;
+    // `receiveReason` is deliberately NOT read: `ok` is SEND-truth, and an IMAP
+    // failure must never unplug a mailbox that can still send.
+    const reason = [d.reason, d.message, d.error].find((v) => typeof v === 'string' && v);
+    return typeof reason === 'string' && classifySmtpError(reason).kind === 'systemic';
+  }
+
+  /** Per-type credential validation, in one place so create and update cannot
+   *  drift — update validates the MERGED secrets, create the incoming ones. */
+  private async assertSecrets(type: string, secrets: Record<string, string>): Promise<void> {
+    if (type === 'SMS') assertNetgsmSmsSecrets(secrets);
+    else if (type === 'TIKTOK') assertTiktokDmSecrets(secrets);
+    else if (isMetaChannelType(type)) assertMetaSecrets(type, secrets);
+    else if (type === 'LINKEDIN') assertLinkedinEngagementSecrets(secrets);
+    else if (type === 'EMAIL') await assertEmailSecrets(secrets);
+  }
+
+  /**
+   * Who may CLAIM an email address, and what happens to everyone else.
+   *
+   * `externalId` is self-asserted — `secrets` is optional, so nothing proved
+   * the caller controls the address it registered — and it is globally unique
+   * (`@@unique([type, externalId])`). A rival registering `info@rakip.com.tr`
+   * therefore locked the real business out with a 409 forever
+   * (`externalid-claim`). `healthCheck` cannot close this: it authenticates
+   * against a host the same caller supplied, so it proves nothing about the
+   * address.
+   *
+   * So an unproven address is PARKED rather than claimed: `externalId` stays
+   * null (Postgres allows many NULLs under the unique index) and the intended
+   * address sits in `configPublic.pendingAddress` until something proves it.
+   * Nothing is lost by waiting — sending reads the sealed `fromEmail`, IMAP
+   * selects on `lastVerifiedAt`, and the tokenized inbound URL routes by
+   * channel id. The one reader that needs the claim is the legacy To-header
+   * webhook, which is exactly the path that must stay proof-gated.
+   */
+  private async resolveEmailClaim(
+    workspaceId: string,
+    type: string,
+    requested: string | null,
+    proof?: EmailAddressProof,
+  ): Promise<{ externalId: string | null; pendingAddress: string | null }> {
+    if (type !== 'EMAIL' || !requested) return { externalId: requested, pendingAddress: null };
+    if (proof === 'oauth') return { externalId: requested, pendingAddress: null };
+    // The DNS proof this product already builds and verifies. Per-workspace and
+    // evidence-based, so it cannot inherit the squat it is closing.
+    const domain = domainOf(requested);
+    const verified = domain
+      ? await this.prisma.sendingDomain.findFirst({
+          where: { workspaceId, domain, status: 'VERIFIED' },
+          select: { id: true },
+        })
+      : null;
+    return verified
+      ? { externalId: requested, pendingAddress: null }
+      : { externalId: null, pendingAddress: requested };
+  }
+
+  /** This workspace's channel that is already waiting on exactly this address. */
+  private async findParkedEmailChannel(workspaceId: string, type: string, address: string) {
+    if (type !== 'EMAIL') return null;
+    const rows = await this.prisma.channel.findMany({
+      where: { workspaceId, type: 'EMAIL', externalId: null },
+      select: { id: true, configPublic: true },
+    });
+    const match = rows.find(
+      (r) => (r.configPublic as { pendingAddress?: unknown } | null)?.pendingAddress === address,
+    );
+    return match ?? null;
+  }
+
+  /** The public config a channel starts life with. EMAIL gets G3's other half:
+   *  a mailbox connected from NOW ON starts on the narrow inbound policy, while
+   *  every channel connected before this keeps reading as `ALL_SENDERS` — a
+   *  silent narrowing would make a live shared inbox look broken. */
+  private initialConfigPublic(dto: CreateChannelInput, pendingAddress: string | null) {
+    if (dto.type !== 'EMAIL') return dto.configPublic ?? undefined;
+    const pub: Record<string, unknown> = { ...(dto.configPublic ?? {}) };
+    if (pub.inboundPolicy === undefined) pub.inboundPolicy = NEW_CHANNEL_INBOUND_POLICY;
+    if (pendingAddress) pub.pendingAddress = pendingAddress;
+    return pub;
   }
 
   /**
@@ -473,18 +792,30 @@ export class ChannelsService {
             messaging: (c.configPublic as Record<string, unknown> | null)?.messaging ?? null,
           }
         : {}),
-      // EMAIL is two-way: outbound SMTP (sealed secrets) + inbound replies parsed
-      // by the workspace's email provider POSTing to our signed inbound webhook.
-      // Surface the webhook URL to paste into the ESP, whether the platform-global
-      // signing key is set (inbound is 401-dead without it), and the inbound
-      // address the channel resolves by — so the UI can show BOTH halves' status.
+      // EMAIL is two-way: outbound SMTP (sealed secrets) + inbound replies, by
+      // IMAP or by a relay POSTing them to us.
+      //
+      // `inboundUrl` is the one a tenant can actually use: the channel id names
+      // the workspace and the token makes the path unguessable, so it needs no
+      // shared secret and a token holder cannot address anybody else's mailbox.
+      // `webhookUrl` is the legacy platform-signed route, kept because a custom
+      // relay may already sign it — `inboundSecretConfigured` says only whether
+      // THAT route can work, and is not the readiness signal for inbound.
+      // `pendingAddress` is an address this channel has asked for and not yet
+      // proven (see `resolveEmailClaim`), so the card can name the mailbox it
+      // means without implying the claim went through.
       ...(c.type === 'EMAIL'
         ? {
+            inboundUrl: emailInboundCallbackUrl(process.env.PUBLIC_BASE_URL, c.id),
             webhookUrl: process.env.PUBLIC_BASE_URL
               ? `${process.env.PUBLIC_BASE_URL.replace(/\/+$/, '')}/api/public/channels/email/webhook`
               : null,
             inboundSecretConfigured: !!process.env.EMAIL_INBOUND_SECRET,
             inboundAddress: c.externalId,
+            pendingAddress:
+              ((c.configPublic as { pendingAddress?: unknown } | null)?.pendingAddress as
+                | string
+                | undefined) ?? null,
           }
         : {}),
       lastVerifiedAt: c.lastVerifiedAt,
