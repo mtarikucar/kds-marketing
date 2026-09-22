@@ -189,7 +189,11 @@ export class ConversationsService {
     if (!convo) throw new NotFoundException('Conversation not found');
     await this.prisma.conversation.update({
       where: { id: convo.id },
-      data: { aiPaused: true, unreadCount: 0 },
+      // A human answering IS the resolution. Leaving the decline standing
+      // shows "the AI did not respond" above a thread somebody has since
+      // replied in — the banner outlives the problem it reported and the rep
+      // stops believing any of them.
+      data: { aiPaused: true, unreadCount: 0, aiLastDeclineReason: null, aiLastDeclineAt: null },
     });
     return this.sender.send({
       workspaceId,
@@ -211,7 +215,13 @@ export class ConversationsService {
   }
 
   async setAiPaused(workspaceId: string, conversationId: string, paused: boolean) {
-    await this.scopedUpdate(workspaceId, conversationId, { aiPaused: paused });
+    // Resuming is an explicit "try again", so whatever it declined for last
+    // time is no longer what the banner should be saying. Pausing leaves the
+    // reason alone — that is still why the AI stopped.
+    await this.scopedUpdate(workspaceId, conversationId, {
+      aiPaused: paused,
+      ...(paused ? {} : { aiLastDeclineReason: null, aiLastDeclineAt: null }),
+    });
     return this.touch(workspaceId, conversationId);
   }
 

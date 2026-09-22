@@ -220,9 +220,14 @@ export class WorkspaceMailboxService {
     const verified = !!ch.lastVerifiedAt;
     if (isEmailOAuthProvider(s.oauthProvider)) {
       const address = (s.fromEmail ?? '').trim().toLowerCase() || null;
-      // Consent wipes the SMTP keys on connect, so a consent mailbox is
-      // send-only unless someone sealed receive credentials beside it.
-      const canReceive = !!(s.smtpUser?.trim() && s.smtpPass);
+      // A consent reconnect no longer wipes a receive credential that is the
+      // mailbox's only way in (`deadSmtpKeys`), and `imapTarget` now polls
+      // with one — so a consent mailbox receives exactly when it holds a
+      // password, whether that is the dedicated inbound pair or the SMTP one.
+      const canReceive = !!(
+        (s.imapUser?.trim() && s.imapPass) ||
+        (s.smtpUser?.trim() && s.smtpPass)
+      );
       return {
         channelId: ch.id,
         config,

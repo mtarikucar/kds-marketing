@@ -362,13 +362,38 @@ describe('EmailChannelAdapter', () => {
     });
 
     it('says plainly that a consent-connected mailbox cannot RECEIVE', async () => {
-      // email-imap-poll and email-imap-idle both `return null` on oauthProvider
-      // and authenticate with smtpUser/smtpPass — there is no XOAUTH2 anywhere —
-      // so consent buys sending only. The connect dialog promises two-way email;
-      // this is what keeps that promise honest instead of silently half-true.
+      // There is no XOAUTH2 IMAP path anywhere, so consent ALONE buys sending
+      // only. The connect dialog promises two-way email; this is what keeps
+      // that promise honest instead of silently half-true.
       const res = await adapter.healthCheck({ secrets: OAUTH } as any);
       expect(res.details).toMatchObject({ receive: false });
-      expect(String(res.details?.receiveReason)).toMatch(/webhook/i);
+      // It names what is missing — an incoming password — rather than implying
+      // an ESP the tenant has not got.
+      expect(String(res.details?.receiveReason)).toMatch(/IMAP/i);
+    });
+
+    it('does NOT claim send-only for a consent mailbox that holds an IMAP password', async () => {
+      // Gmail readonly needs CASA, so "wait for the read scope" means "no
+      // replies, indefinitely". Consent for send plus an app password for
+      // receive works today — and once the pollers use it, a card still
+      // saying "send-only" contradicts the mail arriving in the inbox.
+      const res = await adapter.healthCheck({
+        secrets: {
+          ...OAUTH,
+          imapHost: 'imap.gmail.com',
+          imapPort: '993',
+          imapUser: 'owner@gmail.com',
+          imapPass: 'app-password',
+        },
+      } as any);
+      // The probe was attempted rather than short-circuited, and it reports
+      // what the mailbox actually answered.
+      expect(res.details).toMatchObject({ receive: true, imapHost: 'imap.gmail.com' });
+      expect(res.details?.receiveReason).toBeUndefined();
+      // `ok` is SEND-truth and must stay that way: channels.service stamps
+      // `lastVerifiedAt` on it alone, and that column reroutes every tenant's
+      // mail back to the platform address when it is null.
+      expect(res.ok).toBe(true);
     });
 
     it('mirrors send(): an expired token the provider will not renew is not healthy', async () => {
@@ -492,6 +517,135 @@ describe('EmailChannelAdapter', () => {
   it('parseInbound ignores empty/whitespace bodies', () => {
     const out = adapter.parseInbound({ secrets: SMTP } as any, { from: 'a@b.test', text: '   ' });
     expect(out).toHaveLength(0);
+  });
+
+  describe('parseInbound — who the mail is really from', () => {
+    it('follows a CROSS-DOMAIN Reply-To to the enquirer, with THEIR name', () => {
+      // A contact-form relay mails as the website and puts the submitter in
+      // Reply-To. Reading only the From files every enquiry on one fake lead
+      // named after the site — and the name sticks, because the AI's capture
+      // path fills only EMPTY fields.
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'WordPress <wordpress@site.test>',
+        'reply-to': 'Ayşe Yılmaz <ayse@musteri.test>',
+        text: 'Fiyat listesi alabilir miyim?',
+      });
+      expect(out[0]).toMatchObject({
+        externalUserId: 'ayse@musteri.test',
+        displayName: 'Ayşe Yılmaz',
+      });
+    });
+
+    it('leaves a SAME-domain Reply-To alone', () => {
+      // A vendor newsletter points noreply@vendor at sales@vendor. Following
+      // that would turn every vendor blast into a lead for their sales desk.
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'noreply@vendor.test',
+        replyTo: 'sales@vendor.test',
+        text: 'Our new catalogue is out',
+      });
+      expect(out[0].externalUserId).toBe('noreply@vendor.test');
+    });
+
+    it('rescues a form that mails FROM the mailbox itself', () => {
+      // The override runs BEFORE the own-address check, or a form relaying
+      // through the tenant's own address is dropped as an echo.
+      const out = adapter.parseInbound(
+        { secrets: SMTP, externalId: 'support@acme.test' } as any,
+        {
+          from: 'support@acme.test',
+          'reply-to': 'Can <can@musteri.test>',
+          text: 'Web sitesinden mesaj',
+        },
+      );
+      expect(out[0]).toMatchObject({ externalUserId: 'can@musteri.test', displayName: 'Can' });
+    });
+
+    it('still drops the echo when Reply-To points back at us', () => {
+      // The own-address check RE-RUNS on the resolved address, or a form that
+      // left Reply-To on our own mailbox opens a self-reply loop.
+      const out = adapter.parseInbound(
+        { secrets: SMTP, externalId: 'support@acme.test' } as any,
+        { from: 'relay@site.test', 'reply-to': 'support@acme.test', text: 'loop' },
+      );
+      expect(out).toHaveLength(0);
+    });
+  });
+
+  describe('parseInbound — what the transport could prove', () => {
+    it('marks an explicit authentication failure unverified', () => {
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'ceo@victim.test',
+        text: 'wire the money to this new account',
+        authVerdict: 'fail',
+      });
+      // Still ingested and still attached to the lead — only the automation
+      // downstream is held. Silence is the failure mode being removed.
+      expect(out).toHaveLength(1);
+      expect(out[0].senderVerified).toBe(false);
+    });
+
+    it('leaves senderVerified UNSET when nothing authenticated the mail', () => {
+      // Three states, and this is the one almost all mail is in. Collapsing it
+      // to false would make unverifiable mail read as forged.
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'jane@buyer.test',
+        text: 'hello',
+        authVerdict: 'unknown',
+      });
+      expect(out[0].senderVerified).toBeUndefined();
+      expect('senderVerified' in out[0]).toBe(false);
+    });
+
+    it('reads the webhook path\'s nested verdict too', () => {
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'jane@buyer.test',
+        text: 'hello',
+        auth: { verdict: 'pass', spf: 'pass', dkim: 'pass' },
+      });
+      expect(out[0].senderVerified).toBe(true);
+    });
+  });
+
+  describe('parseInbound — quoting', () => {
+    const QUOTED = [
+      'Evet, uygundur.',
+      '',
+      'On Mon, 1 Sep 2026 at 10:00, Acme <support@acme.test> wrote:',
+      '> Teklifimiz ektedir.',
+      '> Saygılarımızla',
+    ].join('\n');
+
+    it('strips the quoted thread off a raw provider body', () => {
+      // The legacy route posts whatever the provider sent. Without this the
+      // AI reads — and answers — our own quoted message.
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'jane@buyer.test',
+        text: QUOTED,
+      });
+      expect(out[0].text).toContain('Evet, uygundur.');
+      expect(out[0].text).not.toContain('Teklifimiz ektedir.');
+    });
+
+    it('does not strip a body the caller already stripped', () => {
+      // Both internal doors strip before they get here. A second pass on a
+      // reply that is now a few words is how a short answer becomes empty.
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'jane@buyer.test',
+        text: 'On this we agree, so wrote it up',
+        textIsStripped: true,
+      });
+      expect(out[0].text).toBe('On this we agree, so wrote it up');
+    });
+
+    it('does not strip a provider-stripped body', () => {
+      const out = adapter.parseInbound({ secrets: SMTP } as any, {
+        from: 'jane@buyer.test',
+        'stripped-text': 'On this we agree',
+        text: QUOTED,
+      });
+      expect(out[0].text).toBe('On this we agree');
+    });
   });
 
   describe('consent-connected mailbox (OAuth transport)', () => {

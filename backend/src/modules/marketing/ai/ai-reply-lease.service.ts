@@ -255,7 +255,10 @@ export class AiReplyLeaseService {
     if (lastOut?.authorType !== 'AI') return;
     await this.prisma.conversation.updateMany({
       where: { id: conversationId, workspaceId, aiPaused: true },
-      data: { aiPaused: false },
+      // The answer went out, so the last decline is history. Without this an
+      // MCP_ONLY workspace carries a permanently stale "the AI did not
+      // respond" banner over a thread the AI has just answered.
+      data: { aiPaused: false, aiLastDeclineReason: null, aiLastDeclineAt: null },
     });
   }
 

@@ -1,7 +1,11 @@
+import { Logger } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { assertNoHeaderInjection } from '../../../common/util/email-address';
 import { toHeaderMessageId } from './email-message-id';
 import { EMAIL_OAUTH, EmailOAuthProvider } from './email-oauth.config';
+
+/** This module is plain functions, not a provider, so it carries its own. */
+const LOGGER = new Logger('EmailOAuthSender');
 
 /**
  * Sending a mail on a connected mailbox's behalf, over HTTP rather than SMTP.
@@ -423,8 +427,25 @@ export async function fetchConnectedAddress(
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-  }).catch(() => null);
-  if (!res || !res.ok) return null;
+  }).catch((e) => {
+    // The null return is the contract — callers depend on it — but WHY it
+    // came back null has to reach a log, or a timeout and a 403
+    // insufficient-privileges are the same `?connect_error=1` page and an
+    // operator has nothing to act on. Microsoft's `/me` refuses without the
+    // `User.Read` scope, which is precisely the failure this names.
+    LOGGER.warn(
+      `email-oauth: ${provider} identity lookup did not complete: ${String(e?.message ?? e).slice(0, 200)}`,
+    );
+    return null;
+  });
+  if (!res) return null;
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    LOGGER.warn(
+      `email-oauth: ${provider} identity lookup refused (${res.status}): ${detail.slice(0, 300)}`,
+    );
+    return null;
+  }
   const body: any = await res.json().catch(() => ({}));
   // Graph's `mail` is null on accounts with no Exchange licence; the UPN is the
   // address in that case and is what the mailbox actually sends as.

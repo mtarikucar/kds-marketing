@@ -491,6 +491,15 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // EmailImapPollService.pollOne, which re-reads the row by id.
   'channels/email-imap-idle.service.ts:channel.findMany':
     'inbound-email IDLE holder enumerates verified ACTIVE EMAIL channels across all workspaces to decide which need a held connection (system cron); it performs no ingest of its own',
+  // The third of the same family: the \Sent reconciler, which files replies a
+  // rep typed in Outlook or Gmail back into the thread. It is the same shape as
+  // the two above and for the same reason — a mailbox is reachable only through
+  // the credentials sealed on its own channel row, so the cron has to enumerate
+  // across workspaces to know which mailboxes exist. Every row carries its
+  // workspaceId, and each of the file's other three reads (mailLog.findFirst,
+  // message.findFirst, campaignRecipient.findFirst) is scoped by it.
+  'channels/inbound/email-sent-poll.service.ts:channel.findMany':
+    'Sent-folder reconciler enumerates verified ACTIVE EMAIL channels across all workspaces (system cron); ingest and cursor write are scoped by each row workspaceId',
   // The reply-backfill sweep. A conversation that was already waiting when the
   // reply lane was switched on is invisible to it — onInbound only sees
   // messages that ARRIVE — so an hourly system cron has to find them, and

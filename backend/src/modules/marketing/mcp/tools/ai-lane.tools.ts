@@ -3,6 +3,7 @@ import { AI_EXECUTION_MODES, type AiExecutionMode } from '../../ai/ai-execution'
 import { AiReplyLeaseService } from '../../ai/ai-reply-lease.service';
 import { MarketingAuthService } from '../../services/marketing-auth.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
+import { UNTRUSTED_DESCRIPTION_NOTE } from './inbox.tools';
 
 export interface AiLaneToolDeps {
   lease: AiReplyLeaseService;
@@ -49,7 +50,8 @@ export function registerAiLaneTools(registry: McpToolRegistry, deps: AiLaneToolD
       'jeeta.read_conversation and jeeta.get_agent (its persona and guardrails are what the customer ' +
       'expects to hear), send with jeeta.send_message, then close the job with ' +
       'jeeta.complete_reply_job — a lease you never close returns to the queue after a couple of ' +
-      'minutes and someone answers twice.',
+      'minutes and someone answers twice.' +
+      UNTRUSTED_DESCRIPTION_NOTE,
     domain: 'inbox',
     defer: true,
     scopes: ['contacts.write'],
@@ -69,8 +71,10 @@ export function registerAiLaneTools(registry: McpToolRegistry, deps: AiLaneToolD
         waitedMs: Date.now() - claimed.queuedAt.getTime(),
         next:
           claimed.reason === 'followup'
-            ? 'Nobody wrote — this thread went quiet. Read it, then send ONE short, friendly nudge as the attached agent that moves the sale on (a concrete next step, not a repeat of the last message), and call jeeta.complete_reply_job.'
-            : 'Read the thread, write the reply as the attached agent, send it with jeeta.send_message, then call jeeta.complete_reply_job.',
+            ? 'Nobody wrote — this thread went quiet. Read it, then send ONE short, friendly nudge as the attached agent that moves the sale on (a concrete next step, not a repeat of the last message), and call jeeta.complete_reply_job.' +
+              UNTRUSTED_DESCRIPTION_NOTE
+            : 'Read the thread, write the reply as the attached agent, send it with jeeta.send_message, then call jeeta.complete_reply_job.' +
+              UNTRUSTED_DESCRIPTION_NOTE,
       };
     },
   });

@@ -800,3 +800,137 @@ describe('MessageSenderService.send — consent before quota', () => {
     expect(adapter.send).toHaveBeenCalled();
   });
 });
+
+describe('MessageSenderService.send — what the caller is told, and what the clock says', () => {
+  let prisma: any;
+  let registry: any;
+  let adapter: any;
+  let tx: any;
+  let service: MessageSenderService;
+
+  const convo = {
+    id: 'c1',
+    workspaceId: 'w1',
+    channelId: 'ch1',
+    leadId: 'lead-9',
+    contactIdentityId: 'ci1',
+    lastMessageAt: new Date('2026-09-01T09:00:00.000Z'),
+  };
+  const identity = { id: 'ci1', workspaceId: 'w1', value: 'musteri@x.test' };
+
+  const build = (type: string) => {
+    adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'x-1', status: 'SENT' }) };
+    tx = {
+      message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+    };
+    prisma = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1',
+          workspaceId: 'w1',
+          type,
+          configSealed: 'x',
+          configPublic: null,
+        }),
+      },
+      contactIdentity: { findFirst: jest.fn().mockResolvedValue(identity) },
+      message: {
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+    registry = {
+      get: jest.fn().mockReturnValue(adapter),
+      resolveConfig: jest.fn().mockReturnValue({ secrets: {} }),
+    };
+    service = new MessageSenderService(
+      prisma,
+      registry,
+      { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) } as any,
+      { append: jest.fn().mockResolvedValue('evt-1') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue({}) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
+    );
+  };
+
+  const send = (over: Record<string, unknown> = {}) =>
+    service.send({ workspaceId: 'w1', conversationId: 'c1', text: 'hi', authorType: 'AGENT', ...(over as any) });
+
+  describe('Auto-Submitted', () => {
+    it('marks an AI email reply as unattended, so the peer does not answer it back', async () => {
+      build('EMAIL');
+      await send({ authorType: 'AI', subject: 'Re: teklif' });
+      expect(adapter.send.mock.calls[0][0].autoSubmitted).toBe('auto-replied');
+    });
+
+    it('is ABSENT on a human reply', async () => {
+      // A person's reply marked auto-replied is filtered by the recipient's
+      // own RFC 3834 rules — the customer never sees what a human wrote.
+      build('EMAIL');
+      await send({ authorType: 'AGENT' });
+      expect(adapter.send.mock.calls[0][0].autoSubmitted).toBeUndefined();
+    });
+
+    it('is absent on a non-email channel', async () => {
+      build('SMS');
+      await send({ authorType: 'AI' });
+      expect(adapter.send.mock.calls[0][0].autoSubmitted).toBeUndefined();
+    });
+  });
+
+  describe('retriable', () => {
+    it('carries the adapter verdict out to the caller', async () => {
+      // Without it a 4xx greylisting and a permanently rejected address read
+      // identically to the AI engine, which then treats every refusal as final.
+      build('EMAIL');
+      adapter.send.mockResolvedValue({
+        externalMessageId: null,
+        status: 'FAILED',
+        error: '451 try later',
+        retriable: true,
+      });
+      tx.message.update.mockResolvedValue({ id: 'm2', status: 'FAILED' });
+      const msg: any = await send();
+      expect(msg.retriable).toBe(true);
+    });
+
+    it('says nothing when the adapter offered no verdict', async () => {
+      build('SMS');
+      const msg: any = await send();
+      expect('retriable' in msg).toBe(false);
+    });
+  });
+
+  describe('the waiting clock', () => {
+    it('does not advance lastMessageAt on a FAILED send', async () => {
+      // Stamping it silently disarmed the hourly ai-reply-backfill sweep: it
+      // looks for threads whose last message is inbound, and a failed
+      // outbound row made every one of them look answered.
+      build('EMAIL');
+      adapter.send.mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: '550' });
+      tx.message.update.mockResolvedValue({ id: 'm2', status: 'FAILED' });
+      await send();
+      expect(tx.conversation.update.mock.calls[0][0].data.lastMessageAt).toEqual(convo.lastMessageAt);
+    });
+
+    it('never writes NULL — Postgres sorts those to the top of the inbox', async () => {
+      build('EMAIL');
+      prisma.conversation.findFirst.mockResolvedValue({ ...convo, lastMessageAt: null });
+      adapter.send.mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: '550' });
+      tx.message.update.mockResolvedValue({ id: 'm2', status: 'FAILED' });
+      await send();
+      expect(tx.conversation.update.mock.calls[0][0].data.lastMessageAt).toBeInstanceOf(Date);
+    });
+
+    it('advances it on a SENT one', async () => {
+      build('EMAIL');
+      await send();
+      const written = tx.conversation.update.mock.calls[0][0].data.lastMessageAt;
+      expect(written.getTime()).toBeGreaterThan(convo.lastMessageAt.getTime());
+    });
+  });
+});

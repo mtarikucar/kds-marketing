@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ACCESS_TOKEN_SLACK_SECONDS,
   DEFAULT_TOKEN_TTL_SECONDS,
@@ -398,6 +399,34 @@ describe('sending on a connected mailbox behalf', () => {
     it('answers null rather than a non-address', async () => {
       global.fetch = jest.fn().mockResolvedValue(okJson({ email: 'not-an-address' })) as never;
       expect(await fetchConnectedAddress('GOOGLE', 't')).toBeNull();
+    });
+
+    it('says WHY the provider refused, instead of swallowing it', async () => {
+      // Microsoft's /me refuses without the `User.Read` scope. The caller maps
+      // every cause to the same `?connect_error=1` page, so if this does not
+      // reach a log an operator has a broken connect and nothing to act on.
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: async () => 'Insufficient privileges to complete the operation.',
+      }) as never;
+
+      expect(await fetchConnectedAddress('MICROSOFT', 't')).toBeNull();
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('403'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Insufficient privileges'));
+      warn.mockRestore();
+    });
+
+    it('says so when the lookup never completed at all', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      global.fetch = jest.fn().mockRejectedValue(new Error('The operation was aborted')) as never;
+
+      expect(await fetchConnectedAddress('GOOGLE', 't')).toBeNull();
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('aborted'));
+      warn.mockRestore();
     });
   });
 });

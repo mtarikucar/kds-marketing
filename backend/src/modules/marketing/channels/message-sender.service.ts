@@ -204,7 +204,13 @@ export class MessageSenderService {
       throw e;
     }
 
-    let result: { externalMessageId: string | null; status: 'SENT' | 'FAILED'; error?: string };
+    let result: {
+      externalMessageId: string | null;
+      status: 'SENT' | 'FAILED';
+      error?: string;
+      /** The adapter's verdict on whether trying again could work. */
+      retriable?: boolean;
+    };
     if (refusal) {
       // A refusal is visible: it settles as a FAILED message carrying the
       // reason, in the thread, where the rep is looking. It is never thrown —
@@ -227,6 +233,19 @@ export class MessageSenderService {
               media: input.media,
               ...(reply?.inReplyTo ? { inReplyTo: reply.inReplyTo } : {}),
               ...(reply?.references?.length ? { references: reply.references } : {}),
+              /**
+               * RFC 3834. An unattended reply says so, so the peer's own
+               * auto-responder does not answer it back and the two of them
+               * loop forever.
+               *
+               * Gated on `authorType`, never on the channel alone: a HUMAN's
+               * reply marked `auto-replied` is filtered by the recipient's own
+               * RFC 3834 rules, so the customer never sees what a person wrote
+               * to them.
+               */
+              ...(authorType === 'AI' && isEmail
+                ? { autoSubmitted: 'auto-replied' as const }
+                : {}),
             })
           : { externalMessageId: null, status: 'FAILED', error: 'no recipient identity on conversation' };
       } catch (e: any) {
@@ -259,7 +278,21 @@ export class MessageSenderService {
         });
         await tx.conversation.update({
           where: { id: conversationId },
-          data: { lastMessageAt: new Date() },
+          /**
+           * A FAILED send did not reach anybody, so it is not a message in
+           * this thread and must not move the clock.
+           *
+           * Stamping it anyway is what silently disarmed the hourly
+           * ai-reply-backfill sweep, which is the de-facto retry for a
+           * channel refusal: the sweep looks for threads whose last message
+           * is inbound, and a failed outbound row made every one of them look
+           * answered. NOT a skip — `conversations.service` sorts by
+           * `lastMessageAt desc` and Postgres puts NULLs first, so leaving it
+           * null would float failed threads to the top of every inbox.
+           */
+          data: {
+            lastMessageAt: result.status === 'SENT' ? new Date() : (convo.lastMessageAt ?? new Date()),
+          },
         });
         await this.outbox.append(
           {
@@ -323,7 +356,20 @@ export class MessageSenderService {
         );
     }
 
-    return message;
+    /**
+     * The adapter's own verdict on whether trying again could work, carried
+     * out to the caller.
+     *
+     * `SendResult.retriable` is set by every adapter and was then dropped on
+     * the floor here, so a 4xx greylisting and a permanently rejected address
+     * read identically to `ConversationAiEngineService` — which therefore
+     * treated every refusal as final and never rescheduled. It rides on the
+     * returned row rather than in the database because it is a property of
+     * THIS attempt, not of the message.
+     */
+    return Object.assign(message, {
+      ...(result.retriable === undefined ? {} : { retriable: result.retriable }),
+    });
   }
 
   /**

@@ -1,14 +1,15 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
-import addressparser from 'nodemailer/lib/addressparser';
 import { ImapFlow } from 'imapflow';
 import { ChannelAdapterRegistry } from '../channel-adapter.registry';
 import { EmailOAuthProvider, isEmailOAuthProvider } from '../email-oauth.config';
 import { EmailOAuthSecrets, needsRefresh, sendViaOAuth } from '../email-oauth.sender';
 import { EmailOAuthRefreshService } from '../email-oauth-refresh.service';
-import { imapForSmtpHost } from '../smtp-autodiscover';
+import { imapConnectOptions, imapTarget } from '../imap-target';
 import { classifySmtpError } from '../outbound/smtp-error';
-import { isSingleAddress, normalizeAddress } from '../../../../common/util/email-address';
+import { isSingleAddress } from '../../../../common/util/email-address';
+import { resolveSenderIdentity } from '../inbound/inbound-policy';
+import { stripQuotedReply } from '../email-reply-text';
 import { listUnsubscribeHeaders } from '../../../../common/util/list-unsubscribe';
 import {
   ChannelAdapter,
@@ -72,11 +73,19 @@ export interface MailboxProbe {
 /**
  * Two-way Email channel (GoHighLevel parity). OUTBOUND: each workspace sends via
  * its OWN SMTP (sealed creds), so replies come from the workspace's address.
- * INBOUND: the workspace points its email provider's inbound-parse webhook at
- * /api/public/channels/email/webhook; parseInbound normalizes the posted mail.
- * Secrets: { smtpHost, smtpPort, smtpSecure?, smtpUser, smtpPass, fromEmail }.
- * The channel's `externalId` is the inbound address the webhook resolves by.
- * Fully INERT without SMTP creds (send → FAILED).
+ *
+ * INBOUND arrives three ways, all of which end here in `parseInbound`:
+ * `EmailImapPollService` reading the mailbox directly (the path that needs no
+ * ESP and no DNS change, and the one most tenants use); a relay POSTing the
+ * per-channel tokenized URL `/api/public/channels/email/:channelId/:token/
+ * inbound`, where the URL names the tenant; and the legacy platform-HMAC
+ * `/api/public/channels/email/webhook`, kept for what already points at it and
+ * routed by an envelope-preferred recipient list rather than a To header.
+ *
+ * Secrets: { smtpHost, smtpPort, smtpSecure?, smtpUser, smtpPass, fromEmail },
+ * plus optional { imapHost, imapPort, imapUser, imapPass } for a mailbox whose
+ * incoming server differs from its outgoing one. Fully INERT without send
+ * credentials (send → FAILED).
  */
 @Injectable()
 export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
@@ -317,40 +326,104 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     };
   }
 
+  /**
+   * A posted mail as this product's one inbound message shape.
+   *
+   * Three things happen here and nowhere else, which is why both doors — the
+   * IMAP poller and the inbound webhook — come through this method:
+   *
+   * 1. **Identity.** A contact-form relay mails as `wordpress@site.com` and
+   *    puts the enquirer in `Reply-To`. `resolveSenderIdentity` sees through
+   *    that on a CROSS-DOMAIN Reply-To only (a vendor's
+   *    `noreply@vendor → sales@vendor` stays what it is), and it runs BEFORE
+   *    the own-address check so a form that mails from the mailbox itself is
+   *    rescued — then the check re-runs on the RESOLVED address, so a form
+   *    pointing Reply-To back at us cannot open a self-reply loop.
+   * 2. **Authentication.** The transport's verdict becomes `senderVerified`.
+   *    Only an explicit `fail` sets `false`; no header means no opinion.
+   * 3. **Quoting.** A caller that already stripped says so. A raw provider
+   *    body (the legacy route's shape) is stripped here, because otherwise the
+   *    quoted thread is what the AI reads and answers.
+   */
   parseInbound(config: ResolvedChannelConfig, body: unknown): InboundMessage[] {
     const b = (body ?? {}) as Record<string, any>;
     // Tolerant across providers: Mailgun (sender/stripped-text/body-plain),
     // SendGrid (from/text), Postmark (From/TextBody/MessageID), or a plain
     // {from,text,subject,messageId} shape. Pull the first present value.
     const fromRaw = b.from ?? b.sender ?? b.From ?? b.envelope?.from ?? '';
-    const from = this.parseAddress(String(fromRaw));
-    const text =
-      b['stripped-text'] ?? b.text ?? b.TextBody ?? b['body-plain'] ?? b.plain ?? b.body ?? '';
+    const replyToRaw = b['reply-to'] ?? b.replyTo ?? b.ReplyTo ?? b['Reply-To'] ?? null;
     const subject = b.subject ?? b.Subject ?? null;
     const messageId = b['message-id'] ?? b.messageId ?? b.MessageID ?? b['Message-Id'] ?? null;
-    if (!from.address || typeof text !== 'string' || !text.trim()) return [];
 
-    // Drop our OWN address (auto-reply echo loop guard). The From we send with is
-    // `fromEmail || smtpUser` (see send()); the inbound address is `externalId`.
-    // Check ALL of them so a workspace that set only smtpUser (no fromEmail) still
-    // filters its own echoes instead of letting the AI answer itself.
-    const own = new Set(
-      [config.secrets?.fromEmail, config.secrets?.smtpUser, config.externalId]
-        .map((v) => this.parseAddress(String(v ?? '')).address)
-        .filter(Boolean),
-    );
-    if (own.has(from.address)) return [];
+    const picked = this.inboundText(b);
+    if (typeof picked.text !== 'string' || !picked.text.trim()) return [];
+
+    // `fromEmail || smtpUser` is what send() puts in the From; `externalId` is
+    // the address the webhook is registered under. All three, so a workspace
+    // that set only smtpUser still filters its own echoes instead of letting
+    // the AI answer itself.
+    const identity = resolveSenderIdentity({
+      from: String(fromRaw),
+      replyTo: replyToRaw == null ? null : String(replyToRaw),
+      ownAddresses: [config.secrets?.fromEmail, config.secrets?.smtpUser, config.externalId],
+    });
+    if (!identity.address || identity.own) return [];
+
+    const text = picked.stripped ? picked.text : stripQuotedReply(picked.text);
+    if (!text.trim()) return [];
+
+    // Three states. `undefined` is "the transport had no opinion", which is
+    // every channel but this one and most mail on this one — it must stay
+    // undefined rather than collapsing to a boolean, or unverifiable mail
+    // would start reading as forged.
+    const verdict = this.authVerdictOf(b);
 
     return [
       {
-        externalUserId: from.address,
+        externalUserId: identity.address,
         kind: 'EMAIL',
         externalMessageId: messageId ? String(messageId) : null,
-        text: subject ? `${subject}\n\n${text}`.slice(0, 8000) : String(text).slice(0, 8000),
-        displayName: from.name || null,
+        text: subject ? `${subject}\n\n${text}`.slice(0, 8000) : text.slice(0, 8000),
+        // The name of the RESOLVED identity. The relay's would name every form
+        // lead after the website, permanently — the AI's capture path fills
+        // only EMPTY fields, so the wrong name never gets corrected.
+        displayName: identity.name || null,
+        ...(verdict === undefined ? {} : { senderVerified: verdict }),
         raw: b,
       },
     ];
+  }
+
+  /**
+   * The body a human typed, and whether somebody already removed the quote.
+   *
+   * Mailgun's `stripped-text` and our own two callers hand over text that has
+   * been through `stripQuotedReply` already; running it a second time is not
+   * free, because a short reply whose remaining text happens to look like an
+   * attribution line would be stripped down to nothing. So provenance is
+   * tracked rather than guessed.
+   */
+  private inboundText(b: Record<string, any>): { text: unknown; stripped: boolean } {
+    if (typeof b['stripped-text'] === 'string' && b['stripped-text'].trim()) {
+      return { text: b['stripped-text'], stripped: true };
+    }
+    // Set by the IMAP poller and the inbound webhook, both of which strip (and
+    // pre-truncate HTML) before they get here.
+    if (b.textIsStripped === true) {
+      return { text: b.text ?? b.TextBody ?? b['body-plain'] ?? b.plain ?? b.body ?? '', stripped: true };
+    }
+    return {
+      text: b.text ?? b.TextBody ?? b['body-plain'] ?? b.plain ?? b.body ?? '',
+      stripped: false,
+    };
+  }
+
+  /** `true`/`false` when the transport had an opinion, `undefined` when not. */
+  private authVerdictOf(b: Record<string, any>): boolean | undefined {
+    const raw = b.authVerdict ?? b.auth?.verdict;
+    if (raw === 'fail') return false;
+    if (raw === 'pass') return true;
+    return undefined;
   }
 
   /**
@@ -404,14 +477,18 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
           reason: token.error,
         };
       }
+      // A consent mailbox is not automatically send-only any more: if a receive
+      // credential is sealed beside the token, the pollers WILL use it
+      // (`imapTarget`), so saying "send-only" here would be a card that
+      // contradicts the mail arriving in the inbox. Probe and report what is
+      // actually true. `ok` stays SEND-truth either way — see healthCheck.
+      const inbound = await this.probeImap(config.secrets ?? {});
       return {
         transport: 'oauth',
         provider: oauth.provider,
         from: oauth.from,
         send: true,
-        receive: false,
-        receiveReason:
-          'a consent-connected mailbox is send-only here — replies arrive through the inbound webhook, not IMAP',
+        ...inbound,
       };
     }
 
@@ -448,28 +525,26 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
   private async probeImap(
     s: Record<string, string>,
   ): Promise<{ receive: boolean; receiveReason?: string; imapHost?: string }> {
-    const user = s.smtpUser?.trim();
-    const pass = s.smtpPass;
-    const explicitHost = s.imapHost?.trim();
-    const discovered = imapForSmtpHost(s.smtpHost ?? '');
-    const host = explicitHost || discovered?.host;
-    if (!host || !user || !pass) return { receive: false, receiveReason: NO_IMAP_HOST };
-    const port = Number(s.imapPort) || discovered?.port || 993;
-
-    const client = new ImapFlow({
-      host,
-      port,
-      // 993/994 are implicit TLS; everything else negotiates it with STARTTLS.
-      // Forcing `secure` on port 143 fails the handshake against servers that
-      // are perfectly willing to encrypt.
-      secure: port === 993 || port === 994,
-      ...(port === 993 || port === 994 ? {} : { doSTARTTLS: true }),
-      auth: { user, pass },
-      logger: false,
-      greetingTimeout: SEND_TIMEOUT_MS,
-      socketTimeout: SEND_TIMEOUT_MS,
-      connectionTimeout: SEND_TIMEOUT_MS,
-    } as any);
+    // The SAME resolver both pollers use. This was a third copy of the host,
+    // port and TLS derivation; behaviour was identical, which is exactly how a
+    // third copy survives long enough to drift.
+    const resolved = imapTarget(s);
+    if (resolved.kind !== 'ok') {
+      return {
+        receive: false,
+        receiveReason:
+          resolved.reason === 'oauth'
+            ? 'this mailbox is connected by consent and holds no incoming (IMAP) password — replies arrive through the inbound URL, not IMAP'
+            : NO_IMAP_HOST,
+      };
+    }
+    const { host } = resolved.target;
+    const client = new ImapFlow(
+      imapConnectOptions(resolved.target, {
+        timeoutMs: SEND_TIMEOUT_MS,
+        socketTimeoutMs: SEND_TIMEOUT_MS,
+      }) as any,
+    );
     try {
       await client.connect();
       // READ-ONLY: a verify must never change what the human who reads this
@@ -489,20 +564,4 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     }
   }
 
-  /**
-   * The real sender, and its label, as two values.
-   *
-   * The old first-`<>` regex read the address out of the DISPLAY NAME, so
-   * `"<ceo@victim>" <attacker@evil>` filed the mail under the CEO. The name is
-   * carried separately because dropping it makes every IMAP lead "Channel
-   * contact", and a multi-mailbox `From` is RFC-legal — the first deliverable
-   * address wins rather than the whole header being refused.
-   */
-  private parseAddress(s: string): { address: string; name: string } {
-    for (const entry of addressparser(String(s ?? ''), { flatten: true })) {
-      const address = normalizeAddress(entry.address);
-      if (address && isSingleAddress(address)) return { address, name: String(entry.name ?? '').trim() };
-    }
-    return { address: '', name: '' };
-  }
 }

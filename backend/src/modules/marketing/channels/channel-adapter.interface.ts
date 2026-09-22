@@ -70,6 +70,26 @@ export interface InboundMessage {
    * already stored, so ingest's dedup resolves them to the existing row.
    */
   echo?: boolean;
+
+  /**
+   * Whether the transport could PROVE the sender is who the From claims —
+   * SPF/DKIM/DMARC on the EMAIL path, via `inbound/mail-auth.ts`.
+   *
+   * Three states, and the third is the default: `undefined` means the transport
+   * offered no opinion (every non-email channel, and mail with no
+   * `Authentication-Results` header), and behaves exactly as this product
+   * always has. Only an explicit `false` — a DMARC fail, or SPF *and* DKIM both
+   * failing — changes anything.
+   *
+   * An explicit `false` does NOT drop the mail. It is still stored and still
+   * attached to the lead, because silence is the failure mode being removed: a
+   * customer whose own mail server is misconfigured must still reach a human.
+   * What it suppresses is everything that would act on the mail by itself —
+   * the AI reply, the `LeadCreated` fan-out and the tool use behind them — so
+   * a forged "please send the invoice to this new account" cannot be answered
+   * automatically.
+   */
+  senderVerified?: boolean;
 }
 
 /** Decrypted, ready-to-use channel config. Built by the registry, never the DB. */

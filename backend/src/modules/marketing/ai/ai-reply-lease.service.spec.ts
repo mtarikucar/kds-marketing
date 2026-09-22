@@ -263,7 +263,10 @@ describe('AiReplyLeaseService', () => {
       await svc.complete(WS, 'job-1', true);
       expect(prisma.conversation.updateMany).toHaveBeenCalledWith({
         where: { id: 'convo-1', workspaceId: WS, aiPaused: true },
-        data: { aiPaused: false },
+        // The answer went out, so the last decline is history too. Without
+        // clearing it an MCP_ONLY workspace carries a permanently stale "the
+        // AI did not respond" banner over a thread it has just answered.
+        data: { aiPaused: false, aiLastDeclineReason: null, aiLastDeclineAt: null },
       });
     });
 
