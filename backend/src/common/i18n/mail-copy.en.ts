@@ -38,6 +38,8 @@ export const en = {
   'unsubscribe.done.body': 'You will no longer receive these messages.',
   'unsubscribe.expired.heading': 'Link expired',
   'unsubscribe.expired.body': 'This unsubscribe link is no longer valid.',
+  'unsubscribe.error.heading': 'Something went wrong',
+  'unsubscribe.error.body': 'We could not record that just now. Please try again.',
 
   // ── Booking lifecycle ─────────────────────────────────────────────────────
   'booking.received.subject': 'Booking received: {{calendar}}',
@@ -81,7 +83,7 @@ export const en = {
   'document.esign.body': '{{business}} asks you to review and sign {{title}}.',
   'document.esign.signLine': 'Review and sign: {{url}}',
   'document.esign.signedSubject': 'Signed copy: {{title}}',
-  'document.esign.signedBody': '{{title}} has been signed by all parties. A copy is attached.',
+  'document.esign.signedBody': '{{title}} has been signed by all parties. You can view the signed copy here:',
 
   // ── Team invite ───────────────────────────────────────────────────────────
   'invite.subject': '{{inviter}} invited you to {{workspace}}',

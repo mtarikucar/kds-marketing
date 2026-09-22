@@ -25,6 +25,8 @@ export const tr: Record<MailCopyKey, string> = {
   'unsubscribe.done.body': 'Bundan sonra bu iletileri almayacaksınız.',
   'unsubscribe.expired.heading': 'Bağlantının süresi dolmuş',
   'unsubscribe.expired.body': 'Bu abonelikten çıkma bağlantısı artık geçerli değil.',
+  'unsubscribe.error.heading': 'Bir şeyler ters gitti',
+  'unsubscribe.error.body': 'Şu anda kaydedemedik, lütfen tekrar deneyin.',
 
   'booking.received.subject': 'Randevu talebiniz alındı: {{calendar}}',
   'booking.received.body': '{{when}} için randevu talebiniz onay bekliyor.',
@@ -66,7 +68,7 @@ export const tr: Record<MailCopyKey, string> = {
   'document.esign.body': '{{business}}, {{title}} belgesini incelemenizi ve imzalamanızı istiyor.',
   'document.esign.signLine': 'İncelemek ve imzalamak için: {{url}}',
   'document.esign.signedSubject': 'İmzalı kopya: {{title}}',
-  'document.esign.signedBody': '{{title}} tüm taraflarca imzalandı. Kopyası ektedir.',
+  'document.esign.signedBody': '{{title}} tüm taraflarca imzalandı. İmzalı kopyayı buradan görüntüleyebilirsiniz:',
 
   'invite.subject': '{{inviter}} sizi {{workspace}} çalışma alanına davet etti',
   'invite.body':

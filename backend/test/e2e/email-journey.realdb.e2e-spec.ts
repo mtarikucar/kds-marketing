@@ -63,6 +63,21 @@ describeRealDb('Email journey — quote to paid invoice, real DB (e2e)', () => {
     }),
     sendCampaignEmail: jest.fn(async () => true),
     consumeLastPlainSendError: jest.fn(() => null),
+    // The gateway dispatches through the `*Result` variants, not the boolean
+    // ones: a stub that only implements the old names makes the platform
+    // transport call `undefined` and the whole journey answers NOT_CONFIGURED.
+    sendPlainEmailResult: jest.fn(async (to: string, subject: string, body: string) => {
+      sent.push({ to, subject, body });
+      return { ok: true, messageId: `e2e-${sent.length}` };
+    }),
+    sendCampaignEmailResult: jest.fn(async (to: string, subject: string, text: string) => {
+      sent.push({ to, subject, body: text });
+      return { ok: true, messageId: `e2e-${sent.length}` };
+    }),
+    sendPlainEmailWithIcsResult: jest.fn(async (to: string, subject: string, body: string) => {
+      sent.push({ to, subject, body });
+      return { ok: true, messageId: `e2e-${sent.length}` };
+    }),
   };
   const quotaStub = {
     reserve: jest.fn(async () => undefined),
@@ -77,6 +92,10 @@ describeRealDb('Email journey — quote to paid invoice, real DB (e2e)', () => {
     // The public quote/pay links are built from this; DocumentEmailService
     // refuses to send without one rather than mail a dead link.
     process.env.PUBLIC_BASE_URL = BASE;
+    // SenderIdentityService resolves the platform From from these; both are
+    // unset in the test env, and without one the gateway refuses every send as
+    // NOT_CONFIGURED before a transport is ever reached.
+    process.env.EMAIL_FROM = 'no-reply@mail-journey.test';
 
     ({ app, prisma } = await createRealDbTestApp((builder) => {
       builder.overrideProvider(EmailService).useValue(emailStub);

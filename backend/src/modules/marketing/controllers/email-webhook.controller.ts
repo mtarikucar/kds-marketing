@@ -6,13 +6,21 @@ import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { ConversationIngressService } from '../channels/conversation-ingress.service';
 
 /**
- * Inbound Email webhook. A workspace points its email provider's inbound-parse
- * webhook (Mailgun / SendGrid / Postmark / …) at this path. POST verifies an
- * HMAC-SHA256 over the RAW body against the platform-global EMAIL_INBOUND_SECRET
- * (a raw parser is mounted on this exact path in app.config.ts), ACKs fast, then
- * resolves the channel by the recipient address and funnels each message through
- * the same ConversationIngress → AI pipeline as every other channel. Inert
- * without EMAIL_INBOUND_SECRET (401) — nothing runs until an operator sets it.
+ * Inbound Email webhook — a GENERIC HMAC RELAY, not an ESP endpoint.
+ *
+ * POST verifies an HMAC-SHA256 over the RAW body against the platform-global
+ * EMAIL_INBOUND_SECRET (a raw parser is mounted on this exact path in
+ * app.config.ts), ACKs fast, then resolves the channel by the recipient address
+ * and funnels each message through the same ConversationIngress → AI pipeline as
+ * every other channel. Inert without EMAIL_INBOUND_SECRET (401) — nothing runs
+ * until an operator sets it.
+ *
+ * This docblock used to say "point Mailgun / SendGrid / Postmark at this path",
+ * which is the lie `esp-feedback-auth` is about: none of them can produce an
+ * `x-email-signature` HMAC of this shape, so every event they sent would 401 —
+ * silently, until now. Only a relay you control and can make sign this way
+ * belongs here. Provider-native verification lives beside the feedback webhook
+ * (`channels/inbound/webhook-verifier/`).
  */
 @Controller('public/channels/email')
 export class EmailWebhookController {
@@ -35,6 +43,11 @@ export class EmailWebhookController {
       ? req.body
       : Buffer.from(JSON.stringify(req.body ?? {}));
     if (!this.validSignature(raw, req.headers['x-email-signature'])) {
+      // Said out loud, never with the header value: a silent 401 is how an ESP
+      // pointed at the wrong path loses every inbound mail without a trace.
+      this.logger.warn(
+        `inbound email webhook rejected: ${process.env.EMAIL_INBOUND_SECRET ? 'signature did not verify' : 'EMAIL_INBOUND_SECRET is not set'}`,
+      );
       res.status(401).send('bad signature');
       return;
     }

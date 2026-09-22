@@ -105,6 +105,9 @@ export default function MarketingUsersPage({ embedded }: { embedded?: boolean } 
 
   // Dialog states
   const [inviteOpen, setInviteOpen] = useState(false);
+  /** Set only when the invite was created but its mail did not go out — the
+   *  dialog then shows the join link instead of claiming it was sent. */
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [editUser, setEditUser] = useState<MarketingUser | null>(null);
   const [resetUser, setResetUser] = useState<MarketingUser | null>(null);
   const [confirmUser, setConfirmUser] = useState<{ user: MarketingUser; action: 'deactivate' | 'reactivate' } | null>(null);
@@ -118,8 +121,16 @@ export default function MarketingUsersPage({ embedded }: { embedded?: boolean } 
   // ── Mutations ────────────────────────────────────────────────────────────
   const inviteMutation = useMutation({
     mutationFn: (data: { email: string; role: string }) => inviteMember(data),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'users'] });
+      // The membership is created either way; only the MAIL can fail. Saying
+      // "Invitation sent" when nothing left the building is how a new hire
+      // waits a week for a mail nobody sent (`invites-not-sent`).
+      if (data?.emailSent === false && data.inviteToken) {
+        setInviteLink(`${window.location.origin}/accept-invite?token=${encodeURIComponent(data.inviteToken)}`);
+        toast.error(`${variables.email} is invited, but the email could not be sent`);
+        return;
+      }
       setInviteOpen(false);
       toast.success(`Invitation sent to ${variables.email}`);
     },
@@ -348,9 +359,14 @@ export default function MarketingUsersPage({ embedded }: { embedded?: boolean } 
       {/* Invite dialog */}
       <InviteUserDialog
         open={inviteOpen}
-        onOpenChange={setInviteOpen}
+        onOpenChange={(open) => {
+          setInviteOpen(open);
+          // Closing the fallback discards the link; the invite itself stands.
+          if (!open) setInviteLink(null);
+        }}
         onSubmit={handleInvite}
         isPending={inviteMutation.isPending}
+        inviteLink={inviteLink}
       />
 
       {/* Edit dialog */}

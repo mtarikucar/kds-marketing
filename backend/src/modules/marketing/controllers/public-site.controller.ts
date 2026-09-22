@@ -162,6 +162,59 @@ export class PublicSiteController {
     return this.booking.book(ws, c.id, body);
   }
 
+  /**
+   * The page every booking mail's manage link opens.
+   *
+   * Server-rendered here rather than as an SPA route for the same reason the
+   * slot picker above is: the customer is not a tenant user, has no session and
+   * may well be on a phone in a mail client's in-app browser. The two token
+   * routes below already existed; until this, nothing rendered them.
+   *
+   * Reschedule is a link back to the calendar's own picker rather than a second
+   * picker here — one implementation of "which slots are free", not two.
+   */
+  @Get('book/manage/:token')
+  async manageBooking(@Param('token') token: string, @Res() res: Response): Promise<void> {
+    let b;
+    try {
+      b = await this.booking.publicByToken(token);
+    } catch {
+      // Same words for an unknown token and an expired one: a page that
+      // distinguishes them is a token oracle.
+      res.status(404).type('html').send(callbackPage('Randevu', 'Randevu bulunamadı', 'Bu bağlantı artık geçerli değil.'));
+      return;
+    }
+    const cancelled = b.status === 'CANCELLED';
+    const rebook = b.calendarSlug ? `${this.base()}/api/public/book/${esc(b.workspaceId)}/${esc(b.calendarSlug)}` : '';
+    // The conferencing sync writes this column, not a visitor — but it lands in
+    // an href, and `esc()` does not stop a `javascript:` scheme.
+    const join = /^https?:\/\//i.test(b.meetingUrl ?? '') ? b.meetingUrl : null;
+    res.type('html').send(
+      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<title>${esc(b.calendarName || 'Randevu')}</title><style>body{font-family:system-ui;max-width:520px;margin:40px auto;padding:0 16px;color:#0f172a}` +
+      `.card{border:1px solid #e2e8f0;border-radius:12px;padding:20px}.muted{color:#64748b}` +
+      `button,a.btn{display:inline-block;margin-top:14px;background:#1e40af;color:#fff;border:none;padding:11px 18px;border-radius:10px;cursor:pointer;text-decoration:none;font-size:15px}` +
+      `button.danger{background:#fff;color:#b91c1c;border:1px solid #fecaca;margin-right:8px}</style></head><body>` +
+      `<h2>${esc(b.calendarName || 'Randevu')}</h2><div class="card"><div id="when" class="muted">…</div>` +
+      `<div class="muted">${esc(b.timezone)}</div>` +
+      (join ? `<p><a href="${esc(join)}">Toplantıya katıl</a></p>` : '') +
+      `<p id="state">${cancelled ? 'Bu randevu iptal edildi.' : ''}</p>` +
+      (cancelled
+        ? (rebook ? `<a class="btn" href="${rebook}">Yeni bir saat seç</a>` : '')
+        : `<button class="danger" id="cancel">Randevuyu iptal et</button>` +
+          (rebook ? `<a class="btn" href="${rebook}">Saati değiştir</a>` : '')) +
+      `</div><div id="msg" class="muted"></div>` +
+      // Trusted first-party markup, like the slot picker above.
+      `<script>const T=${JSON.stringify(token)};const S=${JSON.stringify(b.startAt)};` +
+      `document.getElementById('when').textContent=new Date(S).toLocaleString();` +
+      `const c=document.getElementById('cancel');if(c)c.onclick=async()=>{c.disabled=true;` +
+      `const r=await fetch(${JSON.stringify(`${this.base()}/api/public/book/token/`)}+encodeURIComponent(T)+'/cancel',{method:'POST'});` +
+      `document.getElementById('msg').textContent=r.ok?'Randevunuz iptal edildi.':'İptal edilemedi, lütfen tekrar deneyin.';` +
+      `if(r.ok){c.remove();document.getElementById('state').textContent='Bu randevu iptal edildi.';}else{c.disabled=false;}};</script>` +
+      `</body></html>`,
+    );
+  }
+
   /** Public self-service: reschedule a booking by its opaque token. */
   @Post('book/token/:token/reschedule')
   @Throttle(PUBLIC_WRITE_THROTTLE)

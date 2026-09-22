@@ -67,6 +67,22 @@ export class MarketingDocumentsController {
     return this.documents.send(a.workspaceId, id);
   }
 
+  /**
+   * Mint the signing link AND mail it to the document's contact.
+   *
+   * A sibling of `:id/send` rather than a change to it: `send` only mints, and
+   * the rep who copies the link into their own mail client is a path that has
+   * to keep working (an e-sign request that failed to send must still be
+   * recoverable by hand). Same `leads.manage` floor — it is the same binding
+   * document leaving the building.
+   */
+  @Post(':id/email')
+  @RequirePermission('leads.manage')
+  @Audit({ action: 'document.emailForSignature', resourceType: 'document' })
+  emailForSignature(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.documents.sendForSignature(a.workspaceId, id, a.id);
+  }
+
   @Post(':id/void')
   @RequirePermission('leads.manage')
   @Audit({ action: 'document.void', resourceType: 'document' })

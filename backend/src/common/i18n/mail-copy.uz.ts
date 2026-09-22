@@ -24,6 +24,8 @@ export const uz: Partial<Record<MailCopyKey, string>> = {
   'unsubscribe.done.body': 'Bundan keyin bu xatlar sizga yuborilmaydi.',
   'unsubscribe.expired.heading': 'Havola muddati tugagan',
   'unsubscribe.expired.body': 'Bu obunani bekor qilish havolasi endi amal qilmaydi.',
+  'unsubscribe.error.heading': 'Nimadir xato ketdi',
+  'unsubscribe.error.body': 'Hozir buni saqlay olmadik. Iltimos, qayta urinib koʻring.',
 
   'booking.received.subject': 'Band qilish so‘rovi qabul qilindi: {{calendar}}',
   'booking.received.body': '{{when}} uchun band qilish so‘rovingiz tasdiqlanishini kutmoqda.',
@@ -65,7 +67,7 @@ export const uz: Partial<Record<MailCopyKey, string>> = {
   'document.esign.body': '{{business}} sizdan {{title}} hujjatini ko‘rib chiqib imzolashni so‘raydi.',
   'document.esign.signLine': 'Ko‘rib chiqish va imzolash: {{url}}',
   'document.esign.signedSubject': 'Imzolangan nusxa: {{title}}',
-  'document.esign.signedBody': '{{title}} barcha tomonlar tomonidan imzolandi. Nusxasi ilova qilindi.',
+  'document.esign.signedBody': '{{title}} barcha tomonlar tomonidan imzolandi. Imzolangan nusxani bu yerda koʻrishingiz mumkin:',
 
   'invite.subject': '{{inviter}} sizni {{workspace}} ish maydoniga taklif qildi',
   'invite.body': '{{inviter}} sizni {{product}} dagi {{workspace}} ish maydoniga taklif qildi.',

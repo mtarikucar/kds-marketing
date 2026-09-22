@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { hasHeaderInjection, isSingleAddress, normalizeAddress } from '../../../../common/util/email-address';
 import { SuppressionService, SuppressionReason } from '../../compliance/suppression.service';
+import { IYS_EMAIL_PORT, IysEmailPort } from '../../compliance/iys-email.port';
 import { MessageQuotaService } from '../message-quota.service';
 import { GATE_MATRIX, gateApplies } from './mail-class';
-import { MailReason, OutboundMail } from './outbound-mail.types';
+import { MailBudgetService } from './mail-budget.service';
+import { clampToSendWindow, parseSendWindow } from './mail-window';
+import { MailReason, MailTransport, OutboundMail } from './outbound-mail.types';
 
 /**
  * The ordered gate: the one place that decides whether a mail may leave.
@@ -49,6 +52,11 @@ export interface LeadDeliverability {
 export interface WorkspaceGateState {
   status: string;
   settings?: unknown;
+  /**
+   * The tenant's own zone. A send window names LOCAL hours, so without this the
+   * clamp has nothing to resolve them against and correctly declines to guess.
+   */
+  timezone?: string | null;
 }
 
 export interface GateContextInput {
@@ -56,6 +64,12 @@ export interface GateContextInput {
   lead?: LeadDeliverability | null;
   /** Saves the guard a read when the gateway already loaded it. */
   workspace?: WorkspaceGateState | null;
+  /**
+   * Which transport will carry it. Only `PLATFORM` spends the shared relay's
+   * daily budget: a tenant sending through its own mailbox spends its own
+   * reputation, and capping that would be us rationing somebody else's quota.
+   */
+  transport?: MailTransport;
   /**
    * Ask the gate without spending anything — the pre-launch card runs the same
    * checks the send will run, and a preview that consumed a message from the
@@ -84,6 +98,8 @@ export class MailGuardService {
     private readonly prisma: PrismaService,
     private readonly suppression: SuppressionService,
     private readonly quota: MessageQuotaService,
+    @Inject(IYS_EMAIL_PORT) private readonly iysEmail: IysEmailPort,
+    private readonly budget: MailBudgetService,
   ) {}
 
   /**
@@ -115,17 +131,25 @@ export class MailGuardService {
     // 3. The kill switches. A suspended workspace's OWN mail stops; ours
     //    (AUTH/INTERNAL) never does, or a suspension locks the owner out of the
     //    product they are trying to pay for.
-    if (gateApplies(gates.workspaceActive, {}) || gateApplies(gates.sendingPaused, {})) {
-      const ws = ctx.workspace !== undefined ? ctx.workspace : await this.loadWorkspace(mail.workspaceId);
-      if (ws) {
-        if (gateApplies(gates.workspaceActive, {}) && ws.status !== 'ACTIVE') {
-          return { reason: 'WORKSPACE_INACTIVE', retriable: false };
-        }
-        // Default OFF for every existing row: an absent key is today's
-        // behaviour, and only an explicit `true` pauses anything (PLAN G3).
-        if (gateApplies(gates.sendingPaused, {}) && emailPaused(ws.settings)) {
-          return { reason: 'SENDING_PAUSED', retriable: false };
-        }
+    //
+    //    `ws` is hoisted out of this block because steps 5 and 6 read the same
+    //    row. Scoped inside it, an armed İYS tenant paid one extra workspace
+    //    read PER RECIPIENT of a bulk tick to learn what was already in hand.
+    let ws: WorkspaceGateState | null | undefined = ctx.workspace;
+    const needsWorkspace =
+      gateApplies(gates.workspaceActive, {}) ||
+      gateApplies(gates.sendingPaused, {}) ||
+      gateApplies(gates.iysEposta, { ticari: mail.ticari }) ||
+      gateApplies(gates.quietHours, { proactive: mail.proactive });
+    if (needsWorkspace && ws === undefined) ws = await this.loadWorkspace(mail.workspaceId);
+    if (ws) {
+      if (gateApplies(gates.workspaceActive, {}) && ws.status !== 'ACTIVE') {
+        return { reason: 'WORKSPACE_INACTIVE', retriable: false };
+      }
+      // Default OFF for every existing row: an absent key is today's
+      // behaviour, and only an explicit `true` pauses anything (PLAN G3).
+      if (gateApplies(gates.sendingPaused, {}) && emailPaused(ws.settings)) {
+        return { reason: 'SENDING_PAUSED', retriable: false };
       }
     }
 
@@ -137,25 +161,71 @@ export class MailGuardService {
       return { reason: SUPPRESSION_REASON_CODE[suppressed], retriable: false };
     }
 
-    // 5. İYS `EPOSTA` (BULK + TİCARİ + configured) — `w2-iys-email`.
-    // 6. Quiet-hours clamp, refused with a `retryAt` and never dropped —
-    //    `w2-mail-policy-guards`.
-    // 7. The per-workspace daily platform cap — `w2-mail-budget`.
-    //    All three slot in here, in this order, and each one refuses before the
-    //    quota below is spent.
+    // 5. İYS `EPOSTA` — commercial mail to a Turkish recipient. Inert until a
+    //    workspace arms it: the port answers UNKNOWN with a gap code and no
+    //    refusal for everyone else, which is every tenant today.
+    if (gateApplies(gates.iysEposta, { ticari: mail.ticari })) {
+      const verdict = await this.iysEmail.check({
+        workspaceId: mail.workspaceId,
+        address: recipient,
+        mailClass: mail.mailClass,
+        ticari: mail.ticari,
+        // `undefined` would make the adapter read the row again; `null` is a
+        // real answer. Passing what step 3 already loaded keeps a bulk tick at
+        // one workspace read rather than one per recipient.
+        ...(ws === undefined ? {} : { settings: ws?.settings ?? null }),
+      });
+      if (verdict.refusal) {
+        return {
+          reason: verdict.refusal.reason,
+          retriable: verdict.refusal.retriable,
+          ...(verdict.refusal.error ? { error: verdict.refusal.error } : {}),
+        };
+      }
+    }
+
+    // 6. The send window. The ONLY gate that defers instead of refusing: a
+    //    marketing mail nobody read is a missed mail, but one nobody SENT is a
+    //    broken automation. Before metering on purpose — a mail that has not
+    //    gone yet must not have been paid for yet.
+    if (gateApplies(gates.quietHours, { proactive: mail.proactive })) {
+      const window = parseSendWindow(ws?.settings, ws?.timezone);
+      const retryAt = clampToSendWindow(window, new Date(), {
+        // Seeded so a retried job lands on the same minute each time instead of
+        // walking forward through the jitter window on every attempt.
+        seed: mail.idempotencyKey ?? mail.source,
+      });
+      if (retryAt) return { reason: 'QUIET_HOURS', retriable: true, retryAt };
+    }
+
+    // 7. The shared relay's daily budget. Platform transport only — a tenant on
+    //    its own mailbox spends its own reputation, not ours.
+    if (gateApplies(gates.dailyCap, {}) && !ctx.skipMetering) {
+      const capped = await this.budget.reserveDaily({
+        workspaceId: mail.workspaceId,
+        transport: ctx.transport ?? 'PLATFORM',
+      });
+      if (capped) return { reason: 'DAILY_CAP', retriable: true, retryAt: capped.retryAt };
+    }
 
     // 8. Metering, last. The campaign sender reserves its own quota before the
     //    recipient loop, so it says so and is not charged twice.
     if (gateApplies(gates.messageQuota, {}) && !mail.alreadyMetered && !ctx.skipMetering) {
       const refusal = await this.reserveQuota(mail.workspaceId);
-      if (refusal) return refusal;
+      // The daily budget was spent one step up; a mail the meter refuses never
+      // leaves, so it must not count against tomorrow's ceiling either.
+      if (refusal) {
+        await this.refundDaily(mail, ctx.transport);
+        return refusal;
+      }
     }
 
     return null;
   }
 
   /** Give back what a refused-but-already-reserved send took. */
-  async refundQuota(mail: OutboundMail): Promise<void> {
+  async refundQuota(mail: OutboundMail, transport?: MailTransport): Promise<void> {
+    await this.refundDaily(mail, transport);
     if (!gateApplies(GATE_MATRIX[mail.mailClass]?.messageQuota ?? 'never', {})) return;
     if (mail.alreadyMetered) return;
     try {
@@ -179,11 +249,27 @@ export class MailGuardService {
     return !!mail.unsubscribe?.token && /^https?:\/\//i.test(url);
   }
 
+  /**
+   * The daily budget half of a refund. Separate from the quota because the two
+   * gates apply to different classes: an INTERNAL digest spends the relay's
+   * budget but never the tenant's plan.
+   */
+  private async refundDaily(mail: OutboundMail, transport?: MailTransport): Promise<void> {
+    if (!gateApplies(GATE_MATRIX[mail.mailClass]?.dailyCap ?? 'never', {})) return;
+    try {
+      await this.budget.refundDaily({ workspaceId: mail.workspaceId, transport: transport ?? 'PLATFORM' });
+    } catch (e: any) {
+      this.logger.warn(`daily budget refund failed (workspace=${mail.workspaceId}): ${e?.message ?? e}`);
+    }
+  }
+
   private async loadWorkspace(workspaceId: string): Promise<WorkspaceGateState | null> {
     try {
       return await this.prisma.workspace.findUnique({
         where: { id: workspaceId },
-        select: { status: true, settings: true },
+        // `timezone` is here for the send window: local hours need a zone to be
+        // resolved against, and without it the clamp ships inert.
+        select: { status: true, settings: true, timezone: true },
       });
     } catch (e: any) {
       // A kill switch we cannot read is not a reason to stop a tenant's mail;
@@ -235,6 +321,13 @@ export class MailGuardService {
       const code = e?.response?.code ?? e?.code;
       if (code === 'MESSAGES_EXHAUSTED') {
         return { reason: 'QUOTA_EXHAUSTED', retriable: false, error: e?.response?.message ?? e?.message };
+      }
+      // The meter enforces the status floor too (it is the narrowest
+      // chokepoint). Step 3 normally refuses first, so this is only reachable
+      // when the workspace read above failed — and a suspended tenant must not
+      // be handed a retriable answer that loops forever.
+      if (code === 'WORKSPACE_INACTIVE') {
+        return { reason: 'WORKSPACE_INACTIVE', retriable: false, error: e?.response?.message ?? e?.message };
       }
       // Anything else from the meter is infrastructure, not policy: the mail is
       // worth retrying, and the quota was never spent.

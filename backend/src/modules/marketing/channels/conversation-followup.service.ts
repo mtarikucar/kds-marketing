@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
+import { clampToSendWindow, parseSendWindow } from './outbound/mail-window';
 
 /** The queue kind a proactive nudge waits in. */
 export const FOLLOWUP_KIND = 'conversation.followup';
@@ -99,7 +100,7 @@ export class ConversationFollowupService {
       await this.scheduledJobs.schedule({
         workspaceId,
         kind: FOLLOWUP_KIND,
-        runAt: new Date(Date.now() + policy.afterHours * 3600_000),
+        runAt: await this.runAtFor(workspaceId, policy.afterHours, conversationId),
         dedupKey: conversationId,
         payload: { workspaceId, conversationId },
       });
@@ -109,6 +110,39 @@ export class ConversationFollowupService {
       // is the dedup working rather than a failure.
       this.logger.debug(`follow-up not queued convo=${conversationId}: ${e?.message ?? e}`);
       return false;
+    }
+  }
+
+  /**
+   * When the nudge should fire, inside the workspace's send window.
+   *
+   * A nudge is the proactive CONVERSATIONAL lane, which `GATE_MATRIX` marks
+   * quiet-hours-bound — and `MessageSenderService` deliberately does not run
+   * the conversational lane through the gateway, so this is the only place the
+   * window can be applied at all (`no-send-window`).
+   *
+   * At QUEUE time rather than at send time on purpose: deferring in the handler
+   * would re-run the whole generation for a nudge that was never going to be
+   * sent yet. Seeded with the conversation id so a re-queue of the same nudge
+   * lands on the same minute instead of walking through the jitter window.
+   *
+   * Behaviour-preserving: no window configured — which is every workspace
+   * today — and the clamp answers `null`, i.e. exactly the old instant. So does
+   * a read that fails: a window we cannot read must never cost a customer
+   * their follow-up.
+   */
+  private async runAtFor(workspaceId: string, afterHours: number, conversationId: string): Promise<Date> {
+    const at = new Date(Date.now() + afterHours * 3600_000);
+    try {
+      const ws = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { settings: true, timezone: true },
+      });
+      const opens = clampToSendWindow(parseSendWindow(ws?.settings, ws?.timezone), at, { seed: conversationId });
+      return opens ?? at;
+    } catch (e: any) {
+      this.logger.debug(`send window unread for workspace=${workspaceId}: ${e?.message ?? e}`);
+      return at;
     }
   }
 

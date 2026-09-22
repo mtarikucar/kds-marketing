@@ -70,7 +70,12 @@ export interface InviteMemberDto {
 export interface InviteMemberResult {
   membershipId: string;
   status: 'INVITED';
-  inviteToken?: string;
+  /** Always returned now, so the caller can hand the link over by other means
+   *  when `emailSent` is false. */
+  inviteToken: string;
+  /** Whether the invitation mail actually left. The membership is created
+   *  either way — only the mail can fail (`invites-not-sent`). */
+  emailSent: boolean;
 }
 
 /** POST /marketing/users/invite — requires `users.manage` (OWNER-level).

@@ -93,6 +93,25 @@ describe('notificationRoute — kinds that are actually produced', () => {
     expect(notificationRoute({ type: 'WORKFLOW' })).toBeNull();
     expect(notificationRoute({ type: 'WORKFLOW', metadata: null })).toBeNull();
   });
+
+  /**
+   * The three commerce kinds. They all stamp `metadata.leadId`, so without a
+   * case each they fell to the `default:` no-op and the bell row was a dead
+   * click on the one notification most worth opening.
+   */
+  it.each(['QUOTE_ANSWERED', 'INVOICE_PAID', 'DOCUMENT_SIGNED'])(
+    '%s opens the contact it happened on',
+    (type) => {
+      expect(notificationRoute({ type, metadata: { leadId: 'l1' } })).toBe('/leads/l1');
+    },
+  );
+
+  it.each(['QUOTE_ANSWERED', 'INVOICE_PAID', 'DOCUMENT_SIGNED'])(
+    '%s with no contact on the row is a no-op, not a guessed list',
+    (type) => {
+      expect(notificationRoute({ type })).toBeNull();
+    },
+  );
 });
 
 describe('notificationRoute — guards', () => {

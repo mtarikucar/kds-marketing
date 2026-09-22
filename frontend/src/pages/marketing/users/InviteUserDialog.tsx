@@ -49,6 +49,13 @@ interface InviteUserDialogProps {
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: InviteMemberFormValues) => void;
   isPending: boolean;
+  /**
+   * Set only when the membership was created but the invitation mail did NOT
+   * go out. The dialog then stops being a form and becomes the fallback: the
+   * invite is real and the person can still join, but somebody has to hand
+   * them the link (`invites-not-sent`).
+   */
+  inviteLink?: string | null;
 }
 
 const MSG: Record<string, string> = {
@@ -62,6 +69,7 @@ export function InviteUserDialog({
   onOpenChange,
   onSubmit,
   isPending,
+  inviteLink,
 }: InviteUserDialogProps) {
   const {
     register,
@@ -95,6 +103,32 @@ export function InviteUserDialog({
           </DialogTitle>
         </DialogHeader>
 
+        {inviteLink ? (
+          <div className="space-y-3">
+            <p className="text-body">
+              The invitation could not be emailed. The member is invited — send them this link and
+              they can still join:
+            </p>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  // Best effort: an insecure origin or a denied permission must
+                  // not swallow the link, which is still selectable above.
+                  void navigator.clipboard?.writeText(inviteLink).catch(() => undefined);
+                }}
+              >
+                Copy
+              </Button>
+            </div>
+            <p className="text-caption text-muted-foreground">
+              The link expires like any invitation. Check the mailbox settings if this keeps
+              happening.
+            </p>
+          </div>
+        ) : (
         <form id="invite-user-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Field
             label="Email"
@@ -128,19 +162,28 @@ export function InviteUserDialog({
           </Field>
 
           <p className="text-caption text-muted-foreground">
-            They'll get a link to join and set their own password — no password to set here.
+            We'll email them a link to join and set their own password — no password to set here.
           </p>
         </form>
+        )}
 
         <DialogFooter>
-          <DialogClose asChild>
-            <Button variant="outline" disabled={isPending}>
-              Cancel
-            </Button>
-          </DialogClose>
-          <Button type="submit" form="invite-user-form" loading={isPending}>
-            Send Invite
-          </Button>
+          {inviteLink ? (
+            <DialogClose asChild>
+              <Button>Done</Button>
+            </DialogClose>
+          ) : (
+            <>
+              <DialogClose asChild>
+                <Button variant="outline" disabled={isPending}>
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button type="submit" form="invite-user-form" loading={isPending}>
+                Send Invite
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

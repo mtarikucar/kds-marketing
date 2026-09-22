@@ -66,7 +66,11 @@ export class MarketingConversationsController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: StartConversationDto,
   ) {
-    return this.outbound.start(actor.workspaceId, dto);
+    // The author comes from the authenticated actor, NEVER from the body: a
+    // rep could otherwise stamp a colleague's id onto a customer-facing
+    // message. Without it every human-started thread was recorded as AI
+    // (`human-start-recorded-ai`).
+    return this.outbound.start(actor.workspaceId, dto, { authorType: 'AGENT', authorId: actor.id });
   }
 
   /** Live inbox stream — every conversation event for the workspace. */

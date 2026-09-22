@@ -118,7 +118,7 @@ export class OutboundMailService {
     // 4. The gate. A refusal is visible: it gets a ledger row and a timeline
     //    entry, because "we did not send this, and here is why" is the line
     //    that never existed.
-    const refusal = await this.guard.check({ mail, lead, workspace: ws });
+    const refusal = await this.guard.check({ mail, lead, workspace: ws, transport: identity.transport });
     if (refusal) return this.refuse(mail, identity, refusal, { to, toNorm, lead });
 
     // 5. The ledger row, before anything is dispatched.
@@ -139,7 +139,7 @@ export class OutboundMailService {
     if (opened.deduped) {
       // The race the pre-check could not see: another send under the same key
       // won the insert. Give back what this one reserved.
-      await this.guard.refundQuota(mail);
+      await this.guard.refundQuota(mail, identity.transport);
       return this.dedupedReceipt(opened.row);
     }
     const row = opened.row;
@@ -149,8 +149,23 @@ export class OutboundMailService {
     const messageId = newMessageId(row.id, identity.fromEmail) ?? null;
     const composed = this.compose(mail, identity, ws);
 
-    // 7. Dispatch.
-    const result = await this.dispatch(mail, identity, composed, messageId);
+    // 7. Dispatch. A transport that THROWS rather than answering must not
+    //    escape the gateway: G2 is the promise every migrated caller was
+    //    rewritten against, and an escaped throw also strands the PENDING
+    //    ledger row opened at step 5 with nothing to settle it.
+    let result: Dispatch;
+    try {
+      result = await this.dispatch(mail, identity, composed, messageId);
+    } catch (e: any) {
+      const classified = classifySmtpError(e);
+      result = {
+        ok: false,
+        messageId: null,
+        error: String(e?.message ?? e).slice(0, 300),
+        retriable: classified.retriable,
+        ...(classified.code ? { smtpCode: classified.code } : {}),
+      };
+    }
 
     // 8. Settle.
     return this.settle(mail, identity, row, result, messageId, { to, lead });
@@ -172,7 +187,13 @@ export class OutboundMailService {
       ...(identity.replyTo ? { replyTo: identity.replyTo } : {}),
     };
 
-    const refusal = await this.guard.check({ mail: full, lead, workspace: ws, skipMetering: true });
+    const refusal = await this.guard.check({
+      mail: full,
+      lead,
+      workspace: ws,
+      transport: identity.transport,
+      skipMetering: true,
+    });
     if (refusal) {
       return {
         ok: false,
@@ -434,7 +455,10 @@ export class OutboundMailService {
     });
     // A refusal costs no quota, and neither does a failure: the message never
     // reached anybody, so the tenant is not charged for it.
-    await this.guard.refundQuota(mail);
+    // `identity.transport`, not the settled `transport`: the guard reserved
+    // against what the identity said, and a refund keyed off the "NONE" a
+    // missing transport settles to would give nothing back.
+    await this.guard.refundQuota(mail, identity.transport);
     await this.recordMailboxHealth(identity, false, result.error, verdict.reason);
 
     // Only the allow-listed "this mailbox does not exist" codes suppress, and

@@ -26,6 +26,8 @@ export const ru: Partial<Record<MailCopyKey, string>> = {
   'unsubscribe.done.body': 'Вы больше не будете получать эти письма.',
   'unsubscribe.expired.heading': 'Ссылка недействительна',
   'unsubscribe.expired.body': 'Эта ссылка для отписки больше не действует.',
+  'unsubscribe.error.heading': 'Что-то пошло не так',
+  'unsubscribe.error.body': 'Сейчас не удалось это сохранить. Пожалуйста, попробуйте ещё раз.',
 
   'booking.received.subject': 'Заявка на запись получена: {{calendar}}',
   'booking.received.body': 'Ваша заявка на запись на {{when}} ожидает подтверждения.',
@@ -66,7 +68,7 @@ export const ru: Partial<Record<MailCopyKey, string>> = {
   'document.esign.body': '{{business}} просит вас ознакомиться с документом {{title}} и подписать его.',
   'document.esign.signLine': 'Ознакомиться и подписать: {{url}}',
   'document.esign.signedSubject': 'Подписанный документ: {{title}}',
-  'document.esign.signedBody': 'Документ {{title}} подписан всеми сторонами. Копия во вложении.',
+  'document.esign.signedBody': 'Документ {{title}} подписан всеми сторонами. Подписанную копию можно посмотреть здесь:',
 
   'invite.subject': '{{inviter}} приглашает вас в {{workspace}}',
   'invite.body': '{{inviter}} приглашает вас в рабочее пространство {{workspace}} в {{product}}.',

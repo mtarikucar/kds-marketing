@@ -32,6 +32,13 @@ describe('ConversationFollowupService', () => {
           over.agent === null ? null : { followup: over.followup ?? null },
         ),
       },
+      // No send window, which is every workspace today: the nudge lands at the
+      // agent-chosen distance and nothing clamps it.
+      workspace: {
+        findUnique: jest.fn(async () =>
+          over.workspace === null ? null : { settings: null, timezone: null, ...over.workspace },
+        ),
+      },
     };
     const scheduledJobs = {
       schedule: jest.fn(async () => 'job-1'),
@@ -71,6 +78,57 @@ describe('ConversationFollowupService', () => {
       const arg = scheduledJobs.schedule.mock.calls[0][0];
       expect(arg).toMatchObject({ workspaceId: WS, kind: FOLLOWUP_KIND, dedupKey: CONVO });
       expect(arg.runAt.getTime()).toBeGreaterThanOrEqual(before + 23 * 3600_000);
+    });
+
+    /**
+     * A nudge is the proactive CONVERSATIONAL lane, which the gate matrix marks
+     * quiet-hours-bound — but the reply path deliberately does not run through
+     * the gateway, so the schedule is the only place the window can be applied
+     * (`no-send-window`). The clamp is at queue time, never at send time: a
+     * deferral there would re-run the whole generation.
+     */
+    it('pushes a nudge that would land at 03:00 to the next opening of the window', async () => {
+      const { svc, scheduledJobs } = build({
+        followup: CHASES,
+        workspace: { settings: { email: { sendWindow: { from: 9, to: 21 } } }, timezone: 'Europe/Istanbul' },
+      });
+      // 24h from 03:30 local is 03:30 local, which is outside 09:00-21:00.
+      jest.useFakeTimers().setSystemTime(new Date('2027-03-10T00:30:00.000Z'));
+      try {
+        expect(await svc.scheduleNext(WS, CONVO)).toBe(true);
+        const at: Date = scheduledJobs.schedule.mock.calls[0][0].runAt;
+        const localHour = Number(
+          new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Istanbul', hour: '2-digit', hour12: false }).format(at),
+        ) % 24;
+        expect(localHour).toBe(9);
+        // Never earlier than the policy asked for — a clamp may delay a nudge,
+        // never bring it forward onto a customer who has just been answered.
+        expect(at.getTime()).toBeGreaterThan(Date.now() + 23 * 3600_000);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('leaves a nudge that already lands inside the window exactly where it was', async () => {
+      const { svc, scheduledJobs } = build({
+        followup: CHASES,
+        workspace: { settings: { email: { sendWindow: { from: 9, to: 21 } } }, timezone: 'Europe/Istanbul' },
+      });
+      jest.useFakeTimers().setSystemTime(new Date('2027-03-10T09:00:00.000Z')); // 12:00 local
+      try {
+        await svc.scheduleNext(WS, CONVO);
+        const at: Date = scheduledJobs.schedule.mock.calls[0][0].runAt;
+        expect(at.getTime()).toBe(Date.now() + 24 * 3600_000);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('never lets the window read stop a nudge being queued', async () => {
+      const { svc, prisma, scheduledJobs } = build({ followup: CHASES });
+      prisma.workspace.findUnique.mockRejectedValue(new Error('pool timeout'));
+      expect(await svc.scheduleNext(WS, CONVO)).toBe(true);
+      expect(scheduledJobs.schedule).toHaveBeenCalled();
     });
 
     it('resolves the agent itself when the caller has only a conversation', async () => {

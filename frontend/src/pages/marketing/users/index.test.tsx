@@ -88,6 +88,38 @@ describe('MarketingUsersPage', () => {
     });
   });
 
+  /**
+   * The membership is created whether or not the mail goes out, so the toast
+   * used to say "Invitation sent" for an invite nobody ever received — and the
+   * dialog closed on it. The invitee is real; somebody just has to hand them
+   * the link (`invites-not-sent`).
+   */
+  it('shows the join link instead of claiming success when the invite could not be emailed', async () => {
+    const { inviteMember } = await import('@/features/marketing/api/membershipApi');
+    const { toast } = await import('sonner');
+    (inviteMember as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      membershipId: 'm1',
+      status: 'INVITED',
+      inviteToken: 'tok-123',
+      emailSent: false,
+    });
+    const user = userEvent.setup();
+    render(<MarketingUsersPage />, { wrapper });
+
+    await screen.findByText('Pending');
+    await user.click(screen.getByRole('button', { name: /invite member/i }));
+    await user.type(await screen.findByLabelText(/email/i), 'newrep@acme.com');
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+
+    // The link is on screen and copyable…
+    const field = await screen.findByDisplayValue(/accept-invite\?token=tok-123$/);
+    expect(field).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /copy/i })).toBeInTheDocument();
+    // …and nothing claims the mail was sent.
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalled();
+  });
+
   it('offers "Cancel invite" (not "Reactivate") for an INVITED member', async () => {
     const user = userEvent.setup();
     render(<MarketingUsersPage />, { wrapper });

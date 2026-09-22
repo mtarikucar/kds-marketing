@@ -25,7 +25,13 @@ describe('MailGuardService', () => {
   }
 
   function build(
-    over: { workspace?: any; verdict?: any; reserve?: jest.Mock } = {},
+    over: {
+      workspace?: any;
+      verdict?: any;
+      reserve?: jest.Mock;
+      iys?: any;
+      capped?: any;
+    } = {},
   ) {
     const prisma: any = {
       workspace: {
@@ -41,7 +47,24 @@ describe('MailGuardService', () => {
       reserve: over.reserve ?? jest.fn().mockResolvedValue(undefined),
       refund: jest.fn().mockResolvedValue(undefined),
     };
-    return { prisma, suppression, quota, svc: new MailGuardService(prisma, suppression, quota) };
+    // The unarmed answer, which is what every workspace sees today: a gap code
+    // and no refusal.
+    const iysEmail: any = {
+      check: jest.fn().mockResolvedValue(over.iys ?? { status: 'UNKNOWN', refusal: null, gap: 'NOT_ARMED' }),
+      readiness: jest.fn(),
+    };
+    const budget: any = {
+      reserveDaily: jest.fn().mockResolvedValue(over.capped ?? null),
+      refundDaily: jest.fn().mockResolvedValue(undefined),
+    };
+    return {
+      prisma,
+      suppression,
+      quota,
+      iysEmail,
+      budget,
+      svc: new MailGuardService(prisma, suppression, quota, iysEmail, budget),
+    };
   }
 
   it('lets a clean bulk mail through and meters it', async () => {
@@ -192,6 +215,139 @@ describe('MailGuardService', () => {
     });
   });
 
+  describe('İYS EPOSTA', () => {
+    it('is not even asked about a mail nobody called commercial', async () => {
+      const { iysEmail, svc } = build();
+      await svc.check({ mail: mail() });
+      expect(iysEmail.check).not.toHaveBeenCalled();
+    });
+
+    it('lets commercial mail through while the port has no answer', async () => {
+      const { iysEmail, svc } = build();
+      await expect(svc.check({ mail: mail({ ticari: true }) })).resolves.toBeNull();
+      expect(iysEmail.check).toHaveBeenCalledWith(expect.objectContaining({ address: 'ali@acme.test', ticari: true }));
+    });
+
+    it('refuses on a real RET', async () => {
+      const { svc } = build({ iys: { status: 'RET', refusal: { reason: 'IYS_RET', retriable: false } } });
+      await expect(svc.check({ mail: mail({ ticari: true }) })).resolves.toMatchObject({
+        reason: 'IYS_RET',
+        retriable: false,
+      });
+    });
+
+    it('defers rather than burns the recipient when İYS could not answer', async () => {
+      const { svc } = build({
+        iys: { status: 'UNKNOWN', refusal: { reason: 'TRANSIENT', retriable: true }, gap: 'UNREACHABLE' },
+      });
+      await expect(svc.check({ mail: mail({ ticari: true }) })).resolves.toMatchObject({
+        reason: 'TRANSIENT',
+        retriable: true,
+      });
+    });
+
+    it('hands the port the workspace row the gate already read', async () => {
+      const { prisma, iysEmail, svc } = build();
+      await svc.check({
+        mail: mail({ ticari: true }),
+        workspace: { status: 'ACTIVE', settings: { email: { iys: { eposta: true } } } },
+      });
+      expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
+      expect(iysEmail.check).toHaveBeenCalledWith(
+        expect.objectContaining({ settings: { email: { iys: { eposta: true } } } }),
+      );
+    });
+
+    it('refuses before the quota is spent', async () => {
+      const { quota, svc } = build({ iys: { status: 'RET', refusal: { reason: 'IYS_RET', retriable: false } } });
+      await svc.check({ mail: mail({ ticari: true }) });
+      expect(quota.reserve).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the send window', () => {
+    // 22:00 local in a zone three hours ahead of UTC — the drip that lands at
+    // 02:30 is the finding this gate exists for.
+    const LATE = { status: 'ACTIVE', settings: { email: { sendWindow: { from: 9, to: 18 } } }, timezone: 'Europe/Istanbul' };
+
+    it('does nothing for the tenants who have not set one', async () => {
+      const { svc } = build();
+      await expect(svc.check({ mail: mail() })).resolves.toBeNull();
+    });
+
+    it('defers a bulk mail outside the window with a retryAt, never a drop', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-10T22:30:00Z'));
+      try {
+        const { svc } = build({ workspace: LATE });
+        const refusal: any = await svc.check({ mail: mail() });
+        expect(refusal).toMatchObject({ reason: 'QUIET_HOURS', retriable: true });
+        expect(refusal.retryAt).toBeInstanceOf(Date);
+        expect(refusal.retryAt.getTime()).toBeGreaterThan(Date.now());
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('costs no quota and no daily budget, because the mail has not gone yet', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-10T22:30:00Z'));
+      try {
+        const { quota, budget, svc } = build({ workspace: LATE });
+        await svc.check({ mail: mail() });
+        expect(quota.reserve).not.toHaveBeenCalled();
+        expect(budget.reserveDaily).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('never holds an invoice the customer is waiting for', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-10T22:30:00Z'));
+      try {
+        const { svc } = build({ workspace: LATE });
+        await expect(
+          svc.check({ mail: mail({ mailClass: 'TRANSACTIONAL', unsubscribe: undefined }) }),
+        ).resolves.toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe('the daily platform cap', () => {
+    const CAPPED = { scope: 'WORKSPACE', limit: 1000, used: 1000, retryAt: new Date('2026-03-11T00:00:00Z') };
+
+    it('queues forward when the shared relay s day is spent', async () => {
+      const { svc } = build({ capped: CAPPED });
+      await expect(svc.check({ mail: mail() })).resolves.toMatchObject({
+        reason: 'DAILY_CAP',
+        retriable: true,
+        retryAt: CAPPED.retryAt,
+      });
+    });
+
+    it('only spends the relay s budget on the relay s own transport', async () => {
+      const { budget, svc } = build();
+      await svc.check({ mail: mail(), transport: 'MAILBOX_SMTP' });
+      expect(budget.reserveDaily).toHaveBeenCalledWith({ workspaceId: 'ws-1', transport: 'MAILBOX_SMTP' });
+    });
+
+    it('spends nothing at all for a preflight', async () => {
+      const { budget, quota, svc } = build();
+      await svc.check({ mail: mail(), skipMetering: true });
+      expect(budget.reserveDaily).not.toHaveBeenCalled();
+      expect(quota.reserve).not.toHaveBeenCalled();
+    });
+
+    it('gives the day back when the meter refuses the same mail one step later', async () => {
+      const reserve = jest
+        .fn()
+        .mockRejectedValue(new ForbiddenException({ code: 'MESSAGES_EXHAUSTED', message: 'limit' }));
+      const { budget, svc } = build({ reserve });
+      await svc.check({ mail: mail() });
+      expect(budget.refundDaily).toHaveBeenCalledWith({ workspaceId: 'ws-1', transport: 'PLATFORM' });
+    });
+  });
+
   describe('metering', () => {
     it('turns an exhausted quota into a refusal instead of a throw', async () => {
       const reserve = jest
@@ -242,6 +398,27 @@ describe('MailGuardService', () => {
       const { quota, svc } = build();
       quota.refund.mockRejectedValue(new Error('db down'));
       await expect(svc.refundQuota(mail())).resolves.toBeUndefined();
+    });
+
+    it('gives back the day as well as the message', async () => {
+      const { budget, svc } = build();
+      await svc.refundQuota(mail(), 'PLATFORM');
+      expect(budget.refundDaily).toHaveBeenCalledWith({ workspaceId: 'ws-1', transport: 'PLATFORM' });
+    });
+
+    it('refunds the day even for mail the plan never charged for', async () => {
+      // A campaign meters its own recipients, so `refundQuota` is a no-op for
+      // the message counter — but the relay's day was still spent.
+      const { quota, budget, svc } = build();
+      await svc.refundQuota(mail({ alreadyMetered: true }), 'PLATFORM');
+      expect(quota.refund).not.toHaveBeenCalled();
+      expect(budget.refundDaily).toHaveBeenCalled();
+    });
+
+    it('never throws a daily-budget refund failure back at the caller', async () => {
+      const { budget, svc } = build();
+      budget.refundDaily.mockRejectedValue(new Error('db down'));
+      await expect(svc.refundQuota(mail(), 'PLATFORM')).resolves.toBeUndefined();
     });
   });
 });

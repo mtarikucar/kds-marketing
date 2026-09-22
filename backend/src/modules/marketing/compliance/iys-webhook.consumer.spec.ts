@@ -201,7 +201,11 @@ describe('IysWebhookConsumer — anti-feedback-loop (real ComplianceService + Iy
     const budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     const iysClient = { add: jest.fn() };
     const iysSync = new IysSyncService(prisma as any, registry as any, budgeter as any, iysClient as any);
-    const compliance = new ComplianceService(prisma as any, outbox as any, iysSync as any);
+    // The 4th argument is SuppressionService. This test only drives the
+    // MARKETING_SMS branch, which never reaches it — but an EMAIL-consent case
+    // added here would NPE without it.
+    const suppression = { suppress: jest.fn(), lift: jest.fn() };
+    const compliance = new ComplianceService(prisma as any, outbox as any, iysSync as any, suppression as any);
 
     const bus = { on: jest.fn(), off: jest.fn() };
     const consumer = new IysWebhookConsumer(prisma as any, bus as any, compliance as any);

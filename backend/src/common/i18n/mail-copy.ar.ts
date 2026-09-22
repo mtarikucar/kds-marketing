@@ -27,6 +27,8 @@ export const ar: Partial<Record<MailCopyKey, string>> = {
   'unsubscribe.done.body': 'لن تصلك هذه الرسائل بعد الآن.',
   'unsubscribe.expired.heading': 'انتهت صلاحية الرابط',
   'unsubscribe.expired.body': 'لم يعد رابط إلغاء الاشتراك هذا صالحًا.',
+  'unsubscribe.error.heading': 'حدث خطأ ما',
+  'unsubscribe.error.body': 'تعذّر تسجيل ذلك الآن. يُرجى المحاولة مرة أخرى.',
 
   'booking.received.subject': 'تم استلام طلب الحجز: {{calendar}}',
   'booking.received.body': 'طلب حجزك في {{when}} بانتظار الموافقة.',
@@ -67,7 +69,7 @@ export const ar: Partial<Record<MailCopyKey, string>> = {
   'document.esign.body': 'تطلب منك {{business}} مراجعة {{title}} وتوقيعه.',
   'document.esign.signLine': 'للمراجعة والتوقيع: {{url}}',
   'document.esign.signedSubject': 'نسخة موقعة: {{title}}',
-  'document.esign.signedBody': 'تم توقيع {{title}} من جميع الأطراف. النسخة مرفقة.',
+  'document.esign.signedBody': 'تم توقيع {{title}} من جميع الأطراف. يمكنك عرض النسخة الموقّعة هنا:',
 
   'invite.subject': 'دعاك {{inviter}} للانضمام إلى {{workspace}}',
   'invite.body': 'دعاك {{inviter}} للانضمام إلى مساحة العمل {{workspace}} على {{product}}.',

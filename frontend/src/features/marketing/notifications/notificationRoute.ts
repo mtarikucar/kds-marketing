@@ -92,6 +92,15 @@ export function notificationRoute(
       // metadata at all: no-op.
       return lead ? `/leads/${lead}` : null;
 
+    case 'QUOTE_ANSWERED':
+    case 'INVOICE_PAID':
+    case 'DOCUMENT_SIGNED':
+      // The commerce kinds (a quote accepted/declined, an invoice paid, an
+      // agreement signed). All three stamp `metadata.leadId`, and the contact
+      // is what the owner wants open — there is no per-document route, and
+      // falling back to a list would answer "who?" with "someone".
+      return lead ? `/leads/${lead}` : null;
+
     default:
       // `type` is a free-form String column with no enum behind it. Unknown
       // kinds — including DEMO_REMINDER / OFFER_EXPIRING / TASK_DUE, named in

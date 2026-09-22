@@ -59,6 +59,73 @@ export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   LOST: [],
 };
 
+/**
+ * Everything the lead-detail page reads in one round trip.
+ *
+ * Named rather than inline because `findOne` may have to read TWICE — a merged
+ * lead is followed to its canonical — and the second read must answer with the
+ * same shape as the first, or the detail page would lose its history the moment
+ * a link pointed at a tombstone.
+ */
+const FIND_ONE_INCLUDE = {
+  assignedTo: {
+    select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+  },
+  activities: {
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    include: {
+      createdBy: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+    },
+  },
+  offers: {
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    include: {
+      createdBy: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+    },
+  },
+  tasks: {
+    orderBy: { dueDate: 'asc' },
+    take: 50,
+    where: { status: { not: 'CANCELLED' } },
+    include: {
+      assignedTo: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+    },
+  },
+  _count: {
+    select: { activities: true, offers: true, tasks: true },
+  },
+  // First-touch ad/UTM attribution (captured at lead birth). Scalar select
+  // only — the forensic `raw` JSON snapshot stays server-side. Nullable:
+  // leads with no click/UTM signal (or created before capture) have none.
+  attribution: {
+    select: {
+      utmSource: true,
+      utmMedium: true,
+      utmCampaign: true,
+      utmContent: true,
+      utmTerm: true,
+      clickId: true,
+      clickIdType: true,
+      ctwaClid: true,
+      landingUrl: true,
+      referrerUrl: true,
+      sourceSocialPostId: true,
+      sourceSocialCampaignId: true,
+      sourceAdCampaignId: true,
+      sourceAdCreativeId: true,
+      createdAt: true,
+    },
+  },
+} as const;
+
 @Injectable()
 export class MarketingLeadsService {
   private readonly logger = new Logger(MarketingLeadsService.name);
@@ -582,78 +649,59 @@ export class MarketingLeadsService {
     };
   }
 
+  /**
+   * How far a merge chain is followed before we stop asking.
+   *
+   * `lead-dedupe.service.ts` only refuses a canonical that is CURRENTLY merged,
+   * so A→B and a later B→C is an ordinary shape and one hop is not enough. The
+   * bound is what stops a cycle written by an older dedupe path (or by a
+   * restore) turning a page load into an infinite query loop.
+   */
+  private static readonly MERGE_CHAIN_DEPTH = 8;
+
   async findOne(workspaceId: string, id: string, userId: string, userRole: string) {
-    const lead = await this.prisma.lead.findFirst({
+    let lead = await this.prisma.lead.findFirst({
       where: { id, workspaceId },
-      include: {
-        assignedTo: {
-          select: { id: true, firstName: true, lastName: true, email: true, phone: true },
-        },
-        activities: {
-          orderBy: { createdAt: 'desc' },
-          take: 20,
-          include: {
-            createdBy: {
-              select: { id: true, firstName: true, lastName: true },
-            },
-          },
-        },
-        offers: {
-          orderBy: { createdAt: 'desc' },
-          take: 20,
-          include: {
-            createdBy: {
-              select: { id: true, firstName: true, lastName: true },
-            },
-          },
-        },
-        tasks: {
-          orderBy: { dueDate: 'asc' },
-          take: 50,
-          where: { status: { not: 'CANCELLED' } },
-          include: {
-            assignedTo: {
-              select: { id: true, firstName: true, lastName: true },
-            },
-          },
-        },
-        _count: {
-          select: { activities: true, offers: true, tasks: true },
-        },
-        // First-touch ad/UTM attribution (captured at lead birth). Scalar select
-        // only — the forensic `raw` JSON snapshot stays server-side. Nullable:
-        // leads with no click/UTM signal (or created before capture) have none.
-        attribution: {
-          select: {
-            utmSource: true,
-            utmMedium: true,
-            utmCampaign: true,
-            utmContent: true,
-            utmTerm: true,
-            clickId: true,
-            clickIdType: true,
-            ctwaClid: true,
-            landingUrl: true,
-            referrerUrl: true,
-            sourceSocialPostId: true,
-            sourceSocialCampaignId: true,
-            sourceAdCampaignId: true,
-            sourceAdCreativeId: true,
-            createdAt: true,
-          },
-        },
-      },
+      include: FIND_ONE_INCLUDE,
     });
 
     if (!lead) {
       throw new NotFoundException('Lead not found');
     }
 
+    // A merged-away lead is a tombstone: the merge moved every activity, offer,
+    // task and conversation onto the canonical row and left this one resolvable
+    // so old links, bookmarks and pre-merge notifications still go somewhere.
+    // "Somewhere" was a shell with a name on it and no history. Follow the
+    // chain and answer with the record the person actually is now, naming the
+    // id that was asked for so the caller can correct its own URL
+    // (`erasure-one-row`). NOT a 404: keeping old links alive is the whole
+    // reason the row is still here.
+    const redirectedFromId = lead.mergedIntoId ? id : undefined;
+    const seen = new Set<string>([lead.id]);
+    for (let hop = 0; lead.mergedIntoId && hop < MarketingLeadsService.MERGE_CHAIN_DEPTH; hop++) {
+      if (seen.has(lead.mergedIntoId)) break;
+      seen.add(lead.mergedIntoId);
+      const next = await this.prisma.lead.findFirst({
+        // Scoped, always: a stale `mergedIntoId` must resolve to nobody rather
+        // than to another tenant's lead.
+        where: { id: lead.mergedIntoId, workspaceId },
+        include: FIND_ONE_INCLUDE,
+      });
+      // The canonical has since been hard-deleted. The tombstone is then the
+      // only thing left that answers this link, so it is what we return.
+      if (!next) break;
+      lead = next;
+    }
+
+    // Read against the lead being RETURNED, not the one that was asked for: a
+    // rep is being shown the canonical record, so it is the canonical record's
+    // assignment that decides whether they may see it.
     if (userRole === 'REP' && lead.assignedToId !== userId) {
       throw new ForbiddenException('You can only view your own leads');
     }
 
-    return lead;
+    return redirectedFromId && lead.id !== id ? { ...lead, redirectedFromId } : lead;
   }
 
   async update(workspaceId: string, id: string, dto: UpdateLeadDto, userId: string, userRole: string) {

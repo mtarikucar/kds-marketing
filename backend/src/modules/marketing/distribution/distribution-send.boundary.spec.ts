@@ -524,11 +524,12 @@ describe('C — the actor is verified, not declared', () => {
     const { svc, outbound } = world(member());
     const res = await svc.send('ws-1', 'draft-1', 'u-1');
     expect(res.conversationId).toBe('conv-1');
-    expect(outbound.start).toHaveBeenCalledWith('ws-1', {
-      leadId: 'lead-1',
-      channelId: 'ch-1',
-      text: 'Bunun motoru yok.',
-    });
+    expect(outbound.start).toHaveBeenCalledWith(
+      'ws-1',
+      { leadId: 'lead-1', channelId: 'ch-1', text: 'Bunun motoru yok.' },
+      // The human who pressed send is carried through, not inferred.
+      { authorType: 'AGENT', authorId: 'u-1' },
+    );
   });
 
   it('stamps who sent it, together with the status, in one claim', async () => {
