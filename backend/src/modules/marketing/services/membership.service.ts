@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -12,11 +13,16 @@ import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { t } from '../../../common/i18n/mail-copy';
 import { EntitlementsService } from '../../billing/entitlements.service';
+import { OutboundMailService } from '../channels/outbound/outbound-mail.service';
 import { MembershipSummary } from '../types';
 import { InviteMemberDto } from '../dto/invite-member.dto';
 
 const INVITABLE_ROLES = ['MANAGER', 'REP'];
+
+/** How long the accept token stays valid — matches the `expiresIn` below. */
+const INVITE_TTL_DAYS = 7;
 
 /** Base64url, no padding — mirrors sso.service.ts's local helper. */
 function b64url(input: Buffer | string): string {
@@ -41,11 +47,14 @@ function escapeLockKey(key: string): string {
  */
 @Injectable()
 export class MembershipService {
+  private readonly logger = new Logger(MembershipService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly entitlements: EntitlementsService,
+    private readonly mail: OutboundMailService,
   ) {}
 
   /** The ACTIVE membership binding a user to a workspace, or null. */
@@ -119,7 +128,12 @@ export class MembershipService {
     workspaceId: string,
     actorUserId: string,
     dto: InviteMemberDto,
-  ): Promise<{ membershipId: string; status: 'INVITED'; inviteToken?: string }> {
+  ): Promise<{
+    membershipId: string;
+    status: 'INVITED';
+    inviteToken: string;
+    emailSent: boolean;
+  }> {
     if (!INVITABLE_ROLES.includes(dto.role)) {
       // OWNER exists once per workspace; SYSTEM is the research sentinel —
       // neither is invitable, mirroring marketing-users.service.create.
@@ -142,8 +156,9 @@ export class MembershipService {
     // count + the seat-consuming create need to be atomic.
     const effective = await this.entitlements.getEffective(workspaceId);
 
+    let created: { membershipId: string };
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      created = await this.prisma.$transaction(async (tx) => {
         if (effective.maxUsers !== -1) {
           // Advisory-lock the workspace's seat counter so the seat-check + the
           // seat-consuming membership create is atomic — a bare count-then-write
@@ -188,7 +203,7 @@ export class MembershipService {
             },
             select: { id: true },
           });
-          return { membershipId: membership.id, status: 'INVITED' as const };
+          return { membershipId: membership.id };
         }
 
         // New email: provision a pending identity. No password is usable —
@@ -220,19 +235,7 @@ export class MembershipService {
           select: { id: true },
         });
 
-        // `typ` (not `type`) is deliberate: MarketingGuard only ever accepts
-        // `type === 'marketing'`, so this token can NEVER be replayed as a
-        // session — it is only ever verifiable by the accept endpoint (Task 12).
-        const inviteToken = this.jwt.sign(
-          { membershipId: membership.id, typ: 'marketing-invite' },
-          {
-            secret: this.config.get<string>('MARKETING_JWT_SECRET'),
-            expiresIn: '7d',
-            algorithm: 'HS256',
-          },
-        );
-
-        return { membershipId: membership.id, status: 'INVITED' as const, inviteToken };
+        return { membershipId: membership.id };
       });
     } catch (e) {
       // Lost a concurrent race on either unique index (email, or the
@@ -241,6 +244,149 @@ export class MembershipService {
         throw new ConflictException('This user is already a member or invited');
       }
       throw e;
+    }
+
+    // Minted AFTER the commit, for BOTH branches.
+    //
+    // It used to be minted inside the transaction and only on the new-identity
+    // path, so an EXISTING identity — the case that most needs a link, because
+    // registering again 409s with "Email is already registered" — got nothing
+    // to send. The payload is `{membershipId, typ}`: nothing in it is
+    // new-identity-specific, and `accept()` already distinguishes the two by
+    // the stored password (a real bcrypt hash is exactly 60 chars), so one
+    // token drives both through the same public /auth/accept-invite route.
+    //
+    // `typ` (not `type`) is deliberate: MarketingGuard only ever accepts
+    // `type === 'marketing'`, so this token can NEVER be replayed as a
+    // session — it is only ever verifiable by the accept endpoint (Task 12).
+    const inviteToken = this.jwt.sign(
+      { membershipId: created.membershipId, typ: 'marketing-invite' },
+      {
+        secret: this.config.get<string>('MARKETING_JWT_SECRET'),
+        expiresIn: `${INVITE_TTL_DAYS}d`,
+        algorithm: 'HS256',
+      },
+    );
+
+    const emailSent = await this.sendInviteMail(
+      workspaceId,
+      actorUserId,
+      dto.email,
+      created.membershipId,
+      inviteToken,
+    );
+
+    return {
+      membershipId: created.membershipId,
+      status: 'INVITED' as const,
+      inviteToken,
+      emailSent,
+    };
+  }
+
+  /**
+   * Tell the invitee, outside the transaction and outside the advisory lock.
+   *
+   * Three properties, each one a correction the finding spelled out:
+   *  - **After the commit.** `invite()`'s transaction holds
+   *    `pg_advisory_xact_lock('users:<workspaceId>')`; awaiting a relay inside
+   *    it serialises every invite in the workspace behind one SMTP round-trip
+   *    and risks a transaction timeout on a slow relay.
+   *  - **Never fatal.** The membership is already committed and the seat is
+   *    already spent; a mail failure must not roll either back. Everything
+   *    here is caught, and the answer comes back as `emailSent` so the caller
+   *    can offer the link to copy instead of claiming success it did not have.
+   *  - **INTERNAL, not TRANSACTIONAL.** This is our mail about our product:
+   *    no tenant Reply-To (replies about Jeeta belong with us, not in the
+   *    tenant's sales inbox), no unsubscribe header on an account mail, and
+   *    not metered against the tenant's `messagesMonthly`.
+   *
+   * The token is never logged: it IS the credential, and the accept route
+   * takes nothing else.
+   */
+  private async sendInviteMail(
+    workspaceId: string,
+    actorUserId: string,
+    email: string,
+    membershipId: string,
+    token: string,
+  ): Promise<boolean> {
+    try {
+      // The console lives at FRONTEND_URL (APP_URL is the older spelling both
+      // OAuth controllers still accept). With neither, an accept link would
+      // have no origin and would not be a link at all — better to say the mail
+      // did not go than to send a broken one.
+      const origin = (
+        this.config.get<string>('FRONTEND_URL') ??
+        this.config.get<string>('APP_URL') ??
+        ''
+      )
+        .trim()
+        .replace(/\/+$/, '');
+      if (!origin) {
+        this.logger.warn(
+          `invite mail skipped: no FRONTEND_URL/APP_URL configured (workspace=${workspaceId})`,
+        );
+        return false;
+      }
+
+      const [workspace, inviter] = await Promise.all([
+        this.prisma.workspace.findUnique({
+          where: { id: workspaceId },
+          select: { name: true, defaultLanguage: true },
+        }),
+        // findUnique by id: the actor is whoever the controller authenticated,
+        // and an invite made through the seatless delegate carries no actor.
+        actorUserId
+          ? this.prisma.marketingUser.findUnique({
+              where: { id: actorUserId },
+              select: { firstName: true, lastName: true },
+            })
+          : null,
+      ]);
+
+      const product = this.config.get<string>('APP_NAME') || 'Jeeta';
+      const lang = workspace?.defaultLanguage;
+      const workspaceName = workspace?.name || product;
+      const inviterName =
+        [inviter?.firstName, inviter?.lastName].filter(Boolean).join(' ').trim() || product;
+      const url = `${origin}/accept-invite?token=${encodeURIComponent(token)}`;
+      const expiresOn = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+
+      const receipt = await this.mail.send({
+        workspaceId,
+        mailClass: 'INTERNAL',
+        to: email,
+        subject: t(lang, 'invite.subject', { inviter: inviterName, workspace: workspaceName }),
+        text: [
+          t(lang, 'invite.body', {
+            inviter: inviterName,
+            workspace: workspaceName,
+            product,
+          }),
+          '',
+          t(lang, 'invite.ctaLine', { url }),
+          t(lang, 'invite.expiryLine', { date: expiresOn }),
+        ].join('\n'),
+        source: `invite:${membershipId}`,
+        // The membership id is a real domain key, so a retried invite settles
+        // as DEDUPED instead of arriving twice.
+        idempotencyKey: `invite:${membershipId}`,
+        ...(lang ? { lang } : {}),
+      });
+      if (!receipt.ok) {
+        this.logger.warn(
+          `invite mail not sent (workspace=${workspaceId}, membership=${membershipId}): ${receipt.reason ?? receipt.outcome}`,
+        );
+      }
+      return receipt.ok;
+    } catch (e) {
+      this.logger.warn(
+        `invite mail failed (workspace=${workspaceId}, membership=${membershipId}): ${(e as Error)?.message ?? e}`,
+      );
+      return false;
     }
   }
 

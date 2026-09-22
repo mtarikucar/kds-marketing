@@ -1,7 +1,19 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { MembershipService } from './membership.service';
+import { MailReceipt } from '../channels/outbound/outbound-mail.types';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
+
+/** What the gateway hands back for an INTERNAL invite. */
+const receipt = (over: Partial<MailReceipt> = {}): MailReceipt => ({
+  outcome: 'SENT',
+  ok: true,
+  mailLogId: 'ml-1',
+  messageId: 'mid@jeetagrowth.com',
+  transport: 'PLATFORM',
+  retriable: false,
+  ...over,
+});
 
 /**
  * Phase 2 Task 11 — MembershipService.invite(): existing-identity (new
@@ -19,13 +31,32 @@ function makeSvc(maxUsers: number = -1) {
   (prisma.$queryRawUnsafe as any).mockResolvedValue([{ locked: 'x' }]);
   const jwt = new JwtService();
   const config = {
-    get: jest.fn((key: string) => (key === 'MARKETING_JWT_SECRET' ? 'invite-secret' : undefined)),
+    get: jest.fn((key: string) =>
+      key === 'MARKETING_JWT_SECRET'
+        ? 'invite-secret'
+        : key === 'FRONTEND_URL'
+          ? 'https://app.example.com'
+          : key === 'APP_NAME'
+            ? 'Jeeta'
+            : undefined,
+    ),
   };
   // Defaults to unlimited so the existing (non-seat-cap) tests below are
   // unaffected; the seat-cap describe block overrides this per-test.
   const entitlements = { getEffective: jest.fn().mockResolvedValue({ maxUsers }) };
-  const svc = new MembershipService(prisma as any, jwt, config as any, entitlements as any);
-  return { prisma, svc, jwt, entitlements };
+  const mail = { send: jest.fn().mockResolvedValue(receipt()) };
+  (prisma.workspace.findUnique as jest.Mock).mockResolvedValue({
+    name: 'Acme',
+    defaultLanguage: 'tr',
+  });
+  const svc = new MembershipService(
+    prisma as any,
+    jwt,
+    config as any,
+    entitlements as any,
+    mail as any,
+  );
+  return { prisma, svc, jwt, entitlements, mail };
 }
 
 const WS = 'ws-1';
@@ -43,7 +74,12 @@ describe('MembershipService.invite', () => {
 
     const out = await svc.invite(WS, ACTOR, { email: 'exist@x.co', role: 'REP' });
 
-    expect(out).toEqual({ membershipId: 'mem-1', status: 'INVITED' });
+    expect(out).toMatchObject({ membershipId: 'mem-1', status: 'INVITED', emailSent: true });
+    // invites-not-sent, correction 2: an EXISTING identity used to get no
+    // token at all, so the one branch that most needs a link — "you already
+    // have a login, here is the workspace you were added to" — produced
+    // nothing to send. accept() already handles this identity correctly.
+    expect(typeof out.inviteToken).toBe('string');
     expect(prisma.marketingUser.create).not.toHaveBeenCalled();
     expect(prisma.workspaceMembership.create).toHaveBeenCalledWith({
       data: {
@@ -184,7 +220,7 @@ describe('MembershipService.invite — seat cap (Fix 2)', () => {
 
     const out = await svc.invite(WS, ACTOR, { email: 'room@x.co', role: 'REP' });
 
-    expect(out).toEqual({ membershipId: 'mem-ok', status: 'INVITED' });
+    expect(out).toMatchObject({ membershipId: 'mem-ok', status: 'INVITED' });
     const lockSql = (prisma.$queryRawUnsafe as jest.Mock).mock.calls[0][0] as string;
     expect(lockSql).toContain('pg_advisory_xact_lock');
     expect(lockSql).toContain('users:ws-1');
@@ -200,5 +236,137 @@ describe('MembershipService.invite — seat cap (Fix 2)', () => {
 
     expect(prisma.workspaceMembership.count).not.toHaveBeenCalled();
     expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * invites-not-sent.
+ *
+ * `invite()` minted a token, returned it, and sent nothing. The frontend threw
+ * the token away and toasted "Invitation sent to …", the invitee never heard a
+ * word, could not self-register (`Email is already registered`), and a seat was
+ * consumed for someone who did not know they had been invited.
+ *
+ * Two constraints shape the fix, and both are about WHERE the send happens:
+ * the transaction holds `pg_advisory_xact_lock('users:<ws>')`, so awaiting a
+ * slow relay inside it serialises every invite in the workspace and risks a
+ * transaction timeout; and a mail failure must never roll back a membership
+ * that already committed.
+ */
+describe('MembershipService.invite — the mail', () => {
+  it('sends the accept link as INTERNAL mail, on the platform identity', async () => {
+    const { prisma, svc, mail } = makeSvc();
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-mail' });
+
+    const out = await svc.invite(WS, ACTOR, { email: 'new@x.co', role: 'REP' });
+
+    const sent = mail.send.mock.calls[0][0];
+    expect(sent).toMatchObject({
+      workspaceId: WS,
+      // Not TRANSACTIONAL: this is OUR mail about OUR product, so it carries
+      // no tenant Reply-To (replies about Jeeta must not land in the tenant's
+      // sales inbox) and is not metered against the tenant's plan.
+      mailClass: 'INTERNAL',
+      to: 'new@x.co',
+      source: 'invite:mem-mail',
+    });
+    expect(sent.unsubscribe).toBeUndefined();
+    expect(sent.leadId).toBeUndefined();
+    // The link is absolute and carries the token the accept route verifies.
+    expect(sent.text).toContain(`https://app.example.com/accept-invite?token=${out.inviteToken}`);
+    expect(out.emailSent).toBe(true);
+  });
+
+  it('sends exactly once per membership, under a stable idempotency key', async () => {
+    const { prisma, svc, mail } = makeSvc();
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-once' });
+
+    await svc.invite(WS, ACTOR, { email: 'once@x.co', role: 'REP' });
+
+    expect(mail.send).toHaveBeenCalledTimes(1);
+    // The membership id IS the domain key: a retried request that lands on the
+    // same membership settles as DEDUPED instead of a second inbox hit.
+    expect(mail.send.mock.calls[0][0].idempotencyKey).toBe('invite:mem-once');
+  });
+
+  it('sends AFTER the transaction commits, never inside the advisory lock', async () => {
+    const { prisma, svc, mail } = makeSvc();
+    let inTransaction = false;
+    let sentInsideTransaction: boolean | null = null;
+    (prisma.$transaction as any).mockImplementation(async (fn: any) => {
+      inTransaction = true;
+      try {
+        return await fn(prisma);
+      } finally {
+        inTransaction = false;
+      }
+    });
+    mail.send.mockImplementation(async () => {
+      sentInsideTransaction = inTransaction;
+      return receipt();
+    });
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-after' });
+
+    await svc.invite(WS, ACTOR, { email: 'after@x.co', role: 'REP' });
+
+    // Awaiting SMTP under pg_advisory_xact_lock('users:<ws>') serialises every
+    // invite in the workspace behind one relay round-trip.
+    expect(sentInsideTransaction).toBe(false);
+  });
+
+  it('keeps the committed membership when the mail cannot be sent', async () => {
+    const { prisma, svc, mail } = makeSvc();
+    mail.send.mockRejectedValue(new Error('relay down'));
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-fail' });
+
+    const out = await svc.invite(WS, ACTOR, { email: 'fail@x.co', role: 'REP' });
+
+    // The seat is spent and the row exists; rolling that back over a relay
+    // hiccup would be the worse outcome. The caller is told the truth instead,
+    // and still holds the token to copy out by hand.
+    expect(out.membershipId).toBe('mem-fail');
+    expect(out.emailSent).toBe(false);
+    expect(typeof out.inviteToken).toBe('string');
+  });
+
+  it('reports a gateway REFUSAL as not-sent rather than as success', async () => {
+    const { prisma, svc, mail } = makeSvc();
+    mail.send.mockResolvedValue(
+      receipt({ ok: false, outcome: 'REFUSED', reason: 'BAD_RECIPIENT', transport: 'NONE' }),
+    );
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-refused' });
+
+    const out = await svc.invite(WS, ACTOR, { email: 'refused@x.co', role: 'REP' });
+
+    expect(out.emailSent).toBe(false);
+  });
+
+  it('says so, rather than mailing a broken link, when no app origin is configured', async () => {
+    const { prisma, svc, mail } = makeSvc();
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-nourl' });
+    const config = (svc as any).config;
+    config.get.mockImplementation((key: string) =>
+      key === 'MARKETING_JWT_SECRET' ? 'invite-secret' : undefined,
+    );
+
+    const out = await svc.invite(WS, ACTOR, { email: 'nourl@x.co', role: 'REP' });
+
+    // An accept link with no origin is not a link. The invite still stands and
+    // the token still comes back for the admin to hand over.
+    expect(mail.send).not.toHaveBeenCalled();
+    expect(out.emailSent).toBe(false);
+    expect(typeof out.inviteToken).toBe('string');
   });
 });

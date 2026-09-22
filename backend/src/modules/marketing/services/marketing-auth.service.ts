@@ -9,8 +9,11 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { t } from '../../../common/i18n/mail-copy';
+import { OutboundMailService } from '../channels/outbound/outbound-mail.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
@@ -26,11 +29,108 @@ import { MembershipService } from './membership.service';
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 
+/** How long a password-reset link lives. Long enough to survive a mail queue,
+ *  short enough that a forwarded or archived mail is not a standing key. */
+const RESET_TTL_MS = 30 * 60 * 1000;
+
+/** Label separating the reset key from every other use of the JWT secret. */
+const RESET_LABEL = 'marketing-password-reset';
+
+/**
+ * One answer for every no.
+ *
+ * "Expired", "already used", "wrong signature" and "no such account" must be
+ * indistinguishable, or the route becomes an oracle for which addresses exist
+ * and which links are live.
+ */
+const RESET_REJECTED = 'Reset link is invalid or has expired';
+
+/**
+ * The same acknowledgement whether or not the address exists.
+ *
+ * `login` already burns a dummy bcrypt compare (see DUMMY_BCRYPT_HASH) so a
+ * missing email costs what a wrong password costs; this path mirrors it, so
+ * neither the body nor the work distinguishes a registered address from an
+ * unregistered one.
+ */
+const RESET_ACK = {
+  message: 'If an account exists for that address, a password reset link has been sent.',
+} as const;
+
 // Constant-time login: an unknown email must cost roughly one bcrypt compare,
 // same as a wrong password, so response timing can't be used to enumerate
 // which emails exist. Computed once at module load (a real hash, not a literal,
 // so the compare exercises the genuine cost factor) — never used as a credential.
 const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password', 12);
+
+/**
+ * The identity facts a reset link is signed over.
+ *
+ * The password hash and `tokenVersion` are INSIDE the signature and nowhere in
+ * the payload, which is what makes the link single-use with no column to store
+ * and no column to clear: the reset changes both, so the same link stops
+ * verifying the instant it is spent. An ordinary password change kills an
+ * outstanding link for free, for the same reason.
+ */
+interface ResetSubject {
+  id: string;
+  password: string;
+  tokenVersion: number;
+}
+
+/** One master secret, one derived key per purpose — mirrors deriveMailKey's
+ *  label separation, so a reset signature can never be replayed as anything
+ *  else minted from MARKETING_JWT_SECRET. */
+function resetSign(secret: string, body: string, subject: ResetSubject): string {
+  const key = createHmac('sha256', secret).update(RESET_LABEL).digest();
+  return createHmac('sha256', key)
+    .update(`${body}.${subject.password}.${subject.tokenVersion}`)
+    .digest('base64url');
+}
+
+/** `base64url({u,e}).HMAC` — the user id travels in the clear because the
+ *  verifier must load the row before it can recompute the signature. */
+function resetToken(secret: string, subject: ResetSubject, expiresAt: number): string {
+  const body = Buffer.from(JSON.stringify({ u: subject.id, e: expiresAt })).toString('base64url');
+  return `${body}.${resetSign(secret, body, subject)}`;
+}
+
+/** The claim inside a token, or null for anything that is not one. Never
+ *  throws and never says WHY — the caller has exactly one refusal message. */
+function readResetToken(
+  token: unknown,
+): { userId: string; expiresAt: number; body: string; signature: string } | null {
+  // 4 KiB is far past any legitimate token and stops a huge body being hashed.
+  if (typeof token !== 'string' || !token || token.length > 4096) return null;
+  const dot = token.indexOf('.');
+  if (dot <= 0 || dot !== token.lastIndexOf('.')) return null;
+  const body = token.slice(0, dot);
+  const signature = token.slice(dot + 1);
+  if (!signature) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString()) as {
+      u?: unknown;
+      e?: unknown;
+    };
+    if (typeof payload?.u !== 'string' || !payload.u) return null;
+    if (typeof payload?.e !== 'number' || !Number.isFinite(payload.e)) return null;
+    return { userId: payload.u, expiresAt: payload.e, body, signature };
+  } catch {
+    return null;
+  }
+}
+
+/** Constant-time, and false for anything of the wrong length. */
+function resetSignatureMatches(
+  secret: string,
+  body: string,
+  signature: string,
+  subject: ResetSubject,
+): boolean {
+  const expected = Buffer.from(resetSign(secret, body, subject));
+  const given = Buffer.from(signature);
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
 
 /** Subdomain-safe slug from a workspace name ("Acme Görmez A.Ş." → "acme-gormez-a-s"). */
 function slugify(name: string): string {
@@ -70,6 +170,7 @@ export class MarketingAuthService {
     private configService: ConfigService,
     private smsOtp: SmsOtpService,
     private membership: MembershipService,
+    private mail: OutboundMailService,
   ) {}
 
   private bcryptCost(): number {
@@ -1140,5 +1241,170 @@ export class MarketingAuthService {
     });
 
     return { message: 'Password changed successfully' };
+  }
+
+  /**
+   * "I cannot get in." — the one request `change-password` cannot serve,
+   * because it asks for the password the caller has forgotten.
+   *
+   * Answers the same thing to everybody (`RESET_ACK`) and spends comparable
+   * work either way, so the route says nothing about which addresses exist.
+   * Nothing here throws: a public, unauthenticated surface that 500s on a bad
+   * address is itself an oracle.
+   */
+  async requestPasswordReset(email: string, ip?: string): Promise<{ message: string }> {
+    const address = typeof email === 'string' ? email.trim() : '';
+    // Same lookup shape as login (findUnique on the unique email), so the two
+    // routes agree on what "this address exists" means.
+    const user = address
+      ? await this.prisma.marketingUser.findUnique({ where: { email: address } })
+      : null;
+
+    if (!this.canResetPassword(user)) {
+      // A bcrypt compare is the unit of work this service already spends to
+      // hide a miss (login:33/105), and it is the same order of magnitude as
+      // the mail send the hit path spends — so the two branches cost alike.
+      await bcrypt.compare('not-a-real-password', DUMMY_BCRYPT_HASH);
+      return { ...RESET_ACK };
+    }
+
+    try {
+      const token = resetToken(this.accessSecret(), user!, Date.now() + RESET_TTL_MS);
+      await this.sendResetMail(user!, token);
+      // The ip, never the address: this line exists so an operator can see a
+      // burst of requests, not so they can read who asked.
+      this.logger.log(`password reset requested (ip=${ip ?? 'unknown'})`);
+    } catch (e) {
+      // Same answer as every other branch — a failure here must not become the
+      // one response shape that means "this address is real".
+      this.logger.warn(`password reset could not be issued: ${(e as Error)?.message ?? e}`);
+    }
+    return { ...RESET_ACK };
+  }
+
+  /**
+   * Spend the link: set the new password, invalidate every outstanding session
+   * and let the owner back in.
+   *
+   * It deliberately mints NO session. Handing back tokens here would walk past
+   * the 2FA challenge, the `status !== 'ACTIVE'` check, the `role === 'SYSTEM'`
+   * check, the ACTIVE-membership check and `assertWorkspaceActive` — every gate
+   * `login` and `refreshToken` enforce. The caller signs in afterwards, through
+   * all of them.
+   */
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+    const claim = readResetToken(token);
+    if (!claim) throw new BadRequestException(RESET_REJECTED);
+
+    const user = await this.prisma.marketingUser.findUnique({ where: { id: claim.userId } });
+    if (!this.canResetPassword(user)) throw new BadRequestException(RESET_REJECTED);
+
+    // The signature covers the CURRENT password hash and tokenVersion, so a
+    // spent link — or one overtaken by an ordinary password change — fails
+    // here with no stored token to look up and no column to clear.
+    if (!resetSignatureMatches(this.accessSecret(), claim.body, claim.signature, user!)) {
+      throw new BadRequestException(RESET_REJECTED);
+    }
+    if (claim.expiresAt <= Date.now()) throw new BadRequestException(RESET_REJECTED);
+
+    const hashedPassword = await bcrypt.hash(newPassword, this.bcryptCost());
+    await this.prisma.marketingUser.update({
+      where: { id: user!.id },
+      data: {
+        // The same write shape changePassword uses. The tokenVersion bump is
+        // load-bearing: refreshToken and the guard compare the JWT's `ver` to
+        // it, so without it a refresh token stolen before the reset outlives
+        // it — exactly the session the reset is meant to end.
+        password: hashedPassword,
+        tokenVersion: { increment: 1 },
+        // The locked-out owner IS the scenario. Leaving the lockout behind
+        // would hand them a working password they still cannot use.
+        failedLogins: 0,
+        lockedUntil: null,
+      },
+    });
+
+    // Never a membership write: marketing-users.service already guards
+    // INVITED → ACTIVE as MembershipService.accept()'s job alone, and a reset
+    // that activated a pending invite would be an accept that skipped accept.
+    return { message: 'Password has been reset. Please sign in with your new password.' };
+  }
+
+  /**
+   * Which identities can hold a password at all.
+   *
+   * SYSTEM is the per-workspace research sentinel (it owns rows, never
+   * sessions), and a pending-invite identity carries an unusable random
+   * sentinel rather than a bcrypt hash — a real hash is always exactly 60
+   * chars, the same test `MembershipService.accept` uses. Both are skipped
+   * SILENTLY: the caller still gets `RESET_ACK`.
+   */
+  private canResetPassword(user: {
+    status: string;
+    role: string;
+    password: string;
+  } | null): boolean {
+    if (!user) return false;
+    if (user.status !== 'ACTIVE') return false;
+    if (user.role === 'SYSTEM') return false;
+    return typeof user.password === 'string' && user.password.length === 60;
+  }
+
+  /**
+   * The reset mail itself — AUTH class, so it is gated by nothing a tenant can
+   * set: no marketing opt-out, no stale bounce row, no paused-sending switch
+   * and no quota can stand between an owner and their own account. It carries
+   * the platform identity and no tenant Reply-To, because a password reset
+   * that invites you to reply to a tenant's mailbox is the phishing shape.
+   *
+   * Best-effort by design, and the token is never logged: it IS the credential.
+   */
+  private async sendResetMail(
+    user: { id: string; email: string; workspaceId: string },
+    token: string,
+  ): Promise<void> {
+    const origin = (
+      this.configService.get<string>('FRONTEND_URL') ??
+      this.configService.get<string>('APP_URL') ??
+      ''
+    )
+      .trim()
+      .replace(/\/+$/, '');
+    if (!origin) {
+      this.logger.warn('password reset mail skipped: no FRONTEND_URL/APP_URL configured');
+      return;
+    }
+
+    const lang = await this.workspaceLanguage(user.workspaceId);
+    const url = `${origin}/reset-password?token=${encodeURIComponent(token)}`;
+    const minutes = String(Math.round(RESET_TTL_MS / 60_000));
+
+    await this.mail.send({
+      workspaceId: user.workspaceId,
+      mailClass: 'AUTH',
+      to: user.email,
+      subject: t(lang, 'auth.reset.subject'),
+      text: [
+        t(lang, 'auth.reset.body', { minutes }),
+        '',
+        t(lang, 'auth.reset.ctaLine', { url }),
+        t(lang, 'auth.reset.ignoreLine'),
+      ].join('\n'),
+      source: 'auth:password-reset',
+      ...(lang ? { lang } : {}),
+    });
+  }
+
+  /** Best-effort: account recovery must not depend on a workspace read. */
+  private async workspaceLanguage(workspaceId: string): Promise<string | null> {
+    try {
+      const ws = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { defaultLanguage: true },
+      });
+      return ws?.defaultLanguage ?? null;
+    } catch {
+      return null;
+    }
   }
 }

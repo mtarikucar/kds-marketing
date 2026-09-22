@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { EmailService } from '../../../common/services/email.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { workspaceLocalParts } from '../../../common/scheduling/workspace-local-day';
+import { OutboundMailService } from '../channels/outbound/outbound-mail.service';
 import { DailyDigestService } from './daily-digest.service';
 
 /** Local hour each workspace receives its brief. */
@@ -12,6 +12,20 @@ const DIGEST_HOUR = Number(process.env.DAILY_DIGEST_HOUR ?? 7);
 
 /** One counter row per workspace per local day — the idempotency key. */
 const SENT_METRIC = 'digest.sent';
+
+/**
+ * Strip anything shaped like an address out of a provider's own words.
+ *
+ * The reason string ends up on the cron heartbeat, a PLATFORM row every tenant
+ * can read through `jeeta.list_scheduled_runs` — and a real relay quotes the
+ * mailbox back inside its rejection ("550 5.1.1 <owner@acme.co> unknown"), so
+ * passing the reason through verbatim leaks one workspace's owner address to
+ * every other workspace's agent. The actionable half is the code and the text
+ * around it, and that survives.
+ */
+function withoutAddresses(reason: string): string {
+  return reason.replace(/<?[^\s<>",;:]+@[^\s<>",;:]+>?/g, '(address)');
+}
 
 /**
  * The morning brief, as a product feature rather than a server-time cron.
@@ -40,7 +54,7 @@ export class DailyDigestCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly digest: DailyDigestService,
-    private readonly email: EmailService,
+    private readonly mail: OutboundMailService,
   ) {}
 
   /** Local wall-clock parts for a workspace, via the Intl database. Kept as a
@@ -105,38 +119,35 @@ export class DailyDigestCron {
               skipped++;
               continue;
             }
-            // No mailer configured at all. sendPlainEmail would log an
-            // [EMAIL MOCK] line and return true, so without this the brief would
-            // be recorded as sent every morning forever on a deploy that cannot
-            // send anything.
-            if (!this.email.isConfigured()) {
-              undelivered.push('(mailer not configured)');
-              skipped++;
-              continue;
-            }
             const body = this.digest.render(digest);
             const subject = `${digest.workspaceName} — günlük özet (${digest.forDate})`;
             for (const address of to) {
-              // The return value was ignored, so `sent++` ran whether or not
-              // anything left the building. A brief that fails to send is the
-              // one failure that cannot report itself by email, which is
-              // exactly why it has to surface somewhere else.
-              const ok = await this.email.sendPlainEmail(address, subject, body);
-              if (!ok) {
-                // Carry the SMTP reason, not just the fact. "Undelivered" tells
-                // the owner to look; "535 authentication failed" tells them what
-                // to fix.
-                // The REASON only. Not the address, and not the workspace id:
-                // this string ends up on the cron heartbeat, which is a
-                // PLATFORM-level row that every tenant can read through
-                // jeeta.list_scheduled_runs. Naming the recipient there put one
-                // workspace's owner/manager email addresses in front of every
-                // other workspace's agent. The SMTP reason is the actionable
-                // half and carries nobody's identity; which mailbox bounced is
-                // in the operator's own logs (logger.warn above), where it
-                // belongs.
-                const why = this.email.consumeLastPlainSendError();
-                undelivered.push(why || '(no reason reported)');
+              // INTERNAL: our own users, about our own product. That class is
+              // what keeps an unsubscribe header off an account-service mail,
+              // keeps a tenant Reply-To off it, and keeps it OUT of the
+              // messagesMonthly meter the tenant pays for (§A1).
+              //
+              // Before the gateway this was `sendPlainEmail`, whose bare `true`
+              // meant both "delivered" and "no transporter configured, logged
+              // an [EMAIL MOCK] line" — so an inert deploy reported a
+              // successful send every morning forever. The receipt separates
+              // the two, and NOT_CONFIGURED now arrives as a reason rather than
+              // as a silent success.
+              const receipt = await this.mail.send({
+                workspaceId: ws.id,
+                mailClass: 'INTERNAL',
+                to: address,
+                subject,
+                text: body,
+                source: 'digest',
+              });
+              if (!receipt.ok) {
+                // Carry the reason, not just the fact. "Undelivered" tells the
+                // owner to look; "535 authentication failed" tells them what to
+                // fix. The provider's own words first, the machine code when it
+                // had none — and neither one carrying anybody's address.
+                const why = receipt.error || receipt.reason || '';
+                undelivered.push(why ? withoutAddresses(why) : '(no reason reported)');
               }
             }
             sent++;

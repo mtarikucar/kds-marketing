@@ -22,6 +22,7 @@ import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { SwitchWorkspaceDto } from '../dto/switch-workspace.dto';
 import { AcceptInviteDto } from '../dto/accept-invite.dto';
+import { ForgotPasswordDto, ResetPasswordDto } from '../dto/password-reset.dto';
 import { MarketingUserPayload } from '../types';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
 import { Audit } from '../../audit/audit.decorator';
@@ -35,6 +36,10 @@ const REFRESH_THROTTLE = { default: { limit: 30, ttl: 60_000, blockDuration: 60_
 // Workspace creation is heavier than a login (4 inserts + bcrypt) and is
 // the platform's public front door — keep it slow.
 const REGISTER_THROTTLE = { default: { limit: 3, ttl: 60_000, blockDuration: 10 * 60_000 } };
+// Asking for a reset costs a bcrypt compare (the enumeration burn) and, on a
+// hit, a mail to somebody else's inbox — so it is capped tighter than login and
+// cooled down for longer. A locked-out owner needs one, not five.
+const FORGOT_THROTTLE = { default: { limit: 3, ttl: 60_000, blockDuration: 10 * 60_000 } };
 
 @Controller('marketing/auth')
 @UseGuards(MarketingGuard)
@@ -100,6 +105,29 @@ export class MarketingAuthController {
   async acceptInvite(@Body() dto: AcceptInviteDto) {
     const membershipId = await this.membershipService.verifyInviteToken(dto.token);
     return this.membershipService.accept(membershipId, { password: dto.password });
+  }
+
+  // no-password-recovery — the way back in for someone who cannot log in.
+  // Public by necessity: the caller has no session, which is the whole
+  // problem. The response is the same for every address, so this route tells
+  // nobody which emails are registered.
+  @Post('forgot-password')
+  @MarketingPublic()
+  @Throttle(FORGOT_THROTTLE)
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    return this.authService.requestPasswordReset(dto.email, getClientIp(req));
+  }
+
+  // Spending the link. Same throttle envelope as login: a token, like a
+  // password, must not be brute-forceable at speed. It returns a message and
+  // NO session — the caller signs in afterwards, through the 2FA, status and
+  // membership gates a minted session would have skipped.
+  @Post('reset-password')
+  @MarketingPublic()
+  @Throttle(LOGIN_THROTTLE)
+  @Audit({ action: 'auth.reset-password', resourceType: 'user' })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.newPassword);
   }
 
   @Post('logout')

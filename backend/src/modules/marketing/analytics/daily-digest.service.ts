@@ -33,6 +33,20 @@ export interface WorkspaceDigest {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The origin the brief's CTA is built on.
+ *
+ * The console (where `/home` lives) is FRONTEND_URL, with APP_URL as the
+ * fallback — the same expression `email-oauth.controller.ts:67` and
+ * `social-oauth.controller.ts:120` already use, and both are set in prod. Read
+ * from the environment rather than injected because this file's only other
+ * config read is `process.env` too, and the brief must not gain a constructor
+ * dependency the cron's unit tests would all have to learn about.
+ */
+function appOrigin(): string {
+  return (process.env.FRONTEND_URL ?? process.env.APP_URL ?? '').trim().replace(/\/+$/, '');
+}
+
 /** The columns of a StrategyAction the autopilot report is built from. */
 interface PlanActionRow {
   kind: string;
@@ -695,20 +709,43 @@ export class DailyDigestService {
       for (const item of section.items) lines.push(`  [ ] ${item}`);
       lines.push('');
     }
-    lines.push('Ayrıntı ve onaylar: ana ekran (/home)');
+    // An ORIGIN, not a path. This is a plain-text mail, so `/home` alone is
+    // neither tappable nor resolvable away from the browser the reader signed
+    // in on; a bare https URL auto-links in every client. When no origin is
+    // configured the old wording stays — the brief is still worth reading
+    // without a link, so this line degrades rather than taking the mail with
+    // it (`digest-relative-link`).
+    const origin = appOrigin();
+    lines.push(
+      origin ? `Ayrıntı ve onaylar: ${origin}/home` : 'Ayrıntı ve onaylar: ana ekran (/home)',
+    );
     return lines.join('\n');
   }
 
-  /** OWNER + MANAGER of the workspace — the people who can act on the list. */
+  /**
+   * OWNER + MANAGER of the workspace — the people who can act on the list,
+   * minus anyone who switched their own copy off.
+   *
+   * The per-user opt-out lives in `Workspace.settings.dailyDigest.optOutUserIds`
+   * and not on `MarketingUser`, because the identity table has no preference
+   * column and this preference is per WORKSPACE anyway: the same person may
+   * want the brief for the agency's account and not for a sub-account. It
+   * stacks under the workspace-wide `settings.dailyDigest.enabled` the cron
+   * already reads, so one JSON blob answers both questions.
+   */
   async recipients(workspaceId: string): Promise<string[]> {
-    const memberships = await this.prisma.workspaceMembership.findMany({
-      where: { workspaceId, status: 'ACTIVE', role: { in: ['OWNER', 'MANAGER'] } },
-      select: { userId: true },
-    });
-    if (!memberships.length) return [];
+    const [memberships, optedOut] = await Promise.all([
+      this.prisma.workspaceMembership.findMany({
+        where: { workspaceId, status: 'ACTIVE', role: { in: ['OWNER', 'MANAGER'] } },
+        select: { userId: true },
+      }),
+      this.digestOptOuts(workspaceId),
+    ]);
+    const userIds = memberships.map((m) => m.userId).filter((id) => !optedOut.has(id));
+    if (!userIds.length) return [];
     const users = await this.prisma.marketingUser.findMany({
       where: {
-        id: { in: memberships.map((m) => m.userId) },
+        id: { in: userIds },
         status: 'ACTIVE',
         // The research sentinel is a SYSTEM row that owns records, never a
         // mailbox — it would bounce every morning.
@@ -717,5 +754,19 @@ export class DailyDigestService {
       select: { email: true },
     });
     return users.map((u) => u.email).filter(Boolean);
+  }
+
+  /** Who asked not to be sent the brief. Anything that is not a list of ids is
+   *  read as "nobody": a malformed settings blob must not silence a whole
+   *  workspace's morning. */
+  private async digestOptOuts(workspaceId: string): Promise<Set<string>> {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    const raw = (ws?.settings as { dailyDigest?: { optOutUserIds?: unknown } } | null)?.dailyDigest
+      ?.optOutUserIds;
+    if (!Array.isArray(raw)) return new Set();
+    return new Set(raw.filter((id): id is string => typeof id === 'string' && !!id));
   }
 }

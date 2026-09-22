@@ -246,6 +246,92 @@ describe('DailyDigestService', () => {
     await expect(svc.recipients(WS)).resolves.toEqual([]);
     expect(prisma.marketingUser.findMany).not.toHaveBeenCalled();
   });
+
+  // digest-relative-link. The CTA was the plain text "ana ekran (/home)": a
+  // path with no origin, in a plain-text mail no client can linkify. The
+  // destination was right and untappable.
+  describe('the link the manager actually taps', () => {
+    const saved = { FRONTEND_URL: process.env.FRONTEND_URL, APP_URL: process.env.APP_URL };
+    afterEach(() => {
+      process.env.FRONTEND_URL = saved.FRONTEND_URL;
+      process.env.APP_URL = saved.APP_URL;
+      if (saved.FRONTEND_URL === undefined) delete process.env.FRONTEND_URL;
+      if (saved.APP_URL === undefined) delete process.env.APP_URL;
+    });
+
+    it('is absolute when the app origin is configured', async () => {
+      process.env.FRONTEND_URL = 'https://app.example.com/';
+      counts({ approvals: 1 });
+      const body = svc.render((await svc.build(WS))!);
+      // Trailing slash collapsed, not doubled — the same expression every
+      // sibling origin-builder in the repo uses.
+      expect(body).toContain('https://app.example.com/home');
+      expect(body).not.toContain('example.com//home');
+    });
+
+    it('falls back to APP_URL rather than losing the line', async () => {
+      delete process.env.FRONTEND_URL;
+      process.env.APP_URL = 'https://jeetagrowth.com';
+      counts({ approvals: 1 });
+      expect(svc.render((await svc.build(WS))!)).toContain('https://jeetagrowth.com/home');
+    });
+
+    it('keeps the old wording when no origin is set, rather than skipping the line', async () => {
+      delete process.env.FRONTEND_URL;
+      delete process.env.APP_URL;
+      counts({ approvals: 1 });
+      // The brief is still useful without a link; dropping the whole mail (the
+      // shape marketing-leads.service uses) would be the wrong trade here.
+      expect(svc.render((await svc.build(WS))!)).toContain('ana ekran (/home)');
+    });
+
+    it('never invites the reader to unsubscribe — this is account mail, not a list', async () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+      counts({ approvals: 1 });
+      const body = svc.render((await svc.build(WS))!);
+      expect(body).not.toMatch(/unsubscribe|abonelikten|listeden çık/i);
+    });
+  });
+
+  // The workspace-wide switch has always existed (settings.dailyDigest.enabled,
+  // read by the cron). A MANAGER who does not want it had to switch it off for
+  // the OWNER too — so the only per-person answer was a mail filter.
+  it('skips a user who switched their own digest off', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: WS,
+      name: 'HummyTummy',
+      settings: { dailyDigest: { optOutUserIds: ['u2'] } },
+    });
+    prisma.workspaceMembership.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }]);
+    prisma.marketingUser.findMany.mockResolvedValue([{ email: 'a@x.io' }]);
+
+    await expect(svc.recipients(WS)).resolves.toEqual(['a@x.io']);
+    expect(prisma.marketingUser.findMany.mock.calls[0][0].where.id).toEqual({ in: ['u1'] });
+  });
+
+  it('does not query identities at all when everyone opted out', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: WS,
+      name: 'HummyTummy',
+      settings: { dailyDigest: { optOutUserIds: ['u1'] } },
+    });
+    prisma.workspaceMembership.findMany.mockResolvedValue([{ userId: 'u1' }]);
+
+    await expect(svc.recipients(WS)).resolves.toEqual([]);
+    expect(prisma.marketingUser.findMany).not.toHaveBeenCalled();
+  });
+
+  it('ignores a malformed opt-out list instead of silencing the whole workspace', async () => {
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: WS,
+      name: 'HummyTummy',
+      settings: { dailyDigest: { optOutUserIds: 'u1' } },
+    });
+    prisma.workspaceMembership.findMany.mockResolvedValue([{ userId: 'u1' }]);
+    prisma.marketingUser.findMany.mockResolvedValue([{ email: 'a@x.io' }]);
+
+    await expect(svc.recipients(WS)).resolves.toEqual(['a@x.io']);
+  });
 });
 
 /**
