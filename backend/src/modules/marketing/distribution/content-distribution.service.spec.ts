@@ -2,8 +2,10 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import {
   ContentDistributionService,
   OUTREACH_LIMIT,
+  OUTREACH_TYPE_ORDER,
   DISTRIBUTABLE_ITEM_STATUSES,
 } from './content-distribution.service';
+import { INITIABLE_CHANNEL_TYPES } from '../channels/outbound-conversation.service';
 
 const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
@@ -123,6 +125,7 @@ function makeSvc(f: Fixture = {}, Ctor: typeof ContentDistributionService = Cont
         return Promise.resolve({ count: data.length });
       }),
       findMany: jest.fn().mockImplementation(() => Promise.resolve(created)),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
@@ -336,6 +339,115 @@ describe('ContentDistributionService.plan — outreach drafts', () => {
     const res = await svc.plan(WS, ITEM, ACTOR);
     expect(res.drafts).toHaveLength(0);
     expect(res.plan.gaps.some((g) => g.area === 'outreach' && /copy/i.test(g.reason))).toBe(true);
+  });
+});
+
+/**
+ * WHICH channel an outreach draft is routed to.
+ *
+ * `Channel.status` defaults to ACTIVE and is never demoted when a login stops
+ * working, so "ACTIVE" proves nothing about deliverability: the oldest row won
+ * forever, and a workspace whose first mailbox died sent every outreach through
+ * it while a connected one sat next to it.
+ */
+describe('ContentDistributionService.plan — the channel a draft is routed to', () => {
+  /**
+   * The merit rule is asserted on the QUERY because the database is what
+   * applies it. Postgres sorts NULLs first on a DESC column, so a mailbox
+   * nobody ever verified would otherwise outrank every proven one.
+   */
+  it('asks for proven-first merit order rather than the oldest row', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.plan(WS, ITEM, ACTOR);
+    const query = prisma.channel.findMany.mock.calls[0][0];
+    expect(query.orderBy).toEqual([
+      { lastVerifiedAt: { sort: 'desc', nulls: 'last' } },
+      { createdAt: 'desc' },
+    ]);
+  });
+
+  /** Prefer-verified, never filter-on-verified: verify is a manual button and
+   *  the consent connect path never stamps it, so a hard filter would zero out
+   *  outreach for a workspace whose mailbox works. */
+  it('does not demand a verified channel, which would zero out outreach', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.plan(WS, ITEM, ACTOR);
+    expect(prisma.channel.findMany.mock.calls[0][0].where).not.toHaveProperty('lastVerifiedAt');
+  });
+
+  it('takes the first row of each type the merit order returns, and ignores the rest', async () => {
+    const { svc, created } = makeSvc({
+      channels: [
+        { id: 'ch-verified', type: 'EMAIL', status: 'ACTIVE', name: 'Yeni' },
+        { id: 'ch-dead', type: 'EMAIL', status: 'ACTIVE', name: 'Eski' },
+      ],
+    });
+    await svc.plan(WS, ITEM, ACTOR);
+    expect(created.every((d: any) => d.channelId === 'ch-verified')).toBe(true);
+  });
+
+  /**
+   * Type priority is EXPLICIT and does not follow merit. Without this, the
+   * first person to verify an SMS channel silently moves the workspace's
+   * outreach off free email and onto paid, İYS-governed SMS.
+   */
+  it('prefers email over SMS however the merit order came back', async () => {
+    const { svc, created } = makeSvc({
+      channels: [
+        { id: 'ch-sms', type: 'SMS', status: 'ACTIVE', name: 'NetGSM' },
+        { id: 'ch-email', type: 'EMAIL', status: 'ACTIVE', name: 'Mail' },
+      ],
+    });
+    await svc.plan(WS, ITEM, ACTOR);
+    expect(created.map((d: any) => d.channelType)).toEqual(['EMAIL']);
+    expect(created.map((d: any) => d.channelId)).toEqual(['ch-email']);
+  });
+
+  /** A type that stops being nameable here would silently drop out of outreach
+   *  altogether, which is the failure this ordering exists to prevent. */
+  it('names a preference that covers every channel a conversation can start on', () => {
+    expect([...OUTREACH_TYPE_ORDER].sort()).toEqual([...INITIABLE_CHANNEL_TYPES].sort());
+    expect(OUTREACH_TYPE_ORDER[0]).toBe('EMAIL');
+  });
+
+  /**
+   * The load-bearing half. `createMany(skipDuplicates)` against
+   * `@@unique([planId, leadId, channelType])` silently skips every draft that
+   * already exists, and nothing deletes drafts — so re-planning, the one thing
+   * an operator would try after a run of 535s, could never repair a route.
+   */
+  it('repairs the channel frozen onto a draft nobody has sent yet', async () => {
+    const { svc, prisma } = makeSvc({
+      channels: [{ id: 'ch-new', type: 'EMAIL', status: 'ACTIVE', name: 'Mail' }],
+    });
+    await svc.plan(WS, ITEM, ACTOR);
+    expect(prisma.distributionDraft.updateMany).toHaveBeenCalledWith({
+      where: {
+        workspaceId: WS,
+        planId: 'plan-1',
+        channelType: 'EMAIL',
+        status: { in: ['DRAFT', 'FAILED'] },
+        channelId: { not: 'ch-new' },
+      },
+      data: { channelId: 'ch-new' },
+    });
+  });
+
+  /** A SENT row is the record of what went out and a DISMISSED one was a
+   *  decision. Neither is a route waiting to be corrected. */
+  it('never rewrites a row that was sent or dismissed', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.plan(WS, ITEM, ACTOR);
+    for (const call of prisma.distributionDraft.updateMany.mock.calls) {
+      expect(call[0].where.status).toEqual({ in: ['DRAFT', 'FAILED'] });
+      expect(call[0].data).toEqual({ channelId: expect.any(String) });
+    }
+  });
+
+  it('repairs nothing when there is no channel to route to', async () => {
+    const { svc, prisma } = makeSvc({ channels: [] });
+    await svc.plan(WS, ITEM, ACTOR);
+    expect(prisma.distributionDraft.updateMany).not.toHaveBeenCalled();
   });
 });
 

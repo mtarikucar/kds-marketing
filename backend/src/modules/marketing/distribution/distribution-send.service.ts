@@ -60,6 +60,19 @@ const SENDABLE = ['DRAFT', 'FAILED'] as const;
  * the deliberate direction to fail in: for a feature whose whole reason for
  * existing is not to look like a spam bot, a message that did not go is
  * recoverable and a message that went twice is not.
+ *
+ * ## What the row means afterwards
+ *
+ * The claim is reverted by a REFUSAL — an exception from the outbound path, or
+ * a message the provider persisted as FAILED, which is the shape a bad
+ * password, an expired OAuth token or an outright rejection arrives in, since
+ * nothing downstream throws for those. The reason lands on the row, where the
+ * panel shows it.
+ *
+ * It is NOT reverted by an outcome nobody can read: no message row, or one
+ * still settling. That is the same trade as the crash above — the row stays
+ * claimed and the thread it links to is where the truth is, rather than this
+ * screen offering to send a stranger the same message a second time.
  */
 @Injectable()
 export class DistributionSendService {
@@ -131,15 +144,38 @@ export class DistributionSendService {
     }
 
     try {
-      const res = await this.outbound.start(workspaceId, {
-        leadId: draft.leadId,
-        channelId: draft.channelId,
-        text: bodyToSend,
-      });
+      const channelId = await this.channelForSend(workspaceId, draft);
+      const res = await this.outbound.start(
+        workspaceId,
+        { leadId: draft.leadId, channelId, text: bodyToSend },
+        // The rep who pressed send, so the Message row agrees with the draft's
+        // own `sentById` instead of recording every outreach as AI
+        // (`human-start-recorded-ai`). Already DB-verified by assertHumanActor.
+        { authorType: 'AGENT', authorId: actorId },
+      );
+      // The link first, so a failed attempt still points at the thread that
+      // holds the failed message.
       await this.prisma.distributionDraft.update({
         where: { id: draftId },
         data: { conversationId: res.conversationId },
       });
+      // The send path does NOT throw on a provider error: it persists the
+      // message as FAILED, refunds the quota and hands the row back. So the
+      // row is the only witness, and without this check a 535, an expired
+      // OAuth token or an outright rejection left the draft reading SENT with
+      // a green badge — the rep believing outreach went out that never did.
+      //
+      // Only an EXPLICIT failure fails the draft, and the optional chaining is
+      // load-bearing: a caller that reports no message row, or one still
+      // settling, is not evidence that nothing was sent. This file's trade is
+      // written in the class docblock — a message that did not go is
+      // recoverable, one that went twice is not — so anything short of "the
+      // provider said no" keeps the claim.
+      if (res.message?.status === 'FAILED') {
+        throw new BadRequestException(
+          res.message.error ?? 'The provider did not accept this message.',
+        );
+      }
       return {
         draftId,
         conversationId: res.conversationId,
@@ -158,6 +194,56 @@ export class DistributionSendService {
         })
         .catch(() => undefined);
       throw e;
+    }
+  }
+
+  /**
+   * WHICH channel this message leaves on, decided now rather than when the
+   * plan was written.
+   *
+   * `Channel.status` defaults to ACTIVE and is never demoted when a login stops
+   * working, so the channel frozen onto a draft can be a mailbox that has been
+   * failing for weeks while a connected one sits one row away. The planner
+   * picks the merit winner too, and repairs the rows it already wrote; this
+   * asks again because a draft sits until a person reads it, and the mailbox
+   * that was best when the plan was produced need not still be.
+   *
+   * TYPE-SCOPED, never cross-type: an email draft re-resolves to an email
+   * channel or to nothing. Moving it onto SMS would spend money nobody agreed
+   * to spend and put an İYS-governed message in front of a stranger.
+   *
+   * It stays in this file on purpose. `distribution-send.boundary.spec.ts`
+   * holds that exactly one object here can dispatch, and a re-resolution helper
+   * that other files could reach would be the start of a second one.
+   *
+   * Nothing it can answer is a reason to refuse: the row has already been
+   * claimed and a person has already clicked. When there is no better answer —
+   * or none at all, because the lookup itself failed — the draft's own channel
+   * is used, and the send path reports the real outcome against the channel the
+   * operator was actually shown.
+   */
+  private async channelForSend(
+    workspaceId: string,
+    draft: { channelId: string; channelType: string },
+  ): Promise<string> {
+    try {
+      const best = await this.prisma.channel.findFirst({
+        where: { workspaceId, type: draft.channelType, status: 'ACTIVE' },
+        // Proven first, then the freshest proof, then the newest row — the
+        // same rule `ContentDistributionService` plans with and
+        // `WorkspaceMailboxService.bestChannelIds` answers with.
+        // `nulls: 'last'` is the half a bare `desc` gets wrong: Postgres sorts
+        // NULLs FIRST on DESC, so a mailbox nobody ever verified would outrank
+        // every proven one.
+        orderBy: [{ lastVerifiedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        select: { id: true },
+      });
+      return best?.id ?? draft.channelId;
+    } catch (e) {
+      this.logger.warn(
+        `could not re-resolve a ${draft.channelType} channel for workspace ${workspaceId}; sending on the planned one: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return draft.channelId;
     }
   }
 

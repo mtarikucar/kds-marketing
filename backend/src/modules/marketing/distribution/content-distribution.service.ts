@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { INITIABLE, INITIABLE_CHANNEL_TYPES } from '../channels/outbound-conversation.service';
+import { INITIABLE_CHANNEL_TYPES } from '../channels/outbound-conversation.service';
 import { normalizeEmail, toE164 } from '../utils/lead-normalize';
 
 /**
@@ -65,6 +65,47 @@ export const DISTRIBUTABLE_ITEM_STATUSES = ['APPROVED', 'SCHEDULED', 'PUBLISHED'
  * it. Twenty-five is a number a person can actually read.
  */
 export const OUTREACH_LIMIT = 25;
+
+/**
+ * Which channel outreach PREFERS when a lead is reachable on more than one.
+ *
+ * Explicit and stable, because merit ordering must decide WHICH MAILBOX, never
+ * WHICH CHANNEL: taking whichever row the merit order happened to return first
+ * would move a workspace's outreach off free email and onto paid, İYS-governed
+ * SMS the first day somebody verifies an SMS channel — a spending decision
+ * nobody made, arriving as a side effect of clicking Verify.
+ *
+ * Anything a conversation can be started on but that is not named here still
+ * gets a turn, last: a new initiable channel must not drop out of outreach
+ * silently just because this list was not updated with it.
+ */
+const OUTREACH_TYPE_PREFERENCE: readonly string[] = ['EMAIL', 'WHATSAPP', 'SMS'];
+
+export const OUTREACH_TYPE_ORDER: readonly string[] = Object.freeze([
+  ...OUTREACH_TYPE_PREFERENCE.filter((t) => INITIABLE_CHANNEL_TYPES.includes(t)),
+  ...INITIABLE_CHANNEL_TYPES.filter((t) => !OUTREACH_TYPE_PREFERENCE.includes(t)),
+]);
+
+/**
+ * Proven first, then the freshest proof, then the newest row — applied by the
+ * database, since `nulls: 'last'` is the half a `desc` sort gets wrong on its
+ * own (Postgres puts NULLs FIRST on DESC, so a mailbox nobody ever verified
+ * would outrank every proven one).
+ *
+ * The same rule `WorkspaceMailboxService.bestChannelIds` applies, written out
+ * here rather than called: this service is deliberately constructed with the
+ * Prisma client and NOTHING else — `distribution-send.boundary.spec.ts` asserts
+ * that arity — because an injectable graph is how a planner quietly acquires a
+ * way to dispatch.
+ *
+ * NOT a `where lastVerifiedAt is not null` filter: verify is a manual button
+ * and the consent (OAuth) connect path never stamps that column, so a hard
+ * filter would silently zero out outreach for a workspace whose mailbox works.
+ */
+const BY_MERIT = [
+  { lastVerifiedAt: { sort: 'desc', nulls: 'last' } },
+  { createdAt: 'desc' },
+] as const;
 
 const DEFAULT_CROSS_POST_STAGGER_MS = 4 * 60 * 60 * 1000;
 
@@ -138,6 +179,17 @@ export interface DistributionPlanView {
    *  one, and a hand-written subset is how one of those stops being returned. */
   drafts: DistributionDraftRow[];
 }
+
+/** One ACTIVE channel outreach may use — the merit winner of its type. */
+interface OutreachChannel {
+  id: string;
+  type: string;
+  name: string;
+}
+
+/** Shared, frozen: the two early returns of `outreach` mean "no channel at
+ *  all", and a fresh Map per call would invite someone to write into one. */
+const NO_CHANNELS: ReadonlyMap<string, OutreachChannel> = new Map();
 
 /** What `outreach` decides before anything is written. Deliberately NOT the
  *  shape returned to callers — the persisted row is. */
@@ -225,7 +277,7 @@ export class ContentDistributionService {
     const publishedNetworks = await this.publishedNetworks(workspaceId, item.socialPostId);
     const crossPosts = this.crossPosts(usable, publishedNetworks, gaps);
     const tags = await this.tags(workspaceId, usable, gaps);
-    const { drafts, body } = await this.outreach(workspaceId, item, gaps);
+    const { drafts, body, channels } = await this.outreach(workspaceId, item, gaps);
 
     const document: DistributionPlanDocument = {
       publishedNetworks,
@@ -273,7 +325,47 @@ export class ContentDistributionService {
       });
     }
 
+    await this.repairRouting(workspaceId, row.id, channels);
+
     return this.view(workspaceId, row.id, item.id, document);
+  }
+
+  /**
+   * Re-planning repairs the ROUTE of a draft nobody has sent yet.
+   *
+   * `createMany(..., { skipDuplicates: true })` against
+   * `@@unique([planId, leadId, channelType])` silently skips every draft that
+   * already exists, and nothing in this feature deletes drafts — `dismissDraft`
+   * flips a status. So the `channelId` frozen into a row at plan time could
+   * never be corrected, and re-planning — the one thing an operator would try
+   * after a run of `535 Authentication Failed` — changed nothing at all. That
+   * is the half of this that actually reaches an existing workspace.
+   *
+   * Scoped to the rows that can still be sent. A SENT row is the record of
+   * where a message actually went, and a DISMISSED one was a decision; neither
+   * is a route waiting to be corrected.
+   *
+   * Only the channel. `toAddress` is display copy — the send path re-derives
+   * the address from the lead — and rewriting it would need one statement per
+   * draft rather than one per type.
+   */
+  private async repairRouting(
+    workspaceId: string,
+    planId: string,
+    channels: ReadonlyMap<string, OutreachChannel>,
+  ): Promise<void> {
+    for (const [type, channel] of channels) {
+      await this.prisma.distributionDraft.updateMany({
+        where: {
+          workspaceId,
+          planId,
+          channelType: type,
+          status: { in: ['DRAFT', 'FAILED'] },
+          channelId: { not: channel.id },
+        },
+        data: { channelId: channel.id },
+      });
+    }
   }
 
   /** The stored plan, or an explicit 404 — never a synthesised empty one, which
@@ -448,20 +540,25 @@ export class ContentDistributionService {
         reason:
           'No copy could be found for this item — it carries no approved concept, no post content and no topic — so no message could be composed. That is a missing-content failure, not a decision that nobody should be told.',
       });
-      return { drafts: [], body: '' };
+      return { drafts: [], body: '', channels: NO_CHANNELS };
     }
 
-    const channels = await this.prisma.channel.findMany({
+    const rows = await this.prisma.channel.findMany({
       where: { workspaceId, status: 'ACTIVE', type: { in: [...INITIABLE_CHANNEL_TYPES] } },
       select: { id: true, type: true, name: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [...BY_MERIT],
     });
-    if (!channels.length) {
+    // The best row of each type, not the best row overall: the type is chosen
+    // by OUTREACH_TYPE_ORDER below, merit only decides which mailbox of that
+    // type carries it.
+    const channels = new Map<string, OutreachChannel>();
+    for (const ch of rows) if (!channels.has(ch.type)) channels.set(ch.type, ch);
+    if (!channels.size) {
       gaps.push({
         area: 'outreach',
         reason: `No active channel this workspace has can START a conversation. Only ${INITIABLE_CHANNEL_TYPES.join(', ')} can — Instagram, Messenger and TikTok only permit replying to someone who wrote first, which is the platforms' rule and not a missing integration. Connect one of the three to prepare outreach drafts.`,
       });
-      return { drafts: [], body };
+      return { drafts: [], body, channels: NO_CHANNELS };
     }
 
     const leads = await this.prisma.lead.findMany({
@@ -507,22 +604,26 @@ export class ContentDistributionService {
       });
     }
 
-    return { drafts, body };
+    return { drafts, body, channels };
   }
 
   /**
    * The first channel this lead is genuinely reachable on, applying the SAME
-   * three gates `OutboundConversationService.start` applies at send time:
-   * opt-out, email hygiene, and an address that exists.
+   * three gates the send path applies at send time: opt-out, email hygiene,
+   * and an address that exists.
    *
    * Applied here as well as there deliberately. The send path is the authority
    * and will refuse again; the point of repeating it is that a draft a human
    * reads should not be a message that will be rejected the moment they click —
    * an outreach list full of people who cannot be contacted is worse than a
    * short one.
+   *
+   * It walks OUTREACH_TYPE_ORDER, never the rows: which channel TYPE we reach
+   * someone on is a standing decision about what outreach costs, and it must
+   * not change because a row was verified or created yesterday.
    */
   private reachOn(
-    channels: Array<{ id: string; type: string; name: string }>,
+    channels: ReadonlyMap<string, OutreachChannel>,
     lead: {
       phone: string | null;
       whatsapp: string | null;
@@ -533,9 +634,13 @@ export class ContentDistributionService {
       emailVerifiedStatus: string | null;
       emailBouncedAt: Date | null;
     },
-  ): { channel: { id: string; type: string; name: string }; address: string } | null {
-    for (const channel of channels) {
-      if (!INITIABLE[channel.type]) continue;
+  ): { channel: OutreachChannel; address: string } | null {
+    // Only the types a conversation can be STARTED on are in the order, and the
+    // map is keyed by type, so a channel nobody can open a thread on cannot be
+    // reached from here at all — it is structure now, not a check.
+    for (const type of OUTREACH_TYPE_ORDER) {
+      const channel = channels.get(type);
+      if (!channel) continue;
       if (channel.type === 'EMAIL') {
         if (lead.emailOptOut) continue;
         if (lead.emailBouncedAt || lead.emailVerifiedStatus === 'INVALID') continue;

@@ -9,6 +9,12 @@ const OTHER_WS = 'ws-2';
  *  read only to keep the SYSTEM sentinel excluded. */
 const HUMAN = { role: 'MANAGER', status: 'ACTIVE', user: { id: 'u-1', role: 'REP' } };
 
+/** The third argument `start()` now takes. The rep who pressed send is stamped
+ *  onto the Message, so an outreach a human wrote stops being recorded as AI
+ *  (`human-start-recorded-ai`); `assertHumanActor` has already proved the id
+ *  against the membership above, which is why the body can never supply it. */
+const AUTHOR = { authorType: 'AGENT', authorId: 'u-1' };
+
 const baseDraft = {
   id: 'draft-1',
   workspaceId: WS,
@@ -22,9 +28,19 @@ const baseDraft = {
   status: 'DRAFT',
 };
 
-function makeSvc(over: { draft?: unknown; claim?: number; start?: jest.Mock } = {}) {
+function makeSvc(
+  over: {
+    draft?: unknown;
+    claim?: number;
+    start?: jest.Mock;
+    /** What the send-time channel re-resolution finds. `undefined` keeps the
+     *  draft's own channel, which is what every pre-existing case assumes. */
+    channel?: jest.Mock;
+  } = {},
+) {
   const prisma: any = {
     workspaceMembership: { findFirst: jest.fn().mockResolvedValue(HUMAN) },
+    channel: { findFirst: over.channel ?? jest.fn().mockResolvedValue({ id: 'ch-1' }) },
     distributionDraft: {
       findFirst: jest
         .fn()
@@ -49,11 +65,11 @@ describe('DistributionSendService.send', () => {
   it('sends through the ONE outbound path, with the draft’s resolved channel and lead', async () => {
     const { svc, outbound } = makeSvc();
     const res = await svc.send(WS, 'draft-1', 'u-1');
-    expect(outbound.start).toHaveBeenCalledWith(WS, {
-      leadId: 'lead-1',
-      channelId: 'ch-1',
-      text: 'Bunun motoru yok.',
-    });
+    expect(outbound.start).toHaveBeenCalledWith(
+      WS,
+      { leadId: 'lead-1', channelId: 'ch-1', text: 'Bunun motoru yok.' },
+      AUTHOR,
+    );
     expect(res).toMatchObject({ draftId: 'draft-1', conversationId: 'conv-1', channel: 'EMAIL' });
   });
 
@@ -68,6 +84,7 @@ describe('DistributionSendService.send', () => {
     expect(outbound.start).toHaveBeenCalledWith(
       WS,
       expect.objectContaining({ text: 'Kendi cümlelerimle.' }),
+      AUTHOR,
     );
     expect(prisma.distributionDraft.updateMany.mock.calls[0][0].data.body).toBe(
       'Kendi cümlelerimle.',
@@ -147,5 +164,142 @@ describe('DistributionSendService.send', () => {
       .mockRejectedValue(new Error('That address already belongs to a different lead'));
     const { svc } = makeSvc({ start });
     await expect(svc.send(WS, 'draft-1', 'u-1')).rejects.toThrow(/different lead/);
+  });
+});
+
+/**
+ * The draft's status is the PROVIDER's answer, not the click's.
+ *
+ * The send path never throws on a provider error — it persists the message as
+ * FAILED, refunds the quota and hands the row back — so a refused send used to
+ * leave the draft reading SENT, with a green badge and a sent stamp, while
+ * nothing had left the building. A rep has no other place to look.
+ */
+describe('DistributionSendService.send — the row follows the provider', () => {
+  function failing(error: string | null, status = 'FAILED') {
+    return jest.fn().mockResolvedValue({
+      conversationId: 'conv-1',
+      to: 'a@example.com',
+      channel: 'EMAIL',
+      message: { id: 'msg-1', status, error },
+    });
+  }
+
+  it('marks the draft FAILED when the provider refused, even though nothing threw', async () => {
+    const { svc, prisma } = makeSvc({ start: failing('535 5.7.8 Authentication failed') });
+    await expect(svc.send(WS, 'draft-1', 'u-1')).rejects.toThrow(/535 5\.7\.8/);
+    expect(prisma.distributionDraft.update).toHaveBeenCalledWith({
+      where: { id: 'draft-1' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        sentAt: null,
+        error: '535 5.7.8 Authentication failed',
+      }),
+    });
+  });
+
+  /** The provider gave no words. The row must still say something a person can
+   *  act on rather than an empty reason under a FAILED badge. */
+  it('says something when the provider refused without a reason', async () => {
+    const { svc, prisma } = makeSvc({ start: failing(null) });
+    await expect(svc.send(WS, 'draft-1', 'u-1')).rejects.toBeInstanceOf(BadRequestException);
+    const failure = prisma.distributionDraft.update.mock.calls.at(-1)[0];
+    expect(failure.data.status).toBe('FAILED');
+    expect(String(failure.data.error).length).toBeGreaterThan(10);
+  });
+
+  /** A failed attempt still opened (or reused) the thread, and that thread now
+   *  holds the FAILED message. Losing the link would hide the one place the
+   *  rep can see what actually happened. */
+  it('keeps the conversation link on a failed attempt', async () => {
+    const { svc, prisma } = makeSvc({ start: failing('mailbox unavailable') });
+    await expect(svc.send(WS, 'draft-1', 'u-1')).rejects.toThrow(/mailbox unavailable/);
+    expect(prisma.distributionDraft.update.mock.calls[0][0]).toEqual({
+      where: { id: 'draft-1' },
+      data: { conversationId: 'conv-1' },
+    });
+  });
+
+  it('leaves a SENT message SENT', async () => {
+    const { svc, prisma } = makeSvc({ start: failing(null, 'SENT') });
+    await expect(svc.send(WS, 'draft-1', 'u-1')).resolves.toMatchObject({ draftId: 'draft-1' });
+    expect(prisma.distributionDraft.update).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Only an EXPLICIT failure fails the row.
+   *
+   * The optional chaining is load-bearing twice over: a caller that hands back
+   * no message row at all (every fixture in this suite, and the real-DB spec)
+   * must not turn into a TypeError the catch below converts into a false
+   * failure — and a row in some other state is not evidence that nothing was
+   * sent. This file's whole trade is that a message which went twice is worse
+   * than one that did not go, so anything short of "the provider said no" keeps
+   * the claim.
+   */
+  it('does not fail the row on a send that reported no message at all', async () => {
+    const { svc, prisma } = makeSvc();
+    await expect(svc.send(WS, 'draft-1', 'u-1')).resolves.toMatchObject({
+      conversationId: 'conv-1',
+    });
+    expect(prisma.distributionDraft.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fail the row on a message that is still settling', async () => {
+    const { svc } = makeSvc({ start: failing(null, 'PENDING') });
+    await expect(svc.send(WS, 'draft-1', 'u-1')).resolves.toMatchObject({ draftId: 'draft-1' });
+  });
+});
+
+/**
+ * Which channel the message leaves on is decided NOW, not when the plan was
+ * written. A draft frozen onto the oldest ACTIVE mailbox kept failing with 535
+ * while a working mailbox sat one row away.
+ */
+describe('DistributionSendService.send — the channel is re-resolved at send time', () => {
+  it('sends on the best ACTIVE channel of the draft’s type, not the one the plan froze', async () => {
+    const { svc, outbound } = makeSvc({
+      channel: jest.fn().mockResolvedValue({ id: 'ch-verified' }),
+    });
+    await svc.send(WS, 'draft-1', 'u-1');
+    expect(outbound.start).toHaveBeenCalledWith(
+      WS,
+      expect.objectContaining({ channelId: 'ch-verified' }),
+      AUTHOR,
+    );
+  });
+
+  /** Type-scoped, never cross-type: merit ordering must not move an email
+   *  outreach onto a paid, İYS-governed SMS channel. */
+  it('looks only at this workspace’s ACTIVE channels of the draft’s own type', async () => {
+    const channel = jest.fn().mockResolvedValue({ id: 'ch-1' });
+    const { svc } = makeSvc({ channel });
+    await svc.send(WS, 'draft-1', 'u-1');
+    expect(channel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { workspaceId: WS, type: 'EMAIL', status: 'ACTIVE' },
+      }),
+    );
+  });
+
+  it('keeps the planned channel when nothing better answers, so the error stays truthful', async () => {
+    const { svc, outbound } = makeSvc({ channel: jest.fn().mockResolvedValue(null) });
+    await svc.send(WS, 'draft-1', 'u-1');
+    expect(outbound.start).toHaveBeenCalledWith(WS, expect.objectContaining({ channelId: 'ch-1' }), AUTHOR);
+  });
+
+  /** Re-resolution is an improvement on the plan's guess. It is never a reason
+   *  to refuse a send a human has already clicked and the row has already been
+   *  claimed for. */
+  it('sends on the planned channel when the lookup itself fails', async () => {
+    const { svc, outbound, prisma } = makeSvc({
+      channel: jest.fn().mockRejectedValue(new Error('connection pool timeout')),
+    });
+    await svc.send(WS, 'draft-1', 'u-1');
+    expect(outbound.start).toHaveBeenCalledWith(WS, expect.objectContaining({ channelId: 'ch-1' }), AUTHOR);
+    expect(prisma.distributionDraft.update).toHaveBeenCalledWith({
+      where: { id: 'draft-1' },
+      data: { conversationId: 'conv-1' },
+    });
   });
 });
