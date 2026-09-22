@@ -5,16 +5,20 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { OutboxService } from '../../outbox/outbox.service';
-import { EmailService } from '../../../common/services/email.service';
+import { MailCopyKey, t } from '../../../common/i18n/mail-copy';
+import { OutboundMailService } from '../channels/outbound/outbound-mail.service';
+import { MailReceipt, OutboundMail } from '../channels/outbound/outbound-mail.types';
+import { ReplyIdentity, SenderIdentityService } from '../channels/outbound/sender-identity.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { zonedParts, zonedWallTimeToUtcMs, parseHm, formatInTimeZone } from './timezone-slots';
-import { buildIcs } from './ics.util';
+import { buildIcs, icsSequence, IcsMethod } from './ics.util';
 import { overlapsBlackout } from './blackout.util';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
@@ -24,6 +28,97 @@ import { GoogleCalendarSyncService } from '../integrations/google-calendar-sync.
 import { OutlookCalendarSyncService } from '../integrations/outlook-calendar-sync.service';
 
 const BOOKING_REMINDER_KIND = 'booking.reminder';
+/** The retry lane for a booking mail the relay could not take right now. */
+const BOOKING_MAIL_KIND = 'booking.mail';
+/** First retry of a deferred booking mail; the runner backs off from there. */
+const BOOKING_MAIL_RETRY_MS = 2 * 60_000;
+/**
+ * How many bookings ONE address may make on ONE calendar in 24h.
+ *
+ * The public reserve endpoint is throttled per IP, which places no bound at all
+ * on how much mail a single victim receives (`booking-public-abuse`): a script
+ * rotating IPs can book, cancel and re-book forever, and every cycle mails the
+ * address a platform-branded invite. Generous enough for a parent booking a
+ * class for several children.
+ */
+const MAX_BOOKINGS_PER_ADDRESS_PER_DAY = 10;
+/** …and how many of those may actually be MAILED. Mail is the thing with a
+ *  reputation to lose, so it stops well before the calendar does. */
+const MAX_BOOKING_MAILS_PER_ADDRESS_PER_DAY = 3;
+/** An unassigned booking notifies the workspace's managers, not a mailing list. */
+const MAX_HOST_RECIPIENTS = 5;
+
+/**
+ * One booking lifecycle event = one mail.
+ *
+ * The event picks the copy, the ICS method and the idempotency key together, so
+ * "the customer was told their appointment moved" cannot drift apart from "the
+ * invite in their calendar moved".
+ */
+type BookingMailEvent =
+  | 'received'
+  | 'confirmed'
+  | 'cancelled'
+  | 'declined'
+  | 'rescheduled'
+  | 'reschedulePending'
+  | 'reminder'
+  | 'hostNew'
+  | 'hostReminder';
+
+const BOOKING_COPY: Record<BookingMailEvent, { subject: MailCopyKey; body: MailCopyKey }> = {
+  received: { subject: 'booking.received.subject', body: 'booking.received.body' },
+  confirmed: { subject: 'booking.confirmed.subject', body: 'booking.confirmed.body' },
+  cancelled: { subject: 'booking.cancelled.subject', body: 'booking.cancelled.body' },
+  declined: { subject: 'booking.declined.subject', body: 'booking.declined.body' },
+  rescheduled: { subject: 'booking.rescheduled.subject', body: 'booking.rescheduled.body' },
+  // A request that moved while it is still waiting on a human says exactly
+  // that, and carries no invite — it never had one to update.
+  reschedulePending: { subject: 'booking.rescheduled.subject', body: 'booking.received.body' },
+  reminder: { subject: 'booking.reminder.subject', body: 'booking.reminder.body' },
+  hostNew: { subject: 'booking.hostNew.subject', body: 'booking.hostNew.body' },
+  hostReminder: { subject: 'booking.hostReminder.subject', body: 'booking.hostReminder.body' },
+};
+
+/**
+ * Which events carry an invite, and what it says.
+ *
+ * Only these three: a reminder duplicates an invite the customer already
+ * holds, a `received` request has not been granted yet, and a DECLINED request
+ * never produced an invite to withdraw — a CANCEL for a uid the client has
+ * never seen is an appointment appearing in a calendar just to disappear.
+ */
+const ICS_METHOD: Partial<Record<BookingMailEvent, IcsMethod>> = {
+  confirmed: 'REQUEST',
+  rescheduled: 'REQUEST',
+  cancelled: 'CANCEL',
+};
+
+/** Mail we send to OUR OWN user about a booking, never to the customer. */
+const HOST_EVENTS: readonly BookingMailEvent[] = ['hostNew', 'hostReminder'];
+
+/** The events an unauthenticated stranger can trigger, and so the ones the
+ *  per-address mail budget applies to. */
+const PUBLICLY_TRIGGERED_EVENTS: readonly BookingMailEvent[] = ['received', 'confirmed'];
+
+/** What a caller knows that the booking row does not: which reminder this is,
+ *  and (for a host mail) which of our own users is being written to. */
+interface BookingMailExtra {
+  offsetMinutes?: number;
+  to?: string;
+}
+
+/**
+ * A real, reachable person. The research sentinel is a `SYSTEM` MarketingUser
+ * that owns records but has no mailbox, and a suspended user is not somebody to
+ * send an appointment to.
+ */
+function pickAddress(
+  user: { email: string | null; status: string; role: string } | null | undefined,
+): string | null {
+  if (!user?.email || user.status !== 'ACTIVE' || user.role === 'SYSTEM') return null;
+  return user.email;
+}
 const MAX_RANGE_DAYS = 21;
 const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'];
 const CONFERENCING = ['NONE', 'GOOGLE_MEET', 'TEAMS'];
@@ -112,33 +207,13 @@ function memberCoversSlot(
 export class BookingService implements OnModuleInit {
   private readonly logger = new Logger(BookingService.name);
 
-  /**
-   * Booking mail is FIRE-AND-FORGET on purpose: sendMail waits up to 25s, and a
-   * customer submitting a booking must not sit through that. But
-   * `.catch(() => undefined)` also threw away the ANSWER — sendPlainEmail
-   * returns false rather than throwing, so a confirmation that never left was
-   * indistinguishable from one that did, in a path the customer is waiting on.
-   *
-   * Still not awaited; only the outcome is written down. `what` names the mail
-   * so a log line says which of the four this was.
-   */
-  private fireAndLog(what: string, p: Promise<boolean>): void {
-    void p
-      .then((ok) => {
-        if (!ok) {
-          const why = this.email.consumeLastPlainSendError();
-          this.logger.warn(`booking ${what} email NOT delivered${why ? `: ${why}` : ''}`);
-        }
-      })
-      .catch((e) => this.logger.warn(`booking ${what} email failed: ${(e as Error)?.message ?? e}`));
-  }
-
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly entitlements: EntitlementsService,
     private readonly outbox: OutboxService,
-    private readonly email: EmailService,
+    private readonly outboundMail: OutboundMailService,
+    private readonly senderIdentity: SenderIdentityService,
+    private readonly config: ConfigService,
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
@@ -149,6 +224,346 @@ export class BookingService implements OnModuleInit {
 
   onModuleInit(): void {
     this.runner.registerHandler(BOOKING_REMINDER_KIND, (job) => this.remind(job));
+    this.runner.registerHandler(BOOKING_MAIL_KIND, (job) => this.retryBookingMail(job));
+  }
+
+  // ── booking mail ───────────────────────────────────────────────────────────
+
+  /**
+   * Booking mail is still NOT awaited by the request that triggers it: the
+   * relay waits up to 25s, and a customer pressing "book" must not sit through
+   * that (the reason the old fire-and-forget existed).
+   *
+   * What changed is that the ANSWER is no longer thrown away. The gateway
+   * writes a `MailLog` row for every attempt, a refusal is logged with the
+   * reason it was refused, and a TRANSIENT failure books a retry job — so a
+   * five-minute relay hiccup no longer silently drops a confirmation or a
+   * reminder the customer is waiting on (`booking-mail-no-retry`).
+   */
+  private dispatchBookingMail(
+    workspaceId: string,
+    bookingId: string,
+    event: BookingMailEvent,
+    extra: BookingMailExtra = {},
+  ): void {
+    void this.sendBookingMail(workspaceId, bookingId, event, extra)
+      .then((receipt) => this.afterBookingMail(workspaceId, bookingId, event, extra, receipt))
+      .catch((e) =>
+        this.logger.warn(`booking ${event} email failed: ${(e as Error)?.message ?? e}`),
+      );
+  }
+
+  /** What the receipt means for the booking: nothing, a log line, or a retry. */
+  private async afterBookingMail(
+    workspaceId: string,
+    bookingId: string,
+    event: BookingMailEvent,
+    extra: BookingMailExtra,
+    receipt: MailReceipt | null,
+  ): Promise<void> {
+    if (!receipt || receipt.ok) return;
+    const why = receipt.reason ?? receipt.outcome;
+    if (!receipt.retriable) {
+      // REFUSED and FAILED_PERMANENT are terminal ANSWERS, not failures to
+      // paper over: retrying a suppressed address or an exhausted quota just
+      // spends the same refusal again.
+      this.logger.warn(
+        `booking ${event} email NOT delivered (${why})${receipt.error ? `: ${receipt.error}` : ''}`,
+      );
+      return;
+    }
+    this.logger.warn(`booking ${event} email deferred (${why}) — retrying`);
+    await this.scheduledJobs
+      .schedule({
+        workspaceId,
+        kind: BOOKING_MAIL_KIND,
+        runAt: receipt.retryAt ?? new Date(Date.now() + BOOKING_MAIL_RETRY_MS),
+        // Per (booking, event, recipient): one host's undelivered reminder must
+        // not collapse onto another's.
+        dedupKey: this.mailJobKey(bookingId, event, extra),
+        payload: { workspaceId, bookingId, event, ...extra },
+      })
+      .catch((e) =>
+        this.logger.warn(`booking ${event} email retry not queued: ${(e as Error)?.message ?? e}`),
+      );
+  }
+
+  /** The retry lane. Throwing hands the row back to the runner's backoff. */
+  private async retryBookingMail(job: ClaimedJob): Promise<void> {
+    const { workspaceId, bookingId, event, offsetMinutes, to } = job.payload as {
+      workspaceId: string;
+      bookingId: string;
+      event: BookingMailEvent;
+      offsetMinutes?: number;
+      to?: string;
+    };
+    if (!workspaceId || !bookingId || !BOOKING_COPY[event]) return;
+    const receipt = await this.sendBookingMail(workspaceId, bookingId, event, {
+      ...(offsetMinutes === undefined ? {} : { offsetMinutes }),
+      ...(to ? { to } : {}),
+    });
+    if (receipt && !receipt.ok && receipt.retriable) {
+      throw new Error(
+        `booking ${event} email still undeliverable (${receipt.reason ?? receipt.outcome})${
+          receipt.error ? `: ${receipt.error}` : ''
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Compose and send one booking mail, from the CURRENT state of the booking.
+   *
+   * It re-reads rather than trusting a snapshot on purpose: conferencing is
+   * pushed asynchronously, so `meetingUrl` frequently lands after the caller
+   * had its copy of the row, and a retry minutes later must send what is true
+   * then — not what was true when the relay first refused.
+   *
+   * Returns `null` when there was nothing to send (no address, a booking that
+   * has since gone, an address over its daily mail budget). It never throws:
+   * every caller is either a public request the customer is waiting on or a
+   * job whose other leg already succeeded.
+   */
+  private async sendBookingMail(
+    workspaceId: string,
+    bookingId: string,
+    event: BookingMailEvent,
+    extra: BookingMailExtra = {},
+  ): Promise<MailReceipt | null> {
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, workspaceId },
+      select: {
+        id: true, calendarId: true, leadId: true, name: true, email: true, token: true,
+        startAt: true, endAt: true, meetingUrl: true, attendeeTimezone: true, createdAt: true,
+      },
+    });
+    if (!booking) return null;
+    const host = HOST_EVENTS.includes(event);
+    const to = (host ? extra.to : booking.email)?.trim();
+    if (!to) return null;
+    if (!host && PUBLICLY_TRIGGERED_EVENTS.includes(event) && (await this.overMailBudget(workspaceId, to))) {
+      this.logger.warn(
+        `booking ${event} email skipped — ${MAX_BOOKING_MAILS_PER_ADDRESS_PER_DAY}+ bookings for this address in 24h`,
+      );
+      return null;
+    }
+
+    const cal = await this.prisma.bookingCalendar.findFirst({
+      where: { id: booking.calendarId, workspaceId },
+      select: { name: true, timezone: true },
+    });
+    const { lang, business, replyTo } = await this.mailIdentity(workspaceId);
+    const calendarName = cal?.name || 'Booking';
+    // The customer reads their own timezone; the host reads the calendar's —
+    // the host's mail used to render in the ATTENDEE's timezone, which is the
+    // one time of day the host is not working in.
+    const when = formatInTimeZone(
+      booking.startAt,
+      (host ? cal?.timezone : booking.attendeeTimezone || cal?.timezone) || 'Europe/Istanbul',
+    );
+    const vars = { calendar: calendarName, when, name: booking.name, business };
+    const copy = BOOKING_COPY[event];
+    const manageUrl = host ? undefined : this.manageUrl(booking.token);
+    const withdrawn = event === 'cancelled' || event === 'declined';
+
+    const lines = [t(lang, copy.body, vars)];
+    if (!host) lines.push(t(lang, 'booking.calendarLine', { calendar: calendarName }));
+    if (booking.meetingUrl && !withdrawn) {
+      lines.push(t(lang, 'booking.joinLine', { url: booking.meetingUrl }));
+    }
+    // Nothing left to manage once the appointment is gone.
+    if (manageUrl && !withdrawn) lines.push(t(lang, 'booking.manageLine', { url: manageUrl }));
+    // Who this is from, in the mail itself — the platform From address cannot
+    // say it (G4), so the body does (`booking-no-manage-link`).
+    if (!host && business) lines.push(t(lang, 'booking.fromBusiness', { business }));
+
+    const method = ICS_METHOD[event];
+    const mail: OutboundMail = {
+      workspaceId,
+      // A host notice is mail about OUR product to OUR user: no tenant
+      // Reply-To, no lead, and never metered against the tenant's plan.
+      mailClass: host ? 'INTERNAL' : 'TRANSACTIONAL',
+      to,
+      subject: t(lang, copy.subject, vars),
+      text: lines.join('\n'),
+      ...(host ? {} : { leadId: booking.leadId }),
+      ...(method
+        ? {
+            ics: {
+              method,
+              content: buildIcs({
+                uid: booking.id,
+                start: booking.startAt,
+                end: booking.endAt,
+                // The brand, not just the calendar name: an invite reading
+                // "Booking" tells the customer nothing about who they are
+                // meeting.
+                summary: business ? `${business} — ${calendarName}` : calendarName,
+                // NOT `booking.notes`: that is visitor-authored text, and
+                // putting it in the attendee invite let a script mail
+                // arbitrary content to arbitrary addresses
+                // (`booking-public-abuse`). The host still sees the notes on
+                // the booking and in the mirrored calendar event.
+                ...(manageUrl ? { description: t(lang, 'booking.manageLine', { url: manageUrl }) } : {}),
+                ...(booking.meetingUrl ? { joinUrl: booking.meetingUrl } : {}),
+                // The mailbox the business actually reads — the same address
+                // the gateway puts in Reply-To.
+                ...(replyTo ? { organizerEmail: replyTo } : {}),
+                ...(business ? { organizerName: business } : {}),
+                attendeeEmail: to,
+                attendeeName: booking.name,
+                method,
+                sequence: icsSequence(booking.createdAt),
+              }),
+              filename: 'invite.ics',
+            },
+          }
+        : {}),
+      ...(lang ? { lang } : {}),
+      source: `booking:${booking.id}`,
+      // The same lifecycle event twice — a repeated approval, a retried job, a
+      // double-clicked cancel — is ONE mail.
+      idempotencyKey: this.mailKey(booking, event, extra, to),
+    };
+    return this.outboundMail.send(mail);
+  }
+
+  /** The key that makes one lifecycle event one mail, however often it fires. */
+  private mailKey(
+    booking: { id: string; startAt: Date },
+    event: BookingMailEvent,
+    extra: BookingMailExtra,
+    to: string,
+  ): string {
+    const addr = normalizeEmail(to) ?? to.toLowerCase();
+    switch (event) {
+      // A booking can move more than once, and each move is its own mail.
+      case 'rescheduled':
+      case 'reschedulePending':
+        return `booking:${booking.id}:rescheduled:${booking.startAt.getTime()}`;
+      case 'reminder':
+        return `booking:${booking.id}:reminder:${extra.offsetMinutes ?? 0}`;
+      case 'hostReminder':
+        return `booking:${booking.id}:host-reminder:${extra.offsetMinutes ?? 0}:${addr}`;
+      case 'hostNew':
+        return `booking:${booking.id}:host-new:${addr}`;
+      default:
+        return `booking:${booking.id}:${event}`;
+    }
+  }
+
+  /** The retry job's dedup key — same granularity as the mail's own key. */
+  private mailJobKey(bookingId: string, event: BookingMailEvent, extra: BookingMailExtra): string {
+    const parts = [bookingId, event];
+    if (extra.offsetMinutes !== undefined) parts.push(String(extra.offsetMinutes));
+    if (extra.to) parts.push(normalizeEmail(extra.to) ?? extra.to.toLowerCase());
+    return parts.join(':');
+  }
+
+  /**
+   * How many bookings this address already made here in the last 24h.
+   *
+   * CANCELLED rows count, which is the whole point: `cancelByToken` frees the
+   * slot, so `book → cancel → book` re-runs the confirmation send forever
+   * (`booking-public-abuse`).
+   */
+  private async overMailBudget(workspaceId: string, email: string): Promise<boolean> {
+    const since = new Date(Date.now() - 86400_000);
+    try {
+      const count = await this.prisma.booking.count({
+        where: { workspaceId, email: { equals: email, mode: 'insensitive' }, createdAt: { gte: since } },
+      });
+      return count > MAX_BOOKING_MAILS_PER_ADDRESS_PER_DAY;
+    } catch (e) {
+      // A budget read that fails must not silence a real customer's mail.
+      this.logger.warn(`booking mail budget check failed: ${(e as Error)?.message ?? e}`);
+      return false;
+    }
+  }
+
+  /** Whose name is on the mail, in which language, and where a reply goes. */
+  private async mailIdentity(
+    workspaceId: string,
+  ): Promise<{ lang: string | null; business: string; replyTo?: string }> {
+    const [identity, ws] = await Promise.all([
+      this.senderIdentity.replyIdentity(workspaceId).catch((): ReplyIdentity => ({ name: '' })),
+      this.prisma.workspace
+        .findUnique({ where: { id: workspaceId }, select: { name: true, defaultLanguage: true } })
+        .catch(() => null),
+    ]);
+    return {
+      lang: ws?.defaultLanguage ?? null,
+      business: identity.name || ws?.name || '',
+      ...(identity.replyTo ? { replyTo: identity.replyTo } : {}),
+    };
+  }
+
+  /**
+   * The customer's own cancel/reschedule page, carrying the booking's existing
+   * opaque token. Omitted rather than thrown when `PUBLIC_BASE_URL` is unset:
+   * these sends are best-effort, and a booking must not fail to be confirmed
+   * because a link could not be built (`booking-no-manage-link`).
+   */
+  private manageUrl(token: string | null): string | undefined {
+    const base = (this.config.get<string>('PUBLIC_BASE_URL') ?? '').replace(/\/$/, '');
+    // Under `/api/public`, the same shape `/api/public/ul/<token>` uses. The
+    // bare `/book/manage/<token>` this used to build is an SPA path with no
+    // route behind it, so every manage link landed on the catch-all redirect —
+    // a customer asking to cancel was shown the marketing home page.
+    return base && token ? `${base}/api/public/book/manage/${token}` : undefined;
+  }
+
+  /**
+   * The host's address, resolved through the MEMBERSHIP.
+   *
+   * `MarketingUser.workspaceId` is the user's HOME workspace, so the old
+   * `marketingUser.findFirst({ id, workspaceId })` silently dropped every
+   * reminder for a consultant whose home is elsewhere (`host-reminder-multiws`).
+   * The workspace filter stays ON the membership: a stale or foreign
+   * `assigneeUserId` must resolve to nobody, never to another tenant's user.
+   */
+  private async hostAddress(workspaceId: string, assigneeUserId: string | null): Promise<string | null> {
+    if (!assigneeUserId) return null;
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { workspaceId, userId: assigneeUserId, status: 'ACTIVE' },
+      select: { user: { select: { email: true, status: true, role: true } } },
+    });
+    return pickAddress(membership?.user);
+  }
+
+  /**
+   * Who to tell about a new booking: the assignee, or — for a SINGLE calendar
+   * with no owner, where `assigneeUserId` is null — the people who can act on
+   * it (`host-not-notified`).
+   */
+  private async hostRecipients(workspaceId: string, assigneeUserId: string | null): Promise<string[]> {
+    const assignee = await this.hostAddress(workspaceId, assigneeUserId);
+    if (assignee) return [assignee];
+    const memberships = await this.prisma.workspaceMembership.findMany({
+      where: { workspaceId, status: 'ACTIVE', role: { in: ['OWNER', 'MANAGER'] } },
+      select: { user: { select: { email: true, status: true, role: true } } },
+    });
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of memberships) {
+      const address = pickAddress(m.user);
+      if (!address || seen.has(address.toLowerCase())) continue;
+      seen.add(address.toLowerCase());
+      out.push(address);
+      if (out.length >= MAX_HOST_RECIPIENTS) break;
+    }
+    return out;
+  }
+
+  /** Tell the host (or the managers) that a booking arrived. Best-effort. */
+  private async notifyHostOfBooking(
+    workspaceId: string,
+    booking: { id: string; assigneeUserId: string | null },
+  ): Promise<void> {
+    const recipients = await this.hostRecipients(workspaceId, booking.assigneeUserId).catch(() => []);
+    for (const to of recipients) {
+      this.dispatchBookingMail(workspaceId, booking.id, 'hostNew', { to });
+    }
   }
 
   // ---- calendar CRUD (workspace) ----
@@ -605,6 +1020,25 @@ export class BookingService implements OnModuleInit {
       throw new BadRequestException('Slot is outside the calendar availability or not aligned to the grid');
     }
     const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
+    const email = dto.email?.trim() || null;
+    // Bound the abuse at the source, keyed on the ADDRESS. `@Throttle` on the
+    // public reserve endpoint is per IP, which bounds nothing about how much
+    // mail one victim receives — a script rotating IPs can book, cancel and
+    // re-book the same person forever (`booking-public-abuse`). Counts every
+    // status, because a cancelled booking freed its slot and mailed its person.
+    if (email) {
+      const recent = await this.prisma.booking.count({
+        where: {
+          workspaceId,
+          calendarId: calId,
+          email: { equals: email, mode: 'insensitive' },
+          createdAt: { gte: new Date(Date.now() - 86400_000) },
+        },
+      });
+      if (recent >= MAX_BOOKINGS_PER_ADDRESS_PER_DAY) {
+        throw new BadRequestException('Too many bookings for this email address today');
+      }
+    }
 
     const booking = await this.prisma.$transaction(async (tx) => {
       // Serialize concurrent reservations across the WHOLE WORKSPACE so the
@@ -748,8 +1182,7 @@ export class BookingService implements OnModuleInit {
         throw new BadRequestException('That slot was just taken');
       }
 
-      // Link or create a lead.
-      const email = dto.email?.trim() || null;
+      // Link or create a lead (`email` is read above, for the per-address cap).
       const phone = dto.phone?.trim() || null;
       const emailNormalized = normalizeEmail(email);
       const phoneNormalized = normalizePhone(phone);
@@ -852,15 +1285,11 @@ export class BookingService implements OnModuleInit {
     if (booking.status === 'CONFIRMED') {
       await this.afterConfirmed(workspaceId, cal, booking);
     } else if (booking.email) {
-      const when = formatInTimeZone(booking.startAt, (cal as any).timezone || 'Europe/Istanbul');
-      this.fireAndLog(
-        'received',
-        this.email.sendPlainEmail(
-          booking.email, `Booking received: ${cal.name || 'Booking'}`,
-          `Your booking request for ${when} is pending approval.`,
-        ),
-      );
+      this.dispatchBookingMail(workspaceId, booking.id, 'received');
     }
+    // Somebody has to know a booking arrived — most of all the PENDING one,
+    // which sits there until a human approves it (`host-not-notified`).
+    await this.notifyHostOfBooking(workspaceId, booking);
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
   }
@@ -873,7 +1302,10 @@ export class BookingService implements OnModuleInit {
   async cancel(workspaceId: string, id: string) {
     const existing = await this.prisma.booking.findFirst({
       where: { id, workspaceId },
-      select: { id: true, status: true, calendarId: true },
+      // Wide enough to compose the mail from: the customer has to be TOLD, and
+      // a second read after the flip would report the cancelled status rather
+      // than the one that decides which mail this is.
+      select: { id: true, status: true, calendarId: true, email: true },
     });
     if (!existing) throw new NotFoundException('Booking not found');
     if (existing.status === 'EXTERNAL_BUSY') {
@@ -907,6 +1339,18 @@ export class BookingService implements OnModuleInit {
       // also drives both syncs, so a missed direct call recovers).
       this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
       this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
+      // Inside the guard, so a repeat cancel (or a retried cancelByToken) cannot
+      // mail the same person twice. A CONFIRMED booking had an invite, so it is
+      // WITHDRAWN (METHOD:CANCEL); a PENDING request never had one, so it is
+      // DECLINED in words only — a CANCEL for a uid the client never saw makes
+      // an appointment appear just to vanish (`booking-cancel-reschedule-ics`).
+      if (existing.email) {
+        this.dispatchBookingMail(
+          workspaceId,
+          existing.id,
+          existing.status === 'PENDING' ? 'declined' : 'cancelled',
+        );
+      }
     }
     return { id: existing.id, status: 'CANCELLED' };
   }
@@ -920,16 +1364,8 @@ export class BookingService implements OnModuleInit {
   private async afterConfirmed(
     workspaceId: string,
     cal: { name: string | null; conferencing?: string; timezone?: string },
-    booking: {
-      id: string;
-      email: string | null;
-      notes: string | null;
-      startAt: Date;
-      endAt: Date;
-      attendeeTimezone?: string | null;
-    },
+    booking: { id: string; email: string | null; startAt: Date },
   ): Promise<void> {
-    let meetingUrl: string | null = null;
     const conferencing = cal.conferencing ?? 'NONE';
     if (conferencing === 'GOOGLE_MEET') {
       await this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
@@ -939,38 +1375,10 @@ export class BookingService implements OnModuleInit {
       this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
       this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
     }
-    if (conferencing !== 'NONE') {
-      const fresh = await this.prisma.booking.findFirst({
-        where: { id: booking.id, workspaceId },
-        select: { meetingUrl: true },
-      });
-      meetingUrl = fresh?.meetingUrl ?? null;
-    }
-    if (booking.email) {
-      const joinLine = meetingUrl ? `\nJoin: ${meetingUrl}` : '';
-      // Render in the attendee's timezone when captured, else the calendar's.
-      const when = formatInTimeZone(
-        booking.startAt,
-        booking.attendeeTimezone || cal.timezone || 'Europe/Istanbul',
-      );
-      const body =
-        `Your booking is confirmed for ${when}.\n` +
-        `Calendar: ${cal.name || 'Booking'}${joinLine}`;
-      const ics = buildIcs({
-        uid: booking.id,
-        start: booking.startAt,
-        end: booking.endAt,
-        summary: cal.name || 'Booking',
-        description: booking.notes ?? undefined,
-        joinUrl: meetingUrl ?? undefined,
-      });
-      this.fireAndLog(
-        'confirmed',
-        this.email.sendPlainEmailWithIcs(
-          booking.email, `Booking confirmed: ${cal.name || 'Booking'}`, body, ics,
-        ),
-      );
-    }
+    // The push above is AWAITED for a conferencing calendar so the link is on
+    // the row before the mail reads it back — that ordering is why the invite
+    // carries a join link at all.
+    if (booking.email) this.dispatchBookingMail(workspaceId, booking.id, 'confirmed');
     // One reminder job per configured lead time (default: a single T-1h customer
     // email). dedupKey is per (booking, offset) so re-running approval is safe.
     await this.syncReminders(workspaceId, booking, (cal as any).reminderConfig);
@@ -984,6 +1392,13 @@ export class BookingService implements OnModuleInit {
    * "T-N before start" reminder aligned to the CURRENT start. A rule whose new
    * lead time is already in the past is CANCELLED, so a booking moved earlier
    * can't strand a reminder queued to fire at the stale old time.
+   *
+   * ONE JOB PER AUDIENCE, not per offset. A single row carrying both legs can
+   * only be retried as a whole, so a failed host reminder would re-send the
+   * customer reminder that already arrived — a worse bug than the one retrying
+   * fixes (`booking-mail-no-retry`). The CUSTOMER leg keeps the bare
+   * `<booking>:<offset>` key that rows minted before the split already hold, so
+   * no in-flight reminder doubles up.
    */
   private async syncReminders(
     workspaceId: string,
@@ -992,25 +1407,39 @@ export class BookingService implements OnModuleInit {
   ): Promise<void> {
     const reminders = parseReminderConfig(reminderConfig);
     for (const r of reminders) {
-      const dedupKey = `${booking.id}:${r.offsetMinutes}`;
+      const legs: Array<'CUSTOMER' | 'HOST'> =
+        r.audience === 'BOTH' ? ['CUSTOMER', 'HOST'] : [r.audience === 'HOST' ? 'HOST' : 'CUSTOMER'];
       const runAt = new Date(booking.startAt.getTime() - r.offsetMinutes * 60_000);
-      if (runAt.getTime() <= Date.now()) {
-        await this.scheduledJobs.cancel(BOOKING_REMINDER_KIND, dedupKey);
-        continue;
+      // A HOST-only rule mints ONLY the `:HOST` key now, so a bare key left on
+      // this booking can only be a pre-split row for the same reminder — and
+      // leaving it PENDING would fire the host leg twice.
+      if (legs.length === 1 && legs[0] === 'HOST') {
+        await this.scheduledJobs.cancel(BOOKING_REMINDER_KIND, `${booking.id}:${r.offsetMinutes}`);
       }
-      await this.scheduledJobs.schedule({
-        workspaceId,
-        kind: BOOKING_REMINDER_KIND,
-        runAt,
-        dedupKey,
-        payload: {
+      for (const leg of legs) {
+        const dedupKey =
+          leg === 'HOST'
+            ? `${booking.id}:${r.offsetMinutes}:HOST`
+            : `${booking.id}:${r.offsetMinutes}`;
+        if (runAt.getTime() <= Date.now()) {
+          await this.scheduledJobs.cancel(BOOKING_REMINDER_KIND, dedupKey);
+          continue;
+        }
+        await this.scheduledJobs.schedule({
           workspaceId,
-          bookingId: booking.id,
-          offsetMinutes: r.offsetMinutes,
-          channels: r.channels,
-          audience: r.audience,
-        },
-      });
+          kind: BOOKING_REMINDER_KIND,
+          runAt,
+          dedupKey,
+          payload: {
+            workspaceId,
+            bookingId: booking.id,
+            offsetMinutes: r.offsetMinutes,
+            channels: r.channels,
+            audience: r.audience,
+            leg,
+          },
+        });
+      }
     }
   }
 
@@ -1106,6 +1535,18 @@ export class BookingService implements OnModuleInit {
       // firing relative to the OLD start after a move.
       await this.syncReminders(workspaceId, { id: booking.id, startAt: start }, (cal as any).reminderConfig);
     }
+    // Tell the customer, or they turn up at the old time. A CONFIRMED booking
+    // gets an UPDATED invite on the same uid with a higher SEQUENCE, which is
+    // what moves the appointment already in their calendar; a PENDING request
+    // gets words only — shipping it an invite would read as an approval the
+    // workspace has not granted (`booking-cancel-reschedule-ics`).
+    if (booking.email) {
+      this.dispatchBookingMail(
+        workspaceId,
+        booking.id,
+        booking.status === 'CONFIRMED' ? 'rescheduled' : 'reschedulePending',
+      );
+    }
     return { id: booking.id, startAt: start.toISOString() };
   }
 
@@ -1151,6 +1592,51 @@ export class BookingService implements OnModuleInit {
     return { id: existing.id, status };
   }
 
+  /**
+   * Public self-service: the booking behind a manage link, and nothing else.
+   *
+   * Every booking mail now carries `/api/public/book/manage/<token>`, and the
+   * two token routes below were the only things that ever read that token —
+   * there was no way to SEE the appointment the link was about. This is that
+   * read.
+   *
+   * The projection is a whitelist rather than a `select` with a few fields
+   * taken out, because the token is the whole credential and manage links get
+   * forwarded: `notes` is whatever the visitor (or a rep) typed, and the lead,
+   * the assignee and the attendee's own contact details are the tenant's data,
+   * not the link-holder's.
+   */
+  async publicByToken(token: string) {
+    const booking = await this.prisma.booking.findFirst({
+      where: { token },
+      select: {
+        workspaceId: true,
+        calendarId: true,
+        startAt: true,
+        endAt: true,
+        status: true,
+        meetingUrl: true,
+      },
+    });
+    if (!booking) throw new NotFoundException('Booking not found');
+    // A deleted calendar must not 404 a booking that still exists: the customer
+    // can no longer rebook, but they can still see and cancel what they have.
+    const cal = await this.prisma.bookingCalendar.findFirst({
+      where: { id: booking.calendarId, workspaceId: booking.workspaceId },
+      select: { name: true, slug: true, timezone: true },
+    });
+    return {
+      workspaceId: booking.workspaceId,
+      calendarName: cal?.name ?? '',
+      calendarSlug: cal?.slug ?? null,
+      timezone: cal?.timezone ?? 'UTC',
+      startAt: booking.startAt.toISOString(),
+      endAt: booking.endAt.toISOString(),
+      status: booking.status,
+      meetingUrl: booking.meetingUrl ?? null,
+    };
+  }
+
   /** Public self-service: reschedule a booking by its opaque token. */
   async rescheduleByToken(token: string, newStartISO: string) {
     const booking = await this.prisma.booking.findFirst({ where: { token }, select: { id: true, workspaceId: true } });
@@ -1165,56 +1651,86 @@ export class BookingService implements OnModuleInit {
     return this.cancel(booking.workspaceId, booking.id);
   }
 
+  /**
+   * One reminder leg, and the job is only DONE once the mail is really out.
+   *
+   * The old handler fired both legs and returned, so the runner marked the row
+   * DONE before either send finished: a five-minute relay hiccup dropped the
+   * T-1h reminder and the customer no-showed (`booking-mail-no-retry`). It now
+   * AWAITS its one leg and throws on a retriable failure, which hands the row
+   * back to the runner's backoff instead of losing it.
+   */
   private async remind(job: ClaimedJob): Promise<void> {
-    const { workspaceId, bookingId, channels, audience } = job.payload as {
+    const { workspaceId, bookingId, channels, audience, offsetMinutes, leg } = job.payload as {
       workspaceId: string;
       bookingId: string;
       channels?: string[];
       audience?: string;
+      offsetMinutes?: number;
+      leg?: 'CUSTOMER' | 'HOST';
     };
-    const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
-    if (!booking || booking.status !== 'CONFIRMED') return;
-    const chans = channels ?? ['EMAIL'];
-    const aud = audience ?? 'CUSTOMER';
-    // Render in the attendee's timezone when captured, else the calendar's (not
-    // UTC), matching the confirmation email.
-    const cal = await this.prisma.bookingCalendar.findFirst({
-      where: { id: booking.calendarId, workspaceId },
-      select: { timezone: true },
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, workspaceId },
+      select: { id: true, status: true, startAt: true, email: true, assigneeUserId: true },
     });
-    const when = formatInTimeZone(
-      booking.startAt,
-      booking.attendeeTimezone || cal?.timezone || 'Europe/Istanbul',
-    );
-    const joinLine = booking.meetingUrl ? `\nJoin: ${booking.meetingUrl}` : '';
-
-    if ((aud === 'CUSTOMER' || aud === 'BOTH') && chans.includes('EMAIL') && booking.email) {
-      this.fireAndLog(
-        'customer reminder',
-        this.email.sendPlainEmail(
-          booking.email, 'Reminder: your booking is soon',
-          `This is a reminder for your booking at ${when}.${joinLine}`,
-        ),
-      );
-    }
-    if ((aud === 'HOST' || aud === 'BOTH') && chans.includes('EMAIL') && booking.assigneeUserId) {
-      const host = await this.prisma.marketingUser.findFirst({
-        where: { id: booking.assigneeUserId, workspaceId },
-        select: { email: true },
-      });
-      if (host?.email) {
-        this.fireAndLog(
-          'host reminder',
-          this.email.sendPlainEmail(
-            host.email, `Reminder: upcoming appointment with ${booking.name}`,
-            `You have an appointment at ${when}.${joinLine}`,
-          ),
-        );
-      }
-    }
+    if (!booking || booking.status !== 'CONFIRMED') return;
+    // The retry backoff can carry a short-lead rule (a 5- or 15-minute offset)
+    // past the appointment itself, and "your booking is soon" delivered after
+    // it started is a wrong-content regression the retry would have introduced.
+    if (booking.startAt.getTime() <= Date.now()) return;
     // SMS reminders (channels includes 'SMS') are delivered by the notification /
     // messaging layer that subscribes to booking events — BookingService does not
     // couple directly to the SMS channel adapter here.
+    if (!(channels ?? ['EMAIL']).includes('EMAIL')) return;
+
+    const aud = audience ?? 'CUSTOMER';
+    // A row minted before reminders were split per audience carries no `leg` and
+    // owns BOTH sends. Failing it loudly would re-send the leg that already
+    // arrived, so such a row keeps exactly today's fire-and-forget behaviour;
+    // only a per-leg row is allowed to fail.
+    const legs: Array<'CUSTOMER' | 'HOST'> = leg
+      ? [leg]
+      : aud === 'BOTH'
+        ? ['CUSTOMER', 'HOST']
+        : [aud === 'HOST' ? 'HOST' : 'CUSTOMER'];
+
+    for (const which of legs) {
+      const event = which === 'HOST' ? 'hostReminder' : 'reminder';
+      const extra: BookingMailExtra = { ...(offsetMinutes === undefined ? {} : { offsetMinutes }) };
+      if (which === 'HOST') {
+        const to = await this.hostAddress(workspaceId, booking.assigneeUserId);
+        if (!to) {
+          this.logger.warn(
+            `booking host reminder skipped — no active member ${booking.assigneeUserId ?? '(unassigned)'} in ${workspaceId}`,
+          );
+          continue;
+        }
+        extra.to = to;
+      } else if (!booking.email) {
+        continue;
+      }
+
+      if (!leg) {
+        this.dispatchBookingMail(workspaceId, bookingId, event, extra);
+        continue;
+      }
+      const receipt = await this.sendBookingMail(workspaceId, bookingId, event, extra);
+      if (!receipt || receipt.ok) continue;
+      if (receipt.retriable) {
+        throw new Error(
+          `booking ${event} undeliverable (${receipt.reason ?? receipt.outcome})${
+            receipt.error ? `: ${receipt.error}` : ''
+          }`,
+        );
+      }
+      // REFUSED / permanent: the job is DONE because there is nothing a retry
+      // would change, and the MailLog row carries the reason.
+      this.logger.warn(
+        `booking ${event} NOT delivered (${receipt.reason ?? receipt.outcome})${
+          receipt.error ? `: ${receipt.error}` : ''
+        }`,
+      );
+    }
   }
 
   /**

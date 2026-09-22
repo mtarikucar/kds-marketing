@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { BookingService } from './booking.service';
 
@@ -20,6 +20,34 @@ describe('BookingService', () => {
   let scheduledJobs: any;
   let leadAttribution: { capture: jest.Mock };
   let entitlements: any;
+  let outboundMail: { send: jest.Mock };
+  let runner: { registerHandler: jest.Mock };
+
+  /** What the gateway gives back when the mail really went out. */
+  function sent(over: Record<string, unknown> = {}) {
+    return {
+      outcome: 'SENT',
+      ok: true,
+      mailLogId: 'ml-1',
+      messageId: 'mid-1',
+      transport: 'PLATFORM',
+      retriable: false,
+      ...over,
+    };
+  }
+
+  /** The one mail the gateway was asked to send for `event`. */
+  function mailFor(event: string) {
+    return outboundMail.send.mock.calls
+      .map((c) => c[0])
+      .find((m) => String(m.idempotencyKey ?? '').includes(`:${event}`));
+  }
+
+  /** Run the handler the service registered for a job kind. */
+  function handlerFor(kind: string) {
+    const call = runner.registerHandler.mock.calls.find((c) => c[0] === kind);
+    return call?.[1] as (job: any) => Promise<void>;
+  }
 
   function calendar(extra: any = {}) {
     // maxAdvanceDays is generous so the fixed far-future fixture day isn't
@@ -40,18 +68,26 @@ describe('BookingService', () => {
       bookingBlackout: { findMany: jest.fn().mockResolvedValue([]) },
       memberAvailability: { findMany: jest.fn().mockResolvedValue([]) },
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
+      // The workspace behind the mail identity (name + language).
+      workspace: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme', defaultLanguage: 'en' }) },
+      // Hosts are resolved through the MEMBERSHIP, never MarketingUser.workspaceId.
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
       // The per-slot advisory lock acquired at the top of the booking tx.
       $executeRaw: jest.fn().mockResolvedValue(1),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
+    prisma.booking.count = jest.fn().mockResolvedValue(0);
     outbox = { append: jest.fn().mockResolvedValue('e') };
-    const email = {
-      sendPlainEmail: jest.fn().mockResolvedValue(true),
-      sendPlainEmailWithIcs: jest.fn().mockResolvedValue(true),
+    outboundMail = { send: jest.fn().mockResolvedValue(sent()) };
+    const senderIdentity = {
+      replyIdentity: jest.fn().mockResolvedValue({ name: 'Acme', replyTo: 'hello@acme.com' }),
+    };
+    const config = {
+      get: jest.fn((k: string) => (k === 'PUBLIC_BASE_URL' ? 'https://jeetagrowth.com' : undefined)),
     };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('j'), cancel: jest.fn().mockResolvedValue(true) };
-    const runner = { registerHandler: jest.fn() };
+    runner = { registerHandler: jest.fn() };
     // Google / Outlook calendar sync are inert in this suite (push/cancel are
     // best-effort no-ops here); the dedicated calendar specs exercise them for real.
     googleSync = {
@@ -66,7 +102,8 @@ describe('BookingService', () => {
     // Calendar-count limit: default unlimited so the CRUD/booking specs are
     // unaffected; the maxCalendars-cap test overrides getEffective.
     entitlements = { getEffective: jest.fn().mockResolvedValue({ limits: { maxCalendars: -1 } }) };
-    svc = new BookingService(prisma as any, entitlements as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any, leadAttribution as any);
+    svc = new BookingService(prisma as any, entitlements as any, outbox as any, outboundMail as any, senderIdentity as any, config as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any, leadAttribution as any);
+    svc.onModuleInit();
   });
 
   it('slices the availability window into slots', async () => {
@@ -597,8 +634,14 @@ describe('BookingService', () => {
       });
       await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
       const dedupKeys = scheduledJobs.schedule.mock.calls.map((c: any) => c[0].dedupKey);
-      expect(dedupKeys).toEqual(expect.arrayContaining(['b1:1440', 'b1:60']));
-      expect(scheduledJobs.schedule).toHaveBeenCalledTimes(2);
+      // An audience of BOTH is TWO jobs, not one carrying two sends: a single
+      // row can only be retried whole, so a failed host reminder would re-send
+      // the customer reminder that already arrived. The customer leg keeps the
+      // bare key so reminders minted before the split don't double up.
+      expect(dedupKeys).toEqual(expect.arrayContaining(['b1:1440', 'b1:60', 'b1:60:HOST']));
+      expect(scheduledJobs.schedule).toHaveBeenCalledTimes(3);
+      const hostJob = scheduledJobs.schedule.mock.calls.find((c: any) => c[0].dedupKey === 'b1:60:HOST');
+      expect(hostJob[0].payload.leg).toBe('HOST');
     });
 
     it('falls back to a single T-1h reminder when no config is set', async () => {
@@ -733,6 +776,423 @@ describe('BookingService', () => {
       expect(prisma.bookingCalendar.update.mock.calls[0][0].data.conferencing).toBe('TEAMS');
       await svc.update(WS, 'c1', { conferencing: 'BOGUS' });
       expect(prisma.bookingCalendar.update.mock.calls[1][0].data.conferencing).toBeUndefined();
+    });
+  });
+
+  /**
+   * The lifecycle the customer actually experiences: booked, moved, cancelled,
+   * reminded — and the host told any of it happened. Every send goes through
+   * the outbound gateway, so the assertions here are about WHAT was handed to
+   * it (class, invite, key, recipient), not about SMTP.
+   */
+  describe('booking mail', () => {
+    const START = new Date('2027-06-14T09:00:00.000Z');
+    const END = new Date('2027-06-14T09:30:00.000Z');
+
+    function bookingRow(over: Record<string, unknown> = {}) {
+      return {
+        id: 'b1',
+        calendarId: 'c1',
+        leadId: 'lead-1',
+        name: 'Ada',
+        email: 'ada@example.com',
+        token: 'bk_tok',
+        startAt: START,
+        endAt: END,
+        meetingUrl: null,
+        attendeeTimezone: null,
+        // Two minutes old: SEQUENCE is derived from the booking's age, so a
+        // fixture created "now" would make every revision SEQUENCE:0.
+        createdAt: new Date(Date.now() - 120_000),
+        status: 'CONFIRMED',
+        assigneeUserId: null,
+        ...over,
+      };
+    }
+
+    /** The mail is dispatched without being awaited (the customer is waiting
+     *  on the booking, not on SMTP) — drain the microtasks it left behind. */
+    const flush = () => new Promise((r) => setImmediate(r));
+
+    beforeEach(() => {
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ name: 'Sales call', timezone: 'UTC' }));
+    });
+
+    it('confirms with a REQUEST invite that names the business and links the manage page', async () => {
+      prisma.booking.findFirst.mockResolvedValueOnce(null); // the external-busy check in book()
+      prisma.booking.create.mockResolvedValue(bookingRow());
+      prisma.booking.findFirst.mockResolvedValue(bookingRow());
+
+      await svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada', email: 'ada@example.com' });
+      await flush();
+
+      const mail = mailFor('confirmed');
+      expect(mail).toBeDefined();
+      // The tenant's own business mail to one named customer: their identity,
+      // their Reply-To, and never an unsubscribe header.
+      expect(mail.mailClass).toBe('TRANSACTIONAL');
+      expect(mail.to).toBe('ada@example.com');
+      expect(mail.leadId).toBe('lead-1');
+      expect(mail.idempotencyKey).toBe('booking:b1:confirmed');
+      expect(mail.ics.method).toBe('REQUEST');
+      expect(mail.ics.content).toContain('METHOD:REQUEST');
+      expect(mail.ics.content).toContain('UID:b1');
+      // The mailbox the business reads, not a no-reply nobody opens.
+      expect(mail.ics.content).toContain('ORGANIZER;CN=Acme:mailto:hello@acme.com');
+      expect(mail.ics.content.replace(/\r\n /g, '')).toContain('mailto:ada@example.com');
+      // Who sent it, and how to get out of it.
+      expect(mail.text).toContain('Acme');
+      expect(mail.text).toContain('https://jeetagrowth.com/api/public/book/manage/bk_tok');
+    });
+
+    it('keeps visitor-authored notes out of the attendee invite', async () => {
+      // The public endpoint let a script mail arbitrary text to arbitrary
+      // addresses by typing it into `notes` (booking-public-abuse). The host
+      // still sees the notes on the booking and in the mirrored event.
+      prisma.booking.findFirst.mockResolvedValueOnce(null);
+      prisma.booking.create.mockResolvedValue(bookingRow({ notes: 'CLICK http://evil.example' }));
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ notes: 'CLICK http://evil.example' }));
+
+      await svc.book(WS, 'c1', {
+        start: START.toISOString(), name: 'Ada', email: 'ada@example.com',
+        notes: 'CLICK http://evil.example',
+      });
+      await flush();
+
+      expect(mailFor('confirmed').ics.content).not.toContain('evil.example');
+    });
+
+    it('the manage link carries the booking own token, which resolves back to it', async () => {
+      prisma.booking.findFirst.mockResolvedValueOnce(null);
+      prisma.booking.create.mockResolvedValue(bookingRow());
+      prisma.booking.findFirst.mockResolvedValue(bookingRow());
+      await svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada', email: 'ada@example.com' });
+      await flush();
+
+      const link = mailFor('confirmed').text.split('\n').find((l: string) => l.includes('/book/manage/'));
+      const token = link.split('/book/manage/')[1].trim();
+      expect(token).toBe('bk_tok');
+
+      // The same token is the one the public self-service route accepts.
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, status: 'CONFIRMED', calendarId: 'c1', email: null });
+      await expect(svc.cancelByToken(token)).resolves.toEqual({ id: 'b1', status: 'CANCELLED' });
+    });
+
+
+    it('cancelling a CONFIRMED booking withdraws the invite (METHOD:CANCEL, same UID)', async () => {
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', status: 'CONFIRMED', calendarId: 'c1', email: 'ada@example.com' })
+        .mockResolvedValue(bookingRow({ status: 'CANCELLED' }));
+
+      await svc.cancel(WS, 'b1');
+      await flush();
+
+      const mail = mailFor('cancelled');
+      expect(mail.ics.method).toBe('CANCEL');
+      expect(mail.ics.content).toContain('METHOD:CANCEL');
+      expect(mail.ics.content).toContain('STATUS:CANCELLED');
+      expect(mail.ics.content).toContain('UID:b1');
+      expect(mail.idempotencyKey).toBe('booking:b1:cancelled');
+    });
+
+    it('a repeat cancel mails nothing', async () => {
+      prisma.booking.findFirst.mockResolvedValue({
+        id: 'b1', status: 'CANCELLED', calendarId: 'c1', email: 'ada@example.com',
+      });
+      await svc.cancel(WS, 'b1');
+      await flush();
+      expect(outboundMail.send).not.toHaveBeenCalled();
+    });
+
+    it('declining a PENDING request says so in words, with no invite to withdraw', async () => {
+      // setStatus('CANCELLED') delegates here, so this covers decline too. A
+      // CANCEL for a uid the client never saw makes an appointment appear in
+      // the customer's calendar just to vanish again.
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', status: 'PENDING', calendarId: 'c1', email: 'ada@example.com' })
+        .mockResolvedValue(bookingRow({ status: 'CANCELLED' }));
+
+      await svc.setStatus(WS, 'b1', 'CANCELLED');
+      await flush();
+
+      const mail = mailFor('declined');
+      expect(mail).toBeDefined();
+      expect(mail.ics).toBeUndefined();
+      expect(mail.mailClass).toBe('TRANSACTIONAL');
+    });
+
+    it('moving a CONFIRMED booking updates the same invite with a higher SEQUENCE', async () => {
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED', assigneeUserId: null, email: 'ada@example.com' })
+        .mockResolvedValueOnce(null) // external busy
+        .mockResolvedValue(bookingRow({ startAt: new Date('2027-06-14T09:30:00.000Z') }));
+
+      await svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z');
+      await flush();
+
+      const mail = mailFor('rescheduled');
+      expect(mail.ics.method).toBe('REQUEST');
+      expect(mail.ics.content).toContain('UID:b1');
+      const sequence = Number(/SEQUENCE:(\d+)/.exec(mail.ics.content)![1]);
+      expect(sequence).toBeGreaterThan(0);
+      // Keyed on the new start: a booking moved twice is two mails, not one.
+      expect(mail.idempotencyKey).toBe(`booking:b1:rescheduled:${new Date('2027-06-14T09:30:00.000Z').getTime()}`);
+    });
+
+    it('moving a PENDING request tells the customer without granting an invite', async () => {
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'PENDING', assigneeUserId: null, email: 'ada@example.com' })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(bookingRow({ status: 'PENDING', startAt: new Date('2027-06-14T09:30:00.000Z') }));
+
+      await svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z');
+      await flush();
+
+      const mail = mailFor('rescheduled');
+      expect(mail).toBeDefined();
+      expect(mail.ics).toBeUndefined();
+    });
+
+    it('approving the same booking twice asks for the same mail, once', async () => {
+      // The gateway dedupes on the key; what this asserts is that the key is
+      // stable across the two approvals that produce it.
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'PENDING', email: 'ada@example.com', startAt: START })
+        .mockResolvedValue(bookingRow());
+      await svc.setStatus(WS, 'b1', 'CONFIRMED');
+      await flush();
+
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'PENDING', email: 'ada@example.com', startAt: START })
+        .mockResolvedValue(bookingRow());
+      outboundMail.send.mockResolvedValue(sent({ outcome: 'DEDUPED' }));
+      await svc.setStatus(WS, 'b1', 'CONFIRMED');
+      await flush();
+
+      const keys = outboundMail.send.mock.calls
+        .map((c) => c[0].idempotencyKey)
+        .filter((k: string) => k === 'booking:b1:confirmed');
+      expect(keys).toHaveLength(2);
+    });
+
+    // ── the host ────────────────────────────────────────────────────────────
+
+    it('notifies the assignee through an ACTIVE membership, whatever their home workspace', async () => {
+      // host-reminder-multiws: the old marketingUser.findFirst({id, workspaceId})
+      // filtered on the user's HOME workspace, so a consultant who works in two
+      // never heard about either.
+      prisma.booking.findFirst.mockResolvedValueOnce(null);
+      prisma.booking.create.mockResolvedValue(bookingRow({ assigneeUserId: 'u-consultant', email: null }));
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ assigneeUserId: 'u-consultant', email: null }));
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        user: { email: 'host@acme.com', status: 'ACTIVE', role: 'MANAGER' },
+      });
+
+      await svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada' });
+      await flush();
+
+      const mail = mailFor('host-new');
+      expect(mail.to).toBe('host@acme.com');
+      // Our own user, about our own product: no tenant Reply-To, no lead, and
+      // never metered against the tenant's plan.
+      expect(mail.mailClass).toBe('INTERNAL');
+      expect(mail.leadId).toBeUndefined();
+      expect(prisma.workspaceMembership.findFirst.mock.calls[0][0].where).toMatchObject({
+        workspaceId: WS,
+        userId: 'u-consultant',
+        status: 'ACTIVE',
+      });
+    });
+
+    it('falls back to the workspace managers when nobody is assigned', async () => {
+      prisma.booking.findFirst.mockResolvedValueOnce(null);
+      prisma.booking.create.mockResolvedValue(bookingRow({ assigneeUserId: null, email: null }));
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ assigneeUserId: null, email: null }));
+      prisma.workspaceMembership.findMany.mockResolvedValue([
+        { user: { email: 'owner@acme.com', status: 'ACTIVE', role: 'OWNER' } },
+        // The research sentinel owns records but has no mailbox.
+        { user: { email: 'system@acme.com', status: 'ACTIVE', role: 'SYSTEM' } },
+        { user: { email: 'gone@acme.com', status: 'SUSPENDED', role: 'MANAGER' } },
+      ]);
+
+      await svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada' });
+      await flush();
+
+      const hostMails = outboundMail.send.mock.calls
+        .map((c) => c[0])
+        .filter((m) => String(m.idempotencyKey).includes(':host-new'));
+      expect(hostMails.map((m) => m.to)).toEqual(['owner@acme.com']);
+    });
+
+    // ── reminders ───────────────────────────────────────────────────────────
+
+    it('hands a retriable reminder failure back to the runner instead of marking it done', async () => {
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ startAt: new Date(Date.now() + 3600_000) }));
+      outboundMail.send.mockResolvedValue({
+        outcome: 'FAILED_TRANSIENT', ok: false, mailLogId: 'ml-2', messageId: null,
+        transport: 'PLATFORM', reason: 'TRANSIENT', retriable: true, error: 'relay timeout',
+      });
+
+      await expect(
+        handlerFor('booking.reminder')({
+          id: 'j1', workspaceId: WS, kind: 'booking.reminder', attempts: 0,
+          payload: { workspaceId: WS, bookingId: 'b1', offsetMinutes: 60, channels: ['EMAIL'], audience: 'CUSTOMER', leg: 'CUSTOMER' },
+        }),
+      ).rejects.toThrow(/relay timeout/);
+    });
+
+    it('does not retry a reminder policy REFUSED — that is an answer, not a failure', async () => {
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ startAt: new Date(Date.now() + 3600_000) }));
+      outboundMail.send.mockResolvedValue({
+        outcome: 'REFUSED', ok: false, mailLogId: 'ml-3', messageId: null,
+        transport: 'NONE', reason: 'SUPPRESSED_BOUNCE', retriable: false,
+      });
+
+      await expect(
+        handlerFor('booking.reminder')({
+          id: 'j1', workspaceId: WS, kind: 'booking.reminder', attempts: 0,
+          payload: { workspaceId: WS, bookingId: 'b1', offsetMinutes: 60, channels: ['EMAIL'], audience: 'CUSTOMER', leg: 'CUSTOMER' },
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('never reminds about an appointment that has already started', async () => {
+      // Backoff can carry a short-lead rule past the start; "your booking is
+      // soon" delivered afterwards is a regression the retry itself introduced.
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ startAt: new Date(Date.now() - 60_000) }));
+      await handlerFor('booking.reminder')({
+        id: 'j1', workspaceId: WS, kind: 'booking.reminder', attempts: 0,
+        payload: { workspaceId: WS, bookingId: 'b1', offsetMinutes: 60, channels: ['EMAIL'], audience: 'CUSTOMER', leg: 'CUSTOMER' },
+      });
+      expect(outboundMail.send).not.toHaveBeenCalled();
+    });
+
+    it('sends the HOST leg to the member resolved through the membership', async () => {
+      prisma.booking.findFirst.mockResolvedValue(
+        bookingRow({ assigneeUserId: 'u-consultant', startAt: new Date(Date.now() + 3600_000) }),
+      );
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        user: { email: 'host@acme.com', status: 'ACTIVE', role: 'REP' },
+      });
+
+      await handlerFor('booking.reminder')({
+        id: 'j1', workspaceId: WS, kind: 'booking.reminder', attempts: 0,
+        payload: { workspaceId: WS, bookingId: 'b1', offsetMinutes: 60, channels: ['EMAIL'], audience: 'HOST', leg: 'HOST' },
+      });
+
+      const mail = outboundMail.send.mock.calls[0][0];
+      expect(mail.to).toBe('host@acme.com');
+      expect(mail.mailClass).toBe('INTERNAL');
+      expect(mail.idempotencyKey).toBe('booking:b1:host-reminder:60:host@acme.com');
+    });
+
+    // ── retry + abuse ───────────────────────────────────────────────────────
+
+    it('books a retry job when the relay defers a confirmation, and re-sends on it', async () => {
+      prisma.booking.findFirst.mockResolvedValueOnce(null);
+      prisma.booking.create.mockResolvedValue(bookingRow());
+      prisma.booking.findFirst.mockResolvedValue(bookingRow());
+      outboundMail.send.mockResolvedValue({
+        outcome: 'FAILED_TRANSIENT', ok: false, mailLogId: 'ml-4', messageId: null,
+        transport: 'PLATFORM', reason: 'TRANSIENT', retriable: true, error: '451 try later',
+      });
+
+      await svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada', email: 'ada@example.com' });
+      await flush();
+
+      const retry = scheduledJobs.schedule.mock.calls.find((c: any) => c[0].kind === 'booking.mail');
+      expect(retry).toBeDefined();
+      expect(retry[0].payload).toMatchObject({ bookingId: 'b1', event: 'confirmed' });
+
+      // The retry lane re-sends under the SAME key, so a confirmation that did
+      // get out cannot be sent twice — and it keeps failing loudly while the
+      // relay keeps deferring.
+      await expect(
+        handlerFor('booking.mail')({
+          id: 'j2', workspaceId: WS, kind: 'booking.mail', attempts: 1, payload: retry[0].payload,
+        }),
+      ).rejects.toThrow(/451 try later/);
+      expect(outboundMail.send.mock.calls.at(-1)[0].idempotencyKey).toBe('booking:b1:confirmed');
+    });
+
+    it('refuses an unthrottled burst from one address, which per-IP throttling never bounded', async () => {
+      prisma.booking.count.mockResolvedValue(10);
+      await expect(
+        svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada', email: 'ada@example.com' }),
+      ).rejects.toThrow(/too many bookings/i);
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+      const where = prisma.booking.count.mock.calls[0][0].where;
+      expect(where.workspaceId).toBe(WS);
+      expect(where.calendarId).toBe('c1');
+    });
+
+    it('stops mailing an address long before it stops booking it', async () => {
+      // book → cancel → book frees the slot and re-runs the confirmation send
+      // forever; cancelled rows are counted on purpose.
+      prisma.booking.count.mockResolvedValue(4);
+      prisma.booking.findFirst.mockResolvedValueOnce(null);
+      prisma.booking.create.mockResolvedValue(bookingRow());
+      prisma.booking.findFirst.mockResolvedValue(bookingRow());
+
+      await svc.book(WS, 'c1', { start: START.toISOString(), name: 'Ada', email: 'ada@example.com' });
+      await flush();
+
+      expect(mailFor('confirmed')).toBeUndefined();
+    });
+  });
+
+  /**
+   * The page the manage link opens. It is the only surface a customer ever
+   * reaches with nothing but a token, so what it may say is a whitelist, not a
+   * `select` with a few fields taken out.
+   */
+  describe('publicByToken', () => {
+    const AT = new Date('2027-06-14T09:00:00.000Z');
+    const row = {
+      id: 'b1', workspaceId: WS, calendarId: 'c1',
+      startAt: AT, endAt: new Date(AT.getTime() + 1800_000),
+      status: 'CONFIRMED', meetingUrl: 'https://meet.example/xyz',
+    };
+
+    it('answers with the booking behind the token', async () => {
+      prisma.booking.findFirst.mockResolvedValue(row);
+      prisma.bookingCalendar.findFirst.mockResolvedValue({ name: 'Intro call', slug: 'intro', timezone: 'Europe/Istanbul' });
+
+      await expect(svc.publicByToken('bk_tok')).resolves.toEqual({
+        workspaceId: WS,
+        calendarName: 'Intro call',
+        calendarSlug: 'intro',
+        timezone: 'Europe/Istanbul',
+        startAt: AT.toISOString(),
+        endAt: new Date(AT.getTime() + 1800_000).toISOString(),
+        status: 'CONFIRMED',
+        meetingUrl: 'https://meet.example/xyz',
+      });
+      expect(prisma.booking.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { token: 'bk_tok' } }),
+      );
+    });
+
+    it('never hands back the notes, the lead or the host — a manage link gets forwarded', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ ...row, notes: 'card ending 4242', leadId: 'lead-1', assigneeUserId: 'u-1', email: 'ada@example.com', phone: '+905551112233', name: 'Ada' });
+      prisma.bookingCalendar.findFirst.mockResolvedValue({ name: 'Intro call', slug: 'intro', timezone: 'Europe/Istanbul' });
+
+      const out: Record<string, unknown> = await svc.publicByToken('bk_tok');
+      for (const leaked of ['notes', 'leadId', 'assigneeUserId', 'email', 'phone', 'name', 'id']) {
+        expect(out).not.toHaveProperty(leaked);
+      }
+    });
+
+    it('404s an unknown token rather than describing what is missing', async () => {
+      prisma.booking.findFirst.mockResolvedValue(null);
+      await expect(svc.publicByToken('nope')).rejects.toThrow(NotFoundException);
+    });
+
+    it('survives a calendar that has since been deleted', async () => {
+      prisma.booking.findFirst.mockResolvedValue(row);
+      prisma.bookingCalendar.findFirst.mockResolvedValue(null);
+      await expect(svc.publicByToken('bk_tok')).resolves.toMatchObject({ calendarName: '', calendarSlug: null, timezone: 'UTC' });
     });
   });
 });
