@@ -13,8 +13,10 @@ describe('CampaignsService', () => {
   let prisma: any;
   let scheduledJobs: { schedule: jest.Mock; cancel: jest.Mock };
   let entitlements: { getEffective: jest.Mock };
+  let segmentCompiler: { compile: jest.Mock };
   let svc: CampaignsService;
 
+  let iysEmail: any;
   beforeEach(() => {
     prisma = {
       campaign: {
@@ -26,11 +28,24 @@ describe('CampaignsService', () => {
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      campaignVariant: { findMany: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      emailTemplate: { findMany: jest.fn().mockResolvedValue([]) },
+      segment: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
     // Default: entitled to sms (matches every plan block — no regression).
     entitlements = { getEffective: jest.fn().mockResolvedValue({ features: { sms: true } }) };
-    svc = new CampaignsService(prisma as any, scheduledJobs as any, entitlements as any);
+    segmentCompiler = { compile: jest.fn().mockReturnValue({ AND: [{ workspaceId: WS }] }) };
+    // Unarmed, which is every workspace today: the composer's TİCARİ option
+    // stays coerced to BİLGİLENDİRME exactly as it was before the port existed.
+    iysEmail = { readiness: jest.fn().mockResolvedValue({ armed: false, configured: false, gap: 'NOT_ARMED', messageKey: 'compliance.iysEposta.notArmed' }) };
+    svc = new CampaignsService(
+      prisma as any,
+      scheduledJobs as any,
+      entitlements as any,
+      segmentCompiler as any,
+      iysEmail as any,
+    );
   });
 
   describe('buildAudienceWhere', () => {
@@ -430,6 +445,12 @@ describe('CampaignsService', () => {
 
       await svc.update(WS, 'c1', { scheduledAt: '' });
 
+      // The revert must also drop the frozen recipients, exactly like its two
+      // sibling revert branches — otherwise a later launch() mails the UNION of
+      // the old frozen audience and the new one (stale-recipients).
+      expect(prisma.campaignRecipient.deleteMany).toHaveBeenCalledWith({
+        where: { campaignId: 'c1', workspaceId: WS },
+      });
       expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
       expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND }));
       // Two writes: the scheduledAt=null column update, then the status revert.
@@ -563,10 +584,428 @@ describe('CampaignsService', () => {
       expect(prisma.campaign.update.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
     });
 
+    /**
+     * EMAIL was coerced to BİLGİLENDİRME unconditionally, which was right while
+     * nothing checked İYS for email at all. Now the BULK gate does — but only
+     * for a workspace that armed it, so the unlock has to be conditional on the
+     * same readiness the gate reads (`tr-commercial-compliance`).
+     */
+    it('still coerces an EMAIL campaign to BILGILENDIRME while İYS EPOSTA is unarmed', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', iysMessageType: 'TICARI' });
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('BILGILENDIRME');
+    });
+
+    it('lets an armed workspace mark an EMAIL campaign TICARI', async () => {
+      iysEmail.readiness.mockResolvedValue({ armed: true, configured: true, gap: null, messageKey: null });
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', iysMessageType: 'TICARI' });
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
+      expect(iysEmail.readiness).toHaveBeenCalledWith(WS);
+    });
+
+    it('does not ask İYS anything when the campaign was not marked TICARI', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi' });
+      expect(iysEmail.readiness).not.toHaveBeenCalled();
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('BILGILENDIRME');
+    });
+
+    it('keeps coercing an ARMED-but-unconfigured workspace — a gate that cannot answer must not mark mail commercial', async () => {
+      iysEmail.readiness.mockResolvedValue({ armed: true, configured: false, gap: 'NO_CREDENTIALS', messageKey: 'compliance.iysEposta.noCredentials' });
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', iysMessageType: 'TICARI' });
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('BILGILENDIRME');
+    });
+
+    it('update: the same unlock applies to an existing EMAIL campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL' });
+      iysEmail.readiness.mockResolvedValue({ armed: true, configured: true, gap: null, messageKey: null });
+      await svc.update(WS, 'c1', { iysMessageType: 'TICARI' });
+      expect(prisma.campaign.update.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
+    });
+
+    it('update: an unarmed workspace still cannot mark an EMAIL campaign TICARI', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL' });
+      await svc.update(WS, 'c1', { iysMessageType: 'TICARI' });
+      expect(prisma.campaign.update.mock.calls[0][0].data.iysMessageType).toBe('BILGILENDIRME');
+    });
+
+    it('never asks İYS about a WHATSAPP campaign — the rule is channel-bound', async () => {
+      iysEmail.readiness.mockResolvedValue({ armed: true, configured: true, gap: null, messageKey: null });
+      await svc.create(WS, { name: 'N', channel: 'WHATSAPP', body: 'Hi', iysMessageType: 'TICARI' });
+      expect(iysEmail.readiness).not.toHaveBeenCalled();
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('BILGILENDIRME');
+    });
+
     it('buildAudienceWhere VOICE requires a phone and reuses the smsOptOut proxy', () => {
       const w: any = svc.buildAudienceWhere(WS, 'VOICE', []);
       expect(w.smsOptOut).toBe(false);
       expect(w.phone).toEqual({ not: null });
+    });
+  });
+
+  // audience-targeting: a tag/list audience is expressible, enum-ish values are
+  // matched case-insensitively by NORMALIZING them (never by Prisma's
+  // `mode:'insensitive'`, which is ILIKE and would turn an `id` filter's
+  // `%`/`_` into wildcards — i.e. "email this one lead" into a blast).
+  describe('buildAudienceWhere — tags and enum casing', () => {
+    it('targets a tag through AND, not a key assignment', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'tag', op: 'eq', value: 'tag-1' }]);
+      expect(w.AND).toEqual([{ tags: { some: { tagId: 'tag-1' } } }]);
+    });
+
+    it('excludes a tag with neq', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'tag', op: 'neq', value: 'tag-1' }]);
+      expect(w.AND).toEqual([{ tags: { none: { tagId: 'tag-1' } } }]);
+    });
+
+    // Two tag rules on one key would silently collide (last wins) — the reason
+    // they go into an AND array rather than onto `where.tags`.
+    it('keeps BOTH tag rules when two are given', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [
+        { field: 'tag', op: 'eq', value: 'fuar-2026' },
+        { field: 'tag', op: 'neq', value: 'musteri' },
+      ]);
+      expect(w.AND).toEqual([
+        { tags: { some: { tagId: 'fuar-2026' } } },
+        { tags: { none: { tagId: 'musteri' } } },
+      ]);
+    });
+
+    it('does not add an empty AND when no tag rule is given', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'city', op: 'eq', value: 'Izmir' }]);
+      expect(w.AND).toBeUndefined();
+    });
+
+    it('uppercases the enum-ish fields so typing "new" still matches', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [
+        { field: 'lead.status', op: 'eq', value: 'new' },
+        { field: 'lead.priority', op: 'neq', value: 'low' },
+        { field: 'lead.source', op: 'in', value: ['ads', 'referral'] },
+        { field: 'lead.businessType', op: 'eq', value: 'cafe' },
+      ]);
+      expect(w.status).toBe('NEW');
+      expect(w.priority).toEqual({ not: 'LOW' });
+      expect(w.source).toEqual({ in: ['ADS', 'REFERRAL'] });
+      expect(w.businessType).toBe('CAFE');
+    });
+
+    // Free text is NOT an enum: a city or a business name keeps the operator's
+    // casing (contains is already insensitive), and `id` is never touched.
+    it('leaves free-text fields and id exactly as given', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [
+        { field: 'lead.city', op: 'eq', value: 'Izmir' },
+        { field: 'id', op: 'eq', value: 'lead-9' },
+      ]);
+      expect(w.city).toBe('Izmir');
+      expect(w.id).toBe('lead-9');
+    });
+
+    // segmentId needs a DB read, so it is resolved by resolveAudienceWhere —
+    // buildAudienceWhere stays sync and must drop it rather than emit a
+    // `where.segmentId` that Prisma would 500 on.
+    it('drops segmentId (resolved asynchronously, never a lead column)', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'segmentId', op: 'eq', value: 'seg-1' }]);
+      expect(w.segmentId).toBeUndefined();
+      expect(w.AND).toBeUndefined();
+    });
+  });
+
+  // The one source of truth the audience-preview endpoint shares with launch(),
+  // so a preview and a send can never disagree.
+  describe('resolveAudienceWhere — segments', () => {
+    it('merges a compiled segment under AND, leaving the channel reachability OR intact', async () => {
+      prisma.segment.findFirst.mockResolvedValue({ id: 'seg-1', definition: { op: 'and', children: [] } });
+      segmentCompiler.compile.mockReturnValue({ AND: [{ workspaceId: WS }, { status: 'WON' }] });
+
+      const w: any = await svc.resolveAudienceWhere(WS, 'WHATSAPP', [
+        { field: 'segmentId', op: 'eq', value: 'seg-1' },
+      ]);
+
+      // Tenant-scoped read, exactly like SegmentsService.getOwned.
+      expect(prisma.segment.findFirst).toHaveBeenCalledWith({
+        where: { id: 'seg-1', workspaceId: WS },
+        select: { definition: true },
+      });
+      expect(w.OR).toEqual([{ whatsapp: { not: null } }, { phone: { not: null } }]);
+      expect(w.AND).toEqual([{ AND: [{ workspaceId: WS }, { status: 'WON' }] }]);
+    });
+
+    it('refuses a segment from another workspace instead of silently widening the audience', async () => {
+      prisma.segment.findFirst.mockResolvedValue(null);
+      await expect(
+        svc.resolveAudienceWhere(WS, 'EMAIL', [{ field: 'segmentId', op: 'eq', value: 'seg-x' }]),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('does not touch the database when no segment is targeted', async () => {
+      const w: any = await svc.resolveAudienceWhere(WS, 'EMAIL', [{ field: 'lead.status', op: 'eq', value: 'NEW' }]);
+      expect(prisma.segment.findFirst).not.toHaveBeenCalled();
+      expect(w.status).toBe('NEW');
+    });
+  });
+
+  // stale-recipients + the wave-1 channel handoff.
+  describe('launch — recipient freeze hygiene', () => {
+    const draft = {
+      id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null, audienceFilter: [],
+    };
+
+    it('clears PENDING/HOLD rows before re-freezing a DRAFT audience', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(draft);
+
+      await svc.launch(WS, 'c1');
+
+      expect(prisma.campaignRecipient.deleteMany).toHaveBeenCalledWith({
+        where: { workspaceId: WS, campaignId: 'c1', status: { in: ['PENDING', 'HOLD'] } },
+      });
+      // Order matters: the stale rows must be gone before the new freeze, or
+      // skipDuplicates keeps them.
+      expect(prisma.campaignRecipient.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.campaignRecipient.createMany.mock.invocationCallOrder[0],
+      );
+    });
+
+    // SENT/FAILED/SKIPPED/UNSUBSCRIBED rows are the audit trail AND the token
+    // behind every open pixel and unsubscribe link already sitting in an inbox.
+    it('never deletes terminal recipient rows', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(draft);
+      await svc.launch(WS, 'c1');
+      const { status } = prisma.campaignRecipient.deleteMany.mock.calls[0][0].where;
+      expect(status).toEqual({ in: ['PENDING', 'HOLD'] });
+    });
+
+    it('does NOT clear recipients when an admin re-launches a still-SCHEDULED campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ ...draft, status: 'SCHEDULED', scheduledAt: new Date(Date.now() - 60_000) });
+      await svc.launch(WS, 'c1');
+      expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
+    });
+
+    // Wave-1 handoff: the denormalised channel must be frozen onto EVERY row,
+    // including the A/B held-back remainder, or rows written after the deploy
+    // carry a null channel and no bounce/complaint writer can find them.
+    it('stamps the campaign channel on both the test and the held rows', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        ...draft, abEnabled: true, abMode: 'WINNER', abTestPercent: 20,
+      });
+      prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }, { id: 'l2' }, { id: 'l3' }, { id: 'l4' }]);
+      prisma.campaignVariant.findMany.mockResolvedValue([
+        { key: 'A', weight: 1, body: 'a', bodyHtml: null },
+        { key: 'B', weight: 1, body: 'b', bodyHtml: null },
+      ]);
+
+      await svc.launch(WS, 'c1');
+
+      const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
+      expect(rows.some((r: any) => r.status === 'HOLD')).toBe(true);
+      expect(rows.every((r: any) => r.channel === 'EMAIL')).toBe(true);
+    });
+
+    // Index stability: `?i=` points into links[], so two computations over the
+    // same content must produce the same order — which needs a deterministic
+    // variant order.
+    it('reads variants in a deterministic key order', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ ...draft, abEnabled: true });
+      prisma.campaignVariant.findMany.mockResolvedValue([
+        { key: 'A', weight: 1, body: 'a', bodyHtml: null },
+        { key: 'B', weight: 1, body: 'b', bodyHtml: null },
+      ]);
+
+      await svc.launch(WS, 'c1');
+
+      expect(prisma.campaignVariant.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { key: 'asc' } }),
+      );
+    });
+  });
+
+  // img-src-click: an image load must never be counted as a click.
+  describe('launch — tracked links', () => {
+    it('tracks the <a href> and leaves the <img src> out of links[]', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL',
+        body: 'Hi',
+        bodyHtml: '<a href="https://shop.test/sale">Sale</a><img src="https://cdn.test/hero.jpg">',
+        audienceFilter: [],
+      });
+
+      await svc.launch(WS, 'c1');
+
+      const update = prisma.campaign.update.mock.calls.at(-1)[0].data;
+      expect(update.links).toEqual(['https://shop.test/sale']);
+    });
+
+    it('still tracks bare urls in the plain-text body (SMS and the text part)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'SMS',
+        body: 'Kampanya: https://only.test', bodyHtml: null, audienceFilter: [],
+      });
+
+      await svc.launch(WS, 'c1');
+
+      const update = prisma.campaign.update.mock.calls.at(-1)[0].data;
+      expect(update.links).toEqual(['https://only.test']);
+    });
+  });
+
+  // template-not-resolved: a template id must actually RENDER, server-side.
+  describe('email templates', () => {
+    beforeEach(() => {
+      prisma.campaign.create = jest.fn().mockResolvedValue({ id: 'c1' });
+    });
+
+    it('create renders the template into bodyHtml when the caller sent none (the MCP path)', async () => {
+      prisma.emailTemplate.findMany.mockResolvedValue([{ id: 't1', compiledHtml: '<p>Merhaba</p>' }]);
+
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', emailTemplateId: 't1' });
+
+      expect(prisma.emailTemplate.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['t1'] }, workspaceId: WS },
+        select: { id: true, compiledHtml: true },
+      });
+      expect(prisma.campaign.create.mock.calls[0][0].data.bodyHtml).toBe('<p>Merhaba</p>');
+    });
+
+    it('create refuses a template id that does not belong to this workspace', async () => {
+      prisma.emailTemplate.findMany.mockResolvedValue([]);
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', emailTemplateId: 'foreign' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('update renders a newly chosen template into bodyHtml', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL' });
+      prisma.emailTemplate.findMany.mockResolvedValue([{ id: 't2', compiledHtml: '<p>v2</p>' }]);
+
+      await svc.update(WS, 'c1', { emailTemplateId: 't2' });
+
+      expect(prisma.campaign.update.mock.calls[0][0].data.bodyHtml).toBe('<p>v2</p>');
+    });
+
+    // The campaign form resends the stored id on every save. Validating an
+    // UNCHANGED id would brick a campaign whose template was later deleted —
+    // the operator could not even rename it.
+    it('update does not re-validate an unchanged template id', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', emailTemplateId: 'gone',
+      });
+
+      await svc.update(WS, 'c1', { name: 'Renamed', emailTemplateId: 'gone' });
+
+      expect(prisma.emailTemplate.findMany).not.toHaveBeenCalled();
+      expect(prisma.campaign.update).toHaveBeenCalled();
+    });
+
+    it('create also lets the template win over a bodyHtml passed alongside it', async () => {
+      prisma.emailTemplate.findMany.mockResolvedValue([{ id: 't1', compiledHtml: '<p>tpl</p>' }]);
+
+      await svc.create(WS, {
+        name: 'N', channel: 'EMAIL', body: 'Hi', bodyHtml: '<p>stale</p>', emailTemplateId: 't1',
+      });
+
+      expect(prisma.campaign.create.mock.calls[0][0].data.bodyHtml).toBe('<p>tpl</p>');
+    });
+
+    it('launch re-renders the template so an edit made after the draft was built does ship', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi',
+        bodyHtml: '<a href="https://old.test">old</a>', emailTemplateId: 't1', audienceFilter: [],
+      });
+      prisma.emailTemplate.findMany.mockResolvedValue([
+        { id: 't1', compiledHtml: '<a href="https://new.test">new</a>' },
+      ]);
+
+      await svc.launch(WS, 'c1');
+
+      const update = prisma.campaign.update.mock.calls.at(-1)[0].data;
+      expect(update.bodyHtml).toBe('<a href="https://new.test">new</a>');
+      // Tracked links come from the FRESH html, not the stale snapshot.
+      expect(update.links).toEqual(['https://new.test']);
+    });
+
+    // A deleted template must not strand a draft that can no longer launch.
+    it('launch falls back to the stored bodyHtml when the template is gone (no throw)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi',
+        bodyHtml: '<a href="https://old.test">old</a>', emailTemplateId: 'deleted', audienceFilter: [],
+      });
+      prisma.emailTemplate.findMany.mockResolvedValue([]);
+
+      await svc.launch(WS, 'c1');
+
+      const update = prisma.campaign.update.mock.calls.at(-1)[0].data;
+      expect(update.bodyHtml).toBeUndefined(); // untouched
+      expect(update.links).toEqual(['https://old.test']);
+    });
+
+    // A/B sibling: a variant carrying only a template id used to inherit the
+    // CONTROL's html — the wrong template's content, not merely plain text.
+    it('setVariants renders a variant-level template id', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', status: 'DRAFT' });
+      prisma.$transaction = jest.fn().mockResolvedValue([]);
+      prisma.campaign.updateMany = jest.fn();
+      prisma.campaignVariant.deleteMany = jest.fn();
+      prisma.campaignVariant.createMany = jest.fn();
+      prisma.emailTemplate.findMany.mockResolvedValue([{ id: 'tv', compiledHtml: '<p>B</p>' }]);
+
+      await svc.setVariants(WS, 'c1', { variants: [{ key: 'B', body: 'b', emailTemplateId: 'tv' }] });
+
+      const rows = prisma.$transaction.mock.calls[0][0];
+      expect(rows).toHaveLength(3);
+      expect(prisma.campaignVariant.createMany.mock.calls[0][0].data[0].bodyHtml).toBe('<p>B</p>');
+    });
+  });
+
+  // scheduled-links-stale: a SCHEDULED campaign has frozen links[] but has sent
+  // nothing yet, so a body edit must refresh them (no index can have shipped).
+  describe('update — link refresh on a SCHEDULED campaign', () => {
+    it('re-extracts links when the body is edited', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL',
+        body: 'Old https://old.test', bodyHtml: null, audienceFilter: [],
+        scheduledAt: new Date(Date.now() + 86_400_000),
+      });
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { body: 'New https://new.test' });
+
+      expect(prisma.campaign.update.mock.calls[0][0].data.links).toEqual(['https://new.test']);
+    });
+
+    it('re-extracts links when the HTML body is edited, ignoring images', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL',
+        body: 'Hi', bodyHtml: '<a href="https://old.test">o</a>', audienceFilter: [],
+        scheduledAt: new Date(Date.now() + 86_400_000),
+      });
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', {
+        bodyHtml: '<a href="https://new.test">n</a><img src="https://cdn.test/i.png">',
+      });
+
+      expect(prisma.campaign.update.mock.calls[0][0].data.links).toEqual(['https://new.test']);
+    });
+
+    it('leaves links alone when the edit does not touch the content', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', body: 'Hi', bodyHtml: null,
+        scheduledAt: new Date(Date.now() + 86_400_000),
+      });
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { name: 'Renamed' });
+
+      expect(prisma.campaign.update.mock.calls[0][0].data.links).toBeUndefined();
+    });
+
+    // A DRAFT has no frozen links yet — launch() computes them.
+    it('does not compute links for a DRAFT body edit', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null,
+      });
+
+      await svc.update(WS, 'c1', { body: 'New https://new.test' });
+
+      expect(prisma.campaign.update.mock.calls[0][0].data.links).toBeUndefined();
     });
   });
 });

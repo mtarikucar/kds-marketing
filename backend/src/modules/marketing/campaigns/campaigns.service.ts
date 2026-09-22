@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   BadRequestException,
   ConflictException,
@@ -10,6 +11,9 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
+import { SegmentCompilerService, SegmentNode } from '../services/segment-compiler.service';
+import { extractCampaignLinks } from './campaign-links.util';
+import { IYS_EMAIL_PORT, IysEmailPort } from '../compliance/iys-email.port';
 
 export const CAMPAIGN_BATCH_KIND = 'campaign.batch';
 /** A/B WINNER mode: the job that picks the winner + releases the held remainder. */
@@ -40,6 +44,21 @@ const LEAD_FILTER_FIELDS = new Set([
   'id',
 ]);
 
+/** Fields whose stored values are an UPPER_SNAKE taxonomy (schema.prisma's Lead
+ *  comments; `businessType` is validated by BUSINESS_TYPE_PATTERN). Typing
+ *  "new" in the audience builder must match `NEW` — so the VALUE is normalized
+ *  here rather than the comparison loosened. Prisma's `mode:'insensitive'` is
+ *  ILIKE on Postgres: `%`/`_` in the value would become wildcards, and on the
+ *  whitelisted `id` field that turns the MCP "email this one lead" filter into
+ *  a blast. Never make `eq` insensitive. */
+const ENUMISH_FILTER_FIELDS = new Set(['status', 'priority', 'source', 'businessType']);
+
+/** Audience filter fields that are NOT lead columns and are handled on their
+ *  own branch: `tag` compiles to a relation predicate, `segmentId` needs a DB
+ *  read and is resolved by `resolveAudienceWhere`. */
+const TAG_FILTER_FIELD = 'tag';
+const SEGMENT_FILTER_FIELD = 'segmentId';
+
 interface AudienceFilter {
   field: string;
   op: string;
@@ -61,7 +80,36 @@ export class CampaignsService {
     private readonly prisma: PrismaService,
     private readonly scheduledJobs: ScheduledJobService,
     private readonly entitlements: EntitlementsService,
+    private readonly segmentCompiler: SegmentCompilerService,
+    @Inject(IYS_EMAIL_PORT) private readonly iysEmail: IysEmailPort,
   ) {}
+
+  /**
+   * What `iysMessageType` this campaign may actually be stored as.
+   *
+   * SMS and VOICE have always been allowed to be TİCARİ: their senders run an
+   * İYS preflight before every recipient. EMAIL was coerced to BİLGİLENDİRME
+   * unconditionally because nothing checked İYS for email — which is no longer
+   * true, but only in a workspace that armed the gate. So the unlock is
+   * conditional on exactly the readiness the gate reads: arming it any wider
+   * would mark mail commercial that no İYS check will ever cover, which is the
+   * 6563 exposure the coercion existed to avoid (`tr-commercial-compliance`).
+   *
+   * WHATSAPP stays coerced: İYS has no lane for it.
+   */
+  private async resolveIysMessageType(
+    workspaceId: string,
+    channel: string,
+    requested: string | undefined,
+  ): Promise<'TICARI' | 'BILGILENDIRME'> {
+    if (requested !== 'TICARI') return 'BILGILENDIRME';
+    if (channel === 'SMS' || channel === 'VOICE') return 'TICARI';
+    // Only EMAIL gets as far as the port, and only when TİCARİ was asked for —
+    // an ordinary campaign save must not cost a config read.
+    if (channel !== 'EMAIL') return 'BILGILENDIRME';
+    const readiness = await this.iysEmail.readiness(workspaceId);
+    return readiness.configured ? 'TICARI' : 'BILGILENDIRME';
+  }
 
   async list(workspaceId: string) {
     return this.prisma.campaign.findMany({
@@ -137,6 +185,18 @@ export class CampaignsService {
       keys.add(key);
       if ((v.weight ?? 1) < 1 || (v.weight ?? 1) > 1000) throw new BadRequestException('Variant weight must be 1–1000');
     }
+    // A variant carrying only a template id used to inherit the CONTROL's HTML
+    // at send time — the wrong template's content, not merely plain text. Same
+    // strict resolve as create()/update(), one query for all variants.
+    const variantTemplates = await this.loadTemplateHtml(
+      workspaceId,
+      dto.variants.map((v) => v.emailTemplateId),
+    );
+    for (const v of dto.variants) {
+      if (v.emailTemplateId && !variantTemplates.has(v.emailTemplateId)) {
+        throw new BadRequestException('Email template not found');
+      }
+    }
     const abEnabled = !!dto.abEnabled && dto.variants.length > 1;
     const winner = abEnabled && dto.abMode === 'WINNER';
     // WINNER mode: test cohort is 5–50% of the audience; default 20% / pick by opens.
@@ -154,7 +214,10 @@ export class CampaignsService {
               weight: v.weight ?? 1,
               subject: v.subject ?? null,
               body: v.body,
-              bodyHtml: v.bodyHtml || null,
+              bodyHtml:
+                (v.emailTemplateId ? variantTemplates.get(v.emailTemplateId) : null) ||
+                v.bodyHtml ||
+                null,
               emailTemplateId: v.emailTemplateId || null,
             })),
           })]
@@ -209,6 +272,17 @@ export class CampaignsService {
       }
       this.assertVoiceConfig(dto.voiceConfig);
     }
+    // Resolve the template NOW rather than storing an unchecked 64-char string:
+    // a caller that passes only a template id (the MCP tools do) gets its HTML
+    // rendered into the campaign instead of a plain-text send. When both are
+    // given the TEMPLATE wins — attaching a template means "this campaign is
+    // this template", and `launch()` re-renders it the same way, so anything
+    // else would make create and launch disagree. (The campaign form always
+    // sends the template's own compiled HTML as bodyHtml, so nothing changes
+    // for it.)
+    const templateHtml = dto.emailTemplateId
+      ? await this.requireTemplateHtml(workspaceId, dto.emailTemplateId)
+      : null;
     return this.prisma.campaign.create({
       data: {
         workspaceId,
@@ -216,19 +290,14 @@ export class CampaignsService {
         channel: dto.channel,
         subject: dto.subject || null,
         body: dto.body,
-        bodyHtml: dto.bodyHtml || null,
+        bodyHtml: templateHtml || dto.bodyHtml || null,
         emailTemplateId: dto.emailTemplateId || null,
         audienceFilter: (dto.audienceFilter ?? []) as Prisma.InputJsonValue,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
-        // İYS classification only means anything for SMS/VOICE — force it to
-        // the exempt default on every other channel so a stray value never
-        // silently rides along on an EMAIL/WHATSAPP campaign (the sender's
-        // TİCARİ preflight only ever reads it on those two branches anyway,
-        // but this keeps the stored value honest for CampaignsPage.tsx's own display).
-        iysMessageType:
-          (dto.channel === 'SMS' || dto.channel === 'VOICE') && dto.iysMessageType === 'TICARI'
-            ? 'TICARI'
-            : 'BILGILENDIRME',
+        // Never taken from the DTO as given: a stray TİCARİ on a channel with
+        // no İYS lane behind it would ride along into CampaignsPage.tsx's
+        // display and into the sender's `ticari` flag. See resolveIysMessageType.
+        iysMessageType: await this.resolveIysMessageType(workspaceId, dto.channel, dto.iysMessageType),
         voiceConfig: dto.channel === 'VOICE' ? (dto.voiceConfig as Prisma.InputJsonValue) : Prisma.JsonNull,
         status: 'DRAFT',
       },
@@ -261,14 +330,11 @@ export class CampaignsService {
     if (data.subject === '') data.subject = null;
     if (data.bodyHtml === '') data.bodyHtml = null;
     if (data.emailTemplateId === '') data.emailTemplateId = null;
-    // Same SMS/VOICE-only normalization as create(): channel itself isn't
-    // editable (not in the field loop above), so `existing.channel` is this
-    // campaign's permanent channel — force the exempt default on anything else.
+    // Same normalisation as create(): channel itself isn't editable (not in the
+    // field loop above), so `existing.channel` is this campaign's permanent
+    // channel and the same per-channel rule applies to an edit.
     if (dto.iysMessageType !== undefined) {
-      data.iysMessageType =
-        (existing.channel === 'SMS' || existing.channel === 'VOICE') && dto.iysMessageType === 'TICARI'
-          ? 'TICARI'
-          : 'BILGILENDIRME';
+      data.iysMessageType = await this.resolveIysMessageType(workspaceId, existing.channel, dto.iysMessageType);
     }
     // voiceConfig is only editable on a VOICE campaign (mirrors channel-scoped
     // iysMessageType above) — re-validated the same way create() does, since
@@ -279,6 +345,45 @@ export class CampaignsService {
     }
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
+    // Same server-side template resolution as create(): a NEWLY chosen template
+    // must actually change what ships, and an id from another workspace is a
+    // caller error rather than a silently plain send. Only on a CHANGE, though:
+    // the campaign form resends the stored id on every save, so validating an
+    // unchanged one would make a campaign whose template was later deleted
+    // impossible to even rename. An unchanged id is re-rendered at launch().
+    if (
+      typeof data.emailTemplateId === 'string' &&
+      data.emailTemplateId &&
+      data.emailTemplateId !== (existing as any).emailTemplateId
+    ) {
+      const html = await this.requireTemplateHtml(workspaceId, data.emailTemplateId);
+      if (html) data.bodyHtml = html;
+    }
+
+    // A SCHEDULED campaign's links[] were frozen at launch(), and `?i=` indexes
+    // into that array — so an edited body would send new CTAs untracked (and,
+    // worse, could point an old index at a URL that is no longer in the body).
+    // Nothing has been sent yet in SCHEDULED (the launch job hasn't run), so
+    // recomputing here is safe; the same is NOT true once a campaign is
+    // SENDING, which update() already refuses.
+    const contentEdited = ['body', 'bodyHtml', 'emailTemplateId'].some(
+      (k) => data[k] !== undefined && data[k] !== (existing as any)[k],
+    );
+    if (existing.status === 'SCHEDULED' && contentEdited) {
+      const variants = (existing as any).abEnabled
+        ? await this.prisma.campaignVariant.findMany({
+            where: { workspaceId, campaignId: existing.id },
+            orderBy: { key: 'asc' },
+          })
+        : [];
+      data.links = extractCampaignLinks(
+        {
+          body: data.body !== undefined ? data.body : existing.body,
+          bodyHtml: data.bodyHtml !== undefined ? data.bodyHtml : (existing as any).bodyHtml,
+        },
+        variants.map((v: any) => ({ body: v.body, bodyHtml: v.bodyHtml })),
+      ) as any;
+    }
     const updated = await this.prisma.campaign.update({ where: { id: existing.id }, data });
 
     // A SCHEDULED campaign froze its audience into CampaignRecipient rows at
@@ -325,10 +430,16 @@ export class CampaignsService {
       } else {
         // Cleared, or moved to a non-future time: nothing is left to fire the
         // launch — cancel the stale job and revert to DRAFT rather than
-        // stranding the campaign SCHEDULED with no queued job. The frozen
-        // recipients/links stay put; a later launch() re-freeze is idempotent
-        // (CampaignRecipient's @@unique([campaignId, leadId]) + skipDuplicates).
+        // stranding the campaign SCHEDULED with no queued job. Drop the frozen
+        // recipients too, exactly like the audience-change and variant-edit
+        // reverts above: a re-freeze is idempotent (@@unique([campaignId,
+        // leadId]) + skipDuplicates), which is precisely why leaving them would
+        // make a later launch() mail the UNION of the old audience and the new
+        // one — the operator narrows the filter from 800 leads to 60 and 860
+        // are mailed. Safe: SCHEDULED means the launch job has not run, so no
+        // row can be SENT.
         await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
+        await this.prisma.campaignRecipient.deleteMany({ where: { campaignId: existing.id, workspaceId } });
         await this.prisma.campaign.update({ where: { id: existing.id }, data: { status: 'DRAFT' } });
         updated.status = 'DRAFT';
       }
@@ -401,21 +512,56 @@ export class CampaignsService {
     if (campaign.status !== 'DRAFT' && campaign.status !== 'SCHEDULED') {
       throw new BadRequestException('Campaign already launched');
     }
-    const where = this.buildAudienceWhere(workspaceId, campaign.channel, campaign.audienceFilter);
+    const where = await this.resolveAudienceWhere(workspaceId, campaign.channel, campaign.audienceFilter);
     const leads = await this.prisma.lead.findMany({ where: { ...where, workspaceId }, select: { id: true } });
     if (leads.length === 0) throw new BadRequestException('Audience is empty (no opted-in, reachable leads match)');
 
     // A/B: split recipients across variants by weight (frozen here at launch).
+    // `orderBy key` is not cosmetic: links[] is an index and two computations
+    // over the same content must yield the same order.
     const variants = (campaign as any).abEnabled
-      ? await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId: campaign.id } })
+      ? await this.prisma.campaignVariant.findMany({
+          where: { workspaceId, campaignId: campaign.id },
+          orderBy: { key: 'asc' },
+        })
       : [];
     const useAb = variants.length > 1;
 
-    // Track links from the control body+HTML AND every variant body+HTML (decoded
-    // first, so a tracked link's redirect target is the real URL, not escaped).
-    const srcs = [campaign.body, this.decodeHtml((campaign as any).bodyHtml ?? '')];
-    for (const v of variants) srcs.push(v.body, this.decodeHtml(v.bodyHtml ?? ''));
-    const links = [...new Set(srcs.flatMap((s) => this.extractLinks(s)))];
+    // Re-render every attached template at freeze time, so a typo fixed in the
+    // template after the draft was built does ship. Lenient on purpose: a
+    // template that no longer resolves falls back to the stored HTML rather
+    // than stranding a draft that can never launch again. This is a
+    // freeze-time snapshot — `launchScheduled()` does not re-enter launch(),
+    // so it can never mutate an in-flight send.
+    const templates = await this.loadTemplateHtml(workspaceId, [
+      (campaign as any).emailTemplateId,
+      ...variants.map((v: any) => v.emailTemplateId),
+    ]);
+    const freshHtml = (id: string | null | undefined, current: string | null | undefined) =>
+      (id ? templates.get(id) : null) || current || null;
+    const campaignHtml = freshHtml((campaign as any).emailTemplateId, (campaign as any).bodyHtml);
+    for (const v of variants as any[]) {
+      const html = freshHtml(v.emailTemplateId, v.bodyHtml);
+      if (html !== (v.bodyHtml ?? null)) {
+        // Persist it: the sender re-reads the variant rows per batch, so an
+        // in-memory refresh alone would fix the tracked links and still send
+        // the stale body.
+        await this.prisma.campaignVariant.updateMany({
+          where: { id: v.id, workspaceId, campaignId: campaign.id },
+          data: { bodyHtml: html },
+        });
+        v.bodyHtml = html;
+      }
+    }
+
+    // Track links from the control body+HTML AND every variant body+HTML. The
+    // HTML half reads `<a href>` only: an `<img src>` rewritten to the click
+    // tracker turns every image load — Gmail's cache, Apple MPP — into a
+    // recorded click (img-src-click).
+    const links = extractCampaignLinks(
+      { body: campaign.body, bodyHtml: campaignHtml },
+      (variants as any[]).map((v) => ({ body: v.body, bodyHtml: v.bodyHtml })),
+    );
 
     // WINNER mode: only abTestPercent% of the audience is the test cohort (sent
     // now across variants); the remainder is HELD until the winner is decided.
@@ -441,21 +587,48 @@ export class CampaignsService {
       abDecideAt = new Date(Date.now() + AB_TEST_WINDOW_MS);
     }
 
+    // Belt-and-braces re-freeze hygiene: a DRAFT campaign may still carry rows
+    // frozen by an earlier launch that was reverted (or that crashed halfway).
+    // The re-freeze below is idempotent (@@unique + skipDuplicates), so those
+    // stale rows would SURVIVE it and be mailed alongside the current audience.
+    // Scope is load-bearing — SENT/FAILED/SKIPPED/UNSUBSCRIBED rows are the
+    // audit trail AND the token behind every open pixel and unsubscribe link
+    // already sitting in an inbox, so they are never touched. A still-SCHEDULED
+    // campaign being re-launched early keeps its frozen rows as today.
+    if (campaign.status === 'DRAFT') {
+      await this.prisma.campaignRecipient.deleteMany({
+        where: { workspaceId, campaignId: campaign.id, status: { in: ['PENDING', 'HOLD'] } },
+      });
+    }
     // Materialize recipients (skip dupes if a previous partial launch raced).
+    // `channel` is frozen onto EVERY row — the test cohort AND the held-back
+    // remainder: a bounce or complaint writer finds its rows by that column, so
+    // a null channel on the held rows would make the A/B majority invisible to
+    // deliverability feedback.
     const tok = () => `cr_${randomBytes(18).toString('hex')}`;
     await this.prisma.campaignRecipient.createMany({
       data: [
         ...testLeads.map((l) => ({
           workspaceId, campaignId: campaign.id, leadId: l.id, token: tok(),
+          channel: campaign.channel,
           variantKey: useAb ? this.pickVariant(variants) : null,
         })),
         ...holdLeads.map((l) => ({
           workspaceId, campaignId: campaign.id, leadId: l.id, token: tok(),
+          channel: campaign.channel,
           variantKey: null, status: 'HOLD', // released to PENDING when the winner is picked
         })),
       ],
       skipDuplicates: true,
     });
+
+    // Only write the refreshed template HTML when it actually changed, so a
+    // campaign without a template (or whose template was deleted) keeps
+    // exactly the body it had.
+    const htmlRefresh =
+      campaignHtml !== (((campaign as any).bodyHtml ?? null) as string | null)
+        ? { bodyHtml: campaignHtml }
+        : {};
 
     const isScheduled = !!campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() + SCHEDULE_TOLERANCE_MS;
 
@@ -472,6 +645,7 @@ export class CampaignsService {
         where: { id: campaign.id },
         data: {
           status: 'SCHEDULED',
+          ...htmlRefresh,
           links: links as Prisma.InputJsonValue,
           stats: { recipients: leads.length, sent: 0, failed: 0, skipped: 0, opened: 0, clicked: 0, unsubscribed: 0 },
         },
@@ -503,6 +677,7 @@ export class CampaignsService {
         status: 'SENDING',
         startedAt: new Date(),
         ...(abDecideAt ? { abDecideAt } : {}),
+        ...htmlRefresh,
         links: links as Prisma.InputJsonValue,
         stats: { recipients: leads.length, sent: 0, failed: 0, skipped: 0, opened: 0, clicked: 0, unsubscribed: 0 },
       },
@@ -558,27 +733,116 @@ export class CampaignsService {
     // service.ts's isOptedOut for the same reuse on the send-time recheck).
     else if (channel === 'VOICE') { where.smsOptOut = false; where.phone = { not: null }; }
 
+    // Relation predicates (tag membership) go into an AND ARRAY, never onto a
+    // key: `where.tags = …` twice would silently collide and only the last rule
+    // would survive ("in fuar-2026 AND not in musteri" would become one of the
+    // two). The base `where` keeps its own keys — in particular WHATSAPP's
+    // reachability `OR` — untouched.
+    const ands: Prisma.LeadWhereInput[] = [];
+
     const filters = Array.isArray(audienceFilter) ? (audienceFilter as AudienceFilter[]) : [];
     for (const f of filters) {
       const field = f.field?.replace(/^lead\./, '');
-      if (!field || !LEAD_FILTER_FIELDS.has(field)) continue;
+      if (!field) continue;
+      if (field === TAG_FILTER_FIELD) {
+        const tagId = typeof f.value === 'string' ? f.value : null;
+        if (!tagId) continue;
+        // `neq` is "not tagged", i.e. `none` — NOT `some: { tagId: { not } }`,
+        // which would match any lead carrying at least one OTHER tag.
+        ands.push(f.op === 'neq' ? { tags: { none: { tagId } } } : { tags: { some: { tagId } } });
+        continue;
+      }
+      // A saved segment is compiled against the DB (custom fields, tags) and is
+      // therefore resolved by `resolveAudienceWhere`; it is never a lead column.
+      if (field === SEGMENT_FILTER_FIELD) continue;
+      if (!LEAD_FILTER_FIELDS.has(field)) continue;
+      const enumish = ENUMISH_FILTER_FIELDS.has(field);
+      const norm = (v: any) => (enumish && typeof v === 'string' ? v.toUpperCase() : v);
+      const value = Array.isArray(f.value) ? f.value.map(norm) : norm(f.value);
       // A scalar op needs a scalar value: an ARRAY would compile to e.g.
       // `{ status: ['a','b'] }`, an invalid Prisma filter that 500s when the
       // audience is materialized. Guard the scalar ops the same way `in` already
       // guards against a non-array — drop the malformed leaf rather than poison
       // the whole where.
-      const scalar = !Array.isArray(f.value);
+      const scalar = !Array.isArray(value);
       switch (f.op) {
-        case 'eq': if (scalar) where[field] = f.value; break;
-        case 'neq': if (scalar) where[field] = { not: f.value }; break;
-        case 'in': if (Array.isArray(f.value)) where[field] = { in: f.value }; break;
+        case 'eq': if (scalar) where[field] = value; break;
+        case 'neq': if (scalar) where[field] = { not: value }; break;
+        case 'in': if (Array.isArray(value)) where[field] = { in: value }; break;
         case 'contains': where[field] = { contains: String(f.value), mode: 'insensitive' }; break;
-        case 'gte': if (scalar) where[field] = { gte: f.value }; break;
-        case 'lte': if (scalar) where[field] = { lte: f.value }; break;
+        case 'gte': if (scalar) where[field] = { gte: value }; break;
+        case 'lte': if (scalar) where[field] = { lte: value }; break;
         case 'exists': where[field] = f.value ? { not: null } : null; break;
       }
     }
+    if (ands.length) where.AND = ands;
     return where as Prisma.LeadWhereInput;
+  }
+
+  /**
+   * The audience `where` the send ACTUALLY uses: `buildAudienceWhere` plus the
+   * saved segments it can't resolve synchronously. Both `launch()` and the
+   * audience-preview endpoint go through this one method so a preview and a
+   * send can never disagree.
+   */
+  async resolveAudienceWhere(
+    workspaceId: string,
+    channel: string,
+    audienceFilter: unknown,
+  ): Promise<Prisma.LeadWhereInput> {
+    const where = this.buildAudienceWhere(workspaceId, channel, audienceFilter) as any;
+    const filters = Array.isArray(audienceFilter) ? (audienceFilter as AudienceFilter[]) : [];
+    const segmentIds = filters
+      .filter((f) => f.field?.replace(/^lead\./, '') === SEGMENT_FILTER_FIELD && typeof f.value === 'string')
+      .map((f) => f.value as string);
+    if (segmentIds.length === 0) return where as Prisma.LeadWhereInput;
+
+    const ands: Prisma.LeadWhereInput[] = Array.isArray(where.AND) ? where.AND : [];
+    for (const id of [...new Set(segmentIds)]) {
+      // Tenant-scoped exactly like SegmentsService.getOwned. A segment that does
+      // not resolve must REFUSE, never be skipped: silently dropping the leaf
+      // would widen the audience to everyone the other rules still allow.
+      const segment = await this.prisma.segment.findFirst({
+        where: { id, workspaceId },
+        select: { definition: true },
+      });
+      if (!segment) throw new BadRequestException('Segment not found');
+      // AND only. `compile()` returns `{ AND: [...] }` and the WHATSAPP branch
+      // already owns `where.OR`, so a key-level merge would clobber the
+      // reachability guard and widen the audience.
+      ands.push(this.segmentCompiler.compile(workspaceId, segment.definition as unknown as SegmentNode));
+    }
+    where.AND = ands;
+    return where as Prisma.LeadWhereInput;
+  }
+
+  /**
+   * Resolve `emailTemplateId`s to their compiled HTML, workspace-scoped.
+   *
+   * Until this existed the id was stored but never read: an MCP/template send
+   * went out with no HTML at all, and a typo fixed in the template still
+   * shipped the old copy. One `findMany` covers the control and every variant.
+   */
+  private async loadTemplateHtml(
+    workspaceId: string,
+    ids: Array<string | null | undefined>,
+  ): Promise<Map<string, string | null>> {
+    const wanted = [...new Set(ids.filter((id): id is string => !!id))];
+    if (wanted.length === 0) return new Map();
+    const rows = await this.prisma.emailTemplate.findMany({
+      where: { id: { in: wanted }, workspaceId },
+      select: { id: true, compiledHtml: true },
+    });
+    return new Map(rows.map((r) => [r.id, r.compiledHtml]));
+  }
+
+  /** Strict resolve for an EDIT: an id that doesn't belong to this workspace is
+   *  a caller error (an MCP agent gets a real error instead of a silently plain
+   *  send). Launch uses the lenient path instead — see `launch()`. */
+  private async requireTemplateHtml(workspaceId: string, id: string): Promise<string | null> {
+    const found = await this.loadTemplateHtml(workspaceId, [id]);
+    if (!found.has(id)) throw new BadRequestException('Email template not found');
+    return found.get(id) ?? null;
   }
 
   /** Weighted-random pick of a variant key (split frozen per recipient at launch). */
@@ -592,20 +856,4 @@ export class CampaignsService {
     return variants[variants.length - 1].key;
   }
 
-  private extractLinks(body: string): string[] {
-    const urls = body.match(/https?:\/\/[^\s)\]<>"']+/g) ?? [];
-    return [...new Set(urls)];
-  }
-
-  /** Reverse the renderer's HTML escaping so URLs extracted from compiled email
-   *  HTML are the real targets (&amp;→& etc.). &amp; is decoded last to avoid
-   *  double-decoding (e.g. "&amp;lt;" → "&lt;", not "<"). */
-  private decodeHtml(s: string): string {
-    return s
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, '&');
-  }
 }
