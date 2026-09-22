@@ -4,12 +4,17 @@ import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-
 
 describe('DocumentsService', () => {
   let prisma: MockPrismaClient;
+  let mail: { sendAgreement: jest.Mock; sendSignedCopy: jest.Mock };
   let svc: DocumentsService;
   const WS = 'ws-1';
 
   beforeEach(() => {
     prisma = mockPrismaClient();
-    svc = new DocumentsService(prisma as any);
+    mail = {
+      sendAgreement: jest.fn().mockResolvedValue({ sent: true, to: 'jane@x.com', via: 'mailbox' }),
+      sendSignedCopy: jest.fn().mockResolvedValue(undefined),
+    };
+    svc = new DocumentsService(prisma as any, mail as any);
   });
 
   describe('update', () => {
@@ -66,6 +71,44 @@ describe('DocumentsService', () => {
       expect(res).toEqual({ status: 'SENT', publicToken: 'esign_x' });
       expect(prisma.document.updateMany).not.toHaveBeenCalled();
     });
+
+    // `esign-not-emailed`: the only way to get an agreement in front of a
+    // signer was to copy the link out of the UI and paste it into an email by
+    // hand.
+    describe('sendForSignature', () => {
+      it('mints the signing link FIRST, then delivers it', async () => {
+        prisma.document.findFirst.mockResolvedValue({ id: 'd1', status: 'DRAFT', body: 'Terms…' } as any);
+        prisma.document.updateMany.mockResolvedValue({ count: 1 } as any);
+
+        const res = await svc.sendForSignature(WS, 'd1', 'u1');
+
+        // The order is load-bearing: the public token does not exist until the
+        // DRAFT→SENT claim mints it, so the mail cannot be composed first.
+        expect(prisma.document.updateMany).toHaveBeenCalled();
+        expect(mail.sendAgreement).toHaveBeenCalledWith(WS, 'd1', 'u1');
+        expect(res).toMatchObject({ status: 'SENT', sent: true, to: 'jane@x.com' });
+        expect(res.publicToken).toMatch(/^esign_/);
+      });
+
+      // Rolling back to DRAFT would break send()'s idempotent-token contract
+      // and could invalidate a link the user already copied.
+      it('leaves the document SENT when the mail fails, and surfaces the error', async () => {
+        prisma.document.findFirst.mockResolvedValue({ id: 'd1', status: 'DRAFT', body: 'Terms…' } as any);
+        prisma.document.updateMany.mockResolvedValue({ count: 1 } as any);
+        mail.sendAgreement.mockRejectedValue(new BadRequestException('Contact has no email address'));
+
+        await expect(svc.sendForSignature(WS, 'd1')).rejects.toThrow(/no email address/);
+        const written = (prisma.document.updateMany.mock.calls[0][0] as any).data;
+        expect(written.status).toBe('SENT');
+        expect(prisma.document.update).not.toHaveBeenCalled();
+      });
+
+      it('refuses a document that can no longer be signed', async () => {
+        prisma.document.findFirst.mockResolvedValue({ id: 'd1', status: 'VOIDED' } as any);
+        await expect(svc.sendForSignature(WS, 'd1')).rejects.toBeInstanceOf(ConflictException);
+        expect(mail.sendAgreement).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('void / remove', () => {
@@ -80,6 +123,33 @@ describe('DocumentsService', () => {
   });
 
   describe('publicSign (token-gated)', () => {
+    it('mails both parties their copy — but only the claim winner does', async () => {
+      prisma.document.findUnique.mockResolvedValue({ id: 'd1', workspaceId: WS, status: 'SENT' } as any);
+      prisma.document.updateMany.mockResolvedValue({ count: 1 } as any);
+
+      await svc.publicSign('esign_tok', { signerName: 'Jane', consent: true }, {});
+      expect(mail.sendSignedCopy).toHaveBeenCalledWith(WS, 'd1');
+
+      // A concurrent second signer claims nothing, so nobody is mailed twice.
+      mail.sendSignedCopy.mockClear();
+      prisma.document.updateMany.mockResolvedValue({ count: 0 } as any);
+      prisma.document.findUnique.mockResolvedValue({ id: 'd1', workspaceId: WS, status: 'SIGNED' } as any);
+      await svc.publicSign('esign_tok', { signerName: 'Jane', consent: true }, {});
+      expect(mail.sendSignedCopy).not.toHaveBeenCalled();
+    });
+
+    // The signature is already a legal fact by then. A throw here would answer
+    // a signer whose agreement IS signed with "Could not sign. Please try again."
+    it('signs even when the copies cannot be sent', async () => {
+      prisma.document.findUnique.mockResolvedValue({ id: 'd1', workspaceId: WS, status: 'SENT' } as any);
+      prisma.document.updateMany.mockResolvedValue({ count: 1 } as any);
+      mail.sendSignedCopy.mockRejectedValue(new Error('smtp exploded'));
+
+      await expect(
+        svc.publicSign('esign_tok', { signerName: 'Jane', consent: true }, {}),
+      ).resolves.toEqual({ status: 'SIGNED' });
+    });
+
     it('records the signature + audit trail via an atomic SENT→SIGNED claim', async () => {
       prisma.document.findUnique.mockResolvedValue({ id: 'd1', status: 'SENT' } as any);
       prisma.document.updateMany.mockResolvedValue({ count: 1 } as any);

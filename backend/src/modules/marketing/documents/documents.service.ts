@@ -8,6 +8,7 @@ import {
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { DocumentEmailService } from '../invoicing/document-email.service';
 import { CreateDocumentDto, UpdateDocumentDto } from '../dto/document.dto';
 
 /** The consent text frozen onto every document at send time. */
@@ -43,7 +44,17 @@ interface SignContext {
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  /**
+   * The mail lives in `DocumentEmailService`, not here: that is where metering,
+   * the mailbox→platform ladder, the bounce refusal and the PUBLIC_BASE_URL
+   * guard already are, and re-implementing any of them beside them is how the
+   * guards drift. The arrow points one way — this service orchestrates the
+   * lifecycle and asks for the mail; the mail service never calls back.
+   */
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly documentEmail: DocumentEmailService,
+  ) {}
 
   // ─── Manager (workspace-scoped) ─────────────────────────────────────────────
 
@@ -164,6 +175,26 @@ export class DocumentsService {
     return { status: 'SENT', publicToken: token };
   }
 
+  /**
+   * Send the agreement to the signer by email (`esign-not-emailed`).
+   *
+   * MINT FIRST, then deliver — the opposite order to the invoice and the quote,
+   * and deliberately so: a document has no `publicToken` until `send()` flips
+   * DRAFT→SENT, so there is no link to put in the mail before that. A delivery
+   * failure therefore does NOT roll the document back to DRAFT: that would
+   * break `send()`'s idempotent-token contract and could invalidate a link the
+   * user already copied. It stays SENT, the error is surfaced, and "Copy
+   * signing link" is still there as the manual path.
+   */
+  async sendForSignature(workspaceId: string, id: string, actorId?: string | null) {
+    const minted = await this.send(workspaceId, id);
+    if (minted.status !== 'SENT' || !minted.publicToken) {
+      throw new ConflictException(`Cannot send a ${String(minted.status).toLowerCase()} document`);
+    }
+    const mail = await this.documentEmail.sendAgreement(workspaceId, id, actorId ?? null);
+    return { ...minted, ...mail };
+  }
+
   async void(workspaceId: string, id: string) {
     const doc = await this.get(workspaceId, id);
     if (doc.status === 'SIGNED') {
@@ -233,6 +264,19 @@ export class DocumentsService {
       });
       if (!fresh) throw new NotFoundException('Document not found');
       return { status: fresh.status };
+    }
+
+    // Both parties get their copy — and ONLY the claim winner sends it, so a
+    // double-sign race mails once. It runs on an unauthenticated public
+    // endpoint after the signature is already a legal fact, so nothing here may
+    // escape: a throw would answer a signer whose agreement IS signed with
+    // "Could not sign. Please try again."
+    try {
+      await this.documentEmail.sendSignedCopy(doc.workspaceId, doc.id);
+    } catch (e: unknown) {
+      this.logger.warn(
+        `signed copy not sent (document=${doc.id}): ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
     return { status: 'SIGNED' };
   }

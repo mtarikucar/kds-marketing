@@ -4,6 +4,9 @@ import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.servi
 import { MarketingEventTypes, MarketingInvoicePaidPayload } from '../events/marketing-event-types';
 import { CommerceTraceService } from './commerce-trace.service';
 import { commerceActivity } from './commerce-activity';
+import { DocumentEmailService } from './document-email.service';
+import { notifyCommerce } from './commerce-notify';
+import { formatMinorAmount } from './priced-document.util';
 
 /**
  * The paid half of the money story on a person's stream.
@@ -48,6 +51,7 @@ export class InvoicePaidConsumer implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly bus: DomainEventBus,
     private readonly trace: CommerceTraceService,
+    private readonly documentEmail: DocumentEmailService,
   ) {}
 
   onModuleInit(): void {
@@ -102,6 +106,31 @@ export class InvoicePaidConsumer implements OnModuleInit, OnModuleDestroy {
           currency: p.currency,
           paidVia: p.via,
         }),
+      );
+
+      // `no-payment-receipt`: a wallet or manual payment confirmed nothing to
+      // EITHER side. Both halves are deliberately after the trace and inside
+      // the same try — the money has already moved, so neither a receipt nor a
+      // bell may turn into a failed payment. The receipt's own dedupe is the
+      // mail ledger's durable idempotency key, not this consumer's in-memory
+      // Set, which is empty after exactly the restart that makes the outbox
+      // redeliver.
+      await this.documentEmail.sendPaymentReceipt(p.workspaceId, p.invoiceId);
+
+      const amount = formatMinorAmount(p.total, p.currency, null);
+      await notifyCommerce(
+        this.prisma,
+        {
+          workspaceId: p.workspaceId,
+          leadId: p.leadId,
+          type: 'INVOICE_PAID',
+          title: `Invoice ${invoice.number} paid`,
+          message: [`Invoice ${invoice.number} was paid`, amount && `(${amount})`, p.via && `via ${p.via}`]
+            .filter(Boolean)
+            .join(' ') + '.',
+          metadata: { docId: p.invoiceId, number: invoice.number, paidVia: p.via ?? null },
+        },
+        this.logger,
       );
     } catch (e) {
       // The invoice is already PAID and the money has already moved. A failed

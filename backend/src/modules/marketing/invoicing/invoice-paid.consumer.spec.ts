@@ -47,6 +47,7 @@ describe('InvoicePaidConsumer', () => {
   let prisma: MockPrismaClient;
   let bus: { on: jest.Mock; off: jest.Mock };
   let trace: { record: jest.Mock };
+  let mail: { sendPaymentReceipt: jest.Mock };
   let svc: InvoicePaidConsumer;
 
   const handle = (e: DomainEvent<MarketingInvoicePaidPayload>) => (svc as any).handle(e);
@@ -55,8 +56,11 @@ describe('InvoicePaidConsumer', () => {
     prisma = mockPrismaClient();
     bus = { on: jest.fn(), off: jest.fn() };
     trace = { record: jest.fn().mockResolvedValue(undefined) };
-    svc = new InvoicePaidConsumer(prisma as any, bus as any, trace as any);
+    mail = { sendPaymentReceipt: jest.fn().mockResolvedValue({ sent: true, to: 'ayse@example.com' }) };
+    svc = new InvoicePaidConsumer(prisma as any, bus as any, trace as any, mail as any);
     (prisma.invoice.findFirst as jest.Mock).mockResolvedValue({ number: 'INV-1042' });
+    (prisma.lead.findFirst as jest.Mock).mockResolvedValue({ assignedToId: 'rep-1' } as any);
+    (prisma.marketingNotification.create as jest.Mock).mockResolvedValue({ id: 'n1' } as any);
   });
 
   describe('onModuleInit / onModuleDestroy', () => {
@@ -139,6 +143,41 @@ describe('InvoicePaidConsumer', () => {
     it('never lets a trace failure escape — the invoice is already PAID', async () => {
       trace.record.mockRejectedValue(new Error('db down'));
       await expect(handle(makeEvent('evt-1'))).resolves.toBeUndefined();
+    });
+
+    // `no-payment-receipt`: a wallet or manual payment confirmed nothing to
+    // either side. The payer gets a receipt; the workspace gets told.
+    it('mails the payer a receipt and tells the workspace', async () => {
+      await handle(makeEvent('evt-1'));
+      expect(mail.sendPaymentReceipt).toHaveBeenCalledWith('ws-1', 'inv-1');
+      const notice = (prisma.marketingNotification.create as jest.Mock).mock.calls[0][0] as any;
+      expect(notice.data).toMatchObject({
+        workspaceId: 'ws-1',
+        userId: 'rep-1',
+        type: 'INVOICE_PAID',
+      });
+      expect(notice.data.message).toContain('INV-1042');
+      expect(notice.data.message).toContain('150.00 TRY');
+    });
+
+    // The receipt's dedupe is the mail ledger's durable key, but the event
+    // dedupe still spares the work when the outbox redispatches in-process.
+    it('does not re-send the receipt for a redispatched event', async () => {
+      await handle(makeEvent('evt-1'));
+      await handle(makeEvent('evt-1'));
+      expect(mail.sendPaymentReceipt).toHaveBeenCalledTimes(1);
+    });
+
+    it('never lets a failing receipt look like a failed payment', async () => {
+      mail.sendPaymentReceipt.mockRejectedValue(new Error('smtp exploded'));
+      await expect(handle(makeEvent('evt-1'))).resolves.toBeUndefined();
+      // The trace still went in: it runs before the mail.
+      expect(trace.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('mails nothing for an invoice with no contact', async () => {
+      await handle(makeEvent('evt-1', { leadId: null }));
+      expect(mail.sendPaymentReceipt).not.toHaveBeenCalled();
     });
   });
 });

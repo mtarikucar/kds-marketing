@@ -6,6 +6,7 @@ describe('EstimatesService', () => {
   let prisma: MockPrismaClient;
   let invoices: { create: jest.Mock };
   let taxRates: { resolveItemTaxes: jest.Mock };
+  let trace: { record: jest.Mock };
   let svc: EstimatesService;
   const WS = 'ws-1';
 
@@ -14,7 +15,10 @@ describe('EstimatesService', () => {
     invoices = { create: jest.fn().mockResolvedValue({ id: 'inv-1' }) };
     // Default: no tax (pct 0) — totals equal the pre-tax subtotal, as before.
     taxRates = { resolveItemTaxes: jest.fn((_ws, items) => Promise.resolve(items ?? [])) };
-    svc = new EstimatesService(prisma as any, invoices as any, taxRates as any);
+    trace = { record: jest.fn().mockResolvedValue(undefined) };
+    svc = new EstimatesService(prisma as any, invoices as any, taxRates as any, trace as any);
+    (prisma.lead.findFirst as jest.Mock).mockResolvedValue({ assignedToId: 'rep-1' } as any);
+    (prisma.marketingNotification.create as jest.Mock).mockResolvedValue({ id: 'n1' } as any);
   });
 
   describe('list', () => {
@@ -148,31 +152,125 @@ describe('EstimatesService', () => {
   });
 
   describe('public accept / decline (token-gated)', () => {
+    const SENT = {
+      id: 'e1',
+      workspaceId: WS,
+      status: 'SENT',
+      leadId: 'lead-1',
+      number: 'EST-7',
+      total: 125050,
+      currency: 'TRY',
+      validUntil: null,
+    };
+
     it('accepts via the public token and stamps acceptedAt', async () => {
-      prisma.estimate.findUnique.mockResolvedValue({ id: 'e1', status: 'SENT' } as any);
-      prisma.estimate.update.mockResolvedValue({ id: 'e1' } as any);
+      prisma.estimate.findUnique.mockResolvedValue(SENT as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
       const res = await svc.publicAccept('es_tok');
       expect(prisma.estimate.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({ where: { publicToken: 'es_tok' } }),
       );
-      expect(prisma.estimate.update).toHaveBeenCalledWith(
+      expect(prisma.estimate.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ status: 'ACCEPTED' }) }),
       );
       expect(res).toEqual({ status: 'ACCEPTED' });
     });
 
-    it('refuses to accept an already-declined estimate via token', async () => {
-      prisma.estimate.findUnique.mockResolvedValue({ id: 'e1', status: 'DECLINED' } as any);
-      await expect(svc.publicAccept('es_tok')).rejects.toBeInstanceOf(ConflictException);
+    // The public endpoint allows 20 POSTs/min/IP, and the old guard was
+    // evaluated off a STALE read: two concurrent accepts both passed it. The
+    // claim is what makes "the customer answered" a single event.
+    it('claims the answer with a status-conditional, workspace-scoped updateMany', async () => {
+      prisma.estimate.findUnique.mockResolvedValue(SENT as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
+      await svc.publicAccept('es_tok');
+      expect(prisma.estimate.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'e1', workspaceId: WS, status: { in: ['DRAFT', 'SENT'] } },
+        }),
+      );
       expect(prisma.estimate.update).not.toHaveBeenCalled();
+    });
+
+    // `quote-answer-silent`: an acceptance went unnoticed and the deal stalled.
+    it('writes the answer onto the person and tells the rep who owns them', async () => {
+      prisma.estimate.findUnique.mockResolvedValue(SENT as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
+      await svc.publicAccept('es_tok');
+
+      const [ws, leadId, row, opts] = trace.record.mock.calls[0];
+      expect(ws).toBe(WS);
+      expect(leadId).toBe('lead-1');
+      expect(row.title).toBe('Quote EST-7 accepted by the customer');
+      expect(row.metadata).toMatchObject({ event: 'quote_answered', answer: 'ACCEPTED' });
+      // No actor: the CUSTOMER answered, so the row belongs to the workspace
+      // SYSTEM sentinel, not to whichever colleague happened to be nearby.
+      expect(opts).toBeUndefined();
+
+      const notice = (prisma.marketingNotification.create as jest.Mock).mock.calls[0][0] as any;
+      expect(notice.data).toMatchObject({ workspaceId: WS, userId: 'rep-1', type: 'QUOTE_ANSWERED' });
+    });
+
+    it('records a decline the same way', async () => {
+      prisma.estimate.findUnique.mockResolvedValue(SENT as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
+      await expect(svc.publicDecline('es_tok')).resolves.toEqual({ status: 'DECLINED' });
+      expect(trace.record.mock.calls[0][2].metadata).toMatchObject({ answer: 'DECLINED' });
+    });
+
+    // The loser of a double-click writes nothing: one answer, one activity row.
+    it('writes no trace when the claim was lost, and reports the real status', async () => {
+      prisma.estimate.findUnique
+        .mockResolvedValueOnce(SENT as any)
+        .mockResolvedValueOnce({ ...SENT, status: 'ACCEPTED' } as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 0 } as any);
+
+      await expect(svc.publicAccept('es_tok')).resolves.toEqual({ status: 'ACCEPTED' });
+      expect(trace.record).not.toHaveBeenCalled();
+    });
+
+    it('re-accepting an already-accepted quote stays idempotent and silent', async () => {
+      prisma.estimate.findUnique.mockResolvedValue({ ...SENT, status: 'ACCEPTED' } as any);
+      await expect(svc.publicAccept('es_tok')).resolves.toEqual({ status: 'ACCEPTED' });
+      expect(prisma.estimate.updateMany).not.toHaveBeenCalled();
+      expect(trace.record).not.toHaveBeenCalled();
+    });
+
+    // A missing timeline row is a missing line in a story; it is not a reason
+    // to tell a customer their acceptance failed.
+    it('still accepts when the trace or the notification cannot be written', async () => {
+      prisma.estimate.findUnique.mockResolvedValue(SENT as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
+      trace.record.mockRejectedValue(new Error('no sentinel'));
+      await expect(svc.publicAccept('es_tok')).resolves.toEqual({ status: 'ACCEPTED' });
+    });
+
+    it('refuses to accept an already-declined estimate via token', async () => {
+      prisma.estimate.findUnique.mockResolvedValue({ ...SENT, status: 'DECLINED' } as any);
+      await expect(svc.publicAccept('es_tok')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.estimate.updateMany).not.toHaveBeenCalled();
     });
 
     it('refuses to accept an EXPIRED estimate (past validUntil) — no lock-in at the stale price', async () => {
       prisma.estimate.findUnique.mockResolvedValue({
-        id: 'e1', status: 'SENT', validUntil: new Date(Date.now() - 86_400_000),
+        ...SENT, validUntil: new Date(Date.now() - 86_400_000 * 2),
       } as any);
       await expect(svc.publicAccept('es_tok')).rejects.toThrow(/expired/i);
-      expect(prisma.estimate.update).not.toHaveBeenCalled();
+      expect(prisma.estimate.updateMany).not.toHaveBeenCalled();
+    });
+
+    // The page prints "Valid until 30 September" — the 30th is a day the
+    // customer can still accept on, in any timezone.
+    it('still accepts on the last stated day', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-30T22:30:00.000Z'));
+      try {
+        prisma.estimate.findUnique.mockResolvedValue({
+          ...SENT, validUntil: new Date('2026-09-30T00:00:00.000Z'),
+        } as any);
+        prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
+        await expect(svc.publicAccept('es_tok')).resolves.toEqual({ status: 'ACCEPTED' });
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('404s an unknown public token', async () => {
