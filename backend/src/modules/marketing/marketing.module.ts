@@ -189,6 +189,11 @@ import { ConsentLedgerService } from './compliance/consent-ledger.service';
 import { MailBudgetService } from './channels/outbound/mail-budget.service';
 import { IYS_EMAIL_PORT } from './compliance/iys-email.port';
 import { IysEmailAdapter } from './compliance/iys-email.adapter';
+// Email flawless wave 3 — the inbound pipeline's ledger and its retry job.
+import { InboundItemService } from './channels/inbound/inbound-item.service';
+import { InboundRetryJob } from './channels/inbound/inbound-retry.job';
+import { EmailSentPollService } from './channels/inbound/email-sent-poll.service';
+import { PlatformBouncePollService } from './channels/inbound/platform-bounce-poll.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
 import { OutboundConversationService } from './channels/outbound-conversation.service';
@@ -1009,6 +1014,24 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // and it stays inert until a workspace arms `settings.email.iys.eposta`.
     MailBudgetService,
     { provide: IYS_EMAIL_PORT, useClass: IysEmailAdapter },
+    // Email flawless wave 3 — the inbound pipeline. `InboundItemService` is the
+    // examine-ledger every inbound path writes to, which is what turns "where
+    // did my customer's mail go?" from a log grep into a row; `InboundRetryJob`
+    // is the bounded replay behind it, so a failed ingest is retried and then
+    // PARKED visibly instead of being dropped when the cursor moves on.
+    // The job registers its ScheduledJob handler in onModuleInit, so it has to
+    // be a provider even though nothing injects it.
+    InboundItemService,
+    InboundRetryJob,
+    // The Sent-folder reconciler. Its @Cron only exists once Nest owns the
+    // instance, and it is inert until a mailbox opts in with
+    // `configPublic.readSentFolder` (G3: off for every existing channel).
+    EmailSentPollService,
+    // Bounces of PLATFORM mail (digests, invites, password resets). Reads the
+    // EMAIL_USER mailbox over IMAP and feeds EspFeedbackService, and is fully
+    // inert while those env vars are absent (G6) — registering it costs an
+    // idle cron, not a connection.
+    PlatformBouncePollService,
     ChannelsService,
     ConversationStreamService,
     MessageSenderService,
