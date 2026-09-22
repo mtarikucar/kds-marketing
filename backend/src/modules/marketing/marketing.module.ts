@@ -174,6 +174,17 @@ import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
 import { WorkspaceMailboxService } from './channels/workspace-mailbox.service';
 import { MessageQuotaService } from './channels/message-quota.service';
+// Email flawless wave 1 — the outbound mail seam. Nothing is migrated onto it
+// yet (callers move in wave 2); these are the providers the seam is built from.
+import { SystemSentinelService } from './channels/system-sentinel';
+import { MailboxHealthService } from './channels/mailbox-health.service';
+import { SenderIdentityService } from './channels/outbound/sender-identity.service';
+import { MailGuardService } from './channels/outbound/mail-guard.service';
+import { MailLogService } from './channels/outbound/mail-log.service';
+import { MailTraceService } from './channels/outbound/mail-trace.service';
+import { OutboundMailService } from './channels/outbound/outbound-mail.service';
+import { SuppressionService } from './compliance/suppression.service';
+import { ConsentLedgerService } from './compliance/consent-ledger.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
 import { OutboundConversationService } from './channels/outbound-conversation.service';
@@ -972,6 +983,19 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     EmailOAuthService,
     EmailOAuthRefreshService,
     MessageQuotaService,
+    // Email flawless wave 1 — the outbound seam (the gateway, its ordered gate,
+    // the two ledgers, the sender identity and the suppression core). Registered
+    // so the seam exists and is injectable; no caller is moved onto it until
+    // wave 2, so nothing sends differently today.
+    SystemSentinelService,
+    MailboxHealthService,
+    ConsentLedgerService,
+    SuppressionService,
+    SenderIdentityService,
+    MailLogService,
+    MailTraceService,
+    MailGuardService,
+    OutboundMailService,
     ChannelsService,
     ConversationStreamService,
     MessageSenderService,
