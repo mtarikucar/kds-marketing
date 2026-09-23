@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { IconButton } from '@/components/ui/IconButton';
+import { Textarea } from '@/components/ui/Textarea';
 import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
 import { fmtSlot } from '../../../features/marketing/utils/format';
 import LeadStream from '../../../features/marketing/components/LeadStream';
@@ -24,6 +25,7 @@ import {
   listConversations,
   type ConversationSummary,
 } from '../../../features/marketing/api/conversations.service';
+import { readDeclineReason } from '../../../features/marketing/aiDeclineReason';
 import LeadHeaderActions from '../leadDetail/LeadHeaderActions';
 import type { SurfacePerson } from './surfacePerson';
 
@@ -33,6 +35,48 @@ interface NoteRow {
   createdAt: string;
 }
 
+/**
+ * A thread row, plus the recipient identity the conversation list is being
+ * taught to carry.
+ *
+ * Optional on purpose: the field arrives separately, and until it does this
+ * column must render without CLAIMING an address it does not have. Everything
+ * that reads it treats absence as "not known here", never as "no recipient".
+ */
+type ThreadRow = ConversationSummary & {
+  contact?: { value?: string | null; kind?: string | null } | null;
+};
+
+/**
+ * What `POST /conversations/:id/reply` answers with — the settled `Message`
+ * row, not a courtesy echo.
+ *
+ * A 2xx is the REQUEST succeeding. `MessageSenderService` catches an adapter
+ * rejection, persists the row as FAILED with the provider's reason, refunds the
+ * quota and RETURNS, so `status` is the only witness to whether anything left
+ * the building. `to` is where this attempt was actually addressed.
+ */
+interface ReplyResult {
+  status?: string;
+  error?: string | null;
+  to?: string | null;
+}
+
+/** `ReplyDto.text` is `@MaxLength(4000)`. Said in the box, the cap is a number
+ *  a rep can write around; unsaid it arrives as a 400 with their whole letter
+ *  in the request body. */
+const MAX_REPLY_CHARS = 4000;
+
+/**
+ * Compare two spellings of an address the way the server does before deciding
+ * they are the same person.
+ *
+ * EMAIL only, deliberately. Phone identities are written E.164 (`+90555…`)
+ * while `lead.phone` keeps whatever shape it arrived in, so the same comparison
+ * on the busiest channel would warn about a mismatch on virtually every thread.
+ */
+const normEmail = (v?: string | null) => (v ?? '').trim().toLowerCase();
+
 export interface PersonPaneProps {
   /**
    * Who is selected. Null before anyone is — the column says so and fetches
@@ -41,11 +85,11 @@ export interface PersonPaneProps {
    * `SurfacePerson` rather than `Lead` since the left column switches views: a
    * board card or a task row knows an id and a name and little else, and the
    * surface fills the rest in from the person's own record. What this column
-   * reads is `contactPerson`/`businessName` for the header and `phone` /
-   * `smsOptOut` for `LeadHeaderActions` — and that last pair is why the fill-in
-   * matters here rather than being cosmetic: "Ara" is ABSENT, not disabled,
-   * when a lead has no number, so a half-described person would silently lose
-   * two buttons.
+   * reads is `contactPerson`/`businessName` for the header, `email` for the
+   * composer's recipient line, and `phone` / `smsOptOut` for
+   * `LeadHeaderActions` — and that last pair is why the fill-in matters here
+   * rather than being cosmetic: "Ara" is ABSENT, not disabled, when a lead has
+   * no number, so a half-described person would silently lose two buttons.
    */
   person: SurfacePerson | null;
   className?: string;
@@ -71,7 +115,11 @@ const errMsg = (e: unknown, fallback: string) =>
  * - The composer and its send are ThreadPane's, `POST /conversations/:id/reply`
  *   unchanged, including the Enter guard that stops a fast second press from
  *   double-sending an uncleared draft to a live customer, and the SMS segment
- *   counter.
+ *   counter. EMAIL is the one branch that diverges — a multi-line box, and
+ *   therefore Ctrl/Cmd+Enter to send — because an email answer written into a
+ *   single-line input goes out as one run-on line. The guard itself is shared
+ *   rather than re-written, which is the point: a fresh keydown path that
+ *   omits the in-flight check is how the duplicate-send bug comes back.
  * - Pause/resume AI, close/reopen and the team-only notes are ThreadPane's too.
  *   They are per-CONVERSATION controls, so they hang off the thread this pane
  *   has in hand rather than off the person.
@@ -84,6 +132,13 @@ const errMsg = (e: unknown, fallback: string) =>
  * person with an SMS thread and an email thread needs the composer to say which
  * one it is about to answer on. Without it a rep replies to an email over SMS
  * and finds out from the customer.
+ *
+ * The same reasoning, carried one step further: the composer also names the
+ * ADDRESS it is about to mail, and says so when that address is no longer the
+ * one on the lead record — a corrected email does not re-point an open thread,
+ * because the identity is the threading key. And a send the provider refused
+ * keeps the draft in the box with the reason on screen, because a cleared box
+ * is a rep believing they answered a customer nobody answered.
  *
  * Failure and gating, kept apart as everywhere else on this surface:
  *
@@ -114,10 +169,20 @@ export function PersonPane({ person, className }: PersonPaneProps) {
   const [noteDraft, setNoteDraft] = useState('');
   const [notesOpen, setNotesOpen] = useState(false);
   const [pickedThreadId, setPickedThreadId] = useState<string | null>(null);
+  /**
+   * Where the server said it actually mailed, per thread.
+   *
+   * First-hand evidence, and the only kind this column has until the list
+   * endpoint carries the thread's identity: the reply response names the
+   * address the send resolved to. Kept for a FAILED attempt too — that is
+   * still where the letter was addressed, and it is the address a rep needs to
+   * see before pressing Gönder again.
+   */
+  const [sentTo, setSentTo] = useState<Record<string, string>>({});
 
   const leadId = person?.id ?? null;
 
-  const threads = useQuery<ConversationSummary[]>({
+  const threads = useQuery<ThreadRow[]>({
     queryKey: ['marketing', 'conversations', 'lead', leadId],
     queryFn: () => listConversations({ leadId: leadId! }),
     enabled: !!leadId && canConverse,
@@ -169,15 +234,46 @@ export function PersonPane({ person, className }: PersonPaneProps) {
   const reply = useMutation({
     mutationFn: async (text: string) => {
       const id = activeId;
-      await marketingApi.post(`/conversations/${id}/reply`, { text });
-      return id;
+      // The BODY, not just the status code. The send's outcome exists nowhere
+      // else: a refusal comes back 200 with `status: 'FAILED'` on the row.
+      const r = await marketingApi.post(`/conversations/${id}/reply`, { text });
+      return { id, message: (r?.data ?? null) as ReplyResult | null };
     },
-    onSuccess: (id) => {
+    onSuccess: ({ id, message }) => {
+      // BOTH branches. A refused send still wrote a Message row, and the
+      // stream is where its reason is readable — a list left un-invalidated
+      // would keep showing a thread that never mentions the attempt.
+      invalidate();
+
+      const addressed = message?.to?.trim();
+      if (id && addressed) {
+        setSentTo((m) => (m[id] === addressed ? m : { ...m, [id]: addressed }));
+      }
+
+      if (message?.status === 'FAILED') {
+        const base = t('inbox.sendFailed', 'Gönderilemedi');
+        const reason = message.error?.trim();
+        // The draft STAYS in the box, and that is the whole retry: a second
+        // control would duplicate the Gönder button, while a wiped box is the
+        // rep's letter gone with nothing to send again.
+        //
+        // The second clause is the other half of the truth. `reply()` pauses
+        // the AI for this thread BEFORE it sends, so a failure that passed
+        // unnoticed left the customer with nobody answering at all — neither
+        // the rep, who believes they replied, nor the engine.
+        toast.error(
+          `${reason ? `${base}: ${reason}` : base} — ${t(
+            'inbox.sendFailedAiPaused',
+            'yapay zekâ bu konuşmada duraklatıldı; yeniden dene',
+          )}`,
+        );
+        return;
+      }
+
       // Only clear the box if the reply landed on the thread still in hand — a
       // slow send that resolves after the rep switched channels must not wipe
       // the new thread's draft.
       if (id === activeId) setDraft('');
-      invalidate();
     },
     onError: (e) => toast.error(errMsg(e, t('inbox.sendFailed', 'Gönderilemedi'))),
   });
@@ -229,11 +325,51 @@ export function PersonPane({ person, className }: PersonPaneProps) {
     );
   }
 
-  const channelOf = (c: ConversationSummary) => c.channel?.type ?? '—';
+  const channelOf = (c: ThreadRow) => c.channel?.type ?? '—';
+  /** The address a thread is bound to, best evidence first: the identity the
+   *  list carries, else what the server said it last mailed. Never guessed. */
+  const addressOf = (c: ThreadRow) => c.contact?.value?.trim() || sentTo[c.id] || null;
   const send = () => {
     const text = draft.trim();
     if (text && !reply.isPending) reply.mutate(text);
   };
+  /**
+   * ThreadPane's guard, in ONE place so the two key paths cannot drift.
+   *
+   * The in-flight half is the load-bearing one: without it a fast second press
+   * re-sends the not-yet-cleared draft, which is a duplicate message to a live
+   * customer. A fresh keydown handler that omits it re-introduces exactly that
+   * bug, so the single-line and multi-line branches share this.
+   */
+  const canSend = draft.trim().length > 0 && !reply.isPending;
+
+  const activeChannel = active ? channelOf(active) : '—';
+  const isEmail = activeChannel === 'EMAIL';
+  const leadEmail = person.email?.trim() || null;
+  const threadAddress = active ? addressOf(active) : null;
+  /**
+   * Who this reply is really addressed to.
+   *
+   * The thread's own identity wins. The lead's address is a FALLBACK and only
+   * for EMAIL: it is what a new thread would be opened against, and on the
+   * overwhelmingly common thread the two are the same address anyway.
+   */
+  const recipient = threadAddress ?? (isEmail ? leadEmail : null);
+  /**
+   * The thread mails one address and the lead record now carries another.
+   *
+   * The identity is the threading and dedup key, so a lead edit deliberately
+   * does NOT re-point an open thread — mail from the old address must keep
+   * landing in it. What was missing is anybody being told: the reply went to
+   * the former address unseen. Saying so turns it into a choice, and the one
+   * safe way to act on it is `Mesaj`, which opens a thread against the new
+   * address through the single start path that enforces opt-out, bounce
+   * hygiene and the cross-lead identity conflict.
+   */
+  const staleAddress =
+    isEmail && threadAddress && leadEmail && normEmail(threadAddress) !== normEmail(leadEmail)
+      ? threadAddress
+      : null;
 
   return (
     <Card className={`flex min-w-0 flex-col overflow-hidden ${className ?? ''}`}>
@@ -307,8 +443,8 @@ export function PersonPane({ person, className }: PersonPaneProps) {
         >
           <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span className="min-w-0">
-            {t('inbox.aiDeclined', 'Yapay zekâ bu konuşmada yanıt vermedi:')}{' '}
-            {active.aiLastDeclineReason}
+            {t('inbox.aiDeclined', 'The AI did not reply in this conversation:')}{' '}
+            {readDeclineReason(active.aiLastDeclineReason, (k, d) => t(k, d))}
           </span>
         </div>
       )}
@@ -331,6 +467,16 @@ export function PersonPane({ person, className }: PersonPaneProps) {
               onClick={() => setPickedThreadId(c.id)}
             >
               {channelOf(c)}
+              {/* The address, when it is known. Required rather than a nicety
+                  once a person can have two threads on ONE channel: after a
+                  merge, or after a lead's email is corrected and a second
+                  thread is opened beside the first, the address is the only
+                  thing that tells the two buttons apart. */}
+              {addressOf(c) && (
+                <span className="max-w-[10rem] truncate text-[10px] opacity-70">
+                  {addressOf(c)}
+                </span>
+              )}
               {/* The channel alone is not an identity. Two SMS threads with one
                   person render as the same button twice, and the picker exists
                   precisely so a rep does not answer the wrong thread — so the
@@ -513,38 +659,85 @@ export function PersonPane({ person, className }: PersonPaneProps) {
           </p>
         ) : active ? (
           <>
+            {staleAddress && (
+              <p
+                data-testid="person-pane-recipient-stale"
+                role="status"
+                className="text-[11px] text-warning"
+              >
+                {t('surface.pane.recipientStale', {
+                  defaultValue:
+                    'Bu konuşma {{thread}} adresine gidiyor; kişinin kayıtlı adresi {{lead}}. Yeni adrese yazmak için Mesaj ile yeni bir konuşma başlat.',
+                  thread: staleAddress,
+                  lead: leadEmail,
+                })}
+              </p>
+            )}
             <div className="flex gap-2">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                aria-label={t('surface.pane.reply', 'Yanıt yaz')}
-                placeholder={t('surface.pane.reply', 'Yanıt yaz')}
-                onKeyDown={(e) => {
-                  // ThreadPane's guard, kept: without the in-flight check a
-                  // second Enter re-sends the not-yet-cleared draft, which is a
-                  // duplicate message to a live customer.
-                  if (e.key === 'Enter' && !e.shiftKey && draft.trim() && !reply.isPending) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                className="h-9 flex-1 rounded-lg border border-border-strong bg-surface px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
+              {isEmail ? (
+                /* A letter, not a text message. An email answer to a B2B
+                   enquiry went out as one run-on line while the composer was a
+                   single `<input>` — so EMAIL gets a real box, and with it
+                   Enter gets its ordinary job back. Only EMAIL: SMS and
+                   WhatsApp reps send with Enter all day on the higher-traffic
+                   channels, and moving them to Ctrl+Enter would be a
+                   regression for them. */
+                <Textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={3}
+                  maxLength={MAX_REPLY_CHARS}
+                  aria-label={t('surface.pane.reply', 'Yanıt yaz')}
+                  placeholder={t('surface.pane.reply', 'Yanıt yaz')}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && canSend) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  className="min-h-[72px] flex-1"
+                />
+              ) : (
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  aria-label={t('surface.pane.reply', 'Yanıt yaz')}
+                  placeholder={t('surface.pane.reply', 'Yanıt yaz')}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && canSend) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  className="h-9 flex-1 rounded-lg border border-border-strong bg-surface px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              )}
               <Button
                 size="md"
+                className={isEmail ? 'self-end' : undefined}
                 onClick={send}
-                disabled={!draft.trim() || reply.isPending}
+                disabled={!canSend}
                 loading={reply.isPending}
                 aria-label={t('inbox.send', 'Gönder')}
               >
                 <Send className="h-4 w-4" />
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              {/* Which channel this reply leaves on. On the old surface the
-                  conversation list answered that; here the person does not. */}
-              {channelOf(active)}
-              {channelOf(active) === 'SMS' &&
+            <p
+              data-testid="person-pane-composer-meta"
+              className="text-[11px] text-muted-foreground"
+            >
+              {/* Which channel this reply leaves on, and — the part that was
+                  missing — WHICH ADDRESS. On the old surface the conversation
+                  list answered the first; nothing anywhere answered the
+                  second. */}
+              {activeChannel}
+              {recipient && ` · ${recipient}`}
+              {/* Numbers only: a ratio needs no translating, and the cap it
+                  names is the server's own. */}
+              {isEmail && ` · ${draft.length}/${MAX_REPLY_CHARS}`}
+              {isEmail && ` · ${t('surface.pane.sendShortcut', 'Ctrl+Enter ile gönder')}`}
+              {activeChannel === 'SMS' &&
                 ` · ${t('inbox.smsCounter', {
                   defaultValue: '{{chars}} karakter · {{segments}} parça',
                   chars: draft.length,

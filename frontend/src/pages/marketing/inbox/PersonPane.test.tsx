@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { PersonPane } from './PersonPane';
 import type { Lead } from '../../../features/marketing/types';
 
@@ -104,6 +105,37 @@ describe('PersonPane — the middle column is one person’s whole history', () 
 
     expect(await screen.findByTestId('ai-decline-reason')).toHaveTextContent(
       'no agent profile attached to channel SMS',
+    );
+  });
+
+  it('names a coded decline in the reader’s language, not the server’s prose', async () => {
+    // The engine prefixes a machine code onto its own English sentence. The
+    // sentence is for whoever is reading the database during an incident; the
+    // rep gets the translated one (PLAN G8 — a reason code is never printed raw).
+    listConversations.mockResolvedValue([
+      thread({
+        aiLastDeclineReason: 'CONVERSATION_NOT_OPEN: conversation is CLOSED, not OPEN',
+      }),
+    ]);
+
+    renderPane();
+
+    const row = await screen.findByTestId('ai-decline-reason');
+    expect(row).toHaveTextContent('This conversation is closed');
+    expect(row).not.toHaveTextContent('not OPEN');
+  });
+
+  it('falls back to the prose for a code this build does not know', async () => {
+    // The SPA and the API deploy separately, so a newer server can name a code
+    // this bundle has never heard of. Prose is degraded; blank is broken.
+    listConversations.mockResolvedValue([
+      thread({ aiLastDeclineReason: 'SOME_NEW_CODE: the engine said something new' }),
+    ]);
+
+    renderPane();
+
+    expect(await screen.findByTestId('ai-decline-reason')).toHaveTextContent(
+      'SOME_NEW_CODE: the engine said something new',
     );
   });
 
@@ -426,5 +458,345 @@ describe('PersonPane — two threads on one channel are still two threads', () =
     const [, closed] = within(picker).getAllByRole('button');
     expect(closed).toHaveTextContent('Kapalı');
     expect(within(picker).getAllByRole('button')[0]).not.toHaveTextContent('Kapalı');
+  });
+});
+
+/**
+ * A 2xx from `POST /conversations/:id/reply` is the REQUEST succeeding, not the
+ * send. `MessageSenderService` catches an adapter rejection, persists the
+ * Message as FAILED with the provider's reason, refunds the quota and RETURNS —
+ * so the composer used to clear the box, show nothing, and leave the rep
+ * believing a letter went out that never left the building. Worse: `reply()`
+ * pauses the AI for the thread before it sends, so the failure left the
+ * customer with nobody answering at all.
+ *
+ * The same distinction `LeadHeaderActions` already makes one component over.
+ */
+describe('PersonPane — a send that failed is not a send that happened', () => {
+  const failed = (error?: string | null) => ({
+    data: { id: 'm1', status: 'FAILED', error: error ?? null },
+  });
+
+  const typeAndSend = async (user: ReturnType<typeof userEvent.setup>, text = 'Uzun bir yanıt') => {
+    const box = await screen.findByLabelText('Yanıt yaz');
+    await user.type(box, text);
+    await user.click(screen.getByRole('button', { name: 'Gönder' }));
+    return box;
+  };
+
+  it('keeps the rep’s letter in the box when the provider refused it', async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue(failed('550 mailbox unavailable'));
+    renderPane();
+
+    const box = await typeAndSend(user);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    // The whole point: Gönder is the retry, so what was typed has to still be
+    // there to retry with.
+    expect((box as HTMLInputElement).value).toBe('Uzun bir yanıt');
+  });
+
+  it('names the provider’s reason instead of failing silently', async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue(failed('550 mailbox unavailable'));
+    renderPane();
+
+    await typeAndSend(user);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('550 mailbox unavailable'),
+      ),
+    );
+    // And says the other half of the truth: the AI was paused by this very
+    // reply, so nobody is answering this customer until somebody retries.
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('yapay zekâ'));
+  });
+
+  it('still says "Gönderilemedi" when the row carries no reason', async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue(failed(null));
+    renderPane();
+
+    await typeAndSend(user, 'kısa');
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Gönderilemedi')),
+    );
+  });
+
+  it('refreshes the thread on a FAILED send too — the bubble is where the reason lives', async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue(failed('550'));
+    renderPane();
+
+    await typeAndSend(user, 'x');
+
+    // The FAILED Message row exists; a list left un-invalidated would keep
+    // showing a thread that never mentions it.
+    await waitFor(() => expect(listConversations.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('clears the box when the send actually left', async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue({ data: { id: 'm1', status: 'SENT' } });
+    renderPane();
+
+    const box = await typeAndSend(user, 'gitti');
+
+    await waitFor(() => expect((box as HTMLInputElement).value).toBe(''));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  // The other failure shape: the request itself is refused (a non-ACTIVE
+  // channel, MESSAGES_EXHAUSTED). Same rule — the letter stays.
+  it('keeps the box when the request itself is refused, and repeats the server’s words', async () => {
+    const user = userEvent.setup();
+    post.mockRejectedValue({ response: { data: { message: 'Channel is INACTIVE, not ACTIVE' } } });
+    renderPane();
+
+    const box = await typeAndSend(user, 'deneme');
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Channel is INACTIVE, not ACTIVE'),
+    );
+    expect((box as HTMLInputElement).value).toBe('deneme');
+  });
+});
+
+/**
+ * An email reply is a letter, not a text message.
+ *
+ * The composer was one `<input>` for every channel, so a formal answer to a
+ * B2B enquiry went out as a single run-on line. Widening it is only half the
+ * fix: the key that sends has to change with it, because Enter now has a job
+ * inside the box — and the SMS side must NOT change, since plain Enter is what
+ * the higher-traffic channel's reps use all day.
+ */
+describe('PersonPane — an email reply is a letter, not a text message', () => {
+  const mailThread = (over: Record<string, unknown> = {}) =>
+    thread({ id: 'c-mail', channel: { type: 'EMAIL' }, ...over });
+
+  const replyCalls = () =>
+    post.mock.calls.filter(([url]) => String(url).includes('/reply')).length;
+
+  it('gives EMAIL a multi-line box, and Enter writes a newline instead of sending', async () => {
+    const user = userEvent.setup();
+    listConversations.mockResolvedValue([mailThread()]);
+    renderPane();
+
+    const box = (await screen.findByLabelText('Yanıt yaz')) as HTMLTextAreaElement;
+    expect(box.tagName).toBe('TEXTAREA');
+
+    await user.type(box, 'Merhaba,{Enter}{Enter}Teklifi ekte gönderiyorum.');
+
+    expect(box.value).toContain('\n');
+    expect(replyCalls()).toBe(0);
+  });
+
+  it('sends on Ctrl+Enter', async () => {
+    const user = userEvent.setup();
+    listConversations.mockResolvedValue([mailThread()]);
+    renderPane();
+
+    const box = await screen.findByLabelText('Yanıt yaz');
+    await user.type(box, 'Merhaba');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/conversations/c-mail/reply', { text: 'Merhaba' }),
+    );
+  });
+
+  it('sends ONCE while the first send is still in flight', async () => {
+    // The guard the single-line box has always carried, kept verbatim on the
+    // new key path: a second press re-sending the not-yet-cleared draft is a
+    // duplicate letter to a live customer.
+    const user = userEvent.setup();
+    listConversations.mockResolvedValue([mailThread()]);
+    post.mockImplementation((url: string) =>
+      String(url).includes('/reply') ? new Promise(() => undefined) : Promise.resolve({ data: {} }),
+    );
+    renderPane();
+
+    const box = await screen.findByLabelText('Yanıt yaz');
+    await user.type(box, 'Merhaba');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    await waitFor(() => expect(replyCalls()).toBe(1));
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+
+    expect(replyCalls()).toBe(1);
+  });
+
+  it('shows how much room is left before the server refuses the letter', async () => {
+    // The 4000-char cap is `ReplyDto.text`'s; unannounced it arrives as a 400
+    // with the rep's whole letter in the request body.
+    const user = userEvent.setup();
+    listConversations.mockResolvedValue([mailThread()]);
+    renderPane();
+
+    const box = (await screen.findByLabelText('Yanıt yaz')) as HTMLTextAreaElement;
+    expect(box.maxLength).toBe(4000);
+
+    await user.type(box, 'abc');
+    expect(screen.getByTestId('person-pane-composer-meta')).toHaveTextContent('3/4000');
+  });
+
+  it('leaves SMS on plain Enter, with its segment counter', async () => {
+    // Moving the higher-traffic channel to Ctrl+Enter would be a regression
+    // for the reps who live in it.
+    const user = userEvent.setup();
+    renderPane();
+
+    const box = await screen.findByLabelText('Yanıt yaz');
+    expect((box as HTMLElement).tagName).toBe('INPUT');
+
+    await user.type(box, 'Merhaba{Enter}');
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/conversations/c1/reply', { text: 'Merhaba' }),
+    );
+    expect(screen.getByTestId('person-pane-composer-meta')).toHaveTextContent('parça');
+  });
+});
+
+/**
+ * Which address this reply is about to leave for.
+ *
+ * The composer named the CHANNEL and nothing else, so a thread opened against
+ * `ahmet@eski.com` kept mailing it after the lead's address was corrected —
+ * unseen, because nothing on the surface ever prints the address a thread is
+ * bound to. The identity is the threading key and is deliberately NOT
+ * re-pointed by a lead edit, so the answer is to say what it is, and to say so
+ * when the lead has moved on.
+ */
+describe('PersonPane — the composer says which address it is about to mail', () => {
+  it('names the address the thread actually mails', async () => {
+    listConversations.mockResolvedValue([
+      thread({
+        id: 'c-mail',
+        channel: { type: 'EMAIL' },
+        contact: { value: 'ahmet@acme.com', kind: 'EMAIL' },
+      }),
+    ]);
+
+    renderPane({ person: person({ email: 'ahmet@acme.com' }) });
+
+    expect(await screen.findByTestId('person-pane-composer-meta')).toHaveTextContent(
+      'EMAIL · ahmet@acme.com',
+    );
+  });
+
+  it('falls back to the lead’s own address, so correcting the lead corrects the box', async () => {
+    listConversations.mockResolvedValue([thread({ id: 'c-mail', channel: { type: 'EMAIL' } })]);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (email: string) => (
+      <QueryClientProvider client={qc}>
+        <PersonPane person={person({ email })} />
+      </QueryClientProvider>
+    );
+
+    const { rerender } = render(ui('eski@acme.com'));
+    expect(await screen.findByTestId('person-pane-composer-meta')).toHaveTextContent(
+      'eski@acme.com',
+    );
+
+    rerender(ui('yeni@acme.com'));
+    await waitFor(() =>
+      expect(screen.getByTestId('person-pane-composer-meta')).toHaveTextContent('yeni@acme.com'),
+    );
+  });
+
+  it('warns when the thread still points at an address the lead no longer uses', async () => {
+    listConversations.mockResolvedValue([
+      thread({
+        id: 'c-mail',
+        channel: { type: 'EMAIL' },
+        contact: { value: 'Ahmet@Eski.com ', kind: 'EMAIL' },
+      }),
+    ]);
+
+    renderPane({ person: person({ email: 'yeni@acme.com' }) });
+
+    expect(await screen.findByTestId('person-pane-recipient-stale')).toBeInTheDocument();
+    // And it still says where the mail is really going, rather than the
+    // address the rep would assume from the lead record.
+    expect(screen.getByTestId('person-pane-composer-meta')).toHaveTextContent('Ahmet@Eski.com');
+  });
+
+  it('says nothing when the two spellings are the same address', async () => {
+    listConversations.mockResolvedValue([
+      thread({
+        id: 'c-mail',
+        channel: { type: 'EMAIL' },
+        contact: { value: '  Ahmet@Acme.com', kind: 'EMAIL' },
+      }),
+    ]);
+
+    renderPane({ person: person({ email: 'ahmet@acme.com' }) });
+
+    await screen.findByTestId('person-pane-composer-meta');
+    expect(screen.queryByTestId('person-pane-recipient-stale')).not.toBeInTheDocument();
+  });
+
+  it('never warns on a phone thread', async () => {
+    // Identities are stored E.164 while `lead.phone` keeps whatever shape it
+    // arrived in, so a raw compare would warn on virtually every SMS thread.
+    listConversations.mockResolvedValue([
+      thread({ id: 'c-sms', channel: { type: 'SMS' }, contact: { value: '+905551112233', kind: 'PHONE' } }),
+    ]);
+
+    renderPane({ person: person({ phone: '0555 111 22 33' }) });
+
+    await screen.findByTestId('person-pane-composer-meta');
+    expect(screen.queryByTestId('person-pane-recipient-stale')).not.toBeInTheDocument();
+  });
+
+  it('tells two same-channel threads apart by the address each one mails', async () => {
+    // The merge case: two EMAIL threads on one person differ by nothing a
+    // channel label can show.
+    listConversations.mockResolvedValue([
+      thread({
+        id: 'c-new',
+        channel: { type: 'EMAIL' },
+        lastMessageAt: '2026-08-20T10:00:00Z',
+        contact: { value: 'yeni@acme.com', kind: 'EMAIL' },
+      }),
+      thread({
+        id: 'c-old',
+        channel: { type: 'EMAIL' },
+        lastMessageAt: '2026-06-05T10:00:00Z',
+        contact: { value: 'eski@acme.com', kind: 'EMAIL' },
+      }),
+    ]);
+
+    renderPane();
+
+    const picker = await screen.findByRole('group', { name: 'Konuşma' });
+    const [newer, older] = within(picker).getAllByRole('button');
+    expect(newer).toHaveTextContent('yeni@acme.com');
+    expect(older).toHaveTextContent('eski@acme.com');
+  });
+
+  it('adopts the address the server says it mailed, once it has said so', async () => {
+    // Until the list endpoint carries the identity, the reply response is the
+    // only first-hand witness to where a thread's mail actually went.
+    const user = userEvent.setup();
+    listConversations.mockResolvedValue([thread({ id: 'c-mail', channel: { type: 'EMAIL' } })]);
+    post.mockResolvedValue({ data: { id: 'm1', status: 'SENT', to: 'ahmet@eski.com' } });
+
+    renderPane({ person: person({ email: 'yeni@acme.com' }) });
+
+    const box = await screen.findByLabelText('Yanıt yaz');
+    await user.type(box, 'selam');
+    await user.click(screen.getByRole('button', { name: 'Gönder' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('person-pane-composer-meta')).toHaveTextContent('ahmet@eski.com'),
+    );
+    expect(screen.getByTestId('person-pane-recipient-stale')).toBeInTheDocument();
   });
 });

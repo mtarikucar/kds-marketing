@@ -368,6 +368,25 @@ export class MessageSenderService {
      * THIS attempt, not of the message.
      */
     return Object.assign(message, {
+      /*
+       * WHERE this attempt was addressed, carried out to the caller alongside
+       * `retriable` and for the same reason: it is a property of THIS attempt,
+       * not of the message.
+       *
+       * The recipient is resolved above, from the conversation's contact
+       * identity, and was then visible nowhere. The Inbox composer named the
+       * CHANNEL and nothing else, so a thread bound to `ahmet@eski.com` went on
+       * mailing it after somebody corrected the lead's address — unseen,
+       * because no surface prints the address a thread is bound to
+       * (`composer-recipient-hidden`). The reply response is the caller's
+       * first-hand witness to it.
+       *
+       * EMAIL only, and not as a convenience: on a phone thread the address IS
+       * the lead's number, normalised to E.164 everywhere and already on the
+       * header beside the thread. The email identity is the one that is both
+       * invisible in the product and free to drift from `lead.email`.
+       */
+      ...(isEmail && to ? { to } : {}),
       ...(result.retriable === undefined ? {} : { retriable: result.retriable }),
     });
   }
