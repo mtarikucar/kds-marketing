@@ -234,3 +234,57 @@ describe('research contract — contact recovery from externalRef', () => {
     expect(validate({ externalRef: 'google:' + 'a'.repeat(21) }).phone).toBeUndefined();
   });
 });
+
+/**
+ * The email a researcher hands back becomes a recipient.
+ *
+ * Nothing between `submit_research_candidates` and `lead.email` ever checked
+ * that the value was an address: the model returns `info@x / satis@x`,
+ * `info[at]x.com` or a two-address list, and that string is what a campaign
+ * later tries to deliver to on the shared platform sender. The contract is the
+ * right place to stop it — it is the one gate BOTH research lanes pass through.
+ */
+describe('research contract — email hygiene', () => {
+  const base = {
+    externalRef: 'phone:+905551112233',
+    businessName: 'Cafe X',
+    businessType: 'CAFE',
+    painPoint: 'p',
+    evidence: 'e',
+    pitch: 'pi',
+  };
+  const email = (v: unknown) => validateResearchCandidates([{ ...base, email: v }])[0].email;
+
+  it('keeps a single well-formed address, lowercased', () => {
+    expect(email('Info@CafeX.com.tr')).toBe('info@cafex.com.tr');
+    expect(email('  info@cafex.com  ')).toBe('info@cafex.com');
+  });
+
+  it('takes the FIRST address out of a list rather than storing the list', () => {
+    // A list in `to` is one row that delivers to two people and carries one
+    // unsubscribe token; the send chokepoints refuse it outright.
+    expect(email('info@x.com / satis@x.com')).toBe('info@x.com');
+    expect(email('info@x.com, satis@x.com')).toBe('info@x.com');
+    expect(email('info@x.com;satis@x.com')).toBe('info@x.com');
+    expect(email('info@x.com\nsatis@x.com')).toBe('info@x.com');
+  });
+
+  it('drops a value that contains no address at all', () => {
+    expect(email('info[at]cafex.com')).toBeUndefined();
+    expect(email('bilinmiyor')).toBeUndefined();
+    expect(email('')).toBeUndefined();
+    expect(email(null)).toBeUndefined();
+  });
+
+  it('drops the email but KEEPS the candidate — it is still reachable by phone', () => {
+    // The brief's disqualifier is "no reachable contact", not "no email".
+    // Dropping the row would leave it PENDING forever and clog the queue.
+    const c = validateResearchCandidates([{ ...base, email: 'info[at]x.com' }])[0];
+    expect(c).toBeDefined();
+    expect(c.phone).toBe('+905551112233');
+  });
+
+  it('never lets a header break through', () => {
+    expect(email('ada@x.com\r\nbcc: victim@y.com')).toBe('ada@x.com');
+  });
+});

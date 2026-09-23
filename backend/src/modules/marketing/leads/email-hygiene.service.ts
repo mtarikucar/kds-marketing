@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { promises as dns } from 'dns';
 import { safeFetch } from '../../../common/util/safe-fetch';
+import { isSingleAddress, normalizeAddress } from '../../../common/util/email-address';
 
 export type EmailVerifyStatus = 'UNKNOWN' | 'VALID' | 'INVALID' | 'RISKY';
 
@@ -18,7 +19,6 @@ export function mapVerifyVerdict(status: string | undefined): EmailVerifyStatus 
   return null;
 }
 
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const MX_TIMEOUT_MS = 2500;
 
 // A small disposable / throwaway domain blocklist → RISKY (still deliverable,
@@ -28,6 +28,35 @@ const DISPOSABLE = new Set([
   'mailinator.com', 'guerrillamail.com', '10minutemail.com', 'tempmail.com',
   'temp-mail.org', 'throwawaymail.com', 'yopmail.com', 'trashmail.com', 'sharklasers.com',
 ]);
+
+/**
+ * The verdict you can reach without touching the network.
+ *
+ * Every lead-creating path needs hygiene, but only some of them can pay for a
+ * DNS round trip: `import.service.ts` creates its lead INSIDE a transaction and
+ * `forms.service.ts` answers a visitor's POST, so a 2.5 s `resolveMx` there
+ * would hold a pooled connection open per row (a 5k-row CSV becomes hours) or
+ * stall the submit. Splitting the syntax half out lets those paths refuse the
+ * garbage — which is what the bounces actually come from — and leave the
+ * network verdict to `verify()` on the paths that can afford it.
+ *
+ * `UNKNOWN` for a well-formed address is deliberate and load-bearing: syntax
+ * cannot prove deliverability, and `buildAudienceWhere` only excludes
+ * `INVALID`, so claiming VALID here would smuggle unverified addresses past a
+ * gate that is supposed to mean "MX-checked".
+ */
+export function classifyEmailSyntax(email: string | null | undefined): EmailVerifyStatus {
+  const addr = normalizeAddress(email);
+  if (!addr) return 'UNKNOWN';
+  // `isSingleAddress` is the SAME rule the three send chokepoints enforce, so a
+  // value stored here can never be one the transport would later refuse (or,
+  // worse, expand into several deliveries).
+  if (!isSingleAddress(addr)) return 'INVALID';
+  const domain = addr.split('@')[1];
+  if (!domain) return 'INVALID';
+  if (DISPOSABLE.has(domain)) return 'RISKY';
+  return 'UNKNOWN';
+}
 
 /**
  * List-hygiene tier-1 (GoHighLevel parity): classify an email by SYNTAX + MX so
@@ -41,17 +70,25 @@ export class EmailHygieneService {
   private readonly logger = new Logger(EmailHygieneService.name);
 
   async verify(email: string | null | undefined): Promise<EmailVerifyStatus> {
-    const addr = (email ?? '').trim().toLowerCase();
+    const addr = normalizeAddress(email);
     if (!addr) return 'UNKNOWN';
-    if (addr.length > 254 || !EMAIL_RE.test(addr)) return 'INVALID';
+    // The syntax half is shared with the write paths that cannot afford DNS, so
+    // an address refused at import is refused here for the same reason.
+    // RISKY (throwaway domain) short-circuits too: the domain answers mail, so
+    // an MX lookup can only confirm what we already decided.
+    const syntax = classifyEmailSyntax(addr);
+    if (syntax !== 'UNKNOWN') return syntax;
     const domain = addr.split('@')[1];
-    if (!domain) return 'INVALID';
-    if (DISPOSABLE.has(domain)) return 'RISKY';
 
     let tier1: EmailVerifyStatus;
     try {
       const mx = await this.withTimeout(dns.resolveMx(domain), MX_TIMEOUT_MS);
-      tier1 = Array.isArray(mx) && mx.length > 0 ? 'VALID' : 'INVALID';
+      // RFC 7505: a single `0 .` record is a domain stating it accepts NO mail.
+      // Counting it as "has MX" made every address there look deliverable.
+      const usable = Array.isArray(mx)
+        ? mx.filter((r) => r?.exchange && r.exchange !== '.')
+        : [];
+      tier1 = usable.length > 0 ? 'VALID' : 'INVALID';
     } catch (e: any) {
       // No such domain / no MX records = the address can't receive mail → INVALID.
       // A timeout or other transient DNS failure → UNKNOWN (don't penalize).

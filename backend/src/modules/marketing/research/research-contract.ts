@@ -1,6 +1,7 @@
 import { ResearchJob } from './research-job.service';
 import { StagedCandidate } from './research-candidate.service';
 import { EXTERNAL_REF_PATTERN } from '../dto/ingest-leads.dto';
+import { isSingleAddress } from '../../../common/util/email-address';
 
 /**
  * The research CONTRACT — what we ask for, and what we accept back.
@@ -170,7 +171,7 @@ export function validateResearchCandidates(raw: unknown[]): StagedCandidate[] {
       phone: str(c.phone) ?? refContact(externalRef, 'phone'),
       instagram: str(c.instagram) ?? refContact(externalRef, 'instagram'),
       website: str(c.website) ?? refContact(externalRef, 'domain'),
-      email: str(c.email),
+      email: firstAddress(c.email),
       currentSystem: str(c.currentSystem),
       branchCount: Number.isFinite(Number(c.branchCount)) ? Number(c.branchCount) : undefined,
       stage,
@@ -201,6 +202,35 @@ function clampScore(raw: unknown): number | undefined {
 function str(v: unknown): string | undefined {
   const s = v == null ? '' : String(v).trim();
   return s ? s : undefined;
+}
+
+/**
+ * The one address in whatever the researcher wrote, or nothing.
+ *
+ * This value becomes `lead.email`, and `lead.email` becomes an SMTP recipient
+ * on the shared platform sender. Runs routinely return `info@x / satis@x`
+ * (two businesses, one string), `info[at]cafex.com` (scraped anti-harvesting
+ * form) or a name-plus-address. Stored verbatim, the first breaks dedup and
+ * delivers to someone the tenant never chose, and the second fails at the
+ * transport with no way back to the row that caused it.
+ *
+ * Splitting on the separators a model actually uses and taking the FIRST token
+ * that is exactly one address keeps the reachable half of a two-address answer
+ * instead of throwing the whole candidate away — the brief disqualifies "no
+ * reachable contact", not "no email", and a dropped candidate would sit PENDING
+ * in the review queue forever.
+ *
+ * `isSingleAddress` rather than a local regex: it is the same rule the send
+ * chokepoints enforce, so nothing stored here can be refused later.
+ */
+function firstAddress(v: unknown): string | undefined {
+  const raw = str(v);
+  if (!raw) return undefined;
+  for (const token of raw.split(/[\s,;/|<>]+/)) {
+    const candidate = token.trim().toLowerCase();
+    if (candidate && isSingleAddress(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 /**

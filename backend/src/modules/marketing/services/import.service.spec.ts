@@ -15,14 +15,16 @@ function makeSvc() {
   const tags = { assignToLead: jest.fn().mockResolvedValue([]) };
   const scheduledJob = { schedule: jest.fn().mockResolvedValue('job-1') };
   const runner = { registerHandler: jest.fn() };
+  const consentLedger = { record: jest.fn().mockResolvedValue(1) };
   const svc = new ImportService(
     prisma as any,
     customFields as any,
     tags as any,
     scheduledJob as any,
     runner as any,
+    consentLedger as any,
   );
-  return { prisma, customFields, tags, scheduledJob, runner, svc };
+  return { prisma, customFields, tags, scheduledJob, runner, consentLedger, svc };
 }
 
 describe('ImportService.suggestMapping', () => {
@@ -383,5 +385,240 @@ describe('ImportService — batch-job exhaustion flips the ImportJob FAILED', ()
     prisma.importJob.findUnique.mockResolvedValue({ status: 'DONE', errors: null } as any);
     await onExhausted({ payload: { jobId: 'imp-1' } }, 'late failure');
     expect(prisma.importJob.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Hygiene on the import path.
+ *
+ * A CSV is where the dead addresses come from — typo'd, pasted two-to-a-cell,
+ * exported from a system that wrote "yok". Until now every one of those rows
+ * landed with `emailVerifiedStatus: 'UNKNOWN'`, which `buildAudienceWhere`
+ * admits, so the whole list went out and the bounces burned the shared sender.
+ *
+ * The verdict taken here is SYNTAX ONLY, on purpose: `verify()` does a DNS
+ * round trip with a 2.5 s timeout and the lead write below sits inside
+ * `prisma.$transaction`, so a per-row lookup would hold a pooled connection for
+ * the length of the lookup and turn a 5k-row import into hours. The MX half
+ * belongs to a background sweep over `UNKNOWN`.
+ */
+describe('ImportService — email hygiene at the write', () => {
+  const baseJob = {
+    id: 'imp-1',
+    workspaceId: WS,
+    status: 'RUNNING',
+    mapping: { business: 'businessName', email: 'email' },
+    errors: null,
+    dedupePolicy: 'CREATE',
+  };
+
+  function arrange(raw: Record<string, string>, over: Record<string, unknown> = {}) {
+    const ctx = makeSvc();
+    ctx.prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, ...over } as any);
+    ctx.prisma.importJobRow.findMany.mockResolvedValue([{ id: 'r1', rowIndex: 0, raw }] as any);
+    ctx.prisma.lead.findFirst.mockResolvedValue(null as any);
+    (ctx.prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-1' });
+    (ctx.prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (ctx.prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (ctx.prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (ctx.prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+    return ctx;
+  }
+
+  it('stamps an unusable imported address INVALID, so the send gate refuses it', async () => {
+    const { prisma, svc } = arrange({ business: 'Acme', email: 'a@x.com, b@y.com' });
+    await svc.processBatch('imp-1', 0);
+    const data = (prisma.lead.create as jest.Mock).mock.calls[0][0].data;
+    expect(data.emailVerifiedStatus).toBe('INVALID');
+    // The raw value is KEPT so a rep can repair it in the UI — the INVALID
+    // verdict (SuppressionService reads it) is what stops the send, and the
+    // gateway's single-recipient guard is the backstop if anything tries.
+    expect(data.email).toBe('a@x.com, b@y.com');
+  });
+
+  it('stamps a typo-d address INVALID too', async () => {
+    const { prisma, svc } = arrange({ business: 'Acme', email: 'ada@ x.com' });
+    await svc.processBatch('imp-1', 0);
+    expect((prisma.lead.create as jest.Mock).mock.calls[0][0].data.emailVerifiedStatus).toBe('INVALID');
+  });
+
+  it('leaves a well-formed address UNKNOWN — syntax never claims deliverable', async () => {
+    const { prisma, svc } = arrange({ business: 'Acme', email: 'ada@x.com' });
+    await svc.processBatch('imp-1', 0);
+    expect((prisma.lead.create as jest.Mock).mock.calls[0][0].data.emailVerifiedStatus).toBe('UNKNOWN');
+  });
+
+  it('never blocks on DNS: an import row costs no network call', async () => {
+    const { prisma, svc } = arrange({ business: 'Acme', email: 'ada@x.com' });
+    await svc.processBatch('imp-1', 0);
+    // The transaction callback ran to completion synchronously against the mock;
+    // a `verify()` call here would have needed dns/resolveMx, which is not mocked
+    // in this suite at all.
+    expect(prisma.lead.create).toHaveBeenCalled();
+  });
+
+  it('re-verdicts only when the UPDATE actually writes a DIFFERENT address', async () => {
+    const { prisma, svc } = arrange(
+      { business: 'Acme', email: 'broken@ x.com' },
+      { dedupePolicy: 'UPDATE', mapping: { business: 'businessName', email: 'email', phone: 'phone' } },
+    );
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1', customFields: {}, status: 'NEW', convertedTenantId: null,
+      emailNormalized: 'good@x.com', phoneNormalized: null,
+    } as any);
+    await svc.processBatch('imp-1', 0);
+    expect((prisma.lead.update as jest.Mock).mock.calls[0][0].data.emailVerifiedStatus).toBe('INVALID');
+  });
+
+  it('does NOT re-verdict an unchanged address (a VALID lead stays VALID)', async () => {
+    const { prisma, svc } = arrange(
+      { business: 'Acme', email: 'Good@X.com' },
+      { dedupePolicy: 'UPDATE' },
+    );
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1', customFields: {}, status: 'NEW', convertedTenantId: null,
+      emailNormalized: 'good@x.com', phoneNormalized: null,
+    } as any);
+    await svc.processBatch('imp-1', 0);
+    // Writing the syntax verdict here would downgrade an MX-proven VALID to
+    // UNKNOWN on every re-import of the same list.
+    expect((prisma.lead.update as jest.Mock).mock.calls[0][0].data.emailVerifiedStatus).toBeUndefined();
+  });
+
+  it('does NOT re-verdict an address the single-key-match rule preserved', async () => {
+    const { prisma, svc } = arrange(
+      { business: 'Acme', phone: '05001112233', email: 'junk@ x.com' },
+      { dedupePolicy: 'UPDATE', mapping: { business: 'businessName', phone: 'phone', email: 'email' } },
+    );
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1', customFields: {}, status: 'NEW', convertedTenantId: null,
+      emailNormalized: 'old@x.com', phoneNormalized: '905001112233',
+    } as any);
+    await svc.processBatch('imp-1', 0);
+    const data = (prisma.lead.update as jest.Mock).mock.calls[0][0].data;
+    expect(data.email).toBeUndefined(); // preserved
+    expect(data.emailVerifiedStatus).toBeUndefined(); // so its verdict is too
+  });
+});
+
+/**
+ * An opt-out column in the CSV.
+ *
+ * Every CRM export carries one, and there was no way to map it: re-importing a
+ * list you had already scrubbed silently un-suppressed nobody (the flag was
+ * never written) and re-mailed everyone who had unsubscribed elsewhere.
+ *
+ * The direction is one-way by design. A blank or falsey cell means "this export
+ * did not say", never "this person consented" — a symmetric mapping would let
+ * one sloppy CSV clear every opt-out in the workspace.
+ */
+describe('ImportService — opt-out columns', () => {
+  const baseJob = {
+    id: 'imp-1',
+    workspaceId: WS,
+    status: 'RUNNING',
+    mapping: { business: 'businessName', email: 'email', unsub: 'emailOptOut' },
+    errors: null,
+    dedupePolicy: 'CREATE',
+  };
+
+  function arrange(raw: Record<string, string>, over: Record<string, unknown> = {}) {
+    const ctx = makeSvc();
+    ctx.prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, ...over } as any);
+    ctx.prisma.importJobRow.findMany.mockResolvedValue([{ id: 'r1', rowIndex: 0, raw }] as any);
+    ctx.prisma.lead.findFirst.mockResolvedValue(null as any);
+    (ctx.prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-1' });
+    (ctx.prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (ctx.prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (ctx.prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (ctx.prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+    return ctx;
+  }
+
+  it('suggests the opt-out columns from the headers a real export uses', () => {
+    const { svc } = makeSvc();
+    expect(svc.suggestMapping(['Unsubscribed', 'SMS Opt Out', 'Abonelikten çıktı'])).toEqual({
+      Unsubscribed: 'emailOptOut',
+      'SMS Opt Out': 'smsOptOut',
+      'Abonelikten çıktı': 'emailOptOut',
+    });
+  });
+
+  it('sets emailOptOut for a truthy cell and records the withdrawal in the consent ledger', async () => {
+    const { prisma, consentLedger, svc } = arrange({ business: 'Acme', email: 'a@x.com', unsub: 'yes' });
+    await svc.processBatch('imp-1', 0);
+    expect((prisma.lead.create as jest.Mock).mock.calls[0][0].data.emailOptOut).toBe(true);
+    // The repo rule: an opt-out flag is never flipped without a dated record
+    // behind it. The ledger write is the audit half — side-effect free, so one
+    // CSV cannot enqueue an İYS job per row.
+    expect(consentLedger.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: WS,
+        leadIds: ['lead-1'],
+        type: 'MARKETING_EMAIL',
+        granted: false,
+        source: 'import:imp-1',
+      }),
+    );
+  });
+
+  it('accepts the spellings an export actually contains', async () => {
+    for (const cell of ['TRUE', '1', 'Evet', 'unsubscribed', 'x', 'opted out']) {
+      const { prisma, svc } = arrange({ business: 'Acme', email: 'a@x.com', unsub: cell });
+      await svc.processBatch('imp-1', 0);
+      expect((prisma.lead.create as jest.Mock).mock.calls[0][0].data.emailOptOut).toBe(true);
+    }
+  });
+
+  it('a falsey or unrecognised cell writes NOTHING — it never clears an existing opt-out', async () => {
+    for (const cell of ['', 'no', 'FALSE', '0', 'hayır', 'maybe']) {
+      const { prisma, consentLedger, svc } = arrange(
+        { business: 'Acme', email: 'a@x.com', unsub: cell },
+        { dedupePolicy: 'UPDATE' },
+      );
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'existing-1', customFields: {}, status: 'NEW', convertedTenantId: null,
+        emailNormalized: 'a@x.com', phoneNormalized: null,
+      } as any);
+      await svc.processBatch('imp-1', 0);
+      const data = (prisma.lead.update as jest.Mock).mock.calls[0][0].data;
+      expect('emailOptOut' in data).toBe(false);
+      expect(consentLedger.record).not.toHaveBeenCalled();
+    }
+  });
+
+  it('maps the SMS and WhatsApp columns to their own consent types', async () => {
+    const { prisma, consentLedger, svc } = arrange(
+      { business: 'Acme', sms: 'yes', wa: 'yes' },
+      { mapping: { business: 'businessName', sms: 'smsOptOut', wa: 'waOptOut' } },
+    );
+    await svc.processBatch('imp-1', 0);
+    const data = (prisma.lead.create as jest.Mock).mock.calls[0][0].data;
+    expect(data.smsOptOut).toBe(true);
+    expect(data.waOptOut).toBe(true);
+    const types = consentLedger.record.mock.calls.map((c: any[]) => c[0].type);
+    expect(types).toEqual(expect.arrayContaining(['MARKETING_SMS', 'MARKETING_WHATSAPP']));
+  });
+
+  it('records consent AFTER the row commits, and a ledger failure never fails the row', async () => {
+    const { prisma, consentLedger, svc } = arrange({ business: 'Acme', email: 'a@x.com', unsub: 'yes' });
+    consentLedger.record.mockRejectedValue(new Error('ledger down'));
+    await svc.processBatch('imp-1', 0);
+    // The lead is in and the row is DONE — the audit row is best-effort, the
+    // flag on the lead is the part that actually suppresses.
+    expect(prisma.importJobRow.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'DONE' }) }),
+    );
+    expect(consentLedger.record).toHaveBeenCalled();
+  });
+
+  it('writes no ledger row for a lead that was skipped (no lead to attach it to)', async () => {
+    const { prisma, consentLedger, svc } = arrange(
+      { business: 'Acme', email: 'a@x.com', unsub: 'yes' },
+      { dedupePolicy: 'SKIP' },
+    );
+    prisma.lead.findFirst.mockResolvedValue({ id: 'existing-1', customFields: {} } as any);
+    await svc.processBatch('imp-1', 0);
+    expect(consentLedger.record).not.toHaveBeenCalled();
   });
 });

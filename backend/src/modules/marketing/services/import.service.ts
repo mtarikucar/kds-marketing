@@ -17,6 +17,8 @@ import {
 import { normalizeEmail, normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 import { parseCsv } from '../utils/csv-parse';
 import { LeadSource, LeadPriority, BUSINESS_TYPE_PATTERN } from '../dto/create-lead.dto';
+import { classifyEmailSyntax } from '../leads/email-hygiene.service';
+import { ConsentLedgerService, ConsentType } from '../compliance/consent-ledger.service';
 
 const MAX_ROWS = 50_000;
 const BATCH = 200;
@@ -62,6 +64,42 @@ const NATIVE_FIELDS = [
   'priority',
 ] as const;
 
+/**
+ * Opt-out columns a CSV may map onto. Kept OUT of `NATIVE_FIELDS` because those
+ * are copied verbatim as strings; these are booleans, and — more importantly —
+ * they are write-once-true.
+ *
+ * Every CRM export carries an unsubscribe column and there was no way to map
+ * it, so re-importing a list you had already scrubbed re-mailed everyone who
+ * had opted out elsewhere. The one-way rule is the whole safety property: a
+ * blank or falsey cell means "this export did not say", never "this person
+ * consented", so one sloppy file can never clear a workspace's opt-outs.
+ */
+const OPT_OUT_FIELDS = ['emailOptOut', 'smsOptOut', 'waOptOut'] as const;
+type OptOutField = (typeof OPT_OUT_FIELDS)[number];
+
+/** Which consent the flag withdraws — the audit row behind the flip. */
+const OPT_OUT_CONSENT: Record<OptOutField, ConsentType> = {
+  emailOptOut: 'MARKETING_EMAIL',
+  smsOptOut: 'MARKETING_SMS',
+  waOptOut: 'MARKETING_WHATSAPP',
+};
+
+/**
+ * The cell values that mean "yes, they opted out", in the spellings exports
+ * actually use (TR and EN, plus the bare `x` a spreadsheet tick leaves behind).
+ * Anything else — including an unrecognised word — is treated as "not stated",
+ * because guessing wrong in this direction suppresses a consenting customer.
+ */
+const OPT_OUT_TRUTHY = new Set([
+  'true', '1', 'yes', 'y', 'evet', 'e', 'x', 'opted out', 'optedout', 'opt out', 'optout',
+  'unsubscribed', 'unsubscribe', 'abonelikten çıktı', 'çıktı', 'cikti', 'iptal',
+]);
+
+function isOptedOutCell(value: string): boolean {
+  return OPT_OUT_TRUTHY.has(value.trim().toLowerCase());
+}
+
 /** Header synonyms → native field, for the suggested mapping. */
 const SYNONYMS: Record<string, string> = {
   business: 'businessName',
@@ -99,6 +137,26 @@ const SYNONYMS: Record<string, string> = {
   tags: 'tags',
   tag: 'tags',
   labels: 'tags',
+  // Opt-out columns. `emailoptout`/`smsoptout`/`waoptout` are here rather than
+  // relying on the NATIVE_FIELDS fallback because that comparison is against a
+  // LOWERCASED header, which a camelCase field name can never match.
+  unsubscribed: 'emailOptOut',
+  unsubscribe: 'emailOptOut',
+  'opt out': 'emailOptOut',
+  'opt-out': 'emailOptOut',
+  optout: 'emailOptOut',
+  'email opt out': 'emailOptOut',
+  'email optout': 'emailOptOut',
+  emailoptout: 'emailOptOut',
+  'abonelikten çıktı': 'emailOptOut',
+  'e-posta izni': 'emailOptOut',
+  'sms opt out': 'smsOptOut',
+  'sms optout': 'smsOptOut',
+  smsoptout: 'smsOptOut',
+  'sms izni': 'smsOptOut',
+  'whatsapp opt out': 'waOptOut',
+  'whatsapp optout': 'waOptOut',
+  waoptout: 'waOptOut',
 };
 
 @Injectable()
@@ -111,6 +169,7 @@ export class ImportService implements OnModuleInit {
     private tags: TagsService,
     private scheduledJob: ScheduledJobService,
     private runner: ScheduledJobRunnerService,
+    private consentLedger: ConsentLedgerService,
   ) {}
 
   onModuleInit(): void {
@@ -150,6 +209,7 @@ export class ImportService implements OnModuleInit {
       const key = h.trim().toLowerCase();
       if (SYNONYMS[key]) out[h] = SYNONYMS[key];
       else if ((NATIVE_FIELDS as readonly string[]).includes(key)) out[h] = key;
+      else if ((OPT_OUT_FIELDS as readonly string[]).includes(key)) out[h] = key;
       else out[h] = '__skip';
     }
     return out;
@@ -243,6 +303,8 @@ export class ImportService implements OnModuleInit {
     const native: Record<string, string> = {};
     const cf: Record<string, unknown> = {};
     const tags: string[] = [];
+    /** Only ever `{ field: true }` — see OPT_OUT_FIELDS for why never false. */
+    const optOuts: Partial<Record<OptOutField, true>> = {};
     for (const [header, field] of Object.entries(mapping)) {
       if (!field || field === '__skip') continue;
       const val = (raw[header] ?? '').trim();
@@ -251,6 +313,8 @@ export class ImportService implements OnModuleInit {
         for (const t of val.split(/[;,]/).map((s) => s.trim()).filter(Boolean)) tags.push(t);
       } else if (field.startsWith('cf:')) {
         cf[field.slice(3)] = val;
+      } else if ((OPT_OUT_FIELDS as readonly string[]).includes(field)) {
+        if (isOptedOutCell(val)) optOuts[field as OptOutField] = true;
       } else if ((NATIVE_FIELDS as readonly string[]).includes(field)) {
         native[field] = val;
       }
@@ -269,7 +333,7 @@ export class ImportService implements OnModuleInit {
     if (native.businessType !== undefined) {
       native.businessType = coerceBusinessType(native.businessType);
     }
-    return { native, cf, tags };
+    return { native, cf, tags, optOuts };
   }
 
   private findExisting(
@@ -329,7 +393,7 @@ export class ImportService implements OnModuleInit {
 
     for (const row of rows) {
       try {
-        const { native, cf, tags } = this.buildLeadData(mapping, row.raw as Record<string, string>);
+        const { native, cf, tags, optOuts } = this.buildLeadData(mapping, row.raw as Record<string, string>);
         if (!native.businessName) throw new Error('missing businessName');
         const emailNormalized = normalizeEmail(native.email);
         const phoneNormalized = normalizePhone(native.phone);
@@ -387,10 +451,20 @@ export class ImportService implements OnModuleInit {
             const scalars = this.nativeScalars(native);
             if (keepEmail) delete scalars.email;
             if (keepPhone) delete scalars.phone;
+            // Re-verdict ONLY when this row actually replaces the stored
+            // address. Stamping the syntax verdict on every update would
+            // downgrade an MX-proven VALID lead to UNKNOWN each time the same
+            // list is re-imported — and stamping it on an address the
+            // single-key-match rule just preserved would describe a value we
+            // did not write.
+            const rewritesEmail =
+              scalars.email !== undefined && emailNormalized !== existing.emailNormalized;
             await tx.lead.update({
               where: { id: existing.id },
               data: {
                 ...scalars,
+                ...optOuts,
+                ...(rewritesEmail ? { emailVerifiedStatus: classifyEmailSyntax(scalars.email) } : {}),
                 customFields: {
                   ...((existing.customFields as Record<string, unknown>) ?? {}),
                   ...customFields,
@@ -409,6 +483,14 @@ export class ImportService implements OnModuleInit {
                 businessType: native.businessType ?? 'OTHER',
                 source: native.source ?? 'IMPORT',
                 ...this.nativeScalars(native),
+                ...optOuts,
+                // A CSV is where the dead addresses come from. Without a
+                // verdict here every imported row landed UNKNOWN, which
+                // `buildAudienceWhere` admits, so the whole list went out and
+                // the bounces burned the shared sender's reputation.
+                ...(native.email !== undefined
+                  ? { emailVerifiedStatus: classifyEmailSyntax(native.email) }
+                  : {}),
                 customFields: customFields as Prisma.InputJsonValue,
                 phoneNormalized,
                 emailNormalized,
@@ -426,6 +508,25 @@ export class ImportService implements OnModuleInit {
         if (action === 'created') created++;
         else if (action === 'updated') updated++;
         else skipped++;
+
+        // The audit row behind the flag, AFTER the row committed and outside
+        // its transaction. The repo rule is that an opt-out flag is never
+        // flipped without a dated record behind it; `ConsentLedgerService` is
+        // the side-effect-free half of that rule, so a 50k-row file cannot
+        // enqueue an İYS RET job and a blacklist sync per line the way
+        // `ComplianceService.recordConsent` would. Best-effort: the flag on the
+        // lead is what actually suppresses, and losing the audit row must not
+        // un-import the lead.
+        if (leadId) {
+          for (const [field, consentType] of Object.entries(OPT_OUT_CONSENT) as [OptOutField, ConsentType][]) {
+            if (!optOuts[field]) continue;
+            await this.consentLedger
+              .record({ workspaceId: job.workspaceId, leadIds: [leadId], type: consentType, granted: false, source: `import:${jobId}` })
+              .catch((e) =>
+                this.logger.warn(`import: consent record failed for lead ${leadId}: ${(e as Error).message}`),
+              );
+          }
+        }
 
         // Tags are best-effort AFTER the row committed — a tag failure must not
         // un-import the lead or flip the row to FAILED (the lead is in).

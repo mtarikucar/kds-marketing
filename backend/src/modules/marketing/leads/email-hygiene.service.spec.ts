@@ -1,4 +1,4 @@
-import { EmailHygieneService } from './email-hygiene.service';
+import { EmailHygieneService, classifyEmailSyntax } from './email-hygiene.service';
 
 const resolveMx = jest.fn();
 jest.mock('dns', () => ({ promises: { resolveMx: (...a: any[]) => resolveMx(...a) } }));
@@ -40,6 +40,25 @@ describe('EmailHygieneService', () => {
   it('returns INVALID when the domain resolves but has no MX', async () => {
     resolveMx.mockResolvedValue([]);
     expect(await svc.verify('user@no-mx.com')).toBe('INVALID');
+  });
+
+  it('treats an RFC 7505 null MX ("." exchange) as INVALID, not as a working domain', async () => {
+    // A domain that publishes `0 .` is explicitly saying "I accept no mail".
+    // The old length-only check read that single record as "has MX" → VALID,
+    // so every address at a null-MX domain entered campaign audiences.
+    resolveMx.mockResolvedValue([{ exchange: '.', priority: 0 }]);
+    expect(await svc.verify('user@null-mx.com')).toBe('INVALID');
+    resolveMx.mockResolvedValue([{ exchange: '', priority: 0 }]);
+    expect(await svc.verify('user@null-mx.com')).toBe('INVALID');
+  });
+
+  it('returns INVALID for a multi-address / display-name value without hitting DNS', async () => {
+    // The shared single-address rule, not a second local regex: a list or a
+    // display-name form is one lead row that would deliver to someone else.
+    expect(await svc.verify('info@x.com, satis@x.com')).toBe('INVALID');
+    expect(await svc.verify('info@x.com;satis@x.com')).toBe('INVALID');
+    expect(await svc.verify('"Ada" <ada@x.com>')).toBe('INVALID');
+    expect(resolveMx).not.toHaveBeenCalled();
   });
 
   it('returns INVALID when the domain does not exist (ENOTFOUND)', async () => {
@@ -98,5 +117,39 @@ describe('EmailHygieneService', () => {
       expect(await svc.verify('user@no-mx.com')).toBe('INVALID');
       expect(safeFetchMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The I/O-free half of hygiene: the verdict a write path can afford to take
+ * inline. `verify()` does a DNS round trip, so the import loop (inside a
+ * transaction) and the public form submit cannot call it — but they CAN refuse
+ * a value that is not an address at all, and that is what catches the garbage.
+ */
+describe('classifyEmailSyntax', () => {
+  it('is UNKNOWN for a missing address — absence is not a verdict', () => {
+    expect(classifyEmailSyntax('')).toBe('UNKNOWN');
+    expect(classifyEmailSyntax(null)).toBe('UNKNOWN');
+    expect(classifyEmailSyntax(undefined)).toBe('UNKNOWN');
+  });
+
+  it('is INVALID for everything that is not exactly one address', () => {
+    expect(classifyEmailSyntax('not-an-email')).toBe('INVALID');
+    expect(classifyEmailSyntax('a@b')).toBe('INVALID');
+    expect(classifyEmailSyntax('info@x.com, satis@x.com')).toBe('INVALID');
+    expect(classifyEmailSyntax('info[at]x.com')).toBe('INVALID');
+    expect(classifyEmailSyntax('ada@x.com\r\nbcc: victim@y.com')).toBe('INVALID');
+    expect(classifyEmailSyntax(`${'a'.repeat(250)}@x.com`)).toBe('INVALID');
+  });
+
+  it('is RISKY for a throwaway domain', () => {
+    expect(classifyEmailSyntax('x@mailinator.com')).toBe('RISKY');
+    expect(classifyEmailSyntax('X@Mailinator.com')).toBe('RISKY');
+  });
+
+  it('is UNKNOWN — never VALID — for a well-formed address, because syntax proves nothing', () => {
+    // Only an MX lookup (or tier-2) may say VALID. A syntax pass that claimed
+    // VALID would let a dead domain into an audience the send-time gate trusts.
+    expect(classifyEmailSyntax('user@example.com')).toBe('UNKNOWN');
   });
 });
