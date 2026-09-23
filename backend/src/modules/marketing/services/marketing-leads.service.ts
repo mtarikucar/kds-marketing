@@ -16,6 +16,7 @@ import { LeadAutoAssignerService } from './lead-auto-assigner.service';
 import { CustomFieldsService } from './custom-fields.service';
 import { EmailHygieneService } from '../leads/email-hygiene.service';
 import { SmsOtpService } from './sms-otp.service';
+import { SuppressionService, SuppressionReason } from '../compliance/suppression.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { rangeEndInclusive } from './report-date-range.util';
@@ -58,6 +59,56 @@ export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   WON: [],
   LOST: [],
 };
+
+/**
+ * What a tenant may do to one address's email standing from the UI.
+ *
+ * Three verbs, not a free-form reason: the only suppressions a human should be
+ * able to author by hand are the consent decision they were just told about and
+ * the correction of a machine verdict. `ERASURE` and `COMPLAINT` are not in the
+ * list on purpose — a tombstone is not undoable and a spam complaint is the
+ * recipient's word, not the tenant's.
+ */
+export type EmailSuppressionAction = 'OPT_OUT' | 'RESUBSCRIBE' | 'CLEAR_BOUNCE';
+
+/** The three denormalised columns the chips read, plus the gateway's verdict. */
+export interface EmailSuppressionState {
+  emailOptOut: boolean;
+  emailBouncedAt: Date | null;
+  emailVerifiedStatus: string;
+  /** Would a BULK send to this address be refused right now? */
+  suppressed: boolean;
+  /** The harshest standing reason, when it would be. */
+  reason?: SuppressionReason;
+}
+
+/**
+ * Which suppressions each lifting action withdraws.
+ *
+ * `CLEAR_BOUNCE` withdraws BOTH machine verdicts. They sit in different columns
+ * (`emailBouncedAt` and `emailVerifiedStatus`) but say the same thing to an
+ * operator — "this address is dead" — and the correction is one act: the
+ * address was retyped, or the mailbox came back. Lifting one would leave the
+ * other chip on screen with no control able to clear it.
+ *
+ * It deliberately does NOT touch `OPT_OUT`. Machine suppression and human
+ * refusal stopped sharing a column when `bounce-sets-optout` was fixed, and
+ * clearing a bounce must not quietly re-subscribe someone.
+ */
+const EMAIL_SUPPRESSION_LIFTS: Record<'RESUBSCRIBE' | 'CLEAR_BOUNCE', SuppressionReason[]> = {
+  RESUBSCRIBE: ['OPT_OUT'],
+  CLEAR_BOUNCE: ['HARD_BOUNCE', 'INVALID'],
+};
+
+/** Read once before the write and once after, so the answer is the real state. */
+const EMAIL_SUPPRESSION_SELECT = {
+  id: true,
+  email: true,
+  emailNormalized: true,
+  emailOptOut: true,
+  emailBouncedAt: true,
+  emailVerifiedStatus: true,
+} as const;
 
 /**
  * Everything the lead-detail page reads in one round trip.
@@ -142,6 +193,10 @@ export class MarketingLeadsService {
     private readonly customFields: CustomFieldsService,
     private readonly hygiene: EmailHygieneService,
     private readonly smsOtp: SmsOtpService,
+    // Last on purpose: every existing unit spec builds this service positionally,
+    // and appending keeps those constructions valid (the new dependency is only
+    // ever touched by `setEmailSuppression`).
+    private readonly suppression: SuppressionService,
   ) {}
 
   /** Epic 6 — a contact's companyId must reference a Company in the same
@@ -880,6 +935,81 @@ export class MarketingLeadsService {
     const phoneVerifiedAt = new Date();
     await this.prisma.lead.update({ where: { id }, data: { phoneVerifiedAt } });
     return { phoneVerifiedAt };
+  }
+
+  /**
+   * Change one address's email standing — the write half of
+   * `optout-state-invisible`.
+   *
+   * Until this existed a rep who was told "remove me" on the phone had nowhere
+   * to record it, and a corrected typo left the old address looking bounced
+   * forever. The three chips the UI renders finally have controls behind them.
+   *
+   * Everything goes through `SuppressionService`, and nothing is written here.
+   * That service is what moves the `ContactSuppression` row, the denormalised
+   * lead columns AND the `ConsentRecord` ledger in one transaction, for every
+   * lead that shares the address — the whole point of `optout-per-lead-row`. A
+   * local `lead.update({ emailOptOut: true })` would flip one row, record no
+   * consent decision and let the next campaign reach the same human through
+   * their duplicate.
+   *
+   * The answer is the state AFTER the write plus the gateway's own verdict, so
+   * a re-subscribe that could not take effect (a live COMPLAINT row still owns
+   * `emailOptOut`) says so instead of reporting success.
+   */
+  async setEmailSuppression(
+    workspaceId: string,
+    id: string,
+    action: EmailSuppressionAction,
+    actorId: string,
+  ): Promise<EmailSuppressionState> {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, workspaceId },
+      select: EMAIL_SUPPRESSION_SELECT,
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    // Prefer the normalised spelling: the suppression table stores an HMAC of
+    // it, and hashing two spellings of one address produces two rows that never
+    // find each other. `emailNormalized` is nullable, so older rows fall back to
+    // the raw column — `SuppressionService` normalises whatever it is handed.
+    const address = (lead.emailNormalized || lead.email || '').trim();
+    if (!address) {
+      // `suppress()` treats an unusable value as a silent no-op, which is the
+      // right answer for a machine caller and the worst possible one for a rep
+      // who just pressed a button to honour "remove me".
+      throw new BadRequestException('This lead has no email address on file.');
+    }
+
+    const by = `manual:${actorId}`;
+    if (action === 'OPT_OUT') {
+      // `leadId` widens the projection past the address: a lead whose email was
+      // edited after the decision was made is still the person who refused.
+      await this.suppression.suppress(workspaceId, address, 'EMAIL', 'OPT_OUT', {
+        source: by,
+        leadId: id,
+      });
+    } else {
+      const reasons = EMAIL_SUPPRESSION_LIFTS[action];
+      if (!reasons) throw new BadRequestException('Unknown email suppression action');
+      for (const reason of reasons) {
+        await this.suppression.lift(workspaceId, address, 'EMAIL', reason, by);
+      }
+    }
+
+    const after =
+      (await this.prisma.lead.findFirst({
+        where: { id, workspaceId },
+        select: EMAIL_SUPPRESSION_SELECT,
+      })) ?? lead;
+    const verdict = await this.suppression.check(workspaceId, address, 'BULK');
+    return {
+      emailOptOut: after.emailOptOut,
+      emailBouncedAt: after.emailBouncedAt,
+      emailVerifiedStatus: after.emailVerifiedStatus,
+      suppressed: verdict.suppressed,
+      reason: verdict.reason,
+    };
   }
 
   async updateStatus(

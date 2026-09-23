@@ -33,12 +33,26 @@ import {
 } from '@/components/ui';
 import { fmtDateTime } from '@/features/marketing/utils/format';
 import {
+  EmailSuppressionPanel,
+  type EmailSuppressionLead,
+} from '@/features/marketing/components/EmailSuppression';
+import {
   useDataRequests,
   useLeadSearch,
   useLeadConsents,
   useComplianceMutations,
 } from './hooks';
 import type { ComplianceLead, ConsentRecord, DataRequest } from './types';
+
+/**
+ * The picker row, plus the three deliverability columns it already carries.
+ *
+ * `GET /leads` uses Prisma `include`, so it answers the Lead row's scalars
+ * unfiltered — `emailOptOut`, `emailBouncedAt` and `emailVerifiedStatus` are in
+ * the payload today. `ComplianceLead` (shared, and not this screen's to widen)
+ * simply does not name them yet, so the intersection is declared here.
+ */
+type ComplianceLeadWithEmail = ComplianceLead & EmailSuppressionLead;
 
 function apiError(e: unknown, fallback: string): string {
   const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data
@@ -163,7 +177,7 @@ export default function CompliancePage({ embedded }: { embedded?: boolean } = {}
   const { t } = useTranslation('marketing');
 
   const [search, setSearch] = useState('');
-  const [selectedLead, setSelectedLead] = useState<ComplianceLead | null>(null);
+  const [selectedLead, setSelectedLead] = useState<ComplianceLeadWithEmail | null>(null);
   const [erasureOpen, setErasureOpen] = useState(false);
 
   const { data: searchResults, isFetching: searching } = useLeadSearch(search);
@@ -257,7 +271,7 @@ export default function CompliancePage({ embedded }: { embedded?: boolean } = {}
                         <li key={l.id}>
                           <button
                             type="button"
-                            onClick={() => setSelectedLead(l)}
+                            onClick={() => setSelectedLead(l as ComplianceLeadWithEmail)}
                             className="flex w-full items-center justify-between gap-2 px-3 py-2 text-start text-sm hover:bg-surface-muted"
                           >
                             <span className="min-w-0">
@@ -294,6 +308,25 @@ export default function CompliancePage({ embedded }: { embedded?: boolean } = {}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
+                {/* EMAIL STANDING — "may we mail them today, and if not why",
+                    with the controls that change the answer.
+                    This is where a written "remove me" lands: the sender has no
+                    conversation with the person, so the Inbox's record card
+                    cannot be the door. The opt-out is dated from the consent
+                    ledger this page has already read — the lead row dates the
+                    bounce but carries no `emailOptOutAt`, so nowhere else can
+                    date that chip honestly. */}
+                <EmailSuppressionPanel
+                  lead={selectedLead}
+                  optedOutAt={
+                    (consents ?? []).find(
+                      (c: ConsentRecord) => c.type === 'MARKETING_EMAIL' && !c.granted,
+                    )?.at
+                  }
+                />
+
+                <Separator />
+
                 {/* Consent records */}
                 <div>
                   <p className="mb-2 text-sm font-medium text-foreground">
@@ -322,10 +355,21 @@ export default function CompliancePage({ embedded }: { embedded?: boolean } = {}
                             ) : (
                               <XCircle className="h-4 w-4 text-danger" aria-hidden="true" />
                             )}
-                            <span className="text-sm font-medium text-foreground">
-                              {t(`compliance.consentType.${c.type}`, {
-                                defaultValue: c.type.replace(/_/g, ' '),
-                              })}
+                            <span className="min-w-0">
+                              <span className="block text-sm font-medium text-foreground">
+                                {t(`compliance.consentType.${c.type}`, {
+                                  defaultValue: c.type.replace(/_/g, ' '),
+                                })}
+                              </span>
+                              {/* WHERE it came from. A date alone cannot answer
+                                  "did they untick a form, reply STOP, or did a
+                                  rep do it for them" — and that is the question
+                                  a compliance officer is actually asked. */}
+                              {c.source && (
+                                <span className="block truncate text-caption text-muted-foreground">
+                                  {t('leads.suppression.source', { defaultValue: 'Source' })}: {c.source}
+                                </span>
+                              )}
                             </span>
                           </div>
                           <div className="flex items-center gap-3">

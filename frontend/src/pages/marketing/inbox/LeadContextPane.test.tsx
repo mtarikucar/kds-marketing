@@ -785,3 +785,90 @@ describe('LeadContextPane — the disclosures are keyed to the person', () => {
     expect(screen.queryByText('Demo görüşmesi')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The deliverability chips (`optout-state-invisible`).
+ *
+ * The rule under test is the card's OWN three-state rule, the one written down
+ * for `assignedTo` and now load-bearing for three more fields: a chip is a
+ * CLAIM about this person, so it appears only when the payload actually made
+ * it. The lead that rides on a conversation carries none of these columns, and
+ * `undefined` printing "Abonelikten çıktı" would put a refusal on somebody who
+ * never gave one — on the one card a rep reads before deciding whether to send.
+ *
+ * And no RoleGate: a REP must be able to see why their send will fail. These
+ * are plain lead scalars, not the consent ledger, so they sit OUTSIDE the
+ * MANAGER-gated disclosure two sections down.
+ */
+describe('LeadContextPane — the email deliverability chips', () => {
+  type CardLead = React.ComponentProps<typeof LeadContextPane>['lead'];
+  const withEmailState = (over: Record<string, unknown>) =>
+    ({ ...person(), ...over }) as CardLead;
+
+  it('says the person unsubscribed when the record says so', () => {
+    render(wrap(<LeadContextPane lead={withEmailState({ emailOptOut: true })} />));
+
+    expect(screen.getByTestId('email-chip-optedOut')).toHaveTextContent('Abonelikten çıktı');
+  });
+
+  it('dates the bounce, because the record carries the date', () => {
+    render(
+      wrap(
+        <LeadContextPane
+          lead={withEmailState({ emailBouncedAt: '2026-09-01T00:00:00.000Z' })}
+        />,
+      ),
+    );
+
+    const chip = screen.getByTestId('email-chip-bounced');
+    expect(chip).toHaveTextContent('Geri döndü (bounce)');
+    expect(chip).toHaveTextContent('2026');
+  });
+
+  it('names an invalid address', () => {
+    render(wrap(<LeadContextPane lead={withEmailState({ emailVerifiedStatus: 'INVALID' })} />));
+
+    expect(screen.getByTestId('email-chip-invalid')).toHaveTextContent('Geçersiz adres');
+  });
+
+  it('prints nothing for a person whose record simply did not carry the fields', () => {
+    render(wrap(<LeadContextPane lead={person()} />));
+
+    expect(screen.queryByTestId('email-suppression-chips')).not.toBeInTheDocument();
+  });
+
+  it('prints nothing when the record explicitly says all is well', () => {
+    render(
+      wrap(
+        <LeadContextPane
+          lead={withEmailState({
+            emailOptOut: false,
+            emailBouncedAt: null,
+            emailVerifiedStatus: 'VALID',
+          })}
+        />,
+      ),
+    );
+
+    expect(screen.queryByTestId('email-suppression-chips')).not.toBeInTheDocument();
+  });
+
+  it('shows a REP why their send will fail — the chips carry no role gate', () => {
+    setRole('REP');
+    render(wrap(<LeadContextPane lead={withEmailState({ emailOptOut: true })} />));
+
+    expect(screen.getByTestId('email-chip-optedOut')).toBeInTheDocument();
+    // …while the consent LEDGER stays manager-only, as it already was.
+    expect(screen.queryByTestId('record-consents')).not.toBeInTheDocument();
+  });
+
+  // The card is a read. Changing a consent decision belongs where the decision
+  // is recorded (the lead header and the compliance console), not on a triage
+  // card a rep clicks through twenty of.
+  it('offers no control — and adds no second way off the surface', () => {
+    render(wrap(<LeadContextPane lead={withEmailState({ emailOptOut: true })} />));
+
+    expect(screen.queryByTestId('email-suppression-actions')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('record-card')).getAllByRole('link')).toHaveLength(1);
+  });
+});

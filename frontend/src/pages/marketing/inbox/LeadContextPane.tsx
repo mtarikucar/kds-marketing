@@ -16,6 +16,10 @@ import { PersonEstimates } from './PersonEstimates';
 import { PersonOffers } from './PersonOffers';
 import { PersonTasks } from './PersonTasks';
 import { RecordDisclosure } from './RecordDisclosure';
+import {
+  EmailSuppressionChips,
+  hasEmailSuppression,
+} from '../../../features/marketing/components/EmailSuppression';
 
 /**
  * The fields this card reads. A structural subset of `Lead` rather than `Lead`
@@ -54,6 +58,19 @@ export type RecordCardLead = Pick<Lead, 'id'> &
      * be written down, on the component that depends on it.
      */
     assignedTo?: Lead['assignedTo'];
+    /**
+     * The three deliverability columns, under the SAME three-state rule as
+     * `assignedTo` above and for the same reason.
+     *
+     * `GET /leads` and `GET /leads/:id` both `include` rather than `select`, so
+     * the Lead row's scalars ride along and these arrive filled. The lead
+     * stitched onto a CONVERSATION payload carries four fields and none of
+     * these — and `undefined` must never print "Abonelikten çıktı" on somebody
+     * who never said it. See `EmailSuppressionChips`, which enforces it.
+     */
+    emailOptOut?: boolean;
+    emailBouncedAt?: string | null;
+    emailVerifiedStatus?: string | null;
   };
 
 export interface LeadContextPaneProps {
@@ -121,6 +138,18 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
         )}
         {lead.phone && <Row label={t('surface.card.phone', 'Telefon')}>{lead.phone}</Row>}
         {lead.email && <Row label={t('surface.card.email', 'E-posta')}>{lead.email}</Row>}
+        {/* Why a send to this address will be refused, next to the address
+            itself. NO RoleGate, deliberately: these are plain lead scalars, not
+            the consent ledger two sections down, and a REP who cannot see them
+            watches their message fail for a reason nothing on screen names. The
+            card stays a READ — the control that CHANGES this lives on the lead
+            header and in the compliance console, where the decision is
+            recorded. */}
+        {hasEmailSuppression(lead) && (
+          <Row label={t('leads.suppression.title', 'E-posta durumu')}>
+            <EmailSuppressionChips lead={lead} className="justify-end" />
+          </Row>
+        )}
         {lead.city && <Row label={t('surface.card.city', 'Şehir')}>{lead.city}</Row>}
         {lead.createdAt && (
           <Row label={t('surface.card.created', 'Kayıt')}>{fmtDate(lead.createdAt)}</Row>

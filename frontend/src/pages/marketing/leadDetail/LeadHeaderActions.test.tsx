@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import LeadHeaderActions from './LeadHeaderActions';
 import * as conversationsService from '../../../features/marketing/api/conversations.service';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 vi.mock('../../../features/marketing/api/conversations.service');
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
@@ -72,6 +73,7 @@ const started = (
 
 const CHANNELS = [
   { id: 'ch-sms', type: 'SMS', name: 'NetGSM', status: 'ACTIVE' },
+  { id: 'ch-email', type: 'EMAIL', name: 'E-posta', status: 'ACTIVE' },
   { id: 'ch-wa', type: 'WHATSAPP', name: 'WhatsApp Business', status: 'ACTIVE' },
   // Neither of these can OPEN a thread — see OutboundConversationService's
   // INITIABLE map — so neither may be offered here.
@@ -80,7 +82,7 @@ const CHANNELS = [
 ];
 
 function renderActions(
-  lead: { id: string; phone?: string | null; smsOptOut?: boolean },
+  lead: React.ComponentProps<typeof LeadHeaderActions>['lead'],
   onOpenStream = vi.fn(),
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -352,6 +354,41 @@ describe('LeadHeaderActions — Mesaj', () => {
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(onOpenStream).not.toHaveBeenCalled();
   });
+
+  /**
+   * The dialog names the three LEAD-COLUMN suppressions in Turkish before the
+   * request is ever made. This is the fourth case — an address-level
+   * `ContactSuppression` row, which has no lead flag to read — so the server
+   * sends a `reason` code beside its English sentence and the toast renders the
+   * code through the catalogue (PLAN G8).
+   */
+  it('renders a refusal CODE through the catalogue rather than the server sentence', async () => {
+    const user = userEvent.setup({ delay: null });
+    startConversation.mockRejectedValue({
+      response: {
+        data: {
+          message: 'This recipient reported an earlier message as spam, so a conversation cannot be started.',
+          reason: 'SUPPRESSED_COMPLAINT',
+        },
+      },
+    });
+    renderActions({ id: 'l1', phone: '+905551112233' });
+
+    await user.click(await readyMessageButton());
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('combobox'));
+    await screen.findByRole('listbox');
+    await user.click(screen.getByRole('option', { name: /NetGSM/ }));
+    await user.type(within(dialog).getByLabelText(/İlk mesaj/), 'Merhaba');
+    await user.click(within(dialog).getByRole('button', { name: 'Gönder' }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    const shown = String(toastError.mock.calls.at(-1)![0]);
+    // The mocked `t` answers with the key, which is the proof the key was asked
+    // for; both catalogues carry a sentence for it.
+    expect(shown).toBe('mail.reason.SUPPRESSED_COMPLAINT');
+    expect(shown).not.toMatch(/reported an earlier message/);
+  });
 });
 
 // `POST /calls/start` is behind @RequiresFeature('telephony') at CONTROLLER
@@ -408,5 +445,269 @@ describe('LeadHeaderActions — the conversationAi gate', () => {
     // halves of Mesaj sit behind @RequiresFeature('conversationAi'), so the
     // query would 403 as reliably as the button would.
     expect(listConversations).not.toHaveBeenCalled();
+  });
+});
+
+// ── Wave 4: the header tells the truth about email, and can start one ────────
+
+const apiPost = vi.mocked(marketingApi.post);
+
+/** A thread that names the channel it is on — what `GET /conversations`
+ *  actually sends, and what "write on ANOTHER channel" has to read. */
+const threadOn = (id: string, type: string, name: string, status = 'OPEN') =>
+  ({
+    id,
+    status,
+    aiPaused: false,
+    unreadCount: 0,
+    channel: { id: `ch-${type.toLowerCase()}`, type, name },
+  }) as conversationsService.ConversationSummary;
+
+function setRole(role: 'OWNER' | 'MANAGER' | 'REP' | null) {
+  useMarketingAuthStore.setState({
+    user: role
+      ? { id: 'u1', workspaceId: 'ws1', email: 'm@acme.test', firstName: 'M', lastName: 'K', role }
+      : null,
+    isAuthenticated: !!role,
+  });
+}
+
+type HeaderLead = Parameters<typeof renderActions>[0];
+const emailLead = (over: Record<string, unknown> = {}) =>
+  ({
+    id: 'l1',
+    phone: '+905551112233',
+    email: 'ayse@acme.test',
+    emailOptOut: false,
+    emailBouncedAt: null,
+    emailVerifiedStatus: 'UNKNOWN',
+    ...over,
+  }) as HeaderLead;
+
+/**
+ * `start-email-other-thread` — a webchat visitor leaves an email address and
+ * nobody can mail them, because the only door to the composer was "this person
+ * has no conversations at all".
+ *
+ * The primary Mesaj button is deliberately NOT repurposed: its `onOpenStream`
+ * is the only jump-to-history this header has, and flipping it would trade one
+ * missing affordance for another. The fix is a SECOND, always-available door.
+ */
+describe('LeadHeaderActions — writing on another channel', () => {
+  beforeEach(() => setRole('MANAGER'));
+
+  it('offers a way to start an EMAIL thread with a lead who already has a WhatsApp one', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockResolvedValue([threadOn('c1', 'WHATSAPP', 'WhatsApp Business')]);
+    renderActions(emailLead());
+
+    await user.click(await screen.findByRole('button', { name: /Başka kanaldan yaz/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('combobox'));
+    await screen.findByRole('listbox');
+    expect(screen.getByRole('option', { name: /E-posta/ })).toBeInTheDocument();
+  });
+
+  it('keeps Mesaj doing its own job — opening the stream — when threads exist', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockResolvedValue([threadOn('c1', 'WHATSAPP', 'WhatsApp Business')]);
+    const { onOpenStream } = renderActions(emailLead());
+
+    await user.click(await readyMessageButton());
+
+    expect(onOpenStream).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  // The old copy — "Bu kişiyle henüz konuşulmadı" — becomes a lie the moment
+  // the dialog can be opened on a lead who HAS threads.
+  it('stops claiming nobody has spoken to them, and names the channels in use', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockResolvedValue([threadOn('c1', 'WHATSAPP', 'WhatsApp Business')]);
+    renderActions(emailLead());
+
+    await user.click(await screen.findByRole('button', { name: /Başka kanaldan yaz/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).not.toHaveTextContent('henüz konuşulmadı');
+    expect(dialog).toHaveTextContent('WhatsApp Business');
+  });
+
+  it('still says nobody has spoken to them when that is true', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockResolvedValue([]);
+    renderActions(emailLead());
+
+    await user.click(await readyMessageButton());
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent('henüz konuşulmadı');
+  });
+
+  // A failed lookup is not "no threads" — and it is not "these threads" either.
+  // The door stays open; the description just cannot name anything.
+  it('keeps the door open when the thread lookup failed', async () => {
+    listConversations.mockRejectedValue(new Error('boom'));
+    renderActions(emailLead());
+
+    expect(await screen.findByRole('button', { name: /Başka kanaldan yaz/ })).toBeEnabled();
+  });
+
+  // Three outcomes, not two: undefined data is loading OR failed, and neither
+  // is "nobody has spoken to them". The claim waits for an answer.
+  it('does not claim nobody has spoken to them when the lookup never answered', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockRejectedValue(new Error('boom'));
+    renderActions(emailLead());
+
+    await user.click(await screen.findByRole('button', { name: /Başka kanaldan yaz/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).not.toHaveTextContent('henüz konuşulmadı');
+  });
+
+  it('is absent for a workspace without the conversation add-on, like Mesaj itself', async () => {
+    entitled = false;
+    renderActions(emailLead());
+
+    await waitFor(() => expect(apiGet).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /Başka kanaldan yaz/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * `optout-state-invisible`, dialog half: the backend refuses an EMAIL start
+   * to a suppressed address with an ENGLISH `BadRequestException`
+   * (outbound-conversation.service.ts). The rep gets a foreign-language failure
+   * for something the header already knew. Say it first, in Turkish, and do not
+   * let the send fire.
+   */
+  it('refuses to mail a hard-bounced address, in Turkish, instead of collecting an English 400', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockResolvedValue([]);
+    renderActions(emailLead({ emailBouncedAt: '2026-09-01T00:00:00.000Z' }));
+
+    await user.click(await readyMessageButton());
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('combobox'));
+    await screen.findByRole('listbox');
+    await user.click(screen.getByRole('option', { name: /E-posta/ }));
+    await user.type(within(dialog).getByLabelText(/İlk mesaj/), 'Merhaba');
+
+    expect(within(dialog).getByText(/Geri döndü \(bounce\)/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Gönder' })).toBeDisabled();
+    expect(startConversation).not.toHaveBeenCalled();
+  });
+
+  it('leaves SMS alone — the email verdict is about the address, not the person', async () => {
+    const user = userEvent.setup({ delay: null });
+    listConversations.mockResolvedValue([]);
+    renderActions(emailLead({ emailOptOut: true }));
+
+    await user.click(await readyMessageButton());
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('combobox'));
+    await screen.findByRole('listbox');
+    await user.click(screen.getByRole('option', { name: /NetGSM/ }));
+    await user.type(within(dialog).getByLabelText(/İlk mesaj/), 'Merhaba');
+
+    expect(within(dialog).getByRole('button', { name: 'Gönder' })).toBeEnabled();
+  });
+});
+
+/**
+ * The chips and the control behind them, on the one header a rep opens to act.
+ */
+describe('LeadHeaderActions — email consent', () => {
+  beforeEach(() => setRole('MANAGER'));
+
+  it('shows the standing state rather than leaving the rep to guess', async () => {
+    renderActions(emailLead({ emailOptOut: true }));
+
+    expect(await screen.findByTestId('email-chip-optedOut')).toHaveTextContent(
+      'Abonelikten çıktı',
+    );
+  });
+
+  it('prints no claim about a lead whose payload does not carry the fields', async () => {
+    renderActions({ id: 'l1', phone: '+905551112233' });
+
+    await readyMessageButton();
+    expect(screen.queryByTestId('email-suppression-chips')).not.toBeInTheDocument();
+  });
+
+  it('opts the person out through the endpoint that writes the consent ledger', async () => {
+    const user = userEvent.setup({ delay: null });
+    apiPost.mockResolvedValue({
+      data: { emailOptOut: true, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: true, reason: 'OPT_OUT' },
+    } as never);
+    renderActions(emailLead());
+
+    await user.click(
+      await screen.findByRole('button', { name: /Pazarlama e-postasından çıkar/ }),
+    );
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/leads/l1/email-suppression', { action: 'OPT_OUT' }),
+    );
+    expect(toastSuccess).toHaveBeenCalled();
+  });
+
+  it('puts them back through the same endpoint', async () => {
+    const user = userEvent.setup({ delay: null });
+    apiPost.mockResolvedValue({
+      data: { emailOptOut: false, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: false },
+    } as never);
+    renderActions(emailLead({ emailOptOut: true }));
+
+    await user.click(await screen.findByRole('button', { name: /Yeniden abone et/ }));
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/leads/l1/email-suppression', {
+        action: 'RESUBSCRIBE',
+      }),
+    );
+  });
+
+  // `writeLift` refuses to clear `emailOptOut` while a live COMPLAINT row still
+  // owns that column, so the endpoint can answer 200 for a lift that changed
+  // nothing. Reporting that as success is the same lie a 2xx FAILED send is.
+  it('does not claim success for a lift the server could not apply', async () => {
+    const user = userEvent.setup({ delay: null });
+    apiPost.mockResolvedValue({
+      data: { emailOptOut: true, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: true, reason: 'COMPLAINT' },
+    } as never);
+    renderActions(emailLead({ emailOptOut: true }));
+
+    await user.click(await screen.findByRole('button', { name: /Yeniden abone et/ }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(String(toastError.mock.calls[0][0])).toContain('Spam şikâyeti');
+  });
+
+  it('clears a machine verdict without touching consent', async () => {
+    const user = userEvent.setup({ delay: null });
+    apiPost.mockResolvedValue({
+      data: { emailOptOut: false, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: false },
+    } as never);
+    renderActions(emailLead({ emailVerifiedStatus: 'INVALID' }));
+
+    await user.click(await screen.findByRole('button', { name: /Bounce kaydını temizle/ }));
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/leads/l1/email-suppression', {
+        action: 'CLEAR_BOUNCE',
+      }),
+    );
+  });
+
+  // MANAGER + settings.manage on the server. A rep who could press it would
+  // collect a 403 — and a recorded consent decision is not theirs to erase.
+  it('offers a REP the chips but not the controls', async () => {
+    setRole('REP');
+    renderActions(emailLead({ emailOptOut: true }));
+
+    expect(await screen.findByTestId('email-chip-optedOut')).toBeInTheDocument();
+    expect(screen.queryByTestId('email-suppression-actions')).not.toBeInTheDocument();
   });
 });

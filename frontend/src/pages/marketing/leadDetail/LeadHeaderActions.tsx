@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, MessageSquarePlus } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Textarea } from '@/components/ui/Textarea';
@@ -23,6 +23,10 @@ import {
   SelectValue,
 } from '@/components/ui/Select';
 import { ClickToDialButton } from '../../../features/marketing/components';
+import {
+  EmailSuppressionActions,
+  EmailSuppressionChips,
+} from '../../../features/marketing/components/EmailSuppression';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
@@ -44,10 +48,16 @@ import {
  * WhatsApp is the one the backend allows and this dialog must not offer. It is
  * INITIABLE with `supportsTemplate: true`, which is the backend saying "bring
  * an approved template", not "free text is fine". This dialog has no template
- * field, and it only ever opens when `listConversations({ leadId })` came back
- * EMPTY — no status filter, so the lead has no WhatsApp thread of any kind and
- * no inbound WhatsApp message was ever ingested for them. Meta's 24h session
- * window is therefore shut, every time, and free text is refused.
+ * field, so free text is what it would send and free text is what Meta refuses
+ * outside a 24h session window.
+ *
+ * That argument used to lean on a second one — "this dialog only ever opens
+ * when the lead has NO threads at all, so the window is shut by construction".
+ * That premise is dead: the dialog is now reachable for a lead who is already
+ * being talked to (`start-email-other-thread`), and such a lead may well have a
+ * live WhatsApp session. The template argument stands on its own and is the
+ * only one left, so re-adding WhatsApp here means adding a template picker
+ * first — not re-reading the thread list.
  *
  * What makes that unacceptable rather than merely unlucky:
  * MessageSenderService.send does not THROW when an adapter rejects a send — it
@@ -71,15 +81,43 @@ interface ChannelRow {
 }
 
 export interface LeadHeaderActionsProps {
-  /** Only the fields these two actions actually decide on. */
-  lead: { id: string; phone?: string | null; smsOptOut?: boolean };
+  /** Only the fields these actions actually decide on. The three email columns
+   *  follow the three-state rule `EmailSuppressionChips` enforces: `undefined`
+   *  is "nobody has said", never "all clear". */
+  lead: {
+    id: string;
+    phone?: string | null;
+    smsOptOut?: boolean;
+    email?: string | null;
+    emailOptOut?: boolean;
+    emailBouncedAt?: string | null;
+    emailVerifiedStatus?: string | null;
+  };
   /** Bring the person's Akış stream forward — the app has no per-thread deep
    *  link, so "open the conversation" means "show me this person's stream". */
   onOpenStream: () => void;
 }
 
-const errMsg = (e: unknown, fallback: string) =>
-  (e as { response?: { data?: { message?: string } } })?.response?.data?.message || fallback;
+/**
+ * The server's refusal, in the reader's own language where it named a code.
+ *
+ * `POST /conversations/start` refuses an address-level suppression with both a
+ * sentence and a `reason` in the `MailReason` vocabulary. The dialog pre-empts
+ * the three LEAD-COLUMN cases in Turkish already; this is the one with no lead
+ * flag to read, and it used to arrive as an English sentence (PLAN G8 — a
+ * server reason code is never printed raw, and neither is a server sentence
+ * when a code came with it). A body with no `reason` — an older server, or any
+ * other 4xx — still shows its own message, which is today's behaviour.
+ */
+const errMsg = (e: unknown, fallback: string, t?: (key: string) => string) => {
+  const data = (e as { response?: { data?: { message?: string; reason?: string } } })?.response?.data;
+  // Looked up with NO inline default, the way CampaignsPage already renders a
+  // `mail.reason.*`: every code this endpoint can send has a sentence in both
+  // catalogues, and an inline English default here would simply be the server
+  // sentence again under a different name.
+  if (t && data?.reason) return t(`mail.reason.${data.reason}`);
+  return data?.message || fallback;
+};
 
 /**
  * "Ara" and "Mesaj" on the lead header — spec §3.
@@ -140,6 +178,47 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
     (c) => INITIABLE_CHANNEL_TYPES.includes(c.type) && c.status === 'ACTIVE',
   );
 
+  // The channels this person is ALREADY being talked to on — what the dialog
+  // names instead of claiming nobody has spoken to them. A thread whose channel
+  // did not come back is skipped rather than named "undefined".
+  const inUse = [
+    ...new Set(
+      (threads.data ?? [])
+        .map((c) => c.channel?.name || c.channel?.type)
+        .filter((n): n is string => !!n),
+    ),
+  ];
+  const hasThreads = (threads.data?.length ?? 0) > 0;
+  // "Bu kişiyle henüz konuşulmadı" is a CLAIM, and the lookup has three
+  // outcomes, not two. Undefined data means loading or failed — neither is
+  // "nobody has spoken to them", so the claim is only made once the list has
+  // actually come back empty. (Same rule `onMessage` below applies to its own
+  // branch, and the same one the record card applies to `assignedTo`.)
+  const knownThreadless = threads.data !== undefined && !hasThreads;
+
+  /**
+   * Why an EMAIL start to THIS address would be refused — said here, in
+   * Turkish, before the send.
+   *
+   * `OutboundConversationService.start` refuses a suppressed, bounced or
+   * MX-invalid address with an English `BadRequestException`, which this dialog
+   * would print verbatim to a Turkish rep for something the header already
+   * knows (`optout-state-invisible`). Reading the lead's own columns is not a
+   * second source of truth — it is the same three columns `SuppressionService`
+   * projects onto, so the two can only disagree while a write is in flight, and
+   * the server still has the last word.
+   */
+  const emailRefusal =
+    lead.emailOptOut === true
+      ? t('leads.suppression.optedOut', 'Abonelikten çıktı')
+      : lead.emailBouncedAt
+        ? t('leads.suppression.bounced', 'Geri döndü (bounce)')
+        : lead.emailVerifiedStatus === 'INVALID'
+          ? t('leads.suppression.invalid', 'Geçersiz adres')
+          : null;
+  const picked = startable.find((c) => c.id === channelId);
+  const blockedReason = picked?.type === 'EMAIL' ? emailRefusal : null;
+
   const start = useMutation<StartedConversation>({
     mutationFn: () => startConversation({ leadId: lead.id, channelId, text: text.trim() }),
     onSuccess: (res) => {
@@ -187,7 +266,9 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
       onOpenStream();
     },
     onError: (e) =>
-      toast.error(errMsg(e, t('leadDetail.startConversation.failed', 'Mesaj gönderilemedi'))),
+      toast.error(
+        errMsg(e, t('leadDetail.startConversation.failed', 'Mesaj gönderilemedi'), (k) => t(k)),
+      ),
   });
 
   const onMessage = () => {
@@ -203,6 +284,12 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
 
   return (
     <>
+      {/* What the send will run into, before anyone presses anything. No role
+          gate on the chips (a REP must see it); the CONTROLS carry the MANAGER
+          gate their endpoint does. */}
+      <EmailSuppressionChips lead={lead} />
+      <EmailSuppressionActions lead={lead} />
+
       {callable && <ClickToDialButton leadId={lead.id} defaultPhone={phone} />}
 
       {canMessage && (
@@ -219,14 +306,50 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
       </Button>
       )}
 
+      {/* The SECOND door, and the whole of `start-email-other-thread`.
+          Deliberately not a behaviour flip on Mesaj: that button's
+          `onOpenStream` is the only jump-to-history this header has
+          (LeadDetailPage.tsx:288), so repurposing it would trade one missing
+          affordance for another. A webchat visitor who left an email address
+          had NO way to be emailed, because the composer's only door was "this
+          person has no conversations at all". */}
+      {canMessage && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setStartOpen(true)}
+          title={t('leadDetail.startConversation.another', 'Başka kanaldan yaz')}
+        >
+          <MessageSquarePlus className="h-4 w-4" />{' '}
+          {t('leadDetail.startConversation.another', 'Başka kanaldan yaz')}
+        </Button>
+      )}
+
       <Dialog open={startOpen} onOpenChange={setStartOpen}>
         <DialogContent>
+          {/* The copy has to branch, or it lies. "Bu kişiyle henüz
+              konuşulmadı" was true while the dialog only opened on a lead with
+              zero threads; it is false the moment the second door exists. */}
           <DialogHeader>
-            <DialogTitle>{t('leadDetail.startConversation.title', 'Konuşma başlat')}</DialogTitle>
+            <DialogTitle>
+              {knownThreadless
+                ? t('leadDetail.startConversation.title', 'Konuşma başlat')
+                : t('leadDetail.startConversation.titleOther', 'Başka kanaldan yaz')}
+            </DialogTitle>
             <DialogDescription>
-              {t(
-                'leadDetail.startConversation.desc',
-                'Bu kişiyle henüz konuşulmadı. Bir kanal seç ve ilk mesajı yaz.',
+              {knownThreadless
+                ? t(
+                    'leadDetail.startConversation.desc',
+                    'Bu kişiyle henüz konuşulmadı. Bir kanal seç ve ilk mesajı yaz.',
+                  )
+                : t('leadDetail.startConversation.descAny', 'Bir kanal seç ve yaz.')}
+              {/* Which channels are already in use is DATA, not part of the
+                  sentence — so it needs no interpolation key and reads the same
+                  in every locale. */}
+              {inUse.length > 0 && (
+                <span className="mt-1 block text-caption text-muted-foreground">
+                  {inUse.join(' · ')}
+                </span>
               )}
             </DialogDescription>
           </DialogHeader>
@@ -265,6 +388,16 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
                 )}
               </Field>
 
+              {/* Said BEFORE the send, in the reader's own language. Without
+                  it the rep types a message, presses Gönder and collects the
+                  backend's English refusal for something this page already
+                  knew (`optout-state-invisible`). */}
+              {blockedReason && (
+                <Callout tone="warning" title={t('leads.suppression.title', 'E-posta durumu')}>
+                  {blockedReason}
+                </Callout>
+              )}
+
               {/* Not optional in practice, whatever the DTO says: the backend
                   refuses a start with neither text nor a WhatsApp template, and
                   this dialog does not do templates. */}
@@ -292,7 +425,10 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
             <Button
               type="button"
               onClick={() => start.mutate()}
-              disabled={!channelId || !text.trim()}
+              // `blockedReason` is the same refusal the backend would answer
+              // with, asked of the lead's own columns — so the button is off
+              // rather than a round trip that can only fail.
+              disabled={!channelId || !text.trim() || !!blockedReason}
               loading={start.isPending}
             >
               {t('leadDetail.startConversation.send', 'Gönder')}

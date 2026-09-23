@@ -10,6 +10,7 @@ import {
   Header,
   UseGuards,
 } from '@nestjs/common';
+import { IsIn } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -19,7 +20,10 @@ import { VerifyPhoneConfirmDto } from '../dto/verify-phone.dto';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
-import { MarketingLeadsService } from '../services/marketing-leads.service';
+import {
+  MarketingLeadsService,
+  type EmailSuppressionAction,
+} from '../services/marketing-leads.service';
 import { LeadStreamService } from '../services/lead-stream.service';
 import { TagsService } from '../services/tags.service';
 import { LeadDedupeService } from '../services/lead-dedupe.service';
@@ -37,6 +41,16 @@ import { BulkLeadIdsDto, BulkEnrollLeadsDto, EnrollByFilterDto } from '../dto/le
 import { LeadBulkService } from '../inbox/lead-bulk.service';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
+
+/**
+ * Declared here rather than in `dto/`, following `ComplianceController`'s own
+ * `RecordConsentDto`: the endpoint has exactly one field, and the route and its
+ * only shape belong on one screen.
+ */
+class EmailSuppressionDto {
+  @IsIn(['OPT_OUT', 'RESUBSCRIBE', 'CLEAR_BOUNCE'])
+  action: EmailSuppressionAction;
+}
 
 @Controller('marketing/leads')
 // FeatureGuard is a no-op for every route without a method-level
@@ -198,6 +212,33 @@ export class MarketingLeadsController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
     return this.leadsService.verifyPhoneConfirm(actor.workspaceId, id, dto.code);
+  }
+
+  /**
+   * Opt this person's address out of marketing mail, put them back, or clear a
+   * machine verdict — the control behind the deliverability chips.
+   *
+   * MANAGER + `settings.manage`, matching `ComplianceController`'s consent POST
+   * (`compliance.controller.ts:34,52`), because this writes the same
+   * `ConsentRecord` ledger through the same service. The READ side deliberately
+   * carries no gate at all — a REP must be able to see why their send will fail
+   * — but a recorded consent decision is not theirs to erase.
+   */
+  @Post(':id/email-suppression')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({
+    action: 'lead.email_suppression',
+    resourceType: 'lead',
+    resourceIdParam: 'id',
+    captureBody: ['action'],
+  })
+  emailSuppression(
+    @Param('id') id: string,
+    @Body() dto: EmailSuppressionDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.leadsService.setEmailSuppression(actor.workspaceId, id, dto.action, actor.id);
   }
 
   @Patch(':id/status')
