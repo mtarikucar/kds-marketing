@@ -6,7 +6,11 @@ jest.mock('../../../common/scheduling/advisory-lock', () => ({
   }),
 }));
 
-import { ScheduledJobRunnerService } from './scheduled-job-runner.service';
+import {
+  ScheduledJobRunnerService,
+  DISPATCH_BUDGET_MS,
+  KIND_DISPATCH_CAP,
+} from './scheduled-job-runner.service';
 import { RESEARCH_RUN_KIND } from '../research/research-kinds';
 import {
   MCP_ACTIVITY_AGENT,
@@ -395,5 +399,149 @@ describe('ScheduledJobRunnerService — first refusal expires', () => {
     // every workspace in every mode, is unaffected by all of the above.
     expect(sql).toMatch(/NOT \( s\."kind" = \?/);
     expect(values).toContain(RESEARCH_RUN_KIND);
+  });
+});
+
+/**
+ * Fairness: one tenant's work may not hold the whole platform's queue.
+ *
+ * The runner claims up to a hundred due rows and runs them SEQUENTIALLY under
+ * ONE global advisory lock, so a campaign's fifty SMTP round-trips used to keep
+ * every other tenant's AI reply, workflow resume and booking reminder waiting
+ * for as long as they took (`batches-stall-runner`).
+ *
+ * Two bounds, and one rule that makes both safe: whatever this tick does not
+ * dispatch must be handed BACK to the queue explicitly. `claimBatch` already
+ * flipped those rows to RUNNING, so simply abandoning them would hide them
+ * until `reapStuck` revives them fifteen minutes later — turning a two-minute
+ * delay into a quarter-hour one.
+ */
+describe('ScheduledJobRunnerService — one tenant cannot hold the tick', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let runner: ScheduledJobRunnerService;
+
+  function claim(jobs: any[]) {
+    prisma.$queryRaw.mockResolvedValue(jobs);
+  }
+  const job = (id: string, kind: string) => ({ id, workspaceId: WS, kind, payload: {}, attempts: 0 });
+  /** The release write: RUNNING rows this tick never got to. */
+  const releaseCall = () =>
+    prisma.scheduledJob.updateMany.mock.calls.map((c: any[]) => c[0]).find((c: any) => c?.data?.status === 'PENDING');
+
+  beforeEach(() => {
+    prisma = {
+      workspace: { findUnique: jest.fn().mockResolvedValue({ aiSpendPolicy: {} }) },
+      scheduledJob: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        update: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn().mockResolvedValue({ maxAttempts: 5 }),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    };
+    runner = new ScheduledJobRunnerService(prisma as any);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  /** A handler that costs `ms` of wall clock, on a clock the test owns. */
+  function slowHandler(ms: number): jest.Mock {
+    let clock = Date.now();
+    jest.spyOn(Date, 'now').mockImplementation(() => clock);
+    return jest.fn(async () => {
+      clock += ms;
+    });
+  }
+
+  it('stops dispatching at the wall-clock deadline instead of holding the lock for the whole batch', async () => {
+    const handler = slowHandler(DISPATCH_BUDGET_MS / 2 + 1);
+    runner.registerHandler('slow', handler);
+    claim([job('j1', 'slow'), job('j2', 'slow'), job('j3', 'slow'), job('j4', 'slow')]);
+
+    await runner.tick();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(releaseCall()).toEqual({
+      where: { workspaceId: WS, id: { in: ['j3', 'j4'] }, status: 'RUNNING' },
+      data: { status: 'PENDING', lockedAt: null },
+    });
+  });
+
+  it('breaks rather than returns: the tail that hands the remainder back still runs', async () => {
+    // A `return` out of the dispatch loop would skip the release below and
+    // leave those rows RUNNING and invisible until the 15-minute reaper.
+    const handler = slowHandler(DISPATCH_BUDGET_MS * 2);
+    runner.registerHandler('slow', handler);
+    claim([job('j1', 'slow'), job('j2', 'slow')]);
+
+    await runner.tick();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(releaseCall()?.where.id.in).toEqual(['j2']);
+  });
+
+  it('always dispatches the first claimed job, so a tick can never make zero progress', async () => {
+    const handler = slowHandler(DISPATCH_BUDGET_MS * 10);
+    runner.registerHandler('slow', handler);
+    claim([job('j1', 'slow')]);
+
+    await runner.tick();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(releaseCall()).toBeUndefined();
+  });
+
+  it('hands the remainder back untouched — no attempt consumed, no lastError, same runAt', async () => {
+    const handler = slowHandler(DISPATCH_BUDGET_MS * 2);
+    runner.registerHandler('slow', handler);
+    claim([job('j1', 'slow'), job('j2', 'slow')]);
+
+    await runner.tick();
+
+    // A deferral is not a failure: these rows were never attempted, so the
+    // release writes exactly the two columns the claim wrote and nothing else.
+    expect(Object.keys(releaseCall()!.data).sort()).toEqual(['lockedAt', 'status']);
+  });
+
+  it('caps one kind per claim, so a campaign burst cannot starve another tenant behind it', async () => {
+    const bulk = jest.fn().mockResolvedValue(undefined);
+    const reminder = jest.fn().mockResolvedValue(undefined);
+    runner.registerHandler('campaign.batch', bulk);
+    runner.registerHandler('booking.reminder', reminder);
+    const overflow = 3;
+    claim([
+      ...Array.from({ length: KIND_DISPATCH_CAP + overflow }, (_, i) => job(`b${i}`, 'campaign.batch')),
+      // Last in the claim, i.e. the row a naive runner reaches only after every
+      // campaign row above it has finished.
+      job('reminder', 'booking.reminder'),
+    ]);
+
+    await runner.tick();
+
+    expect(bulk).toHaveBeenCalledTimes(KIND_DISPATCH_CAP);
+    expect(reminder).toHaveBeenCalled();
+    expect(releaseCall()?.where.id.in).toEqual(
+      Array.from({ length: overflow }, (_, i) => `b${KIND_DISPATCH_CAP + i}`),
+    );
+  });
+
+  it('writes nothing back when the whole claim was dispatched (never resurrects a finished row)', async () => {
+    runner.registerHandler('k', jest.fn().mockResolvedValue(undefined));
+    claim([job('j1', 'k'), job('j2', 'k')]);
+
+    await runner.tick();
+
+    expect(releaseCall()).toBeUndefined();
+  });
+
+  it('isolates a failed release so the tick still ends cleanly (the reaper is the backstop)', async () => {
+    prisma.scheduledJob.updateMany.mockRejectedValue(new Error('db blip'));
+    const handler = slowHandler(DISPATCH_BUDGET_MS * 2);
+    runner.registerHandler('slow', handler);
+    claim([job('j1', 'slow'), job('j2', 'slow')]);
+
+    await expect(runner.tick()).resolves.toBeUndefined();
   });
 });

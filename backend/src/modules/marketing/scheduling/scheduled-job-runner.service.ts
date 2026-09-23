@@ -43,6 +43,30 @@ const BATCH = 100;
 const STUCK_AFTER_MS = 15 * 60 * 1000;
 
 /**
+ * How long one tick may keep dispatching before it hands the advisory lock
+ * back and lets the next minute's tick start.
+ *
+ * The claim takes up to a hundred due rows and runs them SEQUENTIALLY under ONE
+ * global lock, so a tenant whose fifty campaign sends each wait on an SMTP
+ * round-trip used to delay every other tenant's AI replies, workflow resumes
+ * and booking reminders for as long as that took (`batches-stall-runner`).
+ * Under the minute interval, so the queue keeps moving at roughly its intended
+ * cadence instead of in one long stall.
+ */
+export const DISPATCH_BUDGET_MS = 45_000;
+
+/**
+ * How many jobs of ONE kind a single claim may dispatch.
+ *
+ * The deadline alone is not fairness: a hundred `campaign.batch` rows claimed
+ * ahead of one booking reminder would still spend the whole budget on the
+ * campaign and leave the reminder for the next tick, every tick. Capping the
+ * kind means the tail of the claim is reached while there is still budget left.
+ * Sized well under BATCH so a mixed claim always gets through.
+ */
+export const KIND_DISPATCH_CAP = 25;
+
+/**
  * Claims due ScheduledJob rows once a minute (single-replica via advisory
  * lock) and routes each to its registered per-kind handler — same claim SQL
  * as OutboxWorker (UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)).
@@ -53,6 +77,10 @@ const STUCK_AFTER_MS = 15 * 60 * 1000;
  * failures back off (30s·2^attempts, capped 1h) until maxAttempts → FAILED
  * + a `DLQ:` log line for ops grep. RUNNING rows older than 15 min are
  * reaped back to PENDING (crash recovery).
+ *
+ * Dispatch is sequential under one lock, so it is also bounded: a tick stops
+ * at `DISPATCH_BUDGET_MS` and runs at most `KIND_DISPATCH_CAP` jobs of any one
+ * kind, and hands every row it did not dispatch straight back to PENDING.
  */
 @Injectable()
 export class ScheduledJobRunnerService {
@@ -118,14 +146,75 @@ export class ScheduledJobRunnerService {
         this.logger.error(`scheduled-job claimBatch failed: ${e?.message ?? e}`);
         return;
       }
-      for (const job of claimed) {
+      // Two fairness bounds on the dispatch loop, and one rule that makes both
+      // safe: whatever this tick does NOT dispatch must be handed back to the
+      // queue explicitly, because claimBatch already flipped every one of these
+      // rows to RUNNING. Abandoning them would hide them from the next tick
+      // until reapStuck revives them fifteen minutes later — turning the delay
+      // this bound exists to shorten into a much longer one.
+      const deadline = Date.now() + DISPATCH_BUDGET_MS;
+      const dispatchedPerKind = new Map<string, number>();
+      const overCap: ClaimedJob[] = [];
+      let i = 0;
+      for (; i < claimed.length; i++) {
+        const job = claimed[i];
+        // The first job of a tick always runs: a clock that is somehow already
+        // past the deadline must not produce a tick that makes no progress at
+        // all and re-queues the same rows forever.
+        if (i > 0 && Date.now() >= deadline) break;
+        const dispatched = dispatchedPerKind.get(job.kind) ?? 0;
+        if (dispatched >= KIND_DISPATCH_CAP) {
+          overCap.push(job);
+          continue;
+        }
+        dispatchedPerKind.set(job.kind, dispatched + 1);
         try {
           await this.run(job);
         } catch (e: any) {
           this.logger.error(`scheduled-job dispatch ${job.id} crashed: ${e?.message ?? e}`);
         }
       }
+      // `break` above, never `return`: this tail is what keeps the deferred
+      // rows claimable.
+      await this.release([...overCap, ...claimed.slice(i)]);
     }, this.logger);
+  }
+
+  /**
+   * Hand rows this tick claimed but never dispatched back to the queue.
+   *
+   * A deferral is not a failure, so this writes exactly the two columns the
+   * claim wrote and nothing else: `attempts`, `lastError` and `runAt` stay as
+   * they were, and since the claim orders by `runAt`, these rows are the first
+   * candidates of the next tick. The `status = 'RUNNING'` guard keeps it from
+   * ever resurrecting a row another writer has already settled.
+   *
+   * Best-effort: a failed release leaves the rows RUNNING, which `reapStuck`
+   * still recovers — that is a slower path, not a lost one, and it must not
+   * take the rest of the tick down with it.
+   */
+  private async release(jobs: ClaimedJob[]): Promise<void> {
+    if (jobs.length === 0) return;
+    // One write per workspace rather than one over every id: a claim spans
+    // tenants, and every multi-row write in this module names the workspace it
+    // belongs to (`workspace-scoping.arch.spec.ts`).
+    const byWorkspace = new Map<string, string[]>();
+    for (const job of jobs) {
+      const ids = byWorkspace.get(job.workspaceId) ?? [];
+      ids.push(job.id);
+      byWorkspace.set(job.workspaceId, ids);
+    }
+    try {
+      for (const [workspaceId, ids] of byWorkspace) {
+        await this.prisma.scheduledJob.updateMany({
+          where: { workspaceId, id: { in: ids }, status: 'RUNNING' },
+          data: { status: 'PENDING', lockedAt: null },
+        });
+      }
+      this.logger.debug(`scheduled-job tick deferred ${jobs.length} claimed row(s) to the next tick`);
+    } catch (e: any) {
+      this.logger.error(`scheduled-job release failed for ${jobs.length} row(s): ${e?.message ?? e}`);
+    }
   }
 
   /**
