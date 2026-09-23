@@ -22,33 +22,48 @@ import { EmailFrom } from '../../../common/services/email.service';
 import {
   isSendingDomainsConfigured,
   platformSpfInclude,
+  sendingDomainEspStatus,
   SENDING_DOMAIN_VERIFY_KIND,
   SENDING_DOMAIN_POLL_INTERVAL_MS,
+  SENDING_DOMAIN_RETRY_INTERVAL_MS,
   SENDING_DOMAIN_MAX_POLLS,
 } from './sending-domains.config';
 import {
   DnsCheck,
   allVerified,
   buildRecords,
+  checkDkim,
+  checkDmarc,
+  checkSpf,
   dkimHost,
-  dkimMatches,
   dmarcHost,
-  dmarcMatches,
+  isDecisive,
   missingSummary,
   normalizeDomain,
-  spfMatches,
 } from './sending-domain.dns';
 
 const generateKeyPairAsync = promisify(generateKeyPair);
 
+/** Resolver codes that mean "nothing is published there", as opposed to
+ *  "the question was not answered". Everything else is a blip. */
+const DEFINITIVE_DNS_CODES = new Set(['ENOTFOUND', 'ENODATA', 'NXDOMAIN', 'NOTFOUND']);
+
+interface TxtLookup {
+  records: string[][];
+  /** The resolver did not answer — says nothing about what is published. */
+  unavailable: boolean;
+}
+
 /**
- * Sending domains / DKIM (GHL parity, Epic 13 — inert until SENDING_DOMAIN_ESP).
+ * Sending domains / DKIM (GHL parity, Epic 13 — inert until an ESP is actually
+ * configured; see sending-domains.config.ts for what "configured" means).
  *
  * request() mints an RSA DKIM keypair (private sealed, public published), hands
  * the tenant the DKIM/SPF/DMARC records to add, and a 'sending-domain.verify'
  * ScheduledJob re-polls DNS until the records appear. resolveFrom() lets the
- * campaign sender route mail From a VERIFIED domain — but only once an ESP
- * transport is configured, so the live email path is untouched by default.
+ * campaign sender route mail From a VERIFIED domain — but only once the path is
+ * armed AND the mail can be DKIM-signed as that domain, so the live email path
+ * is untouched by default.
  */
 @Injectable()
 export class SendingDomainsService implements OnModuleInit {
@@ -67,7 +82,11 @@ export class SendingDomainsService implements OnModuleInit {
   // ---- CRUD ----
 
   async request(workspaceId: string, dto: { domain: string; fromName?: string }) {
-    if (!isSendingDomainsConfigured()) {
+    const esp = sendingDomainEspStatus();
+    if (!esp.armed) {
+      // The tenant gets the plain fact; the missing KEYS are operator detail and
+      // belong in the log and the ops health panel, not in a 503 body.
+      this.logger.warn(`sending-domain request refused: ESP path not armed (missing: ${esp.missing.join(', ')})`);
       throw new ServiceUnavailableException('Custom sending domains are not enabled');
     }
     if (!isSecretBoxConfigured()) {
@@ -141,25 +160,39 @@ export class SendingDomainsService implements OnModuleInit {
     return { deleted: true };
   }
 
-  /** Manual "Verify" button — check DNS right now and update the status. */
+  /**
+   * Manual "Verify" button — check DNS right now and update the status.
+   *
+   * A VERIFIED domain is re-checked too (records do get deleted), but only a
+   * DECISIVE check may move anything: a SERVFAIL that demoted a healthy domain
+   * would silently revert a campaign mid-flight to the platform From, which is
+   * worse than the drift it was meant to catch.
+   */
   async verifyNow(workspaceId: string, id: string) {
     const dom = await this.prisma.sendingDomain.findFirst({ where: { id, workspaceId } });
     if (!dom) throw new NotFoundException('Sending domain not found');
-    if (dom.status === 'VERIFIED') return this.present(dom);
     const check = await this.checkDns(dom);
-    const data = allVerified(check)
+    if (!isDecisive(check)) return this.present(dom, check);
+
+    const verified = allVerified(check);
+    const data: { status?: string; verifiedAt?: Date; lastError?: string | null } = verified
       ? { status: 'VERIFIED', verifiedAt: new Date(), lastError: null }
       : { lastError: missingSummary(check) };
+    // Records that were really there and are gone: say so instead of going on
+    // signing mail with a key the world can no longer look up.
+    if (!verified && dom.status === 'VERIFIED') data.status = 'PENDING';
+    if (verified && dom.status === 'VERIFIED') return this.present(dom, check); // nothing to write
+
     await this.prisma.sendingDomain.updateMany({ where: { id, workspaceId }, data });
-    return this.present({ ...dom, ...data });
+    return this.present({ ...dom, ...data }, check);
   }
 
-  // ---- campaign integration (inert without an ESP transport) ----
+  // ---- campaign integration (inert without an armed ESP path) ----
 
   /**
    * The per-workspace From for outbound marketing email. Returns null (→ the
-   * platform default) unless an ESP transport is configured AND the workspace
-   * has a VERIFIED domain, so by default this changes nothing.
+   * platform default) unless the ESP path is armed AND the workspace has a
+   * VERIFIED domain we can still sign as, so by default this changes nothing.
    */
   async resolveFrom(workspaceId: string): Promise<EmailFrom | null> {
     if (!isSendingDomainsConfigured()) return null;
@@ -169,17 +202,23 @@ export class SendingDomainsService implements OnModuleInit {
       select: { domain: true, fromEmail: true, fromName: true, dkimSelector: true, dkimPrivateSealed: true },
     });
     if (!dom?.fromEmail) return null;
-    const from: EmailFrom = { email: dom.fromEmail, name: dom.fromName ?? undefined };
-    // Attach DKIM signing so the From-swap is authenticated (d= aligned to the
-    // From domain), not a deliverability-hurting unsigned spoof.
-    if (isSecretBoxConfigured() && dom.dkimPrivateSealed) {
-      try {
-        from.dkim = { domainName: dom.domain, keySelector: dom.dkimSelector, privateKey: openSecret(dom.dkimPrivateSealed) };
-      } catch {
-        /* unreadable key — send unsigned rather than crash the campaign */
-      }
+    // The envelope stays the platform's, so SPF can never align with a tenant
+    // From. DKIM is the ONLY thing that makes the swap pass DMARC — without it
+    // the mail is a spoof of the tenant's own domain and is treated as one, so
+    // fall back to the platform identity rather than send it unsigned.
+    if (!isSecretBoxConfigured() || !dom.dkimPrivateSealed) return null;
+    let privateKey: string;
+    try {
+      privateKey = openSecret(dom.dkimPrivateSealed);
+    } catch {
+      this.logger.warn(`sending domain ${dom.domain}: DKIM key unreadable — falling back to the platform identity`);
+      return null;
     }
-    return from;
+    return {
+      email: dom.fromEmail,
+      name: dom.fromName ?? undefined,
+      dkim: { domainName: dom.domain, keySelector: dom.dkimSelector, privateKey },
+    };
   }
 
   // ---- verify job ----
@@ -187,13 +226,20 @@ export class SendingDomainsService implements OnModuleInit {
   private async runVerifyJob(job: ClaimedJob): Promise<JobHandlerResult> {
     const domainId = String(job.payload?.domainId ?? '');
     if (!domainId) return;
-    const polls = Number(job.payload?.polls ?? 0) + 1;
+    const previousPolls = Number(job.payload?.polls ?? 0);
     const dom = await this.prisma.sendingDomain.findFirst({
       where: { id: domainId, workspaceId: job.workspaceId },
     });
     if (!dom || dom.status === 'VERIFIED' || dom.status === 'FAILED') return; // settled / gone
 
     const check = await this.checkDns(dom);
+    // A resolver outage is not a poll: it must neither spend the tenant's
+    // ~14-day budget nor leave a "records not found" hint nobody established.
+    if (!isDecisive(check)) {
+      return { reschedule: { runAt: new Date(Date.now() + SENDING_DOMAIN_RETRY_INTERVAL_MS), payload: { domainId, polls: previousPolls } } };
+    }
+
+    const polls = previousPolls + 1;
     if (allVerified(check)) {
       await this.prisma.sendingDomain.updateMany({
         where: { id: domainId, workspaceId: job.workspaceId },
@@ -218,28 +264,41 @@ export class SendingDomainsService implements OnModuleInit {
   }
 
   private async checkDns(dom: { domain: string; dkimSelector: string; dkimPublicKey: string }): Promise<DnsCheck> {
+    const include = platformSpfInclude();
     const [dkim, spf, dmarc] = await Promise.all([
       this.resolveTxtSafe(dkimHost(dom.dkimSelector, dom.domain)),
       this.resolveTxtSafe(dom.domain),
       this.resolveTxtSafe(dmarcHost(dom.domain)),
     ]);
     return {
-      dkim: dkimMatches(dkim, dom.dkimPublicKey),
-      spf: spfMatches(spf, platformSpfInclude()),
-      dmarc: dmarcMatches(dmarc),
+      dkim: dkim.unavailable ? { ok: false, reason: 'UNAVAILABLE' } : checkDkim(dkim.records, dom.dkimPublicKey),
+      spf: spf.unavailable ? { ok: false, reason: 'UNAVAILABLE' } : checkSpf(spf.records, include),
+      dmarc: dmarc.unavailable ? { ok: false, reason: 'UNAVAILABLE' } : checkDmarc(dmarc.records),
     };
   }
 
-  private async resolveTxtSafe(host: string): Promise<string[][]> {
+  /**
+   * NXDOMAIN/ENODATA is an answer ("nothing is published there"); SERVFAIL, a
+   * timeout or a refusal is not. Collapsing both into `[]` is what made a
+   * resolver blip indistinguishable from a deleted record.
+   */
+  private async resolveTxtSafe(host: string): Promise<TxtLookup> {
     try {
-      return await dns.resolveTxt(host);
-    } catch {
-      return []; // NXDOMAIN / no records yet — treated as "not found"
+      return { records: await dns.resolveTxt(host), unavailable: false };
+    } catch (e) {
+      const code = String((e as { code?: string })?.code ?? '').toUpperCase();
+      if (DEFINITIVE_DNS_CODES.has(code)) return { records: [], unavailable: false };
+      this.logger.debug(`TXT lookup for ${host} did not answer (${code || 'unknown'})`);
+      return { records: [], unavailable: true };
     }
   }
 
-  /** Strip the sealed DKIM private key and attach the copy-able DNS records. */
-  private present<T extends { domain: string; dkimSelector: string; dkimPublicKey: string; dkimPrivateSealed?: string }>(dom: T) {
+  /** Strip the sealed DKIM private key and attach the copy-able DNS records.
+   *  `check` is transient (never persisted) so the UI can name what is wrong. */
+  private present<T extends { domain: string; dkimSelector: string; dkimPublicKey: string; dkimPrivateSealed?: string }>(
+    dom: T,
+    check?: DnsCheck,
+  ) {
     const { dkimPrivateSealed: _omit, ...safe } = dom;
     return {
       ...safe,
@@ -249,6 +308,7 @@ export class SendingDomainsService implements OnModuleInit {
         publicKeyB64Der: dom.dkimPublicKey,
         spfInclude: platformSpfInclude(),
       }),
+      checks: check,
     };
   }
 }
