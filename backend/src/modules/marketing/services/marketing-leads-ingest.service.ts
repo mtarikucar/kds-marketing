@@ -7,6 +7,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { localMsisdnVariants, normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { classifyEmailSyntax } from '../leads/email-hygiene.service';
 import {
   IngestLeadCandidateDto,
   IngestLeadsDto,
@@ -442,6 +443,17 @@ export class MarketingLeadsIngestService {
       // form/manual/booking lead that has the same email/phone (cross-path).
       phoneNormalized: normalizePhone(c.phone),
       emailNormalized: normalizeEmail(c.email),
+      // A researched address is the only one in the product that nobody typed:
+      // it comes off a web page the agent read. Import and forms both stamp a
+      // verdict at the write, and `buildAudienceWhere` excludes only INVALID —
+      // so without this, an impossible address minted here entered every
+      // campaign audience and was refused one by one at the gateway, spending
+      // reputation on the shared relay each time.
+      //
+      // SYNTAX ONLY. `verify()` is a 2.5 s MX lookup and this runs inside
+      // `prisma.$transaction`, one held pooled connection per row; the MX half
+      // belongs to the background sweeper, not to a transaction.
+      emailVerifiedStatus: classifyEmailSyntax(c.email),
       city: c.city,
       region: c.region,
       businessType: c.businessType,

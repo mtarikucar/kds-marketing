@@ -132,6 +132,19 @@ export interface Lead {
    *  rides along on `GET /marketing/leads/:id`, which returns the Lead row's
    *  scalars unfiltered. */
   smsOptOut?: boolean;
+  /** "Do not email me." The email mirror of `smsOptOut` — set by the consent
+   *  panel, by a campaign unsubscribe and by an ESP complaint. Rides along on
+   *  `GET /marketing/leads/:id` with the rest of the Lead row's scalars.
+   *  UNDEFINED IS NOT FALSE: a caller that renders a chip must test for an
+   *  explicit `true`, or a payload that predates the field prints "opted out"
+   *  over somebody who never did. */
+  emailOptOut?: boolean;
+  /** When this address last hard-bounced or drew a complaint. Non-null means
+   *  the mail gateway will refuse it; null/undefined means nothing is known. */
+  emailBouncedAt?: string | null;
+  /** Hygiene verdict for `email`: 'UNKNOWN' until something checks it, then
+   *  'VALID' / 'INVALID'. Only 'INVALID' blocks a send. */
+  emailVerifiedStatus?: string | null;
   address?: string;
   city?: string;
   region?: string;

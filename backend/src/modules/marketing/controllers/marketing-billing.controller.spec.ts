@@ -36,7 +36,15 @@ describe('MarketingBillingController.walletTopup', () => {
  * unset = hidden exactly as today, set = the flag flips.
  */
 describe('MarketingBillingController.summary (platform feature gates)', () => {
-  const KEYS = ['PAGESPEED_API_KEY', 'SENDING_DOMAIN_ESP', 'CUSTOM_DOMAINS_ENABLED'] as const;
+  const KEYS = [
+    'PAGESPEED_API_KEY',
+    'SENDING_DOMAIN_ESP',
+    // The sending-domain gate needs a provider AND a real SPF include: naming a
+    // provider with no include used to arm the path and hand the tenant a DNS
+    // record that authorises nobody.
+    'SENDING_DOMAIN_SPF_INCLUDE',
+    'CUSTOM_DOMAINS_ENABLED',
+  ] as const;
   const real: Record<string, string | undefined> = {};
   let ctrl: MarketingBillingController;
 
@@ -72,6 +80,7 @@ describe('MarketingBillingController.summary (platform feature gates)', () => {
   it('flips only the features whose env key is set', async () => {
     process.env.PAGESPEED_API_KEY = 'psi-key';
     process.env.SENDING_DOMAIN_ESP = 'postmark';
+    process.env.SENDING_DOMAIN_SPF_INCLUDE = 'spf.jeeta.example';
 
     const out: any = await ctrl.summary({ workspaceId: 'ws-1' } as any);
 

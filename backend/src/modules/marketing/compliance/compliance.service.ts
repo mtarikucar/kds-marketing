@@ -254,9 +254,18 @@ export class ComplianceService {
       where: { workspaceId, leadId },
       orderBy: { createdAt: 'desc' },
     });
-    const latest: Record<string, { type: string; granted: boolean; at: Date }> = {};
+    // `source` rides along: dating an opt-out answers half of what a compliance
+    // officer is asked, and the other half is whether the person unticked a
+    // form, replied STOP or a rep did it for them. Explicitly null — never
+    // absent — on a record written before sources were captured.
+    const latest: Record<
+      string,
+      { type: string; granted: boolean; at: Date; source: string | null }
+    > = {};
     for (const r of all) {
-      if (!(r.type in latest)) latest[r.type] = { type: r.type, granted: r.granted, at: r.createdAt };
+      if (!(r.type in latest)) {
+        latest[r.type] = { type: r.type, granted: r.granted, at: r.createdAt, source: r.source ?? null };
+      }
     }
     return Object.values(latest);
   }

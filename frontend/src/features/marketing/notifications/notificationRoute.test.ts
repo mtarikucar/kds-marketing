@@ -160,3 +160,27 @@ describe('notificationRoute — guards', () => {
     expect(notificationRoute({ type: 'FOLLOW_UP_REMINDER', metadata: { leadIds: [], bulk: true } })).toBeNull();
   });
 });
+
+describe('notificationRoute — CAMPAIGN_STALLED', () => {
+  // The batch runner raises this when a campaign stopped part-way: half the
+  // audience is sent, the rest is PENDING, and nobody is told unless the bell
+  // can be clicked. There is no `/campaigns/:id` detail route, so the list is
+  // the honest target; the id rides in `metadata` for whoever opens the row.
+  it('opens the campaigns list', () => {
+    expect(
+      notificationRoute({
+        type: 'CAMPAIGN_STALLED',
+        metadata: { campaignId: '11111111-1111-4111-8111-111111111111', kind: 'campaign.batch' },
+      } as never),
+    ).toBe('/campaigns');
+  });
+
+  it('does not invent a detail route out of the campaign id', () => {
+    const to = notificationRoute({
+      type: 'CAMPAIGN_STALLED',
+      metadata: { campaignId: '11111111-1111-4111-8111-111111111111' },
+    } as never);
+    expect(to).not.toContain('11111111');
+  });
+});
+

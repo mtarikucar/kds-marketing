@@ -61,6 +61,34 @@ interface Notification {
   metadata?: unknown;
 }
 
+/**
+ * A notification in the reader's own language, when the producer said how.
+ *
+ * `title`/`message` are written in ONE language by whichever backend raised the
+ * row, so a Turkish literal reached an English operator and the other way
+ * round. Producers that care — the mail health alerts, the inbound quarantine
+ * notice — stamp `metadata.copyKey`, a stable handle with `.title`/`.message`
+ * under it in every catalogue (PLAN G8). The stored literal is the fallback:
+ * for a producer that stamps nothing, and for a key this bundle has not met yet
+ * (the SPA and the API deploy separately), which is exactly today's behaviour.
+ */
+function notificationCopy(
+  n: Notification,
+  t: (key: string, opts: Record<string, unknown>) => string,
+): { title: string; message: string } {
+  const meta = (n.metadata ?? null) as { copyKey?: unknown } | null;
+  const key = typeof meta?.copyKey === 'string' ? meta.copyKey.trim() : '';
+  if (!key) return { title: n.title, message: n.message };
+  // The stored literal is the defaultValue, so a missing key degrades to the
+  // sentence the producer wrote rather than to a raw `mail.alert.X.title`.
+  // `metadata` rides along so a count or a name in the copy interpolates.
+  const vars = (n.metadata ?? {}) as Record<string, unknown>;
+  return {
+    title: t(`${key}.title`, { ...vars, defaultValue: n.title }),
+    message: t(`${key}.message`, { ...vars, defaultValue: n.message }),
+  };
+}
+
 function formatTimeAgo(dateStr: string): string {
   const now = Date.now();
   const date = new Date(dateStr).getTime();
@@ -474,7 +502,9 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                     No notifications
                   </div>
                 ) : (
-                  notificationList.map((n) => (
+                  notificationList.map((n) => {
+                    const copy = notificationCopy(n, t as never);
+                    return (
                     <button
                       key={n.id}
                       type="button"
@@ -495,10 +525,10 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                         )}
                         <div className={cn('flex-1 min-w-0', n.isRead && 'ms-4')}>
                           <p className="text-sm font-medium text-foreground truncate">
-                            {n.title}
+                            {copy.title}
                           </p>
                           <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                            {n.message}
+                            {copy.message}
                           </p>
                           <p className="text-[11px] text-muted-foreground mt-1">
                             {formatTimeAgo(n.createdAt)}
@@ -506,7 +536,8 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                         </div>
                       </div>
                     </button>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </PopoverContent>

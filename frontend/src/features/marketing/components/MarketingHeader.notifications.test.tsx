@@ -201,3 +201,62 @@ describe('MarketingHeader — notification click', () => {
     expect(screen.getByTestId('notification-unread-dot')).toBeInTheDocument();
   });
 });
+
+/**
+ * A NOTIFICATION IN THE READER'S LANGUAGE.
+ *
+ * `title`/`message` are written once, in one language, by whichever backend
+ * raised the row — so the mail health alerts reached an English operator in
+ * Turkish and the inbound quarantine notice did the same. Producers that care
+ * stamp `metadata.copyKey`, and the catalogue carries `<key>.title` /
+ * `<key>.message` in both languages (PLAN G8).
+ */
+describe('MarketingHeader — notification copy', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en');
+    marketingApi.get.mockReset();
+    marketingApi.patch.mockReset();
+  });
+
+  const alertRow = (over: Partial<Row> = {}): Row => ({
+    id: 'n9',
+    // What the producer stored: one language, for whoever reads the database.
+    title: 'E-posta gönderimi başarısız oluyor',
+    message: 'Son 24 saatte gönderilen e-postaların %30 kadarı gönderilemedi.',
+    isRead: false,
+    createdAt: new Date().toISOString(),
+    type: 'MAIL_HEALTH_ALERT',
+    metadata: { copyKey: 'mail.alert.SEND_FAILURE_RATE', alert: 'SEND_FAILURE_RATE' },
+    ...over,
+  });
+
+  it('prefers the catalogue over the producer’s stored literal', async () => {
+    mockNotifications([alertRow()]);
+    await openBell();
+
+    // The English sentence for that key, not the Turkish one in the row.
+    expect(
+      await screen.findByText(i18n.t('marketing:mail.alert.SEND_FAILURE_RATE.title')),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('E-posta gönderimi başarısız oluyor')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the stored literal for a key this bundle does not know', async () => {
+    // The SPA and the API deploy separately, so a newer server can name a key
+    // this bundle has never met. The producer's own sentence is degraded; a raw
+    // `some.new.key.title` on screen would be broken.
+    mockNotifications([alertRow({ metadata: { copyKey: 'mail.alert.SOME_NEW_KIND' } })]);
+    await openBell();
+
+    expect(await screen.findByText('E-posta gönderimi başarısız oluyor')).toBeInTheDocument();
+  });
+
+  it('leaves a producer that stamps no key exactly as it is', async () => {
+    mockNotifications([
+      alertRow({ type: 'TASK_ASSIGNED', title: 'New task assigned', message: 'Call the restaurant', metadata: { taskId: 't1' } }),
+    ]);
+    await openBell();
+
+    expect(await screen.findByText('New task assigned')).toBeInTheDocument();
+  });
+});

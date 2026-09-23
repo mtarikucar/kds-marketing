@@ -101,6 +101,26 @@ const REFUSAL: Record<SuppressionReason, string> = {
 };
 
 /**
+ * The same refusal as a MACHINE CODE, in the `MailReason` vocabulary the rest
+ * of the product's mail surfaces already speak.
+ *
+ * The dialog pre-empts the three LEAD-COLUMN cases in the reader's own
+ * language, but an address-level `ContactSuppression` row has no lead flag to
+ * read — so that refusal reached a Turkish rep as an English sentence (PLAN
+ * G8). The two vocabularies differ by a letter in places (`ERASURE` ⇒
+ * `SUPPRESSED_ERASED`), which is exactly why this is a table and not a
+ * template.
+ */
+const REFUSAL_REASON: Record<SuppressionReason, string> = {
+  OPT_OUT: 'SUPPRESSED_OPT_OUT',
+  MANUAL: 'SUPPRESSED_OPT_OUT',
+  HARD_BOUNCE: 'SUPPRESSED_BOUNCE',
+  INVALID: 'SUPPRESSED_INVALID',
+  COMPLAINT: 'SUPPRESSED_COMPLAINT',
+  ERASURE: 'SUPPRESSED_ERASED',
+};
+
+/**
  * Starting a conversation with a lead we chose, rather than waiting to be
  * messaged.
  *
@@ -182,7 +202,10 @@ export class OutboundConversationService {
    * cannot complete leaves this path's previous behaviour rather than
    * pretending a database hiccup was a customer's refusal.
    */
-  private async suppressionRefusal(workspaceId: string, address: string): Promise<string | null> {
+  private async suppressionRefusal(
+    workspaceId: string,
+    address: string,
+  ): Promise<{ message: string; reason: string } | null> {
     try {
       const verdict = await this.suppression.check(workspaceId, address, 'CONVERSATIONAL', {
         // Opening a thread IS reaching out: there is no inbound message that
@@ -190,7 +213,12 @@ export class OutboundConversationService {
         proactive: true,
       });
       if (!verdict.suppressed || !verdict.reason) return null;
-      return REFUSAL[verdict.reason] ?? 'This address cannot be messaged.';
+      return {
+        message: REFUSAL[verdict.reason] ?? 'This address cannot be messaged.',
+        // A reason this build has not met yet still gets a code the UI can map
+        // to its own "we cannot reach this address" sentence.
+        reason: REFUSAL_REASON[verdict.reason] ?? 'UNKNOWN',
+      };
     } catch (e: any) {
       this.logger.warn(`suppression check failed (lead address): ${e?.message ?? e}`);
       return null;
@@ -294,6 +322,8 @@ export class OutboundConversationService {
     // blacklist, which `SuppressionService` deliberately does not touch.
     if (channel.type === 'EMAIL') {
       const refusal = await this.suppressionRefusal(workspaceId, address);
+      // The sentence AND the code: the sentence stays for a log and for a
+      // client that predates the code, and the code is what the dialog renders.
       if (refusal) throw new BadRequestException(refusal);
     }
 
@@ -331,15 +361,28 @@ export class OutboundConversationService {
         select: { id: true, leadId: true },
       }));
 
-    // Reuse an open thread rather than opening a second one beside it — the
-    // inbox would otherwise show the same person twice on the same channel.
-    const open = await this.prisma.conversation.findFirst({
-      where: { workspaceId, channelId: channel.id, contactIdentityId: identity.id, status: 'OPEN' },
-      select: { id: true },
+    // Reuse the thread this identity already has rather than opening a second
+    // one beside it — the inbox would otherwise show the same person twice on
+    // the same channel, and inbound mail would land in whichever of the two the
+    // ingress matcher happened to pick.
+    //
+    // Whatever its STATUS. A closed thread is a finished conversation, not a
+    // forbidden one: filtering on OPEN is what made writing to somebody whose
+    // one thread had been closed fork a duplicate. Reopening it is the honest
+    // answer — we are, after all, reopening the conversation.
+    const prior = await this.prisma.conversation.findFirst({
+      where: { workspaceId, channelId: channel.id, contactIdentityId: identity.id },
+      select: { id: true, status: true },
       orderBy: { updatedAt: 'desc' },
     });
+    if (prior && prior.status !== 'OPEN') {
+      await this.prisma.conversation.update({
+        where: { id: prior.id },
+        data: { status: 'OPEN' },
+      });
+    }
     const conversation =
-      open ??
+      prior ??
       (await this.prisma.conversation.create({
         data: {
           workspaceId,
@@ -365,7 +408,7 @@ export class OutboundConversationService {
       leadId: lead.id,
       channel: channel.type,
       to: address,
-      reusedThread: Boolean(open),
+      reusedThread: Boolean(prior),
       message,
     };
   }

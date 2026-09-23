@@ -10,9 +10,9 @@ import {
   CreateCustomFieldDefDto,
   UpdateCustomFieldDefDto,
 } from '../dto/custom-field.dto';
+import { isSingleAddress } from '../../../common/util/email-address';
 
 const URL_RE = /^https?:\/\/.+/i;
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 type DefRow = {
   key: string;
@@ -238,7 +238,12 @@ export class CustomFieldsService {
         if (!URL_RE.test(String(raw))) bad('must be a URL');
         return String(raw);
       case 'EMAIL':
-        if (!EMAIL_RE.test(String(raw))) bad('must be an email');
+        // The ONE address rule the product has. The local copy that used to
+        // live here accepted `a,b@c.com` — two addresses in one header, which
+        // is how a custom field became a way to write mail to somebody nobody
+        // chose. `isSingleAddress` also carries the 254-char SMTP cap and the
+        // CR/LF refusal, which no local copy ever did.
+        if (!isSingleAddress(String(raw))) bad('must be an email');
         return String(raw);
       default:
         return String(raw); // TEXT, TEXTAREA, PHONE

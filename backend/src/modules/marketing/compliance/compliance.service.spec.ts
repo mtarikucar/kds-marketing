@@ -410,15 +410,40 @@ describe('ComplianceService', () => {
     expect(prisma.lead.update).not.toHaveBeenCalled();
   });
 
-  it('returns the latest consent per type', async () => {
+  it('returns the latest consent per type, and says where it came from', async () => {
+    // WHERE matters as much as WHEN. "Withdrawn on 12 March" answers half the
+    // question a compliance officer is actually asked; the other half is
+    // whether the person unticked a form, replied STOP, or a rep did it for
+    // them. `source` is the only column that carries it, and the panel had a
+    // key for it with nothing to render.
     const { prisma, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     prisma.consentRecord.findMany.mockResolvedValue([
-      { type: 'MARKETING_EMAIL', granted: true, createdAt: new Date('2026-02-01') },
-      { type: 'MARKETING_EMAIL', granted: false, createdAt: new Date('2026-01-01') },
+      { type: 'MARKETING_EMAIL', granted: true, createdAt: new Date('2026-02-01'), source: 'form:f1 :: Kampanyalardan haberdar olmak istiyorum' },
+      { type: 'MARKETING_EMAIL', granted: false, createdAt: new Date('2026-01-01'), source: 'unsubscribe' },
     ] as any);
     const out = await svc.getConsents(WS, 'lead-1');
-    expect(out).toEqual([{ type: 'MARKETING_EMAIL', granted: true, at: new Date('2026-02-01') }]);
+    expect(out).toEqual([
+      {
+        type: 'MARKETING_EMAIL',
+        granted: true,
+        at: new Date('2026-02-01'),
+        source: 'form:f1 :: Kampanyalardan haberdar olmak istiyorum',
+      },
+    ]);
+  });
+
+  it('carries an explicit null source rather than dropping the key', async () => {
+    // A record written before sources were captured has none. `undefined` would
+    // be serialised away, which a reader cannot tell from "not shipped yet".
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    prisma.consentRecord.findMany.mockResolvedValue([
+      { type: 'MARKETING_SMS', granted: false, createdAt: new Date('2026-02-01'), source: null },
+    ] as any);
+    expect(await svc.getConsents(WS, 'lead-1')).toEqual([
+      { type: 'MARKETING_SMS', granted: false, at: new Date('2026-02-01'), source: null },
+    ]);
   });
 
   it('exports a lead bundle and records a COMPLETED request', async () => {

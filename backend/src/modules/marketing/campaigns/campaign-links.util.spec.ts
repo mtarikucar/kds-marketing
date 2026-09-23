@@ -3,6 +3,8 @@ import {
   extractCampaignLinks,
   extractHrefLinks,
   extractPlainLinks,
+  screenCampaignLinks,
+  MAX_TRACKED_LINKS,
 } from './campaign-links.util';
 
 /**
@@ -107,3 +109,60 @@ describe('campaign-links.util', () => {
     });
   });
 });
+
+/**
+ * THE REDIRECTOR IS SHARED.
+ *
+ * `/api/public/t/c/:token?i=N` resolves its destination out of `Campaign.links`
+ * on the PLATFORM's own domain, and until launch time nothing looked at what
+ * went into that array beyond "starts with http". That is an open redirector
+ * with a tenant's name on it: aim it at a credential-harvesting page and every
+ * reputation system sees jeetagrowth.com, not the tenant.
+ *
+ * Screening is deliberately NARROW. Refusing a link a tenant legitimately
+ * wanted is a campaign that cannot ship, so only the shapes that cannot be a
+ * real marketing destination are refused — the rest is somebody else's
+ * judgement call, not this function's.
+ */
+describe('screenCampaignLinks', () => {
+  it('passes ordinary destinations, including odd but real ones', () => {
+    expect(
+      screenCampaignLinks([
+        'https://acme.com/spring?utm_source=mail&a=b#top',
+        'http://blog.acme.co.uk/2026/09/post',
+        'https://acme.com:8443/portal',
+      ]),
+    ).toEqual({ ok: true });
+  });
+
+  it('refuses credentials smuggled into the authority', () => {
+    // `https://acme.com@evil.test/` reads as Acme to a person and resolves to
+    // evil.test — the oldest phishing trick there is, and never a real
+    // marketing link.
+    const out = screenCampaignLinks(['https://acme.com@evil.test/login']);
+    expect(out).toMatchObject({ ok: false, reason: 'CREDENTIALS_IN_URL' });
+    expect((out as { url: string }).url).toContain('evil.test');
+  });
+
+  it('refuses a URL that does not parse', () => {
+    expect(screenCampaignLinks(['https://'])).toMatchObject({ ok: false, reason: 'UNPARSEABLE' });
+  });
+
+  it('refuses a scheme the redirect must never emit', () => {
+    // Nothing should reach this array, but the redirector trusts it, so the
+    // guard does not depend on the extractor having been careful.
+    expect(screenCampaignLinks(['javascript:alert(1)'])).toMatchObject({ ok: false, reason: 'BAD_SCHEME' });
+    expect(screenCampaignLinks(['data:text/html,<script>'])).toMatchObject({ ok: false, reason: 'BAD_SCHEME' });
+  });
+
+  it('bounds how many destinations one campaign may carry', () => {
+    const many = Array.from({ length: MAX_TRACKED_LINKS + 1 }, (_, i) => `https://acme.com/${i}`);
+    expect(screenCampaignLinks(many)).toMatchObject({ ok: false, reason: 'TOO_MANY' });
+    expect(screenCampaignLinks(many.slice(0, MAX_TRACKED_LINKS))).toEqual({ ok: true });
+  });
+
+  it('is fine with nothing to screen', () => {
+    expect(screenCampaignLinks([])).toEqual({ ok: true });
+  });
+});
+

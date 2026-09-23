@@ -42,6 +42,10 @@ export interface ConversationSummary {
   lead?: { id?: string; businessName?: string; contactPerson?: string } | null;
   channel?: ConversationChannelRef | null;
   lastMessage?: ConversationLastMessage | null;
+  /** The identity this thread actually reaches — the address an email reply
+   *  leaves for, which is free to drift from `lead.email` and is the threading
+   *  and dedup key, so it is the truth the composer must show. */
+  contact?: { value: string; kind: string } | null;
 }
 
 export interface ConversationListParams {

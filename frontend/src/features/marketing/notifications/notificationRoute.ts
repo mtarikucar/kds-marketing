@@ -101,6 +101,12 @@ export function notificationRoute(
       // falling back to a list would answer "who?" with "someone".
       return lead ? `/leads/${lead}` : null;
 
+    case 'CAMPAIGN_STALLED':
+      // The batch runner gave up on a campaign that is half sent. There is no
+      // `/campaigns/:id` route, so the list is the honest target — the id is in
+      // `metadata` for whoever opens the row, not in an invented path.
+      return '/campaigns';
+
     default:
       // `type` is a free-form String column with no enum behind it. Unknown
       // kinds — including DEMO_REMINDER / OFFER_EXPIRING / TASK_DUE, named in

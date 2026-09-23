@@ -934,3 +934,70 @@ describe('MessageSenderService.send — what the caller is told, and what the cl
     });
   });
 });
+
+/**
+ * WHICH ADDRESS DID THIS REPLY LEAVE FOR?
+ *
+ * The recipient is resolved from the conversation's contact identity and was
+ * then visible nowhere. A thread bound to `ahmet@eski.com` went on mailing it
+ * after somebody corrected the lead's address, and no surface said so
+ * (`composer-recipient-hidden`). The reply response is the caller's first-hand
+ * witness to it, carried alongside `retriable` and for the same reason: it is a
+ * property of THIS attempt, not of the message.
+ */
+describe('MessageSenderService.send — the reply says where it went', () => {
+  const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
+
+  function build(channelType: string, identityValue: string) {
+    const tx: any = {
+      message: { update: jest.fn().mockResolvedValue({ id: 'm1', status: 'SENT' }) },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1', workspaceId: 'w1', type: channelType, configSealed: 'x', configPublic: null,
+        }),
+      },
+      contactIdentity: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: identityValue }),
+      },
+      message: {
+        create: jest.fn().mockResolvedValue({ id: 'm1', status: 'PENDING' }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+    const service = new MessageSenderService(
+      prisma,
+      {
+        get: jest.fn().mockReturnValue({
+          send: jest.fn().mockResolvedValue({ externalMessageId: 'x', status: 'SENT' }),
+        }),
+        resolveConfig: jest.fn().mockReturnValue({ secrets: {} }),
+      } as any,
+      { reserve: jest.fn(), refund: jest.fn() } as any,
+      { append: jest.fn().mockResolvedValue('evt-1') } as any,
+      { push: jest.fn() } as any,
+      { settleSms: jest.fn().mockResolvedValue({ amount: 0, quantity: 0, unitCost: 0 }) } as any,
+      { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
+    );
+    return service;
+  }
+
+  const input = { workspaceId: 'w1', conversationId: 'c1', text: 'hi', authorType: 'AGENT' as const, authorId: 'u1' };
+
+  it('carries the address out on an EMAIL send', async () => {
+    const msg: any = await build('EMAIL', 'ahmet@eski.com').send(input);
+    expect(msg.to).toBe('ahmet@eski.com');
+  });
+
+  it('is absent on SMS, where the address IS the number already on the header', async () => {
+    // Also why the field is EMAIL-only rather than universal: four assertions
+    // in this file pin the SMS return with an exact `toEqual({ id, status })`,
+    // and an unconditional field would red every one of them.
+    const msg: any = await build('SMS', '+905551112233').send(input);
+    expect(msg.to).toBeUndefined();
+  });
+});

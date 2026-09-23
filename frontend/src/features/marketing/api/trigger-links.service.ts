@@ -11,7 +11,15 @@ export interface TriggerLink {
   name: string;
   slug: string;
   targetUrl: string;
+  /** HUMAN clicks. Mail-security scanners and link prefetchers sweep every URL
+   *  in a message on delivery, and they no longer bump this — which is why
+   *  `botCount` exists: without it the number simply fell one day. */
   clickCount: number;
+  /** Every hit ever recorded, humans and machines alike. Null when the counting
+   *  read failed — unknown, not zero. */
+  totalClicks?: number | null;
+  /** The machine share of `totalClicks`. Null when unknown. */
+  botCount?: number | null;
   url: string;
   createdAt: string;
   updatedAt: string;
@@ -25,6 +33,9 @@ export interface TriggerLinkPayload {
 
 export interface TriggerLinkStats extends TriggerLink {
   recent: { id: string; leadId: string | null; clickedAt: string }[];
+  /** The detail read counts the rows itself, so these are always present. */
+  totalClicks: number;
+  botCount: number;
 }
 
 export const listTriggerLinks = (): Promise<TriggerLink[]> =>

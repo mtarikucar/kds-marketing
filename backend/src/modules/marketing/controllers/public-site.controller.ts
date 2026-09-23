@@ -66,7 +66,16 @@ export class PublicSiteController {
     // First-touch attribution signals: the hosting page (Referer) carries the
     // UTM/click-id query; a hidden landing_url/page_url field wins if present.
     const referer = typeof req.headers.referer === 'string' ? req.headers.referer : undefined;
-    const attributionCtx = { url: safe.landing_url || safe.page_url || referer, referrer: referer };
+    // The socket address travels too: `FormsService` needs it for the
+    // per-(form, IP) burst cap and for `ConsentRecord.ipAddress`, the evidence
+    // half of a consent record. Only the controller can see it, and an
+    // `undefined` here would be spread away — leaving a consent row that cannot
+    // be told apart from one that was never recorded.
+    const attributionCtx = {
+      url: safe.landing_url || safe.page_url || referer,
+      referrer: referer,
+      ip: req.ip ?? null,
+    };
     let redirectUrl: string | null = null;
     try {
       ({ redirectUrl } = await this.forms.submit(formId, safe, readCookie(req, AFF_REF_COOKIE), attributionCtx));

@@ -33,10 +33,26 @@ const SEND_TIMEOUT_MS = 15_000;
  */
 const NO_SUBJECT = '(no subject)';
 
-/** Said to an operator, not to a customer — this lands on the channel card. */
-const NO_IMAP_HOST =
+/**
+ * Why a mailbox cannot receive, as a MACHINE CODE.
+ *
+ * `channels.verifySendOnly` interpolates this into an otherwise Turkish
+ * sentence, so an English sentence here reached the tenant verbatim (PLAN G8 —
+ * a server reason code is never printed raw). The codes match the convention
+ * `email-oauth.config.ts` already uses for its own `receiveReason`, and the
+ * frontend maps each to `channels.health.reason.<CODE>`.
+ *
+ * The prose still travels, as `receiveDetail`: it is what an operator reading a
+ * log or a health blob needs, and it names the fix the code cannot spell out.
+ */
+const NO_IMAP_HOST = 'NO_IMAP_HOST';
+const NO_IMAP_HOST_DETAIL =
   'no incoming (IMAP) server is set for this mailbox — fill in the IMAP host, or point your provider\'s inbound webhook at Jeeta';
-const IMAP_REFUSED = 'the mail server refused the IMAP login';
+const OAUTH_NO_IMAP_PASSWORD = 'OAUTH_NO_IMAP_PASSWORD';
+const OAUTH_NO_IMAP_PASSWORD_DETAIL =
+  'this mailbox is connected by consent and holds no incoming (IMAP) password — replies arrive through the inbound URL, not IMAP';
+const IMAP_REFUSED = 'IMAP_REFUSED';
+const IMAP_REFUSED_DETAIL = 'the mail server refused the IMAP login';
 
 /** SMTP settings live in the sealed `secrets` (host/port/user/from are not
  *  sensitive but are kept together with the password for a single connection). */
@@ -66,8 +82,11 @@ export interface MailboxProbe {
   receive: boolean;
   /** Why `send` is false. */
   reason?: string;
-  /** Why `receive` is false, in words that name the fix. */
+  /** Why `receive` is false, as a code the UI translates. */
   receiveReason?: string;
+  /** The same thing in words, for an operator reading a log. Never rendered to
+   *  a tenant on its own — that is what `receiveReason` is for. */
+  receiveDetail?: string;
 }
 
 /**
@@ -524,18 +543,22 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
    */
   private async probeImap(
     s: Record<string, string>,
-  ): Promise<{ receive: boolean; receiveReason?: string; imapHost?: string }> {
+  ): Promise<{
+    receive: boolean;
+    receiveReason?: string;
+    receiveDetail?: string;
+    imapHost?: string;
+  }> {
     // The SAME resolver both pollers use. This was a third copy of the host,
     // port and TLS derivation; behaviour was identical, which is exactly how a
     // third copy survives long enough to drift.
     const resolved = imapTarget(s);
     if (resolved.kind !== 'ok') {
+      const oauth = resolved.reason === 'oauth';
       return {
         receive: false,
-        receiveReason:
-          resolved.reason === 'oauth'
-            ? 'this mailbox is connected by consent and holds no incoming (IMAP) password — replies arrive through the inbound URL, not IMAP'
-            : NO_IMAP_HOST,
+        receiveReason: oauth ? OAUTH_NO_IMAP_PASSWORD : NO_IMAP_HOST,
+        receiveDetail: oauth ? OAUTH_NO_IMAP_PASSWORD_DETAIL : NO_IMAP_HOST_DETAIL,
       };
     }
     const { host } = resolved.target;
@@ -555,7 +578,8 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
       return {
         receive: false,
         imapHost: host,
-        receiveReason: `${IMAP_REFUSED}: ${String(e?.message ?? e).slice(0, 160)}`,
+        receiveReason: IMAP_REFUSED,
+        receiveDetail: `${IMAP_REFUSED_DETAIL}: ${String(e?.message ?? e).slice(0, 160)}`,
       };
     } finally {
       // Verify is a synchronous HTTP request; a probe that leaves the socket

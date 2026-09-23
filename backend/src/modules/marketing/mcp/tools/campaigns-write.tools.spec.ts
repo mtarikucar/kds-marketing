@@ -1,5 +1,6 @@
 import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerCampaignWriteTools } from './campaigns-write.tools';
+import { EMAIL_SUBJECT_REQUIRED } from '../../campaigns/campaigns.service';
 
 const ctx = { workspaceId: 'ws1', grantedScopes: ['campaigns.write'] };
 
@@ -51,6 +52,21 @@ describe('jeeta.create_campaign', () => {
       schema.safeParse({ name: 'n', channel: 'EMAIL', body: 'b', audienceFilter: [{ field: 'city', op: 'eq', value: 'Izmir' }] })
         .success,
     ).toBe(true);
+  });
+
+  /**
+   * `CampaignsService.launch()` refuses an EMAIL campaign with no subject, and
+   * that refusal lands at set_campaign_status time — two tool calls after the
+   * mistake. The schema stays permissive (a draft with no subject yet is a
+   * legitimate thing to author), so the field's own description is what has to
+   * carry the requirement to the agent.
+   */
+  it('tells the agent that EMAIL needs a subject, and names the refusal', () => {
+    const { registry } = deps();
+    const shape = (registry.get('jeeta.create_campaign')!.inputSchema as any).shape;
+    const described = String(shape.subject.description ?? '');
+    expect(described).toMatch(/required when channel is email/i);
+    expect(described).toContain(EMAIL_SUBJECT_REQUIRED);
   });
 
   it('routes VOICE to its own tool rather than accepting it here', () => {

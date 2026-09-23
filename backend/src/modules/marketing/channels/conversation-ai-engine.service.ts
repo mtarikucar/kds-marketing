@@ -25,6 +25,7 @@ import {
 } from '../scheduling/scheduled-job-runner.service';
 import { MessageSenderService } from './message-sender.service';
 import { ConversationStreamService } from './conversation-stream.service';
+import { AiDeclineCode, codedDeclineReason } from './ai-decline-reason';
 import { PLACEHOLDER_CONTACT_NAME } from './conversation-ingress.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { BrandContextService } from '../brand-brain/brand-context.service';
@@ -350,7 +351,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     try {
       const choice = await readJobPolicy(this.prisma, p.workspaceId, 'conversation.reply');
       if (!choice.enabled) {
-        this.decline(p.conversationId, 'conversation.reply is disabled');
+        this.decline(p.conversationId, 'conversation.reply is disabled', { code: 'REPLY_DISABLED' });
         return;
       }
       const mode = await this.aiModeFor(p.workspaceId);
@@ -364,7 +365,9 @@ export class ConversationAiEngineService implements OnModuleInit {
           select: { aiPaused: true },
         });
         if (convo?.aiPaused) {
-          this.decline(p.conversationId, 'AI paused on this conversation (a human took over)');
+          this.decline(p.conversationId, 'AI paused on this conversation (a human took over)', {
+            code: 'AI_PAUSED',
+          });
           return;
         }
         await this.scheduledJobs
@@ -845,7 +848,11 @@ export class ConversationAiEngineService implements OnModuleInit {
     }
   }
 
-  private decline(conversationId: string, reason: string, opts: { persist?: boolean } = {}): void {
+  private decline(
+    conversationId: string,
+    reason: string,
+    opts: { persist?: boolean; code?: AiDeclineCode } = {},
+  ): void {
     this.logger.log(`ai reply declined convo=${conversationId}: ${reason}`);
     // Two of the gates below are CONFIGURATION, not silence: "no agent profile
     // attached" and "no usable AI key" fire on every message of every tenant
@@ -878,7 +885,17 @@ export class ConversationAiEngineService implements OnModuleInit {
           data: {
             // Bounded: these are our own sentences, but one of them interpolates
             // a provider/channel name and the column is read straight into the UI.
-            aiLastDeclineReason: reason.slice(0, 500),
+            //
+            // Prefixed with a machine code where there is one, so the inbox can
+            // say this in the reader's own language (G8). The prose stays put:
+            // a reader that does not know the code — including every row written
+            // before codes existed — renders it exactly as it does today, and
+            // whoever is reading the table during an incident still gets a
+            // sentence rather than an enum.
+            aiLastDeclineReason: (opts.code
+              ? codedDeclineReason(opts.code, reason)
+              : reason
+            ).slice(0, 500),
             aiLastDeclineAt: new Date(),
           },
         })
@@ -999,15 +1016,21 @@ export class ConversationAiEngineService implements OnModuleInit {
       where: { id: conversationId, workspaceId },
     });
     if (!convo) {
-      this.decline(conversationId, 'conversation not found in this workspace');
+      this.decline(conversationId, 'conversation not found in this workspace', {
+        code: 'CONVERSATION_MISSING',
+      });
       return;
     }
     if (convo.status !== 'OPEN') {
-      this.decline(conversationId, `conversation is ${convo.status}, not OPEN`);
+      this.decline(conversationId, `conversation is ${convo.status}, not OPEN`, {
+        code: 'CONVERSATION_NOT_OPEN',
+      });
       return;
     }
     if (convo.aiPaused) {
-      this.decline(conversationId, 'AI paused on this conversation (a human took over)');
+      this.decline(conversationId, 'AI paused on this conversation (a human took over)', {
+        code: 'AI_PAUSED',
+      });
       return;
     }
     /**
@@ -1026,7 +1049,9 @@ export class ConversationAiEngineService implements OnModuleInit {
         select: { deletedAt: true, mergedIntoId: true },
       });
       if (lead?.deletedAt || lead?.mergedIntoId) {
-        this.decline(conversationId, 'this lead was deleted or merged — the thread is hidden');
+        this.decline(conversationId, 'this lead was deleted or merged — the thread is hidden', {
+          code: 'LEAD_GONE',
+        });
         return;
       }
     }
@@ -1035,11 +1060,13 @@ export class ConversationAiEngineService implements OnModuleInit {
       where: { id: convo.channelId, workspaceId },
     });
     if (!channel) {
-      this.decline(conversationId, 'channel not found');
+      this.decline(conversationId, 'channel not found', { code: 'CHANNEL_MISSING' });
       return;
     }
     if (channel.status !== 'ACTIVE') {
-      this.decline(conversationId, `channel is ${channel.status}, not ACTIVE`);
+      this.decline(conversationId, `channel is ${channel.status}, not ACTIVE`, {
+        code: 'CHANNEL_INACTIVE',
+      });
       return;
     }
     if (!channel.agentProfileId) {
@@ -1053,11 +1080,15 @@ export class ConversationAiEngineService implements OnModuleInit {
       where: { id: channel.agentProfileId, workspaceId },
     });
     if (!agent) {
-      this.decline(conversationId, 'attached agent profile no longer exists');
+      this.decline(conversationId, 'attached agent profile no longer exists', {
+        code: 'AGENT_MISSING',
+      });
       return;
     }
     if (agent.status !== 'ACTIVE') {
-      this.decline(conversationId, `agent profile is ${agent.status}, not ACTIVE`);
+      this.decline(conversationId, `agent profile is ${agent.status}, not ACTIVE`, {
+        code: 'AGENT_INACTIVE',
+      });
       return;
     }
 
@@ -1129,6 +1160,7 @@ export class ConversationAiEngineService implements OnModuleInit {
         this.decline(
           conversationId,
           `monthly message allowance is used up (${usage.used}/${usage.limit}) — add messages to reply`,
+          { code: 'MESSAGE_QUOTA' },
         );
         return;
       }
@@ -1167,6 +1199,7 @@ export class ConversationAiEngineService implements OnModuleInit {
         this.decline(
           conversationId,
           `daily reply cap reached (${agent.maxRepliesPerConvoDaily}/day) or lost the slot race`,
+          { code: 'DAILY_CAP' },
         );
         return;
       }
@@ -1228,6 +1261,7 @@ export class ConversationAiEngineService implements OnModuleInit {
           this.decline(
             conversationId,
             'monthly message allowance is used up — add messages to reply',
+            { code: 'MESSAGE_QUOTA' },
           );
         }
         sent = outbound?.status === 'SENT';
@@ -1246,6 +1280,7 @@ export class ConversationAiEngineService implements OnModuleInit {
             retried
               ? 'the channel refused the reply — retrying shortly; credit and daily slot released'
               : 'the channel refused the reply — credit and daily slot released, no follow-up scheduled',
+            { code: retried ? 'SEND_REFUSED_RETRY' : 'SEND_REFUSED' },
           );
         } else if (sent) {
           // The silence ended, so the banner explaining it must go with it.

@@ -22,6 +22,12 @@ export interface SourceRef {
   setupKind?: 'META_WEBHOOK' | 'SMS_CALLBACK' | 'EMAIL_WEBHOOK' | 'TIKTOK_WEBHOOK';
   /** WEBCHAT — the embed <script> is built from this widget key. */
   widgetKey?: string | null;
+  /** EMAIL — what the mailbox card needs that `status` cannot say: whether it
+   *  was connected by OAuth consent (so re-consent is the repair, not a
+   *  password), whether that consent has been revoked, and the address mail
+   *  actually leaves from. Absent on a server that predates the field, which is
+   *  why `mailboxOf()` in ./hooks reads it defensively. */
+  mailbox?: { consent: boolean; reauthRequired: boolean; address: string | null };
 }
 export interface ConnectionGroup {
   identityKey: string;

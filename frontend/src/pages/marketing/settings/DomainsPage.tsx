@@ -9,6 +9,10 @@ import { RouteFallback } from '../../../components/RouteFallback';
 // route before, and neither should be paid for by someone who wanted the other.
 const SendingDomainsPage = lazy(() => import('./SendingDomainsPage'));
 const CustomDomainsPage = lazy(() => import('./CustomDomainsPage'));
+// "Why did nothing send" is answered above the DNS records, not after them:
+// a tenant who never wired an ESP still sends through the platform relay, and
+// this card is the only screen that names which lane is actually broken.
+const EmailHealthCard = lazy(() => import('./EmailHealthCard'));
 
 const TABS = ['sending', 'custom'] as const;
 type DomainTab = (typeof TABS)[number];
@@ -57,7 +61,8 @@ export default function DomainsPage() {
           <TabsTrigger value="custom">{t('domains.tab.custom', { defaultValue: 'Website' })}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sending" className="pt-5">
+        <TabsContent value="sending" className="space-y-5 pt-5">
+          <Lazy><EmailHealthCard /></Lazy>
           <Lazy><SendingDomainsPage embedded /></Lazy>
         </TabsContent>
         <TabsContent value="custom" className="pt-5">

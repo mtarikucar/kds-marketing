@@ -202,3 +202,33 @@ describe('CustomFieldsService def CRUD', () => {
     await expect(svc.archive(WS, 'nope')).rejects.toBeInstanceOf(NotFoundException);
   });
 });
+
+/**
+ * A custom field of type EMAIL is a header the product will eventually write
+ * mail to. The local regex this used to carry accepted `a,b@c.com` — two
+ * addresses in one field — so it is now the SAME rule every other address in
+ * the product goes through, with the SMTP length cap and the CR/LF refusal that
+ * no local copy ever had.
+ */
+describe('CustomFieldsService — an EMAIL field holds ONE address', () => {
+  const coerce = (svc: any, raw: unknown) =>
+    svc.coerce({ key: 'contact', type: 'EMAIL', options: null, required: false }, raw);
+
+  it('accepts one ordinary address', () => {
+    const svc: any = new (CustomFieldsService as any)({} as any);
+    expect(coerce(svc, 'ali@acme.com')).toBe('ali@acme.com');
+  });
+
+  it('refuses two addresses smuggled into one value', () => {
+    const svc: any = new (CustomFieldsService as any)({} as any);
+    expect(() => coerce(svc, 'a,b@c.com')).toThrow();
+    expect(() => coerce(svc, 'a@b.com;c@d.com')).toThrow();
+    expect(() => coerce(svc, 'Ali <ali@acme.com>')).toThrow();
+  });
+
+  it('refuses a value carrying a header break', () => {
+    const svc: any = new (CustomFieldsService as any)({} as any);
+    expect(() => coerce(svc, 'ali@acme.com\r\nBcc: victim@x.test')).toThrow();
+  });
+});
+

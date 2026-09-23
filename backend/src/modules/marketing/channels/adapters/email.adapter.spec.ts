@@ -318,6 +318,32 @@ describe('EmailChannelAdapter', () => {
       expect(String(res.details?.receiveReason)).toMatch(/IMAP/i);
     });
 
+    it('answers with a machine CODE, and keeps the prose beside it', async () => {
+      // `channels.verifySendOnly` interpolates this straight into an otherwise
+      // Turkish sentence, so an English sentence here reaches the tenant
+      // verbatim (PLAN G8). The code is what the UI translates; the prose stays
+      // for the operator reading a log or a health blob.
+      verify.mockResolvedValue(true);
+      const res = await adapter.healthCheck({ secrets: SMTP } as any);
+      expect(res.details?.receiveReason).toBe('NO_IMAP_HOST');
+      expect(String(res.details?.receiveDetail)).toMatch(/IMAP host/i);
+    });
+
+    it('distinguishes a consent mailbox with no incoming password from a missing host', async () => {
+      // The two need different fixes — reconnect with an app password, versus
+      // fill in an IMAP host — so one code cannot serve both.
+      const res = await adapter.healthCheck({ secrets: OAUTH } as any);
+      expect(res.details?.receiveReason).toBe('OAUTH_NO_IMAP_PASSWORD');
+    });
+
+    it('codes a refused IMAP login and carries the server’s own words as detail', async () => {
+      verify.mockResolvedValue(true);
+      mockImap.connect.mockRejectedValue(new Error('AUTHENTICATIONFAILED'));
+      const res = await adapter.healthCheck({ secrets: SMTP_WITH_IMAP } as any);
+      expect(res.details?.receiveReason).toBe('IMAP_REFUSED');
+      expect(String(res.details?.receiveDetail)).toContain('AUTHENTICATIONFAILED');
+    });
+
     it('does NOT guess the IMAP host from the SMTP host', async () => {
       // A blanket default would start logins against hosts nobody proved —
       // including pure relays that have no IMAP at all.

@@ -24,6 +24,8 @@ const stub = (name: string) => ({ default: () => <div>{name}-stub</div> });
 
 vi.mock('./SendingDomainsPage', () => stub('sending'));
 vi.mock('./CustomDomainsPage', () => stub('custom'));
+// Health card stubbed with the rest: it fetches, and this file tests the shell.
+vi.mock('./EmailHealthCard', () => stub('email-health'));
 vi.mock('./webhooks/WebhooksPage', () => stub('outgoing-hooks'));
 vi.mock('./inboundWebhooks', () => stub('inbound-hooks'));
 vi.mock('./apiKeys/ApiKeysPage', () => stub('api-keys'));

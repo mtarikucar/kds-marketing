@@ -89,7 +89,13 @@ export function registerCampaignWriteTools(registry: McpToolRegistry, deps: Camp
       channel: z
         .enum(['EMAIL', 'SMS', 'WHATSAPP'])
         .describe('Delivery channel. SMS additionally requires the "sms" package feature. For voice, use jeeta.create_voice_campaign.'),
-      subject: z.string().max(200).optional().describe('Email subject line (EMAIL only).'),
+      subject: z
+        .string()
+        .max(200)
+        .optional()
+        .describe(
+          'Email subject line. REQUIRED when channel is EMAIL — launching an email campaign without one is refused with "An email campaign needs a subject", and the refusal arrives at jeeta.set_campaign_status time, not here. Ignored on SMS and WhatsApp.',
+        ),
       body: z.string().min(1).max(20000).describe('Message body. An unsubscribe footer and link tracking are added at send time.'),
       bodyHtml: z.string().max(200000).optional().describe('HTML body (EMAIL only).'),
       emailTemplateId: z.string().max(64).optional().describe('Email template id to render from (see jeeta.list_email_templates).'),

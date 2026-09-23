@@ -385,7 +385,10 @@
       "sent": "Xabar yuborildi",
       "failed": "Xabarni yuborib bo'lmadi",
       "noChannels": "Suhbat boshlash mumkin bo'lgan ulangan kanal yo'q — SMS yoki e-pochtani ulang.",
-      "channelsFailed": "Kanallarni yuklab bo'lmadi."
+      "channelsFailed": "Kanallarni yuklab bo'lmadi.",
+      "another": "Boshqa kanal orqali yozish",
+      "titleOther": "Boshqa kanal orqali yozish",
+      "descAny": "Kanalni tanlang va yozing."
     }
   },
   "createLead": {
@@ -1211,7 +1214,9 @@
       "noThreadHint": "birinchisini «Xabar» orqali boshlang",
       "notesFailed": "Ichki eslatmalarni yuklab boʻlmadi",
       "notesFailedHint": "bu yerda hamkasbingizning topshiriq eslatmasi boʻlishi mumkin — oʻqimasdan davom etmang",
-      "notesRetry": "Qayta urinish"
+      "notesRetry": "Qayta urinish",
+      "sendShortcut": "Ctrl+Enter bilan yuborish",
+      "recipientStale": "Bu suhbat {{thread}} manziliga ketadi, kishining saqlangan manzili esa {{lead}}. Yangi manzilga yozish uchun «Xabar» orqali yangi suhbat boshlang."
     },
     "card": {
       "title": "Yozuv",

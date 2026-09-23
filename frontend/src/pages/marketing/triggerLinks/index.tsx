@@ -149,11 +149,32 @@ export default function TriggerLinksPage({ embedded }: { embedded?: boolean } = 
                   <p className="truncate text-sm font-medium text-foreground">{l.name}</p>
                   <p className="truncate text-micro text-muted-foreground">{l.targetUrl}</p>
                 </div>
-                <Badge tone="neutral" size="sm">
+                {/* The badge is HUMAN clicks. Scanners and prefetchers sweep
+                    every link in a mail on delivery and are filtered out, so
+                    without the line below the number simply fell one day with
+                    nothing on the page to explain it (A5.1). Rendered only when
+                    there is actually something filtered — and never when the
+                    count is unknown, because "0 filtered" is a claim. */}
+                <Badge
+                  tone="neutral"
+                  size="sm"
+                  title={t('triggerLinks.botFilteredHint', {
+                    defaultValue:
+                      'Mail-security scanners and link prefetchers are not counted, so the click figure shows real people.',
+                  })}
+                >
                   <MousePointerClick className="h-3 w-3" aria-hidden="true" /> {l.clickCount}
                 </Badge>
               </div>
               <p className="truncate rounded bg-surface-muted px-2 py-1 font-mono text-micro text-primary">{l.url}</p>
+              {typeof l.botCount === 'number' && l.botCount > 0 && (
+                <p className="text-micro text-muted-foreground">
+                  {t('triggerLinks.botFiltered', {
+                    defaultValue: '{{count}} machine clicks filtered out',
+                    count: l.botCount,
+                  })}
+                </p>
+              )}
               <div className="mt-auto flex items-center justify-end gap-1 pt-1">
                 <IconButton variant="ghost" size="sm" aria-label={t('triggerLinks.copy', { defaultValue: 'Copy link' })} onClick={() => copy(l.url)}>
                   <Copy className="h-4 w-4" aria-hidden="true" />

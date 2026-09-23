@@ -18,6 +18,11 @@ export interface ConsentRecord {
   type: string;
   granted: boolean;
   at: string;
+  /** Where this consent came from — a form and its wording, an unsubscribe, a
+   *  rep. Dating an opt-out answers half of what a compliance officer is asked;
+   *  this is the other half. Null on a record written before sources were
+   *  captured. */
+  source?: string | null;
 }
 
 /** Lightweight lead row from GET /leads (paginated). */

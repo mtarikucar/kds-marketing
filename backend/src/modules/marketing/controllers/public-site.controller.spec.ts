@@ -87,3 +87,52 @@ describe('PublicSiteController — POST callback/:ws (Task 6 callback widget)', 
     expect(body).not.toContain('RET');
   });
 });
+
+/**
+ * THE VISITOR'S IP HAS TO REACH THE FORM.
+ *
+ * `FormsService.submit` accepts it for two things it cannot do without it: the
+ * per-(form, IP) burst cap that stops one script filling a tenant's CRM with
+ * junk, and `ConsentRecord.ipAddress` — the evidence half of a consent record,
+ * which a KVKK/GDPR audit asks for by name. Only the controller can see the socket,
+ * so a controller that does not pass it leaves both correct-but-inert.
+ */
+describe('PublicSiteController — POST f/:formId passes the visitor context', () => {
+  function withForms() {
+    const forms = { submit: jest.fn().mockResolvedValue({ redirectUrl: null }) };
+    const sites = { resolvePublicCallbackTarget: jest.fn() };
+    const ctrl = new PublicSiteController(
+      sites as any,
+      forms as any,
+      {} as any,
+      { get: jest.fn().mockReturnValue('') } as any,
+      { requestCallback: jest.fn() } as any,
+    );
+    return { ctrl, forms };
+  }
+
+  it('hands the IP to the form alongside the attribution signals', async () => {
+    const { ctrl, forms } = withForms();
+    const req: any = {
+      ip: '203.0.113.9',
+      headers: { referer: 'https://acme.test/lp?utm_source=x' },
+      cookies: {},
+    };
+
+    await ctrl.submit('f1', { email: 'a@b.test' }, req, makeRes());
+
+    expect(forms.submit.mock.calls[0][3]).toEqual({
+      url: 'https://acme.test/lp?utm_source=x',
+      referrer: 'https://acme.test/lp?utm_source=x',
+      ip: '203.0.113.9',
+    });
+  });
+
+  it('is explicitly null when the socket address is unknown, never undefined', async () => {
+    // `undefined` would be spread away and the consent row would silently lose
+    // the column, which is indistinguishable from "we never recorded one".
+    const { ctrl, forms } = withForms();
+    await ctrl.submit('f1', {}, { headers: {}, cookies: {} } as any, makeRes());
+    expect(forms.submit.mock.calls[0][3]).toMatchObject({ ip: null });
+  });
+});

@@ -8,12 +8,15 @@ import { PaymentsAdminController } from './controllers/payments-admin.controller
 import { PackagesAdminController } from './controllers/packages-admin.controller';
 import { RoutineAdminController } from './controllers/routine-admin.controller';
 import { AiCostsAdminController } from './controllers/ai-costs-admin.controller';
+import { MailAdminController } from './controllers/mail-admin.controller';
 import { PlatformAuthService } from './services/platform-auth.service';
 import { WorkspacesAdminService } from './services/workspaces-admin.service';
 import { PlatformGuard } from './guards/platform.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AiUsageStatsService } from '../marketing/ai/ai-usage-stats.service';
 import { PlatformAiSpendService } from '../marketing/ai/platform-ai-spend.service';
+import { MailAdminService } from './services/mail-admin.service';
+import { MailBudgetService } from '../marketing/channels/outbound/mail-budget.service';
 
 /**
  * Platform (superadmin) realm: operator auth + cross-workspace
@@ -33,6 +36,7 @@ import { PlatformAiSpendService } from '../marketing/ai/platform-ai-spend.servic
     PackagesAdminController,
     RoutineAdminController,
     AiCostsAdminController,
+    MailAdminController,
   ],
   providers: [
     PlatformAuthService,
@@ -44,6 +48,12 @@ import { PlatformAiSpendService } from '../marketing/ai/platform-ai-spend.servic
     PrismaService,
     AiUsageStatsService,
     PlatformAiSpendService,
+    // The E-posta panel reads MailLog/EmailInboundItem/Channel across tenants,
+    // which is legitimate only in the operator realm. MailBudgetService is its
+    // only other dependency and needs ConfigService, which this module already
+    // has in scope.
+    MailAdminService,
+    MailBudgetService,
   ],
 })
 export class PlatformModule {}

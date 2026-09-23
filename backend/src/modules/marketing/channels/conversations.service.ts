@@ -115,7 +115,7 @@ export class ConversationsService {
       where: { id: conversationId, workspaceId },
     });
     if (!convo) throw new NotFoundException('Conversation not found');
-    const [messages, lead, channel] = await Promise.all([
+    const [messages, lead, channel, identity] = await Promise.all([
       // Take the most RECENT 500 messages, not the oldest 500 — a long-running
       // thread (>500 messages) would otherwise show ancient history and HIDE the
       // latest customer message, so an agent replies with no view of it. Fetched
@@ -141,9 +141,27 @@ export class ConversationsService {
         where: { id: convo.channelId, workspaceId },
         select: { id: true, type: true, name: true, agentProfileId: true },
       }),
+      // The address this thread actually reaches. It is the threading and
+      // dedup key, and it is free to drift from `lead.email` — a rep edits the
+      // lead, the thread keeps mailing the address the customer wrote from —
+      // so the composer has to be told which one it is sending to.
+      convo.contactIdentityId
+        ? this.prisma.contactIdentity.findFirst({
+            where: { id: convo.contactIdentityId, workspaceId },
+            select: { value: true, kind: true },
+          })
+        : Promise.resolve(null),
     ]);
     // Reverse the desc-fetched recent window back to chronological (oldest→newest).
-    return { conversation: convo, messages: messages.reverse(), lead, channel };
+    return {
+      conversation: convo,
+      messages: messages.reverse(),
+      lead,
+      channel,
+      // Explicitly null, never absent: a caller that renders "this thread mails
+      // X" must be able to tell "no identity" from "the field is not shipped".
+      contact: identity ? { value: identity.value, kind: identity.kind } : null,
+    };
   }
 
   /** Agent reply — a human takeover, so the AI is paused for this thread. */
@@ -370,8 +388,11 @@ export class ConversationsService {
     const leadIds = [...new Set(convos.map((c) => c.leadId))];
     const channelIds = [...new Set(convos.map((c) => c.channelId))];
     const convoIds = convos.map((c) => c.id);
+    // Deduped, and skipped entirely when nothing on the page has one — an
+    // `id: { in: [] }` is a full-table read wearing a filter.
+    const identityIds = [...new Set(convos.map((c) => c.contactIdentityId).filter(Boolean))];
 
-    const [leads, channels, lastMsgs] = await Promise.all([
+    const [leads, channels, lastMsgs, identities] = await Promise.all([
       this.prisma.lead.findMany({
         where: { workspaceId, id: { in: leadIds } },
         select: { id: true, businessName: true, contactPerson: true },
@@ -402,8 +423,17 @@ export class ConversationsService {
           AND "conversationId" IN (${Prisma.join(convoIds)})
         ORDER BY "conversationId", "createdAt" DESC
       `,
+      // Which address each thread reaches. One query for the page, workspace
+      // named in the predicate like every other read here.
+      identityIds.length
+        ? this.prisma.contactIdentity.findMany({
+            where: { workspaceId, id: { in: identityIds } },
+            select: { id: true, value: true, kind: true },
+          })
+        : Promise.resolve([]),
     ]);
     const leadById = new Map(leads.map((l) => [l.id, l]));
+    const identityById = new Map(identities.map((i) => [i.id, i]));
     const channelById = new Map(channels.map((c) => [c.id, c]));
     const lastByConvo = new Map<string, (typeof lastMsgs)[number]>();
     for (const m of lastMsgs) if (!lastByConvo.has(m.conversationId)) lastByConvo.set(m.conversationId, m);
@@ -413,6 +443,12 @@ export class ConversationsService {
       lead: leadById.get(c.leadId) ?? null,
       channel: channelById.get(c.channelId) ?? null,
       lastMessage: lastByConvo.get(c.id) ?? null,
+      contact: c.contactIdentityId
+        ? (() => {
+            const i = identityById.get(c.contactIdentityId);
+            return i ? { value: i.value, kind: i.kind } : null;
+          })()
+        : null,
     }));
   }
 }

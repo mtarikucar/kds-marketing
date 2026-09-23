@@ -31,6 +31,9 @@ describe('OutboundConversationService', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
@@ -50,7 +53,7 @@ describe('OutboundConversationService', () => {
   });
 
   it('reuses an open thread instead of opening a second one', async () => {
-    prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-existing' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-existing', status: 'OPEN' });
     const out = await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
 
     expect(prisma.conversation.create).not.toHaveBeenCalled();
@@ -58,6 +61,74 @@ describe('OutboundConversationService', () => {
     expect(sender.send).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-existing' }),
     );
+  });
+
+  /**
+   * A CLOSED thread is a finished conversation, not a forbidden one.
+   *
+   * The reuse query asked for `status: 'OPEN'` only, so writing to a person
+   * whose one thread on that channel had been closed forked a SECOND
+   * conversation on the same (channel, identity) pair — which the inbox then
+   * renders as the same button twice, and inbound mail keeps landing in
+   * whichever one the ingress matcher picks. Reopening the newest closed one
+   * keeps one thread per identity, which is what every other reader assumes.
+   */
+  describe('one thread per identity, open or not', () => {
+    it('reopens the newest closed thread rather than forking a second one', async () => {
+      prisma.conversation.update = jest.fn().mockResolvedValue({ id: 'conv-closed' });
+      prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-closed', status: 'CLOSED' });
+
+      const out = await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+      expect(prisma.conversation.create).not.toHaveBeenCalled();
+      expect(prisma.conversation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'conv-closed' },
+          data: expect.objectContaining({ status: 'OPEN' }),
+        }),
+      );
+      expect(out.reusedThread).toBe(true);
+      expect(sender.send).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'conv-closed' }),
+      );
+    });
+
+    it('does not rewrite the status of a thread that is already open', async () => {
+      prisma.conversation.update = jest.fn();
+      prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-open', status: 'OPEN' });
+
+      await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
+    });
+
+    it('looks for the newest thread on the identity, whatever its status', async () => {
+      prisma.conversation.update = jest.fn().mockResolvedValue({});
+      await svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' });
+
+      const where = prisma.conversation.findFirst.mock.calls[0][0].where;
+      expect(where).toMatchObject({ workspaceId: WS, channelId: 'ch-1', contactIdentityId: 'ci-1' });
+      expect(where).not.toHaveProperty('status');
+    });
+  });
+
+  /**
+   * A refusal a Turkish rep reads. `suppressionRefusal` answered with an
+   * English sentence that the dialog printed verbatim (PLAN G8), and the three
+   * lead-column cases the dialog pre-empts do not cover an address-level
+   * `ContactSuppression` row — which is exactly the case with no lead flag to
+   * read. The code rides alongside the sentence so the sentence can stay for a
+   * log and the UI can use the code.
+   */
+  it('names a machine reason on an address-level suppression', async () => {
+    prisma.channel.findFirst.mockResolvedValue(channelOf('EMAIL'));
+    suppression.check.mockResolvedValue({ suppressed: true, reason: 'COMPLAINT' });
+
+    await expect(
+      svc.start(WS, { leadId: 'lead-1', channelId: 'ch-1', text: 'hi' }),
+    ).rejects.toMatchObject({
+      response: { reason: 'SUPPRESSED_COMPLAINT', message: expect.stringMatching(/spam/i) },
+    });
   });
 
   it('refuses to send to an address that belongs to another lead', async () => {
@@ -171,6 +242,9 @@ describe('OutboundConversationService — address form', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
@@ -227,6 +301,9 @@ describe('OutboundConversationService — opt-out', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
@@ -320,6 +397,9 @@ describe('OutboundConversationService — template support', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
@@ -389,6 +469,9 @@ describe('OutboundConversationService — email hygiene', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     suppression = { check: jest.fn().mockResolvedValue({ suppressed: false }) };
@@ -468,6 +551,9 @@ describe('OutboundConversationService — authorship', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     svc = new OutboundConversationService(prisma, sender as any, suppression as any);
@@ -543,6 +629,9 @@ describe('OutboundConversationService — address-level suppression', () => {
       conversation: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+        // Reopening a closed thread is now part of start(); `status` is
+        // non-null on the real row, so every fixture below states it.
+        update: jest.fn().mockResolvedValue({}),
       },
     };
     svc = new OutboundConversationService(prisma, sender as any, suppression as any);

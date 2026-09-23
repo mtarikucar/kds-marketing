@@ -83,3 +83,59 @@ export function extractCampaignLinks(control: CampaignBody, variants: CampaignBo
   }
   return out;
 }
+
+/**
+ * How many distinct destinations one campaign may track.
+ *
+ * `Campaign.links` is an INDEX the public redirector resolves by position, so
+ * an unbounded array is an unbounded lookup table hosted on the platform's own
+ * domain. A marketing email with more than this many distinct URLs is not a
+ * marketing email.
+ */
+export const MAX_TRACKED_LINKS = 200;
+
+/** Why a link cannot be tracked. Codes, not sentences: the launch refusal is
+ *  rendered to a tenant and a raw reason is never printed (PLAN G8). */
+export type CampaignLinkRefusal = 'BAD_SCHEME' | 'UNPARSEABLE' | 'CREDENTIALS_IN_URL' | 'TOO_MANY';
+
+export type CampaignLinkScreen =
+  | { ok: true }
+  | { ok: false; reason: CampaignLinkRefusal; url: string };
+
+/**
+ * Is every tracked destination something the SHARED redirector may point at?
+ *
+ * `/api/public/t/c/:token?i=N` resolves out of this array on the PLATFORM's own
+ * domain. Until this ran at launch, the only check was "starts with http" at
+ * redirect time — which is an open redirector with the platform's name on it:
+ * aim it at a credential-harvesting page and every reputation system blames
+ * jeetagrowth.com rather than the tenant who wrote the link.
+ *
+ * Deliberately NARROW. Refusing a link a tenant legitimately wanted is a
+ * campaign that cannot ship, so only shapes that cannot be a real marketing
+ * destination are refused; everything else is a judgement call this function
+ * has no business making.
+ */
+export function screenCampaignLinks(links: readonly string[]): CampaignLinkScreen {
+  if (links.length > MAX_TRACKED_LINKS) {
+    return { ok: false, reason: 'TOO_MANY', url: links[MAX_TRACKED_LINKS] ?? '' };
+  }
+  for (const raw of links) {
+    const url = String(raw ?? '').trim();
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { ok: false, reason: 'UNPARSEABLE', url };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, reason: 'BAD_SCHEME', url };
+    }
+    if (!parsed.hostname) return { ok: false, reason: 'UNPARSEABLE', url };
+    // `https://acme.com@evil.test/` reads as Acme and resolves to evil.test.
+    if (parsed.username || parsed.password) {
+      return { ok: false, reason: 'CREDENTIALS_IN_URL', url };
+    }
+  }
+  return { ok: true };
+}
