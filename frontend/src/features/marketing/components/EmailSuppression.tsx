@@ -239,8 +239,35 @@ export function EmailSuppressionActions({
 
   if (!lead?.email?.trim() || !hasEmailStanding(lead)) return null;
 
+  // These buttons live in narrow places: the lead detail's Contact Info card is
+  // one third of the content width at `lg`, ~160px for the label at a 1024px
+  // viewport. Button's base is `whitespace-nowrap h-8`, so "Pazarlama
+  // e-postasından çıkar" would keep its one-line width and run out of the card.
+  // Let the label wrap and the button grow instead. Where the label fits,
+  // min-h-8 keeps it exactly the h-8 it was.
+  const fitClass = 'h-auto min-h-8 max-w-full whitespace-normal py-1 text-left';
+
   const optedOut = lead.emailOptOut === true;
-  const machineVerdict = !!lead.emailBouncedAt || lead.emailVerifiedStatus === 'INVALID';
+  const bounced = !!lead.emailBouncedAt;
+  const invalid = lead.emailVerifiedStatus === 'INVALID';
+  // ONE action behind two labels. `CLEAR_BOUNCE` lifts HARD_BOUNCE and INVALID
+  // together (`EMAIL_SUPPRESSION_LIFTS` in marketing-leads.service.ts): both
+  // say "this address is dead", and the correction is one act. What it does
+  // NOT do is re-check the address — lifting INVALID sets `emailVerifiedStatus`
+  // back to UNKNOWN and nothing more; only editing the email runs the MX check
+  // again. So an address that was marked invalid and never bounced gets a
+  // label about the mark it actually carries, not "clear the bounce" for a
+  // bounce that never happened.
+  const machineVerdict = bounced || invalid;
+  const clearLabel = bounced
+    ? t('leads.suppression.clearBounce', 'Bounce kaydını temizle')
+    : t('leads.suppression.clearInvalid', 'Geçersiz işaretini kaldır');
+  const clearHint = bounced
+    ? undefined
+    : t(
+        'leads.suppression.clearInvalidHint',
+        'Adres yeniden kontrol edilmez — yalnızca işaret kalkar ve artık bu adrese gönderimi engellemez.',
+      );
 
   return (
     <RoleGate role={MarketingRole.MANAGER}>
@@ -252,6 +279,7 @@ export function EmailSuppressionActions({
           type="button"
           variant="outline"
           size="sm"
+          className={fitClass}
           loading={act.isPending}
           onClick={() => act.mutate(optedOut ? 'RESUBSCRIBE' : 'OPT_OUT')}
         >
@@ -264,10 +292,12 @@ export function EmailSuppressionActions({
             type="button"
             variant="outline"
             size="sm"
+            className={fitClass}
             loading={act.isPending}
+            title={clearHint}
             onClick={() => act.mutate('CLEAR_BOUNCE')}
           >
-            {t('leads.suppression.clearBounce', 'Bounce kaydını temizle')}
+            {clearLabel}
           </Button>
         )}
       </div>
@@ -280,10 +310,13 @@ export interface EmailSuppressionPanelProps extends EmailSuppressionChipsProps {
 }
 
 /**
- * Chips + controls under one heading — the shape the compliance console and the
- * lead header both want. "Nothing is standing in the way" is said out loud, but
- * only for a payload that actually answered: silence is what an unanswered
- * field earns.
+ * Chips + controls under one heading — the shape the compliance console wants.
+ * "Nothing is standing in the way" is said out loud, but only for a payload
+ * that actually answered: silence is what an unanswered field earns.
+ *
+ * The lead detail page does NOT use this: it puts the chips and the controls
+ * on the email row of its Contact Info card, beside the address they are about
+ * (`ContactInfo.tsx`), where there is already a heading — the address itself.
  */
 export function EmailSuppressionPanel({
   lead,

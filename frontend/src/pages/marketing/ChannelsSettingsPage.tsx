@@ -515,7 +515,7 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
             title={t('channels.emptyTitle', 'No channels yet')}
             description={t(
               'channels.empty',
-              'No channels yet — connect one in the Account Center so customers can message you.',
+              'Connect one in the Account Center so customers can message you.',
             )}
             action={
               <Button asChild variant="outline">

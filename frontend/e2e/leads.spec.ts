@@ -13,6 +13,9 @@
  *   - create test red → a lead typed by hand is not persisted, not readable
  *     back, or a non-default select value (source) is dropped from the payload;
  *     the row-click tail also pins that a list row opens the SAME lead.
+ *   - laptop-width test red → something on the detail page is wider than its
+ *     column again: the header row has taken the lead's name down to 0px, or
+ *     an email consent button has run out of the Contact Info card.
  *   - required-field test red → the form lets an unnamed/contactless lead
  *     through, which the backend rejects with a bare toast, or the Turkish
  *     validation copy regressed to a raw zod key.
@@ -36,6 +39,7 @@
  * No data-testid was added to production code for this spec.
  */
 import { test, expect } from './support/fixtures';
+import { apiUrl } from './support/config';
 
 /** Turkish-character name — also proves the value survives the round-trip. */
 const stamp = () => `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -109,6 +113,54 @@ test('a lead typed into /leads/new is saved, opened, and listed', async ({ app }
   await expect(app).toHaveURL(/\/leads$/);
   await app.getByRole('link', { name: /Kaydı aç/ }).click();
   await expect(app).toHaveURL(detailUrl);
+});
+
+test('at laptop width the lead keeps its name, and its email controls stay inside their card', async ({
+  app,
+  api,
+  workspace,
+}) => {
+  const suffix = stamp();
+  const businessName = `Kahve Durağı ${suffix}`;
+  const email = `kahve.${suffix}@e2e.example.com`;
+
+  // Seeded out of band: the create flow is the test above. What is under test
+  // is the detail page's LAYOUT once the email consent controls are on it.
+  const created = await api.post(apiUrl('/marketing/leads'), {
+    headers: { Authorization: `Bearer ${workspace.session.accessToken}` },
+    data: {
+      businessName,
+      contactPerson: `Ayşe Yılmaz ${suffix}`,
+      email,
+      businessType: 'OTHER',
+      source: 'WEBSITE',
+    },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+
+  // 1024px is the narrowest viewport that still gets the three-column grid,
+  // which puts Contact Info in its narrowest column.
+  await app.setViewportSize({ width: 1024, height: 900 });
+  await app.goto(`/leads/${id}`);
+
+  // The consent controls once sat in the header's action row. They widened it
+  // until the name column had 0px, so the <h1> was in the DOM but hidden.
+  await expect(app.getByRole('heading', { level: 1, name: businessName })).toBeVisible();
+
+  // The opt-out control renders for an owner on ANY lead with an address,
+  // whatever the MX check said, so this does not depend on the runner's DNS.
+  // Where DNS works, e2e.example.com is also marked invalid and a second
+  // button joins it; every button on the row is held to the same bound.
+  const row = app.getByTestId('contact-email');
+  await expect(row.getByRole('button', { name: 'Pazarlama e-postasından çıkar' })).toBeVisible();
+  const rowBox = (await row.boundingBox())!;
+  for (const button of await row.getByRole('button').all()) {
+    const box = (await button.boundingBox())!;
+    expect(box.x + box.width, 'an email control spills out of the Contact Info card').toBeLessThanOrEqual(
+      rowBox.x + rowBox.width + 0.5,
+    );
+  }
 });
 
 test('the create form refuses a lead with no business name or contact', async ({ app }) => {

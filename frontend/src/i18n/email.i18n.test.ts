@@ -326,6 +326,10 @@ const REQUIRED: string[] = [
   'leads.suppression.optOut',
   'leads.suppression.resubscribe',
   'leads.suppression.clearBounce',
+  // An address marked INVALID that never bounced is not offered "clear the
+  // bounce" — it is told what the lift really does to it.
+  'leads.suppression.clearInvalid',
+  'leads.suppression.clearInvalidHint',
   'leads.suppression.updated',
   'leads.suppression.updateFailed',
   'leads.suppression.none',

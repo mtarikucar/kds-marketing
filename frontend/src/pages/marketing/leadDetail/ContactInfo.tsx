@@ -17,6 +17,10 @@ import {
   Badge,
 } from '@/components/ui';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import {
+  EmailSuppressionActions,
+  EmailSuppressionChips,
+} from '../../../features/marketing/components/EmailSuppression';
 import { verifyLeadPhoneStart, verifyLeadPhoneConfirm } from '../../../features/marketing/api/leads.service';
 import {
   BUSINESS_TYPE_LABELS,
@@ -199,21 +203,35 @@ export default function ContactInfo({ lead, fmtDate }: ContactInfoProps) {
             </div>
           )}
           {lead.email && (
-            <div className="flex items-center gap-2">
-              <Mail className="h-4 w-4 text-muted-foreground" />
-              {/* Only build a mailto: for a well-formed address, and encode
-                  it — an unvalidated email could carry header-injection
-                  payload (newlines, extra recipients) into the link. */}
-              {EMAIL_RE.test(lead.email) ? (
-                <a
-                  href={`mailto:${encodeURIComponent(lead.email)}`}
-                  className="text-primary hover:underline"
-                >
-                  {lead.email}
-                </a>
-              ) : (
-                <span className="text-muted-foreground">{lead.email}</span>
-              )}
+            <div data-testid="contact-email" className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                {/* Only build a mailto: for a well-formed address, and encode
+                    it — an unvalidated email could carry header-injection
+                    payload (newlines, extra recipients) into the link. */}
+                {EMAIL_RE.test(lead.email) ? (
+                  <a
+                    href={`mailto:${encodeURIComponent(lead.email)}`}
+                    className="min-w-0 break-all text-primary hover:underline"
+                  >
+                    {lead.email}
+                  </a>
+                ) : (
+                  <span className="min-w-0 break-all text-muted-foreground">{lead.email}</span>
+                )}
+              </div>
+              {/* May we mail this address, and the control that changes it —
+                  under the address they are about, indented to its text
+                  (icon 1rem + gap 0.5rem). They used to sit in the page
+                  header's action row, where they crushed the lead's name to
+                  zero width.
+
+                  The chips carry NO role gate: a REP must see why their send
+                  will fail. The controls carry the MANAGER gate their endpoint
+                  does, inside EmailSuppressionActions. Both render nothing for
+                  a payload that never answered the fields. */}
+              <EmailSuppressionChips lead={lead} className="pl-6" />
+              <EmailSuppressionActions lead={lead} className="pl-6" />
             </div>
           )}
           {(lead.city || lead.address) && (

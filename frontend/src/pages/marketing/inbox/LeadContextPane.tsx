@@ -142,9 +142,9 @@ export function LeadContextPane({ lead, asSheet, onClose, className }: LeadConte
             itself. NO RoleGate, deliberately: these are plain lead scalars, not
             the consent ledger two sections down, and a REP who cannot see them
             watches their message fail for a reason nothing on screen names. The
-            card stays a READ — the control that CHANGES this lives on the lead
-            header and in the compliance console, where the decision is
-            recorded. */}
+            card stays a READ — the control that CHANGES this lives beside the
+            address on the lead detail's Contact Info card and in the
+            compliance console, where the decision is recorded. */}
         {hasEmailSuppression(lead) && (
           <Row label={t('leads.suppression.title', 'E-posta durumu')}>
             <EmailSuppressionChips lead={lead} className="justify-end" />

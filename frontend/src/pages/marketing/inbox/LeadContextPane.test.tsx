@@ -863,8 +863,8 @@ describe('LeadContextPane — the email deliverability chips', () => {
   });
 
   // The card is a read. Changing a consent decision belongs where the decision
-  // is recorded (the lead header and the compliance console), not on a triage
-  // card a rep clicks through twenty of.
+  // is recorded (beside the address on the lead detail page, and the compliance
+  // console), not on a triage card a rep clicks through twenty of.
   it('offers no control — and adds no second way off the surface', () => {
     render(wrap(<LeadContextPane lead={withEmailState({ emailOptOut: true })} />));
 

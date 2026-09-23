@@ -23,10 +23,6 @@ import {
   SelectValue,
 } from '@/components/ui/Select';
 import { ClickToDialButton } from '../../../features/marketing/components';
-import {
-  EmailSuppressionActions,
-  EmailSuppressionChips,
-} from '../../../features/marketing/components/EmailSuppression';
 import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
@@ -82,8 +78,9 @@ interface ChannelRow {
 
 export interface LeadHeaderActionsProps {
   /** Only the fields these actions actually decide on. The three email columns
-   *  follow the three-state rule `EmailSuppressionChips` enforces: `undefined`
-   *  is "nobody has said", never "all clear". */
+   *  feed the start dialog's pre-send refusal (`emailRefusal`) and follow the
+   *  three-state rule `EmailSuppressionChips` enforces: `undefined` is "nobody
+   *  has said", never "all clear". */
   lead: {
     id: string;
     phone?: string | null;
@@ -202,8 +199,8 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
    *
    * `OutboundConversationService.start` refuses a suppressed, bounced or
    * MX-invalid address with an English `BadRequestException`, which this dialog
-   * would print verbatim to a Turkish rep for something the header already
-   * knows (`optout-state-invisible`). Reading the lead's own columns is not a
+   * would print verbatim to a Turkish rep for something the page already
+   * shows beside the address (`optout-state-invisible`). Reading the lead's own columns is not a
    * second source of truth — it is the same three columns `SuppressionService`
    * projects onto, so the two can only disagree while a write is in flight, and
    * the server still has the last word.
@@ -284,12 +281,14 @@ export default function LeadHeaderActions({ lead, onOpenStream }: LeadHeaderActi
 
   return (
     <>
-      {/* What the send will run into, before anyone presses anything. No role
-          gate on the chips (a REP must see it); the CONTROLS carry the MANAGER
-          gate their endpoint does. */}
-      <EmailSuppressionChips lead={lead} />
-      <EmailSuppressionActions lead={lead} />
-
+      {/* NO email-consent chips or controls here, on purpose. They lived in
+          this row for one release and it overflowed: the header's actions are
+          laid out beside the lead's name, so two consent buttons and a chip
+          pushed the <h1> down to zero width and the business name vanished.
+          They are about the ADDRESS, so they sit beside it — on the email row
+          of the Contact Info card (ContactInfo.tsx). The start dialog below
+          still reads the same three columns to refuse an EMAIL send in
+          Turkish before it fires. */}
       {callable && <ClickToDialButton leadId={lead.id} defaultPhone={phone} />}
 
       {canMessage && (

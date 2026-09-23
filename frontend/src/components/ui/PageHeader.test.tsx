@@ -75,3 +75,48 @@ describe('PageHeader — embedded', () => {
     expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument();
   });
 });
+
+/**
+ * A LONG ACTION ROW — the title must survive it.
+ *
+ * The lead detail header carries up to a dozen controls beside the lead's name.
+ * With the actions `shrink-0` and the title `flex-1 min-w-0`, a row wider than
+ * the page kept its full width and left the <h1> zero pixels: in the DOM, not
+ * on screen, and e2e/leads.spec.ts failed on exactly that ("exists but is not
+ * visible"). jsdom does no layout, so the contract is pinned on the classes
+ * that produce it, and the e2e spec pins the outcome in a real browser.
+ */
+describe('PageHeader — a long action row', () => {
+  const renderLong = () =>
+    render(
+      <PageHeader
+        title="Kahve Durağı"
+        actions={
+          <>
+            {Array.from({ length: 12 }, (_, i) => (
+              <button key={i} type="button">{`Action ${i}`}</button>
+            ))}
+          </>
+        }
+      />,
+    );
+
+  it('gives the title column a floor it cannot be squeezed below', () => {
+    renderLong();
+    const titleColumn = screen.getByRole('heading', { level: 1 }).parentElement!;
+    expect(titleColumn).toHaveClass('flex-1', 'sm:min-w-64');
+  });
+
+  it('lets the row wrap, so the actions drop beneath the title instead of eating it', () => {
+    renderLong();
+    const row = screen.getByRole('heading', { level: 1 }).parentElement!.parentElement!;
+    expect(row).toHaveClass('sm:flex-row', 'sm:flex-wrap');
+  });
+
+  it('lets the action group shrink and fold onto several lines rather than overflow', () => {
+    renderLong();
+    const group = screen.getByRole('button', { name: 'Action 0' }).parentElement!;
+    expect(group).toHaveClass('flex-wrap', 'min-w-0', 'max-w-full');
+    expect(group).not.toHaveClass('shrink-0');
+  });
+});

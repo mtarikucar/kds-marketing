@@ -615,99 +615,56 @@ describe('LeadHeaderActions — writing on another channel', () => {
 });
 
 /**
- * The chips and the control behind them, on the one header a rep opens to act.
+ * The consent chips and controls are NOT in the header any more — they sit
+ * beside the address on the Contact Info card (ContactInfo.test.tsx owns their
+ * behaviour now: opt out, re-subscribe, clear a machine verdict, the REP gate).
+ *
+ * They lived here for one release, and the header's action row sits beside the
+ * lead's name: a chip plus two consent buttons made the row wider than the page
+ * and squeezed the <h1> to zero width, so the business name vanished
+ * (e2e/leads.spec.ts, "a lead typed into /leads/new is saved, opened, and
+ * listed"). This pins that they do not drift back — for every state that used
+ * to put something in the row, and for the role that used to see the most.
  */
-describe('LeadHeaderActions — email consent', () => {
+describe('LeadHeaderActions — no email-consent controls in the header row', () => {
   beforeEach(() => setRole('MANAGER'));
 
-  it('shows the standing state rather than leaving the rep to guess', async () => {
-    renderActions(emailLead({ emailOptOut: true }));
+  it.each([
+    ['an unsubscribed address', { emailOptOut: true }],
+    ['a bounced address', { emailBouncedAt: '2026-09-01T00:00:00.000Z' }],
+    ['an address marked invalid', { emailVerifiedStatus: 'INVALID' }],
+    ['a deliverable address', {}],
+  ])('renders neither chips nor controls for %s', async (_label, over) => {
+    renderActions(emailLead(over));
 
-    expect(await screen.findByTestId('email-chip-optedOut')).toHaveTextContent(
-      'Abonelikten çıktı',
-    );
-  });
-
-  it('prints no claim about a lead whose payload does not carry the fields', async () => {
-    renderActions({ id: 'l1', phone: '+905551112233' });
-
+    // Positive anchor: the row HAS rendered (Mesaj settles last).
     await readyMessageButton();
     expect(screen.queryByTestId('email-suppression-chips')).not.toBeInTheDocument();
-  });
-
-  it('opts the person out through the endpoint that writes the consent ledger', async () => {
-    const user = userEvent.setup({ delay: null });
-    apiPost.mockResolvedValue({
-      data: { emailOptOut: true, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: true, reason: 'OPT_OUT' },
-    } as never);
-    renderActions(emailLead());
-
-    await user.click(
-      await screen.findByRole('button', { name: /Pazarlama e-postasından çıkar/ }),
-    );
-
-    await waitFor(() =>
-      expect(apiPost).toHaveBeenCalledWith('/leads/l1/email-suppression', { action: 'OPT_OUT' }),
-    );
-    expect(toastSuccess).toHaveBeenCalled();
-  });
-
-  it('puts them back through the same endpoint', async () => {
-    const user = userEvent.setup({ delay: null });
-    apiPost.mockResolvedValue({
-      data: { emailOptOut: false, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: false },
-    } as never);
-    renderActions(emailLead({ emailOptOut: true }));
-
-    await user.click(await screen.findByRole('button', { name: /Yeniden abone et/ }));
-
-    await waitFor(() =>
-      expect(apiPost).toHaveBeenCalledWith('/leads/l1/email-suppression', {
-        action: 'RESUBSCRIBE',
+    expect(screen.queryByTestId('email-suppression-actions')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', {
+        name: /Pazarlama e-postasından çıkar|Yeniden abone et|Bounce kaydını temizle|Geçersiz işaretini kaldır/,
       }),
-    );
+    ).not.toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
   });
 
-  // `writeLift` refuses to clear `emailOptOut` while a live COMPLAINT row still
-  // owns that column, so the endpoint can answer 200 for a lift that changed
-  // nothing. Reporting that as success is the same lie a 2xx FAILED send is.
-  it('does not claim success for a lift the server could not apply', async () => {
+  // What the header still does with those columns: refuse an EMAIL start
+  // before it fires. Moving the chips must not have taken the refusal with it.
+  it('still refuses an EMAIL start to an address marked invalid, in Turkish', async () => {
     const user = userEvent.setup({ delay: null });
-    apiPost.mockResolvedValue({
-      data: { emailOptOut: true, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: true, reason: 'COMPLAINT' },
-    } as never);
-    renderActions(emailLead({ emailOptOut: true }));
-
-    await user.click(await screen.findByRole('button', { name: /Yeniden abone et/ }));
-
-    await waitFor(() => expect(toastError).toHaveBeenCalled());
-    expect(toastSuccess).not.toHaveBeenCalled();
-    expect(String(toastError.mock.calls[0][0])).toContain('Spam şikâyeti');
-  });
-
-  it('clears a machine verdict without touching consent', async () => {
-    const user = userEvent.setup({ delay: null });
-    apiPost.mockResolvedValue({
-      data: { emailOptOut: false, emailBouncedAt: null, emailVerifiedStatus: 'UNKNOWN', suppressed: false },
-    } as never);
+    listConversations.mockResolvedValue([]);
     renderActions(emailLead({ emailVerifiedStatus: 'INVALID' }));
 
-    await user.click(await screen.findByRole('button', { name: /Bounce kaydını temizle/ }));
+    await user.click(await readyMessageButton());
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('combobox'));
+    await screen.findByRole('listbox');
+    await user.click(screen.getByRole('option', { name: /E-posta/ }));
+    await user.type(within(dialog).getByLabelText(/İlk mesaj/), 'Merhaba');
 
-    await waitFor(() =>
-      expect(apiPost).toHaveBeenCalledWith('/leads/l1/email-suppression', {
-        action: 'CLEAR_BOUNCE',
-      }),
-    );
-  });
-
-  // MANAGER + settings.manage on the server. A rep who could press it would
-  // collect a 403 — and a recorded consent decision is not theirs to erase.
-  it('offers a REP the chips but not the controls', async () => {
-    setRole('REP');
-    renderActions(emailLead({ emailOptOut: true }));
-
-    expect(await screen.findByTestId('email-chip-optedOut')).toBeInTheDocument();
-    expect(screen.queryByTestId('email-suppression-actions')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('Geçersiz adres')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Gönder' })).toBeDisabled();
+    expect(startConversation).not.toHaveBeenCalled();
   });
 });

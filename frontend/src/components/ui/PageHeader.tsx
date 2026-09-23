@@ -55,15 +55,30 @@ export function PageHeader({
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs items={breadcrumbs} renderLink={renderBreadcrumbLink} />
       )}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0 flex-1">
-          <h1 className="font-display text-h1 text-foreground truncate">{title}</h1>
+      {/* The title can never be squeezed out by its own actions.
+
+          It used to be: the actions were `shrink-0`, so on a page with a long
+          action row (the lead detail header) they kept their full width and
+          the title column — `flex-1` with `min-w-0` — was left with whatever
+          remained, which could be nothing. The <h1> was still in the DOM but
+          zero pixels wide, and the page's name was gone.
+
+          Now the row WRAPS: the title holds a floor of 16rem, so when title +
+          actions do not fit on one line the actions drop beneath the title
+          (the same stacking the phone layout already uses) instead of eating
+          it. The action group can itself shrink and wrap, so a row wider than
+          the whole page folds onto several lines rather than overflowing. A
+          header whose actions fit beside the title renders exactly as before. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1 sm:min-w-64">
+          {/* `title` so a name cut short by `truncate` can still be read whole. */}
+          <h1 className="font-display text-h1 text-foreground truncate" title={title}>{title}</h1>
           {description && (
             <p className="mt-1 text-sm text-muted-foreground">{description}</p>
           )}
         </div>
         {actions && (
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             {actions}
           </div>
         )}
