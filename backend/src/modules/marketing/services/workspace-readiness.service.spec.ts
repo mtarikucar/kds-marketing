@@ -548,6 +548,60 @@ describe('workspace readiness', () => {
         expect.objectContaining({ type: 'EMAIL', status: 'ACTIVE', lastVerifiedAt: { not: null } }),
       );
     });
+
+    /**
+     * WHERE THE ROW SENDS YOU, which is the only part of a checklist that does
+     * any work. Every state used to point at Sending Domains — a page that
+     * answers 503 on this deployment because no ESP is configured — so an owner
+     * following the one instruction on the list got an error and was never told
+     * that connecting a mailbox is the other, working route.
+     */
+    describe('the link has to match the state', () => {
+      const ESP = process.env.SENDING_DOMAIN_ESP;
+      // Naming a provider is not enough to arm the path — the platform also has
+      // to own a real SPF include for the tenant to publish, so both keys have
+      // to be saved and restored together.
+      const SPF = process.env.SENDING_DOMAIN_SPF_INCLUDE;
+      afterEach(() => {
+        if (ESP === undefined) delete process.env.SENDING_DOMAIN_ESP;
+        else process.env.SENDING_DOMAIN_ESP = ESP;
+        if (SPF === undefined) delete process.env.SENDING_DOMAIN_SPF_INCLUDE;
+        else process.env.SENDING_DOMAIN_SPF_INCLUDE = SPF;
+      });
+
+      it('sends a mailbox that never proved itself to the card with the Verify button', async () => {
+        // ATTENTION is not "go and add a domain" — the mailbox is already
+        // there and one button away from working.
+        delete process.env.SENDING_DOMAIN_ESP;
+        build({ counts: { mailbox: 1, provenMailbox: 0 } as any });
+        const i = await item('email-sending');
+        expect(i.state).toBe('ATTENTION');
+        expect(i.to).toBe('/inbox?tab=channels');
+      });
+
+      it('sends an owner with nothing connected to the mailbox dialog when there is no ESP', async () => {
+        delete process.env.SENDING_DOMAIN_ESP;
+        build();
+        const i = await item('email-sending');
+        expect(i.state).toBe('MISSING');
+        expect(i.to).toBe('/accounts?focus=email');
+      });
+
+      it('keeps the domains page where an operator has actually wired an ESP', async () => {
+        process.env.SENDING_DOMAIN_ESP = 'postmark';
+        process.env.SENDING_DOMAIN_SPF_INCLUDE = 'spf.jeeta.example';
+        build();
+        expect((await item('email-sending')).to).toBe('/settings/domains');
+      });
+
+      it('leaves a READY workspace pointing at its domains', async () => {
+        delete process.env.SENDING_DOMAIN_ESP;
+        build({ counts: { sendingDomain: 1 } as any });
+        const i = await item('email-sending');
+        expect(i.state).toBe('READY');
+        expect(i.to).toBe('/settings/domains');
+      });
+    });
   });
 
   describe('AI credits: "can an action run right now", not "is there a wallet"', () => {

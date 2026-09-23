@@ -73,6 +73,92 @@ describe('AccountCenterService', () => {
     expect(r.providers.find((p: any) => p.provider === 'TIKTOK').connections[0].health).toBe('REAUTH_REQUIRED');
   });
 
+  /**
+   * THE MAILBOX, WHICH THIS PAGE COULD NOT TALK ABOUT.
+   *
+   * Reconnect is offered only for providers in `PROVIDER_NETWORK`, and EMAIL is
+   * not one of them — so a mailbox whose Google consent had been revoked
+   * rendered as a healthy connection with nothing to press, while every send
+   * and every poll failed. The marker the refresh sweep leaves is
+   * `configPublic.health.oauthReauthRequiredAt`, deliberately outside the
+   * sealed box precisely so a read-model like this one can see it.
+   */
+  describe('email mailboxes', () => {
+    const mailbox = (over: Record<string, unknown> = {}) => ({
+      id: 'ch-mail',
+      type: 'EMAIL',
+      name: 'destek@acme.com',
+      externalId: 'destek@acme.com',
+      status: 'ACTIVE',
+      configuredSecrets: ['smtpHost', 'smtpUser', 'smtpPass'],
+      configPublic: {},
+      ...over,
+    });
+    const email = (r: any) => r.providers.find((p: any) => p.provider === 'EMAIL');
+
+    it('asks a mailbox with a dead consent to be reconnected', async () => {
+      channels.list.mockResolvedValue([
+        mailbox({
+          configuredSecrets: ['oauthProvider', 'oauthAccessToken', 'oauthRefreshToken', 'fromEmail'],
+          configPublic: { health: { oauthReauthRequiredAt: '2026-09-01T10:00:00.000Z' } },
+        }),
+      ]);
+      const g = email(await svc.getConnections(WS)).connections[0];
+      expect(g.health).toBe('REAUTH_REQUIRED');
+      expect(g.sources[0].mailbox).toEqual({
+        consent: true,
+        reauthRequired: true,
+        address: 'destek@acme.com',
+      });
+    });
+
+    it('marks a password mailbox as editable rather than reconnectable', async () => {
+      // Consent is what "Yeniden bağlan" repairs. An SMTP mailbox whose
+      // password changed needs the Edit dialog, and offering a consent flow it
+      // has no app registration for would be a dead end.
+      channels.list.mockResolvedValue([mailbox()]);
+      const g = email(await svc.getConnections(WS)).connections[0];
+      expect(g.health).toBe('HEALTHY');
+      expect(g.sources[0].mailbox).toEqual({
+        consent: false,
+        reauthRequired: false,
+        address: 'destek@acme.com',
+      });
+    });
+
+    it('does not call a working consent mailbox broken', async () => {
+      channels.list.mockResolvedValue([
+        mailbox({
+          configuredSecrets: ['oauthProvider', 'oauthAccessToken'],
+          configPublic: { health: { send: { ok: true }, receive: { ok: true } } },
+        }),
+      ]);
+      const g = email(await svc.getConnections(WS)).connections[0];
+      expect(g.health).toBe('HEALTHY');
+      expect(g.sources[0].mailbox).toMatchObject({ consent: true, reauthRequired: false });
+    });
+
+    it('carries the address it has only CLAIMED, so the card can name the mailbox', async () => {
+      // A first SMTP connect parks the address in `pendingAddress` with a null
+      // externalId until something proves it — the card still has to say which
+      // mailbox it means.
+      channels.list.mockResolvedValue([
+        mailbox({ externalId: null, configPublic: { pendingAddress: 'destek@acme.com' } }),
+      ]);
+      const g = email(await svc.getConnections(WS)).connections[0];
+      expect(g.sources[0].mailbox.address).toBe('destek@acme.com');
+    });
+
+    it('leaves every other channel type without a mailbox block', async () => {
+      channels.list.mockResolvedValue([
+        { id: 'ch-sms', type: 'SMS', name: 'SMS', externalId: '850', status: 'ACTIVE', configuredSecrets: [] },
+      ]);
+      const g = (await svc.getConnections(WS)).providers.find((p: any) => p.provider === 'SMS')
+        .connections[0];
+      expect(g.sources[0].mailbox).toBeUndefined();
+    });
+  });
+
   it('never leaks sealed secrets in the response', async () => {
     socialPlanner.listAccounts.mockResolvedValue([
       { id: 'sa1', network: 'FACEBOOK', externalId: 'P1', displayName: 'A', accountType: 'PAGE', connectedVia: 'OAUTH', enabled: true, accessToken: 'v1:sealed:blob' },

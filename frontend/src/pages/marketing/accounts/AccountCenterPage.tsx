@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Plug, RefreshCw, Unplug } from 'lucide-react';
+import { Pencil, Plug, RefreshCw, Unplug } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -13,8 +13,9 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { QueryStateBoundary } from '@/components/ui';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { RouteFallback } from '../../../components/RouteFallback';
-import { useConnections, useDisconnect, connectionsKey } from './hooks';
+import { useConnections, useDisconnect, connectionsKey, mailboxOf } from './hooks';
 import type { Capability, ConnectionGroup, Health, Provider, ProviderBlock, SourceRef } from './types';
+import type { EditableMailbox } from './EmailChannelDialog';
 import { useSocialConnect } from '../social/useSocialConnect';
 import { AccountSelectDialog } from '../social/AccountSelectDialog';
 import type { SocialNetwork } from '../social/socialSchemas';
@@ -106,6 +107,10 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectionGroup | null>(null);
   const [manualType, setManualType] = useState<ChannelType | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
+  // Editing the mailbox this workspace already has, rather than disconnecting
+  // it: `ChannelsService.remove` hard-deletes, so Disconnect-and-connect-again
+  // orphaned every conversation hanging off the channel.
+  const [emailEdit, setEmailEdit] = useState<EditableMailbox | null>(null);
   const [webchatOpen, setWebchatOpen] = useState(false);
   const disconnect = useDisconnect();
 
@@ -164,6 +169,31 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, focus, isLoading]);
+
+  /**
+   * The readiness list's "E-posta gönderimi" row points here
+   * (`/accounts?focus=email`) when this deployment has no ESP, because Sending
+   * Domains answers 503 and connecting a mailbox is the route that works.
+   * Landing on a page of cards with no idea which one was meant is how that
+   * instruction went nowhere.
+   *
+   * A SEPARATE effect from the telephony one above on purpose: that one also
+   * scrolls and highlights `#telephony-card`, which must not run for email.
+   * Both delete the same `focus` param, so they stay mutually exclusive on its
+   * value — widening either would clear the other's trigger before it fired.
+   */
+  useEffect(() => {
+    if (tab !== 'accounts' || focus !== 'email') return;
+    setEmailOpen(true);
+    setSearchParams(
+      (p) => {
+        p.delete('focus');
+        return p;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, focus]);
 
   const onConnected = () => {
     qc.invalidateQueries({ queryKey: connectionsKey });
@@ -229,10 +259,31 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
     TIKTOK_WEBHOOK: t('accounts.setup.tiktokWebhook', 'TikTok webhook URL — paste into the TikTok for Business app'),
   };
 
+  /** The EMAIL source of a group, with the block that says which repair it
+   *  needs. Null for every other provider, and for a server that predates the
+   *  field — see `mailboxOf`. */
+  const mailboxSource = (g: ConnectionGroup) => {
+    for (const s of g.sources) {
+      const mailbox = mailboxOf(s);
+      if (mailbox) return { source: s, mailbox };
+    }
+    return null;
+  };
+
   const renderGroup = (provider: Provider, g: ConnectionGroup) => {
     // "Paste this to finish connecting" URLs (Meta webhook / NetGSM inbound / email
     // inbound / web-chat embed) live here now, not on the channels page.
     const setups = g.sources.filter((s) => s.setupUrl || s.widgetKey);
+    const mail = mailboxSource(g);
+    const openMailbox = () => {
+      if (!mail) return;
+      setEmailEdit({
+        id: mail.source.id,
+        address: mail.mailbox.address,
+        consent: mail.mailbox.consent,
+        reauthRequired: mail.mailbox.reauthRequired,
+      });
+    };
     return (
       <div key={g.identityKey} className="space-y-2 rounded-lg border border-border px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -259,6 +310,27 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
               <RefreshCw className="h-3.5 w-3.5" />
               {t('accounts.reconnect', 'Reconnect')}
             </Button>
+          )}
+          {/* The EMAIL branch of Reconnect. `PROVIDER_NETWORK` has no EMAIL
+              entry — there is no EMAIL social network — so the button above
+              can never fire for a mailbox, and a revoked consent had nothing
+              to press. Only a CONSENT mailbox is offered it: an SMTP one has
+              nothing to re-grant. */}
+          {mail?.mailbox.reauthRequired && mail.mailbox.consent && (
+            <Button variant="outline" size="sm" onClick={openMailbox}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('accounts.reconnect', 'Reconnect')}
+            </Button>
+          )}
+          {mail && (
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label={t('accounts.email.edit', 'Edit mailbox')}
+              onClick={openMailbox}
+            >
+              <Pencil className="h-4 w-4" aria-hidden="true" />
+            </IconButton>
           )}
           <IconButton
             variant="ghost"
@@ -427,7 +499,19 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
         onCreated={onConnected}
       />
 
-      <EmailChannelDialog open={emailOpen} onOpenChange={setEmailOpen} onCreated={onConnected} />
+      {/* One dialog for both jobs: connecting a mailbox, and repairing the one
+          that is already here. `channel` is what tells them apart. */}
+      <EmailChannelDialog
+        open={emailOpen || !!emailEdit}
+        onOpenChange={(o) => {
+          if (!o) {
+            setEmailOpen(false);
+            setEmailEdit(null);
+          }
+        }}
+        onCreated={onConnected}
+        channel={emailEdit}
+      />
       <WebchatChannelDialog open={webchatOpen} onOpenChange={setWebchatOpen} onCreated={onConnected} />
 
       <ConfirmDialog

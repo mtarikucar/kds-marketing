@@ -307,3 +307,93 @@ describe('AccountCenterPage — the shape of the page', () => {
     });
   });
 });
+
+/**
+ * THE MAILBOX, which this page could talk about least of all.
+ *
+ * Reconnect is offered only for providers in `PROVIDER_NETWORK`, and EMAIL is
+ * not one of them (there is no EMAIL social network) — so a mailbox whose
+ * Google consent had been revoked rendered as a card with nothing to press.
+ * And changing a password meant Disconnect, which hard-deletes the channel and
+ * orphans every thread hanging off it.
+ */
+describe('AccountCenterPage — the email mailbox', () => {
+  const emailPayload = (mailbox: Record<string, unknown>, health = 'HEALTHY') => ({
+    ...PAYLOAD,
+    providers: [
+      {
+        provider: 'EMAIL',
+        displayName: 'Email',
+        connectMethod: 'MANUAL',
+        configured: true,
+        connections: [
+          {
+            identityKey: 'EMAIL:destek@acme.com',
+            externalId: 'destek@acme.com',
+            displayName: 'destek@acme.com',
+            connectedVia: 'MANUAL',
+            capabilities: ['INBOX'],
+            health,
+            sources: [
+              { capability: 'INBOX', model: 'Channel', id: 'ch-mail', status: 'ACTIVE', mailbox },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  async function withPayload(payload: unknown) {
+    const api = (await import('../../../features/marketing/api/marketingApi')).default as any;
+    api.get.mockResolvedValue({ data: payload });
+  }
+
+  it('offers Edit rather than Disconnect-and-start-again', async () => {
+    const user = userEvent.setup();
+    await withPayload(emailPayload({ consent: false, reauthRequired: false, address: 'destek@acme.com' }));
+    wrap();
+
+    await user.click(await screen.findByRole('button', { name: /edit mailbox/i }));
+    expect(await screen.findByRole('heading', { name: /edit mailbox/i })).toBeInTheDocument();
+  });
+
+  it('offers Reconnect on the EMAIL branch when the consent has died', async () => {
+    // Not the social `startConnect` route: there is no EMAIL network, so it
+    // would have thrown the person at nothing.
+    const user = userEvent.setup();
+    await withPayload(
+      emailPayload({ consent: true, reauthRequired: true, address: 'destek@acme.com' }, 'REAUTH_REQUIRED'),
+    );
+    wrap();
+
+    await user.click(await screen.findByRole('button', { name: /^reconnect$/i }));
+    expect(await screen.findByText(/connection needs renewing — the provider consent expired/i)).toBeInTheDocument();
+  });
+
+  it('does not offer Reconnect to a password mailbox', async () => {
+    // There is nothing to re-grant, and a consent flow this deployment may
+    // have no app registration for is a dead end.
+    await withPayload(emailPayload({ consent: false, reauthRequired: false, address: 'destek@acme.com' }));
+    wrap();
+    await screen.findByText('destek@acme.com');
+    expect(screen.queryByRole('button', { name: /^reconnect$/i })).not.toBeInTheDocument();
+  });
+
+  it('opens the connect dialog straight from the readiness list deep link', async () => {
+    // The readiness item "E-posta gönderimi" points here when this deployment
+    // has no ESP. Landing on a page of cards with no idea which one was meant
+    // is how that instruction went nowhere.
+    await withPayload(PAYLOAD);
+    wrap('/accounts?focus=email');
+    expect(await screen.findByRole('heading', { name: /connect email/i })).toBeInTheDocument();
+  });
+
+  it('leaves the telephony deep link alone', async () => {
+    // The two effects share one `focus` param and delete it; widening either
+    // one would have the other's trigger cleared before it fired.
+    await withPayload(PAYLOAD);
+    wrap('/accounts?focus=telephony');
+    await screen.findByText('Acme Clinic');
+    expect(screen.queryByRole('heading', { name: /connect email/i })).not.toBeInTheDocument();
+  });
+});

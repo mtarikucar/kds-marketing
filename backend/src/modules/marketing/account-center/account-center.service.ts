@@ -47,6 +47,21 @@ export interface SourceRef {
   setupKind?: 'META_WEBHOOK' | 'SMS_CALLBACK' | 'EMAIL_WEBHOOK' | 'TIKTOK_WEBHOOK';
   /** WEBCHAT only — the SPA builds the embed <script> snippet from this. */
   widgetKey?: string | null;
+  /** EMAIL only — which repair this mailbox needs, without opening the box.
+   *  A consent mailbox with a dead grant needs the owner to sign in again; a
+   *  password one needs the Edit dialog, and offering it a consent flow this
+   *  deployment may have no app registration for is a dead end. */
+  mailbox?: MailboxRef;
+}
+
+export interface MailboxRef {
+  /** Connected by provider consent (OAuth) rather than by password. */
+  consent: boolean;
+  /** The stored grant is dead — only the mailbox owner can repair it. */
+  reauthRequired: boolean;
+  /** The address this mailbox answers to, or the one it has claimed and not
+   *  yet proven. Null only for a row that has neither. */
+  address: string | null;
 }
 
 export interface ConnectionGroup {
@@ -119,6 +134,33 @@ const PROVIDER_NETWORK: Partial<Record<Provider, string>> = {
   PINTEREST: 'PINTEREST',
   GOOGLE: 'GMB',
 };
+
+/**
+ * What a mailbox card needs to offer the right repair.
+ *
+ * Reads only the MASKED channel DTO: `configuredSecrets` is a list of key
+ * NAMES (never values), and `configPublic.health` is the block
+ * `MailboxHealthService` keeps deliberately outside the AES-GCM box. Nothing
+ * here opens a secret, which is what lets this read-model stay a read-model.
+ */
+function mailboxRef(c: {
+  externalId?: string | null;
+  configuredSecrets?: string[] | null;
+  configPublic?: Record<string, unknown> | null;
+}): MailboxRef {
+  const health = (c.configPublic?.health ?? null) as { oauthReauthRequiredAt?: unknown } | null;
+  const pending = c.configPublic?.pendingAddress;
+  return {
+    // `oauthProvider` is the key `EmailChannelAdapter` branches on, so its
+    // presence is the same question the transport asks.
+    consent: (c.configuredSecrets ?? []).includes('oauthProvider'),
+    reauthRequired: typeof health?.oauthReauthRequiredAt === 'string',
+    // An address that is merely CLAIMED still names the mailbox on the card —
+    // a first SMTP connect parks it here with a null externalId until
+    // something proves it.
+    address: c.externalId ?? (typeof pending === 'string' ? pending : null),
+  };
+}
 
 /** The full provider catalog, in display order — always emitted (even with zero
  *  connections) so the hub is a complete "connect anything" catalog. */
@@ -308,6 +350,14 @@ export class AccountCenterService {
       } else if (c.type === 'EMAIL') {
         src.setupUrl = c.webhookUrl ?? null;
         src.setupKind = 'EMAIL_WEBHOOK';
+        src.mailbox = mailboxRef(c);
+        // A revoked consent is invisible everywhere else: `oauthError` is
+        // sealed, so nothing that can only run a Prisma query — this
+        // read-model, the digest, the readiness list — could ever see it.
+        // `MailboxHealthService` writes the marker in the clear for exactly
+        // this reason, and until it was read here the page showed a healthy
+        // card with no button while every send and every poll failed.
+        if (src.mailbox.reauthRequired) g.health = 'REAUTH_REQUIRED';
       } else if (c.type === 'TIKTOK') {
         src.setupUrl = c.webhookUrl ?? null;
         src.setupKind = 'TIKTOK_WEBHOOK';

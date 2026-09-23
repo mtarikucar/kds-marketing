@@ -5,6 +5,7 @@ import { AI_CREDITS_METRIC, monthKey } from '../ai/ai-credits.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiReplyLeaseService } from '../ai/ai-reply-lease.service';
 import { AI_MCP_GRACE_MS } from '../ai/ai-execution';
+import { isSendingDomainsConfigured } from '../sending-domains/sending-domains.config';
 
 /**
  * How far ahead a token expiry is worth complaining about — and why there are
@@ -380,6 +381,11 @@ export class WorkspaceReadinessService {
     ]);
 
     const yes = (ok: boolean): ReadinessState => (ok ? 'READY' : 'MISSING');
+    /** Computed once, because BOTH the state and the link below are read off
+     *  it — two independently-written predicates are how a row ends up saying
+     *  one thing and sending you somewhere that answers another. */
+    const emailSending: ReadinessState =
+      sendingDomains > 0 || provenMailboxes > 0 ? 'READY' : mailboxChannels > 0 ? 'ATTENTION' : 'MISSING';
     const platformAi = this.anthropic.platformAiUnavailable();
     const replyQueue = await this.aiReplyQueue
       .pending(workspaceId)
@@ -596,9 +602,24 @@ export class WorkspaceReadinessService {
         // rotated away keeps reading READY until somebody re-runs Verify.
         // Catching that needs a stored check RESULT, which the Channel model
         // does not have today.
-        state:
-          sendingDomains > 0 || provenMailboxes > 0 ? 'READY' : mailboxChannels > 0 ? 'ATTENTION' : 'MISSING',
-        to: '/settings/domains',
+        state: emailSending,
+        // WHERE THE ROW SENDS YOU. One destination for three states was wrong
+        // in every one of them, and expensively so: Sending Domains answers
+        // 503 unless an operator has wired an ESP (`isSendingDomainsConfigured`),
+        // so the owner of a brand-new workspace followed the only instruction
+        // on the list, got an error, and was never told that connecting a
+        // mailbox is the other — working — route to the same READY.
+        //
+        // Derived from the SAME local as `state` above so the two cannot drift
+        // apart the way a second, independently-written predicate would.
+        to:
+          emailSending === 'ATTENTION'
+            ? // The mailbox already exists; what it needs is the Verify button
+              // on its own card, not a domain.
+              '/inbox?tab=channels'
+            : emailSending === 'MISSING' && !isSendingDomainsConfigured()
+              ? '/accounts?focus=email'
+              : '/settings/domains',
         mcpTool: null,
         detail: {
           verifiedDomains: sendingDomains,

@@ -32,6 +32,49 @@ interface OAuthProvider {
   label: string;
 }
 
+/**
+ * A mailbox that already exists, handed in to edit it rather than replace it.
+ *
+ * The whole reason this prop exists: `ChannelsService.remove` hard-deletes, so
+ * "delete and reconnect" — the only way to change a password before this —
+ * orphaned every conversation and contact identity hanging off the channel.
+ * Old threads 404 and the customer's next reply opens a duplicate. Editing
+ * keeps the row, so nothing is orphaned.
+ */
+export interface EditableMailbox {
+  id: string;
+  /** What this mailbox answers to (or the address it has claimed). LOCKED in
+   *  the form: `externalId` is the inbound routing key and `fromEmail` is the
+   *  outbound identity, so changing one here would leave the mailbox sending
+   *  from one address and receiving at another. */
+  address: string | null;
+  /** Connected by provider consent rather than by password. */
+  consent?: boolean;
+  /** The grant itself is dead — the repair is one click at the provider, not
+   *  five fields. */
+  reauthRequired?: boolean;
+  /** Which credential keys the channel already holds (names only, never
+   *  values), so a blank field does not read as a missing setting. */
+  configuredSecrets?: string[];
+}
+
+/**
+ * The consent keys a password must displace.
+ *
+ * `EmailChannelAdapter` checks `oauthProvider` FIRST and never looks at the
+ * SMTP block again (`email.adapter.ts` `oauth()`), so a password patched onto
+ * a channel that still carries stale `oauth*` keys is silently ignored — the
+ * save succeeds, nothing changes, and Edit looks broken. This is the exact
+ * mirror of `SMTP_KEYS` in `email-oauth.service.ts`, which has no counterpart
+ * on the backend today.
+ */
+export const OAUTH_KEYS = [
+  'oauthProvider',
+  'oauthAccessToken',
+  'oauthRefreshToken',
+  'oauthExpiresAt',
+] as const;
+
 interface SmtpSuggestion {
   host: string;
   port: number;
@@ -59,7 +102,8 @@ const EMPTY_FORM = {
 };
 
 /**
- * Connecting the workspace's mailbox.
+ * Connecting the workspace's mailbox — and, with `channel`, editing the one it
+ * already has.
  *
  * Consent comes first and a password is the fallback, because for most people
  * the mailbox is Gmail or Microsoft and typing that password into someone
@@ -72,18 +116,36 @@ const EMPTY_FORM = {
  * its MX record. They stay visible and editable underneath, because the
  * autodiscovery table cannot know every host and a wrong guess must be
  * correctable rather than hidden.
+ *
+ * ## Edit mode
+ *
+ * Blank means UNCHANGED, never "erase this": `ChannelsService.update` merges
+ * partial secrets, so only the fields somebody actually typed into are sent.
+ * That is what lets an owner rotate a password without re-typing a host they
+ * chose months ago — and what stops a half-filled form from sealing an empty
+ * string that reads as a configured credential.
  */
 export function EmailChannelDialog({
   open,
   onOpenChange,
   onCreated,
+  channel,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
+  channel?: EditableMailbox | null;
 }) {
   const { t } = useTranslation('marketing');
-  const [form, setForm] = useState(EMPTY_FORM);
+  const editing = !!channel;
+  /** Edit mode starts empty apart from the locked address — including the
+   *  port, because `587` as a starting value would be PATCHed over whatever
+   *  the mailbox actually uses. */
+  const initialForm = () =>
+    channel
+      ? { ...EMPTY_FORM, address: channel.address ?? '', smtpPort: '' }
+      : EMPTY_FORM;
+  const [form, setForm] = useState(initialForm);
   const [suggestion, setSuggestion] = useState<SmtpSuggestion | null>(null);
   const [suggestedFor, setSuggestedFor] = useState('');
   const [created, setCreated] = useState<CreatedEmail | null>(null);
@@ -92,12 +154,13 @@ export function EmailChannelDialog({
 
   useEffect(() => {
     if (!open) {
-      setForm(EMPTY_FORM);
+      setForm(initialForm());
       setSuggestion(null);
       setSuggestedFor('');
       setCreated(null);
     }
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, channel?.id]);
 
   const providers = useQuery({
     queryKey: ['email-oauth-providers'],
@@ -152,6 +215,10 @@ export function EmailChannelDialog({
   });
 
   const onAddressSettled = () => {
+    // Never in edit mode: the address is locked, and refilling the server
+    // fields from the MX table would PATCH a guess over a host the owner
+    // deliberately typed.
+    if (editing) return;
     const address = form.address.trim().toLowerCase();
     if (!address.includes('@') || address === suggestedFor) return;
     suggest.mutate(address);
@@ -190,6 +257,55 @@ export function EmailChannelDialog({
       toast.error(e?.response?.data?.message || t('accounts.channelFailed', 'Could not connect the channel')),
   });
 
+  /** Only what was typed. Blank is "leave it alone", because the backend
+   *  merges — see the class docstring. */
+  const editedSecrets = (): Record<string, string> => {
+    const secrets: Record<string, string> = {};
+    const put = (key: string, raw: string) => {
+      const value = raw.trim();
+      if (value) secrets[key] = value;
+    };
+    // Not trimmed: a password may legitimately begin or end with a space.
+    if (form.password) secrets.smtpPass = form.password;
+    put('smtpHost', form.smtpHost);
+    put('smtpPort', form.smtpPort);
+    put('smtpUser', form.smtpUser);
+    put('imapHost', form.imapHost);
+    put('imapPort', form.imapPort);
+    // Written WITH the port and only then, because a stored `smtpSecure: true`
+    // left behind by a 465 mailbox would break the same mailbox moved to 587.
+    // The adapter also implies TLS from 465, so this only ever agrees with it.
+    if (secrets.smtpPort) secrets.smtpSecure = String(secrets.smtpPort === '465');
+    return secrets;
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const secrets = editedSecrets();
+      await marketingApi.patch(`/channels/${channel!.id}`, {
+        secrets,
+        // ONLY when a password is actually being set. Clearing a live grant
+        // because somebody corrected where replies are read from would take
+        // the mailbox's ability to send away with it.
+        ...(secrets.smtpPass ? { clearSecretKeys: [...OAUTH_KEYS] } : {}),
+      });
+      // The credential rewrite re-proves the mailbox server-side already; this
+      // is the answer the person standing at the dialog is waiting for.
+      return marketingApi.post(`/channels/${channel!.id}/verify`).then((r) => r.data);
+    },
+    onSuccess: (res: any) => {
+      onCreated();
+      if (res?.ok === false) {
+        toast.error(res?.message || t('accounts.email.smtpFailed', 'SMTP check failed'));
+        return;
+      }
+      toast.success(t('accounts.email.editSaved', 'Mailbox updated'));
+      onOpenChange(false);
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message || t('accounts.email.editFailed', 'Could not update the mailbox')),
+  });
+
   const verify = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/channels/${id}/verify`).then((r) => r.data),
     onSuccess: (res: any) =>
@@ -202,17 +318,30 @@ export function EmailChannelDialog({
 
   const canCreate =
     form.address.trim().includes('@') && !!form.password && !!form.smtpHost.trim();
+  /** An edit that changes nothing must not be submittable: it would re-run a
+   *  health check and report a result nobody asked for. */
+  const canSave = Object.keys(editedSecrets()).length > 0;
 
   /** This address is run by a provider we can connect WITHOUT a password. */
   const passwordlessOffer = suggestion?.oauth
     ? oauthProviders.find((p) => p.provider === suggestion.oauth)
     : undefined;
 
+  /** Consent is offered on a NEW mailbox, and on an existing one only when
+   *  consent is what it runs on — an SMTP mailbox is edited, not re-granted. */
+  const showConsent = oauthProviders.length > 0 && (!editing || !!channel?.consent);
+  /** Folded away only when the repair is the consent button above it. */
+  const serverFieldsOpen = editing ? !channel?.reauthRequired : oauthProviders.length === 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t('accounts.email.title', 'Connect Email')}</DialogTitle>
+          <DialogTitle>
+            {editing
+              ? t('accounts.email.edit', 'Edit mailbox')
+              : t('accounts.email.title', 'Connect Email')}
+          </DialogTitle>
           <DialogDescription>
             {t(
               'accounts.email.desc',
@@ -223,7 +352,25 @@ export function EmailChannelDialog({
 
         {!created ? (
           <div className="space-y-4">
-            {oauthProviders.length > 0 && (
+            {/* The grant is dead, not the password — say so before the form,
+                so nobody starts typing credentials that cannot help. */}
+            {editing && channel?.reauthRequired && (
+              <Callout tone="warning" icon={<AlertTriangle className="h-4 w-4 text-warning" aria-hidden="true" />}>
+                <div className="space-y-1">
+                  <p>
+                    {t(
+                      'accounts.email.reauthRequired',
+                      'Connection needs renewing — the provider consent expired, so this mailbox can neither send nor receive.',
+                    )}
+                  </p>
+                  <p className="text-caption text-muted-foreground">
+                    {t('accounts.email.reauthRequiredHint', 'Only the mailbox owner can reconnect it.')}
+                  </p>
+                </div>
+              </Callout>
+            )}
+
+            {showConsent && (
               <section className="space-y-3">
                 <p className="text-sm font-medium text-foreground">
                   {t('accounts.email.consentTitle', 'Connect your mailbox')}
@@ -254,11 +401,17 @@ export function EmailChannelDialog({
             {/* Held back until the providers query settles. `defaultOpen` seeds
                 state on FIRST render only, and on that render the query has no
                 data — so rendering early would open this section every time and
-                bury the consent buttons it is supposed to sit under. */}
-            {providers.isFetched && (
+                bury the consent buttons it is supposed to sit under. Edit mode
+                does not wait: its fold state is decided by the channel, not by
+                the provider list. */}
+            {(providers.isFetched || editing) && (
             <Disclosure
-              title={t('accounts.email.ownServer', 'I have my own mail server')}
-              defaultOpen={oauthProviders.length === 0}
+              title={
+                editing
+                  ? t('accounts.email.sending', 'Sending (SMTP)')
+                  : t('accounts.email.ownServer', 'I have my own mail server')
+              }
+              defaultOpen={serverFieldsOpen}
             >
               <div className="space-y-3 pt-1">
                 <Field
@@ -274,11 +427,25 @@ export function EmailChannelDialog({
                       type="email"
                       aria-describedby={describedBy}
                       value={form.address}
+                      // The inbound routing key. Editable here, it would be
+                      // changed WITHOUT the `fromEmail` beside it and the
+                      // mailbox would send from one address and receive at
+                      // another.
+                      disabled={editing}
                       onChange={(e) => set('address', e.target.value)}
                       onBlur={onAddressSettled}
                     />
                   )}
                 </Field>
+
+                {/* What the mailbox already holds, so an empty field reads as
+                    "already set" rather than "missing". Key names only — the
+                    values never leave the server. */}
+                {editing && (channel?.configuredSecrets?.length ?? 0) > 0 && (
+                  <p className="text-caption text-muted-foreground">
+                    {`${t('channels.secretsSet', 'credentials set')}: ${channel!.configuredSecrets!.join(', ')}`}
+                  </p>
+                )}
 
                 {passwordlessOffer && (
                   <Callout tone="info" icon={<ShieldCheck className="h-4 w-4" aria-hidden="true" />}>
@@ -445,17 +612,23 @@ export function EmailChannelDialog({
         )}
 
         <DialogFooter>
-          {!created ? (
+          {created ? (
+            <Button onClick={() => onOpenChange(false)}>{t('common.done', 'Done')}</Button>
+          ) : (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 {t('common.cancel', 'Cancel')}
               </Button>
-              <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!canCreate}>
-                {t('accounts.connect', 'Connect')}
-              </Button>
+              {editing ? (
+                <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!canSave}>
+                  {t('common.save', 'Save')}
+                </Button>
+              ) : (
+                <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!canCreate}>
+                  {t('accounts.connect', 'Connect')}
+                </Button>
+              )}
             </>
-          ) : (
-            <Button onClick={() => onOpenChange(false)}>{t('common.done', 'Done')}</Button>
           )}
         </DialogFooter>
       </DialogContent>

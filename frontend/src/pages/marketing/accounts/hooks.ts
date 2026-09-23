@@ -1,8 +1,41 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import marketingApi from '../../../features/marketing/api/marketingApi';
-import type { AccountCenterResponse } from './types';
+import type { AccountCenterResponse, SourceRef } from './types';
 
 export const connectionsKey = ['marketing', 'connections'] as const;
+
+/**
+ * The EMAIL-only block `AccountCenterService` attaches to a mailbox source, so
+ * the page can offer the RIGHT repair: a dead consent needs the owner to sign
+ * in again at the provider, a password mailbox needs the edit dialog, and
+ * offering a consent flow this deployment may have no app registration for is
+ * a dead end. Mirrors `AccountCenterService.MailboxRef`.
+ */
+export interface MailboxRef {
+  consent: boolean;
+  reauthRequired: boolean;
+  address: string | null;
+}
+
+/**
+ * Read it off a source, or null.
+ *
+ * A function rather than a field on `SourceRef` deliberately: the SPA is
+ * deployed separately from the API, so a browser running this build can be
+ * talking to a server that predates the field. `null` is the honest answer
+ * there, and it renders the page exactly as it rendered before — rather than
+ * an Edit button that patches a channel id the response never carried.
+ */
+export function mailboxOf(source: SourceRef): MailboxRef | null {
+  const raw = (source as SourceRef & { mailbox?: unknown }).mailbox;
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Partial<MailboxRef>;
+  return {
+    consent: m.consent === true,
+    reauthRequired: m.reauthRequired === true,
+    address: typeof m.address === 'string' ? m.address : null,
+  };
+}
 
 /**
  * The Account Center read-model — every connected account across the workspace.

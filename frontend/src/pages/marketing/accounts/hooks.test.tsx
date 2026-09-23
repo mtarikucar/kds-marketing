@@ -3,7 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import marketingApi from '../../../features/marketing/api/marketingApi';
-import { useConnections, connectionsKey } from './hooks';
+import { useConnections, connectionsKey, mailboxOf } from './hooks';
 
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: { get: vi.fn() },
@@ -54,5 +54,32 @@ describe('useConnections', () => {
     await waitFor(() =>
       expect(qc.getQueryCache().find({ queryKey: connectionsKey })?.meta).toEqual({ silent: true }),
     );
+  });
+});
+
+/**
+ * The mailbox block AccountCenterService attaches to an EMAIL source. It is
+ * read through a helper rather than off the type, so the shape is asserted in
+ * exactly one place — see `mailboxOf`'s comment.
+ */
+describe('mailboxOf', () => {
+  it('reads the block off an email source', () => {
+    expect(
+      mailboxOf({
+        capability: 'INBOX',
+        model: 'Channel',
+        id: 'ch1',
+        status: 'ACTIVE',
+        mailbox: { consent: true, reauthRequired: true, address: 'destek@acme.com' },
+      } as never),
+    ).toEqual({ consent: true, reauthRequired: true, address: 'destek@acme.com' });
+  });
+
+  it('answers null for every other capability, and for a server that has not shipped it', async () => {
+    // The page branches on this, so a non-email source must never look like a
+    // mailbox — and a deploy whose backend predates the field must render the
+    // old way rather than an Edit button that patches nothing.
+    expect(mailboxOf({ capability: 'PUBLISH', model: 'SocialAccount', id: 'sa1', status: 'ACTIVE' })).toBeNull();
+    expect(mailboxOf({ capability: 'INBOX', model: 'Channel', id: 'ch1', status: 'ACTIVE' })).toBeNull();
   });
 });

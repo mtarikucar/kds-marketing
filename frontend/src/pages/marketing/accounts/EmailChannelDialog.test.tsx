@@ -7,7 +7,7 @@ import marketingApi from '../../../features/marketing/api/marketingApi';
 import { navigateExternal } from '../../../lib/navigateExternal';
 
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
-  default: { get: vi.fn(), post: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn(), patch: vi.fn() },
 }));
 vi.mock('../../../lib/navigateExternal', () => ({ navigateExternal: vi.fn(() => true) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -24,14 +24,21 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const api = marketingApi as unknown as { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> };
+const api = marketingApi as unknown as {
+  get: ReturnType<typeof vi.fn>;
+  post: ReturnType<typeof vi.fn>;
+  patch: ReturnType<typeof vi.fn>;
+};
 
-function wrap(providers: Array<{ provider: string; label: string }>) {
+function wrap(
+  providers: Array<{ provider: string; label: string }>,
+  channel?: Parameters<typeof EmailChannelDialog>[0]['channel'],
+) {
   api.get.mockResolvedValue({ data: { providers } });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <EmailChannelDialog open onOpenChange={() => {}} onCreated={() => {}} />
+      <EmailChannelDialog open onOpenChange={() => {}} onCreated={() => {}} channel={channel} />
     </QueryClientProvider>,
   );
 }
@@ -273,5 +280,128 @@ describe('EmailChannelDialog — consent first, password as the fallback', () =>
       expect(body.secrets).not.toHaveProperty('imapHost');
       expect(body.secrets).not.toHaveProperty('imapPort');
     });
+  });
+});
+
+/**
+ * EDITING A MAILBOX, which used to mean deleting it.
+ *
+ * A password change had exactly one path through this product: delete the
+ * channel and connect it again. `remove()` hard-deletes, so every conversation
+ * and contact identity hanging off that channel was orphaned — old threads
+ * 404, and the customer's next reply opens a duplicate conversation. The whole
+ * point of this mode is that the CHANNEL ROW SURVIVES.
+ */
+describe('EmailChannelDialog — editing an existing mailbox', () => {
+  const CHANNEL = {
+    id: 'ch1',
+    address: 'destek@acme.com',
+    configuredSecrets: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'fromEmail'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (navigateExternal as unknown as ReturnType<typeof vi.fn>).mockReturnValue(true);
+  });
+
+  it('locks the address, because it is the inbound routing key', async () => {
+    // externalId is what inbound mail is matched on and `fromEmail` is what
+    // outbound is sent as. Letting Edit change one silently would leave the
+    // mailbox sending from one address and receiving at another.
+    wrap([], CHANNEL);
+    const address = await screen.findByLabelText(/email address/i);
+    expect(address).toHaveValue('destek@acme.com');
+    expect(address).toBeDisabled();
+  });
+
+  it('patches the new password onto the SAME channel and re-verifies it', async () => {
+    const user = userEvent.setup();
+    api.patch.mockResolvedValue({ data: { id: 'ch1' } });
+    api.post.mockResolvedValue({ data: { ok: true } });
+    wrap([], CHANNEL);
+
+    await user.type(await screen.findByLabelText(/mailbox password/i), 'new-hunter2');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/channels/ch1', expect.anything()));
+    const body = api.patch.mock.calls[0][1] as any;
+    expect(body.secrets.smtpPass).toBe('new-hunter2');
+    // Never a create, and never a re-registration of the identity: both are
+    // how the threads got orphaned.
+    expect(api.post).not.toHaveBeenCalledWith('/channels', expect.anything());
+    expect(body).not.toHaveProperty('externalId');
+    expect(body).not.toHaveProperty('type');
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/channels/ch1/verify'));
+  });
+
+  it('clears the consent keys when a password is set, or the password is ignored', async () => {
+    // EmailChannelAdapter checks `oauthProvider` FIRST and never looks at the
+    // SMTP block again, so a password patched onto a channel that still
+    // carries stale oauth* keys does nothing at all — and Edit looks broken.
+    const user = userEvent.setup();
+    api.patch.mockResolvedValue({ data: { id: 'ch1' } });
+    api.post.mockResolvedValue({ data: { ok: true } });
+    wrap([], { ...CHANNEL, consent: true, configuredSecrets: ['oauthProvider', 'oauthAccessToken'] });
+
+    await user.type(await screen.findByLabelText(/mailbox password/i), 'new-hunter2');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(api.patch).toHaveBeenCalled());
+    const body = api.patch.mock.calls[0][1] as any;
+    expect(body.clearSecretKeys).toEqual(
+      expect.arrayContaining(['oauthProvider', 'oauthAccessToken', 'oauthRefreshToken', 'oauthExpiresAt']),
+    );
+  });
+
+  it('leaves a consent mailbox alone when only its IMAP host is corrected', async () => {
+    // The mirror of the rule above: clearing the grant because somebody fixed
+    // where replies are read from would take the mailbox's ability to SEND
+    // with it.
+    const user = userEvent.setup();
+    api.patch.mockResolvedValue({ data: { id: 'ch1' } });
+    api.post.mockResolvedValue({ data: { ok: true } });
+    wrap([], { ...CHANNEL, consent: true, configuredSecrets: ['oauthProvider', 'oauthAccessToken'] });
+
+    await user.type(await screen.findByLabelText(/imap host/i), 'imap.acme.com');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(api.patch).toHaveBeenCalled());
+    const body = api.patch.mock.calls[0][1] as any;
+    expect(body.secrets).toEqual({ imapHost: 'imap.acme.com' });
+    expect(body.clearSecretKeys).toBeUndefined();
+  });
+
+  it('sends nothing for a field left blank, so a partial edit keeps the rest', async () => {
+    // ChannelsService.update MERGES partial secrets. Blank therefore means
+    // "unchanged", and posting an empty string would seal a credential that
+    // looks configured and is not.
+    const user = userEvent.setup();
+    api.patch.mockResolvedValue({ data: { id: 'ch1' } });
+    api.post.mockResolvedValue({ data: { ok: true } });
+    wrap([], CHANNEL);
+
+    await user.type(await screen.findByLabelText(/mailbox password/i), 'new-hunter2');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(api.patch).toHaveBeenCalled());
+    expect((api.patch.mock.calls[0][1] as any).secrets).toEqual({ smtpPass: 'new-hunter2' });
+  });
+
+  it('will not submit an edit that changes nothing', async () => {
+    wrap([], CHANNEL);
+    expect(await screen.findByRole('button', { name: /save/i })).toBeDisabled();
+  });
+
+  it('names what the mailbox already holds, so a blank field does not read as missing', async () => {
+    wrap([], CHANNEL);
+    expect(await screen.findByText(/smtpHost, smtpPort, smtpUser/)).toBeInTheDocument();
+  });
+
+  it('opens on the consent buttons when the grant is what died', async () => {
+    // A revoked Google consent is not a password problem, and the fix is one
+    // click at the provider — not five fields.
+    wrap(GOOGLE, { ...CHANNEL, consent: true, reauthRequired: true });
+    expect(await screen.findByRole('button', { name: /connect with google/i })).toBeInTheDocument();
+    expect(screen.getByText(/connection needs renewing/i)).toBeInTheDocument();
   });
 });

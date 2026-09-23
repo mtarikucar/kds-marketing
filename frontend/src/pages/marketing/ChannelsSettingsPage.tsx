@@ -7,6 +7,8 @@ import {
   MessageSquare,
   Trash2,
   BadgeCheck,
+  Pencil,
+  RefreshCw,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -26,6 +28,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/Select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/RadioGroup';
+import { CopyField } from './accounts/CopyField';
+import { EmailChannelDialog, type EditableMailbox } from './accounts/EmailChannelDialog';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +56,98 @@ interface ChannelRow {
   configPublic?: Record<string, unknown> | null;
   // TIKTOK only: whether messaging scope was granted via OAuth.
   messaging?: boolean | null;
+  // EMAIL only: the per-channel tokenized inbound URL (the channel id names
+  // the workspace, the token makes it unguessable), and the address this
+  // mailbox has CLAIMED but not yet proven.
+  inboundUrl?: string | null;
+  pendingAddress?: string | null;
+}
+
+/**
+ * `Channel.configPublic.health` as the card reads it — MailboxHealthService's
+ * block, kept deliberately outside the sealed box so a UI (and a Prisma query)
+ * can see it at all.
+ *
+ * Every field is optional on purpose: a mailbox connected before this existed
+ * has none of them, and the card must say "not checked yet" rather than
+ * inventing a verdict.
+ */
+interface MailboxLaneHealth {
+  ok?: boolean;
+  lastOkAt?: string;
+  lastErrorAt?: string;
+  lastError?: string;
+  reason?: string;
+}
+interface MailboxHealth {
+  send?: MailboxLaneHealth;
+  receive?: MailboxLaneHealth;
+  backoffUntil?: string;
+  oauthReauthRequiredAt?: string;
+  lastPolledAt?: string;
+}
+
+/** The reason codes this UI has copy for. Anything else is UNKNOWN — a server
+ *  code must never be printed at a person (PLAN G8). */
+const HEALTH_REASON_FALLBACK: Record<string, string> = {
+  OAUTH_REAUTH_REQUIRED: 'The provider consent expired — reconnect',
+  AUTH_FAILED: 'The username or password was refused',
+  CONNECT_FAILED: 'The mail server could not be reached',
+  // The three `probeImap` answers (email.adapter). They arrive on the verify
+  // response as well as in the health block, and each names a different fix.
+  NO_IMAP_HOST: 'No incoming (IMAP) server is set — add one, or point your provider’s inbound webhook at Jeeta',
+  OAUTH_NO_IMAP_PASSWORD: 'This mailbox is connected by consent and has no incoming password — replies arrive over the inbound address, not IMAP',
+  IMAP_REFUSED: 'The mail server refused the IMAP login',
+  UNKNOWN: 'No reason was reported',
+};
+const KNOWN_HEALTH_REASONS = [
+  'OAUTH_REAUTH_REQUIRED',
+  'AUTH_FAILED',
+  'CONNECT_FAILED',
+  'NO_IMAP_HOST',
+  'OAUTH_NO_IMAP_PASSWORD',
+  'IMAP_REFUSED',
+] as const;
+
+/**
+ * A machine code turned into a sentence, with a sentence for the codes we do not
+ * know rather than the code itself (PLAN G8).
+ *
+ * Module-scope because the verify toast needs the same mapping as the health
+ * line — one list, or the two drift and only one of them stays honest.
+ */
+function healthReasonText(
+  reason: string | undefined,
+  t: (key: string, defaultValue: string) => string,
+): string {
+  const code = (KNOWN_HEALTH_REASONS as readonly string[]).includes(reason ?? '')
+    ? (reason as string)
+    : 'UNKNOWN';
+  return t(`channels.health.reason.${code}`, HEALTH_REASON_FALLBACK[code]);
+}
+
+const EMAIL_INBOUND_POLICIES = ['ALL_SENDERS', 'REPLIES_AND_KNOWN'] as const;
+type EmailInboundPolicy = (typeof EMAIL_INBOUND_POLICIES)[number];
+/** What a channel connected BEFORE the knob existed has always done — the
+ *  same default `readInboundPolicy` applies on the server (PLAN G3). */
+const DEFAULT_INBOUND_POLICY: EmailInboundPolicy = 'ALL_SENDERS';
+
+function readHealth(configPublic: Record<string, unknown> | null | undefined): MailboxHealth {
+  const health = (configPublic as { health?: unknown } | null | undefined)?.health;
+  return health && typeof health === 'object' ? (health as MailboxHealth) : {};
+}
+
+/** A mailbox the edit dialog can work on, from the masked list row. */
+function editableMailbox(c: ChannelRow): EditableMailbox {
+  return {
+    id: c.id,
+    address: c.externalId ?? c.pendingAddress ?? null,
+    // `oauthProvider` is the key the transport branches on, so its presence is
+    // the same question `EmailChannelAdapter` asks.
+    consent: c.configuredSecrets.includes('oauthProvider'),
+    reauthRequired: typeof readHealth(c.configPublic).oauthReauthRequiredAt === 'string',
+    configuredSecrets: c.configuredSecrets,
+  };
 }
 interface AgentRow {
   id: string;
@@ -118,6 +215,10 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<ChannelRow | null>(null);
+  // Editing a mailbox instead of deleting it: `remove()` hard-deletes, so
+  // delete-and-reconnect orphaned every conversation and contact identity
+  // hanging off the channel (`mailbox-edit-orphans`).
+  const [editTarget, setEditTarget] = useState<ChannelRow | null>(null);
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const { data: channels } = useQuery<ChannelRow[]>({
@@ -177,7 +278,9 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
               : t('channels.verifyUnreachable', 'Could not reach NetGSM — try again');
       const detail = ok
         ? d?.receive === false
-          ? (d?.receiveReason ?? undefined)
+          // A CODE, turned into a sentence the reader's own language — the raw
+          // value used to land inside an otherwise Turkish toast (PLAN G8).
+          ? (d?.receiveReason ? healthReasonText(d.receiveReason, (k, v) => t(k, v)) : undefined)
           : undefined
         : (d?.message ?? d?.reason ?? undefined);
       toast[ok ? 'success' : 'error'](headline, detail ? { description: detail } : undefined);
@@ -243,6 +346,16 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
         onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
       />
 
+      {/* ── Edit mailbox ───────────────────────────────────────────────────
+          Keeps the channel row, so the threads, contact identities and inbound
+          routing that hang off it survive a password change. */}
+      <EmailChannelDialog
+        open={!!editTarget}
+        onOpenChange={(o) => { if (!o) setEditTarget(null); }}
+        onCreated={invalidate}
+        channel={editTarget ? editableMailbox(editTarget) : null}
+      />
+
       {/* ── Channel list ──────────────────────────────────────────────────── */}
       <div className="space-y-3">
         {(channels ?? []).map((c) => (
@@ -291,6 +404,18 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
                   >
                     {t('channels.verify', 'Verify')}
                   </Button>
+                  {/* Only EMAIL: every other channel type is connected by a
+                      provider grant that has its own repair path. */}
+                  {c.type === 'EMAIL' && (
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('accounts.email.edit', 'Edit mailbox')}
+                      onClick={() => setEditTarget(c)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </IconButton>
+                  )}
                   <IconButton
                     variant="ghost"
                     size="sm"
@@ -348,6 +473,17 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
                   a workspace without `campaigns` just gets a 403 toast from the
                   save/register actions below, same as any other gated action). */}
               {c.type === 'SMS' && <SmsIysSection channel={c} onSaved={invalidate} />}
+
+              {/* The mailbox's own card: is it sending, is it receiving, who
+                  is allowed to reach the inbox, where does inbound go, and
+                  what got stuck. */}
+              {c.type === 'EMAIL' && (
+                <EmailChannelSection
+                  channel={c}
+                  onSaved={invalidate}
+                  onReconnect={() => setEditTarget(c)}
+                />
+              )}
 
               {c.type === 'LINKEDIN' && (
                 <div className="mt-3 pt-3 border-t border-border">
@@ -591,6 +727,274 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
             </Button>
           </div>
         </Callout>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The EMAIL channel card — everything a non-technical owner needs to answer
+ * "is my email working, and if not, what do I press?".
+ *
+ * ## Why a card and not a badge
+ *
+ * A mailbox has TWO lanes that fail independently and for different reasons:
+ * an SMTP password can be right while IMAP is blocked at the host, and a
+ * consent grant can be revoked while nothing else changes. `lastVerifiedAt`
+ * latches on the first success and is never cleared, so the one signal this
+ * card used to show stayed green through every one of those failures. The
+ * health block (`configPublic.health`, written by `MailboxHealthService` in
+ * the clear precisely so a reader without the secret key can see it) is the
+ * only honest answer, and it needs two lines, not a tick.
+ *
+ * ## What it must never do
+ *
+ * Print a `reason` code at a person (PLAN G8). The codes map to copy; an
+ * unrecognised one falls back to a sentence, never to the code.
+ */
+function EmailChannelSection({
+  channel,
+  onSaved,
+  onReconnect,
+}: {
+  channel: ChannelRow;
+  onSaved: () => void;
+  onReconnect: () => void;
+}) {
+  const { t } = useTranslation('marketing');
+  const health = readHealth(channel.configPublic);
+  const savedPublic = (channel.configPublic as Record<string, unknown> | null) ?? {};
+  const rawPolicy = savedPublic.inboundPolicy;
+  const policy: EmailInboundPolicy = EMAIL_INBOUND_POLICIES.includes(rawPolicy as EmailInboundPolicy)
+    ? (rawPolicy as EmailInboundPolicy)
+    : DEFAULT_INBOUND_POLICY;
+
+  /** Items the pipeline gave up on. Silent on failure: this is a "heads up"
+   *  surface, and a mailbox card that errors because a side query 404s would
+   *  hide the health line, which is the part that matters. */
+  const quarantined = useQuery<{ id: string }[]>({
+    queryKey: ['marketing', 'channels', channel.id, 'inbound-quarantined'],
+    queryFn: () =>
+      marketingApi
+        .get(`/channels/${channel.id}/inbound-items`, { params: { state: 'QUARANTINED' } })
+        .then((r) => (Array.isArray(r.data) ? r.data : [])),
+    staleTime: 30_000,
+    retry: false,
+    meta: { silent: true },
+  });
+  const stuck = quarantined.data ?? [];
+
+  const savePolicy = useMutation({
+    mutationFn: (next: EmailInboundPolicy) =>
+      marketingApi.patch(`/channels/${channel.id}`, {
+        // ONLY the knob. `ChannelsService.update` merges `configPublic` onto
+        // the row as it is AT SAVE TIME, and that column is also where the
+        // machines keep their place — `imapLastUid`, the backoff counters, the
+        // health block this very card reads. Posting the snapshot this page
+        // loaded with would stamp a stale cursor back over whatever the poller
+        // wrote in between, which replays live mail into the automation.
+        configPublic: { inboundPolicy: next },
+      }),
+    onSuccess: () => {
+      onSaved();
+      toast.success(t('channels.saved', 'Channel saved'));
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('channels.saveFailed', 'Save failed')),
+  });
+
+  const retryStuck = useMutation({
+    mutationFn: async () => {
+      // One request per item, and `allSettled` so one permanently-dead item
+      // does not cancel the retry of the rest.
+      const results = await Promise.allSettled(
+        stuck.map((item) =>
+          marketingApi.post(`/channels/${channel.id}/inbound-items/${item.id}/retry`),
+        ),
+      );
+      return results.filter((r) => r.status === 'fulfilled').length;
+    },
+    onSuccess: (queued) => {
+      quarantined.refetch();
+      if (queued === 0) {
+        toast.error(t('channels.inboundRetryFailed', 'Could not retry'));
+        return;
+      }
+      toast.success(t('channels.inboundRetried', 'Queued for reprocessing'));
+    },
+    onError: () => toast.error(t('channels.inboundRetryFailed', 'Could not retry')),
+  });
+
+  /** A machine code turned into a sentence, with a sentence for the codes we
+   *  do not know rather than the code itself. */
+  const reasonText = (reason?: string) => healthReasonText(reason, (k, d) => t(k, d));
+  const when = (iso?: string) => {
+    const at = iso ? new Date(iso) : null;
+    return at && !Number.isNaN(at.getTime()) ? at.toLocaleString() : '';
+  };
+
+  const sendLine =
+    health.send?.ok === false
+      ? t('channels.health.sendFail', 'Sending ✗ — {{reason}}', { reason: reasonText(health.send.reason) })
+      : health.send?.ok === true || channel.lastVerifiedAt
+        ? // `verify` stamps `lastVerifiedAt` on SEND truth alone, so it is a
+          // legitimate stand-in for a mailbox the health writer has not reached
+          // yet — and the ONLY signal a pre-health mailbox has.
+          t('channels.health.sendOk', 'Sending ✓')
+        : null;
+  const receiveLine =
+    health.receive?.ok === false
+      ? t('channels.health.receiveFail', 'Receiving ✗ — {{reason}}', {
+          reason: reasonText(health.receive.reason),
+        })
+      : health.receive?.ok === true
+        ? t('channels.health.receiveOk', 'Receiving ✓')
+        : null;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border space-y-3">
+      {/* ── Is it working? ─────────────────────────────────────────────── */}
+      <div className="space-y-1">
+        <span className="text-caption text-muted-foreground">
+          {t('channels.health.title', 'Mailbox health')}
+        </span>
+
+        {!channel.lastVerifiedAt && !health.send && !health.receive ? (
+          <Callout tone="warning" className="p-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-caption">
+                {t(
+                  'channels.notVerified',
+                  'This mailbox is not verified yet — sending and receiving are off.',
+                )}
+              </span>
+            </div>
+          </Callout>
+        ) : (
+          <p className="text-caption text-foreground">
+            {[sendLine, receiveLine].filter(Boolean).join(' · ')}
+          </p>
+        )}
+
+        {/* The provider's own words, underneath the localized line and never
+            instead of it — they are a diagnostic for whoever fixes it. */}
+        {(health.send?.lastError || health.receive?.lastError) && (
+          <p className="text-micro text-muted-foreground break-words">
+            {health.send?.lastError || health.receive?.lastError}
+          </p>
+        )}
+        {health.send?.lastOkAt && (
+          <p className="text-micro text-muted-foreground">
+            {t('channels.health.lastOkAt', 'Last worked: {{when}}', { when: when(health.send.lastOkAt) })}
+          </p>
+        )}
+        {!health.lastPolledAt && (
+          <p className="text-micro text-muted-foreground">
+            {t('channels.health.neverPolled', 'Never checked yet.')}
+          </p>
+        )}
+        {health.backoffUntil && (
+          <p className="text-micro text-muted-foreground">
+            {t('channels.health.backoffUntil', 'Waiting before the next attempt: {{when}}', {
+              when: when(health.backoffUntil),
+            })}
+          </p>
+        )}
+      </div>
+
+      {/* ── The one failure only the owner can repair ──────────────────── */}
+      {health.oauthReauthRequiredAt && (
+        <Callout tone="danger" className="p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-caption">
+              {t('channels.reauthRequired', 'Connection needs renewing')}
+            </span>
+            <Button size="sm" variant="outline" onClick={onReconnect}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('channels.reconnect', 'Reconnect')}
+            </Button>
+          </div>
+        </Callout>
+      )}
+
+      {/* ── Mail that never made it into the inbox ─────────────────────── */}
+      {stuck.length > 0 && (
+        <Callout tone="warning" className="p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-caption">
+              {t('channels.inboundQuarantined', {
+                defaultValue: '{{count}} inbound email(s) could not be processed',
+                count: stuck.length,
+              })}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => retryStuck.mutate()} loading={retryStuck.isPending}>
+              {t('channels.inboundRetry', 'Retry')}
+            </Button>
+          </div>
+        </Callout>
+      )}
+
+      {/* ── Who is allowed to open a conversation ──────────────────────── */}
+      <div className="space-y-1.5">
+        <span className="text-caption text-muted-foreground">
+          {t('channels.inboundPolicy.label', 'Which senders reach the inbox')}
+        </span>
+        <RadioGroup
+          value={policy}
+          onValueChange={(v) => savePolicy.mutate(v as EmailInboundPolicy)}
+          disabled={savePolicy.isPending}
+          aria-label={t('channels.inboundPolicy.label', 'Which senders reach the inbox')}
+        >
+          {EMAIL_INBOUND_POLICIES.map((option) => (
+            <div key={option} className="flex items-start gap-2">
+              <RadioGroupItem
+                value={option}
+                id={`${channel.id}-policy-${option}`}
+                aria-labelledby={`${channel.id}-policy-${option}-label`}
+                className="mt-0.5"
+              />
+              <div className="min-w-0">
+                <label
+                  id={`${channel.id}-policy-${option}-label`}
+                  htmlFor={`${channel.id}-policy-${option}`}
+                  className="text-caption text-foreground"
+                >
+                  {t(
+                    `channels.inboundPolicy.${option}`,
+                    option === 'ALL_SENDERS' ? 'Anyone' : 'Replies and known contacts',
+                  )}
+                </label>
+                <p className="text-micro text-muted-foreground">
+                  {t(
+                    `channels.inboundPolicy.${option}_HINT`,
+                    option === 'ALL_SENDERS'
+                      ? 'Anyone who writes to this mailbox opens a conversation.'
+                      : 'Only replies to mail we sent, and contacts already on file, open a conversation.',
+                  )}
+                </p>
+              </div>
+            </div>
+          ))}
+        </RadioGroup>
+        <p className="text-micro text-muted-foreground">
+          {t(
+            'channels.inboundPolicy.hint',
+            'This only limits NEW conversations; a reply into an existing conversation always arrives.',
+          )}
+        </p>
+      </div>
+
+      {/* ── Where the provider should post inbound mail ────────────────── */}
+      {channel.inboundUrl && (
+        <div className="space-y-1">
+          <CopyField label={t('channels.inboundUrl', 'This mailbox’s inbound address')} value={channel.inboundUrl} />
+          <p className="text-micro text-muted-foreground">
+            {t(
+              'channels.inboundUrlHint',
+              'Paste this into your provider’s inbound-parse route. It belongs to this mailbox alone — do not share it.',
+            )}
+          </p>
+        </div>
       )}
     </div>
   );

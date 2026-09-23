@@ -20,10 +20,19 @@ vi.mock('../../lib/navigateExternal', () => ({ navigateExternal: vi.fn() }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+// Interpolates, because the mailbox health line is built ENTIRELY out of
+// placeholders ("Sending ✗ — {{reason}}"). Asserting on a literal
+// `{{reason}}` would pass while the person reads a template.
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, opts?: { defaultValue?: string } | string) =>
-      (typeof opts === 'string' ? opts : opts?.defaultValue) ?? key,
+    t: (key: string, opts?: { defaultValue?: string } | string, vars?: Record<string, unknown>) => {
+      const base = (typeof opts === 'string' ? opts : opts?.defaultValue) ?? key;
+      const values = { ...(typeof opts === 'string' ? {} : (opts ?? {})), ...(vars ?? {}) } as Record<
+        string,
+        unknown
+      >;
+      return base.replace(/\{\{(\w+)\}\}/g, (_m, name) => String(values[name] ?? ''));
+    },
     i18n: { language: 'en' },
   }),
 }));
@@ -162,7 +171,9 @@ describe('ChannelsSettingsPage', () => {
             transport: 'oauth',
             send: true,
             receive: false,
-            receiveReason: 'replies arrive through the inbound webhook, not IMAP',
+            // A CODE, which is what `probeImap` answers with. The description
+            // is the translated sentence for it, never the code (PLAN G8).
+            receiveReason: 'OAUTH_NO_IMAP_PASSWORD',
           },
         },
       });
@@ -172,8 +183,10 @@ describe('ChannelsSettingsPage', () => {
 
       expect(toast.success).toHaveBeenCalledWith(
         'Verified — this mailbox can send, but not receive',
-        expect.objectContaining({ description: expect.stringMatching(/webhook/i) }),
+        expect.objectContaining({ description: expect.stringMatching(/inbound address/i) }),
       );
+      const description = (toast.success as any).mock.calls[0][1].description as string;
+      expect(description).not.toMatch(/OAUTH_NO_IMAP_PASSWORD/);
     });
 
     it('credsValid: false → the "check credentials" headline', async () => {
@@ -342,5 +355,148 @@ describe('ChannelsSettingsPage', () => {
       expect(marketingApi.post).toHaveBeenCalledWith('/compliance/iys/retry');
       expect(toast.success).toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * THE MAILBOX CARD — "is my email working, and if not, what do I press?".
+ *
+ * Until this existed the card showed a name, a status word and a Verify
+ * button, all three of which stay identical while a mailbox is completely
+ * dead: `lastVerifiedAt` latches on the first success and is never cleared, so
+ * a rotated password read as verified forever. The health block
+ * (`configPublic.health`, written by MailboxHealthService in the clear) is the
+ * only honest answer, and this is where a non-technical owner reads it.
+ */
+describe('ChannelsSettingsPage — the email mailbox card', () => {
+  const MAILBOX = {
+    id: 'em1',
+    type: 'EMAIL',
+    name: 'destek@acme.com',
+    status: 'ACTIVE',
+    externalId: 'destek@acme.com',
+    configuredSecrets: ['smtpHost', 'smtpUser', 'smtpPass'],
+    configPublic: {},
+    agentProfileId: null,
+    lastVerifiedAt: '2026-09-20T09:00:00.000Z',
+    inboundUrl: 'https://app.example/api/public/channels/email/em1/tok/inbound',
+  };
+
+  async function renderMailbox(over: Record<string, unknown> = {}, quarantined: unknown[] = []) {
+    const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+    marketingApi.get.mockImplementation((url: string) => {
+      if (url === '/channels') return Promise.resolve({ data: [{ ...MAILBOX, ...over }] });
+      if (url === '/channels/em1/inbound-items') return Promise.resolve({ data: quarantined });
+      return Promise.resolve({ data: [] });
+    });
+    render(<ChannelsSettingsPage />, { wrapper });
+    await screen.findByText('destek@acme.com');
+    return marketingApi;
+  }
+
+  it('says each half separately, because sending and receiving fail apart', async () => {
+    // An SMTP password can be right while IMAP is blocked. One "healthy" flag
+    // would have to pick a side and lie about the other.
+    await renderMailbox({
+      configPublic: {
+        health: {
+          send: { ok: true, lastOkAt: '2026-09-21T08:00:00.000Z' },
+          receive: { ok: false, reason: 'AUTH_FAILED' },
+          lastPolledAt: '2026-09-21T08:05:00.000Z',
+        },
+      },
+    });
+    expect(screen.getByText(/Sending ✓/)).toBeInTheDocument();
+    expect(screen.getByText(/Receiving ✗ — The username or password was refused/)).toBeInTheDocument();
+  });
+
+  it('never prints a machine reason code at a person', async () => {
+    // `reason` is a code for the UI to map. A code the copy does not know
+    // falls back to a sentence, never to the code itself.
+    await renderMailbox({
+      configPublic: { health: { receive: { ok: false, reason: 'SOMETHING_NEW' }, lastPolledAt: 'x' } },
+    });
+    expect(screen.queryByText(/SOMETHING_NEW/)).not.toBeInTheDocument();
+    expect(screen.getByText(/No reason was reported/)).toBeInTheDocument();
+  });
+
+  it('says a mailbox has never been checked rather than implying it works', async () => {
+    await renderMailbox({ lastVerifiedAt: null, configPublic: {} });
+    expect(screen.getByText(/This mailbox is not verified yet/)).toBeInTheDocument();
+  });
+
+  it('offers Reconnect — not a password field — when the consent died', async () => {
+    // A revoked grant is the one failure the owner alone can repair, and the
+    // Account Center could not even see it before: `oauthError` is sealed.
+    await renderMailbox({
+      configuredSecrets: ['oauthProvider', 'oauthAccessToken'],
+      configPublic: { health: { oauthReauthRequiredAt: '2026-09-21T07:00:00.000Z' } },
+    });
+    expect(screen.getByText(/Connection needs renewing/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
+  });
+
+  it('opens the edit dialog instead of making the owner delete the mailbox', async () => {
+    // Delete-and-reconnect hard-deletes the channel, orphaning every thread
+    // hanging off it. This button is the whole reason that is no longer the
+    // only way to change a password.
+    await renderMailbox();
+    await userEvent.click(screen.getByRole('button', { name: /edit mailbox/i }));
+    expect(await screen.findByRole('heading', { name: /edit mailbox/i })).toBeInTheDocument();
+  });
+
+  it('saves the inbound policy WITHOUT replaying the rest of configPublic', async () => {
+    // That column is also where the machines keep their place (imapLastUid,
+    // the backoff counters, the health block), and ChannelsService.update
+    // merges onto the row as it is AT SAVE TIME. Posting the snapshot this
+    // page loaded with would stamp a stale cursor back over whatever the
+    // poller wrote in between — which replays live mail into the automation.
+    const marketingApi = await renderMailbox({
+      configPublic: { inboundPolicy: 'ALL_SENDERS', imapLastUid: 4210, health: { send: { ok: true } } },
+    });
+    await userEvent.click(screen.getByRole('radio', { name: /replies and known contacts/i }));
+    expect(marketingApi.patch).toHaveBeenCalledWith('/channels/em1', {
+      configPublic: { inboundPolicy: 'REPLIES_AND_KNOWN' },
+    });
+  });
+
+  it('shows the per-mailbox inbound address to paste at the provider', async () => {
+    await renderMailbox();
+    expect(screen.getByText(MAILBOX.inboundUrl)).toBeInTheDocument();
+  });
+
+  it('stays quiet when nothing is stuck', async () => {
+    await renderMailbox();
+    expect(screen.queryByRole('button', { name: /^retry$/i })).not.toBeInTheDocument();
+  });
+
+  it('counts the mail that could not be processed and retries it on request', async () => {
+    // "Where did my customer's mail go?" — the quarantine is the answer, and
+    // it is worthless if nobody is told it happened.
+    const marketingApi = await renderMailbox({}, [{ id: 'it1' }, { id: 'it2' }]);
+    expect(await screen.findByText(/2 inbound email\(s\) could not be processed/)).toBeInTheDocument();
+
+    marketingApi.post.mockResolvedValue({ data: { ok: true } });
+    await userEvent.click(screen.getByRole('button', { name: /^retry$/i }));
+
+    expect(marketingApi.post).toHaveBeenCalledWith('/channels/em1/inbound-items/it1/retry');
+    expect(marketingApi.post).toHaveBeenCalledWith('/channels/em1/inbound-items/it2/retry');
+  });
+
+  it('leaves a non-email channel untouched', async () => {
+    const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+    marketingApi.get.mockImplementation((url: string) =>
+      url === '/channels'
+        ? Promise.resolve({
+            data: [
+              { id: 'ch1', type: 'SMS', name: 'SMS line', status: 'ACTIVE', configuredSecrets: [], configPublic: {}, agentProfileId: null },
+            ],
+          })
+        : Promise.resolve({ data: [] }),
+    );
+    render(<ChannelsSettingsPage />, { wrapper });
+    await screen.findByText('SMS line');
+    expect(screen.queryByRole('button', { name: /edit mailbox/i })).not.toBeInTheDocument();
+    expect(marketingApi.get).not.toHaveBeenCalledWith('/channels/ch1/inbound-items', expect.anything());
   });
 });
