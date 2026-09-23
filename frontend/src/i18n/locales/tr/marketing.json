@@ -177,7 +177,17 @@
       "recognised": "{{provider}} tanındı — sunucu ayarları aşağıya dolduruldu.",
       "notRecognised": "Bu alan adının posta sunucusunu tanımıyoruz — sunucu ayarlarını kendin doldur.",
       "smtpUserHint": "Genellikle adresin kendisiyle aynıdır.",
-      "connected": "Posta kutusu bağlandı."
+      "connected": "Posta kutusu bağlandı.",
+      "imapHost": "IMAP sunucusu",
+      "imapPort": "IMAP portu",
+      "imapHint": "Yanıtların okunduğu yer. Bu sağlayıcı için tanıdığımız ayarları kullanmak istiyorsanız boş bırakın.",
+      "platformFallback": "Mailiniz Jeeta üzerinden gönderiliyor. Yanıtlar {{replyTo}} adresine gelir. Kendi adresinizden göndermek için posta kutunuzu bağlayın.",
+      "reauthRequired": "Bağlantı yenilenmeli — sağlayıcı izni geçersiz oldu, bu posta kutusu gönderemiyor ve alamıyor.",
+      "reauthRequiredHint": "Yalnızca posta kutusunun sahibi yeniden bağlayabilir.",
+      "edit": "Posta kutusunu düzenle",
+      "editSaved": "Posta kutusu güncellendi",
+      "editFailed": "Posta kutusu güncellenemedi",
+      "sendingHint": "Giden postanın çıktığı yer."
     },
     "webchat": {
       "title": "Web sohbet",
@@ -378,7 +388,16 @@
     "phoneSetup": "Telefon hattın",
     "phoneSetupDesc": "Aramalar ve SMS çalışmadan önce tamamlanacaklar.",
     "wholeTeam": "Bu çalışma alanındaki herkes",
-    "wholeTeamDesc": "Ekibinin nasıl giriş yaptığı ve bildirimlerin nereye düştüğü. Bunları değiştirmek herkes için değiştirir."
+    "wholeTeamDesc": "Ekibinin nasıl giriş yaptığı ve bildirimlerin nereye düştüğü. Bunları değiştirmek herkes için değiştirir.",
+    "reauthRequired": "Bağlantı yenilenmeli",
+    "reconnectFailed": "Yeniden bağlanma başlatılamadı — sunucu yapılandırmasını kontrol edin.",
+    "disconnectTitle": "Hesap bağlantısını kes",
+    "disconnectFailed": "Bağlantı kesilemedi",
+    "disconnectPartial": "Kısmen kesildi — bazı bağlantılar kaldırılamadı",
+    "disconnected": "Hesap bağlantısı kesildi",
+    "loadError": "Bağlantılarınız yüklenemedi.",
+    "waTitle": "WhatsApp Business",
+    "waSubtitle": "Kendi işletme numaranızı Meta üzerinden bağlayın. Meta test numarası yalnızca birkaç kişiye mesaj gönderebilir."
   },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",
@@ -859,7 +878,8 @@
     "done": "Tamam",
     "saving": "Kaydediliyor…",
     "retry": "Tekrar dene",
-    "tryAgain": "Tekrar dene"
+    "tryAgain": "Tekrar dene",
+    "loadError": "Yüklenemedi. Lütfen tekrar deneyin."
   },
   "validation": {
     "required": "Zorunlu",
@@ -1048,6 +1068,38 @@
       "unassigned": "Atanmamış",
       "all": "Hepsi",
       "countFailed": "Sayı alınamadı"
+    },
+    "suppression": {
+      "title": "E-posta durumu",
+      "optedOut": "Abonelikten çıktı",
+      "bounced": "Geri döndü (bounce)",
+      "invalid": "Geçersiz adres",
+      "complained": "Spam olarak işaretledi",
+      "erased": "Verisi silindi",
+      "since": "{{date}} tarihinden beri",
+      "source": "Kaynak: {{source}}",
+      "optOut": "Pazarlama e-postasından çıkar",
+      "resubscribe": "Yeniden abone et",
+      "clearBounce": "Bounce kaydını temizle",
+      "updated": "E-posta durumu güncellendi",
+      "updateFailed": "E-posta durumu güncellenemedi",
+      "none": "Bu kişiye e-posta gönderilebilir.",
+      "history": "Onay geçmişi",
+      "historyEmpty": "Bu kişi için onay kaydı yok.",
+      "reason": {
+        "ERASURE": "Veri silme talebi",
+        "HARD_BOUNCE": "Kalıcı geri dönüş",
+        "INVALID": "Geçersiz adres",
+        "COMPLAINT": "Spam şikâyeti",
+        "OPT_OUT": "Abonelikten çıkma",
+        "MANUAL": "Elle eklendi"
+      },
+      "verifyStatus": {
+        "UNKNOWN": "Doğrulanmadı",
+        "VALID": "Geçerli",
+        "INVALID": "Geçersiz",
+        "RISKY": "Riskli"
+      }
     }
   },
   "leadDetail": {
@@ -1195,7 +1247,10 @@
       "sent": "Mesaj gönderildi",
       "failed": "Mesaj gönderilemedi",
       "noChannels": "Konuşma başlatılabilecek bağlı kanal yok — SMS veya e-posta bağla.",
-      "channelsFailed": "Kanallar yüklenemedi."
+      "channelsFailed": "Kanallar yüklenemedi.",
+      "another": "Başka kanaldan yaz",
+      "titleOther": "Başka kanaldan yaz",
+      "descAny": "Bir kanal seç ve yaz."
     }
   },
   "fax": {
@@ -2104,7 +2159,24 @@
     "aiToggleFailed": "Yapay zeka durumu değiştirilemedi",
     "closeFailed": "Konuşma kapatılamadı",
     "reopenFailed": "Konuşma açılamadı",
-    "noteFailed": "Not kaydedilemedi"
+    "noteFailed": "Not kaydedilemedi",
+    "aiDeclined": "Yapay zekâ bu konuşmada yanıt vermedi:",
+    "sendFailedAiPaused": "yapay zekâ bu konuşmada duraklatıldı; yeniden dene",
+    "aiDeclineReason": {
+      "REPLY_DISABLED": "Bu çalışma alanında yapay zekâ yanıtları kapalı.",
+      "AI_PAUSED": "Bu konuşmayı bir ekip arkadaşınız devraldı.",
+      "CONVERSATION_MISSING": "Bu konuşma bulunamadı.",
+      "CONVERSATION_NOT_OPEN": "Bu konuşma kapalı.",
+      "LEAD_GONE": "Bu kişi silinmiş veya birleştirilmiş.",
+      "CHANNEL_MISSING": "Bu konuşmanın kanalı artık yok.",
+      "CHANNEL_INACTIVE": "Bu konuşmanın kanalı etkin değil.",
+      "AGENT_MISSING": "Bu kanala bağlı yapay zekâ asistanı artık yok.",
+      "AGENT_INACTIVE": "Bu kanala bağlı yapay zekâ asistanı etkin değil.",
+      "MESSAGE_QUOTA": "Aylık mesaj hakkınız doldu.",
+      "DAILY_CAP": "Bu konuşma için günlük yanıt sınırına ulaşıldı.",
+      "SEND_REFUSED_RETRY": "Kanal yanıtı kabul etmedi — birazdan tekrar denenecek.",
+      "SEND_REFUSED": "Kanal yanıtı kabul etmedi."
+    }
   },
   "channels": {
     "title": "Kanallar",
@@ -2149,7 +2221,62 @@
     "otpTransport": "OTP gönderim kanalı",
     "otpTransportSms": "SMS (varsayılan)",
     "otpTransportWhatsapp": "WhatsApp",
-    "otpTransportHelp": "Doğrulama kodları (2FA, telefon doğrulama) hangi kanaldan gönderilsin. WhatsApp seçeneği, NetGSM hesabınızda ücretli \"OTP WhatsApp\" paketi ve onaylı netgsm_verify_code şablonu gerektirir — paket yoksa veya gönderim başarısız olursa kod otomatik olarak SMS ile gönderilir."
+    "otpTransportHelp": "Doğrulama kodları (2FA, telefon doğrulama) hangi kanaldan gönderilsin. WhatsApp seçeneği, NetGSM hesabınızda ücretli \"OTP WhatsApp\" paketi ve onaylı netgsm_verify_code şablonu gerektirir — paket yoksa veya gönderim başarısız olursa kod otomatik olarak SMS ile gönderilir.",
+    "verified": "Doğrulandı",
+    "verifyFailed": "Doğrulama başarısız",
+    "verifySendOnly": "Gönderim ✓ · Alım ✗ — {{reason}}",
+    "notVerified": "Bu posta kutusu henüz doğrulanmadı — gönderim ve yanıt alma kapalı.",
+    "notVerifiedAction": "Doğrula",
+    "delete": "Kanalı sil",
+    "deleteTitle": "Kanal silinsin mi?",
+    "deleteDesc": "Bu, kanalı hemen keser. Yolda olan mesajlar başarısız olabilir.",
+    "deleteFailed": "Kanal silinemedi",
+    "emptyTitle": "Henüz kanal yok",
+    "agentSaveFailed": "Yanıtlayan ajan güncellenemedi",
+    "linkedinGranted": "Etkileşim açık — kurum gönderilerinizdeki yorumlara yapay zekâ yanıt veriyor. (LinkedIn DM API sunmuyor; bu, kendi gönderilerinizde izinli etkileşimdir.)",
+    "linkedinPending": "Uykuda — yorum etkileşimi, LinkedIn Community Management erişimi onaylanınca açılır. LinkedIn DM API sunmadığı için bu yalnızca KENDİ kurum gönderilerinizdeki yorumları yanıtlar (yoklama ile, webhook yok).",
+    "iysDlqRetried": "{{count}} iş yeniden denenmek üzere sıraya alındı",
+    "iysDlqRetryFailed": "Başarısız işler yeniden denenemedi",
+    "reauthRequired": "Bağlantı yenilenmeli",
+    "reconnect": "Yeniden bağlan",
+    "health": {
+      "title": "Posta kutusu durumu",
+      "line": "Gönderim {{send}} · Alım {{receive}}",
+      "sendOk": "Gönderim ✓",
+      "sendFail": "Gönderim ✗ — {{reason}}",
+      "receiveOk": "Alım ✓",
+      "receiveFail": "Alım ✗ — {{reason}}",
+      "lastOkAt": "Son başarılı: {{when}}",
+      "lastErrorAt": "Son hata: {{when}}",
+      "neverPolled": "Henüz hiç kontrol edilmedi.",
+      "backoffUntil": "Yeniden denemeden önce bekleniyor: {{when}}",
+      "reason": {
+        "OAUTH_REAUTH_REQUIRED": "Sağlayıcı izni geçersiz oldu — yeniden bağlanın",
+        "AUTH_FAILED": "Kullanıcı adı veya parola kabul edilmedi",
+        "CONNECT_FAILED": "Posta sunucusuna ulaşılamadı",
+        "UNKNOWN": "Nedeni bildirilmedi",
+        "NO_IMAP_HOST": "Gelen (IMAP) sunucusu tanımlı değil — IMAP bilgilerini girin veya sağlayıcınızın gelen webhook adresini Jeeta’ya yönlendirin",
+        "OAUTH_NO_IMAP_PASSWORD": "Bu posta kutusu izinle bağlandı ve gelen posta parolası yok — yanıtlar IMAP ile değil, gelen e-posta adresiyle ulaşır",
+        "IMAP_REFUSED": "Posta sunucusu IMAP girişini kabul etmedi"
+      }
+    },
+    "inboundQuarantined": "{{count}} gelen e-posta işlenemedi",
+    "inboundRetry": "Tekrar dene",
+    "inboundRetried": "Yeniden işlenmek üzere sıraya alındı",
+    "inboundRetryFailed": "Yeniden denenemedi",
+    "inboundUrl": "Bu posta kutusunun gelen adresi",
+    "inboundUrlHint": "Sağlayıcınızın gelen-ayrıştırma rotasına bu adresi yapıştırın. Adres yalnızca bu posta kutusu içindir; paylaşmayın.",
+    "inboundPolicy": {
+      "label": "Hangi gönderenler gelen kutusuna düşsün",
+      "hint": "Bu yalnızca yeni konuşma açılmasını sınırlar; var olan bir konuşmaya gelen yanıt her zaman düşer.",
+      "ALL_SENDERS": "Herkes",
+      "ALL_SENDERS_HINT": "Bu posta kutusuna yazan herkes için konuşma açılır.",
+      "REPLIES_AND_KNOWN": "Yanıtlar ve tanınan kişiler",
+      "REPLIES_AND_KNOWN_HINT": "Yalnızca gönderdiğimiz bir iletiye gelen yanıtlar ve kayıtlı kişiler konuşma açar."
+    },
+    "iysDlqBacklog": "{{count}} İYS senkronizasyonu başarısız oldu (DLQ)",
+    "iysDlqRetry": "Yeniden dene",
+    "deleteEmailWarning": "Bu posta kutusunu silerseniz üzerindeki konuşmalar kimsenin gelen kutusunda görünmez ve bu adrese gelen yanıtlar artık işlenmez. Adresi değiştirmek istiyorsanız silmek yerine düzenleyin."
   },
   "automations": {
     "title": "Otomasyonlar",
@@ -2327,7 +2454,101 @@
     "removeKeyMapping": "Eşlemeyi kaldır",
     "addKeyMapping": "Tuş eşlemesi ekle",
     "bodyVoiceLabel": "Dahili etiket",
-    "bodyVoiceHint": "Yalnızca sizin referansınız içindir — sesli okunmaz. Seslendirilecek metin yukarıda ayarlanır."
+    "bodyVoiceHint": "Yalnızca sizin referansınız içindir — sesli okunmaz. Seslendirilecek metin yukarıda ayarlanır.",
+    "abTitle": "A/B testi",
+    "abHint": "Alıcıları ağırlığa göre varyantlara bölün. Her varyantın kendi konusu ve gövdesi olur.",
+    "abEnable": "A/B bölünmesini aç (2+ varyant gerekir)",
+    "abTestPct": "Test edilecek oran",
+    "abWinnerMode": "Kazananı otomatik gönder (bir örneklemde test edip en iyi varyantı kalanlara gönder)",
+    "abOpens": "açılma",
+    "abClicks": "tıklama",
+    "abWinBy": "kazananı şuna göre seç",
+    "abNeeds2": "A/B bölünmesi için en az 2 varyant gerekir — bir tane daha ekleyin, yoksa tek kampanya olarak gider.",
+    "addVariant": "Varyant ekle",
+    "weight": "Ağırlık",
+    "variantsSaved": "A/B varyantları kaydedildi",
+    "variantsSaveFailed": "Varyantlar kaydedilemedi",
+    "abTest": "A/B testi…",
+    "aiCompose": "AI metin yazarı",
+    "bodyPlainFallback": "Düz metin karşılığı",
+    "bodyPlainFallbackHint": "İsteğe bağlı — boş bırakırsanız şablonunuzdan otomatik üretilir.",
+    "deleteTitle": "Kampanya silinsin mi?",
+    "deleteDesc": "Gönderim istatistikleri kaybolur. Bu geri alınamaz.",
+    "editTitle": "Kampanyayı düzenle",
+    "emailTemplate": "HTML şablonu (isteğe bağlı)",
+    "emptyTitle": "Henüz kampanya yok",
+    "formHint": "Mesajınızı ve hedef kitlenizi kurun. Abonelikten çıkanlar otomatik olarak ayıklanır.",
+    "htmlAttached": "HTML ekli",
+    "launchTitle": "Bu kampanya başlatılsın mı?",
+    "launchDesc": "Hedef kitledeki herkese şimdi gönderilir. Bu geri alınamaz.",
+    "pause": "Duraklat",
+    "resume": "Sürdür",
+    "plainText": "Yalnızca düz metin",
+    "templateLoadFailed": "Şablon yüklenemedi",
+    "status": {
+      "DRAFT": "Taslak",
+      "SCHEDULED": "Zamanlandı",
+      "SENDING": "Gönderiliyor",
+      "SENT": "Gönderildi",
+      "PAUSED": "Duraklatıldı",
+      "CANCELLED": "İptal edildi"
+    },
+    "recipientStatus": {
+      "PENDING": "Sırada",
+      "SENT": "Gönderildi",
+      "FAILED": "Başarısız",
+      "SKIPPED": "Atlandı",
+      "UNSUBSCRIBED": "Abonelikten çıktı"
+    },
+    "prelaunch": {
+      "title": "Göndermeden önce",
+      "desc": "Bu kampanyanın kime gideceği ve hangi adresten çıkacağı.",
+      "irreversible": "Gönderim başladıktan sonra geri alınamaz.",
+      "audience": "Ulaşılacak kişi: {{count}}",
+      "audienceLoading": "Hedef kitle hesaplanıyor…",
+      "audienceFailed": "Hedef kitle hesaplanamadı — tekrar deneyin.",
+      "noRecipients": "Bu hedef kitlede gönderilebilecek kimse yok.",
+      "excluded": "Ayıklanan: {{count}}",
+      "excludedOptedOut": "Abonelikten çıktı: {{count}}",
+      "excludedBounced": "Geri döndü (bounce): {{count}}",
+      "excludedInvalid": "Geçersiz adres: {{count}}",
+      "excludedSuppressed": "Başka nedenle engelli: {{count}}",
+      "excludedNoEmail": "E-posta adresi yok: {{count}}",
+      "sender": "Gönderen",
+      "senderPlatform": "Jeeta gönderici — yanıtlar {{replyTo}} adresine gelir.",
+      "senderDegraded": "Kendi posta kutunuz kullanılamıyor: {{reason}}",
+      "testSend": "Kendine test gönder",
+      "testSendHint": "Bir kopya size gider ve istatistiklere yazılmaz.",
+      "testSendSent": "Test e-postası {{email}} adresine gönderildi",
+      "testSendFailed": "Test e-postası gönderilemedi",
+      "confirm": "Gönder",
+      "degradedReason": {
+        "NO_MAILBOX": "bu çalışma alanına bağlı posta kutusu yok",
+        "MAILBOX_UNVERIFIED": "posta kutusu henüz doğrulanmadı",
+        "MAILBOX_SEND_ONLY": "bağlı posta kutusu bu tür e-postayı taşıyamıyor",
+        "OAUTH_REAUTH": "posta kutusu bağlantısı yenilenmeli",
+        "HTML_ON_CONSENT": "biçimli (HTML) e-posta izinle bağlı posta kutusundan gönderilemiyor"
+      },
+      "truncated": "İlk {{count}} adres kontrol edildi — kitle daha büyük, dışarıda kalan sayısı en az bu kadar."
+    },
+    "results": {
+      "recipients": "Alıcılar",
+      "recipient": "Alıcı",
+      "status": "Durum",
+      "sentAt": "Gönderim",
+      "opened": "Açıldı",
+      "clicked": "Tıklandı",
+      "failureReason": "Gönderilmeme nedeni",
+      "empty": "Bu filtreye uyan alıcı yok.",
+      "filterAll": "Tümü",
+      "noEmail": "e-posta adresi yok",
+      "unnamed": "Adsız kişi",
+      "total": "{{shown}} / {{total}} alıcı",
+      "loadMore": "Daha fazla yükle",
+      "loadFailed": "Alıcılar yüklenemedi"
+    },
+    "stalled": "Gönderim durduruldu.",
+    "stalledHint": "Bu kampanya bir hata yüzünden yarıda kaldı. Sorunu giderdikten sonra Devam ettir’e basın."
   },
   "sites": {
     "title": "Funnel & Sayfalar",
@@ -2713,7 +2934,36 @@
     "emptyHint": "Markalı, kimliği doğrulanmış e-posta göndermek için bir alan adı ekleyin.",
     "addRecords": "DNS sağlayıcınızda şu TXT kayıtlarını ekleyin:",
     "copy": "Değeri kopyala",
-    "copied": "Kopyalandı"
+    "copied": "Kopyalandı",
+    "deleteTitle": "Gönderim alanı silinsin mi?",
+    "deleteDesc": "Bu alan adından artık e-posta gönderilemez. Yeniden eklemek, DKIM/SPF/DMARC kayıtlarını tekrar yayınlayıp doğrulamak demektir.",
+    "deleteFailed": "Alan adı silinemedi",
+    "disabledTitle": "Özel gönderim alan adları bu kurulumda kapalı",
+    "disabledHint": "Bu kurulumda kiracı alan adları için bir e-posta sağlayıcısı tanımlı değil. Bunun yerine kendi posta kutunuzu bağlayın — kampanyalarınız o adresten gönderilir.",
+    "connectMailbox": "Posta kutusu bağla",
+    "subdomainHint": "mail.acme.com gibi bir alt alan adı kullanın — bu kayıtlarla çakışacak mevcut bir SPF veya DMARC kaydı olmaz.",
+    "onlyIfAbsent": "Yalnızca henüz yoksa ekleyin",
+    "note": {
+      "SPF_MERGE": "{{host}} için zaten bir v=spf1 kaydı varsa ikinci bir tane EKLEMEYİN — bir alan adı yalnızca bir tane yayınlayabilir. Mevcut kaydı düzenleyip yukarıdaki include değerini son \"all\" teriminden önce ekleyin.",
+      "DMARC_ONLY_IF_ABSENT": "Bunu yalnızca _dmarc.{{domain}} altında hiç TXT kaydı yoksa ekleyin. Mevcut bir DMARC politikası varsa olduğu gibi bırakın — ikinci bir _dmarc kaydı tüm e-postalarınız için politikayı geçersiz kılar. Raporlarınız temiz görünmeye başlayınca politikayı kendiniz p=quarantine ve ardından p=reject seviyesine çıkarabilirsiniz."
+    },
+    "reason": {
+      "unavailable": "{{label}} şu anda kontrol edilemedi — DNS yanıt vermedi.",
+      "DKIM": {
+        "MISSING": "DKIM: kayıt henüz yayınlanmamış.",
+        "KEY_MISMATCH": "DKIM: bu selector altında farklı bir anahtar yayınlanıyor."
+      },
+      "SPF": {
+        "MISSING": "SPF: kayıt henüz yayınlanmamış.",
+        "DUPLICATE": "SPF: iki ayrı v=spf1 kaydı yayınlanıyor — tek bir kayıtta birleştirin; bir alan adı yalnızca bir tane yayınlayabilir.",
+        "NO_INCLUDE": "SPF: kayıt var ama bizim include değerimizi taşımıyor — son \"all\" teriminden önce ekleyin.",
+        "NOT_CONFIGURED": "SPF bu kurulumda henüz yapılandırılmadı — sistem yöneticinize danışın."
+      },
+      "DMARC": {
+        "MISSING": "DMARC: henüz bir politika yayınlanmamış.",
+        "DUPLICATE": "DMARC: iki kayıt yayınlanıyor — birini bırakın; ikinci bir _dmarc kaydı politikayı geçersiz kılar."
+      }
+    }
   },
   "customDomains": {
     "title": "Özel Alan Adları",
@@ -5172,7 +5422,9 @@
       "noThreadHint": "Mesaj ile ilk konuşmayı başlat",
       "notesFailed": "İç notlar yüklenemedi",
       "notesFailedHint": "bir ekip arkadaşının devir notu burada olabilir; okumadan devam etme",
-      "notesRetry": "Yeniden dene"
+      "notesRetry": "Yeniden dene",
+      "sendShortcut": "Ctrl+Enter ile gönder",
+      "recipientStale": "Bu konuşma {{thread}} adresine gidiyor; kişinin kayıtlı adresi {{lead}}. Yeni adrese yazmak için Mesaj ile yeni bir konuşma başlat."
     },
     "card": {
       "title": "Kayıt",
@@ -5225,7 +5477,42 @@
     "noConsent": "Bu aday için onay kaydı yok.",
     "requestErasure": "Silme talebi oluştur",
     "requestExport": "Veriyi dışa aktar",
-    "withdrawn": "Geri çekildi"
+    "withdrawn": "Geri çekildi",
+    "iysEposta": {
+      "title": "İYS e-posta onayı",
+      "configure": "İYS bilgilerini gir",
+      "ready": "İYS e-posta onayı sorgulanıyor.",
+      "notArmed": "Ticari e-posta göndermek için İYS bilgilerinizi girin.",
+      "noCredentials": "İYS açık ama bu çalışma alanı için kullanıcı kodu/parola bulunamadı.",
+      "noBrandCode": "İYS marka kodu girilmemiş — onay sorgusu yapılamıyor.",
+      "unavailable": "İYS'ye şu an ulaşılamıyor — onay durumu bilinmiyor.",
+      "badRecipient": "İYS bu adres için kayıt tutamaz."
+    },
+    "req": {
+      "kind": "Tür",
+      "export": "Dışa aktarma",
+      "erasure": "Silme",
+      "status": "Durum",
+      "lead": "Kişi",
+      "requestedAt": "Talep tarihi",
+      "completedAt": "Tamamlanma"
+    },
+    "noRequests": "Henüz veri talebi yok",
+    "noRequestsHint": "Çalıştırdığınız dışa aktarma ve silme talepleri burada görünür.",
+    "title": "Uyumluluk",
+    "subtitle": "İzin kayıtları ve KVKK/GDPR veri sahibi talepleri (dışa aktarma ve silme).",
+    "tabs": {
+      "subject": "Veri sahibi",
+      "requests": "Talep geçmişi"
+    },
+    "findLead": "Kişi bul",
+    "findLeadDesc": "İzin kayıtlarını görmek ve talep çalıştırmak için firma adı, kişi veya e-posta ile arayın.",
+    "searchPlaceholder": "Kişilerde ara…",
+    "noLeads": "Eşleşen kişi yok.",
+    "selectedDesc": "Kayıtlı izinler ve yapılabilecek veri sahibi işlemleri.",
+    "consentRecords": "İzin kayıtları",
+    "pickLeadTitle": "Başlamak için bir kişi seçin",
+    "pickLeadDesc": "Bir kişinin izin kayıtlarını görmek ve dışa aktarma veya silme çalıştırmak için yukarıdan arayın."
   },
   "credits": {
     "exhausted": {
@@ -5496,6 +5783,214 @@
         "why": "En sonda: yukarıdakiler eksikken makineyi çalıştırmak, kimsenin kullanamayacağı işe para harcamaktır.",
         "why_MISSING": "En sonda: yukarıdakiler eksikken makineyi çalıştırmak, kimsenin kullanamayacağı işe para harcamaktır. Bu kolu yalnızca sen çevirebilirsin — onay kapısını kaldırdığı için ajana açtırmıyoruz."
       }
+    }
+  },
+  "mail": {
+    "reason": {
+      "SUPPRESSED_OPT_OUT": "Kişi pazarlama e-postalarından çıktı.",
+      "SUPPRESSED_BOUNCE": "Adres kalıcı olarak geri döndü, bu yüzden artık posta gönderilmiyor.",
+      "SUPPRESSED_INVALID": "Adres teslim edilebilir değil.",
+      "SUPPRESSED_COMPLAINT": "Kişi önceki iletiyi spam olarak işaretledi.",
+      "SUPPRESSED_ERASED": "Kişi verilerinin silinmesini istedi.",
+      "IYS_RET": "İYS bu adres için ret kaydı tutuyor.",
+      "CONSENT_REQUIRED": "Pazarlama e-postası için onay kaydı yok.",
+      "QUOTA_EXHAUSTED": "Aylık ileti kotası doldu.",
+      "DAILY_CAP": "Bu çalışma alanının günlük gönderim sınırına ulaşıldı.",
+      "QUIET_HOURS": "Gönderime izin verilen saatlerin dışında.",
+      "WORKSPACE_INACTIVE": "Çalışma alanı etkin değil.",
+      "SENDING_PAUSED": "Bu çalışma alanında e-posta gönderimi duraklatıldı.",
+      "NO_RECIPIENT": "Alıcı adresi yok.",
+      "BAD_RECIPIENT": "Alıcı tek ve geçerli bir adres değil.",
+      "NO_UNSUBSCRIBE": "Toplu e-posta için abonelikten çıkma bağlantısı gerekir ve bu bağlantı oluşturulamadı.",
+      "MISSING_PUBLIC_BASE_URL": "PUBLIC_BASE_URL ayarlı değil, bu yüzden abonelikten çıkma bağlantısı oluşturulamıyor.",
+      "NOT_CONFIGURED": "Yapılandırılmış bir posta kutusu veya platform göndericisi yok.",
+      "TRANSIENT": "Posta sunucusu şimdilik kabul etmedi; yeniden denenecek.",
+      "SYSTEMIC": "Posta sunucusu bağlantıyı veya oturum açmayı reddetti.",
+      "PERMANENT": "Posta sunucusu kalıcı olarak reddetti.",
+      "UNKNOWN": "Gönderim tamamlanmadı ve sunucu bir gerekçe bildirmedi."
+    },
+    "outcome": {
+      "SENT": "Gönderildi",
+      "REFUSED": "Gönderilmedi",
+      "FAILED_PERMANENT": "Kalıcı olarak başarısız",
+      "FAILED_TRANSIENT": "Geçici olarak başarısız",
+      "DEDUPED": "Zaten gönderilmişti"
+    },
+    "transport": {
+      "MAILBOX_SMTP": "Kendi posta kutunuz (SMTP)",
+      "MAILBOX_OAUTH": "Kendi posta kutunuz (izinle bağlı)",
+      "PLATFORM": "Jeeta gönderici",
+      "NONE": "Gönderici yok"
+    },
+    "class": {
+      "AUTH": "Hesap güvenliği",
+      "INTERNAL": "Ürün bildirimi",
+      "TRANSACTIONAL": "İşlem e-postası",
+      "CONVERSATIONAL": "Konuşma",
+      "BULK": "Kampanya"
+    },
+    "notSent": "Gönderilmedi: {{reason}}",
+    "dailyCapReached": "Günlük e-posta sınırına ulaşıldı ({{used}}/{{limit}}). Yarın devam edecek.",
+    "health": {
+      "title": "E-posta sağlığı",
+      "subtitle": "E-postanız kimden gidiyor, ne gitti, ne gitmedi ve neden.",
+      "unavailable": "E-posta sağlığı şu anda okunamıyor.",
+      "partial": "Bir okuma tamamlanamadı — bazı sayılar eksik olabilir.",
+      "paused": "Bu çalışma alanında e-posta gönderimi duraklatıldı. Hiçbir e-posta gönderilmiyor.",
+      "from": "Gönderen",
+      "replyTo": "Yanıtlar",
+      "today": "Bugün (Jeeta üzerinden)",
+      "sent": "Gönderildi",
+      "failed": "Gönderilemedi",
+      "bounced": "Geri döndü",
+      "complained": "Spam işaretlendi",
+      "laneSend": "Gönderim",
+      "laneReceive": "Alım",
+      "suppressed": "{{count}} adres e-posta almıyor (çıkış, geri dönüş veya şikâyet).",
+      "inertTitle": "Şu anda kapalı olan özellikler",
+      "inertHint": "Bu anahtarları yöneticiniz tanımlayana kadar ilgili özellik sessizce kapalı kalır.",
+      "reason": {
+        "AUTH_FAILED": "Kullanıcı adı veya parola kabul edilmedi.",
+        "OAUTH_REAUTH_REQUIRED": "Bağlantı yenilenmeli.",
+        "CONNECT_FAILED": "Posta sunucusuna ulaşılamadı.",
+        "POLL_FAILED": "Posta kutusu okunamadı.",
+        "unknown": "Bilinmeyen bir hata."
+      },
+      "degraded": {
+        "NO_MAILBOX": "Mailiniz Jeeta üzerinden gönderiliyor. Kendi adresinizden göndermek için posta kutunuzu bağlayın.",
+        "MAILBOX_UNVERIFIED": "Posta kutunuz doğrulanmadığı için mailiniz Jeeta üzerinden gönderiliyor.",
+        "MAILBOX_SEND_ONLY": "Bağlı posta kutusu bu tür e-postayı taşıyamıyor; gönderim Jeeta üzerinden.",
+        "OAUTH_REAUTH": "Posta kutusu bağlantısı yenilenmeli; şimdilik Jeeta üzerinden gönderiliyor.",
+        "HTML_ON_CONSENT": "Biçimli e-postalar Jeeta üzerinden gönderiliyor."
+      },
+      "inert": {
+        "SENDING_DOMAIN_ESP": "Kendi alan adınızdan gönderim",
+        "ESP_FEEDBACK": "Otomatik geri dönüş ve şikâyet bildirimleri",
+        "MAILBOX_OAUTH_GOOGLE": "Google ile posta kutusu bağlama",
+        "MAILBOX_OAUTH_MICROSOFT": "Microsoft ile posta kutusu bağlama",
+        "INBOUND_WEBHOOK": "Webhook ile gelen e-posta",
+        "PLATFORM_DKIM": "Giden e-posta imzalama (DKIM)",
+        "SECRET_BOX": "Posta kutusu bilgilerinin şifrelenmesi"
+      }
+    },
+    "alert": {
+      "SEND_FAILURE_RATE": {
+        "title": "E-posta gönderimleri başarısız oluyor",
+        "message": "Son 24 saatte {{attempted}} denemenin {{failed}} tanesi gönderilemedi. E-posta sağlığı kartına bakın."
+      },
+      "BOUNCE_RATE": {
+        "title": "Geri dönen e-posta oranı yüksek",
+        "message": "Son 24 saatte gönderilen {{sent}} e-postanın {{bounced}} tanesi geri döndü (%5 üzeri gönderen itibarınızı düşürür)."
+      },
+      "COMPLAINT_RATE": {
+        "title": "Spam şikâyeti oranı yüksek",
+        "message": "Son 24 saatte {{complained}} alıcı e-postanızı spam olarak işaretledi (%0,1 üzeri gönderen itibarınızı düşürür)."
+      },
+      "RECEIVE_DOWN": {
+        "title": "Posta kutusundan e-posta alınamıyor",
+        "message": "\"{{name}}\" posta kutusu {{hours}} saattir e-posta alamıyor. Gelen yanıtlar görünmüyor olabilir."
+      },
+      "INBOUND_QUARANTINED": {
+        "title": "Gelen e-postalar işlenemedi",
+        "message": "{{count}} gelen e-posta işlenemedi. Posta kutusu sağlık kartından tekrar deneyebilirsiniz."
+      }
+    }
+  },
+  "email": {
+    "title": "E-posta şablonları",
+    "subtitle": "Bloklardan markalı HTML e-postalar oluşturun, sonra kampanyalarda kullanın.",
+    "new": "Yeni şablon",
+    "edit": "Şablonu düzenle",
+    "hint": "Soldaki bloklarla yazın; sağdaki önizlemeyi yenilemek için Kaydet.",
+    "name": "Ad",
+    "accent": "Vurgu rengi",
+    "previewHint": "Önizleme için kaydedin.",
+    "saved": "Şablon kaydedildi",
+    "saveFailed": "Şablon kaydedilemedi",
+    "deleteTitle": "Şablon silinsin mi?",
+    "deleteDesc": "Gönderilmiş kampanyalar etkilenmez.",
+    "deleteFailed": "Şablon silinemedi",
+    "emptyTitle": "Henüz e-posta şablonu yok",
+    "emptyDesc": "Markalı bir HTML e-posta oluşturup kampanyalarda tekrar tekrar kullanın.",
+    "headingText": "Başlık metni",
+    "bodyText": "Gövde metni",
+    "btnText": "Düğme metni",
+    "alt": "Alternatif metin",
+    "column": "Sütun {{n}}",
+    "dividerHint": "Yatay bir çizgi.",
+    "emptyBlocks": "Paletten bir blok ekleyin.",
+    "unknown": "Bilinmeyen blok — JSON'dan düzenleyin."
+  },
+  "settings": {
+    "emailHealth": {
+      "title": "E-posta sağlığı",
+      "subtitle": "Postanız nereden çıkıyor, bugün ne kadar gitti, neresi kapalı.",
+      "sender": "Gönderen kimliği",
+      "senderPlatform": "Jeeta gönderici (kendi posta kutunuz bağlı değil)",
+      "senderMailbox": "Kendi posta kutunuz: {{address}}",
+      "degraded": "Düşük güçte çalışıyor: {{reason}}",
+      "mailboxes": "Bağlı posta kutusu: {{count}}",
+      "mailboxOk": "Çalışıyor",
+      "mailboxDown": "Sorunlu",
+      "noMailbox": "Bağlı posta kutusu yok.",
+      "todaysSends": "Bugün gönderilen",
+      "dailyCap": "Günlük sınır",
+      "capReached": "Günlük e-posta sınırına ulaşıldı ({{used}}/{{limit}}). Yarın devam edecek.",
+      "suppressed": "Engellenen adres",
+      "bounceRate": "Geri dönüş oranı",
+      "complaintRate": "Şikâyet oranı",
+      "failureRate": "Başarısızlık oranı",
+      "paused": "E-posta gönderimi duraklatıldı",
+      "pausedHint": "Duraklatıldığı sürece kampanya ve otomasyon postası çıkmaz; hesap güvenliği postaları etkilenmez.",
+      "inert": "Kapalı özellikler",
+      "inertHint": "Bunlar sunucuda bir ayar bekliyor. Ayar girilene kadar sessizce kapalıdırlar.",
+      "inertNone": "E-posta tarafında kapalı özellik yok.",
+      "refresh": "Yenile",
+      "loadFailed": "E-posta sağlığı yüklenemedi",
+      "feature": {
+        "SENDING_DOMAIN_ESP": "Kendi alan adınızdan gönderim (e-posta sağlayıcı kurulumu)",
+        "ESP_FEEDBACK_SECRET": "Sağlayıcı geri bildirimleri (bounce ve şikâyet)",
+        "GOOGLE_MAIL": "Google ile posta kutusu bağlama",
+        "MICROSOFT_MAIL": "Microsoft ile posta kutusu bağlama",
+        "EMAIL_INBOUND_SECRET": "Gelen e-posta webhook’u",
+        "EMAIL_DKIM": "DKIM imzası",
+        "MARKETING_SECRET_KEY": "Posta kutusu bilgilerinin şifrelenmesi",
+        "LINK_BASE_URL": "Ayrı bağlantı alan adı"
+      }
+    }
+  },
+  "triggerLinks": {
+    "botFiltered": "{{count}} makine tıklaması filtrelendi",
+    "botFilteredHint": "Posta güvenlik tarayıcıları ve bağlantı ön-yükleyicileri sayılmıyor, böylece tıklama sayısı gerçek kişileri gösterir.",
+    "toast": {
+      "saved": "Bağlantı kaydedildi",
+      "failed": "Kaydedilemedi",
+      "deleted": "Bağlantı silindi",
+      "deleteFailed": "Silinemedi"
+    },
+    "copied": "Bağlantı kopyalandı",
+    "copyFailed": "Kopyalanamadı",
+    "title": "Tetikleyici Bağlantılar",
+    "subtitle": "Her tıklamada bir otomasyon başlatan, QR kodlu takip edilebilir kısa bağlantılar.",
+    "new": "Yeni bağlantı",
+    "empty": {
+      "title": "Henüz tetikleyici bağlantı yok",
+      "description": "Tıklamalardan otomasyon başlatmak için takip edilebilir bir bağlantı oluşturun."
+    },
+    "copy": "Bağlantıyı kopyala",
+    "qr": "QR indir",
+    "form": {
+      "editTitle": "Tetikleyici bağlantıyı düzenle",
+      "newTitle": "Yeni tetikleyici bağlantı",
+      "subtitle": "Her tıklama hedefe yönlendirilir ve link.clicked otomasyon tetikleyicisini çalıştırır.",
+      "name": "Ad",
+      "targetUrl": "Hedef adres",
+      "slug": "Özel kısa ad (isteğe bağlı)",
+      "slugHint": "Boş bırakırsanız otomatik oluşturulur. Yayınlandıktan sonra değiştirmemek en iyisi."
+    },
+    "confirm": {
+      "deleteTitle": "Tetikleyici bağlantı silinsin mi?",
+      "deleteBody": "Kısa bağlantı çalışmayı bırakır ve tıklama geçmişi silinir."
     }
   }
 }

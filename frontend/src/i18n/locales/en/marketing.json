@@ -136,7 +136,97 @@
     "tab": {
       "accounts": "Accounts",
       "integrations": "Integrations"
-    }
+    },
+    "reauthRequired": "Connection needs renewing",
+    "email": {
+      "title": "Connect Email",
+      "desc": "Email is two-way: send from your mailbox, and receive replies via your provider’s inbound webhook.",
+      "sending": "Sending (SMTP)",
+      "sendingHint": "Where outgoing mail leaves from.",
+      "receiving": "Receiving replies",
+      "webhookLabel": "Inbound webhook URL — paste this into your email provider’s inbound-parse route",
+      "inboundOn": "Inbound signing key is configured — replies will flow.",
+      "inboundOff": "Inbound not active yet — an admin must set EMAIL_INBOUND_SECRET on the server.",
+      "testSmtp": "Test SMTP connection",
+      "sendingSaved": "Sending set up — now finish receiving",
+      "smtpFailed": "SMTP check failed",
+      "smtpOk": "SMTP verified",
+      "smtpHost": "SMTP host",
+      "smtpPort": "Port",
+      "smtpUser": "SMTP username",
+      "smtpPass": "SMTP password",
+      "fromEmail": "From email (optional)",
+      "inboundAddress": "Inbound address (the address your provider parses)",
+      "receivingHint": "This is the address your provider (Mailgun/SendGrid/Postmark…) forwards inbound mail from. The webhook URL you paste there appears once you save.",
+      "sendingDone": "Sending is configured.",
+      "inboundNoAddr": "Inbound signing key is set, but no inbound address was configured — replies can’t be matched to this channel.",
+      "consentTitle": "Connect your mailbox",
+      "consentDesc": "You sign in at your provider and approve sending. No password is stored here.",
+      "connectWith": "Connect with {{provider}}",
+      "ownServer": "I have my own mail server",
+      "address": "Email address",
+      "addressHint": "Replies to this address come back into the inbox. The server settings are read from its domain.",
+      "mailboxPassword": "Mailbox password",
+      "passwordlessAvailable": "This address is run by {{provider}} — you can connect it without a password.",
+      "recognised": "Recognised {{provider}} — server settings filled in below.",
+      "notRecognised": "We don’t recognise this domain’s mail host — please fill the server settings in yourself.",
+      "smtpUserHint": "Usually the same as the address.",
+      "connected": "Mailbox connected.",
+      "imapHost": "IMAP host",
+      "imapPort": "IMAP port",
+      "imapHint": "Where replies are read from. Leave blank to use the settings we recognise for this provider.",
+      "platformFallback": "Your mail goes out through Jeeta. Replies come back to {{replyTo}}. Connect your mailbox to send from your own address.",
+      "reauthRequired": "Connection needs renewing — the provider consent expired, so this mailbox can neither send nor receive.",
+      "reauthRequiredHint": "Only the mailbox owner can reconnect it.",
+      "edit": "Edit mailbox",
+      "editSaved": "Mailbox updated",
+      "editFailed": "Could not update the mailbox"
+    },
+    "reconnectFailed": "Could not start reconnect — check server config.",
+    "does": {
+      "META": "Publish to Facebook and Instagram, answer their DMs here, and run ads.",
+      "LINKEDIN": "Publish to your LinkedIn page and run ads.",
+      "TIKTOK": "Publish to TikTok and answer its DMs here.",
+      "TWITTER": "Publish to X.",
+      "PINTEREST": "Publish pins.",
+      "GOOGLE": "Run Google ads and read their results.",
+      "SMS": "Send and receive SMS — the fastest way to reach a lead who left a phone number.",
+      "EMAIL": "Send from your own mailbox and get the replies in this inbox.",
+      "WEBCHAT": "Put a chat bubble on your site; visitors land in this inbox.",
+      "VOICE": "Answer calls with an AI voice assistant."
+    },
+    "setup": {
+      "metaWebhook": "Meta webhook URL — paste into the Meta App dashboard",
+      "smsCallback": "NetGSM inbound (MO) URL — paste into İnteraktif SMS",
+      "emailWebhook": "Inbound email webhook URL",
+      "tiktokWebhook": "TikTok webhook URL — paste into the TikTok for Business app"
+    },
+    "disconnect": "Disconnect",
+    "webchat": {
+      "embedLabel": "Paste this just before </body> on every page"
+    },
+    "notConfigured": "An admin must add this provider’s app credentials first",
+    "disconnectTitle": "Disconnect account",
+    "disconnectFailed": "Could not disconnect",
+    "disconnectPartial": "Partly disconnected — some surfaces could not be removed",
+    "disconnected": "Account disconnected",
+    "loadError": "Could not load your connections.",
+    "section": {
+      "attention": "Needs your attention",
+      "attentionDesc": "These are connected but not working. Anything sent through them is being lost.",
+      "working": "Connected and working",
+      "workingDesc": "The badges say what each one lets this product do.",
+      "available": "Not connected yet",
+      "availableDesc": "What each one would add."
+    },
+    "waTitle": "WhatsApp Business",
+    "waSubtitle": "Connect your own business number through Meta. A Meta test number can only message a few pre-approved contacts — it cannot be used with real customers.",
+    "onlyYou": "Only you",
+    "onlyYouDesc": "Your own calendar, so bookings land in it. Nobody else in the workspace is affected.",
+    "phoneSetup": "Your phone line",
+    "phoneSetupDesc": "What is left to finish before calls and SMS work.",
+    "wholeTeam": "Everyone in this workspace",
+    "wholeTeamDesc": "How your team signs in, and where the workspace posts its notifications. Changing these changes it for everybody."
   },
   "welcome": {
     "title": "Welcome to Jeeta 🎉",
@@ -562,7 +652,9 @@
     "copyFailed": "Could not copy",
     "done": "Done",
     "retry": "Retry",
-    "saving": "Saving…"
+    "saving": "Saving…",
+    "loadError": "Could not load. Please try again.",
+    "tryAgain": "Try again"
   },
   "validation": {
     "required": "Required",
@@ -751,6 +843,38 @@
       "unassigned": "Unassigned",
       "all": "All",
       "countFailed": "Count unavailable"
+    },
+    "suppression": {
+      "title": "Email status",
+      "optedOut": "Unsubscribed",
+      "bounced": "Hard-bounced",
+      "invalid": "Invalid address",
+      "complained": "Marked as spam",
+      "erased": "Data erased",
+      "since": "since {{date}}",
+      "source": "Source: {{source}}",
+      "optOut": "Opt out of marketing email",
+      "resubscribe": "Re-subscribe",
+      "clearBounce": "Clear the bounce",
+      "updated": "Email status updated",
+      "updateFailed": "Could not update the email status",
+      "none": "This contact can be emailed.",
+      "history": "Consent history",
+      "historyEmpty": "No consent records for this contact.",
+      "reason": {
+        "ERASURE": "Erasure request",
+        "HARD_BOUNCE": "Hard bounce",
+        "INVALID": "Invalid address",
+        "COMPLAINT": "Spam complaint",
+        "OPT_OUT": "Unsubscribe",
+        "MANUAL": "Added by hand"
+      },
+      "verifyStatus": {
+        "UNKNOWN": "Not checked",
+        "VALID": "Valid",
+        "INVALID": "Invalid",
+        "RISKY": "Risky"
+      }
     }
   },
   "leadDetail": {
@@ -898,7 +1022,10 @@
       "sent": "Message sent",
       "failed": "Could not send the message",
       "noChannels": "No connected channel can open a conversation — connect SMS or email.",
-      "channelsFailed": "Could not load the channels."
+      "channelsFailed": "Could not load the channels.",
+      "another": "Write on another channel",
+      "titleOther": "Write on another channel",
+      "descAny": "Pick a channel and write."
     }
   },
   "createLead": {
@@ -1779,7 +1906,24 @@
     "aiToggleFailed": "Could not change the AI status",
     "closeFailed": "Could not close the conversation",
     "reopenFailed": "Could not reopen the conversation",
-    "noteFailed": "Could not save the note"
+    "noteFailed": "Could not save the note",
+    "aiDeclined": "The AI did not reply in this conversation:",
+    "sendFailedAiPaused": "the AI is paused on this conversation — try again",
+    "aiDeclineReason": {
+      "REPLY_DISABLED": "AI replies are switched off for this workspace.",
+      "AI_PAUSED": "A colleague took this conversation over.",
+      "CONVERSATION_MISSING": "This conversation could not be found.",
+      "CONVERSATION_NOT_OPEN": "This conversation is closed.",
+      "LEAD_GONE": "This person was deleted or merged.",
+      "CHANNEL_MISSING": "The channel for this conversation is gone.",
+      "CHANNEL_INACTIVE": "The channel for this conversation is not active.",
+      "AGENT_MISSING": "The AI assistant attached to this channel no longer exists.",
+      "AGENT_INACTIVE": "The AI assistant attached to this channel is not active.",
+      "MESSAGE_QUOTA": "The monthly message allowance is used up.",
+      "DAILY_CAP": "The daily reply limit for this conversation has been reached.",
+      "SEND_REFUSED_RETRY": "The channel refused the reply — it will be tried again shortly.",
+      "SEND_REFUSED": "The channel refused the reply."
+    }
   },
   "channels": {
     "title": "Channels",
@@ -1805,7 +1949,81 @@
     "otpTransport": "OTP delivery channel",
     "otpTransportSms": "SMS (default)",
     "otpTransportWhatsapp": "WhatsApp",
-    "otpTransportHelp": "Which channel verification codes (2FA, phone verification) are sent over. WhatsApp requires a paid \"OTP WhatsApp\" package and an approved netgsm_verify_code template on your NetGSM account — if the package is missing or the send fails, the code automatically falls back to SMS."
+    "otpTransportHelp": "Which channel verification codes (2FA, phone verification) are sent over. WhatsApp requires a paid \"OTP WhatsApp\" package and an approved netgsm_verify_code template on your NetGSM account — if the package is missing or the send fails, the code automatically falls back to SMS.",
+    "connectInAccountCenter": "Connect a channel in the Account Center",
+    "verifyFailCreds": "Verification failed — check credentials",
+    "verifyUnreachable": "Could not reach NetGSM — try again",
+    "verifyHeaderNotApproved": "Sender ID is not approved on this account",
+    "moWebhookMissing": "MO webhook is missing messages — check the NetGSM panel URL",
+    "iysTitle": "İYS (İleti Yönetim Sistemi)",
+    "iysBrandCode": "İYS Marka Kodu",
+    "iysBrandCodePlaceholder": "Marka kodu",
+    "iysDefault": "Default message type",
+    "iysBilgilendirme": "Bilgilendirme",
+    "iysTicari": "Ticari",
+    "iysSaved": "İYS settings saved",
+    "iysSaveFailed": "Could not save İYS settings",
+    "iysRegisterWebhook": "Register the İYS webhook",
+    "iysWebhookRegistered": "İYS webhook registered with NetGSM",
+    "iysWebhookFailed": "Could not register the İYS webhook",
+    "iysWebhookOk": "Webhook registered",
+    "iysWebhookNotRegistered": "Webhook not registered",
+    "iysHelp": "Enter the Marka Kodu from your İYS panel and register the webhook — commercial SMS consent and rejection states then sync automatically.",
+    "verified": "Verified",
+    "verifyFailed": "Verification failed",
+    "verifySendOnly": "Sending ✓ · Receiving ✗ — {{reason}}",
+    "notVerified": "This mailbox is not verified yet — sending and receiving are off.",
+    "notVerifiedAction": "Verify",
+    "delete": "Delete channel",
+    "deleteTitle": "Delete channel?",
+    "deleteDesc": "This disconnects the channel immediately. Messages in flight may fail.",
+    "deleteFailed": "Could not delete the channel",
+    "emptyTitle": "No channels yet",
+    "agentSaveFailed": "Could not update the answering agent",
+    "linkedinGranted": "Engagement active — replies to comments on your organization posts are AI-answered. (LinkedIn has no DM API; this is sanctioned engagement on owned posts.)",
+    "linkedinPending": "Dormant — comment engagement turns on once LinkedIn Community Management access is approved. LinkedIn exposes no DM API, so this answers comments on your OWN organization posts (polling-based, no webhook).",
+    "iysDlqBacklog": "{{count}} İYS sync(s) failed (DLQ)",
+    "iysDlqRetry": "Retry",
+    "iysDlqRetried": "{{count}} job(s) queued for retry",
+    "iysDlqRetryFailed": "Could not retry the failed jobs",
+    "reauthRequired": "Connection needs renewing",
+    "reconnect": "Reconnect",
+    "health": {
+      "title": "Mailbox health",
+      "line": "Sending {{send}} · Receiving {{receive}}",
+      "sendOk": "Sending ✓",
+      "sendFail": "Sending ✗ — {{reason}}",
+      "receiveOk": "Receiving ✓",
+      "receiveFail": "Receiving ✗ — {{reason}}",
+      "lastOkAt": "Last worked: {{when}}",
+      "lastErrorAt": "Last error: {{when}}",
+      "neverPolled": "Never checked yet.",
+      "backoffUntil": "Waiting before the next attempt: {{when}}",
+      "reason": {
+        "OAUTH_REAUTH_REQUIRED": "The provider consent expired — reconnect",
+        "AUTH_FAILED": "The username or password was refused",
+        "CONNECT_FAILED": "The mail server could not be reached",
+        "UNKNOWN": "No reason was reported",
+        "NO_IMAP_HOST": "No incoming (IMAP) server is set — add one, or point your provider’s inbound webhook at Jeeta",
+        "OAUTH_NO_IMAP_PASSWORD": "This mailbox is connected by consent and has no incoming password — replies arrive over the inbound address, not IMAP",
+        "IMAP_REFUSED": "The mail server refused the IMAP login"
+      }
+    },
+    "inboundQuarantined": "{{count}} inbound email(s) could not be processed",
+    "inboundRetry": "Retry",
+    "inboundRetried": "Queued for reprocessing",
+    "inboundRetryFailed": "Could not retry",
+    "inboundUrl": "This mailbox’s inbound address",
+    "inboundUrlHint": "Paste this into your provider’s inbound-parse route. It belongs to this mailbox alone — do not share it.",
+    "inboundPolicy": {
+      "label": "Which senders reach the inbox",
+      "hint": "This only limits NEW conversations; a reply into an existing conversation always arrives.",
+      "ALL_SENDERS": "Anyone",
+      "ALL_SENDERS_HINT": "Anyone who writes to this mailbox opens a conversation.",
+      "REPLIES_AND_KNOWN": "Replies and known contacts",
+      "REPLIES_AND_KNOWN_HINT": "Only replies to mail we sent, and contacts already on file, open a conversation."
+    },
+    "deleteEmailWarning": "Deleting this mailbox leaves its conversations in nobody’s inbox and stops replies to this address being processed. To change the address, edit the mailbox instead of deleting it."
   },
   "automations": {
     "title": "Automations",
@@ -1982,7 +2200,102 @@
     "removeKeyMapping": "Remove mapping",
     "addKeyMapping": "Add keypress mapping",
     "bodyVoiceLabel": "Internal label",
-    "bodyVoiceHint": "For your reference only — not read aloud. The spoken message is set above."
+    "bodyVoiceHint": "For your reference only — not read aloud. The spoken message is set above.",
+    "abTitle": "A/B test",
+    "abHint": "Split recipients across variants by weight. Each variant has its own subject + body.",
+    "abEnable": "Enable A/B split (needs 2+ variants)",
+    "abTestPct": "Test on",
+    "abWinnerMode": "Auto-send the winner (test on a sample, then send the best variant to the rest)",
+    "abOpens": "opens",
+    "abClicks": "clicks",
+    "abWinBy": "pick winner by",
+    "abNeeds2": "An A/B split needs at least 2 variants — add another or it sends as a single campaign.",
+    "addVariant": "Add variant",
+    "weight": "Weight",
+    "variantsSaved": "A/B variants saved",
+    "variantsSaveFailed": "Could not save variants",
+    "abTest": "A/B test…",
+    "aiCompose": "AI copywriter",
+    "bodyPlainFallback": "Plain-text fallback",
+    "bodyPlainFallbackHint": "Optional — auto-generated from your template if left blank.",
+    "deleteTitle": "Delete campaign?",
+    "deleteDesc": "Sent stats will be lost. This cannot be undone.",
+    "editTitle": "Edit campaign",
+    "emailTemplate": "HTML template (optional)",
+    "emptyTitle": "No campaigns yet",
+    "formHint": "Build your message and target audience. Opt-outs are handled automatically.",
+    "htmlAttached": "HTML attached",
+    "launchTitle": "Launch this campaign?",
+    "launchDesc": "It will be sent to everyone in the audience now. This cannot be undone.",
+    "pause": "Pause",
+    "resume": "Resume",
+    "plainText": "Plain text only",
+    "scheduleInPast": "This time is in the past — the campaign will be sent immediately.",
+    "templateLoadFailed": "Could not load the template",
+    "status": {
+      "DRAFT": "Draft",
+      "SCHEDULED": "Scheduled",
+      "SENDING": "Sending",
+      "SENT": "Sent",
+      "PAUSED": "Paused",
+      "CANCELLED": "Cancelled"
+    },
+    "recipientStatus": {
+      "PENDING": "Queued",
+      "SENT": "Sent",
+      "FAILED": "Failed",
+      "SKIPPED": "Skipped",
+      "UNSUBSCRIBED": "Unsubscribed"
+    },
+    "prelaunch": {
+      "title": "Before you send",
+      "desc": "Who this campaign reaches, and which address it goes out from.",
+      "irreversible": "Once sending starts it cannot be undone.",
+      "audience": "{{count}} people will be reached",
+      "audienceLoading": "Working out the audience…",
+      "audienceFailed": "Could not work out the audience — try again.",
+      "noRecipients": "Nobody in this audience can be mailed.",
+      "excluded": "{{count}} excluded",
+      "excludedOptedOut": "Unsubscribed: {{count}}",
+      "excludedBounced": "Hard-bounced: {{count}}",
+      "excludedInvalid": "Invalid address: {{count}}",
+      "excludedSuppressed": "Blocked for another reason: {{count}}",
+      "excludedNoEmail": "No email address: {{count}}",
+      "sender": "Sender",
+      "senderPlatform": "Jeeta sender — replies come back to {{replyTo}}.",
+      "senderDegraded": "Your own mailbox cannot be used: {{reason}}",
+      "testSend": "Send a test to yourself",
+      "testSendHint": "One copy goes to you and is not counted in the stats.",
+      "testSendSent": "Test email sent to {{email}}",
+      "testSendFailed": "Could not send the test email",
+      "confirm": "Send",
+      "degradedReason": {
+        "NO_MAILBOX": "this workspace has no mailbox connected",
+        "MAILBOX_UNVERIFIED": "the mailbox has not been verified yet",
+        "MAILBOX_SEND_ONLY": "the connected mailbox cannot carry this kind of email",
+        "OAUTH_REAUTH": "the mailbox connection needs renewing",
+        "HTML_ON_CONSENT": "formatted (HTML) email cannot be sent from a consent-connected mailbox"
+      },
+      "truncated": "The first {{count}} addresses were checked — the audience is larger, so the excluded figure is a floor."
+    },
+    "results": {
+      "recipients": "Recipients",
+      "recipient": "Recipient",
+      "status": "Status",
+      "sentAt": "Sent",
+      "opened": "Opened",
+      "clicked": "Clicked",
+      "failureReason": "Why it was not sent",
+      "empty": "No recipients match this filter.",
+      "filterAll": "All",
+      "noEmail": "no email address",
+      "unnamed": "Unnamed contact",
+      "total": "{{shown}} of {{total}} recipients",
+      "loadMore": "Load more",
+      "loadFailed": "Could not load the recipients"
+    },
+    "stalled": "Sending stopped.",
+    "stalledHint": "This campaign stopped part-way because of an error. Fix the problem, then press Resume."
   },
   "sites": {
     "title": "Funnels & Pages",
@@ -4317,7 +4630,9 @@
       "noThreadHint": "use Message to start the first one",
       "notesFailed": "Could not load internal notes",
       "notesFailedHint": "a teammate may have left a handover note here — do not carry on without reading it",
-      "notesRetry": "Try again"
+      "notesRetry": "Try again",
+      "sendShortcut": "Ctrl+Enter to send",
+      "recipientStale": "This conversation goes to {{thread}}; the person’s saved address is {{lead}}. To write to the new address, start a conversation with Message."
     },
     "card": {
       "title": "Record",
@@ -4370,7 +4685,42 @@
     "noConsent": "No consent records for this lead.",
     "requestErasure": "Request erasure",
     "requestExport": "Export data",
-    "withdrawn": "Withdrawn"
+    "withdrawn": "Withdrawn",
+    "iysEposta": {
+      "title": "İYS email consent",
+      "configure": "Enter your İYS details",
+      "ready": "İYS email consent is being checked.",
+      "notArmed": "Enter your İYS details to send commercial email.",
+      "noCredentials": "İYS is on, but no usercode/password resolves for this workspace.",
+      "noBrandCode": "No İYS Marka Kodu is set — consent cannot be checked.",
+      "unavailable": "İYS cannot be reached right now — the consent state is unknown.",
+      "badRecipient": "İYS cannot hold a record for this address."
+    },
+    "req": {
+      "kind": "Type",
+      "export": "Export",
+      "erasure": "Erasure",
+      "status": "Status",
+      "lead": "Lead",
+      "requestedAt": "Requested",
+      "completedAt": "Completed"
+    },
+    "noRequests": "No data requests yet",
+    "noRequestsHint": "Export and erasure requests you run will appear here.",
+    "title": "Compliance",
+    "subtitle": "Consent records and GDPR/KVKK data-subject requests (export and erasure).",
+    "tabs": {
+      "subject": "Data subject",
+      "requests": "Request history"
+    },
+    "findLead": "Find a lead",
+    "findLeadDesc": "Search by business name, contact or email to view consent and run requests.",
+    "searchPlaceholder": "Search leads…",
+    "noLeads": "No matching leads.",
+    "selectedDesc": "Consent on record and available data-subject actions.",
+    "consentRecords": "Consent records",
+    "pickLeadTitle": "Select a lead to begin",
+    "pickLeadDesc": "Search above to view a lead’s consent records and run export or erasure."
   },
   "credits": {
     "exhausted": {
@@ -4457,6 +4807,269 @@
   "voiceHub": {
     "tab": {
       "calls": "Calls"
+    }
+  },
+  "mail": {
+    "reason": {
+      "SUPPRESSED_OPT_OUT": "The contact unsubscribed from marketing email.",
+      "SUPPRESSED_BOUNCE": "The address hard-bounced, so it is no longer mailed.",
+      "SUPPRESSED_INVALID": "The address is not deliverable.",
+      "SUPPRESSED_COMPLAINT": "The contact marked earlier mail as spam.",
+      "SUPPRESSED_ERASED": "The contact asked for their data to be erased.",
+      "IYS_RET": "İYS holds a rejection for this address.",
+      "CONSENT_REQUIRED": "Consent for marketing email has not been recorded.",
+      "QUOTA_EXHAUSTED": "The monthly message quota is used up.",
+      "DAILY_CAP": "Today's sending limit for this workspace has been reached.",
+      "QUIET_HOURS": "It is outside the hours sending is allowed.",
+      "WORKSPACE_INACTIVE": "The workspace is not active.",
+      "SENDING_PAUSED": "Email sending is paused for this workspace.",
+      "NO_RECIPIENT": "There is no recipient address.",
+      "BAD_RECIPIENT": "The recipient is not a single valid address.",
+      "NO_UNSUBSCRIBE": "Bulk email needs an unsubscribe link, and none could be built.",
+      "MISSING_PUBLIC_BASE_URL": "PUBLIC_BASE_URL is not set, so the unsubscribe link cannot be built.",
+      "NOT_CONFIGURED": "No mailbox and no platform mailer is configured.",
+      "TRANSIENT": "The mail server refused it for now; it will be retried.",
+      "SYSTEMIC": "The mail server rejected the connection or the login.",
+      "PERMANENT": "The mail server rejected it permanently.",
+      "UNKNOWN": "The send did not complete and the server gave no reason."
+    },
+    "outcome": {
+      "SENT": "Sent",
+      "REFUSED": "Not sent",
+      "FAILED_PERMANENT": "Permanently failed",
+      "FAILED_TRANSIENT": "Temporarily failed",
+      "DEDUPED": "Already sent"
+    },
+    "transport": {
+      "MAILBOX_SMTP": "Your own mailbox (SMTP)",
+      "MAILBOX_OAUTH": "Your own mailbox (connected by consent)",
+      "PLATFORM": "Jeeta sender",
+      "NONE": "No sender"
+    },
+    "class": {
+      "AUTH": "Account security",
+      "INTERNAL": "Product notice",
+      "TRANSACTIONAL": "Transactional email",
+      "CONVERSATIONAL": "Conversation",
+      "BULK": "Campaign"
+    },
+    "notSent": "Not sent: {{reason}}",
+    "dailyCapReached": "Today's email limit is reached ({{used}}/{{limit}}). Sending resumes tomorrow.",
+    "health": {
+      "title": "Email health",
+      "subtitle": "Who your email is from, what went out, what did not, and why.",
+      "unavailable": "Email health cannot be read right now.",
+      "partial": "One read did not finish — some numbers may be missing.",
+      "paused": "Email sending is paused for this workspace. Nothing is going out.",
+      "from": "Sender",
+      "replyTo": "Replies",
+      "today": "Today (via Jeeta)",
+      "sent": "Sent",
+      "failed": "Not sent",
+      "bounced": "Bounced",
+      "complained": "Marked as spam",
+      "laneSend": "Sending",
+      "laneReceive": "Receiving",
+      "suppressed": "{{count}} address(es) no longer receive email (opt-out, bounce or complaint).",
+      "inertTitle": "Features currently switched off",
+      "inertHint": "Until your administrator sets these keys, the feature stays quietly off.",
+      "reason": {
+        "AUTH_FAILED": "The username or password was not accepted.",
+        "OAUTH_REAUTH_REQUIRED": "The connection needs renewing.",
+        "CONNECT_FAILED": "The mail server could not be reached.",
+        "POLL_FAILED": "The mailbox could not be read.",
+        "unknown": "An unknown error."
+      },
+      "degraded": {
+        "NO_MAILBOX": "Your email is sent through Jeeta. Connect your mailbox to send from your own address.",
+        "MAILBOX_UNVERIFIED": "Your mailbox is not verified, so your email is sent through Jeeta.",
+        "MAILBOX_SEND_ONLY": "The connected mailbox cannot carry this kind of email, so it goes through Jeeta.",
+        "OAUTH_REAUTH": "The mailbox connection needs renewing; for now email goes through Jeeta.",
+        "HTML_ON_CONSENT": "Formatted email is sent through Jeeta."
+      },
+      "inert": {
+        "SENDING_DOMAIN_ESP": "Sending from your own domain",
+        "ESP_FEEDBACK": "Automatic bounce and complaint reports",
+        "MAILBOX_OAUTH_GOOGLE": "Connecting a mailbox with Google",
+        "MAILBOX_OAUTH_MICROSOFT": "Connecting a mailbox with Microsoft",
+        "INBOUND_WEBHOOK": "Inbound email over webhook",
+        "PLATFORM_DKIM": "Outgoing email signing (DKIM)",
+        "SECRET_BOX": "Encryption of mailbox credentials"
+      }
+    },
+    "alert": {
+      "SEND_FAILURE_RATE": {
+        "title": "Email sends are failing",
+        "message": "{{failed}} of {{attempted}} attempts in the last 24 hours could not be sent. Check the email health card."
+      },
+      "BOUNCE_RATE": {
+        "title": "Bounce rate is high",
+        "message": "{{bounced}} of the {{sent}} emails sent in the last 24 hours bounced (over 5% harms your sender reputation)."
+      },
+      "COMPLAINT_RATE": {
+        "title": "Spam complaint rate is high",
+        "message": "{{complained}} recipients marked your email as spam in the last 24 hours (over 0.1% harms your sender reputation)."
+      },
+      "RECEIVE_DOWN": {
+        "title": "A mailbox cannot receive email",
+        "message": "The \"{{name}}\" mailbox has not been able to receive email for {{hours}} hours. Incoming replies may not be visible."
+      },
+      "INBOUND_QUARANTINED": {
+        "title": "Inbound email could not be processed",
+        "message": "{{count}} inbound email(s) could not be processed. You can retry from the mailbox health card."
+      }
+    }
+  },
+  "email": {
+    "title": "Email templates",
+    "subtitle": "Build branded HTML emails from blocks, then use them in campaigns.",
+    "new": "New template",
+    "edit": "Edit template",
+    "hint": "Compose with blocks on the left; Save to refresh the preview on the right.",
+    "name": "Name",
+    "accent": "Accent color",
+    "previewHint": "Save to render a preview.",
+    "saved": "Template saved",
+    "saveFailed": "Could not save template",
+    "deleteTitle": "Delete template?",
+    "deleteDesc": "Campaigns already sent are unaffected.",
+    "deleteFailed": "Could not delete the template",
+    "emptyTitle": "No email templates yet",
+    "emptyDesc": "Build a branded HTML email and reuse it across campaigns.",
+    "headingText": "Heading text",
+    "bodyText": "Body text",
+    "btnText": "Button text",
+    "alt": "Alt text",
+    "column": "Column {{n}}",
+    "dividerHint": "A horizontal rule.",
+    "emptyBlocks": "Add a block from the palette.",
+    "unknown": "Unknown block — edit in JSON."
+  },
+  "sendingDomains": {
+    "title": "Sending Domains",
+    "subtitle": "Send marketing email from your own domain with DKIM/SPF/DMARC.",
+    "domain": "Domain",
+    "fromName": "From name (optional)",
+    "add": "Add",
+    "added": "Domain added — publish the DNS records below, then verify.",
+    "addFailed": "Could not add the domain",
+    "verify": "Verify",
+    "verified": "Domain verified!",
+    "notYet": "Records not found yet — DNS can take a while to propagate.",
+    "verifyFailed": "Verification failed",
+    "empty": "No sending domains",
+    "emptyHint": "Add a domain to send branded, authenticated email.",
+    "addRecords": "Add these TXT records at your DNS provider:",
+    "copy": "Copy value",
+    "copied": "Copied",
+    "deleteTitle": "Delete sending domain?",
+    "deleteDesc": "Email can no longer be sent from this domain. Re-adding it means publishing and verifying the DKIM/SPF/DMARC records again.",
+    "deleteFailed": "Could not delete the domain",
+    "disabledTitle": "Custom sending domains are not enabled here",
+    "disabledHint": "This deployment has no email provider wired up for tenant domains. Connect your own mailbox instead — your campaigns will then send from it.",
+    "connectMailbox": "Connect a mailbox",
+    "subdomainHint": "Use a subdomain such as mail.acme.com — it has no existing SPF or DMARC records for these to collide with.",
+    "onlyIfAbsent": "Only if it does not exist yet",
+    "note": {
+      "SPF_MERGE": "If {{host}} already publishes a v=spf1 record, do NOT add a second one — a domain may publish only one. Edit the existing record and add the include above, before its final \"all\" term.",
+      "DMARC_ONLY_IF_ABSENT": "Only add this if there is no TXT record at _dmarc.{{domain}} at all. If a DMARC policy already exists, leave it alone — a second _dmarc record invalidates the policy for all of your email. Once your reports look clean you can raise the policy to p=quarantine and then p=reject yourself."
+    },
+    "reason": {
+      "unavailable": "{{label}} could not be checked right now — DNS did not answer.",
+      "DKIM": {
+        "MISSING": "DKIM: the record is not published yet.",
+        "KEY_MISMATCH": "DKIM: a different key is published under this selector."
+      },
+      "SPF": {
+        "MISSING": "SPF: the record is not published yet.",
+        "DUPLICATE": "SPF: two separate v=spf1 records are published — merge them into one; a domain may publish only one.",
+        "NO_INCLUDE": "SPF: the record exists but does not carry our include — add it before the final \"all\" term.",
+        "NOT_CONFIGURED": "SPF is not configured on this deployment yet — ask your system administrator."
+      },
+      "DMARC": {
+        "MISSING": "DMARC: no policy is published yet.",
+        "DUPLICATE": "DMARC: two records are published — keep one; a second _dmarc record invalidates the policy."
+      }
+    }
+  },
+  "settings": {
+    "emailHealth": {
+      "title": "Email health",
+      "subtitle": "Where your mail goes out from, how much went today, and what is switched off.",
+      "sender": "Sender identity",
+      "senderPlatform": "Jeeta sender (no mailbox of your own is connected)",
+      "senderMailbox": "Your own mailbox: {{address}}",
+      "degraded": "Running degraded: {{reason}}",
+      "mailboxes": "{{count}} mailbox(es) connected",
+      "mailboxOk": "Working",
+      "mailboxDown": "Broken",
+      "noMailbox": "No mailbox connected.",
+      "todaysSends": "Sent today",
+      "dailyCap": "Daily limit",
+      "capReached": "Today's email limit is reached ({{used}}/{{limit}}). Sending resumes tomorrow.",
+      "suppressed": "Suppressed addresses",
+      "bounceRate": "Bounce rate",
+      "complaintRate": "Complaint rate",
+      "failureRate": "Failure rate",
+      "paused": "Email sending is paused",
+      "pausedHint": "While paused no campaign or automation mail leaves; account-security mail is unaffected.",
+      "inert": "Switched-off features",
+      "inertHint": "These are waiting on a server setting. Until it is set they stay quietly off.",
+      "inertNone": "Nothing on the email path is switched off.",
+      "refresh": "Refresh",
+      "loadFailed": "Could not load email health",
+      "feature": {
+        "SENDING_DOMAIN_ESP": "Sending from your own domain (email provider setup)",
+        "ESP_FEEDBACK_SECRET": "Provider feedback (bounces and complaints)",
+        "GOOGLE_MAIL": "Connecting a mailbox with Google",
+        "MICROSOFT_MAIL": "Connecting a mailbox with Microsoft",
+        "EMAIL_INBOUND_SECRET": "Inbound email webhook",
+        "EMAIL_DKIM": "DKIM signing",
+        "MARKETING_SECRET_KEY": "Encryption of mailbox credentials",
+        "LINK_BASE_URL": "Separate link domain"
+      }
+    }
+  },
+  "triggerLinks": {
+    "botFiltered": "{{count}} machine clicks filtered out",
+    "botFilteredHint": "Mail-security scanners and link prefetchers are not counted, so the click figure shows real people.",
+    "toast": {
+      "saved": "Trigger link saved",
+      "failed": "Failed to save",
+      "deleted": "Trigger link deleted",
+      "deleteFailed": "Failed to delete"
+    },
+    "copied": "Link copied",
+    "copyFailed": "Copy failed",
+    "title": "Trigger Links",
+    "subtitle": "Trackable short links that fire a workflow on every click, with QR codes.",
+    "new": "New link",
+    "empty": {
+      "title": "No trigger links yet",
+      "description": "Create a trackable link to drive automations from clicks."
+    },
+    "copy": "Copy link",
+    "qr": "Download QR",
+    "form": {
+      "editTitle": "Edit trigger link",
+      "newTitle": "New trigger link",
+      "subtitle": "Each click 302s to the target and fires the link.clicked workflow trigger.",
+      "name": "Name",
+      "targetUrl": "Target URL",
+      "slug": "Custom slug (optional)",
+      "slugHint": "Leave blank to auto-generate. Immutable-feeling public id."
+    },
+    "confirm": {
+      "deleteTitle": "Delete trigger link",
+      "deleteBody": "The short link stops working and its click history is removed."
+    }
+  },
+  "domains": {
+    "title": "Domains",
+    "subtitle": "The domains you send mail from and serve your pages on, and the DNS records that prove they are yours.",
+    "tab": {
+      "sending": "Sending",
+      "custom": "Website"
     }
   }
 }
