@@ -653,6 +653,35 @@ describeRealDb('Email inbound journey — real DB (e2e)', () => {
   // ────────────────────────────────────────────────────────────────────────
   // A bounce is not a lead.
   // ────────────────────────────────────────────────────────────────────────
+  /**
+   * The ledger row the outbound gateway writes for one sent mail, in its own
+   * shape: the id's local part IS the row id, on the From's domain. The live
+   * SMTP lane (`email-live-loop`) proves the gateway writes exactly this; the
+   * network is what this file fakes, so the row is seeded rather than sent.
+   */
+  const sentByGateway = async (to: string, sentAt: Date = new Date()) => {
+    const id = randomUUID();
+    const messageId = `${id}@acme.test`;
+    await prisma.mailLog.create({
+      data: {
+        id,
+        workspaceId: wsA,
+        mailClass: 'TRANSACTIONAL',
+        source: `invoice:${SEED}`,
+        toAddress: to,
+        toAddressNorm: to,
+        fromAddress: OWN_A,
+        transport: 'MAILBOX_SMTP',
+        channelId: chA,
+        subject: 'Faturanız',
+        messageId,
+        status: 'SENT',
+        sentAt,
+      },
+    });
+    return messageId;
+  };
+
   describe('the DSN lane — a bounce stops the next send', () => {
     it('suppresses the address a 5.x.x report names and projects it onto the lead', async () => {
       const dead = `yok-${SEED}@musteri.test`;
@@ -668,6 +697,10 @@ describeRealDb('Email inbound journey — real DB (e2e)', () => {
           emailNormalized: dead,
         },
       });
+      // A real bounce answers a mail we sent. A report naming an address this
+      // workspace never mailed is indistinguishable from a forgery, and the
+      // lane below proves those suppress nobody.
+      await sentByGateway(dead);
 
       await setCursor(chA, 100);
       imapServer.serve(101, dsn(dead, '5.1.1'));
@@ -702,6 +735,8 @@ describeRealDb('Email inbound journey — real DB (e2e)', () => {
 
     it('suppresses nobody on a 4.x.x — that is a full mailbox, not a dead address', async () => {
       const busy = `dolu-${SEED}@musteri.test`;
+      // Mailed, so the only thing keeping it unsuppressed is the 4.x.x itself.
+      await sentByGateway(busy);
       await setCursor(chA, 101);
       imapServer.serve(102, dsn(busy, '4.2.2'));
       await poller.pollOne(wsA, chA);
@@ -905,6 +940,425 @@ describeRealDb('Email inbound journey — real DB (e2e)', () => {
       expect(readMailboxHealth(healed.configPublic).consecutiveFailures).toBe(0);
       expect(isMailboxBackedOff(healed.configPublic)).toBe(false);
       expect(readMailboxHealth(healed.configPublic).lastPolledAt).toBeTruthy();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Provenance: a report may only suppress an address this workspace mailed.
+  // ────────────────────────────────────────────────────────────────────────
+  describe('the DSN lane — only mail this workspace sent can be bounced', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    /** Past `PROVENANCE_WINDOW_DAYS`: only the returned id can prove these. */
+    const weeksAgo = () => new Date(Date.now() - 45 * DAY);
+
+    afterAll(async () => {
+      if (!realDbEnabled() || !prisma) return;
+      // The Sent-echo case goes through the REAL ingress, which queues real
+      // outbox events (the lead it opened, the owner's reply). They are the
+      // last this file emits, so let the worker — and the handlers it wakes —
+      // finish with them before the file's teardown closes the app under them.
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const pending = await prisma.outboxEvent.count({
+          where: {
+            status: { in: ['queued', 'dispatching'] },
+            payload: { path: ['workspaceId'], equals: wsA },
+          },
+        });
+        if (!pending) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      await new Promise((r) => setTimeout(r, 1_000));
+      // The only table this block writes that the file's own teardown does not.
+      await prisma.mailLog.deleteMany({ where: { workspaceId: { in: [wsA, wsB] } } }).catch(() => undefined);
+    }, 30_000);
+
+    /** An RFC 3464 report that returns the bounced mail's headers, Postfix-style. */
+    const report = (o: {
+      id: string;
+      finalRecipient: string;
+      status: string;
+      returned?: string[];
+      from?: string;
+    }) => {
+      const body = [
+        '--b',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'This is the mail system at host mail.acme.test.',
+        '',
+        '--b',
+        'Content-Type: message/delivery-status',
+        '',
+        'Reporting-MTA: dns; mail.acme.test',
+        '',
+        `Final-Recipient: ${o.finalRecipient}`,
+        'Action: failed',
+        `Status: ${o.status}`,
+        '',
+        ...(o.returned
+          ? ['--b', 'Content-Type: text/rfc822-headers', '', ...o.returned, '']
+          : []),
+        '--b--',
+      ].join('\r\n');
+      return rfc822({
+        From: o.from ?? 'Mail Delivery System <MAILER-DAEMON@acme.test>',
+        Subject: 'Undelivered Mail Returned to Sender',
+        'Message-ID': `<${o.id}@acme.test>`,
+        'Content-Type': 'multipart/report; report-type=delivery-status; boundary="b"',
+        __body: body,
+      });
+    };
+
+    const itemAt = (uid: number) =>
+      prisma.emailInboundItem.findFirstOrThrow({
+        where: { workspaceId: wsA, channelId: chA, itemKey: `${UID_VALIDITY}:${uid}` },
+      });
+
+    it('suppresses the bounce of a mail the gateway sent, matched on the id the returned headers carry', async () => {
+      const dead = `eski-${SEED}@musteri.test`;
+      const lead = await prisma.lead.create({
+        data: {
+          workspaceId: wsA,
+          businessName: 'Eski Adres Ltd',
+          contactPerson: 'Eski',
+          businessType: 'OTHER',
+          source: 'MANUAL',
+          status: 'NEW',
+          email: dead,
+          emailNormalized: dead,
+        },
+      });
+      // Outside the address window, so the ONLY thing that can prove this is
+      // ours is the id — folded onto its own line, as plenty of MTAs write it.
+      const messageId = await sentByGateway(dead, weeksAgo());
+
+      await setCursor(chA, 130);
+      imapServer.serve(
+        131,
+        report({
+          id: `dsn-eski-${SEED}`,
+          finalRecipient: `rfc822; ${dead}`,
+          status: '5.1.1',
+          returned: [`From: Acme <${OWN_A}>`, `To: ${dead}`, 'Message-ID:', ` <${messageId}>`, 'Subject: Faturanız'],
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, dead, 'TRANSACTIONAL')).toEqual({
+        suppressed: true,
+        reason: 'HARD_BOUNCE',
+      });
+      const after = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+      expect(after.emailBouncedAt).toBeTruthy();
+      const item = await itemAt(131);
+      expect(item.state).toBe('SKIPPED');
+      expect(item.reason).toBe('dsn');
+      expect(await prisma.contactIdentity.count({ where: { workspaceId: wsA, value: dead } })).toBe(0);
+    });
+
+    it('suppresses the address that appears ONLY in the returned headers, beside our id', async () => {
+      // `Final-Recipient: rfc822; <>` — the report names nobody readable, and
+      // the bounced mail's own `To` is the only place the address is written.
+      const dead = `adsiz-${SEED}@musteri.test`;
+      const messageId = await sentByGateway(dead, weeksAgo());
+
+      await setCursor(chA, 131);
+      imapServer.serve(
+        132,
+        report({
+          id: `dsn-adsiz-${SEED}`,
+          finalRecipient: 'rfc822; <>',
+          status: '5.1.1',
+          returned: [`From: Acme <${OWN_A}>`, `To: "Adsız Müşteri" <${dead}>`, `Message-ID: <${messageId}>`],
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, dead, 'BULK')).toEqual({ suppressed: true, reason: 'HARD_BOUNCE' });
+      expect((await itemAt(132)).reason).toBe('dsn');
+    });
+
+    it('suppresses the bounce of a mail the owner typed in their own client, read back from Sent', async () => {
+      // No ledger row at all — the product never sent this. The Sent-folder
+      // reconciler filed the owner's own mail as an OUTBOUND echo, through the
+      // real ingress, and that echo is the proof: nobody outside can write into
+      // a tenant's Sent folder.
+      const dead = `outlook-${SEED}@musteri.test`;
+      const ownerMessageId = `owner-typed-${SEED}@acme.test`;
+      await ingress.ingest(
+        { id: chA, workspaceId: wsA, type: 'EMAIL' },
+        {
+          externalUserId: dead,
+          kind: 'EMAIL',
+          externalMessageId: ownerMessageId,
+          text: 'Teklif\n\nMerhaba, teklifimiz ektedir.',
+          echo: true,
+          raw: { source: 'imap-sent', to: dead, messageId: ownerMessageId },
+        },
+      );
+      expect(await prisma.mailLog.count({ where: { workspaceId: wsA, toAddressNorm: dead } })).toBe(0);
+
+      await setCursor(chA, 132);
+      imapServer.serve(
+        133,
+        report({
+          id: `dsn-outlook-${SEED}`,
+          finalRecipient: `rfc822; ${dead}`,
+          status: '5.1.1',
+          returned: [`From: Acme <${OWN_A}>`, `To: ${dead}`, `Message-ID: <${ownerMessageId}>`],
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, dead, 'TRANSACTIONAL')).toEqual({
+        suppressed: true,
+        reason: 'HARD_BOUNCE',
+      });
+    });
+
+    it('refuses a forged report: a stranger naming a lead this workspace never mailed', async () => {
+      // The attack the provenance gate exists for. The tenant's mailbox is on
+      // their website; this report is well-formed RFC 3464, sent from the
+      // stranger's own domain, and names a customer in the CRM. Nothing in it
+      // is anything we sent.
+      const customer = `patron-${SEED}@buyukmusteri.test`;
+      const lead = await prisma.lead.create({
+        data: {
+          workspaceId: wsA,
+          businessName: 'Büyük Müşteri AŞ',
+          contactPerson: 'Patron',
+          businessType: 'OTHER',
+          source: 'MANUAL',
+          status: 'NEW',
+          email: customer,
+          emailNormalized: customer,
+        },
+      });
+      const rowsBefore = await prisma.contactSuppression.count({ where: { workspaceId: wsA } });
+
+      await setCursor(chA, 133);
+      imapServer.serve(
+        134,
+        report({
+          id: `dsn-forged-${SEED}`,
+          from: `Mail Delivery System <MAILER-DAEMON@rakip-${SEED}.test>`,
+          finalRecipient: `rfc822; ${customer}`,
+          status: '5.1.1',
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, customer, 'TRANSACTIONAL')).toEqual({ suppressed: false });
+      expect(await prisma.contactSuppression.count({ where: { workspaceId: wsA } })).toBe(rowsBefore);
+      const after = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+      expect(after.emailBouncedAt).toBeNull();
+      // Still read, still not a lead, and the cursor is not held behind it.
+      const item = await itemAt(134);
+      expect(item.state).toBe('SKIPPED');
+      expect(item.reason).toBe('dsn');
+      expect((await cursorOf(chA)).imapLastUid).toBe(134);
+    });
+
+    it('suppresses nobody on a 4.x.x, even for an address this workspace DID mail', async () => {
+      const busy = `dolu-kanitli-${SEED}@musteri.test`;
+      const messageId = await sentByGateway(busy);
+      const rowsBefore = await prisma.contactSuppression.count({ where: { workspaceId: wsA } });
+
+      await setCursor(chA, 134);
+      imapServer.serve(
+        135,
+        report({
+          id: `dsn-dolu-${SEED}`,
+          finalRecipient: `rfc822; ${busy}`,
+          status: '4.2.2',
+          returned: [`From: Acme <${OWN_A}>`, `To: ${busy}`, `Message-ID: <${messageId}>`],
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, busy, 'BULK')).toEqual({ suppressed: false });
+      expect(await prisma.contactSuppression.count({ where: { workspaceId: wsA } })).toBe(rowsBefore);
+      expect((await cursorOf(chA)).imapLastUid).toBe(135);
+    });
+
+    // ── forgeries, lane by lane ────────────────────────────────────────────
+
+    /** A lead in the CRM that this workspace has never mailed — the target. */
+    const unmailedLead = async (address: string) =>
+      prisma.lead.create({
+        data: {
+          workspaceId: wsA,
+          businessName: `Hedef ${address}`,
+          contactPerson: 'Hedef',
+          businessType: 'OTHER',
+          source: 'IMPORT',
+          status: 'NEW',
+          email: address,
+          emailNormalized: address,
+        },
+      });
+
+    it("refuses a forgery that claims to be the tenant's OWN mail system", async () => {
+      // `MAILER-DAEMON@acme.test`, `Reporting-MTA: dns; mail.acme.test` — the
+      // tenant's own domain, which is the most plausible bounce there is and
+      // also one line of free text. With no id and no mail to point at, a
+      // report "from our own server" is exactly as provable as one from a rival.
+      const target = `oz-alan-${SEED}@musteri.test`;
+      const lead = await unmailedLead(target);
+      const rowsBefore = await prisma.contactSuppression.count({ where: { workspaceId: wsA } });
+
+      await setCursor(chA, 139);
+      imapServer.serve(
+        140,
+        report({ id: `dsn-own-domain-${SEED}`, finalRecipient: `rfc822; ${target}`, status: '5.1.1' }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, target, 'TRANSACTIONAL')).toEqual({ suppressed: false });
+      expect(await prisma.contactSuppression.count({ where: { workspaceId: wsA } })).toBe(rowsBefore);
+      expect((await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).emailBouncedAt).toBeNull();
+      expect((await itemAt(140)).reason).toBe('dsn');
+      expect((await cursorOf(chA)).imapLastUid).toBe(140);
+    });
+
+    it('refuses a forgery that names nobody readable and points the returned To at a victim beside a REAL id', async () => {
+      // The returned-headers fallback names a CANDIDATE only. The id is one
+      // this workspace really sent — to somebody else — so it must buy the
+      // victim nothing, and must not suppress the real recipient either: the
+      // report never named them.
+      const victim = `kurban-${SEED}@musteri.test`;
+      const realRecipient = `gercek-${SEED}@musteri.test`;
+      const lead = await unmailedLead(victim);
+      const realId = await sentByGateway(realRecipient, weeksAgo());
+      const rowsBefore = await prisma.contactSuppression.count({ where: { workspaceId: wsA } });
+
+      await setCursor(chA, 140);
+      imapServer.serve(
+        141,
+        report({
+          id: `dsn-returned-to-${SEED}`,
+          finalRecipient: 'rfc822; <>',
+          status: '5.1.1',
+          returned: [`From: Acme <${OWN_A}>`, `To: ${victim}`, `Message-ID: <${realId}>`],
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, victim, 'TRANSACTIONAL')).toEqual({ suppressed: false });
+      expect(await suppression.check(wsA, realRecipient, 'TRANSACTIONAL')).toEqual({ suppressed: false });
+      expect(await prisma.contactSuppression.count({ where: { workspaceId: wsA } })).toBe(rowsBefore);
+      expect((await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).emailBouncedAt).toBeNull();
+    });
+
+    it("refuses a forgery quoting the id of the owner's REAL Sent-folder mail to somebody else", async () => {
+      // The echo proof pairs the id with the echo's OWN recipient, in SQL.
+      const echoedTo = `yanki-${SEED}@musteri.test`;
+      const victim = `yanki-kurban-${SEED}@musteri.test`;
+      const lead = await unmailedLead(victim);
+      const echoId = `owner-echo-${SEED}@acme.test`;
+      await ingress.ingest(
+        { id: chA, workspaceId: wsA, type: 'EMAIL' },
+        {
+          externalUserId: echoedTo,
+          kind: 'EMAIL',
+          externalMessageId: echoId,
+          text: 'Teklif\n\nMerhaba, teklifimiz ektedir.',
+          echo: true,
+          raw: { source: 'imap-sent', to: echoedTo, messageId: echoId },
+        },
+      );
+      const rowsBefore = await prisma.contactSuppression.count({ where: { workspaceId: wsA } });
+
+      await setCursor(chA, 141);
+      imapServer.serve(
+        142,
+        report({
+          id: `dsn-echo-forged-${SEED}`,
+          finalRecipient: `rfc822; ${victim}`,
+          status: '5.1.1',
+          returned: [`From: Acme <${OWN_A}>`, `To: ${victim}`, `Message-ID: <${echoId}>`],
+        }),
+      );
+      await poller.pollOne(wsA, chA);
+
+      expect(await suppression.check(wsA, victim, 'TRANSACTIONAL')).toEqual({ suppressed: false });
+      expect(await prisma.contactSuppression.count({ where: { workspaceId: wsA } })).toBe(rowsBefore);
+      expect((await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).emailBouncedAt).toBeNull();
+    });
+
+    it('refuses the same forgery through the tokenized webhook — the token authenticates the relay, not the mail', async () => {
+      const target = `webhook-hedef-${SEED}@musteri.test`;
+      const lead = await unmailedLead(target);
+      const rowsBefore = await prisma.contactSuppression.count({ where: { workspaceId: wsA } });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/public/channels/email/${chA}/${emailInboundToken(chA)}/inbound`)
+        .set('content-type', 'application/json')
+        .send({
+          from: 'Mail Delivery System <MAILER-DAEMON@acme.test>',
+          subject: 'Undelivered Mail Returned to Sender',
+          text: [
+            'Reporting-MTA: dns; mail.acme.test',
+            '',
+            `Final-Recipient: rfc822; ${target}`,
+            'Action: failed',
+            'Status: 5.1.1',
+            'Diagnostic-Code: smtp; 550 5.1.1 User unknown',
+          ].join('\n'),
+          'message-id': `<dsn-webhook-forged-${SEED}@acme.test>`,
+          'message-headers': JSON.stringify([
+            ['Content-Type', 'multipart/report; report-type=delivery-status; boundary=b'],
+          ]),
+          recipient: OWN_A,
+        })
+        .expect(201);
+      // Read as a report, not as a customer — so a pass here cannot be the
+      // vacuous one where the forgery was simply never classified.
+      expect(res.body).toEqual({ ok: true, received: 0 });
+      const item = await prisma.emailInboundItem.findFirstOrThrow({
+        where: { workspaceId: wsA, channelId: chA, source: 'webhook', itemKey: `dsn-webhook-forged-${SEED}@acme.test` },
+      });
+      expect(item.reason).toBe('dsn');
+
+      expect(await suppression.check(wsA, target, 'TRANSACTIONAL')).toEqual({ suppressed: false });
+      expect(await prisma.contactSuppression.count({ where: { workspaceId: wsA } })).toBe(rowsBefore);
+      expect((await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).emailBouncedAt).toBeNull();
+      expect(await prisma.contactIdentity.count({ where: { workspaceId: wsA, value: target } })).toBe(0);
+    });
+
+    it('and the webhook still suppresses a genuine bounce of mail the gateway sent', async () => {
+      // The other half: the same door, the same shape, about an address this
+      // workspace really mailed — so the refusal above is provenance, not a
+      // door that suppresses nothing at all.
+      const dead = `webhook-olu-${SEED}@musteri.test`;
+      await sentByGateway(dead);
+
+      await request(app.getHttpServer())
+        .post(`/api/public/channels/email/${chA}/${emailInboundToken(chA)}/inbound`)
+        .set('content-type', 'application/json')
+        .send({
+          from: 'Mail Delivery System <MAILER-DAEMON@acme.test>',
+          subject: 'Undelivered Mail Returned to Sender',
+          text: [
+            'Reporting-MTA: dns; mail.acme.test',
+            '',
+            `Final-Recipient: rfc822; ${dead}`,
+            'Action: failed',
+            'Status: 5.1.1',
+          ].join('\n'),
+          'message-id': `<dsn-webhook-genuine-${SEED}@acme.test>`,
+          'message-headers': JSON.stringify([
+            ['Content-Type', 'multipart/report; report-type=delivery-status; boundary=b'],
+          ]),
+          recipient: OWN_A,
+        })
+        .expect(201);
+
+      expect(await suppression.check(wsA, dead, 'TRANSACTIONAL')).toEqual({
+        suppressed: true,
+        reason: 'HARD_BOUNCE',
+      });
     });
   });
 });

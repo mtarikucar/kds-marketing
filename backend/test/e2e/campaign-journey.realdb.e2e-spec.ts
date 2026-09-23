@@ -55,6 +55,18 @@ const LINK = 'https://acme.example.com/menu';
 /** A browser, not a scanner: the deny-list must not fire on a real reader. */
 const READER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36';
+/**
+ * Everything a browser sends when a person clicks a link — a top-level
+ * navigation, from the browser or from the webview inside the mail app. The
+ * click classifier (`isAutomatedFetch`) reads this shape, not just the UA.
+ */
+const BROWSER_CLICK = {
+  'User-Agent': READER_UA,
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Dest': 'document',
+};
 
 const SUBSCRIBER = `bulk-${SEED}@example.com`;
 
@@ -500,17 +512,82 @@ describeRealDb('Campaign journey — launch to opt-out, real DB (e2e)', () => {
   });
 
   it('5) redirects a click to the campaign-authored URL and counts it once', async () => {
+    // A person's click is a top-level navigation. A bare User-Agent with no
+    // Accept or Accept-Language is the shape of a script, and 5b) pins that it
+    // is not counted — so the reader here must send what a browser sends.
     const click = await request(app.getHttpServer())
       .get(`/api/public/t/c/${token}?i=0`)
-      .set('User-Agent', READER_UA);
+      .set(BROWSER_CLICK);
     expect(click.status).toBe(302);
     expect(click.headers.location).toBe(LINK);
 
-    await request(app.getHttpServer()).get(`/api/public/t/c/${token}?i=0`).set('User-Agent', READER_UA);
+    await request(app.getHttpServer()).get(`/api/public/t/c/${token}?i=0`).set(BROWSER_CLICK);
 
     expect(await stats()).toMatchObject({ opened: 1, clicked: 1 });
     const row = await recipientOf(leads.subscriber);
     expect(row?.clickedAt).toBeTruthy();
+  });
+
+  it('5b) counts a person who clicks, and none of the machines that fetched the same link first', async () => {
+    // The colleague's own token: nobody has clicked or opened it yet, so every
+    // number below is a transition this test caused — whatever 5) counted on
+    // the subscriber's row.
+    const colleague = await recipientOf(leads.colleague);
+    const url = `/api/public/t/c/${colleague!.token}?i=0`;
+    const before = await stats();
+
+    // What reaches a tracked link before the recipient does. Each one is still
+    // taken to the campaign's own destination — a scanner that got an error
+    // page would flag the mail — but none of them is a click.
+    const machines: Array<[string, () => request.Test]> = [
+      ['a HEAD probe', () => request(app.getHttpServer()).head(url).set(BROWSER_CLICK)],
+      [
+        'a declared prefetch',
+        () => request(app.getHttpServer()).get(url).set({ ...BROWSER_CLICK, 'Sec-Purpose': 'prefetch' }),
+      ],
+      [
+        'a non-navigation fetch',
+        () => request(app.getHttpServer()).get(url).set({ ...BROWSER_CLICK, 'Sec-Fetch-Mode': 'no-cors' }),
+      ],
+      [
+        'a named link scanner',
+        () =>
+          request(app.getHttpServer())
+            .get(url)
+            .set({ ...BROWSER_CLICK, 'User-Agent': 'Mozilla/5.0 (compatible; Mimecast Link Protection)' }),
+      ],
+      [
+        'a script wearing a browser UA (the curl shape)',
+        () => request(app.getHttpServer()).get(url).set({ 'User-Agent': READER_UA, Accept: '*/*' }),
+      ],
+    ];
+    for (const [label, fetch] of machines) {
+      const res = await fetch();
+      expect({ label, status: res.status, location: res.headers.location }).toEqual({
+        label,
+        status: 302,
+        location: LINK,
+      });
+    }
+    expect(await stats()).toMatchObject({ clicked: before.clicked, opened: before.opened });
+    expect(await recipientOf(leads.colleague)).toMatchObject({ clickedAt: null, openedAt: null });
+
+    // Then the person.
+    const click = await request(app.getHttpServer()).get(url).set(BROWSER_CLICK);
+    expect(click.status).toBe(302);
+    expect(click.headers.location).toBe(LINK);
+    // A double-click is one click.
+    await request(app.getHttpServer()).get(url).set(BROWSER_CLICK);
+
+    // One click, and — because a reader who blocks images still read the mail
+    // to click it — one open with it (`click-not-open`).
+    expect(await stats()).toMatchObject({
+      clicked: (before.clicked as number) + 1,
+      opened: (before.opened as number) + 1,
+    });
+    const row = await recipientOf(leads.colleague);
+    expect(row?.clickedAt).toBeTruthy();
+    expect(row?.openedAt).toBeTruthy();
   });
 
   it('6) lets a mail-security scanner fetch the unsubscribe link without opting anybody out', async () => {

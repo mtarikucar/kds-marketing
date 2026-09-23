@@ -179,6 +179,51 @@ describe('CampaignTrackingController — unsubscribe is scanner-safe', () => {
       expect(res.redirect).toHaveBeenCalledWith(302, 'https://shop.example/x');
     });
 
+    /**
+     * The other half of the same wiring: what a person's click actually sends
+     * (a top-level navigation from the browser or the in-app webview the mail
+     * client opens) must reach the service as a person, or every real click in
+     * every campaign goes uncounted with nothing on screen to say why.
+     */
+    const BROWSER_NAVIGATION = {
+      'user-agent':
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36',
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'accept-language': 'tr-TR,tr;q=0.9,en;q=0.8',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    };
+
+    it('hands a real browser navigation to the click as a person', async () => {
+      const tracking = trackingDouble({ click: jest.fn().mockResolvedValue('https://shop.example/x') });
+      const res = makeRes();
+      res.redirect = jest.fn();
+      await make(tracking).click('tok', '0', req({ headers: BROWSER_NAVIGATION }) as any, res);
+      expect(tracking.click).toHaveBeenCalledWith('tok', 0, {
+        method: 'GET',
+        ua: BROWSER_NAVIGATION['user-agent'],
+        automated: false,
+      });
+      expect(res.redirect).toHaveBeenCalledWith(302, 'https://shop.example/x');
+    });
+
+    it('marks a declared prefetch of the same link automated, and still redirects it', async () => {
+      // Same browser, same headers — but the browser says it is speculatively
+      // loading the page, not that the person clicked. The User-Agent cannot
+      // tell the two apart; only the navigation shape can.
+      const tracking = trackingDouble({ click: jest.fn().mockResolvedValue('https://shop.example/x') });
+      const res = makeRes();
+      res.redirect = jest.fn();
+      await make(tracking).click(
+        'tok',
+        '0',
+        req({ headers: { ...BROWSER_NAVIGATION, 'sec-purpose': 'prefetch' } }) as any,
+        res,
+      );
+      expect(tracking.click).toHaveBeenCalledWith('tok', 0, expect.objectContaining({ automated: true }));
+      expect(res.redirect).toHaveBeenCalledWith(302, 'https://shop.example/x');
+    });
+
     it('survives a request object with no headers at all', async () => {
       const tracking = trackingDouble({ open: jest.fn().mockResolvedValue(undefined) });
       const res = makeRes();
