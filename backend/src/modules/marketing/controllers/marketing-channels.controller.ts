@@ -6,6 +6,8 @@ import {
   Delete,
   Body,
   Param,
+  Query,
+  NotFoundException,
   UseGuards,
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
@@ -18,7 +20,17 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { ChannelsService } from '../channels/channels.service';
+import { MailOpsService } from '../channels/ops/mail-ops.service';
+import {
+  InboundItemService,
+  InboundItemState,
+} from '../channels/inbound/inbound-item.service';
 import { CreateChannelDto, UpdateChannelDto, WhatsappEmbeddedSignupDto } from '../dto/channel.dto';
+
+/** The ledger states a client may filter on. An unknown value is dropped
+ *  rather than forwarded — a filter nobody can match would answer "nothing
+ *  went wrong" for a mailbox full of parked mail. */
+const INBOUND_STATES: readonly string[] = ['NEW', 'DONE', 'SKIPPED', 'FAILED', 'QUARANTINED'];
 
 /**
  * Channel configuration (web-chat / WhatsApp / SMS / Instagram / Messenger).
@@ -38,12 +50,80 @@ import { CreateChannelDto, UpdateChannelDto, WhatsappEmbeddedSignupDto } from '.
 @UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class MarketingChannelsController {
-  constructor(private readonly channels: ChannelsService) {}
+  constructor(
+    private readonly channels: ChannelsService,
+    private readonly mailOps: MailOpsService,
+    private readonly inboundItems: InboundItemService,
+  ) {}
 
   @Get()
   @RequiresFeature('conversationAi')
   list(@CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.channels.list(actor.workspaceId);
+  }
+
+  /**
+   * "Why did nothing send?" — the whole answer in one call.
+   *
+   * Sender identity and what is degrading it, the send/bounce/complaint
+   * numbers, per-mailbox send and receive health, today's platform cap,
+   * suppression counts, and **the list of env-gated features this deployment
+   * currently leaves inert**. That last part is the cheapest thing in this
+   * package and the one that most often ends the conversation: a mailbox
+   * OAuth button that does nothing because `GOOGLE_MAIL_CLIENT_ID` was never
+   * mapped looks identical to a bug until something names the key.
+   *
+   * No `@RequiresFeature`: a workspace whose plan does NOT include the
+   * conversation features still sends campaign, booking and invoice mail, and
+   * gating the explanation behind the feature that is switched off is exactly
+   * how a tenant ends up with silence and no reason for it. `settings.manage`
+   * is the floor because the payload names mailbox addresses and error strings.
+   *
+   * Declared BEFORE the `:id` route so the static path isn't captured by it.
+   */
+  @Get('email/health')
+  @RequirePermission('settings.manage')
+  emailHealth(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.mailOps.health(actor.workspaceId);
+  }
+
+  /** One mailbox's inbound ledger — what arrived, what was skipped and why,
+   *  and what is parked waiting for a human. The card's list. */
+  @Get(':id/inbound-items')
+  @RequirePermission('settings.manage')
+  listInboundItems(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+    @Query('state') state?: string,
+  ) {
+    const wanted = INBOUND_STATES.includes(state ?? '') ? (state as InboundItemState) : undefined;
+    return this.inboundItems.listForChannel(actor.workspaceId, id, {
+      ...(wanted ? { state: wanted } : {}),
+    });
+  }
+
+  /**
+   * "Tekrar dene" — requeue one quarantined item.
+   *
+   * The channel in the path is checked against the row rather than trusted:
+   * the ledger read is already workspace-scoped, so this is not an isolation
+   * hole, but a card left open while a mailbox was reconnected would otherwise
+   * silently retry a different mailbox's backlog. A refusal (`no-replayer`,
+   * a row that vanished) becomes a 404 instead of an `{ok:false}` the UI would
+   * render as success.
+   */
+  @Post(':id/inbound-items/:itemId/retry')
+  @RequirePermission('settings.manage')
+  async retryInboundItem(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+  ) {
+    const row = await this.inboundItems.get(actor.workspaceId, itemId);
+    if (!row || row.channelId !== id) throw new NotFoundException('Inbound item not found');
+    const result = await this.inboundItems.retry(actor.workspaceId, itemId);
+    if (!result.ok) throw new NotFoundException('That item cannot be retried');
+    return result;
   }
 
   /** Non-secret config the frontend needs to launch WhatsApp Embedded Signup.

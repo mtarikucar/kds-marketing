@@ -30,6 +30,8 @@ import {
 import { shouldIngest } from './inbound/inbound-policy';
 import { parseDeliveryReport, suppressibleRecipients } from './inbound/delivery-report';
 import { SuppressionService } from '../compliance/suppression.service';
+import { MailboxHealthService } from './mailbox-health.service';
+import { sweepHeartbeatError } from './ops/mail-ops.service';
 
 /** The minimal Channel-row shape this poller reads — an explicit `select` that
  *  keeps `workspaceId` a query-arg literal for workspace-scoping.arch.spec.ts,
@@ -74,6 +76,19 @@ interface PollCursor {
 interface FailState {
   uid: number;
   count: number;
+}
+
+/** One sweep, counted the three ways the heartbeat needs (§A5). */
+interface PollSweep {
+  ingested: number;
+  /** Mailboxes drained without an error. */
+  ok: number;
+  /** Mailboxes that threw. */
+  failed: number;
+  /** Mailboxes this poller is not meant to read — never a heartbeat signal. */
+  skipped: number;
+  /** The failures' own words, for `CronHeartbeat.lastError`. */
+  reasons: string[];
 }
 
 /** Why this uid was not ingested — a ledger code plus the line for the log. */
@@ -219,6 +234,9 @@ export class EmailImapPollService implements OnModuleInit {
     /** Optional so a unit test — or a deployment that has not wired the ledger
      *  — still polls. A missing ledger costs the audit trail, never the mail. */
     @Optional() private readonly items?: InboundItemService,
+    /** Optional for the same reason: the receive lane's health is a description
+     *  of this sweep, and a sweep must never depend on being described. */
+    @Optional() private readonly health?: MailboxHealthService,
   ) {}
 
   onModuleInit(): void {
@@ -233,6 +251,16 @@ export class EmailImapPollService implements OnModuleInit {
    * connection, an unsupported server or a restarted process missed. Five
    * minutes is chosen for that job — often enough that a gap is a gap and not
    * an outage, cheap enough to run against every mailbox on the platform.
+   *
+   * It is also the ONLY place the sweep is allowed to fail. `withAdvisoryLock`
+   * rethrows into `CronHeartbeat.lastError` and flips `failing: true` for the
+   * MCP tool that reads it, so a throw here IS the heartbeat — and it happens
+   * only when every mailbox that was attempted failed (`sweepHeartbeatError`).
+   * The partial case is carried per mailbox, in `Channel.configPublic.health`,
+   * where the only person who can fix it can see it.
+   *
+   * `poll()` itself stays non-throwing: it is the drain, and a caller asking
+   * for the counts should not have to catch one tenant's bad password.
    */
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'email-imap-poll' })
   async pollDue(): Promise<void> {
@@ -240,14 +268,30 @@ export class EmailImapPollService implements OnModuleInit {
       this.prisma,
       'email-imap-poll',
       async () => {
-        await this.poll();
+        const sweep = await this.sweep();
+        const failure = sweepHeartbeatError(sweep, sweep.reasons);
+        if (failure) throw new Error(failure);
       },
       this.logger,
     );
   }
 
   async poll(): Promise<{ ingested: number; mailboxes: number }> {
-    if (!this.registry.has('EMAIL')) return { ingested: 0, mailboxes: 0 };
+    const { ingested, ok } = await this.sweep();
+    return { ingested, mailboxes: ok };
+  }
+
+  /**
+   * One pass over every pollable mailbox, counted three ways.
+   *
+   * `skipped` is a mailbox this poller is not meant to read at all (no
+   * resolvable IMAP host, an ESP-webhook workspace) — it is not evidence of
+   * anything and must never colour the heartbeat. `ok` and `failed` are the
+   * two that do.
+   */
+  private async sweep(): Promise<PollSweep> {
+    const sweep: PollSweep = { ingested: 0, ok: 0, failed: 0, skipped: 0, reasons: [] };
+    if (!this.registry.has('EMAIL')) return sweep;
     const channels = (await this.prisma.channel.findMany({
       // `lastVerifiedAt` is written only when a health check PASSED, so this is
       // a mailbox whose password has actually been accepted. Trying IMAP with
@@ -264,22 +308,43 @@ export class EmailImapPollService implements OnModuleInit {
       },
     })) as ChannelRow[];
 
-    let ingested = 0;
-    let mailboxes = 0;
     for (const channel of channels) {
       try {
         const n = await this.pollChannel(channel);
-        if (n !== null) {
-          mailboxes++;
-          ingested += n;
+        if (n === null) {
+          sweep.skipped++;
+          continue;
         }
+        sweep.ok++;
+        sweep.ingested += n;
+        await this.recordReceive(channel, null);
       } catch (e: any) {
-        this.logger.warn(
-          `email-imap-poll: channel=${channel.id} failed: ${String(e?.message ?? e).slice(0, 300)}`,
-        );
+        const message = String(e?.message ?? e).slice(0, 300);
+        sweep.failed++;
+        sweep.reasons.push(message);
+        this.logger.warn(`email-imap-poll: channel=${channel.id} failed: ${message}`);
+        // Persisted, not only warned: only the tenant knows the new password,
+        // and a log line on our side has never once reached them.
+        await this.recordReceive(channel, message);
       }
     }
-    return { ingested, mailboxes };
+    return sweep;
+  }
+
+  /** Per-mailbox receive truth, best-effort. The IDLE hold writes the same
+   *  block; a deployment whose server has no IDLE support would otherwise have
+   *  nothing writing it at all. Optional so a unit test still polls. */
+  private async recordReceive(channel: ChannelRow, error: string | null): Promise<void> {
+    if (!this.health) return;
+    const ref = { id: channel.id, workspaceId: channel.workspaceId };
+    try {
+      if (error === null) await this.health.recordOk(ref, 'receive', { polled: true });
+      else await this.health.recordFailure(ref, 'receive', { error, reason: 'POLL_FAILED' });
+    } catch {
+      // MailboxHealthService already swallows its own writes; this is the belt
+      // for a mock that does not. Health is a description, never a reason for
+      // the poll to have gone differently (G2).
+    }
   }
 
   /**
