@@ -55,6 +55,21 @@ function makeHealth() {
  * Focused tests for ChannelsService.mask() — the public view of a channel.
  * mask() is private, so we drive it through list() with a stubbed Prisma.
  */
+
+/**
+ * The `configPublic` write a save hands the database: the PATCH (the keys this
+ * save owns) and the keys it drops. The write is one
+ * `(configPublic - $drops) || $patch` statement, so everything not named here
+ * keeps whatever the row holds at write time — which is how a settings save
+ * stops being able to revert an IMAP cursor or a health block written while
+ * the save was talking to a mail server.
+ */
+function publicWrite(prisma: any, index = 0): { patch: any; drops: string[] } {
+  const values = prisma.$executeRaw.mock.calls[index][0].values as unknown[];
+  const at = values.findIndex((v) => typeof v === 'string' && (v as string).startsWith('{'));
+  return { drops: values.slice(0, at) as string[], patch: JSON.parse(values[at] as string) };
+}
+
 describe('ChannelsService — mask()', () => {
   const PUBLIC_BASE_URL = 'https://app.example.com';
 
@@ -416,6 +431,7 @@ describe('ChannelsService — registerIysWebhook()', () => {
         findFirst: jest.fn().mockResolvedValue(channelRow),
         update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...channelRow, ...data })),
       },
+      $executeRaw: jest.fn().mockResolvedValue(1),
     } as any;
     const registry = {
       resolveConfig: jest.fn().mockReturnValue({
@@ -459,10 +475,10 @@ describe('ChannelsService — registerIysWebhook()', () => {
       { usercode: 'u1', password: 'p1', brandCode: 'BRAND1' },
       expect.stringContaining('/api/public/netgsm/ws-1/'),
     );
-    expect(prisma.channel.update).toHaveBeenCalledWith({
-      where: { id: 'ch-1' },
-      data: { configPublic: { brandCode: 'BRAND1', iysWebhookRegistered: true } },
-    });
+    // ONE key, merged by the database: `brandCode` and everything else in the
+    // column stay whatever the row says at write time.
+    expect(publicWrite(prisma)).toEqual({ drops: [], patch: { iysWebhookRegistered: true } });
+    expect(prisma.channel.update).not.toHaveBeenCalled();
   });
 
   it('throws NotFoundException when the channel does not exist (or is not SMS)', async () => {
@@ -819,6 +835,12 @@ describe('ChannelsService — connecting a mailbox', () => {
         findMany: jest.fn().mockResolvedValue(opts.pendingRows ?? []),
       },
       sendingDomain: { findFirst: jest.fn().mockResolvedValue(opts.sendingDomain ?? null) },
+      // A save that touches `configPublic` merges it in the DATABASE
+      // (`configPublic || $patch`) and rides one transaction with the rest of
+      // the row — the column's other writers (both IMAP cursors, the health
+      // block) commit inside this method's own lifetime.
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
     } as any;
     const registry = {
       has: jest.fn().mockReturnValue(true),
@@ -1123,7 +1145,7 @@ describe('ChannelsService — connecting a mailbox', () => {
       expect(result.id).toBe('ch-parked');
       const { data } = prisma.channel.update.mock.calls[0][0];
       expect(data.externalId).toBeNull();
-      expect(data.configPublic.pendingAddress).toBe('info@firma.com.tr');
+      expect(publicWrite(prisma).patch.pendingAddress).toBe('info@firma.com.tr');
     });
 
     it('promotes the parked channel when proof arrives, instead of making a second one', async () => {
@@ -1155,8 +1177,13 @@ describe('ChannelsService — connecting a mailbox', () => {
       expect(result.id).toBe('ch-parked');
       const { data } = prisma.channel.update.mock.calls[0][0];
       expect(data.externalId).toBe('info@firma.com.tr');
-      expect(data.configPublic.pendingAddress).toBeUndefined();
-      expect(data.configPublic.inboundPolicy).toBe('REPLIES_AND_KNOWN');
+      // The parked marker is REMOVED by the statement itself, and
+      // `inboundPolicy` — which this save never names — is left on the row
+      // rather than rewritten from a copy read before the mailbox was probed.
+      const write = publicWrite(prisma);
+      expect(write.drops).toEqual(['pendingAddress']);
+      expect(write.patch.pendingAddress).toBeUndefined();
+      expect(write.patch.inboundPolicy).toBeUndefined();
     });
   });
 
@@ -1335,13 +1362,15 @@ describe('ChannelsService — mask() exposes the tokenized inbound URL', () => {
 
 describe('ChannelsService — a settings save must not wipe the machines\' place', () => {
   function make(existing: any) {
-    const prisma = {
+    const prisma: any = {
       channel: {
         create: jest.fn(),
         update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: 'ch-1', ...data })),
         findFirst: jest.fn().mockResolvedValue(existing),
       },
-    } as any;
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
     const registry = { has: jest.fn().mockReturnValue(true) } as any;
     const resolver = {
       byExternalId: jest.fn().mockResolvedValue(null),
@@ -1382,15 +1411,13 @@ describe('ChannelsService — a settings save must not wipe the machines\' place
     // replies — and drops the backoff a dead credential earned.
     const { svc, prisma } = make(MAILBOX);
     await svc.update('ws-1', 'ch-1', { configPublic: { inboundPolicy: 'REPLIES_AND_KNOWN' } });
-    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
-    expect(written).toMatchObject({
-      imapLastUid: 4210,
-      imapUidValidity: '42',
-      imapFailUid: 4211,
-      imapFailCount: 2,
-      imapSentLastUid: 900,
-      health: { receive: { ok: false, backoffUntil: '2026-09-23T10:00:00.000Z' } },
-    });
+    // The save names the ONE key the dialog posted. Merging onto a copy read
+    // at the top of update() would have fixed the wipe and kept the race: that
+    // copy is several awaits and a credential probe old, and every machine
+    // writer can commit inside the window.
+    expect(publicWrite(prisma)).toEqual({ drops: [], patch: { inboundPolicy: 'REPLIES_AND_KNOWN' } });
+    // The row write that rides with it never carries the column at all.
+    expect(prisma.channel.update.mock.calls[0][0].data.configPublic).toBeUndefined();
   });
 
   it('still applies what the dialog actually changed', async () => {
@@ -1398,8 +1425,8 @@ describe('ChannelsService — a settings save must not wipe the machines\' place
     await svc.update('ws-1', 'ch-1', {
       configPublic: { inboundPolicy: 'REPLIES_AND_KNOWN', fromName: 'Acme Destek' },
     });
-    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
-    expect(written.inboundPolicy).toBe('REPLIES_AND_KNOWN');
-    expect(written.fromName).toBe('Acme Destek');
+    const { patch } = publicWrite(prisma);
+    expect(patch.inboundPolicy).toBe('REPLIES_AND_KNOWN');
+    expect(patch.fromName).toBe('Acme Destek');
   });
 });

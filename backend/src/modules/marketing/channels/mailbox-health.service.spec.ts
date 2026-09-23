@@ -23,10 +23,21 @@ describe('MailboxHealthService', () => {
   let prisma: any;
   let svc: MailboxHealthService;
 
-  /** The `configPublic` this write would leave on the row. */
+  /**
+   * The `configPublic` PATCH this write hands the database.
+   *
+   * It is a patch, not a blob: the write is one `configPublic || $patch`
+   * statement, so anything not named here keeps whatever the row holds at
+   * write time. That is why nothing below asserts on the column's other keys.
+   */
   function written(): any {
-    const calls = prisma.channel.update.mock.calls;
-    return calls[calls.length - 1][0].data.configPublic;
+    const calls = prisma.$executeRaw.mock.calls;
+    return JSON.parse(patchIn(calls[calls.length - 1][0]));
+  }
+
+  /** The JSON parameter out of a `Prisma.sql` statement. */
+  function patchIn(sql: any): string {
+    return (sql.values as unknown[]).find((v) => typeof v === 'string' && v.startsWith('{')) as string;
   }
 
   /** Hand the next re-read a row whose `configPublic` looks like this. */
@@ -41,6 +52,11 @@ describe('MailboxHealthService', () => {
         findFirst: jest.fn().mockResolvedValue({ configPublic: {} }),
         update: jest.fn().mockResolvedValue({}),
       },
+      // The health patch is written with ONE statement that merges it onto the
+      // row in the database (`configPublic || $patch`), so the column's other
+      // writers — the two IMAP cursors, a settings save — cannot be clobbered
+      // by a blob this service read seconds ago.
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
     svc = new MailboxHealthService(prisma);
   });
@@ -50,10 +66,11 @@ describe('MailboxHealthService', () => {
   });
 
   describe('writing without clobbering', () => {
-    it('re-reads the row inside its workspace and merges onto what is there now', async () => {
+    it('re-reads the row inside its workspace and writes the health key ALONE', async () => {
       // The caller has been holding a Channel row since before it opened an
-      // IMAP connection. Writing its stale copy back would drop a settings
-      // save made in the meantime — the same reason `writeCursor` re-reads.
+      // IMAP connection. The re-read is for the patch — `since`, the failure
+      // count — and the write names one key, so the tenant's own settings and
+      // both IMAP cursors are untouchable from here whatever this copy says.
       rowIs({ greeting: 'merhaba', imapLastUid: 41 });
 
       await svc.recordOk(REF, 'send');
@@ -62,9 +79,10 @@ describe('MailboxHealthService', () => {
         where: { id: 'ch-1', workspaceId: 'ws-1' },
         select: { configPublic: true },
       });
-      expect(written().greeting).toBe('merhaba');
-      expect(written().imapLastUid).toBe(41);
+      expect(Object.keys(written())).toEqual(['health']);
       expect(written().health.send.ok).toBe(true);
+      // Never a whole-blob write, however stale the copy in hand.
+      expect(prisma.channel.update).not.toHaveBeenCalled();
     });
 
     it('leaves the other lane alone — sending and receiving fail separately', async () => {
@@ -97,6 +115,37 @@ describe('MailboxHealthService', () => {
       expect(written().health.receive.lastErrorAt).toBe(NOW.toISOString());
     });
 
+    it('does not roll back a cursor that moved while the patch was being computed', async () => {
+      // The re-read narrows the window; it does not close it. `configPublic`
+      // is ONE column carrying both this health block and the IMAP pollers'
+      // cursors, and a send settling and a sweep finishing are not serialized
+      // by anything. Read at 400, write the whole blob back at 400, and the
+      // sweep's 500 is gone — the next tick re-fetches the same fifty
+      // messages, every tick, for as long as the pattern repeats. The reverse
+      // interleave erases an `oauthReauthRequiredAt` the owner's card is
+      // supposed to be showing. Only a write that touches the health key
+      // ALONE, inside the database, is safe.
+      const row: { configPublic: Record<string, unknown> } = { configPublic: { imapLastUid: 400 } };
+      prisma.channel.findFirst.mockImplementation(async () => {
+        const snapshot = { configPublic: { ...row.configPublic } };
+        // The INBOX sweep drains the mailbox and moves its cursor while this
+        // health write is holding its copy.
+        row.configPublic = { ...row.configPublic, imapLastUid: 500 };
+        return snapshot;
+      });
+      prisma.$executeRaw.mockImplementation(async (sql: any) => {
+        // The real statement is `configPublic || $patch` — a shallow merge the
+        // database applies to the row as it is at write time.
+        row.configPublic = { ...row.configPublic, ...JSON.parse(patchIn(sql)) };
+        return 1;
+      });
+
+      await svc.recordOk(REF, 'send');
+
+      expect(row.configPublic.imapLastUid).toBe(500);
+      expect((row.configPublic.health as any).send.ok).toBe(true);
+    });
+
     it('does not resurrect a deleted mailbox', async () => {
       prisma.channel.findFirst.mockResolvedValue(null);
 
@@ -105,7 +154,7 @@ describe('MailboxHealthService', () => {
     });
 
     it('never throws — a health write must not fail the mail it is describing', async () => {
-      prisma.channel.update.mockRejectedValue(new Error('deadlock detected'));
+      prisma.$executeRaw.mockRejectedValue(new Error('deadlock detected'));
 
       await expect(svc.recordFailure(REF, 'send', { error: 'nope' })).resolves.toBeUndefined();
     });
@@ -196,10 +245,12 @@ describe('MailboxHealthService', () => {
     it('stamps the marker in plaintext, outside the sealed box', async () => {
       await svc.recordOAuthReauthRequired(REF, { error: 'invalid_grant' });
 
-      const data = prisma.channel.update.mock.calls[0][0].data;
-      expect(data.configSealed).toBeUndefined();
-      expect(data.configPublic.health.oauthReauthRequiredAt).toBe(NOW.toISOString());
-      expect(data.configPublic.health.send).toMatchObject({
+      // The statement names `configPublic` and nothing else — `configSealed`
+      // is not even reachable from here.
+      const sql: string = prisma.$executeRaw.mock.calls[0][0].sql;
+      expect(sql).not.toContain('configSealed');
+      expect(written().health.oauthReauthRequiredAt).toBe(NOW.toISOString());
+      expect(written().health.send).toMatchObject({
         ok: false,
         reason: 'OAUTH_REAUTH_REQUIRED',
         lastError: 'invalid_grant',

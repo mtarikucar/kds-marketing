@@ -386,6 +386,14 @@ export class CampaignTrackingService {
    *
    * A lead with no address on file still gets the flag and the ledger row —
    * suppression has nothing to key on, but the person still asked us to stop.
+   *
+   * The withdrawal is also REPORTED to İYS when the workspace has armed the
+   * EPOSTA lane (`IysSyncService.enqueueEmailWithdrawal`, inert and silent
+   * otherwise): under 6563 honouring an unsubscribe and reporting it are two
+   * separate duties, and suppressing the address here while İYS goes on
+   * showing ONAY for it leaves the tenant in breach of the second one. It runs
+   * AFTER the suppression commits and cannot fail it — the local record is
+   * what the customer is owed; the push is the mirror.
    */
   private async optOutEmail(workspaceId: string, leadId: string, source: string): Promise<void> {
     const lead = await this.prisma.lead.findFirst({
@@ -395,9 +403,24 @@ export class CampaignTrackingService {
     const address = lead?.emailNormalized || lead?.email || null;
     if (address) {
       await this.suppression.suppress(workspaceId, address, 'EMAIL', 'OPT_OUT', { source, leadId });
+      // `HS_WEB` is İYS's source code for a consent action taken on the web —
+      // which every path through here is. `source` above is the app's own tag
+      // ('unsubscribe-link'), not an İYS code, so it is never forwarded.
+      await this.reportEmailWithdrawal(workspaceId, leadId, address);
       return;
     }
     await this.flipAndRecord(workspaceId, leadId, 'emailOptOut', 'MARKETING_EMAIL', source);
+  }
+
+  /** Best-effort, and belt-and-braces: the producer already swallows its own
+   *  failures, but nothing about İYS bookkeeping may ever turn an unsubscribe
+   *  click into a 500 for the person who clicked it. */
+  private async reportEmailWithdrawal(workspaceId: string, leadId: string, address: string): Promise<void> {
+    try {
+      await this.iysSync.enqueueEmailWithdrawal({ workspaceId, leadId, address, source: 'HS_WEB' });
+    } catch (e: any) {
+      this.logger.warn(`Failed to report the İYS EPOSTA withdrawal for lead=${leadId}: ${e?.message ?? e}`);
+    }
   }
 
   /**

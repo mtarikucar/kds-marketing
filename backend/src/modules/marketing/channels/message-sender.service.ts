@@ -10,6 +10,7 @@ import { OutboundMedia, OutboundTemplate } from './channel-adapter.interface';
 import { ConversationSpendService } from '../budget/conversation-spend.service';
 import { SuppressionReason, SuppressionService } from '../compliance/suppression.service';
 import { normalizeMessageId } from './email-message-id';
+import { emailPaused } from '../../../common/util/email-paused';
 
 export interface SendMessageInput {
   workspaceId: string;
@@ -86,6 +87,14 @@ const SUPPRESSION_MESSAGE: Record<SuppressionReason, string> = {
 };
 
 /**
+ * The same sentence `mail.reason.SENDING_PAUSED` gives the gateway, said to the
+ * rep whose reply was held. It sits beside `SUPPRESSION_MESSAGE` rather than in
+ * it because that map is keyed by `SuppressionReason`, and a paused workspace
+ * is not a fact about the recipient.
+ */
+const PAUSED_MESSAGE = 'Email sending is paused for this workspace.';
+
+/**
  * Outbound send pipeline: ask the consent gate → reserve message quota →
  * open the Message row PENDING → resolve channel config → adapter.send →
  * settle the row + bump the conversation → emit MessageSent + push it over
@@ -103,12 +112,21 @@ const SUPPRESSION_MESSAGE: Record<SuppressionReason, string> = {
  * that says "we do not know how this ended" instead of a mail nobody can
  * account for.
  *
- * ## Consent comes before the meter
+ * ## The gates come before the meter
  *
  * The Inbox composer, `jeeta.send_message` and the AI's queued follow-up all
- * arrive here directly, and this was the one outbound path that asked nothing
- * about the recipient (`replies-skip-consent`). It asks now — and asks first,
- * because a refusal must cost the tenant nothing.
+ * arrive here directly, and this lane deliberately does NOT go through
+ * `MailGuardService` — routing five channels through a mail gateway would
+ * either duplicate the `Message` row or apply email semantics to SMS. So the
+ * two cells of the CONVERSATIONAL column that decide an EMAIL send are applied
+ * here instead, and applied FIRST, because a mail we were never allowed to send
+ * must cost the tenant nothing:
+ *
+ *  - the operator kill switch, `settings.email.paused` (`paused-skips-1to1`) —
+ *    without it, "pause this tenant's mail" stopped the campaigns and left the
+ *    AI reply engine sending;
+ *  - the recipient's own standing refusal (`replies-skip-consent`) — this was
+ *    the one outbound path that asked nothing about who it was mailing.
  */
 @Injectable()
 export class MessageSenderService {
@@ -152,12 +170,28 @@ export class MessageSenderService {
     const to = identity?.value ?? null;
     const isEmail = channel.type === 'EMAIL';
 
-    // The consent gate, BEFORE anything that spends. `SuppressionService` owns
-    // the union read (the suppression table OR the denormalised Lead flags) and
-    // `GATE_MATRIX` owns the class semantics — CONVERSATIONAL suppresses an
-    // opt-out only on a PROACTIVE send, so answering a customer who just wrote
-    // in still works (`replies-skip-consent`).
-    const refusal = isEmail && to ? await this.consentRefusal(workspaceId, conversationId, to) : null;
+    // The CONVERSATIONAL column of `GATE_MATRIX`, BEFORE anything that spends.
+    //
+    // 1. `sendingPaused: 'always'` — the operator kill switch. It is read here
+    //    and not in `MailGuardService` because this lane deliberately does not
+    //    go through the gateway (see the class docblock); until it was, pausing
+    //    a tenant stopped their campaigns and invoices while the AI reply
+    //    engine and the Inbox composer kept mailing (`paused-skips-1to1`).
+    // 2. `hardBounce`/`optOut`/`complaint: 'proactive'` — the consent gate.
+    //    `SuppressionService` owns the union read (the suppression table OR the
+    //    denormalised Lead flags) and the matrix owns the class semantics, so
+    //    answering a customer who wrote in still works (`replies-skip-consent`).
+    //
+    // `workspaceActive` is already applied below by `quota.reserve`, which
+    // throws WORKSPACE_INACTIVE; `dailyCap` is a PLATFORM-transport budget and
+    // this lane sends from the tenant's own mailbox; `quietHours` is applied at
+    // QUEUE time by `ConversationFollowupService`, the only proactive sender
+    // here.
+    let refusal: string | null = null;
+    if (isEmail) {
+      refusal = await this.pausedRefusal(workspaceId);
+      if (!refusal && to) refusal = await this.consentRefusal(workspaceId, conversationId, to);
+    }
 
     // Reserve BEFORE the send (skips web-chat). Throws MESSAGES_EXHAUSTED at cap.
     const reserved = !refusal;
@@ -389,6 +423,31 @@ export class MessageSenderService {
       ...(isEmail && to ? { to } : {}),
       ...(result.retriable === undefined ? {} : { retriable: result.retriable }),
     });
+  }
+
+  /**
+   * The operator kill switch, `settings.email.paused`.
+   *
+   * EMAIL only, and deliberately so: the switch is email-scoped, and silencing
+   * a tenant's SMS and WhatsApp replies with it would take the whole inbox down
+   * for one mail incident (the same reading `CampaignSenderService` makes).
+   *
+   * Fails OPEN, like the consent gate beside it. A connection-pool hiccup is
+   * not an operator's decision — and it costs nothing here, because the very
+   * next statement (`message.create`, on the same client) would fail on a real
+   * outage and nothing would reach the adapter anyway.
+   */
+  private async pausedRefusal(workspaceId: string): Promise<string | null> {
+    try {
+      const ws = await this.prisma.workspace.findFirst({
+        where: { id: workspaceId },
+        select: { settings: true },
+      });
+      return emailPaused(ws?.settings) ? PAUSED_MESSAGE : null;
+    } catch (e: any) {
+      this.logger.warn(`mail-pause check failed workspace=${workspaceId}: ${e?.message ?? e}`);
+      return null;
+    }
   }
 
   /**

@@ -37,6 +37,30 @@ describe('isAutomatedFetch', () => {
       expect(isAutomatedFetch(humanClick({ 'accept-language': undefined }))).toBe(false);
     });
 
+    it('passes a Cubot phone (a bare `bot` substring must not fire)', () => {
+      // The device token contains the letters `bot`. Read as a substring it
+      // makes every owner of one a machine: no `link.clicked` automation, no
+      // click and no open, for as long as they own the phone. The sibling
+      // classifier settled this exact question the other way on purpose
+      // (campaign-tracking.service.ts BOT_UA_RE), and this list must agree.
+      expect(
+        isAutomatedFetch(
+          humanClick({
+            'user-agent':
+              'Mozilla/5.0 (Linux; Android 12; CUBOT_NOTE_21) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Mobile Safari/537.36',
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isAutomatedFetch(
+          humanClick({
+            'user-agent':
+              'Mozilla/5.0 (Linux; Android 11; CUBOT KING KONG 5 Pro Build/RP1A.200720.011; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/107.0.5304.91 Mobile Safari/537.36',
+          }),
+        ),
+      ).toBe(false);
+    });
+
     it('passes a mobile Safari navigation', () => {
       expect(
         isAutomatedFetch({

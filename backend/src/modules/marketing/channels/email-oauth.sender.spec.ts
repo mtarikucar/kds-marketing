@@ -167,6 +167,38 @@ describe('sending on a connected mailbox behalf', () => {
       expect(raw).toContain('Auto-Submitted: auto-replied');
     });
 
+    it('carries a calendar invite as its own part, with the threaded METHOD', () => {
+      // A consent-connected mailbox is the one transport that builds its own
+      // MIME, so an invite has to be assembled here or it is silently dropped.
+      const raw = buildRfc822({
+        from: 'a@b.com',
+        to: 'c@d.com',
+        subject: 's',
+        text: 'Randevunuz iptal edildi',
+        ics: { method: 'CANCEL', content: 'BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nEND:VCALENDAR' },
+      });
+      expect(raw).toContain('multipart/mixed');
+      expect(raw).toContain('Content-Type: text/calendar; charset="UTF-8"; method=CANCEL');
+      expect(raw).toContain('Content-Disposition: attachment; filename="invite.ics"');
+      const part = /Content-Type: text\/calendar[^]*?\r\n\r\n([A-Za-z0-9+/=\r\n]+)/.exec(raw)![1];
+      expect(Buffer.from(part.replace(/\r\n/g, ''), 'base64').toString('utf8')).toContain('METHOD:CANCEL');
+    });
+
+    it('still carries the html alternative beside an invite', () => {
+      const raw = buildRfc822({
+        from: 'a@b.com',
+        to: 'c@d.com',
+        subject: 's',
+        text: 'plain',
+        html: '<p>rich</p>',
+        ics: { method: 'REQUEST', content: 'BEGIN:VCALENDAR\r\nEND:VCALENDAR', filename: 'randevu.ics' },
+      });
+      expect(raw).toContain('multipart/mixed');
+      expect(raw).toContain('multipart/alternative');
+      expect(raw).toContain('method=REQUEST');
+      expect(raw).toContain('filename="randevu.ics"');
+    });
+
     it('refuses a poisoned display name or Reply-To as well as the address', () => {
       expect(() =>
         buildRfc822({ from: 'a@b.com', fromName: 'x\r\nBcc: victim@e.com', to: 'c@d.com', subject: 's', text: 't' }),

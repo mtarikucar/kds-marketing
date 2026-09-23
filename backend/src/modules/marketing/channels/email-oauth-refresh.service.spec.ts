@@ -293,6 +293,207 @@ describe('keeping a connected mailbox alive', () => {
     expect(prisma.channel.update).not.toHaveBeenCalled();
   });
 
+  /**
+   * The sweep and a send are two lanes onto ONE mailbox's credentials, and the
+   * box they share is read-modify-written whole. Both of these are about the
+   * same thing: whatever else happens, the refresh token a provider has
+   * already retired must never be posted a second time, and a write must never
+   * reseal a snapshot taken before somebody else's.
+   */
+  describe('two lanes on one mailbox', () => {
+    const DEAD = () => String(Date.now() - 1_000);
+    const ALIVE = () => String(Date.now() + 60 * 60_000);
+    /** Drain the microtask queue so both lanes reach the provider call. */
+    const flush = () => new Promise((r) => setImmediate(r));
+
+    /** One stored box both lanes read and write, like the row itself. */
+    function store(initial: Record<string, string>) {
+      const state = { box: sealed(initial) };
+      prisma.channel.findMany.mockImplementation(async () => [
+        { id: 'c1', workspaceId: 'ws-1', configSealed: state.box },
+      ]);
+      prisma.channel.findFirst.mockImplementation(async () => ({
+        id: 'c1',
+        workspaceId: 'ws-1',
+        configSealed: state.box,
+      }));
+      prisma.channel.update.mockImplementation(async ({ data }: any) => {
+        state.box = data.configSealed;
+        return {};
+      });
+      return state;
+    }
+
+    /** A provider call the test holds open, so the two lanes overlap. */
+    function heldProvider(result: Record<string, unknown>) {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = () => r()));
+      refreshMock.mockImplementation(async () => {
+        await gate;
+        return result;
+      });
+      return { release: () => release() };
+    }
+
+    it('never trades one refresh token twice when the sweep and a send overlap', async () => {
+      // Microsoft hands back a NEW refresh token on every refresh and only
+      // one writer's box survives, so two lanes redeeming the SAME token end
+      // with one credential stored and another minted and thrown away. If the
+      // provider also retires what it redeemed, the stored one is dead and the
+      // mailbox stops sending and receiving until a human re-consents.
+      const state = store({
+        oauthProvider: 'MICROSOFT',
+        oauthRefreshToken: 'rt-1',
+        oauthAccessToken: 'at-1',
+        oauthExpiresAt: DEAD(),
+      });
+      const provider = heldProvider({
+        accessToken: 'at-2',
+        expiresAt: Date.now() + 60 * 60_000,
+        refreshToken: 'rt-2',
+        error: null,
+      });
+
+      const sweep = svc.refreshExpiring();
+      const send = svc.refreshNow('ws-1', 'c1');
+      await flush();
+      provider.release();
+      const [, token] = await Promise.all([sweep, send]);
+
+      const redeemed = refreshMock.mock.calls.map((c: any[]) => c[1]);
+      expect(redeemed.filter((t: string) => t === 'rt-1')).toHaveLength(1);
+      expect(JSON.parse(state.box)).toMatchObject({ oauthRefreshToken: 'rt-2', oauthAccessToken: 'at-2' });
+      // And the lane that waited still gets a usable token back.
+      expect(token).toMatchObject({ accessToken: 'at-2', error: null });
+    });
+
+    it('keeps a credential saved while the token was being traded', async () => {
+      // The box carries the mailbox's SMTP/IMAP password too. Resealing the
+      // copy read before a network round-trip stamps the operator's new app
+      // password back to the old one, and the tenant's mail stops.
+      const state = store({
+        oauthProvider: 'GOOGLE',
+        oauthRefreshToken: 'rt',
+        oauthAccessToken: 'at-1',
+        oauthExpiresAt: DEAD(),
+        smtpPass: 'old',
+      });
+      const provider = heldProvider({
+        accessToken: 'at-2',
+        expiresAt: Date.now() + 60 * 60_000,
+        refreshToken: null,
+        error: null,
+      });
+
+      const sweep = svc.refreshExpiring();
+      await flush();
+      state.box = sealed({ ...JSON.parse(state.box), smtpPass: 'new' });
+      provider.release();
+      await sweep;
+
+      expect(JSON.parse(state.box)).toMatchObject({ smtpPass: 'new', oauthAccessToken: 'at-2' });
+    });
+
+    it('drops its own result when the mailbox was reconnected mid-exchange', async () => {
+      // A tenant pressing "reconnect" writes a whole new consent. Landing a
+      // token minted from the OLD grant on top of it would undo the thing they
+      // just did, and the mailbox they fixed would look broken again.
+      const state = store({
+        oauthProvider: 'MICROSOFT',
+        oauthRefreshToken: 'rt-old',
+        oauthAccessToken: 'at-old',
+        oauthExpiresAt: DEAD(),
+      });
+      const provider = heldProvider({
+        accessToken: 'at-from-old-grant',
+        expiresAt: Date.now() + 60 * 60_000,
+        refreshToken: 'rt-rotated-old',
+        error: null,
+      });
+
+      const sweep = svc.refreshExpiring();
+      await flush();
+      state.box = sealed({
+        oauthProvider: 'MICROSOFT',
+        oauthRefreshToken: 'rt-new',
+        oauthAccessToken: 'at-new',
+        oauthExpiresAt: ALIVE(),
+      });
+      provider.release();
+      await sweep;
+
+      expect(JSON.parse(state.box)).toMatchObject({ oauthRefreshToken: 'rt-new', oauthAccessToken: 'at-new' });
+    });
+
+    it('does not stamp a refusal onto a token somebody else just minted', async () => {
+      // The other lane's refusal arriving late used to resurrect `oauthError`
+      // over a working token: the card says "reconnect", `classify()` reports
+      // the mailbox unusable, and mail silently leaves from the platform
+      // address instead of the tenant's own.
+      const state = store({
+        oauthProvider: 'GOOGLE',
+        oauthRefreshToken: 'rt',
+        oauthAccessToken: 'at-1',
+        oauthExpiresAt: DEAD(),
+      });
+      const provider = heldProvider({
+        accessToken: null,
+        expiresAt: null,
+        refreshToken: null,
+        error: 'GOOGLE token request 400: invalid_grant',
+      });
+
+      const sweep = svc.refreshExpiring();
+      await flush();
+      state.box = sealed({
+        oauthProvider: 'GOOGLE',
+        oauthRefreshToken: 'rt',
+        oauthAccessToken: 'at-2',
+        oauthExpiresAt: ALIVE(),
+      });
+      provider.release();
+      await sweep;
+
+      expect(JSON.parse(state.box).oauthError).toBeUndefined();
+      expect(JSON.parse(state.box).oauthAccessToken).toBe('at-2');
+      expect(health.recordOAuthReauthRequired).not.toHaveBeenCalled();
+    });
+
+    it('still refreshes pre-emptively, before the token is dead', async () => {
+      // The guard above must not turn into "only refresh what has already
+      // expired": that is the dead minute REFRESH_WINDOW_MS exists to close,
+      // and it would push every refresh into the window where a send races it.
+      prisma.channel.findMany.mockResolvedValue([
+        {
+          id: 'c1',
+          workspaceId: 'ws-1',
+          configSealed: sealed({
+            oauthProvider: 'GOOGLE',
+            oauthRefreshToken: 'rt',
+            oauthAccessToken: 'at-1',
+            oauthExpiresAt: SOON(), // alive, but inside the window
+          }),
+        },
+      ]);
+      prisma.channel.findFirst.mockResolvedValue({
+        id: 'c1',
+        workspaceId: 'ws-1',
+        configSealed: sealed({
+          oauthProvider: 'GOOGLE',
+          oauthRefreshToken: 'rt',
+          oauthAccessToken: 'at-1',
+          oauthExpiresAt: SOON(),
+        }),
+      });
+      refreshMock.mockResolvedValue({ accessToken: 'at-2', expiresAt: 999, refreshToken: null, error: null });
+
+      await svc.refreshExpiring();
+
+      expect(refreshMock).toHaveBeenCalledWith('GOOGLE', 'rt');
+      expect(written(prisma).oauthAccessToken).toBe('at-2');
+    });
+  });
+
   describe('the tick and the window', () => {
     it('sees a dying token at the last sweep before it dies', () => {
       // Invariant (a). A window narrower than the tick leaves a token that

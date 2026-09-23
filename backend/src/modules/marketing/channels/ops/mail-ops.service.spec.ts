@@ -118,6 +118,54 @@ describe('inertMailFeatures — why nothing sent', () => {
   });
 
   /**
+   * The bounce/complaint entry asks the VERIFIER the adopted ESP actually uses.
+   *
+   * `POST /api/public/esp/feedback/:provider` has four verifiers and each is
+   * dark until ITS key is set. `ESP_FEEDBACK_SECRET` arms only the `generic`
+   * self-hosted relay — a shape no commercial ESP can sign. Answering "is
+   * ESP_FEEDBACK_SECRET set" therefore drops this entry, and reports bounce and
+   * complaint feedback as ARMED, for a deployment where every SendGrid event is
+   * still answered 401 and no dead address is ever suppressed.
+   */
+  describe('the ESP-feedback entry follows the adopted provider', () => {
+    const find = (env: Record<string, string | undefined>) =>
+      inertMailFeatures(env).find((f) => f.key === 'ESP_FEEDBACK');
+
+    it('names the generic relay key when no ESP was adopted', () => {
+      expect(find({})!.missing).toEqual(['ESP_FEEDBACK_SECRET']);
+      expect(find({ ESP_FEEDBACK_SECRET: 'relay' })).toBeUndefined();
+    });
+
+    it('names the ADOPTED provider key, not the generic relay it cannot use', () => {
+      const entry = find({ SENDING_DOMAIN_ESP: 'sendgrid', ESP_FEEDBACK_SECRET: 'relay' });
+      expect(entry).toBeDefined();
+      expect(entry!.missing).toEqual(['SENDGRID_EVENT_PUBLIC_KEY']);
+      expect(entry!.env).toEqual(['SENDGRID_EVENT_PUBLIC_KEY']);
+    });
+
+    it('drops the entry once that provider — and only it — is armed', () => {
+      expect(find({ SENDING_DOMAIN_ESP: 'sendgrid', SENDGRID_EVENT_PUBLIC_KEY: 'spki' })).toBeUndefined();
+      // The same key does nothing for a Mailgun deployment.
+      expect(
+        find({ SENDING_DOMAIN_ESP: 'mailgun', SENDGRID_EVENT_PUBLIC_KEY: 'spki' })!.missing,
+      ).toEqual(['MAILGUN_WEBHOOK_SIGNING_KEY']);
+    });
+
+    it('names the half of a basic-auth pair that is still missing', () => {
+      const entry = find({ SENDING_DOMAIN_ESP: 'postmark', POSTMARK_WEBHOOK_USER: 'hook' });
+      expect(entry!.missing).toEqual(['POSTMARK_WEBHOOK_PASSWORD']);
+      expect(JSON.stringify(entry)).not.toContain('hook');
+    });
+
+    it('falls back to the relay for an ESP with no native verifier', () => {
+      // ses/resend are sending providers this path has no signature scheme for;
+      // the self-hosted relay is the only feedback route those operators have.
+      expect(find({ SENDING_DOMAIN_ESP: 'ses' })!.missing).toEqual(['ESP_FEEDBACK_SECRET']);
+      expect(find({ SENDING_DOMAIN_ESP: 'nonsense' })!.missing).toEqual(['ESP_FEEDBACK_SECRET']);
+    });
+  });
+
+  /**
    * The sending-domain entry asks the GATE, not the environment.
    *
    * The gate's own answer is the one the nav item, the register endpoint and

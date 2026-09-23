@@ -118,6 +118,11 @@ export const NO_REFRESH_PATHS = [
   '/auth/refresh',
   '/auth/switch-workspace',
   '/auth/accept-invite',
+  // - /auth/forgot-password, /auth/reset-password: by definition the caller
+  //   has no session — that is the problem they are solving. A refresh-retry
+  //   here could only fail with 'no refresh token' and mask the real answer.
+  '/auth/forgot-password',
+  '/auth/reset-password',
 ] as const;
 
 export function isNoRefreshPath(url: string | undefined | null): boolean {

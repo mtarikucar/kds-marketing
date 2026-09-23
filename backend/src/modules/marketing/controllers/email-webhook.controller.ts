@@ -44,6 +44,7 @@ import {
 import { InboundSkipReason } from '../channels/inbound/inbound-mail.types';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { assessAuth } from '../channels/inbound/mail-auth';
+import { corroborateReport, describeRejections } from '../channels/inbound/dsn-provenance';
 import { parseDeliveryReport, suppressibleRecipients } from '../channels/inbound/delivery-report';
 import { EMAIL_INBOUND_THROTTLE } from '../public-throttle.const';
 
@@ -517,16 +518,34 @@ export class EmailWebhookController {
       );
       return 0;
     }
-    for (const t of targets) {
+    // The token on this door authenticates the RELAY, not the message: an
+    // inbound-parse provider forwards whatever arrived at the MX verbatim, so
+    // a forged report reaches here with a valid token. Only mail we can prove
+    // this workspace sent may suppress an address — see `dsn-provenance.ts`.
+    const { corroborated, rejected } = await corroborateReport(
+      this.prisma,
+      channel.workspaceId,
+      report,
+      targets,
+    );
+    const refused = describeRejections(rejected);
+    if (refused) {
+      this.logger.warn(
+        `email inbound (channel=${channel.id}) delivery report from=${
+          primaryAddress(mail.from) ?? 'unknown'
+        } named addresses this workspace has no record of mailing: ${refused}`,
+      );
+    }
+    for (const t of corroborated) {
       await this.suppression.suppress(channel.workspaceId, t.address, 'EMAIL', t.reason, {
         source: 'dsn',
         note: [t.status, t.diagnostic].filter(Boolean).join(' ').slice(0, 300) || null,
       });
     }
     this.logger.log(
-      `email inbound (channel=${channel.id}) ${report.kind} suppressed ${targets.length} address(es)`,
+      `email inbound (channel=${channel.id}) ${report.kind} suppressed ${corroborated.length} of ${targets.length} address(es)`,
     );
-    return targets.length;
+    return corroborated.length;
   }
 
   /**

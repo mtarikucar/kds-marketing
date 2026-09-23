@@ -1,9 +1,17 @@
 import { IysSyncService } from './iys-sync.service';
+import { IysEmailReadiness } from './iys-email.port';
+
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  // Identity box, so a test can seal a password by writing one.
+  openSecret: jest.fn((s: string) => s),
+}));
 
 function makePrisma() {
   return {
     iysSyncJob: {
       create: jest.fn().mockResolvedValue({}),
+      findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -11,8 +19,19 @@ function makePrisma() {
     channel: {
       findMany: jest.fn().mockResolvedValue([]),
     },
+    workspace: {
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
   };
 }
+
+const READY: IysEmailReadiness = { armed: true, configured: true, gap: null, messageKey: null };
+const NOT_ARMED: IysEmailReadiness = {
+  armed: false,
+  configured: false,
+  gap: 'NOT_ARMED',
+  messageKey: 'compliance.iysEposta.notArmed',
+};
 
 function activeSmsChannel() {
   return { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', status: 'ACTIVE' };
@@ -38,6 +57,7 @@ describe('IysSyncService', () => {
   let registry: { resolveConfig: jest.Mock };
   let budgeter: { tryTake: jest.Mock };
   let client: { add: jest.Mock };
+  let iysEmail: { check: jest.Mock; readiness: jest.Mock };
   let svc: IysSyncService;
 
   beforeEach(() => {
@@ -45,7 +65,14 @@ describe('IysSyncService', () => {
     registry = { resolveConfig: jest.fn() };
     budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     client = { add: jest.fn() };
-    svc = new IysSyncService(prisma as any, registry as any, budgeter as any, client as any);
+    iysEmail = { check: jest.fn(), readiness: jest.fn().mockResolvedValue(NOT_ARMED) };
+    svc = new IysSyncService(
+      prisma as any,
+      registry as any,
+      budgeter as any,
+      client as any,
+      iysEmail as any,
+    );
   });
 
   describe('enqueueConsent', () => {
@@ -164,6 +191,129 @@ describe('IysSyncService', () => {
     });
   });
 
+  /**
+   * The EPOSTA lane's only producer.
+   *
+   * Before it existed the lane had a wire shape, its own budget bucket and a
+   * worker — and nothing that ever wrote a row. A recipient who clicked
+   * "abonelikten çık" was suppressed here and İYS went on showing ONAY for
+   * that address indefinitely, which is the 6563 reporting duty missed and a
+   * reconciliation that contradicts the tenant's own records.
+   */
+  describe('enqueueEmailWithdrawal', () => {
+    it('enqueues an EPOSTA RET for the address once the workspace has armed the lane', async () => {
+      iysEmail.readiness.mockResolvedValue(READY);
+
+      await expect(
+        svc.enqueueEmailWithdrawal({
+          workspaceId: 'ws-1',
+          leadId: 'lead-1',
+          address: 'Ali@Acme.TEST',
+          source: 'HS_WEB',
+        }),
+      ).resolves.toBe('enqueued');
+
+      expect(prisma.iysSyncJob.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          workspaceId: 'ws-1',
+          leadId: 'lead-1',
+          // İYS is keyed on the ADDRESS, and on its normalized spelling — the
+          // same key suppression writes, so the two can be reconciled.
+          recipient: 'ali@acme.test',
+          type: 'EPOSTA',
+          direction: 'RET',
+          source: 'HS_WEB',
+        }),
+      });
+    });
+
+    it('does not queue the same withdrawal twice when the One-Click POST is redelivered', async () => {
+      // Mail clients and providers do retry that POST, and each delivery used
+      // to be another row — another İYS call, out of a budget of ten a minute,
+      // saying what the queue already says.
+      iysEmail.readiness.mockResolvedValue(READY);
+      prisma.iysSyncJob.findFirst = jest.fn().mockResolvedValue({ id: 'job-queued' });
+
+      await expect(
+        svc.enqueueEmailWithdrawal({ workspaceId: 'ws-1', leadId: 'lead-1', address: 'ali@acme.test' }),
+      ).resolves.toBe('duplicate');
+
+      expect(prisma.iysSyncJob.findFirst).toHaveBeenCalledWith({
+        where: {
+          workspaceId: 'ws-1',
+          recipient: 'ali@acme.test',
+          type: 'EPOSTA',
+          direction: 'RET',
+          status: { in: ['PENDING', 'FAILED'] },
+        },
+        select: { id: true },
+      });
+      expect(prisma.iysSyncJob.create).not.toHaveBeenCalled();
+    });
+
+    it('writes nothing at all for the workspace that never armed the lane', async () => {
+      iysEmail.readiness.mockResolvedValue(NOT_ARMED);
+      await expect(
+        svc.enqueueEmailWithdrawal({ workspaceId: 'ws-1', leadId: 'lead-1', address: 'ali@acme.test' }),
+      ).resolves.toBe('not-ready');
+      expect(prisma.iysSyncJob.create).not.toHaveBeenCalled();
+    });
+
+    it('writes nothing when the lane is armed but no credentials resolve', async () => {
+      // A row enqueued against credentials that do not exist just retries
+      // eight times and DLQs, which is a warning badge for a tenant who did
+      // nothing wrong.
+      iysEmail.readiness.mockResolvedValue({
+        armed: true,
+        configured: false,
+        gap: 'NO_CREDENTIALS',
+        messageKey: 'compliance.iysEposta.noCredentials',
+      });
+      await expect(
+        svc.enqueueEmailWithdrawal({ workspaceId: 'ws-1', leadId: 'lead-1', address: 'ali@acme.test' }),
+      ).resolves.toBe('not-ready');
+      expect(prisma.iysSyncJob.create).not.toHaveBeenCalled();
+    });
+
+    it('has nothing to report for a lead with no address on file', async () => {
+      iysEmail.readiness.mockResolvedValue(READY);
+      await expect(
+        svc.enqueueEmailWithdrawal({ workspaceId: 'ws-1', leadId: 'lead-1', address: null }),
+      ).resolves.toBe('no-address');
+      expect(iysEmail.readiness).not.toHaveBeenCalled();
+    });
+
+    it('never throws — an unsubscribe is honoured whatever İYS bookkeeping does', async () => {
+      // This runs on the public unsubscribe route. The local suppression is
+      // the durable answer to the customer; the İYS push is the mirror.
+      iysEmail.readiness.mockRejectedValue(new Error('readiness exploded'));
+      await expect(
+        svc.enqueueEmailWithdrawal({ workspaceId: 'ws-1', leadId: 'lead-1', address: 'ali@acme.test' }),
+      ).resolves.toBe('failed');
+
+      iysEmail.readiness.mockResolvedValue(READY);
+      prisma.iysSyncJob.create.mockRejectedValue(new Error('db down'));
+      await expect(
+        svc.enqueueEmailWithdrawal({ workspaceId: 'ws-1', leadId: 'lead-1', address: 'ali@acme.test' }),
+      ).resolves.toBe('failed');
+    });
+
+    it('never re-submits a withdrawal that İYS itself told us about', async () => {
+      // The anti-feedback-loop tag `enqueueConsent` already honours, reachable
+      // from this door too the day an EPOSTA webhook consumer lands.
+      iysEmail.readiness.mockResolvedValue(READY);
+      await expect(
+        svc.enqueueEmailWithdrawal({
+          workspaceId: 'ws-1',
+          leadId: 'lead-1',
+          address: 'ali@acme.test',
+          source: 'IYS_webhook',
+        }),
+      ).resolves.toBe('skipped');
+      expect(prisma.iysSyncJob.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('retryDlq', () => {
     it('flips DLQ -> PENDING, attempts=0, lastError cleared, scoped to the workspace', async () => {
       prisma.iysSyncJob.updateMany.mockResolvedValue({ count: 3 } as any);
@@ -193,6 +343,42 @@ describe('IysSyncService', () => {
         .mockReturnValueOnce({ secrets: { usercode: 'u2', password: 'p2' }, public: { brandCode: 'BR2' } });
       await expect((svc as any).resolveCreds('ws-1')).resolves.toEqual({
         usercode: 'u2', password: 'p2', brandCode: 'BR2',
+      });
+    });
+
+    // The email-only tenant has no NetGSM SMS channel at all, so a ladder that
+    // starts at the channel scan leaves every EPOSTA row failing 'no creds'
+    // until it DLQs — while `IysEmailAdapter`, which reads the workspace
+    // first, cheerfully reports the same tenant "configured". Two readers of
+    // one setting must not disagree about where it lives.
+    it('resolveCreds reads the workspace İYS settings before any SMS channel', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({
+        settings: { iys: { usercode: 'u-ws', passwordSealed: 'p-ws', brandCode: 'BR-WS' } },
+      } as any);
+      await expect((svc as any).resolveCreds('ws-1')).resolves.toEqual({
+        usercode: 'u-ws', password: 'p-ws', brandCode: 'BR-WS',
+      });
+      expect(prisma.channel.findMany).not.toHaveBeenCalled();
+    });
+
+    it('resolveCreds ignores a plaintext password in the workspace settings', async () => {
+      // `Workspace.settings` is a PATCHable jsonb blob several read paths echo
+      // back; only the sealed envelope is ever honoured (same rule as
+      // `IysEmailAdapter.workspaceIys`).
+      prisma.workspace.findUnique.mockResolvedValue({
+        settings: { iys: { usercode: 'u-ws', password: 'plain', brandCode: 'BR-WS' } },
+      } as any);
+      await expect((svc as any).resolveCreds('ws-1')).resolves.toEqual({ reason: 'no creds' });
+    });
+
+    it('resolveCreds still falls back to the SMS channel when the workspace carries nothing', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ settings: {} } as any);
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
+      registry.resolveConfig.mockReturnValue({
+        secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' },
+      });
+      await expect((svc as any).resolveCreds('ws-1')).resolves.toEqual({
+        usercode: 'u1', password: 'p1', brandCode: 'BR1',
       });
     });
 

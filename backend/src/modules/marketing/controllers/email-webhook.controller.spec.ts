@@ -323,8 +323,18 @@ describe('EmailWebhookController — machine mail is filtered', () => {
     expect(ingress.ingest).not.toHaveBeenCalled();
   });
 
+  /** The workspace really did mail this address — what a genuine DSN reports on. */
+  function weMailed(prisma: any, address: string) {
+    prisma.mailLog.findFirst.mockImplementation(async (args: any) => {
+      const where = args?.where ?? {};
+      const wanted = (where.OR ?? [where]).some((c: any) => c?.toAddressNorm === address);
+      return wanted ? { id: 'ml-1' } : null;
+    });
+  }
+
   it('routes a DSN to suppression instead of creating a lead', async () => {
-    const { controller, ingress, suppression } = build();
+    const { controller, ingress, suppression, prisma } = build();
+    weMailed(prisma, 'olmayan@musteri.test');
     const out = await controller.inbound(
       'chan-1',
       emailInboundToken('chan-1'),
@@ -351,6 +361,48 @@ describe('EmailWebhookController — machine mail is filtered', () => {
       'HARD_BOUNCE',
       expect.objectContaining({ source: 'dsn' }),
     );
+  });
+
+  /**
+   * The token authenticates the RELAY, not the message. An inbound-parse
+   * provider forwards whatever arrived at the MX verbatim, so the identical
+   * forged mail reaches this door with a perfectly valid token.
+   */
+  it('suppresses nobody a DSN names that this workspace never mailed', async () => {
+    const { controller, suppression, prisma } = build();
+    await controller.inbound(
+      'chan-1',
+      emailInboundToken('chan-1'),
+      req({
+        from: 'MAILER-DAEMON@rakip.test',
+        text: [
+          'Reporting-MTA: dns; rakip.test',
+          '',
+          'Final-Recipient: rfc822; patron@buyukmusteri.test',
+          'Action: failed',
+          'Status: 5.1.1',
+        ].join('\n'),
+        'message-headers': headers([
+          ['Content-Type', 'multipart/report; report-type=delivery-status; boundary=b'],
+        ]),
+      }),
+    );
+    expect(suppression.suppress).not.toHaveBeenCalled();
+    expect(prisma.mailLog.findFirst).toHaveBeenCalled();
+  });
+
+  it('is not fooled by a bare X-Failed-Recipients header on this door either', async () => {
+    const { controller, suppression } = build();
+    await controller.inbound(
+      'chan-1',
+      emailInboundToken('chan-1'),
+      req({
+        from: 'satis@rakip.test',
+        text: 'merhaba',
+        'message-headers': headers([['X-Failed-Recipients', 'patron@buyukmusteri.test']]),
+      }),
+    );
+    expect(suppression.suppress).not.toHaveBeenCalled();
   });
 
   it('never suppresses on a transient 4.x.x DSN', async () => {

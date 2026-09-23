@@ -70,9 +70,14 @@ export function parseSendWindow(settings: unknown, fallbackTz?: string | null): 
 }
 
 /**
- * Normalise one raw window object — the settings blob above, or the optional
- * per-workflow window the DSL validates. One reader, so a workflow window and
- * a workspace window can never mean different things.
+ * Normalise one raw window object off an untrusted blob.
+ *
+ * `parseSendWindow` above is its only caller today: the workspace window is
+ * the ONLY quiet-hours setting the product has. (The workflow DSL used to
+ * validate a per-workflow window here too, but nothing ever read it, so the
+ * field is gone rather than pretending — see `TriggerSchema`.) It stays a
+ * separate function because the shape it accepts is a tenant's jsonb, and a
+ * window that cannot be trusted has to be rejected in one place.
  */
 export function normalizeSendWindow(raw: unknown, fallbackTz?: string | null): SendWindow | null {
   if (!raw || typeof raw !== 'object') return null;

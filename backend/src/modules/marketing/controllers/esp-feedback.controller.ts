@@ -2,6 +2,7 @@ import { Controller, Logger, Param, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { EspFeedbackService, FeedbackEvent } from '../channels/esp-feedback.service';
 import { getVerifier, WebhookVerifier } from '../channels/inbound/webhook-verifier';
+import { WebhookReplayStore } from '../channels/inbound/webhook-verifier/webhook-replay.store';
 
 /**
  * ESP delivery-feedback webhook (bounces + spam complaints).
@@ -35,7 +36,10 @@ import { getVerifier, WebhookVerifier } from '../channels/inbound/webhook-verifi
 export class EspFeedbackController {
   private readonly logger = new Logger(EspFeedbackController.name);
 
-  constructor(private readonly feedback: EspFeedbackService) {}
+  constructor(
+    private readonly feedback: EspFeedbackService,
+    private readonly replay: WebhookReplayStore,
+  ) {}
 
   /** The legacy relay path — generic HMAC, unchanged. */
   @Post('feedback')
@@ -70,19 +74,53 @@ export class EspFeedbackController {
       return;
     }
 
+    // One token, one body. Mailgun's signature covers `timestamp + token` and
+    // NOT the payload, so a captured block would otherwise authenticate any
+    // body an attacker liked for the whole 24-hour freshness window — including
+    // a `failed`/`permanent` event that globally suppresses an address
+    // (`mailgun-body-unsigned`). `replayToken` is unset for the verifiers that
+    // sign the raw body, and this whole block is then a no-op.
+    const token = verdict.replayToken;
+    const bodyHash = token ? WebhookReplayStore.hashBody(raw) : '';
+    if (token) {
+      const seen = await this.replay.check(verifier.provider, token, bodyHash);
+      if (seen.seen && !seen.sameBody) {
+        this.logger.warn(
+          `ESP feedback rejected (${verifier.provider}): signature token re-used with a DIFFERENT body — ` +
+            'a captured signature block is being replayed',
+        );
+        res.status(401).send('bad signature');
+        return;
+      }
+      if (seen.seen) {
+        // The provider's own retry of a request we already applied. It must be
+        // acknowledged, or it comes back for eight hours.
+        res.status(200).send('OK');
+        return;
+      }
+    }
+
+    // A 2xx is the provider's cue to stop retrying, so the token is spent at
+    // exactly the same moments — and never on the 500 path below, where the
+    // retry is the thing that saves the event.
+    const ok = async (): Promise<void> => {
+      if (token) await this.replay.remember(verifier.provider, token, bodyHash);
+      res.status(200).send('OK');
+    };
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw.toString('utf8'));
     } catch {
       // Authenticated but unreadable: retrying cannot help, so this is a 200.
       this.logger.warn(`ESP feedback (${verifier.provider}): unparseable JSON body — dropped`);
-      res.status(200).send('OK');
+      await ok();
       return;
     }
 
     const events = this.parseEvents(parsed);
     if (!events.length) {
-      res.status(200).send('OK');
+      await ok();
       return;
     }
 
@@ -92,7 +130,7 @@ export class EspFeedbackController {
         res.status(500).send('suppression failed');
         return;
       }
-      res.status(200).send('OK');
+      await ok();
     } catch (e) {
       this.logger.error(`ESP feedback failed: ${(e as Error)?.message ?? e}`);
       res.status(500).send('suppression failed');

@@ -318,6 +318,93 @@ describe('SuppressionService.check — the reply exemption', () => {
     });
   });
 
+  /**
+   * `deliverability-is-not-consent`: HARD_BOUNCE and INVALID are facts about
+   * the ADDRESS, not statements of consent, and no `ConsentRecord` is ever
+   * written for them — so the 72h legacy window would answer a deliverability
+   * question with a consent clock. An address that has written into this very
+   * thread disproves "does not exist", however long ago it wrote.
+   */
+  it('answers a flagged-as-INVALID customer however old their last mail is', async () => {
+    const { svc } = makeSvc({
+      leads: [lead({ emailVerifiedStatus: 'INVALID' })],
+      messages: [
+        {
+          workspaceId: WS,
+          conversationId: 'c1',
+          direction: 'INBOUND',
+          createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000),
+        },
+      ],
+    });
+    expect(await svc.check(WS, ADDR, 'CONVERSATIONAL', { conversationId: 'c1' })).toEqual({
+      suppressed: false,
+    });
+  });
+
+  it('answers a hard-bounced customer however old their last mail is', async () => {
+    const { svc } = makeSvc({
+      leads: [lead({ emailBouncedAt: new Date('2026-01-01T00:00:00Z') })],
+      messages: [
+        {
+          workspaceId: WS,
+          conversationId: 'c1',
+          direction: 'INBOUND',
+          createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000),
+        },
+      ],
+    });
+    expect(await svc.check(WS, ADDR, 'CONVERSATIONAL', { conversationId: 'c1' })).toEqual({
+      suppressed: false,
+    });
+  });
+
+  it('still refuses a bounced address on a thread the customer never wrote into', async () => {
+    const { svc } = makeSvc({ leads: [lead({ emailBouncedAt: new Date() })] });
+    expect(await svc.check(WS, ADDR, 'CONVERSATIONAL', { conversationId: 'c1' })).toEqual({
+      suppressed: true,
+      reason: 'HARD_BOUNCE',
+    });
+  });
+
+  it('still refuses a proactive send to a bounced address on a replied thread', async () => {
+    const { svc } = makeSvc({
+      leads: [lead({ emailBouncedAt: new Date() })],
+      messages: [{ workspaceId: WS, conversationId: 'c1', direction: 'INBOUND', createdAt: new Date() }],
+    });
+    expect(
+      await svc.check(WS, ADDR, 'CONVERSATIONAL', { conversationId: 'c1', proactive: true }),
+    ).toEqual({ suppressed: true, reason: 'HARD_BOUNCE' });
+  });
+
+  it('keeps the consent clock for an opt-out that rides alongside a bounce', async () => {
+    // The deliverability exemption must not leak onto OPT_OUT: an old inbound
+    // clears the bounce question, the unsubscribe still stands.
+    const { svc } = makeSvc({
+      leads: [lead({ emailOptOut: true, emailBouncedAt: new Date() })],
+      messages: [
+        {
+          workspaceId: WS,
+          conversationId: 'c1',
+          direction: 'INBOUND',
+          createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000),
+        },
+      ],
+    });
+    expect(await svc.check(WS, ADDR, 'CONVERSATIONAL', { conversationId: 'c1' })).toEqual({
+      suppressed: true,
+      reason: 'OPT_OUT',
+    });
+  });
+
+  it('honours an explicit proactive:false over the derived answer', async () => {
+    const { svc, prisma } = makeSvc({ leads: [lead({ emailOptOut: true })] });
+    expect(
+      await svc.check(WS, ADDR, 'CONVERSATIONAL', { conversationId: 'c1', proactive: false }),
+    ).toEqual({ suppressed: false });
+    expect(prisma.message.findFirst).not.toHaveBeenCalled();
+  });
+
   it('an erasure tombstone is not exempted by a reply', async () => {
     const { svc } = makeSvc({
       messages: [{ workspaceId: WS, conversationId: 'c1', direction: 'INBOUND', createdAt: new Date() }],

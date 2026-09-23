@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { emailPaused } from '../../../common/util/email-paused';
 import { MailBudgetService } from '../../marketing/channels/outbound/mail-budget.service';
 import {
   InertMailFeature,
@@ -167,7 +168,7 @@ export class MailAdminService {
         workspaceId: ws.id,
         name: ws.name,
         status: ws.status,
-        paused: readPaused(ws.settings),
+        paused: emailPaused(ws.settings),
         used: usedBy.get(ws.id) ?? 0,
         cap,
         sent: s.SENT ?? 0,
@@ -197,9 +198,12 @@ export class MailAdminService {
   /**
    * The kill switch: stop (or resume) every metered mail for one tenant.
    *
-   * `MailGuardService` already reads `settings.email.paused` on the
-   * TRANSACTIONAL/CONVERSATIONAL/BULK gates, so this is the whole feature —
-   * one merged write into free-shape settings. It re-reads first because
+   * Two readers enforce it, both through `common/util/email-paused`:
+   * `MailGuardService` on the TRANSACTIONAL/BULK gates, and
+   * `MessageSenderService` on the CONVERSATIONAL lane, which deliberately does
+   * not go through the gateway — so the AI reply engine and the Inbox composer
+   * stop too. That is the whole feature: one merged write into free-shape
+   * settings. It re-reads first because
    * `settings` is a platform-PATCHable blob: writing back a copy read minutes
    * earlier is how an operator's pause silently reverts a tenant's branding.
    */
@@ -279,14 +283,6 @@ function countOf(row: any): number {
 
 function tally(rows: any[]): Map<string, number> {
   return new Map(rows.map((r) => [String(r.workspaceId), countOf(r)]));
-}
-
-/** Absent means "not paused", for every existing row (G3). */
-function readPaused(settings: unknown): boolean {
-  if (!settings || typeof settings !== 'object') return false;
-  const email = (settings as Record<string, unknown>).email;
-  if (!email || typeof email !== 'object') return false;
-  return (email as Record<string, unknown>).paused === true;
 }
 
 function startOfUtcDay(now: Date): Date {

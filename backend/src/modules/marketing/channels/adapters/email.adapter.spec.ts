@@ -170,6 +170,46 @@ describe('EmailChannelAdapter', () => {
     expect(sendMail.mock.calls[0][0]).not.toHaveProperty('html');
   });
 
+  describe('the calendar invite', () => {
+    const INVITE = 'BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nEND:VCALENDAR';
+
+    it('attaches the invite with the METHOD it was threaded, not a default', async () => {
+      // A CANCEL VCALENDAR inside a `method=REQUEST` MIME part re-adds the
+      // appointment the customer just cancelled in some clients.
+      sendMail.mockResolvedValue({ messageId: '<i@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP, public: {} } as any,
+        to: 'lead@x.test',
+        text: 'Randevunuz iptal edildi',
+        subject: 'İptal',
+        ics: { method: 'CANCEL', content: INVITE },
+      });
+      expect(sendMail.mock.calls[0][0].icalEvent).toEqual({
+        method: 'CANCEL',
+        filename: 'invite.ics',
+        content: INVITE,
+      });
+    });
+
+    it('keeps the filename the caller chose', async () => {
+      sendMail.mockResolvedValue({ messageId: '<i2@acme.test>' });
+      await adapter.send({
+        config: { secrets: SMTP, public: {} } as any,
+        to: 'lead@x.test',
+        text: 'onaylandı',
+        subject: 'Onay',
+        ics: { method: 'REQUEST', content: INVITE, filename: 'randevu.ics' },
+      });
+      expect(sendMail.mock.calls[0][0].icalEvent).toMatchObject({ method: 'REQUEST', filename: 'randevu.ics' });
+    });
+
+    it('sends no calendar part when there is no invite', async () => {
+      sendMail.mockResolvedValue({ messageId: '<i3@acme.test>' });
+      await adapter.send({ config: { secrets: SMTP, public: {} } as any, to: 'lead@x.test', text: 'hi' });
+      expect(sendMail.mock.calls[0][0]).not.toHaveProperty('icalEvent');
+    });
+  });
+
   it('send returns FAILED (not throw) on an SMTP error', async () => {
     sendMail.mockRejectedValue(new Error('535 auth failed'));
     const res = await adapter.send({ config: { secrets: SMTP } as any, to: 'lead@x.test', text: 'hi' });

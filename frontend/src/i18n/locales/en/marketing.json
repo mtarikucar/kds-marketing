@@ -175,6 +175,7 @@
       "imapHost": "IMAP host",
       "imapPort": "IMAP port",
       "imapHint": "Where replies are read from. Leave blank to use the settings we recognise for this provider.",
+      "imapSecure": "This port uses SSL/TLS directly",
       "platformFallback": "Your mail goes out through Jeeta. Replies come back to {{replyTo}}. Connect your mailbox to send from your own address.",
       "reauthRequired": "Connection needs renewing — the provider consent expired, so this mailbox can neither send nor receive.",
       "reauthRequiredHint": "Only the mailbox owner can reconnect it.",
@@ -685,7 +686,8 @@
     "lockedTryLater": "Your account is temporarily locked. Please try again shortly.",
     "inactive": "Your account is not active. Please contact your administrator.",
     "failed": "Could not sign in. Please try again.",
-    "networkError": "Connection error. Please try again."
+    "networkError": "Connection error. Please try again.",
+    "forgotCta": "Forgot your password?"
   },
   "profile": {
     "menuItem": "Edit profile",
@@ -1185,6 +1187,9 @@
     "deleted": "Document deleted",
     "linkCopied": "Signing link copied",
     "copyLink": "Copy signing link",
+    "email": "Email for signature",
+    "emailNoContact": "Link this document to a contact to email it",
+    "emailed": "Agreement emailed to {{to}}",
     "void": "Void",
     "titleField": "Title",
     "titlePlaceholder": "Service agreement",
@@ -5071,5 +5076,22 @@
       "sending": "Sending",
       "custom": "Website"
     }
+  },
+  "passwordReset": {
+    "title": "Choose a new password",
+    "subtitle": "This link works once. Setting a password also signs you out everywhere else.",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm new password",
+    "policy": "At least 8 characters, with an uppercase letter, a lowercase letter and a digit.",
+    "submit": "Set a new password",
+    "done": "Password updated — please sign in with your new password.",
+    "noToken": "This link is missing its token. Please use the link from the email.",
+    "rejected": "This link has expired or has already been used.",
+    "requestAnother": "Request a new link",
+    "backToLogin": "Back to sign in",
+    "forgotTitle": "Reset your password",
+    "forgotSubtitle": "We will email you a link that lets you set a new one.",
+    "forgotSubmit": "Send the reset link",
+    "forgotAck": "If that address has an account, a reset link is on its way. The link expires in 30 minutes."
   }
 }

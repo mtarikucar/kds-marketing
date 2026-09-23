@@ -118,6 +118,34 @@ describe('ImportWizardPage', () => {
     expect(screen.getByRole('button', { name: /next/i })).toBeEnabled();
   });
 
+  // A suggested opt-out mapping is DESTRUCTIVE — the flag is write-once-true,
+  // so an import that sets it can never be undone by re-importing. It used to
+  // render as a blank Select (the option did not exist in the list), which
+  // meant the operator could neither see nor change the single most damaging
+  // mapping in the wizard. It has to be named, and the suppression called out.
+  it('names an opt-out mapping instead of rendering a blank select', async () => {
+    post.mockResolvedValue({
+      data: {
+        jobId: 'job-1',
+        headers: ['name', 'Unsubscribed'],
+        suggestedMapping: { name: 'businessName', Unsubscribed: 'emailOptOut' },
+        total: 2,
+      },
+    });
+    const { container } = render(<ImportWizardPage />, { wrapper });
+    const file = new File(['name,Unsubscribed\nAcme,yes\n'], 'leads.csv', { type: 'text/csv' });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, file);
+
+    await screen.findByText('Map columns', { selector: 'span.font-medium' });
+    // The chosen value is shown in the trigger, not left blank.
+    expect(screen.getByText(/email opt-out/i)).toBeInTheDocument();
+    // And the consequence is stated before the operator clicks Next, with the
+    // count of preview rows the mapping would actually suppress.
+    expect(screen.getByText(/cannot undo it/i)).toBeInTheDocument();
+    expect(screen.getByText(/mean the opposite/i)).toBeInTheDocument();
+  });
+
   // Regression: the history "Results" cell rendered a stray double-slash
   // ("+10 / ~3 / /2"). Each count must carry a single, distinct prefix.
   it('renders the results counts without a stray double-slash', async () => {

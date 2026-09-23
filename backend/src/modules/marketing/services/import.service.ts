@@ -149,15 +149,60 @@ const SYNONYMS: Record<string, string> = {
   'email optout': 'emailOptOut',
   emailoptout: 'emailOptOut',
   'abonelikten çıktı': 'emailOptOut',
-  'e-posta izni': 'emailOptOut',
+  // NOT here, deliberately: "E-posta izni" / "SMS izni" are CONSENT columns —
+  // in Turkish they say "email permission", so a truthy "Evet" is the customer
+  // agreeing. Mapped onto `emailOptOut` they inverted the file, suppressing
+  // exactly the contacts who had consented, and because an opt-out flag is
+  // write-once-true (see OPT_OUT_FIELDS) a corrected re-import could never
+  // clear it. A consent column that GRANTS has no write path here at all:
+  // granting runs through ComplianceService.recordConsent, which lifts
+  // suppression and enqueues an İYS job per lead — a per-row side-effect storm
+  // the ledger was built to avoid. Until that path exists these headers fall
+  // through to '__skip' and the operator maps them deliberately or not at all.
   'sms opt out': 'smsOptOut',
   'sms optout': 'smsOptOut',
   smsoptout: 'smsOptOut',
-  'sms izni': 'smsOptOut',
   'whatsapp opt out': 'waOptOut',
   'whatsapp optout': 'waOptOut',
   waoptout: 'waOptOut',
 };
+
+/**
+ * Fold a CSV header into one comparable token, the same way `forms.service.ts`
+ * folds a form label.
+ *
+ * A plain `toLowerCase()` does not work on this product's primary market:
+ * `'İ'.toLowerCase()` is `i` + U+0307 (a combining dot) and `'I'.toLowerCase()`
+ * is a DOTTED `i`, so "ABONELİKTEN ÇIKTI" never matched the dotless-`ı`
+ * synonym key while "Abonelikten çıktı" did. `ı` is folded first because it has
+ * no decomposition and NFKD alone would leave it.
+ *
+ * Separators collapse to `_`, so "Business Name", "business-name" and
+ * "business_name" are one token.
+ */
+function normHeader(v: string): string {
+  return String(v ?? '')
+    .toLowerCase()
+    .replace(/ı/g, 'i')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/** The synonym table keyed by the folded header, built once. */
+const NORMALIZED_SYNONYMS = new Map<string, string>(
+  Object.entries(SYNONYMS).map(([k, v]) => [normHeader(k), v]),
+);
+
+/**
+ * The field names themselves, folded — so a header that IS the field name
+ * ("emailOptOut", "businessName") matches. It could not before: the comparison
+ * was against a lowercased header, which a camelCase field never equals.
+ */
+const NORMALIZED_FIELDS = new Map<string, string>(
+  [...NATIVE_FIELDS, ...OPT_OUT_FIELDS].map((f) => [normHeader(f), f]),
+);
 
 @Injectable()
 export class ImportService implements OnModuleInit {
@@ -206,10 +251,11 @@ export class ImportService implements OnModuleInit {
   suggestMapping(headers: string[]): Record<string, string> {
     const out: Record<string, string> = {};
     for (const h of headers) {
-      const key = h.trim().toLowerCase();
-      if (SYNONYMS[key]) out[h] = SYNONYMS[key];
-      else if ((NATIVE_FIELDS as readonly string[]).includes(key)) out[h] = key;
-      else if ((OPT_OUT_FIELDS as readonly string[]).includes(key)) out[h] = key;
+      const key = normHeader(h);
+      const synonym = NORMALIZED_SYNONYMS.get(key);
+      const native = NORMALIZED_FIELDS.get(key);
+      if (synonym) out[h] = synonym;
+      else if (native) out[h] = native;
       else out[h] = '__skip';
     }
     return out;

@@ -50,7 +50,7 @@ describe('CampaignTrackingService', () => {
   const HUMAN = { method: 'GET', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15' };
   let prisma: any;
   let outbox: { append: jest.Mock };
-  let iysSync: { enqueueConsent: jest.Mock };
+  let iysSync: { enqueueConsent: jest.Mock; enqueueEmailWithdrawal: jest.Mock };
   let suppression: { suppress: jest.Mock };
   let ledger: { record: jest.Mock };
   let svc: CampaignTrackingService;
@@ -84,7 +84,10 @@ describe('CampaignTrackingService', () => {
     // idiom elsewhere (e.g. review-sync.service.spec.ts).
     prisma.$transaction = jest.fn((fn: any) => fn(prisma));
     outbox = { append: jest.fn().mockResolvedValue('evt-1') };
-    iysSync = { enqueueConsent: jest.fn().mockResolvedValue(undefined) };
+    iysSync = {
+      enqueueConsent: jest.fn().mockResolvedValue(undefined),
+      enqueueEmailWithdrawal: jest.fn().mockResolvedValue('not-ready'),
+    };
     suppression = { suppress: jest.fn().mockResolvedValue(undefined) };
     ledger = { record: jest.fn().mockResolvedValue(1) };
     svc = new CampaignTrackingService(
@@ -236,13 +239,57 @@ describe('CampaignTrackingService', () => {
     );
   });
 
-  it('non-SMS unsubscribe never enqueues an İYS job', async () => {
+  it('non-SMS unsubscribe never enqueues an İYS MESAJ job', async () => {
     prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
     prisma.campaign.findFirst.mockResolvedValue({ channel: 'EMAIL' });
 
     await expect(svc.unsubscribe('tok')).resolves.toBe(true);
 
     expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The email half of the same duty: 6563 obliges the tenant to REPORT the
+   * withdrawal, not merely to honour it. Suppressing the address here while
+   * İYS keeps showing ONAY for it is the tenant in breach of a reporting
+   * deadline they never knew had started.
+   */
+  it('email unsubscribe reports the withdrawal to İYS for the address', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT', channel: 'EMAIL' });
+    prisma.lead.findFirst.mockResolvedValue({ email: 'Ali@Acme.test', emailNormalized: 'ali@acme.test' });
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+
+    expect(iysSync.enqueueEmailWithdrawal).toHaveBeenCalledWith({
+      workspaceId: WS,
+      leadId: 'lead-1',
+      address: 'ali@acme.test',
+      source: 'HS_WEB',
+    });
+  });
+
+  it('email unsubscribe reports nothing when the lead has no address to report', async () => {
+    // The flag and the ledger row still land — the person asked us to stop —
+    // but there is no address for İYS to hold a record against.
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT', channel: 'EMAIL' });
+    prisma.lead.findFirst.mockResolvedValue({ email: null, emailNormalized: null });
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+
+    expect(iysSync.enqueueEmailWithdrawal).not.toHaveBeenCalled();
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead-1', workspaceId: WS, emailOptOut: false },
+      data: { emailOptOut: true },
+    });
+  });
+
+  it('does not fail the email unsubscribe when the İYS push cannot be queued', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT', channel: 'EMAIL' });
+    prisma.lead.findFirst.mockResolvedValue({ email: 'ali@acme.test', emailNormalized: 'ali@acme.test' });
+    iysSync.enqueueEmailWithdrawal.mockRejectedValue(new Error('iys down'));
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(suppression.suppress).toHaveBeenCalledWith(WS, 'ali@acme.test', 'EMAIL', 'OPT_OUT', expect.anything());
   });
 
   it('does not fail the unsubscribe when the İYS enqueue throws', async () => {

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { mergeConfigPublic } from './config-public.merge';
 
 /**
  * The one writer of `Channel.configPublic.health` — "is this mailbox working,
@@ -30,12 +31,14 @@ import { PrismaService } from '../../../prisma/prisma.service';
  * alone). A single "healthy" flag would have to pick one and lie about the
  * other, so each lane keeps its own state and the card renders both.
  *
- * ## Every write re-reads first
+ * ## Every write re-reads, and touches one key
  *
  * Callers hold a Channel row across an IMAP connect or an SMTP send — seconds
- * to minutes. Writing that stale copy back would drop a settings save made in
- * the meantime. This merges onto the row as it is NOW, scoped by workspace,
- * exactly as `EmailImapPollService.writeCursor` does.
+ * to minutes, so the copy in hand is old. The re-read here is for the PATCH
+ * (`since`, the failure count); the WRITE is a single `configPublic || {health}`
+ * statement through `mergeConfigPublic`, because the column also carries both
+ * IMAP cursors and the tenant's settings and nothing serializes those writers
+ * against this one.
  *
  * ## It never throws
  *
@@ -275,9 +278,15 @@ export class MailboxHealthService {
   }
 
   /**
-   * Re-read the row inside its workspace, apply the patch to the health block
-   * only, and write the whole `configPublic` back — the same shape
-   * `writeCursor` uses, for the same reason: the caller's copy is old.
+   * Re-read the row inside its workspace, compute the new health block from
+   * what is on it NOW, and write back THAT KEY ALONE.
+   *
+   * The read is for the patch (`since`, the failure count), never for the
+   * write: `mergeConfigPublic` hands the database a `health` key and the
+   * database merges it onto the row as it stands. The column also carries both
+   * IMAP cursors and the tenant's own settings, and nothing serializes a send
+   * settling against a sweep finishing — a whole-blob write would roll one of
+   * them back whenever the two interleaved.
    */
   private async merge(
     ref: MailboxRef,
@@ -291,18 +300,7 @@ export class MailboxHealthService {
       // Deleted, or never this workspace's. Either way there is nothing to
       // describe, and re-creating the row would be worse than saying nothing.
       if (!fresh) return;
-      const pub =
-        fresh.configPublic && typeof fresh.configPublic === 'object'
-          ? (fresh.configPublic as Record<string, unknown>)
-          : {};
-      const next: Record<string, unknown> = {
-        ...pub,
-        health: patch(readMailboxHealth(fresh.configPublic)),
-      };
-      await this.prisma.channel.update({
-        where: { id: ref.id },
-        data: { configPublic: next as Prisma.InputJsonValue },
-      });
+      await mergeConfigPublic(this.prisma, ref, { health: patch(readMailboxHealth(fresh.configPublic)) });
     } catch (e) {
       this.logger.warn(`mailbox health write failed for channel ${ref.id}: ${(e as Error).message}`);
     }

@@ -99,6 +99,9 @@ const EMPTY_FORM = {
   // which is the right answer for every provider the MX table already knows.
   imapHost: '',
   imapPort: '',
+  // Off means "decide from the port" (993/994 are IMAPS). On is for the hosts
+  // that serve IMAPS somewhere else, which no port rule can guess.
+  imapSecure: false,
 };
 
 /**
@@ -244,6 +247,7 @@ export function EmailChannelDialog({
             // poller's `imapHost?.trim()` would read it as one.
             ...(form.imapHost.trim() ? { imapHost: form.imapHost.trim() } : {}),
             ...(form.imapPort.trim() ? { imapPort: form.imapPort.trim() } : {}),
+            ...(form.imapSecure ? { imapSecure: 'true' } : {}),
           },
         })
         .then((r) => r.data as CreatedEmail);
@@ -272,6 +276,9 @@ export function EmailChannelDialog({
     put('smtpUser', form.smtpUser);
     put('imapHost', form.imapHost);
     put('imapPort', form.imapPort);
+    // Only alongside a port, for the same reason as smtpSecure below: a stored
+    // `true` from one host must not follow the mailbox to another.
+    if (secrets.imapPort) secrets.imapSecure = String(form.imapSecure);
     // Written WITH the port and only then, because a stored `smtpSecure: true`
     // left behind by a 465 mailbox would break the same mailbox moved to 587.
     // The adapter also implies TLS from 465, so this only ever agrees with it.
@@ -559,6 +566,14 @@ export function EmailChannelDialog({
                     )}
                   </Field>
                 </div>
+                <label className="mt-2 flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.imapSecure}
+                    onChange={(e) => set('imapSecure', e.target.checked)}
+                  />
+                  {t('accounts.email.imapSecure', 'This port uses SSL/TLS directly')}
+                </label>
               </div>
             </Disclosure>
             )}

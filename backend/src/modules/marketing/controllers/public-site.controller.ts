@@ -10,6 +10,7 @@ import { PublicTelephonyCallbackDto } from '../dto/telephony-callback.dto';
 import { TelephonyCallbackService } from '../services/telephony-callback.service';
 import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { readCookie, AFF_REF_COOKIE } from './public-referral.controller';
+import { DEFAULT_MAIL_LANG, t } from '../../../common/i18n/mail-copy';
 
 function callbackPage(title: string, heading: string, body: string): string {
   return (
@@ -181,6 +182,16 @@ export class PublicSiteController {
    *
    * Reschedule is a link back to the calendar's own picker rather than a second
    * picker here — one implementation of "which slots are free", not two.
+   *
+   * ## It answers in the language the mail was written in
+   *
+   * The link that opens this page sits inside a booking mail that
+   * `mail-copy` wrote from `Workspace.defaultLanguage` — whose schema default
+   * is `'en'`. Hardcoding the page in Turkish meant the schema-DEFAULT
+   * configuration mailed a customer in English and then handed them a cancel
+   * button, a reschedule link and a confirmation they could not read. The
+   * language therefore travels with the booking (`publicByToken` resolves it),
+   * exactly as `pageLang(token)` does for the sibling unsubscribe pages.
    */
   @Get('book/manage/:token')
   async manageBooking(@Param('token') token: string, @Res() res: Response): Promise<void> {
@@ -189,37 +200,52 @@ export class PublicSiteController {
       b = await this.booking.publicByToken(token);
     } catch {
       // Same words for an unknown token and an expired one: a page that
-      // distinguishes them is a token oracle.
-      res.status(404).type('html').send(callbackPage('Randevu', 'Randevu bulunamadı', 'Bu bağlantı artık geçerli değil.'));
+      // distinguishes them is a token oracle. And no booking means no
+      // workspace, so there is no tenant language to resolve — rendering one
+      // would turn the page into that oracle by another route. DEFAULT_MAIL_LANG
+      // is the same fallback the unsubscribe pages use when a token is unknown.
+      const lang = DEFAULT_MAIL_LANG;
+      res.status(404).type('html').send(
+        callbackPage(
+          esc(t(lang, 'booking.manage.title')),
+          esc(t(lang, 'booking.manage.notFound.heading')),
+          esc(t(lang, 'booking.manage.notFound.body')),
+        ),
+      );
       return;
     }
+    const lang = b.lang ?? DEFAULT_MAIL_LANG;
     const cancelled = b.status === 'CANCELLED';
     const rebook = b.calendarSlug ? `${this.base()}/api/public/book/${esc(b.workspaceId)}/${esc(b.calendarSlug)}` : '';
     // The conferencing sync writes this column, not a visitor — but it lands in
     // an href, and `esc()` does not stop a `javascript:` scheme.
     const join = /^https?:\/\//i.test(b.meetingUrl ?? '') ? b.meetingUrl : null;
+    const heading = b.calendarName || t(lang, 'booking.manage.title');
     res.type('html').send(
-      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-      `<title>${esc(b.calendarName || 'Randevu')}</title><style>body{font-family:system-ui;max-width:520px;margin:40px auto;padding:0 16px;color:#0f172a}` +
+      `<!doctype html><html lang="${esc(lang)}"${lang === 'ar' ? ' dir="rtl"' : ''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<title>${esc(heading)}</title><style>body{font-family:system-ui;max-width:520px;margin:40px auto;padding:0 16px;color:#0f172a}` +
       `.card{border:1px solid #e2e8f0;border-radius:12px;padding:20px}.muted{color:#64748b}` +
       `button,a.btn{display:inline-block;margin-top:14px;background:#1e40af;color:#fff;border:none;padding:11px 18px;border-radius:10px;cursor:pointer;text-decoration:none;font-size:15px}` +
       `button.danger{background:#fff;color:#b91c1c;border:1px solid #fecaca;margin-right:8px}</style></head><body>` +
-      `<h2>${esc(b.calendarName || 'Randevu')}</h2><div class="card"><div id="when" class="muted">…</div>` +
+      `<h2>${esc(heading)}</h2><div class="card"><div id="when" class="muted">…</div>` +
       `<div class="muted">${esc(b.timezone)}</div>` +
-      (join ? `<p><a href="${esc(join)}">Toplantıya katıl</a></p>` : '') +
-      `<p id="state">${cancelled ? 'Bu randevu iptal edildi.' : ''}</p>` +
+      (join ? `<p><a href="${esc(join)}">${esc(t(lang, 'booking.manage.join'))}</a></p>` : '') +
+      `<p id="state">${cancelled ? esc(t(lang, 'booking.manage.cancelled')) : ''}</p>` +
       (cancelled
-        ? (rebook ? `<a class="btn" href="${rebook}">Yeni bir saat seç</a>` : '')
-        : `<button class="danger" id="cancel">Randevuyu iptal et</button>` +
-          (rebook ? `<a class="btn" href="${rebook}">Saati değiştir</a>` : '')) +
+        ? (rebook ? `<a class="btn" href="${rebook}">${esc(t(lang, 'booking.manage.rebook'))}</a>` : '')
+        : `<button class="danger" id="cancel">${esc(t(lang, 'booking.manage.cancel'))}</button>` +
+          (rebook ? `<a class="btn" href="${rebook}">${esc(t(lang, 'booking.manage.reschedule'))}</a>` : '')) +
       `</div><div id="msg" class="muted"></div>` +
-      // Trusted first-party markup, like the slot picker above.
+      // Trusted first-party markup, like the slot picker above. The three
+      // strings the script writes go in as JSON.stringify, the same way the
+      // token does — they are dictionary values, not markup, and `textContent`
+      // renders them as text.
       `<script>const T=${JSON.stringify(token)};const S=${JSON.stringify(b.startAt)};` +
       `document.getElementById('when').textContent=new Date(S).toLocaleString();` +
       `const c=document.getElementById('cancel');if(c)c.onclick=async()=>{c.disabled=true;` +
       `const r=await fetch(${JSON.stringify(`${this.base()}/api/public/book/token/`)}+encodeURIComponent(T)+'/cancel',{method:'POST'});` +
-      `document.getElementById('msg').textContent=r.ok?'Randevunuz iptal edildi.':'İptal edilemedi, lütfen tekrar deneyin.';` +
-      `if(r.ok){c.remove();document.getElementById('state').textContent='Bu randevu iptal edildi.';}else{c.disabled=false;}};</script>` +
+      `document.getElementById('msg').textContent=r.ok?${JSON.stringify(t(lang, 'booking.manage.cancelDone'))}:${JSON.stringify(t(lang, 'booking.manage.cancelFailed'))};` +
+      `if(r.ok){c.remove();document.getElementById('state').textContent=${JSON.stringify(t(lang, 'booking.manage.cancelled'))};}else{c.disabled=false;}};</script>` +
       `</body></html>`,
     );
   }

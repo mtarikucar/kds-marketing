@@ -273,9 +273,16 @@ export class IysEmailAdapter implements IysEmailPort {
   }
 
   /**
-   * The same ladder `IysSyncService.resolveCreds` walks: a workspace can hold
-   * more than one ACTIVE SMS channel, and one of them lacking a brandCode is
-   * not a reason to declare the whole workspace unconfigured.
+   * The second rung, and the same one `IysSyncService.resolveCreds` walks —
+   * workspace settings first, an ACTIVE SMS channel second, in that order in
+   * both files. They have to agree: this side decides whether a tenant is told
+   * "İYS is configured", and that side decides whether the consent rows that
+   * tenant produces can actually be sent, so a ladder that differed by one
+   * rung would report a workspace ready while its queue DLQ'd every row.
+   *
+   * A workspace can hold more than one ACTIVE SMS channel, and one of them
+   * lacking a brandCode is not a reason to declare the whole workspace
+   * unconfigured.
    */
   private async smsChannelCreds(
     workspaceId: string,

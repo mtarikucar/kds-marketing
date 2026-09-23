@@ -6,6 +6,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { ConversationIngressService } from './conversation-ingress.service';
+import { mergeConfigPublic } from './config-public.merge';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { SmsV2Client, SmsV2InboxMessage } from '../../netgsm/sms/sms-v2.client';
 
@@ -212,27 +213,17 @@ export class NetgsmMoPollService {
     return `netgsm-mo-digest:${hash}`;
   }
 
-  /** Merge-write `configPublic.lastMoPollRecovery` — re-reads the row
-   *  immediately before writing (rather than reusing the tick-start snapshot)
-   *  and spreads the existing blob, mirroring NetgsmDlrPollService's
-   *  `rollupCampaignStats` merge pattern, so a concurrent settings save (which
-   *  replaces `configPublic` wholesale — see ChannelsService.update) loses at
-   *  most this one field's staleness, never the reverse. */
+  /** Merge-write `configPublic.lastMoPollRecovery` — ONE key, in one statement
+   *  the database applies to the row as it stands (`configPublic || $patch`).
+   *  The column is shared with a tenant's settings save and, on a mailbox, the
+   *  two IMAP cursors and the health block; reading the blob and writing it
+   *  back would make this stamp able to revert any of them. */
   private async stampRecovery(workspaceId: string, channelId: string): Promise<void> {
-    const fresh = await this.prisma.channel.findFirst({
-      where: { id: channelId, workspaceId },
-      select: { configPublic: true },
-    });
-    const pub =
-      fresh?.configPublic && typeof fresh.configPublic === 'object'
-        ? (fresh.configPublic as Record<string, unknown>)
-        : {};
-    await this.prisma.channel.update({
-      where: { id: channelId },
-      data: {
-        configPublic: { ...pub, lastMoPollRecovery: new Date().toISOString() } as Prisma.InputJsonValue,
-      },
-    });
+    await mergeConfigPublic(
+      this.prisma,
+      { id: channelId, workspaceId },
+      { lastMoPollRecovery: new Date().toISOString() },
+    );
   }
 
   private buildAccountGroups(channels: ChannelRow[]): Map<string, AccountGroup> {

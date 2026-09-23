@@ -136,3 +136,147 @@ describe('PublicSiteController — POST f/:formId passes the visitor context', (
     expect(forms.submit.mock.calls[0][3]).toMatchObject({ ip: null });
   });
 });
+
+/**
+ * THE MANAGE PAGE MUST SPEAK THE LANGUAGE THE MAIL DID.
+ *
+ * `booking.service.ts manageUrl()` puts `/api/public/book/manage/<token>` into
+ * the customer's booking mail, and that mail is written through
+ * `common/i18n/mail-copy` from `Workspace.defaultLanguage` — whose schema
+ * default is `'en'`. So the schema-DEFAULT configuration sends "Manage or
+ * cancel your booking" in English and lands the customer on this page. Every
+ * word on it used to be a Turkish literal: a customer who never chose Turkish
+ * could not tell which button cancels.
+ *
+ * The sibling unsubscribe pages (`campaign-tracking.controller.ts`) resolve the
+ * language from the workspace whose mail the link came out of. This does the
+ * same, from the workspace the token already resolves to.
+ */
+describe('PublicSiteController — GET book/manage/:token speaks the workspace language', () => {
+  const BOOKING = {
+    workspaceId: 'ws-1',
+    calendarName: '',
+    calendarSlug: 'demo',
+    timezone: 'Europe/Istanbul',
+    startAt: '2026-10-01T09:00:00.000Z',
+    endAt: '2026-10-01T09:30:00.000Z',
+    status: 'CONFIRMED',
+    meetingUrl: 'https://meet.example/abc',
+  };
+
+  function withBooking(overrides: Record<string, unknown> = {}) {
+    const booking = {
+      publicByToken: jest.fn().mockResolvedValue({ ...BOOKING, ...overrides }),
+    };
+    const ctrl = new PublicSiteController(
+      { resolvePublicCallbackTarget: jest.fn() } as any,
+      {} as any,
+      booking as any,
+      { get: jest.fn().mockReturnValue('https://jeetagrowth.com') } as any,
+      { requestCallback: jest.fn() } as any,
+    );
+    return { ctrl, booking };
+  }
+
+  /** Every recipient-facing Turkish word this page used to hardcode. */
+  const TURKISH = [
+    'Randevu bulunamadı',
+    'Bu bağlantı artık geçerli değil',
+    'Toplantıya katıl',
+    'Bu randevu iptal edildi',
+    'Yeni bir saat seç',
+    'Randevuyu iptal et',
+    'Saati değiştir',
+    'Randevunuz iptal edildi',
+    'İptal edilemedi',
+  ];
+
+  it('renders an English workspace in English, not Turkish', async () => {
+    const { ctrl } = withBooking({ lang: 'en' });
+    const res = makeRes();
+
+    await ctrl.manageBooking('tok-1', res);
+
+    const html = res.send.mock.calls[0][0] as string;
+    for (const word of TURKISH) expect(html).not.toContain(word);
+    expect(html).toContain('Cancel booking');
+    expect(html).toContain('Change time');
+    expect(html).toContain('Join meeting');
+    expect(html).toContain('lang="en"');
+  });
+
+  it('still renders Turkish for a Turkish workspace', async () => {
+    const { ctrl } = withBooking({ lang: 'tr' });
+    const res = makeRes();
+
+    await ctrl.manageBooking('tok-1', res);
+
+    const html = res.send.mock.calls[0][0] as string;
+    expect(html).toContain('Randevuyu iptal et');
+    expect(html).toContain('Saati değiştir');
+    expect(html).toContain('lang="tr"');
+  });
+
+  it('marks an Arabic page right-to-left, so the buttons are not mirrored text', async () => {
+    const { ctrl } = withBooking({ lang: 'ar' });
+    const res = makeRes();
+
+    await ctrl.manageBooking('tok-1', res);
+
+    const html = res.send.mock.calls[0][0] as string;
+    expect(html).toContain('lang="ar"');
+    expect(html).toContain('dir="rtl"');
+    expect(html).toContain('إلغاء الموعد');
+    // Latin-script locales must not pick up the attribute.
+    const { ctrl: ru } = withBooking({ lang: 'ru' });
+    const res2 = makeRes();
+    await ru.manageBooking('tok-1', res2);
+    expect(res2.send.mock.calls[0][0]).not.toContain('dir="rtl"');
+    expect(res2.send.mock.calls[0][0]).toContain('Отменить запись');
+  });
+
+  it('says a cancelled booking is cancelled in the workspace language', async () => {
+    const { ctrl } = withBooking({ lang: 'en', status: 'CANCELLED' });
+    const res = makeRes();
+
+    await ctrl.manageBooking('tok-1', res);
+
+    const html = res.send.mock.calls[0][0] as string;
+    expect(html).toContain('This booking has been cancelled');
+    expect(html).toContain('Pick a new time');
+    expect(html).not.toContain('Bu randevu iptal edildi');
+  });
+
+  it('writes the inline script messages in the workspace language too', async () => {
+    const { ctrl } = withBooking({ lang: 'en' });
+    const res = makeRes();
+
+    await ctrl.manageBooking('tok-1', res);
+
+    const html = res.send.mock.calls[0][0] as string;
+    expect(html).toContain('Your booking has been cancelled');
+    expect(html).toContain('We could not cancel that');
+  });
+
+  it('renders an unknown token in the default language, never a tenant one', async () => {
+    // No booking means no workspace: resolving a language here would make the
+    // page a token oracle. DEFAULT_MAIL_LANG is 'en', same as the unsubscribe
+    // pages' own fallback.
+    const booking = { publicByToken: jest.fn().mockRejectedValue(new Error('Booking not found')) };
+    const ctrl = new PublicSiteController(
+      { resolvePublicCallbackTarget: jest.fn() } as any,
+      {} as any,
+      booking as any,
+      { get: jest.fn().mockReturnValue('https://jeetagrowth.com') } as any,
+      { requestCallback: jest.fn() } as any,
+    );
+    const res = makeRes();
+
+    await ctrl.manageBooking('nope', res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    const html = res.send.mock.calls[0][0] as string;
+    expect(html).toContain('Booking not found');
+    expect(html).not.toContain('Randevu bulunamadı');
+  });
+});

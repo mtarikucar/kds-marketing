@@ -7,8 +7,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { ConversationIngressService } from './conversation-ingress.service';
-import { imapConnectOptions, imapTarget } from './imap-target';
-import { stripQuotedReply } from './email-reply-text';
+import { classifyImapError, imapConnectOptions, imapTarget } from './imap-target';
+import { stripQuotedReply, truncateHtmlQuote } from './email-reply-text';
 import { MailClassification, classifyMail } from './inbound/mail-classify';
 import { authVerdict } from './inbound/mail-auth';
 import {
@@ -29,8 +29,10 @@ import {
 } from './inbound/inbound-item.service';
 import { shouldIngest } from './inbound/inbound-policy';
 import { parseDeliveryReport, suppressibleRecipients } from './inbound/delivery-report';
+import { corroborateReport, describeRejections } from './inbound/dsn-provenance';
 import { SuppressionService } from '../compliance/suppression.service';
-import { MailboxHealthService } from './mailbox-health.service';
+import { MailboxHealthService, isMailboxBackedOff } from './mailbox-health.service';
+import { mergeConfigPublic } from './config-public.merge';
 import { sweepHeartbeatError } from './ops/mail-ops.service';
 
 /** The minimal Channel-row shape this poller reads — an explicit `select` that
@@ -67,6 +69,28 @@ const MAX_UID_ATTEMPTS = 3;
 
 /** Enough of a body to be a message; a cap the AI prompt already applies too. */
 const MAX_BODY_CHARS = 8000;
+
+/**
+ * The login itself failed — the ONE failure that earns a retry wait.
+ *
+ * Narrow on purpose. Everything a mailbox throws AFTER the socket is
+ * authenticated (a refused `getMailboxLock`, a Prisma blip writing the cursor)
+ * is a transient of ours, and charging it the 1–60 minute ladder — or the
+ * six-hour auth ceiling — would silence the safety-net poll for a mailbox
+ * whose credentials are perfectly fine. `isMailboxBackedOff` says it in its
+ * own docstring: health state must never be the thing that stops mail
+ * arriving.
+ *
+ * The cause is carried rather than flattened so `classifyImapError` can still
+ * read the provider's `code`/`authenticationFailed`/`responseText`, and the
+ * message is copied up so the sweep's reason line is unchanged.
+ */
+class ImapConnectFailure extends Error {
+  constructor(readonly cause: unknown) {
+    super(String((cause as any)?.message ?? cause));
+    this.name = 'ImapConnectFailure';
+  }
+}
 
 /** The cursor and the one uid currently holding it up. */
 interface PollCursor {
@@ -309,6 +333,22 @@ export class EmailImapPollService implements OnModuleInit {
     })) as ChannelRow[];
 
     for (const channel of channels) {
+      // A mailbox that has already refused us waits. Without this the sweep
+      // dialled a rotated password 288 times a day — indefinitely, because
+      // `lastVerifiedAt` is only ever cleared by a human pressing Verify —
+      // against hosts that lock an account on exactly that count. It is the
+      // same line `EmailImapIdleService` runs, and the same wait: one ladder,
+      // honoured by every unattended path.
+      //
+      // Counted `skipped`, not `failed`: a mailbox we deliberately did not
+      // attempt is not evidence about the platform, and `sweepHeartbeatError`
+      // must not red one shared cron for every tenant over it. The truth stays
+      // where the only person who can fix it looks — the mailbox's own health
+      // card, and the RECEIVE_DOWN alert.
+      if (isMailboxBackedOff(channel.configPublic)) {
+        sweep.skipped++;
+        continue;
+      }
       try {
         const n = await this.pollChannel(channel);
         if (n === null) {
@@ -325,7 +365,7 @@ export class EmailImapPollService implements OnModuleInit {
         this.logger.warn(`email-imap-poll: channel=${channel.id} failed: ${message}`);
         // Persisted, not only warned: only the tenant knows the new password,
         // and a log line on our side has never once reached them.
-        await this.recordReceive(channel, message);
+        await this.recordReceive(channel, message, e);
       }
     }
     return sweep;
@@ -334,11 +374,22 @@ export class EmailImapPollService implements OnModuleInit {
   /** Per-mailbox receive truth, best-effort. The IDLE hold writes the same
    *  block; a deployment whose server has no IDLE support would otherwise have
    *  nothing writing it at all. Optional so a unit test still polls. */
-  private async recordReceive(channel: ChannelRow, error: string | null): Promise<void> {
+  private async recordReceive(
+    channel: ChannelRow,
+    error: string | null,
+    thrown?: unknown,
+  ): Promise<void> {
     if (!this.health) return;
     const ref = { id: channel.id, workspaceId: channel.workspaceId };
     try {
       if (error === null) await this.health.recordOk(ref, 'receive', { polled: true });
+      // A refused LOGIN earns the wait this sweep now honours — and is named
+      // for what it was. It used to be filed as a generic `POLL_FAILED`, so a
+      // rotated password read on the health card as "the poll did not work"
+      // rather than "your password was refused", which is the one sentence
+      // that tells the tenant what to do.
+      else if (thrown instanceof ImapConnectFailure)
+        await this.health.recordBackoff(ref, classifyImapError(thrown.cause));
       else await this.health.recordFailure(ref, 'receive', { error, reason: 'POLL_FAILED' });
     } catch {
       // MailboxHealthService already swallows its own writes; this is the belt
@@ -495,7 +546,13 @@ export class EmailImapPollService implements OnModuleInit {
       imapConnectOptions(resolved.target, { socketTimeoutMs: CONNECT_TIMEOUT_MS }) as any,
     );
 
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (e) {
+      // Tagged so the sweep can tell "the password was refused" from "the
+      // cursor write timed out". Only the first earns a wait.
+      throw new ImapConnectFailure(e);
+    }
     return { client, config };
   }
 
@@ -830,7 +887,14 @@ export class EmailImapPollService implements OnModuleInit {
     let body = '';
     if (node) {
       const raw = await this.download(client, uid, node.part ?? '1');
-      body = String(node.type ?? '').toLowerCase() === 'text/html' ? this.flattenHtml(raw) : raw;
+      // Same rule as `bodyOf`: cut the quote while the markup still says where
+      // it starts. This branch downloads and flattens its own part, so it
+      // needed its own call — a big reply quoting a campaign is precisely the
+      // shape that gets read selectively.
+      body =
+        String(node.type ?? '').toLowerCase() === 'text/html'
+          ? this.flattenHtml(truncateHtmlQuote(raw))
+          : raw;
     }
     const attachmentLine = synthesizeAttachmentBody(parts.attachments);
     // The line is appended even to a body we DID read: the AI answers whatever
@@ -907,11 +971,26 @@ export class EmailImapPollService implements OnModuleInit {
     return (m ? m[1] : raw).trim().toLowerCase();
   }
 
-  /** Plain text, falling back to a flattened HTML part for HTML-only mail. */
+  /**
+   * Plain text, falling back to a flattened HTML part for HTML-only mail.
+   *
+   * The quote is cut BEFORE the flattening, never after. Every client marks
+   * its quote container in the markup — `<blockquote>`, `gmail_quote`,
+   * Outlook's `appendonsend` — and `flattenHtml` destroys exactly those
+   * markers, so a reply that reached here as HTML (a `multipart/related`
+   * signature logo or a `multipart/mixed` attachment leaves `parsed.text`
+   * unset) used to be ingested with the whole quoted thread attached. The AI
+   * then answered our own last message back at the customer, and the quoted
+   * bulk FOOTER — "Abonelikten çıkmak için" / "Unsubscribe" — matched
+   * `detectOptOut` and suppressed a customer who had just asked for a price.
+   *
+   * `truncateHtmlQuote` returns its input unchanged when the head has no
+   * visible text, so this cannot empty a message.
+   */
   private bodyOf(parsed: ParsedMail): string {
     if (parsed.text && parsed.text.trim()) return parsed.text;
     const html = typeof parsed.html === 'string' ? parsed.html : '';
-    return html ? this.flattenHtml(html) : '';
+    return html ? this.flattenHtml(truncateHtmlQuote(html)) : '';
   }
 
   private flattenHtml(html: string): string {
@@ -969,8 +1048,28 @@ export class EmailImapPollService implements OnModuleInit {
     try {
       const report = parseDeliveryReport(mail);
       const targets = suppressibleRecipients(report);
+      // Nothing about a bounce is authenticated, and this mailbox is on the
+      // tenant's website: only mail we can prove we sent may suppress an
+      // address. See `dsn-provenance.ts` for why the sender's SPF/DKIM verdict
+      // and the report's own MIME shape are both the wrong question.
+      const { corroborated, rejected } = await corroborateReport(
+        this.prisma,
+        channel.workspaceId,
+        report,
+        targets,
+      );
+      const refused = describeRejections(rejected);
+      if (refused) {
+        // Recorded, never acted on — a report we refused has to be
+        // diagnosable, or a wrong refusal is as invisible as a wrong write.
+        this.logger.warn(
+          `email-imap-poll: channel=${channel.id} delivery report from=${
+            mail.from?.[0]?.address ?? 'unknown'
+          } named addresses this workspace has no record of mailing: ${refused}`,
+        );
+      }
       let done = 0;
-      for (const t of targets) {
+      for (const t of corroborated) {
         await this.suppression.suppress(channel.workspaceId, t.address, 'EMAIL', t.reason, {
           source: 'dsn',
           note: [t.status, t.diagnostic].filter(Boolean).join(' ').slice(0, 300) || null,
@@ -1050,11 +1149,13 @@ export class EmailImapPollService implements OnModuleInit {
     return { uid, count };
   }
 
-  /** Re-reads the row first (scoped by workspace, as every channel write in
-   *  this module is) so a concurrent settings save is not clobbered by a
-   *  cursor write holding a stale copy of configPublic. The fail counter rides
-   *  along in the SAME update — a second write would be a second chance to
-   *  clobber the first. */
+  /** Writes ITS OWN KEYS, in one statement the database merges onto the row
+   *  (`configPublic || $patch`). `configPublic` is shared with the Sent
+   *  reconciler's cursor, the mailbox health block written after every send,
+   *  and the tenant's settings save — none of which is serialized against this
+   *  tick, so reading the blob and writing it back would roll one of them back
+   *  whenever the two interleaved. The fail counter rides along in the SAME
+   *  statement: a second write would be a second chance to lose one. */
   private async writeCursor(
     channel: ChannelRow,
     uidValidity: string,
@@ -1062,26 +1163,12 @@ export class EmailImapPollService implements OnModuleInit {
     fail: FailState | null,
   ): Promise<void> {
     if (!uidValidity) return;
-    const fresh = await this.prisma.channel.findFirst({
-      where: { id: channel.id, workspaceId: channel.workspaceId },
-      select: { configPublic: true },
-    });
-    const pub =
-      fresh?.configPublic && typeof fresh.configPublic === 'object'
-        ? (fresh.configPublic as Record<string, unknown>)
-        : {};
-    await this.prisma.channel.update({
-      where: { id: channel.id },
-      data: {
-        configPublic: {
-          ...pub,
-          imapLastUid: lastUid,
-          imapUidValidity: uidValidity,
-          imapFailUid: fail ? fail.uid : null,
-          imapFailUidValidity: fail ? uidValidity : null,
-          imapFailCount: fail ? fail.count : null,
-        } as Prisma.InputJsonValue,
-      },
+    await mergeConfigPublic(this.prisma, channel, {
+      imapLastUid: lastUid,
+      imapUidValidity: uidValidity,
+      imapFailUid: fail ? fail.uid : null,
+      imapFailUidValidity: fail ? uidValidity : null,
+      imapFailCount: fail ? fail.count : null,
     });
   }
 }

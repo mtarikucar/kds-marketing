@@ -192,6 +192,22 @@ export class ScheduledJobRunnerService {
    * Best-effort: a failed release leaves the rows RUNNING, which `reapStuck`
    * still recovers — that is a slower path, not a lost one, and it must not
    * take the rest of the tick down with it.
+   *
+   * ## One conflict costs exactly one row
+   *
+   * RUNNING → PENDING is the same transition `reapStuck` guards so carefully,
+   * and for the same reason: it can violate `scheduled_jobs_pending_dedup`
+   * (kind, dedupKey) WHERE status = 'PENDING'. `ScheduledJobService.schedule()`
+   * only collapses onto a row that is still PENDING, so while this tick held a
+   * row RUNNING an inbound message was free to create a PENDING successor for
+   * the same conversation.
+   *
+   * So the writes are isolated twice over. Per workspace, because one `try`
+   * around the whole loop let the first tenant's conflict strand every later
+   * tenant's rows for the full fifteen minutes — the cross-tenant stall
+   * `DISPATCH_BUDGET_MS`/`KIND_DISPATCH_CAP` exist to remove. And, on a
+   * conflict, per id, because one bad row fails the whole `updateMany`
+   * statement and would take that tenant's other deferred rows with it.
    */
   private async release(jobs: ClaimedJob[]): Promise<void> {
     if (jobs.length === 0) return;
@@ -204,16 +220,55 @@ export class ScheduledJobRunnerService {
       ids.push(job.id);
       byWorkspace.set(job.workspaceId, ids);
     }
-    try {
-      for (const [workspaceId, ids] of byWorkspace) {
+    for (const [workspaceId, ids] of byWorkspace) {
+      try {
         await this.prisma.scheduledJob.updateMany({
           where: { workspaceId, id: { in: ids }, status: 'RUNNING' },
           data: { status: 'PENDING', lockedAt: null },
         });
+      } catch (e: any) {
+        // The batch is all-or-nothing, so fall back to one row at a time and
+        // let the conflicting row — and only it — wait for the reaper.
+        await this.releaseOneByOne(workspaceId, ids, e);
       }
-      this.logger.debug(`scheduled-job tick deferred ${jobs.length} claimed row(s) to the next tick`);
-    } catch (e: any) {
-      this.logger.error(`scheduled-job release failed for ${jobs.length} row(s): ${e?.message ?? e}`);
+    }
+    this.logger.debug(`scheduled-job tick deferred ${jobs.length} claimed row(s) to the next tick`);
+  }
+
+  /**
+   * The fallback after a batched release failed: every row on its own.
+   *
+   * A P2002 here is not an error condition — a PENDING successor already
+   * carries this row's work (every dedupKey in this codebase is identity-shaped:
+   * a conversationId, a campaignId, a runId), so the row is left RUNNING and
+   * `reapStuck` pass 1 retires it as DONE at the fifteen-minute mark. Anything
+   * else is logged per row and left to the same backstop.
+   *
+   * `workspaceId` stays in the where clause even for a single id: the
+   * `status: 'RUNNING'` guard is what stops a release resurrecting a row
+   * another writer already settled, and `workspace-scoping.arch.spec.ts`
+   * requires it on any multi-row delegate call.
+   */
+  private async releaseOneByOne(workspaceId: string, ids: string[], batchError: unknown): Promise<void> {
+    if (ids.length > 1) {
+      this.logger.warn(
+        `scheduled-job batched release failed for workspace ${workspaceId} ` +
+          `(${ids.length} row(s)), retrying one at a time: ${errText(batchError)}`,
+      );
+    }
+    for (const id of ids) {
+      try {
+        await this.prisma.scheduledJob.updateMany({
+          where: { workspaceId, id, status: 'RUNNING' },
+          data: { status: 'PENDING', lockedAt: null },
+        });
+      } catch (e: any) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          this.logger.debug(`scheduled-job release skipped ${id}: a PENDING successor holds its dedup slot`);
+          continue;
+        }
+        this.logger.error(`scheduled-job release failed for ${id}: ${errText(e)}`);
+      }
     }
   }
 
@@ -624,4 +679,9 @@ export class ScheduledJobRunnerService {
       }
     }
   }
+}
+
+/** A thrown value's message, whatever shape it arrived in. */
+function errText(e: unknown): string {
+  return (e as any)?.message ?? String(e);
 }

@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { hasHeaderInjection, isSingleAddress, normalizeAddress } from '../../../../common/util/email-address';
+import { emailPaused } from '../../../../common/util/email-paused';
 import { SuppressionService, SuppressionReason } from '../../compliance/suppression.service';
 import { IYS_EMAIL_PORT, IysEmailPort } from '../../compliance/iys-email.port';
 import { MessageQuotaService } from '../message-quota.service';
@@ -55,8 +56,13 @@ export interface WorkspaceGateState {
   /**
    * The tenant's own zone. A send window names LOCAL hours, so without this the
    * clamp has nothing to resolve them against and correctly declines to guess.
+   *
+   * Required, not optional, on purpose. Every caller hands the guard a
+   * workspace it already read, so the guard's own fallback read never runs —
+   * and an optional marker here is exactly what let a `select` that forgot the
+   * column compile, and the send window go quietly inert.
    */
-  timezone?: string | null;
+  timezone: string | null;
 }
 
 export interface GateContextInput {
@@ -267,8 +273,13 @@ export class MailGuardService {
     try {
       return await this.prisma.workspace.findUnique({
         where: { id: workspaceId },
-        // `timezone` is here for the send window: local hours need a zone to be
-        // resolved against, and without it the clamp ships inert.
+        // NOTE: on the real send path this never runs. `check()` only calls
+        // here when `ctx.workspace === undefined`, and the gateway
+        // (OutboundMailService, the sole production caller) always passes a
+        // row or an explicit `null`. The zone the send window actually
+        // resolves against therefore comes from the GATEWAY's select, not
+        // this one — keep `timezone` on both, and change this one expecting
+        // no effect. This stays as the defensive default for a future caller.
         select: { status: true, settings: true, timezone: true },
       });
     } catch (e: any) {
@@ -337,10 +348,3 @@ export class MailGuardService {
   }
 }
 
-/** `settings.email.paused` — absent means "not paused", for every existing row. */
-function emailPaused(settings: unknown): boolean {
-  if (!settings || typeof settings !== 'object') return false;
-  const email = (settings as Record<string, unknown>).email;
-  if (!email || typeof email !== 'object') return false;
-  return (email as Record<string, unknown>).paused === true;
-}

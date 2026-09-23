@@ -148,4 +148,16 @@ describe('MarketingLoginPage', () => {
     });
     expect(screen.queryByText(/no refresh token/i)).not.toBeInTheDocument();
   });
+
+  it('offers the way back in for an owner who cannot remember their password', async () => {
+    // `no-password-recovery`: the backend can mail a reset link, but until
+    // something on this page asks for one, nothing ever calls it.
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: /login.forgotCta/i })).toHaveAttribute(
+        'href',
+        '/forgot-password',
+      );
+    });
+  });
 });

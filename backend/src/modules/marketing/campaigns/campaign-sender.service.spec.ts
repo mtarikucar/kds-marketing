@@ -304,6 +304,28 @@ describe('CampaignSenderService.batch', () => {
     expect(quota.refund).toHaveBeenCalledWith(WS, 'EMAIL');
   });
 
+  it('refunds the message quota when the gateway deduped the send — one mail, one unit', async () => {
+    // The crash window the idempotency key exists for: the relay took the mail
+    // and the MailLog settled SENT, but the process died before the recipient
+    // row was marked, so the stranded-SENDING sweep re-queues it and the row is
+    // sent again. The gateway correctly dispatches NOTHING and answers DEDUPED
+    // — but DEDUPED is `ok: true`, so a refund keyed on `!ok` keeps the second
+    // reserved unit. The customer got one email; the tenant's plan was debited
+    // twice, and the ledger shows a single SENT MailLog row, so nothing says so.
+    outboundMail.send.mockResolvedValue(receipt({ outcome: 'DEDUPED', ok: true, messageId: null }));
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(quota.reserve).toHaveBeenCalledTimes(1);
+    expect(quota.refund).toHaveBeenCalledTimes(1);
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'EMAIL');
+    // And the row still settles as delivered: it really did reach the customer
+    // on the first attempt, so it must never be re-queued.
+    expect(prisma.campaignRecipient.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'r2' }, data: expect.objectContaining({ status: 'SENT' }) }),
+    );
+  });
+
   it('refunds the message quota when the gateway itself throws', async () => {
     // The gateway is documented never to throw; this is the backstop that keeps
     // a broken promise from leaking a reserved message unit.

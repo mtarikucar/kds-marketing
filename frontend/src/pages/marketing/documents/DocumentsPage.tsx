@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Send, Ban, Trash2, Pencil, Link2, FileSignature } from 'lucide-react';
+import { Plus, Mail, Ban, Trash2, Pencil, Link2, FileSignature } from 'lucide-react';
 
 import {
   listDocuments,
@@ -10,6 +10,7 @@ import {
   createDocument,
   updateDocument,
   sendDocument,
+  emailDocumentForSignature,
   voidDocument,
   deleteDocument,
   type MarketingDocument,
@@ -106,6 +107,24 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
       onError(e);
     }
   };
+
+  // copyLink() only mints — the link lands on the REP'S clipboard and the
+  // customer is told nothing. This is the action that actually sends the
+  // agreement. It mints first too, so it works straight from DRAFT.
+  //
+  // On failure the document deliberately stays SENT with a live link (the
+  // backend does not roll back), so the error toast is the whole recovery
+  // story: "Copy signing link" beside it is still the manual path.
+  const emailMut = useMutation({
+    mutationFn: emailDocumentForSignature,
+    onSuccess: (r) => {
+      invalidate();
+      toast.success(
+        t('documents.emailed', { defaultValue: 'Agreement emailed to {{to}}', to: r.to }),
+      );
+    },
+    onError,
+  });
 
   const voidMut = useMutation({
     mutationFn: voidDocument,
@@ -210,10 +229,31 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
                       <Pencil className="w-4 h-4" aria-hidden="true" />
                     </Button>
                   )}
+                  {/* Two distinct affordances, deliberately: the envelope SENDS
+                      (the customer gets the request to sign), the chain-link
+                      only copies. Mailing needs a contact — the backend 400s
+                      with "This agreement has no contact to email" — so a
+                      document with no lead offers the copy path alone rather
+                      than an action that is already doomed. */}
                   {(d.status === 'DRAFT' || d.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" onClick={() => copyLink(d.id)} title={t('documents.copyLink', 'Copy signing link')}>
-                      {d.status === 'DRAFT' ? <Send className="w-4 h-4" aria-hidden="true" /> : <Link2 className="w-4 h-4" aria-hidden="true" />}
-                    </Button>
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!d.leadId || (emailMut.isPending && emailMut.variables === d.id)}
+                        onClick={() => emailMut.mutate(d.id)}
+                        title={
+                          d.leadId
+                            ? t('documents.email', 'Email for signature')
+                            : t('documents.emailNoContact', 'Link this document to a contact to email it')
+                        }
+                      >
+                        <Mail className="w-4 h-4" aria-hidden="true" />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => copyLink(d.id)} title={t('documents.copyLink', 'Copy signing link')}>
+                        <Link2 className="w-4 h-4" aria-hidden="true" />
+                      </Button>
+                    </>
                   )}
                   {/* Per-row in-flight guard (mutation.variables === d.id): a
                       double-click can't re-fire — Delete's second click would 404

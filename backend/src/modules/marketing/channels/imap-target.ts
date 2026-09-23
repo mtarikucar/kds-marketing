@@ -108,7 +108,12 @@ export function imapTarget(
   if (!host) return { kind: 'refused', reason: 'no-host' };
 
   const port = Number(s.imapPort) || discovered?.port || 993;
-  return { kind: 'ok', target: { host, port, secure: IMPLICIT_TLS_PORTS.has(port), user, pass } };
+  // Mirrors `smtpSecure`. Deriving TLS from the port alone leaves a tenant
+  // whose host serves IMAPS on anything but 993/994 permanently unable to
+  // receive: imapflow demands STARTTLS, the server never offers it, and no
+  // setting can say otherwise.
+  const secure = s.imapSecure === 'true' || IMPLICIT_TLS_PORTS.has(port);
+  return { kind: 'ok', target: { host, port, secure, user, pass } };
 }
 
 /**

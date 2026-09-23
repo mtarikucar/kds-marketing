@@ -200,7 +200,19 @@ describe('IysWebhookConsumer — anti-feedback-loop (real ComplianceService + Iy
     const registry = { resolveConfig: jest.fn() };
     const budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     const iysClient = { add: jest.fn() };
-    const iysSync = new IysSyncService(prisma as any, registry as any, budgeter as any, iysClient as any);
+    // The İYS EPOSTA port: this test drives the MARKETING_SMS branch only, so
+    // the email lane must answer "not armed" rather than be absent.
+    const iysEmail = {
+      check: jest.fn(),
+      readiness: jest.fn().mockResolvedValue({ armed: false, configured: false, gap: 'NOT_ARMED', messageKey: 'x' }),
+    };
+    const iysSync = new IysSyncService(
+      prisma as any,
+      registry as any,
+      budgeter as any,
+      iysClient as any,
+      iysEmail as any,
+    );
     // The 4th argument is SuppressionService. This test only drives the
     // MARKETING_SMS branch, which never reaches it — but an EMAIL-consent case
     // added here would NPE without it.

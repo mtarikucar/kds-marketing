@@ -109,6 +109,18 @@ describe('imapTarget — one answer the poller and the idle hold both read', () 
       });
     });
 
+    it('lets a mailbox say its own port is IMAPS, like smtpSecure does', () => {
+      expect(
+        target({ ...GODADDY, imapHost: 'imap.firma.com.tr', imapPort: '50993', imapSecure: 'true' }),
+      ).toMatchObject({ port: 50993, secure: true });
+    });
+
+    it('ignores imapSecure unless it is exactly the stored "true"', () => {
+      expect(target({ ...GODADDY, imapHost: 'imap.tiny-host.example', imapPort: '143', imapSecure: 'yes' }).secure).toBe(
+        false,
+      );
+    });
+
     it('does not treat 465 as IMAPS — that is SMTPS, and a typo must fail loudly', () => {
       expect(target({ ...GODADDY, imapPort: '465' }).secure).toBe(false);
     });

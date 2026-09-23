@@ -63,6 +63,12 @@ export interface OAuthSendInput {
   /** The gateway's own deterministic id, bare — this file writes the brackets. */
   messageId?: string;
   autoSubmitted?: 'auto-generated' | 'auto-replied';
+  /**
+   * An iTIP calendar invite, carried as its own `text/calendar` part. The SMTP
+   * transport hands this to nodemailer's `icalEvent`; here there is no
+   * nodemailer, so `buildRfc822` assembles the `multipart/mixed` itself.
+   */
+  ics?: { method: 'REQUEST' | 'CANCEL'; content: string; filename?: string };
 }
 
 /** Everything `buildRfc822` needs — the transport fields are not its business. */
@@ -175,13 +181,64 @@ function fromHeader(address: string, name?: string): string {
   return display ? `${encodeWords(display)} <${address}>` : address;
 }
 
-function bodyPart(contentType: string, content: string): string[] {
+function bodyPart(
+  contentType: string,
+  content: string,
+  opts: { params?: string; disposition?: string } = {},
+): string[] {
   return [
-    `Content-Type: ${contentType}; charset="UTF-8"`,
+    `Content-Type: ${contentType}; charset="UTF-8"${opts.params ? `; ${opts.params}` : ''}`,
     'Content-Transfer-Encoding: base64',
+    ...(opts.disposition ? [`Content-Disposition: ${opts.disposition}`] : []),
     '',
     base64Lines(content),
   ];
+}
+
+/** A fresh MIME boundary. Random rather than derived: a boundary that appears
+ *  inside a part truncates the message at that line. */
+function boundary(): string {
+  return `----=_Part_${randomBytes(12).toString('hex')}`;
+}
+
+/**
+ * The body as one or more parts: plain text, optionally a `multipart/alternative`
+ * beside the HTML.
+ *
+ * Split out from `buildRfc822` because a calendar invite has to wrap the whole
+ * of it in a `multipart/mixed`, and the alternative it wraps is the same
+ * structure either way.
+ */
+function bodyBlock(text: string, html: string): { headers: string[]; lines: string[] } {
+  if (!html) {
+    return { headers: [`Content-Type: text/plain; charset="UTF-8"`, 'Content-Transfer-Encoding: base64'], lines: ['', base64Lines(text)] };
+  }
+  const b = boundary();
+  return {
+    headers: [`Content-Type: multipart/alternative; boundary="${b}"`],
+    lines: [
+      '',
+      // Least rich first: that is what "alternative" asks a client to prefer.
+      `--${b}`,
+      ...bodyPart('text/plain', text),
+      `--${b}`,
+      ...bodyPart('text/html', html),
+      `--${b}--`,
+    ],
+  };
+}
+
+/**
+ * A sanitized `filename=` value for the invite.
+ *
+ * The filename reaches a MIME header, so a quote or a CR/LF in it would write
+ * headers exactly the way a poisoned display name would. Only the callers in
+ * this repo set it today, but the guard belongs next to the composition, not
+ * next to the current callers.
+ */
+function icsFilename(name?: string): string {
+  const cleaned = (name ?? '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
+  return cleaned || 'invite.ics';
 }
 
 /**
@@ -200,7 +257,7 @@ function bodyPart(contentType: string, content: string): string[] {
  *   what a consent-connected mailbox needs in order to stop being text-only.
  */
 export function buildRfc822(input: Rfc822Input): string {
-  const { from, fromName, replyTo, to, subject, text, html, inReplyTo, references } = input;
+  const { from, fromName, replyTo, to, subject, text, html, inReplyTo, references, ics } = input;
   const headers = [
     `From: ${fromHeader(
       assertNoHeaderInjection(from ?? '', 'From'),
@@ -214,20 +271,26 @@ export function buildRfc822(input: Rfc822Input): string {
     ...threadingHeaders(inReplyTo, references),
     'MIME-Version: 1.0',
   ];
-  const markup = (html ?? '').trim();
-  if (!markup) return [...headers, ...bodyPart('text/plain', text ?? '')].join('\r\n');
+  const body = bodyBlock(text ?? '', (html ?? '').trim());
+  if (!ics?.content) return [...headers, ...body.headers, ...body.lines, ''].join('\r\n');
 
-  const boundary = `----=_Part_${randomBytes(12).toString('hex')}`;
+  // An invite wraps the whole body — alternative and all — in a mixed part, so
+  // the client still picks text-or-HTML and sees a calendar attachment beside
+  // it. `method=` on the part is the threaded one (see `OAuthSendInput.ics`).
+  const outer = boundary();
   return [
     ...headers,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: multipart/mixed; boundary="${outer}"`,
     '',
-    // Least rich first: that is what "alternative" asks a client to prefer.
-    `--${boundary}`,
-    ...bodyPart('text/plain', text ?? ''),
-    `--${boundary}`,
-    ...bodyPart('text/html', markup),
-    `--${boundary}--`,
+    `--${outer}`,
+    ...body.headers,
+    ...body.lines,
+    `--${outer}`,
+    ...bodyPart('text/calendar', ics.content, {
+      params: `method=${ics.method}`,
+      disposition: `attachment; filename="${icsFilename(ics.filename)}"`,
+    }),
+    `--${outer}--`,
     '',
   ].join('\r\n');
 }
@@ -301,7 +364,10 @@ export async function sendViaOAuth(input: OAuthSendInput): Promise<OAuthSendResu
     input.messageId ||
     input.autoSubmitted ||
     input.inReplyTo ||
-    input.references?.length
+    input.references?.length ||
+    // Graph's JSON `message` carries no calendar part either, so a booking
+    // mail takes MIME the same way an HTML one does.
+    input.ics?.content
   );
   const mime = needsMime ? Buffer.from(buildRfc822(input), 'utf8').toString('base64') : null;
   const name = (input.fromName ?? '').trim();

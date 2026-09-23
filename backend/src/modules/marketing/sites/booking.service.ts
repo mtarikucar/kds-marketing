@@ -12,7 +12,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { OutboxService } from '../../outbox/outbox.service';
-import { MailCopyKey, t } from '../../../common/i18n/mail-copy';
+import { MailCopyKey, resolveMailLang, t } from '../../../common/i18n/mail-copy';
 import { OutboundMailService } from '../channels/outbound/outbound-mail.service';
 import { MailReceipt, OutboundMail } from '../channels/outbound/outbound-mail.types';
 import { ReplyIdentity, SenderIdentityService } from '../channels/outbound/sender-identity.service';
@@ -1316,11 +1316,20 @@ export class BookingService implements OnModuleInit {
       // Flip the status and emit BookingCancelled transactionally so downstream
       // teardown (conference + calendar-mirror delete) and workflow automations
       // fire off ONE reliable event via the outbox.
-      await this.prisma.$transaction(async (tx) => {
-        await tx.booking.updateMany({
-          where: { id: existing.id, workspaceId },
+      //
+      // The flip is also the CLAIM, which is why the `where` repeats the guard
+      // above instead of trusting it. The read-then-check on its own is not
+      // one: the manage link is an opaque token a customer can click twice and
+      // a browser can prefetch, so two requests can both read CONFIRMED, both
+      // pass the guard, and both tell the same person their appointment is
+      // off. Whoever does not win the row does nothing at all — no event, no
+      // mirror teardown, no mail.
+      const claimed = await this.prisma.$transaction(async (tx) => {
+        const claim = await tx.booking.updateMany({
+          where: { id: existing.id, workspaceId, status: { notIn: ['CANCELLED', 'EXTERNAL_BUSY'] } },
           data: { status: 'CANCELLED' },
         });
+        if (claim.count === 0) return false;
         await this.outbox.append(
           {
             type: MarketingEventTypes.BookingCancelled,
@@ -1334,22 +1343,25 @@ export class BookingService implements OnModuleInit {
           },
           tx as any,
         );
+        return true;
       });
-      // Direct calls stay as a self-healing fallback (the BookingCancelled event
-      // also drives both syncs, so a missed direct call recovers).
-      this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
-      this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
-      // Inside the guard, so a repeat cancel (or a retried cancelByToken) cannot
-      // mail the same person twice. A CONFIRMED booking had an invite, so it is
-      // WITHDRAWN (METHOD:CANCEL); a PENDING request never had one, so it is
-      // DECLINED in words only — a CANCEL for a uid the client never saw makes
-      // an appointment appear just to vanish (`booking-cancel-reschedule-ics`).
-      if (existing.email) {
-        this.dispatchBookingMail(
-          workspaceId,
-          existing.id,
-          existing.status === 'PENDING' ? 'declined' : 'cancelled',
-        );
+      if (claimed) {
+        // Direct calls stay as a self-healing fallback (the BookingCancelled event
+        // also drives both syncs, so a missed direct call recovers).
+        this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
+        this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
+        // Inside the claim, so a repeat cancel (or a retried cancelByToken) cannot
+        // mail the same person twice. A CONFIRMED booking had an invite, so it is
+        // WITHDRAWN (METHOD:CANCEL); a PENDING request never had one, so it is
+        // DECLINED in words only — a CANCEL for a uid the client never saw makes
+        // an appointment appear just to vanish (`booking-cancel-reschedule-ics`).
+        if (existing.email) {
+          this.dispatchBookingMail(
+            workspaceId,
+            existing.id,
+            existing.status === 'PENDING' ? 'declined' : 'cancelled',
+          );
+        }
       }
     }
     return { id: existing.id, status: 'CANCELLED' };
@@ -1574,8 +1586,16 @@ export class BookingService implements OnModuleInit {
       throw new BadRequestException('Only an active booking can be updated — re-book instead');
     }
     const wasPending = existing.status === 'PENDING';
-    await this.prisma.$transaction(async (tx) => {
-      await tx.booking.updateMany({ where: { id: existing.id, workspaceId }, data: { status } });
+    // The flip is the CLAIM — conditional on the status this request actually
+    // read, the shape `publicSign` uses. Without it two approvals of the same
+    // PENDING request (two admins, or one double-click) both see PENDING, both
+    // run `afterConfirmed`, and the customer gets two invites for one meeting.
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.booking.updateMany({
+        where: { id: existing.id, workspaceId, status: existing.status },
+        data: { status },
+      });
+      if (claim.count === 0) return false;
       await this.outbox.append(
         {
           type: MarketingEventTypes.BookingUpdated,
@@ -1584,10 +1604,22 @@ export class BookingService implements OnModuleInit {
         },
         tx as any,
       );
+      return true;
     });
-    if (status === 'CONFIRMED' && wasPending) {
+    if (claimed && status === 'CONFIRMED' && wasPending) {
       const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: existing.calendarId, workspaceId } });
       if (cal) await this.afterConfirmed(workspaceId, cal, existing);
+    }
+    if (!claimed) {
+      // Somebody else moved it first. Report what the row SAYS, not what this
+      // request asked for — the admin list renders this answer, and two
+      // transitions racing to different statuses must not both claim to have
+      // won.
+      const fresh = await this.prisma.booking.findFirst({
+        where: { id: existing.id, workspaceId },
+        select: { status: true },
+      });
+      return { id: existing.id, status: fresh?.status ?? status };
     }
     return { id: existing.id, status };
   }
@@ -1605,6 +1637,14 @@ export class BookingService implements OnModuleInit {
    * forwarded: `notes` is whatever the visitor (or a rep) typed, and the lead,
    * the assignee and the attendee's own contact details are the tenant's data,
    * not the link-holder's.
+   *
+   * `lang` travels with it. The link came out of a booking mail this same
+   * workspace's `defaultLanguage` wrote (`dispatchBookingMail` → `mailIdentity`
+   * → `mail-copy`), so the page it opens has to answer in that language or the
+   * customer is handed a cancel button in a language they never chose. It is
+   * resolved HERE, to a `MailLang`, so the controller never sees a raw column
+   * value — the same shape `CampaignTrackingService.pageLang` hands the
+   * unsubscribe pages.
    */
   async publicByToken(token: string) {
     const booking = await this.prisma.booking.findFirst({
@@ -1621,10 +1661,20 @@ export class BookingService implements OnModuleInit {
     if (!booking) throw new NotFoundException('Booking not found');
     // A deleted calendar must not 404 a booking that still exists: the customer
     // can no longer rebook, but they can still see and cancel what they have.
-    const cal = await this.prisma.bookingCalendar.findFirst({
-      where: { id: booking.calendarId, workspaceId: booking.workspaceId },
-      select: { name: true, slug: true, timezone: true },
-    });
+    // Neither read may turn a valid token into a 404, so the workspace lookup
+    // falls back to the default language rather than throwing.
+    const [cal, ws] = await Promise.all([
+      this.prisma.bookingCalendar.findFirst({
+        where: { id: booking.calendarId, workspaceId: booking.workspaceId },
+        select: { name: true, slug: true, timezone: true },
+      }),
+      this.prisma.workspace
+        .findUnique({
+          where: { id: booking.workspaceId },
+          select: { defaultLanguage: true },
+        })
+        .catch(() => null),
+    ]);
     return {
       workspaceId: booking.workspaceId,
       calendarName: cal?.name ?? '',
@@ -1634,6 +1684,7 @@ export class BookingService implements OnModuleInit {
       endAt: booking.endAt.toISOString(),
       status: booking.status,
       meetingUrl: booking.meetingUrl ?? null,
+      lang: resolveMailLang(ws?.defaultLanguage),
     };
   }
 

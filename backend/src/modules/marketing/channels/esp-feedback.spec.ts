@@ -1,6 +1,7 @@
 import { createHmac, createSign, generateKeyPairSync } from 'crypto';
 import { EspFeedbackService } from './esp-feedback.service';
 import { EspFeedbackController } from '../controllers/esp-feedback.controller';
+import { WebhookReplayStore } from './inbound/webhook-verifier/webhook-replay.store';
 
 describe('ESP feedback (bounce/complaint suppression)', () => {
   describe('EspFeedbackService.suppress', () => {
@@ -74,7 +75,7 @@ describe('ESP feedback (bounce/complaint suppression)', () => {
     beforeEach(() => {
       process.env.ESP_FEEDBACK_SECRET = SECRET;
       feedback = { suppress: jest.fn().mockResolvedValue({ suppressed: 1, failed: 0 }) };
-      ctrl = new EspFeedbackController(feedback as any);
+      ctrl = new EspFeedbackController(feedback as any, new WebhookReplayStore());
     });
     afterAll(() => {
       if (realSecret === undefined) delete process.env.ESP_FEEDBACK_SECRET;
@@ -176,7 +177,7 @@ describe('ESP feedback (bounce/complaint suppression)', () => {
         delete process.env[k];
       }
       feedback = { suppress: jest.fn().mockResolvedValue({ suppressed: 1, failed: 0 }) };
-      ctrl = new EspFeedbackController(feedback as any);
+      ctrl = new EspFeedbackController(feedback as any, new WebhookReplayStore());
     });
     afterEach(() => {
       for (const k of ENV) {

@@ -1,16 +1,36 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
+import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { IysClient, IysConsentRow, IysConsentType } from '../../netgsm/iys/iys.client';
 import { isSingleAddress, normalizeAddress } from '../../../common/util/email-address';
 import { toIysMsisdn } from '../utils/lead-normalize';
-import { IYS_EPOSTA_BUDGET_BUCKET } from './iys-email.port';
+import { IYS_EMAIL_PORT, IYS_EPOSTA_BUDGET_BUCKET, IysEmailPort } from './iys-email.port';
 
 export type IysConsentDirection = 'ONAY' | 'RET';
+
+/** What became of one withdrawal the platform tried to report to İYS. */
+export type IysEmailWithdrawalResult =
+  | 'enqueued'
+  | 'duplicate'
+  | 'not-ready'
+  | 'no-address'
+  | 'skipped'
+  | 'failed';
+
+export interface IysEmailWithdrawalParams {
+  workspaceId: string;
+  leadId: string;
+  /** The address the person unsubscribed — any spelling; normalized here. */
+  address: string | null | undefined;
+  /** İYS source code. `HS_WEB` (a public unsubscribe link) unless the caller
+   *  knows better; an `IYS_`-prefixed tag means İYS told US, and is dropped. */
+  source?: string;
+}
 
 export interface IysConsentEnqueueParams {
   workspaceId: string;
@@ -129,6 +149,13 @@ function fmtIysDate(d: Date): string {
  *    unchanged. `ARAMA` (call consent) lands with Phase 5's voice campaigns;
  *    this is a deliberate YAGNI deferral, not an oversight.
  *
+ *    `enqueueEmailWithdrawal` is the `EPOSTA` lane's own front door — the
+ *    email unsubscribe reported to İYS as a `RET`, from the public
+ *    unsubscribe route (`CampaignTrackingService.optOutEmail`) and from a
+ *    recorded `MARKETING_EMAIL` withdrawal (`ComplianceService.recordConsent`).
+ *    It opens no transaction of its own and is armed per workspace; see its
+ *    docstring for why the opposite direction is never pushed.
+ *
  * 2. A 1-minute advisory-locked cron worker that drains due `IysSyncJob` rows
  *    (`status` PENDING fresh, or FAILED retried with backoff — see the model's
  *    own doc-comment for the full state machine) grouped by workspace, resolves
@@ -173,6 +200,7 @@ export class IysSyncService {
     private readonly registry: ChannelAdapterRegistry,
     private readonly budgeter: AccountRateBudgeter,
     private readonly client: IysClient,
+    @Inject(IYS_EMAIL_PORT) private readonly iysEmail: IysEmailPort,
   ) {}
 
   /** Enqueue one İYS proof-of-consent job. Must be called with the SAME `tx`
@@ -211,6 +239,79 @@ export class IysSyncService {
         ...(valid ? {} : { status: 'FAILED', lastError: lane.invalidReason }),
       },
     });
+  }
+
+  /**
+   * An email withdrawal, reported to İYS — the `EPOSTA` lane's only producer.
+   *
+   * Under 6563 a tenant who holds a TİCARİ email consent must report its
+   * withdrawal to İYS. Until this existed the lane had a wire shape, its own
+   * budget bucket and a worker, and nothing that ever wrote a row: a recipient
+   * who clicked "abonelikten çık" was suppressed HERE while İYS went on
+   * showing `ONAY` for that address indefinitely, so any İYS-side
+   * reconciliation contradicted the tenant's own records.
+   *
+   * Four deliberate limits:
+   *
+   * - **`RET` only.** The opposite direction would assert a consent the tenant
+   *   cannot evidence: nothing here can tell a recipient's own double opt-in
+   *   from a staff member ticking a box, and İYS is not the place to guess.
+   * - **Armed AND configured, or nothing.** A row written for a workspace with
+   *   no İYS credentials just retries eight times and DLQs — a warning badge
+   *   for a tenant who did nothing wrong. `readiness()` is the same answer the
+   *   settings card and the send-path gate read, so the three cannot diverge.
+   * - **Keyed on the ADDRESS.** İYS holds consent per address, not per lead
+   *   row, and the same person is on file twice more often than anyone
+   *   expects. One push per address, in the normalized spelling suppression
+   *   also stores, so the two records reconcile.
+   * - **Best-effort, never throws.** This runs on the public unsubscribe
+   *   route. The local suppression is the durable answer to the customer; the
+   *   İYS push is the mirror, and a mirror must never fail the thing it
+   *   mirrors (G2). It is deliberately NOT inside the caller's transaction for
+   *   the same reason — one INSERT, outside, cannot turn a caught error into
+   *   Prisma's silent ROLLBACK of the withdrawal itself.
+   */
+  async enqueueEmailWithdrawal(params: IysEmailWithdrawalParams): Promise<IysEmailWithdrawalResult> {
+    const address = normalizeAddress(params.address ?? '');
+    if (!address || !isSingleAddress(address)) return 'no-address';
+    // İYS-ORIGINATED writes are never sent back (see `enqueueConsent`'s own
+    // guard); answered here as well so the caller's log says which it was.
+    if (params.source?.startsWith('IYS_')) return 'skipped';
+    try {
+      const readiness = await this.iysEmail.readiness(params.workspaceId);
+      if (!readiness.armed || !readiness.configured) return 'not-ready';
+      // A One-Click POST is redelivered by mail clients and providers alike,
+      // and every delivery is the same fact about the same address. One row
+      // per withdrawal that has not gone out yet — an address that
+      // re-subscribes and leaves again still gets its own row, because the
+      // earlier one is SENT by then and no longer matches.
+      const queued = await this.prisma.iysSyncJob.findFirst({
+        where: {
+          workspaceId: params.workspaceId,
+          recipient: address,
+          type: 'EPOSTA',
+          direction: 'RET',
+          status: { in: ['PENDING', 'FAILED'] },
+        },
+        select: { id: true },
+      });
+      if (queued) return 'duplicate';
+      await this.enqueueConsent(this.prisma, {
+        workspaceId: params.workspaceId,
+        leadId: params.leadId,
+        recipient: address,
+        type: 'EPOSTA',
+        direction: 'RET',
+        source: params.source ?? 'HS_WEB',
+        consentAt: new Date(),
+      });
+      return 'enqueued';
+    } catch (e: any) {
+      this.logger.warn(
+        `İYS EPOSTA: withdrawal not enqueued (workspace=${params.workspaceId}, lead=${params.leadId}): ${e?.message ?? e}`,
+      );
+      return 'failed';
+    }
   }
 
   /** Manager-visible count of DLQ İYS auto-push jobs for this workspace —
@@ -427,11 +528,21 @@ export class IysSyncService {
     return now - updatedAt.getTime() >= backoffMs;
   }
 
-  /** Resolve the workspace's İYS credentials: the first ACTIVE SMS channel
-   *  carrying usercode+password (mirrors `CallCdrSyncService`/
-   *  `NetgsmBlacklistSyncService`'s own `getCreds`), then that SAME channel's
-   *  `brandCode` (a raw `configPublic` key today — Task 6 lands the
-   *  settings-card UI for it). */
+  /**
+   * Resolve the workspace's İYS credentials.
+   *
+   * Two rungs, in this order — the SAME ladder `IysEmailAdapter.resolveCreds`
+   * walks, because two readers of one setting that disagree about where it
+   * lives produce a tenant the settings card calls "configured" and the queue
+   * DLQs:
+   *
+   * 1. `Workspace.settings.iys` — the email-only tenant's credential home.
+   *    They have no NetGSM SMS channel at all and must not be told to go and
+   *    configure one to report an email unsubscribe.
+   * 2. The first ACTIVE SMS channel carrying usercode+password (mirrors
+   *    `CallCdrSyncService`/`NetgsmBlacklistSyncService`'s own `getCreds`),
+   *    then that SAME channel's `brandCode` (a raw `configPublic` key today).
+   */
   private async resolveCreds(workspaceId: string): Promise<{
     usercode?: string;
     password?: string;
@@ -445,6 +556,14 @@ export class IysSyncService {
      *  way). */
     reason?: string;
   }> {
+    const fromWorkspace = await this.workspaceCreds(workspaceId);
+    if (fromWorkspace.usercode && fromWorkspace.password && fromWorkspace.brandCode) {
+      return {
+        usercode: fromWorkspace.usercode,
+        password: fromWorkspace.password,
+        brandCode: fromWorkspace.brandCode,
+      };
+    }
     const channels = await this.prisma.channel.findMany({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } });
     // A workspace can hold >1 ACTIVE SMS channel. Keep scanning past a
     // creds-bearing channel that lacks a brandCode — returning early there
@@ -453,17 +572,69 @@ export class IysSyncService {
     // configured. Only report 'no brandCode' after the loop, when creds
     // existed somewhere but no channel carried a usable brandCode.
     let sawCredsWithoutBrand = false;
+    let channelPair: { usercode: string; password: string } | null = null;
     for (const ch of channels) {
       const cfg = this.registry.resolveConfig(ch as any);
       if (cfg.secrets?.usercode && cfg.secrets?.password) {
         const brandCode = typeof cfg.public?.brandCode === 'string' ? cfg.public.brandCode.trim() : '';
         if (!brandCode) {
           sawCredsWithoutBrand = true;
+          channelPair ??= { usercode: cfg.secrets.usercode, password: cfg.secrets.password };
           continue;
         }
         return { usercode: cfg.secrets.usercode, password: cfg.secrets.password, brandCode };
       }
     }
-    return { reason: sawCredsWithoutBrand ? 'no brandCode' : 'no creds' };
+    // Neither rung was complete on its own: a workspace that carries only the
+    // marka kodu and a channel that carries only the login are one working
+    // setup between them, and refusing it would DLQ rows over bookkeeping.
+    const pair =
+      fromWorkspace.usercode && fromWorkspace.password
+        ? { usercode: fromWorkspace.usercode, password: fromWorkspace.password }
+        : channelPair;
+    if (pair && fromWorkspace.brandCode) return { ...pair, brandCode: fromWorkspace.brandCode };
+    if (!pair) return { reason: sawCredsWithoutBrand ? 'no brandCode' : 'no creds' };
+    return { reason: 'no brandCode' };
+  }
+
+  /**
+   * `Workspace.settings.iys` — the email-only tenant's credential home.
+   *
+   * The password is accepted ONLY as `passwordSealed`, the same AES-256-GCM
+   * envelope the channels use: `Workspace.settings` is a PATCHable jsonb blob
+   * that several read paths echo back, so a plain `password` key is
+   * deliberately ignored rather than quietly honoured. Byte-for-byte the rule
+   * `IysEmailAdapter.workspaceIys` applies, and a read that fails is "no
+   * credentials", never a thrown tick.
+   */
+  private async workspaceCreds(
+    workspaceId: string,
+  ): Promise<{ usercode?: string; password?: string; brandCode?: string }> {
+    if (!workspaceId) return {};
+    try {
+      const ws = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { settings: true },
+      });
+      const settings = ws?.settings as any;
+      const iys = settings && typeof settings === 'object' ? settings.iys : null;
+      if (!iys || typeof iys !== 'object') return {};
+      const trimmed = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+      const sealed = trimmed(iys.passwordSealed);
+      let password: string | undefined;
+      if (sealed) {
+        try {
+          password = openSecret(sealed) || undefined;
+        } catch (e: any) {
+          // A locked box (rotated/absent MARKETING_SECRET_KEY) reads as "no
+          // credentials" — the rows wait in the queue rather than failing.
+          this.logger.warn(`İYS: workspace credentials could not be opened (workspace=${workspaceId}): ${e?.message ?? e}`);
+        }
+      }
+      return { usercode: trimmed(iys.usercode), password, brandCode: trimmed(iys.brandCode) };
+    } catch (e: any) {
+      this.logger.warn(`İYS: workspace read failed (workspace=${workspaceId}): ${e?.message ?? e}`);
+      return {};
+    }
   }
 }

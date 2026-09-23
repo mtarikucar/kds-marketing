@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { emailPaused } from '../../../common/util/email-paused';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
@@ -135,15 +136,6 @@ interface WorkspaceFacts {
   status: string;
   settings?: unknown;
   name?: string | null;
-}
-
-/** `settings.email.paused` — absent means "not paused", for every existing
- *  row (PLAN G3). Mirrors `MailGuardService`'s own reader. */
-function emailPaused(settings: unknown): boolean {
-  if (!settings || typeof settings !== 'object') return false;
-  const email = (settings as Record<string, unknown>).email;
-  if (!email || typeof email !== 'object') return false;
-  return (email as Record<string, unknown>).paused === true;
 }
 
 /** One merge token's value, or '' — never an object stringified into a
@@ -1061,8 +1053,15 @@ export class CampaignSenderService implements OnModuleInit {
     }
 
     // A message that never reached anybody is not charged for — a refusal
-    // least of all.
-    if (!receipt.ok) await this.quota.refund(input.workspaceId, 'EMAIL');
+    // least of all. DEDUPED counts as "never reached anybody" HERE even though
+    // it is `ok`: the mail it refers to was delivered and metered on the
+    // earlier attempt, and this attempt dispatched nothing. Keyed on `!ok`
+    // instead, a recipient re-queued by the stranded-SENDING sweep debits a
+    // second unit of the tenant's monthly allowance for one delivered email,
+    // invisibly — the ledger still shows a single SENT MailLog row. The
+    // gateway cannot compensate for us either: we send `alreadyMetered`, and
+    // `MailGuardService.refundQuota` returns early on that flag by design.
+    if (receipt.outcome !== 'SENT') await this.quota.refund(input.workspaceId, 'EMAIL');
     return outcomeFor(receipt);
   }
 

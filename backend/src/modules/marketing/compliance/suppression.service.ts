@@ -111,6 +111,23 @@ const REASON_GATE: Record<SuppressionReason, keyof GateSet> = {
 /** The pre-ConsentRecord fallback: "did they write in recently enough". */
 const LEGACY_REPLY_WINDOW_MS = 72 * 60 * 60 * 1000;
 
+/**
+ * The reasons that are facts about the ADDRESS rather than statements of
+ * consent — and so are answered by a different question.
+ *
+ * No `ConsentRecord` is ever written for either of them (`projectionFor` gives
+ * them no `consent` field), so `repliedSinceOptOut` has no withdrawal to date
+ * from and collapses to the 72h legacy window. That window is a CONSENT clock;
+ * applying it here answered "does this address exist?" with "did they write in
+ * this week?", and a rep answering on day four was refused
+ * (`deliverability-is-not-consent`). An address that has written into this
+ * thread at all disproves "does not exist", however long ago it wrote.
+ */
+const DELIVERABILITY_REASONS: ReadonlySet<SuppressionReason> = new Set<SuppressionReason>([
+  'HARD_BOUNCE',
+  'INVALID',
+]);
+
 /** One projection pass; a bounded loop walks the rest. */
 const PROJECTION_BATCH = 500;
 const PROJECTION_MAX_BATCHES = 20;
@@ -309,19 +326,39 @@ export class SuppressionService {
     if (!reasons.size) return { suppressed: false };
 
     const gates = GATE_MATRIX[mailClass];
-    let proactive = opts.proactive === true;
-    // The reply exemption (`replies-skip-consent`): a customer who unsubscribed
-    // and then wrote in must get an answer, but a follow-up we queue hours
-    // later is not an answer. Only CONVERSATIONAL has proactive-gated cells, so
-    // this probe costs a query only where it can change the verdict.
-    if (!proactive && [...reasons].some((r) => gates[REASON_GATE[r]] === 'proactive')) {
-      proactive = !(await this.repliedSinceOptOut(workspaceId, opts.conversationId, flagged.leadIds));
-    }
+    // A caller that KNOWS wins, in BOTH directions. `proactive: false` used to
+    // do nothing at all — only `=== true` was read — so "I am answering, do not
+    // guess" was unsayable.
+    const stated = typeof opts.proactive === 'boolean' ? opts.proactive : null;
+
+    // The reply exemption (`replies-skip-consent`) asks TWO different questions,
+    // one per reason class, each derived at most once:
+    //
+    //  - consent (OPT_OUT / COMPLAINT / MANUAL): "did they write in since they
+    //    unsubscribed?" — a follow-up we queue hours later is not an answer.
+    //  - deliverability (HARD_BOUNCE / INVALID): "has this address written into
+    //    this thread at all?" — see DELIVERABILITY_REASONS.
+    let consent: boolean | null = stated;
+    let delivery: boolean | null = stated;
+    const isProactive = async (reason: SuppressionReason): Promise<boolean> => {
+      if (stated !== null) return stated;
+      if (DELIVERABILITY_REASONS.has(reason)) {
+        if (delivery === null) delivery = !(await this.hasInbound(workspaceId, opts.conversationId));
+        return delivery;
+      }
+      if (consent === null) {
+        consent = !(await this.repliedSinceOptOut(workspaceId, opts.conversationId, flagged.leadIds));
+      }
+      return consent;
+    };
 
     for (const reason of SUPPRESSION_REASONS) {
-      if (reasons.has(reason) && gateApplies(gates[REASON_GATE[reason]], { proactive })) {
-        return { suppressed: true, reason };
-      }
+      if (!reasons.has(reason)) continue;
+      const gate = gates[REASON_GATE[reason]];
+      // Only a `'proactive'` cell can be changed by the answer, so the probe
+      // costs a query only where it decides something.
+      const ctx = gate === 'proactive' ? { proactive: await isProactive(reason) } : {};
+      if (gateApplies(gate, ctx)) return { suppressed: true, reason };
     }
     return { suppressed: false };
   }
@@ -543,6 +580,14 @@ export class SuppressionService {
    * already exists and both writers now fill it, so no new column. Rows written
    * before that was true fall back to "did they write in within 72 hours",
    * which is the same question asked with less precision.
+   *
+   * KNOWN AND ACCEPTED: no migration backfills a withdrawal row for leads that
+   * were already `emailOptOut = true`, so every legacy opt-out uses that 72h
+   * fallback, and a rep answering such a contact on day four is refused. A
+   * backfill would have to invent a withdrawal date for real tenant data, and
+   * inventing an OLD one quietly re-opens mail the contact refused — so the
+   * conservative reading stands until a real timestamp exists to seed from.
+   * Deliverability flags are NOT affected: they take the clock-free path above.
    */
   private async repliedSinceOptOut(
     workspaceId: string,
@@ -562,6 +607,23 @@ export class SuppressionService {
     const since = optOutAt ?? new Date(Date.now() - LEGACY_REPLY_WINDOW_MS);
     const inbound = await this.prisma.message.findFirst({
       where: { workspaceId, conversationId, direction: 'INBOUND', createdAt: { gt: since } },
+      select: { id: true },
+    });
+    return !!inbound;
+  }
+
+  /**
+   * Has this customer ever written into this thread?
+   *
+   * The deliverability question, with no clock in it. A conversation only
+   * carries inbound mail from the address it belongs to, so one inbound row is
+   * proof the address accepted and answered mail — which is exactly what
+   * HARD_BOUNCE and INVALID claim it cannot do.
+   */
+  private async hasInbound(workspaceId: string, conversationId: string | null | undefined): Promise<boolean> {
+    if (!conversationId) return false;
+    const inbound = await this.prisma.message.findFirst({
+      where: { workspaceId, conversationId, direction: 'INBOUND' },
       select: { id: true },
     });
     return !!inbound;

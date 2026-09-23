@@ -140,6 +140,15 @@ export default function MarketingLoginPage() {
                 )}
               </Field>
 
+              <div className="text-end -mt-1">
+                <Link
+                  to="/forgot-password"
+                  className="text-sm text-muted-foreground hover:text-primary hover:underline"
+                >
+                  {t('login.forgotCta', 'Forgot your password?')}
+                </Link>
+              </div>
+
               <Button
                 type="submit"
                 size="lg"

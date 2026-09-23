@@ -117,15 +117,28 @@ const NOT_ON_THE_GATEWAY: Record<string, Exemption> = {
   // adapter call into the gateway would either duplicate the Message row or
   // move four other channels onto an email gateway.
   //
-  // What makes that safe is that the CONVERSATIONAL column of the matrix is
-  // applied here, in the file, before the adapter is touched: the same
-  // `SuppressionService.check` the guard calls, with the same class, so the
-  // reply exemption (a customer who unsubscribed and then wrote in still gets
-  // an answer) behaves identically on both paths. If that check is ever edited
-  // out, this exemption stops applying and the assertion below says so.
+  // What makes that safe is that the DECIDING cells of the CONVERSATIONAL
+  // column are applied here, in the file, before the adapter is touched:
+  //
+  //  - `sendingPaused` — `emailPaused(settings)`, the same reader the gateway
+  //    uses, so the operator kill switch stops the AI reply engine and the
+  //    Inbox composer too (`paused-skips-1to1`).
+  //  - `hardBounce`/`optOut`/`complaint` — the same `SuppressionService.check`
+  //    the guard calls, with the same class, so the reply exemption (a customer
+  //    who unsubscribed and then wrote in still gets an answer) behaves
+  //    identically on both paths.
+  //
+  // The rest of the column is applied elsewhere or does not reach this lane,
+  // and is NOT claimed here: `workspaceActive` by `quota.reserve`, which throws
+  // WORKSPACE_INACTIVE; `quietHours` at queue time by
+  // `ConversationFollowupService`, the only proactive sender on this lane;
+  // `dailyCap` never, because that budget is the PLATFORM transport's and this
+  // lane sends from the tenant's own mailbox; `mailLog` is a known gap, so the
+  // ops snapshot under-reports conversational volume. If a cell asserted below
+  // is ever edited out, this exemption stops applying and the assertion says so.
   'modules/marketing/channels/message-sender.service.ts:email-adapter': {
     sites: 1,
-    why: 'the omnichannel dispatcher — it owns the Message row, the SSE push and the quota pairing for every channel; EMAIL is one branch, gated in-file with the same CONVERSATIONAL suppression check the guard runs',
+    why: 'the omnichannel dispatcher — it owns the Message row, the SSE push and the quota pairing for every channel; EMAIL is one branch, gated in-file with the same pause switch and CONVERSATIONAL suppression check the guard runs',
     requires: [
       {
         pattern: /suppression\.check\(/,
@@ -134,6 +147,10 @@ const NOT_ON_THE_GATEWAY: Record<string, Exemption> = {
       {
         pattern: /'CONVERSATIONAL'/,
         guarantee: 'it asks with the CONVERSATIONAL class, so the reply exemption still applies',
+      },
+      {
+        pattern: /emailPaused\(/,
+        guarantee: "the operator kill switch (`settings.email.paused`) still stops this lane",
       },
     ],
   },

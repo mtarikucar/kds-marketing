@@ -37,6 +37,27 @@ describe('ImportService.suggestMapping', () => {
       Mystery: '__skip',
     });
   });
+
+  it('matches a Turkish header whatever case the export wrote it in', () => {
+    // `'İ'.toLowerCase()` is `i` + U+0307 and `'I'.toLowerCase()` is a DOTTED
+    // `i`, so a plain `toLowerCase()` never matched a Turkish-uppercase header
+    // against the dotless-ı synonym key. A Turkish tenant's export is the
+    // common case, not the exotic one.
+    expect(svcOf().suggestMapping(['ABONELİKTEN ÇIKTI'])).toEqual({
+      'ABONELİKTEN ÇIKTI': 'emailOptOut',
+    });
+    expect(svcOf().suggestMapping(['Abonelikten Çıktı'])).toEqual({
+      'Abonelikten Çıktı': 'emailOptOut',
+    });
+  });
+
+  it('still skips an unknown Turkish header rather than guessing', () => {
+    expect(svcOf().suggestMapping(['Vergi Numarası'])).toEqual({ 'Vergi Numarası': '__skip' });
+  });
+
+  function svcOf() {
+    return makeSvc().svc;
+  }
 });
 
 describe('ImportService.upload', () => {
@@ -541,6 +562,38 @@ describe('ImportService — opt-out columns', () => {
       Unsubscribed: 'emailOptOut',
       'SMS Opt Out': 'smsOptOut',
       'Abonelikten çıktı': 'emailOptOut',
+    });
+  });
+
+  it('never suggests a Turkish CONSENT column as an opt-out column', () => {
+    // "E-posta izni" / "SMS izni" mean PERMISSION, not refusal: a truthy
+    // "Evet" is the customer agreeing. Read as an opt-out it inverts the
+    // whole file — every consenting contact suppressed, every refusing one
+    // left mailable — and the importer only ever writes `true`, so a
+    // corrected re-import cannot undo it.
+    // Every spelling an export actually writes, because the folding is the
+    // whole risk: a variant that slips through is the same inverted file.
+    const { svc } = makeSvc();
+    expect(
+      svc.suggestMapping([
+        'E-posta izni',
+        'E-Posta Izni',
+        'e-posta izni',
+        'E-POSTA İZNİ',
+        'Eposta izni',
+        'SMS izni',
+        'SMS İzni',
+        'İzin',
+      ]),
+    ).toEqual({
+      'E-posta izni': '__skip',
+      'E-Posta Izni': '__skip',
+      'e-posta izni': '__skip',
+      'E-POSTA İZNİ': '__skip',
+      'Eposta izni': '__skip',
+      'SMS izni': '__skip',
+      'SMS İzni': '__skip',
+      'İzin': '__skip',
     });
   });
 

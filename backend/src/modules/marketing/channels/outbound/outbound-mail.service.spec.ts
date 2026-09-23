@@ -1,4 +1,5 @@
 import { OutboundMailService } from './outbound-mail.service';
+import { MailGuardService } from './mail-guard.service';
 import { OutboundMail } from './outbound-mail.types';
 
 /**
@@ -81,11 +82,23 @@ describe('OutboundMailService', () => {
     const prisma: any = {
       lead: { findFirst: jest.fn().mockResolvedValue(over.lead ?? null) },
       workspace: {
-        findUnique: jest.fn().mockResolvedValue(
-          over.workspace === undefined
-            ? { status: 'ACTIVE', settings: null, name: 'Acme', defaultLanguage: 'tr' }
-            : over.workspace,
-        ),
+        // Projected through `select`, the way real Prisma answers. A mock that
+        // hands back the whole row regardless cannot reproduce a field the
+        // query forgot to ask for — which is exactly how an unselected
+        // `timezone` left the send window clamping against nothing while every
+        // test here stayed green.
+        findUnique: jest.fn().mockImplementation(async (args: any) => {
+          const row =
+            over.workspace === undefined
+              ? { status: 'ACTIVE', settings: null, name: 'Acme', defaultLanguage: 'tr' }
+              : over.workspace;
+          if (!row || !args?.select) return row;
+          return Object.fromEntries(
+            Object.keys(args.select)
+              .filter((k) => args.select[k] && k in row)
+              .map((k) => [k, row[k]]),
+          );
+        }),
       },
     };
     const svc = new OutboundMailService(
@@ -273,6 +286,48 @@ describe('OutboundMailService', () => {
       expect(text.match(new RegExp(UNSUB.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
     });
 
+    it('still attaches the 6563 identity block when the caller rendered its own link', async () => {
+      // The campaign sender inlines the unsubscribe URL itself, so `carries()`
+      // is true for every real campaign. Dropping the duplicate LINK must not
+      // drop the sender-identity block with it — that block is the whole
+      // ticari-ileti requirement, and the campaign blast is the mail that
+      // needs it most.
+      const { svc, email } = build({
+        workspace: {
+          status: 'ACTIVE',
+          name: 'Acme',
+          defaultLanguage: 'tr',
+          settings: {
+            email: { identity: { tradeName: 'Acme A.Ş.', address: 'Bağdat Cad. 1', contact: 'info@acme.test' } },
+          },
+        },
+      });
+      await svc.send(mail({ text: `merhaba\n\nAboneliği bırak: ${UNSUB.url}` }));
+      const text = email.sendPlainEmailResult.mock.calls[0][2];
+      expect(text).toContain('Ticari unvan: Acme A.Ş.');
+      expect(text).toContain('Adres: Bağdat Cad. 1');
+      expect(text).toContain('İletişim: info@acme.test');
+      expect(text).toContain('Bu ileti ali@acme.test adresine gönderildi.');
+      expect(text.match(new RegExp(UNSUB.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
+    });
+
+    it('still attaches the 6563 identity block to an HTML body that carries the link', async () => {
+      const { svc, email } = build({
+        workspace: {
+          status: 'ACTIVE',
+          name: 'Acme',
+          defaultLanguage: 'tr',
+          settings: { email: { identity: { tradeName: 'Acme A.Ş.' } } },
+        },
+      });
+      await svc.send(
+        mail({ html: `<html><body><p>merhaba</p><a href="${UNSUB.url}">Çık</a></body></html>` }),
+      );
+      const html = email.sendCampaignEmailResult.mock.calls[0][3];
+      expect(html).toContain('Ticari unvan: Acme A.Ş.');
+      expect(html.match(new RegExp(UNSUB.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
+    });
+
     it('never gives a transactional mail an unsubscribe header or footer', async () => {
       const { svc, email } = build();
       await svc.send(mail({ mailClass: 'TRANSACTIONAL', unsubscribe: UNSUB, text: 'Faturanız hazır' }));
@@ -331,6 +386,33 @@ describe('OutboundMailService', () => {
       const sent = adapter.send.mock.calls[0][0];
       expect(sent.inReplyTo).toBeUndefined();
       expect(sent.autoSubmitted).toBeUndefined();
+    });
+
+    it('carries the calendar invite to the mailbox transport', async () => {
+      // The regression guard against main: booking mail used to go out over the
+      // platform transport, which always attached the invite. A tenant that
+      // connected its own mailbox must still get one.
+      const { svc, adapter } = build({ identity: MAILBOX });
+      await svc.send(
+        mail({
+          mailClass: 'TRANSACTIONAL',
+          unsubscribe: undefined,
+          ics: {
+            method: 'CANCEL',
+            content: 'BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nEND:VCALENDAR',
+            filename: 'randevu.ics',
+          },
+        }),
+      );
+      expect(adapter.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ics: expect.objectContaining({
+            method: 'CANCEL',
+            content: expect.stringContaining('METHOD:CANCEL'),
+            filename: 'randevu.ics',
+          }),
+        }),
+      );
     });
 
     it('records the send lane of the mailbox card', async () => {
@@ -406,6 +488,70 @@ describe('OutboundMailService', () => {
       expect(prisma.lead.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'lead-1', workspaceId: 'ws-1' } }),
       );
+    });
+
+    it('hands the guard the tenant s zone, or the send window clamps against nothing', async () => {
+      // The guard only re-reads the workspace when the gateway passed
+      // `undefined`, and the gateway always passes an object — so a zone this
+      // read leaves out is a zone the send window never sees, and a
+      // `{ from, to }` window (the documented shape: hours here, zone on the
+      // workspace) silently stops deferring anything.
+      const { svc, guard, prisma } = build({
+        workspace: {
+          status: 'ACTIVE',
+          settings: { email: { sendWindow: { from: 9, to: 18 } } },
+          name: 'Acme',
+          defaultLanguage: 'tr',
+          timezone: 'Europe/Istanbul',
+        },
+      });
+      await svc.send(mail());
+      expect(prisma.workspace.findUnique.mock.calls[0][0].select).toMatchObject({ timezone: true });
+      expect(guard.check).toHaveBeenCalledWith(
+        expect.objectContaining({ workspace: expect.objectContaining({ timezone: 'Europe/Istanbul' }) }),
+      );
+    });
+
+    // The test above pins the plumbing against a STUBBED guard, which cannot
+    // tell you whether the clamp actually fires. This one wires the real
+    // MailGuardService to the real gateway and asserts the refusal itself, so
+    // the send window is proven to defer rather than merely to be reachable.
+    it('actually defers a bulk send outside the window, with the zone off the workspace row', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-10T02:30:00Z'));
+      try {
+        const { svc, prisma } = build({
+          workspace: {
+            status: 'ACTIVE',
+            // The documented shape: hours here, zone on the workspace. 02:30
+            // UTC is 05:30 in Istanbul — outside 09:00-21:00.
+            settings: { email: { sendWindow: { from: 9, to: 21 } } },
+            name: 'Acme',
+            defaultLanguage: 'tr',
+            timezone: 'Europe/Istanbul',
+          },
+        });
+        // Swap the stub for the real gate, sharing the gateway's prisma so a
+        // second workspace read would be visible in the same call count.
+        const real = new MailGuardService(
+          prisma,
+          { check: jest.fn().mockResolvedValue({ suppressed: false }) } as any,
+          { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) } as any,
+          { check: jest.fn().mockResolvedValue({ status: 'UNKNOWN', refusal: null, gap: 'NOT_ARMED' }), readiness: jest.fn() } as any,
+          { reserveDaily: jest.fn().mockResolvedValue(null), refundDaily: jest.fn().mockResolvedValue(undefined) } as any,
+        );
+        (svc as any).guard = real;
+
+        const r = await svc.send(mail());
+
+        expect(r).toMatchObject({ outcome: 'REFUSED', reason: 'QUIET_HOURS' });
+        // Exactly one workspace read — the gateway's. If the clamp had only
+        // worked because the guard re-read the row for itself, this would be 2,
+        // and the production path (which always passes an object) would differ
+        // from what this test proves.
+        expect(prisma.workspace.findUnique).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('does not read the workspace for account or product mail', async () => {

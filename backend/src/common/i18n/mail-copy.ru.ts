@@ -50,6 +50,18 @@ export const ru: Partial<Record<MailCopyKey, string>> = {
   'booking.manageLine': 'Изменить или отменить запись: {{url}}',
   'booking.fromBusiness': 'Отправлено {{business}}.',
 
+  // ── Страница управления записью / её отмены ───────────────────────────────
+  'booking.manage.title': 'Запись',
+  'booking.manage.join': 'Присоединиться к встрече',
+  'booking.manage.cancelled': 'Эта запись отменена.',
+  'booking.manage.rebook': 'Выбрать другое время',
+  'booking.manage.cancel': 'Отменить запись',
+  'booking.manage.reschedule': 'Изменить время',
+  'booking.manage.cancelDone': 'Ваша запись отменена.',
+  'booking.manage.cancelFailed': 'Не удалось отменить. Пожалуйста, попробуйте ещё раз.',
+  'booking.manage.notFound.heading': 'Запись не найдена',
+  'booking.manage.notFound.body': 'Эта ссылка больше не действует.',
+
   'document.greeting': 'Здравствуйте, {{name}}!',
   'document.signoff': '{{business}}',
   'document.invoice.subject': 'Счёт {{number}} от {{business}}',

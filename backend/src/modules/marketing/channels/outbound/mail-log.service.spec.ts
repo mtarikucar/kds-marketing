@@ -88,6 +88,60 @@ describe('MailLogService', () => {
       );
     });
 
+    it('treats a row another send is still dispatching as a duplicate, not a retry', async () => {
+      // The row the winner opened stays PENDING for the WHOLE round-trip — the
+      // gateway opens it before the dispatch and settles it after — so a loser
+      // that read "not delivered yet" and called it a retry would dispatch the
+      // same mail a second time. One booking cancellation, two cancellation
+      // mails, and a ledger showing a single SENT row with attempts: 2.
+      const create = jest.fn().mockRejectedValue({ code: 'P2002' });
+      const findFirst = jest.fn().mockResolvedValue({
+        id: 'ml-old',
+        workspaceId: 'ws-1',
+        status: 'PENDING',
+        messageId: null,
+        transport: 'PLATFORM',
+        updatedAt: new Date(Date.now() - 2_000),
+      });
+      const { prisma, svc } = build({ create, findFirst });
+      const r = await svc.pending({ ...BASE, idempotencyKey: 'booking:b1:cancelled' });
+      expect(r.deduped).toBe(true);
+      expect(r.row.id).toBe('ml-old');
+      // Not a retry: the attempt counter does not move and the winner's row is
+      // left exactly as it is, so the winner still owns settling it.
+      expect(prisma.mailLog.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('reopens a PENDING row the process died holding', async () => {
+      // The other half: a claim nobody is dispatching any more. Past the
+      // in-flight window it is a stranded row, and refusing to retry it would
+      // strand the mail with it.
+      const create = jest.fn().mockRejectedValue({ code: 'P2002' });
+      const findFirst = jest.fn().mockResolvedValue({
+        id: 'ml-old',
+        workspaceId: 'ws-1',
+        status: 'PENDING',
+        messageId: null,
+        updatedAt: new Date(Date.now() - 10 * 60_000),
+      });
+      const { prisma, svc } = build({ create, findFirst });
+      const r = await svc.pending({ ...BASE, idempotencyKey: 'booking:b1:cancelled' });
+      expect(r.deduped).toBe(false);
+      expect(prisma.mailLog.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ attempts: { increment: 1 } }) }),
+      );
+    });
+
+    it('reads the timestamp it needs to tell the two apart', async () => {
+      const create = jest.fn().mockRejectedValue({ code: 'P2002' });
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const { prisma, svc } = build({ create, findFirst });
+      await svc.pending({ ...BASE, idempotencyKey: 'k' });
+      expect(prisma.mailLog.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ select: expect.objectContaining({ updatedAt: true }) }),
+      );
+    });
+
     it('hands back an id-less row rather than throwing when the ledger is down', async () => {
       const create = jest.fn().mockRejectedValue(new Error('db down'));
       const { svc } = build({ create });

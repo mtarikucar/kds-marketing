@@ -413,6 +413,7 @@ import { PublicCustomDomainController } from './controllers/public-custom-domain
 // List-hygiene write side — ESP bounce/complaint suppression (inert w/o ESP_FEEDBACK_SECRET).
 import { EspFeedbackService } from './channels/esp-feedback.service';
 import { EspFeedbackController } from './controllers/esp-feedback.controller';
+import { WebhookReplayStore } from './channels/inbound/webhook-verifier/webhook-replay.store';
 // Affiliate referral loop — public /r/:slug redirect + attribution + self-signup.
 import { PublicReferralController } from './controllers/public-referral.controller';
 
@@ -1033,9 +1034,12 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // `configPublic.readSentFolder` (G3: off for every existing channel).
     EmailSentPollService,
     // Bounces of PLATFORM mail (digests, invites, password resets). Reads the
-    // EMAIL_USER mailbox over IMAP and feeds EspFeedbackService, and is fully
-    // inert while those env vars are absent (G6) — registering it costs an
-    // idle cron, not a connection.
+    // EMAIL_USER mailbox over IMAP. Anyone can post mail to that address, so it
+    // suppresses ONLY a report it can tie to a MailLog row AND to the address
+    // that row was sent to, through the workspace-scoped SuppressionService —
+    // never the global ESP writer. Fully inert while those env vars are absent
+    // (G6) or PLATFORM_BOUNCE_POLL=off — registering it costs an idle cron, not
+    // a connection.
     PlatformBouncePollService,
     // Email flawless wave 5 — observability (`no-email-observability`).
     // `MailOpsService` is the ONLY reader of the two ledgers: the tenant's
@@ -1264,6 +1268,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     SendingDomainsService,
     CustomDomainsService,
     EspFeedbackService,
+    WebhookReplayStore,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
     VoiceAdapter,

@@ -905,6 +905,48 @@ describe('BookingService', () => {
       expect(outboundMail.send).not.toHaveBeenCalled();
     });
 
+    it('a SIMULTANEOUS cancel mails nothing either — the loser claims nothing', async () => {
+      // The guard above is a read-then-check, and the manage link is an opaque
+      // token anyone can click twice (or a browser can prefetch). Both requests
+      // read CONFIRMED, both pass `status !== 'CANCELLED'`, and the customer is
+      // told twice that their appointment is off. The status flip is the claim:
+      // whoever does not win it does nothing.
+      prisma.booking.findFirst.mockResolvedValue({
+        id: 'b1', status: 'CONFIRMED', calendarId: 'c1', email: 'ada@example.com',
+      });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+
+      await svc.cancel(WS, 'b1');
+      await flush();
+
+      expect(prisma.booking.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Conditional on the status it read, or it is not a claim at all.
+          where: expect.objectContaining({ id: 'b1', status: expect.anything() }),
+        }),
+      );
+      expect(outboundMail.send).not.toHaveBeenCalled();
+      expect(outbox.append).not.toHaveBeenCalled();
+      expect(googleSync.cancelBooking).not.toHaveBeenCalled();
+      expect(outlookSync.cancelBooking).not.toHaveBeenCalled();
+    });
+
+    it('a SIMULTANEOUS approval runs the confirm side effects once', async () => {
+      // Two admins pressing approve on the same PENDING request (or one
+      // double-clicking): both read PENDING, both run afterConfirmed, and the
+      // customer gets two invites plus two conference pushes.
+      prisma.booking.findFirst.mockResolvedValue(bookingRow({ status: 'PENDING' }));
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+
+      await svc.setStatus(WS, 'b1', 'CONFIRMED');
+      await flush();
+
+      expect(outboundMail.send).not.toHaveBeenCalled();
+      expect(outbox.append).not.toHaveBeenCalled();
+      expect(googleSync.pushBooking).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
     it('declining a PENDING request says so in words, with no invite to withdraw', async () => {
       // setStatus('CANCELLED') delegates here, so this covers decline too. A
       // CANCEL for a uid the client never saw makes an appointment appear in
@@ -1168,10 +1210,32 @@ describe('BookingService', () => {
         endAt: new Date(AT.getTime() + 1800_000).toISOString(),
         status: 'CONFIRMED',
         meetingUrl: 'https://meet.example/xyz',
+        lang: 'en',
       });
       expect(prisma.booking.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { token: 'bk_tok' } }),
       );
+    });
+
+    /**
+     * The manage page is opened from a mail this workspace's language wrote.
+     * Without this the page is rendered in one fixed language and a customer
+     * who was written to in English gets a cancel button they cannot read.
+     */
+    it('carries the workspace language, resolved, so the page matches the mail', async () => {
+      prisma.booking.findFirst.mockResolvedValue(row);
+      prisma.bookingCalendar.findFirst.mockResolvedValue({ name: 'Intro call', slug: 'intro', timezone: 'Europe/Istanbul' });
+      prisma.workspace.findUnique.mockResolvedValue({ defaultLanguage: 'tr-TR' });
+
+      await expect(svc.publicByToken('bk_tok')).resolves.toMatchObject({ lang: 'tr' });
+    });
+
+    it('falls back to the default language rather than 404ing a valid token', async () => {
+      prisma.booking.findFirst.mockResolvedValue(row);
+      prisma.bookingCalendar.findFirst.mockResolvedValue({ name: 'Intro call', slug: 'intro', timezone: 'Europe/Istanbul' });
+      prisma.workspace.findUnique.mockRejectedValue(new Error('P2024 pool timeout'));
+
+      await expect(svc.publicByToken('bk_tok')).resolves.toMatchObject({ lang: 'en', status: 'CONFIRMED' });
     });
 
     it('never hands back the notes, the lead or the host — a manage link gets forwarded', async () => {

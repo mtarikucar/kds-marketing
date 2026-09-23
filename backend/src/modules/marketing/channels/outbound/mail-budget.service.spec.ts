@@ -59,6 +59,19 @@ describe('MailBudgetService', () => {
         }),
       },
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: '' }]),
+      // The refund's guarded decrement. Positional, matching the one statement
+      // the service issues: `GREATEST(0, value - $1) WHERE workspaceId = $2 AND
+      // metric = $3 AND periodKey = $4`. Applied in one step on purpose —
+      // that atomicity is the property under test below.
+      $executeRaw: jest.fn(
+        async (_sql: any, count: number, workspaceId: string, _metric: string, periodKey: string) => {
+          const k = key(workspaceId, periodKey);
+          const before = counters.get(k);
+          if (before === undefined) return 0; // no row → the WHERE matched nothing
+          counters.set(k, Math.max(0, before - count));
+          return 1;
+        },
+      ),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
   });
@@ -136,7 +149,51 @@ describe('MailBudgetService', () => {
   it('refunds nothing for a mailbox send, because nothing was reserved', async () => {
     const svc = newService();
     await svc.refundDaily({ workspaceId: WS, transport: 'MAILBOX_SMTP', now: NOON });
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
     expect(prisma.usageCounter.update).not.toHaveBeenCalled();
+  });
+
+  it('gives back without clobbering a send another tenant reserved at the same moment', async () => {
+    // `__platform__` is ONE row that every tenant on the shared relay writes,
+    // and a refund happens on every failed dispatch — which is exactly when a
+    // relay is in trouble and several tenants are failing at once. Read the
+    // value, subtract in JS, write the absolute number back, and the increment
+    // that committed in between is gone: the counter reads LOW, so the
+    // platform cap admits more than its limit and the operator console
+    // under-reports the blast it exists to reveal. (The other direction —
+    // refund racing refund — over-states the row instead and defers other
+    // tenants' transactional mail with a spurious DAILY_CAP until midnight.)
+    const svc = newService();
+    counters.set(key(WS, '2026-09-22'), 1);
+    counters.set(key(PLATFORM_SENTINEL, '2026-09-22'), 2);
+
+    // Another tenant's send lands between this refund's read and its write.
+    // Hooked on whichever call the refund makes for the sentinel row, so the
+    // case holds whether the refund reads first or decrements in one step.
+    let interleaved = false;
+    const concurrentReserve = async (workspaceId: string) => {
+      if (interleaved || workspaceId !== PLATFORM_SENTINEL) return;
+      interleaved = true; // set BEFORE the await: the reserve reads this row too
+      await svc.reserveDaily({ workspaceId: 'ws-2', transport: 'PLATFORM', now: NOON });
+    };
+    const findUnique = prisma.usageCounter.findUnique;
+    prisma.usageCounter.findUnique = jest.fn(async (args: any) => {
+      const row = await findUnique(args);
+      await concurrentReserve(args.where.workspaceId_metric_periodKey.workspaceId);
+      return row;
+    });
+    const executeRaw = prisma.$executeRaw;
+    prisma.$executeRaw = jest.fn(async (sql: any, ...values: any[]) => {
+      await concurrentReserve(values[1]);
+      return executeRaw(sql, ...values);
+    });
+
+    await svc.refundDaily({ workspaceId: WS, transport: 'PLATFORM', now: NOON });
+
+    expect(interleaved).toBe(true); // the race really was exercised
+    // 2 spent, +1 by the other tenant, −1 given back = 2.
+    expect(counters.get(key(PLATFORM_SENTINEL, '2026-09-22'))).toBe(2);
+    expect(counters.get(key(WS, '2026-09-22'))).toBe(0);
   });
 
   it('rolls over at UTC midnight — yesterday\'s blast does not hold today hostage', async () => {
@@ -154,8 +211,12 @@ describe('MailBudgetService', () => {
     prisma.$transaction.mockRejectedValueOnce(new Error('deadlock detected'));
     await expect(svc.reserveDaily({ workspaceId: WS, transport: 'PLATFORM', now: NOON })).resolves.toBeNull();
 
-    prisma.usageCounter.update.mockRejectedValueOnce(new Error('gone'));
+    // The refund's own statement, not a neighbouring mock: a write that will
+    // not land must stay a warning, or a bookkeeping failure becomes an
+    // undelivered invoice.
+    prisma.$executeRaw.mockRejectedValueOnce(new Error('gone'));
     await expect(svc.refundDaily({ workspaceId: WS, transport: 'PLATFORM', now: NOON })).resolves.toBeUndefined();
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(2); // and the second row still got its refund
   });
 
   it('reports one workspace\'s day without ever showing it the platform row', async () => {

@@ -181,6 +181,7 @@
       "imapHost": "IMAP sunucusu",
       "imapPort": "IMAP portu",
       "imapHint": "Yanıtların okunduğu yer. Bu sağlayıcı için tanıdığımız ayarları kullanmak istiyorsanız boş bırakın.",
+      "imapSecure": "Bu port doğrudan SSL/TLS kullanıyor",
       "platformFallback": "Mailiniz Jeeta üzerinden gönderiliyor. Yanıtlar {{replyTo}} adresine gelir. Kendi adresinizden göndermek için posta kutunuzu bağlayın.",
       "reauthRequired": "Bağlantı yenilenmeli — sağlayıcı izni geçersiz oldu, bu posta kutusu gönderemiyor ve alamıyor.",
       "reauthRequiredHint": "Yalnızca posta kutusunun sahibi yeniden bağlayabilir.",
@@ -910,7 +911,8 @@
     "lockedTryLater": "Hesabınız geçici olarak kilitlendi. Lütfen birazdan tekrar deneyin.",
     "inactive": "Hesabınız aktif değil. Lütfen yöneticinizle iletişime geçin.",
     "failed": "Giriş yapılamadı. Lütfen tekrar deneyin.",
-    "networkError": "Bağlantı hatası. Lütfen tekrar deneyin."
+    "networkError": "Bağlantı hatası. Lütfen tekrar deneyin.",
+    "forgotCta": "Parolanızı mı unuttunuz?"
   },
   "profile": {
     "menuItem": "Profili düzenle",
@@ -1424,6 +1426,9 @@
     "deleted": "Belge silindi",
     "linkCopied": "İmza linki kopyalandı",
     "copyLink": "İmza linkini kopyala",
+    "email": "E-posta ile gönder",
+    "emailNoContact": "E-posta gönderebilmek için belgeyi bir kişiye bağlayın",
+    "emailed": "Sözleşme {{to}} adresine gönderildi",
     "void": "Geçersiz kıl",
     "titleField": "Başlık",
     "titlePlaceholder": "Hizmet sözleşmesi",
@@ -5992,5 +5997,22 @@
       "deleteTitle": "Tetikleyici bağlantı silinsin mi?",
       "deleteBody": "Kısa bağlantı çalışmayı bırakır ve tıklama geçmişi silinir."
     }
+  },
+  "passwordReset": {
+    "title": "Yeni bir parola belirleyin",
+    "subtitle": "Bu bağlantı bir kez çalışır. Parolayı değiştirmek diğer tüm oturumlarınızı da kapatır.",
+    "newPassword": "Yeni parola",
+    "confirmPassword": "Yeni parolayı doğrulayın",
+    "policy": "En az 8 karakter; bir büyük harf, bir küçük harf ve bir rakam içermeli.",
+    "submit": "Yeni parolayı kaydet",
+    "done": "Parolanız güncellendi — yeni parolanızla giriş yapın.",
+    "noToken": "Bu bağlantıda jeton yok. Lütfen e-postadaki bağlantıyı kullanın.",
+    "rejected": "Bu bağlantının süresi dolmuş veya daha önce kullanılmış.",
+    "requestAnother": "Yeni bağlantı iste",
+    "backToLogin": "Girişe dön",
+    "forgotTitle": "Parolanızı sıfırlayın",
+    "forgotSubtitle": "Yeni bir parola belirlemenizi sağlayan bağlantıyı e-posta ile gönderelim.",
+    "forgotSubmit": "Sıfırlama bağlantısı gönder",
+    "forgotAck": "Bu adrese ait bir hesap varsa sıfırlama bağlantısı yola çıktı. Bağlantı 30 dakika geçerlidir."
   }
 }

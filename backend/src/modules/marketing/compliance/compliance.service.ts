@@ -91,8 +91,8 @@ export class ComplianceService {
     // stayed false — and the send path reads ONLY the flag (campaign-sender
     // isOptedOut / campaigns audience filter), so the contact keeps receiving
     // campaigns despite an on-record opt-out (a KVKK/GDPR divergence).
-    return this.prisma.$transaction(async (tx) => {
-      const record = await tx.consentRecord.create({
+    const record = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.consentRecord.create({
         data: { workspaceId, leadId, type, granted, source: meta.source, ipAddress: meta.ipAddress },
       });
       if (field) {
@@ -100,10 +100,55 @@ export class ComplianceService {
         await tx.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
       }
       if (type === 'MARKETING_EMAIL' && granted) {
-        await this.liftEmailSuppression(tx, workspaceId, leadId, record.id);
+        await this.liftEmailSuppression(tx, workspaceId, leadId, created.id);
       }
-      return record;
+      return created;
     });
+
+    // The İYS half of an email withdrawal — reported only once the consent
+    // record above has COMMITTED, and never able to unwind it. See
+    // `reportEmailWithdrawal` for why the other direction is not pushed.
+    if (type === 'MARKETING_EMAIL' && !granted) {
+      await this.reportEmailWithdrawal(workspaceId, leadId, meta.source);
+    }
+    return record;
+  }
+
+  /**
+   * Tell İYS the recipient withdrew — the email counterpart of the `MESAJ`
+   * push `emitSmsOptEvent` makes.
+   *
+   * `RET` ONLY, deliberately. A grant recorded through this method is a staff
+   * member ticking a box in the CRM, and nothing on this path can tell that
+   * from the recipient's own evidenced act (a double opt-in, a public form,
+   * an IP and a timestamp). Pushing it as an İYS `ONAY` would assert a consent
+   * the tenant cannot evidence when İYS asks — so the platform reports the
+   * withdrawal it is obliged to report and stays silent about the rest.
+   *
+   * Inert for every workspace that has not armed `settings.email.iys.eposta`
+   * with credentials, and best-effort in every case: the ConsentRecord and the
+   * flag are the compliance record, the push is the mirror.
+   */
+  private async reportEmailWithdrawal(workspaceId: string, leadId: string, source?: string): Promise<void> {
+    try {
+      const lead = await this.prisma.lead.findUnique({
+        where: { id: leadId },
+        select: { email: true, emailNormalized: true },
+      });
+      const address = lead?.emailNormalized || lead?.email || null;
+      if (!address) return;
+      await this.iysSync.enqueueEmailWithdrawal({
+        workspaceId,
+        leadId,
+        address,
+        // An İYS-originated write carries its own `IYS_` tag through, so the
+        // producer's anti-feedback-loop guard can drop it; every other caller
+        // is a web action, which is what `HS_WEB` means.
+        source: source?.startsWith('IYS_') ? source : 'HS_WEB',
+      });
+    } catch (e: any) {
+      this.logger.warn(`Failed to report the İYS EPOSTA withdrawal for lead=${leadId}: ${e?.message ?? e}`);
+    }
   }
 
   /**

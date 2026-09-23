@@ -49,6 +49,18 @@ export const tr: Record<MailCopyKey, string> = {
   'booking.manageLine': 'Randevunuzu yönetmek veya iptal etmek için: {{url}}',
   'booking.fromBusiness': '{{business}} tarafından gönderildi.',
 
+  // ── Randevu yönetme/iptal sayfası ─────────────────────────────────────────
+  'booking.manage.title': 'Randevu',
+  'booking.manage.join': 'Toplantıya katıl',
+  'booking.manage.cancelled': 'Bu randevu iptal edildi.',
+  'booking.manage.rebook': 'Yeni bir saat seç',
+  'booking.manage.cancel': 'Randevuyu iptal et',
+  'booking.manage.reschedule': 'Saati değiştir',
+  'booking.manage.cancelDone': 'Randevunuz iptal edildi.',
+  'booking.manage.cancelFailed': 'İptal edilemedi, lütfen tekrar deneyin.',
+  'booking.manage.notFound.heading': 'Randevu bulunamadı',
+  'booking.manage.notFound.body': 'Bu bağlantı artık geçerli değil.',
+
   'document.greeting': 'Merhaba {{name}},',
   'document.signoff': '{{business}}',
   'document.invoice.subject': '{{business}} faturası: {{number}}',

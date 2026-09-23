@@ -48,6 +48,18 @@ export const uz: Partial<Record<MailCopyKey, string>> = {
   'booking.manageLine': 'Band qilishni boshqarish yoki bekor qilish: {{url}}',
   'booking.fromBusiness': '{{business}} tomonidan yuborildi.',
 
+  // ── Uchrashuvni boshqarish / bekor qilish sahifasi ────────────────────────
+  'booking.manage.title': 'Uchrashuv',
+  'booking.manage.join': 'Uchrashuvga qo‘shilish',
+  'booking.manage.cancelled': 'Bu uchrashuv bekor qilindi.',
+  'booking.manage.rebook': 'Yangi vaqt tanlang',
+  'booking.manage.cancel': 'Uchrashuvni bekor qilish',
+  'booking.manage.reschedule': 'Vaqtni o‘zgartirish',
+  'booking.manage.cancelDone': 'Uchrashuvingiz bekor qilindi.',
+  'booking.manage.cancelFailed': 'Bekor qila olmadik. Iltimos, qayta urinib koʻring.',
+  'booking.manage.notFound.heading': 'Uchrashuv topilmadi',
+  'booking.manage.notFound.body': 'Bu havola endi amal qilmaydi.',
+
   'document.greeting': 'Salom, {{name}}!',
   'document.signoff': '{{business}}',
   'document.invoice.subject': '{{business}} hisob-fakturasi: {{number}}',

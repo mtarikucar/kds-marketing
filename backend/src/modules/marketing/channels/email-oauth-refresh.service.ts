@@ -61,10 +61,33 @@ export class EmailOAuthRefreshService {
   /** Not a cap — a tripwire. Crossing it means the "one row per workspace"
    *  assumption above is wrong and this needs a queryable expiry column. */
   private static readonly EXPECTED_MAX = 5_000;
-  /** One refresh per mailbox at a time. Microsoft ROTATES the refresh token,
-   *  so two sends racing on the same channel can leave the loser holding a
-   *  credential the provider has already invalidated. */
+  /** One ASK per mailbox at a time: two sends that need a token while one
+   *  exchange is running share its answer instead of opening a second. */
   private readonly inFlight = new Map<string, Promise<OnDemandToken>>();
+  /**
+   * One EXCHANGE per mailbox at a time, whichever lane asked for it.
+   *
+   * `inFlight` above only collapses sends against sends. The sweep is a
+   * different caller of the same trade, and the two overlap by construction:
+   * the send's due-test (`needsRefresh`, expired) is a subset of the sweep's
+   * (inside `REFRESH_WINDOW_MS`), so every token the send exchanges is one the
+   * sweep also thinks is due.
+   *
+   * What that costs, in order of how sure we are of it: the loser's write
+   * reseals a box read before the winner's, so a just-minted access token is
+   * dropped and a stale `oauthError` comes back — which reads as "reconnect
+   * this mailbox" on the card and quietly moves the tenant's mail to the
+   * platform address until the next sweep. And on a provider that hands back
+   * a new refresh token each time (Microsoft does; Google does not), whether
+   * the redeemed one keeps working is the provider's business and not
+   * something worth finding out per tenant: if it does not, the mailbox needs
+   * a human to re-consent before it sends or receives again.
+   *
+   * In-process only, deliberately. A second replica would need the row lock,
+   * and every write below re-reads the box first precisely so a racer this map
+   * cannot see still cannot clobber it.
+   */
+  private readonly exchanges = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -169,8 +192,15 @@ export class EmailOAuthRefreshService {
     }
   }
 
-  /** Trade the refresh token and seal what came back. The one writer of these
-   *  credentials, so the sweep and a send can never disagree about them. */
+  /**
+   * Trade the refresh token and seal what came back — one mailbox at a time.
+   *
+   * Both lanes come through here, and each waits for the other rather than
+   * racing it. Waiting is not enough on its own, so the trade re-reads the box
+   * on the far side of the wait (the token it was going to post may already be
+   * spent) and again before the write (a network round-trip is long enough for
+   * a tenant to press "reconnect").
+   */
   private async exchange(
     row: MailboxRef & { configSealed?: string },
     secrets: SealedSecrets,
@@ -179,13 +209,52 @@ export class EmailOAuthRefreshService {
     // Narrowed on purpose: the health service is handed an identity, never the
     // row that carries the sealed credentials.
     const ref: MailboxRef = { id: row.id, workspaceId: row.workspaceId };
-    const id = ref.id;
-    const t = await refreshAccessToken(provider, secrets.oauthRefreshToken);
+    return this.withChannelLock(ref.id, () => this.trade(ref, secrets, provider));
+  }
+
+  /** The trade itself, with this mailbox's turn already held. */
+  private async trade(
+    ref: MailboxRef,
+    snapshot: SealedSecrets,
+    provider: EmailOAuthProvider,
+  ): Promise<OnDemandToken> {
+    // The wait may have been spent behind the other lane's exchange. If it
+    // minted a token, that is the answer — posting the refresh token it just
+    // redeemed is the request that retires a rotating mailbox for good.
+    const current = (await this.readSecrets(ref)) ?? snapshot;
+    if (this.supersedes(current, snapshot)) {
+      return {
+        accessToken: current.oauthAccessToken ?? null,
+        expiresAt: Number(current.oauthExpiresAt) || null,
+        error: null,
+      };
+    }
+
+    const redeemed = current.oauthRefreshToken || snapshot.oauthRefreshToken;
+    const t = await refreshAccessToken(provider, redeemed);
+
+    // The box as it stands NOW, not as it stood before the round-trip: this
+    // one carries the mailbox's SMTP/IMAP credentials as well, and resealing
+    // an old copy of it is how an operator's new app password disappears.
+    const box = (await this.readSecrets(ref)) ?? current;
+    const replaced = !!box.oauthRefreshToken && box.oauthRefreshToken !== redeemed;
+    if (replaced || (t.error && this.supersedes(box, current))) {
+      // Somebody reconnected the mailbox, or already got a token, while we
+      // were away. Our result is about a grant that is no longer the one
+      // stored, so it is reported and dropped rather than written.
+      this.logger.warn(
+        `email token refresh: channel ${ref.id} changed while its token was being traded; this result is not stored`,
+      );
+      return t.error
+        ? { accessToken: null, expiresAt: null, error: t.error }
+        : { accessToken: t.accessToken, expiresAt: t.expiresAt, error: null };
+    }
+
     if (t.error) {
       // Consent revoked, password changed, app removed. Recorded where the
       // owner can see it; the stored refresh token is LEFT ALONE, because a
       // transient provider outage must not cost a working connection.
-      await this.stampError(id, secrets, t.error);
+      await this.stampError(ref.id, box, t.error);
       // …and again OUTSIDE the sealed box. Nothing that renders a mailbox can
       // open that box, so an error recorded only inside it is a channel that
       // looks connected and sends nothing (`oauth-revoked-invisible`).
@@ -194,7 +263,7 @@ export class EmailOAuthRefreshService {
     }
 
     const next = {
-      ...secrets,
+      ...box,
       oauthAccessToken: t.accessToken,
       oauthExpiresAt: String(t.expiresAt),
       // Only when the provider actually rotated it — Google omits it and the
@@ -203,13 +272,65 @@ export class EmailOAuthRefreshService {
     };
     delete next.oauthError;
     await this.prisma.channel.update({
-      where: { id },
+      where: { id: ref.id },
       data: { configSealed: sealSecret(JSON.stringify(next)) },
     });
     // A token that healed itself must take the reconnect marker down with it,
     // or the card keeps asking for a reconnect nobody needs to do.
     await this.health.clearOAuthReauthRequired(ref).catch(() => undefined);
     return { accessToken: t.accessToken, expiresAt: t.expiresAt, error: null };
+  }
+
+  /**
+   * Queue behind whatever is already trading this mailbox's token.
+   *
+   * Keyed on the channel alone — the two lanes have to collide on the same
+   * key, and the sweep has no key of its own to compose one from. Each lane
+   * keeps its OWN due-test, though: the sweep's 20-minute
+   * pre-emptive window is the thing that stops a token dying between ticks,
+   * and routing it through the send's "already expired" test would delete it.
+   */
+  private async withChannelLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.exchanges.get(channelId);
+    const run = (prior ?? Promise.resolve()).then(() => fn());
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.exchanges.set(channelId, tail);
+    try {
+      return await run;
+    } finally {
+      // Only if nobody queued behind us — otherwise the map holds THEIR tail.
+      if (this.exchanges.get(channelId) === tail) this.exchanges.delete(channelId);
+    }
+  }
+
+  /** The box as the row holds it right now, or null when it cannot be read. */
+  private async readSecrets(ref: MailboxRef): Promise<SealedSecrets | null> {
+    try {
+      const row = await this.prisma.channel.findFirst({
+        where: { id: ref.id, ...(ref.workspaceId ? { workspaceId: ref.workspaceId } : {}) },
+        select: { configSealed: true },
+      });
+      return row?.configSealed ? this.open(row.configSealed) : null;
+    } catch (e) {
+      // Never a reason to fail a refresh: falling back to the caller's own
+      // snapshot is exactly the behaviour this had before it re-read at all.
+      this.logger.warn(`email token refresh: channel ${ref.id} could not be re-read: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Did somebody else mint a working token while we were waiting? Compared by
+   *  value, never by identity: an unchanged box must NOT read as a new token,
+   *  or the sweep would stop refreshing anything that had not already died. */
+  private supersedes(box: SealedSecrets, snapshot: SealedSecrets): boolean {
+    const changed =
+      box.oauthAccessToken !== snapshot.oauthAccessToken ||
+      box.oauthExpiresAt !== snapshot.oauthExpiresAt ||
+      box.oauthRefreshToken !== snapshot.oauthRefreshToken;
+    return changed && !!box.oauthAccessToken && !box.oauthError && !needsRefresh(box);
   }
 
   private async stampError(id: string, secrets: Record<string, string>, error: string): Promise<void> {

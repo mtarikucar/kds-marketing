@@ -1,4 +1,3 @@
-import { normalizeSendWindow } from '../channels/outbound/mail-window';
 import { parseWorkflowParts, WorkflowDslSchema } from './workflow-dsl.schema';
 
 /**
@@ -169,69 +168,27 @@ describe('workflow DSL', () => {
     });
   });
 
-  describe('trigger.sendWindow (per-workflow quiet hours)', () => {
-    const window = { tz: 'Europe/Istanbul', from: 9, to: 21 };
-
-    it('accepts a window and keeps it on the parsed trigger', () => {
-      // The parsed trigger is what workflows.service persists, so a key the
-      // schema does not declare is stripped on save and the window would
-      // silently vanish between the form and the executor.
-      const dsl = parseWorkflowParts({ ...okTrigger, sendWindow: window }, okSteps);
-      expect(dsl.trigger.sendWindow).toEqual(window);
+  describe('trigger.sendWindow', () => {
+    it('does not keep a per-workflow quiet-hours window, because nothing reads one', () => {
+      // A window kept on the parsed trigger is persisted and echoed back, so
+      // the automation READS as configured with quiet hours — while the
+      // executor passes no window to the gateway and the gate consults only
+      // `settings.email.sendWindow`. The 03:00 mail goes out anyway and
+      // nothing records that the tenant's setting was ignored. Until the
+      // executor honours one, the DSL must not look like it accepts one.
+      const dsl = parseWorkflowParts(
+        { ...okTrigger, sendWindow: { tz: 'Europe/Istanbul', from: 9, to: 21 } },
+        okSteps,
+      );
+      expect((dsl.trigger as Record<string, unknown>).sendWindow).toBeUndefined();
     });
 
-    it('accepts a window that wraps midnight', () => {
-      const dsl = parseWorkflowParts({ ...okTrigger, sendWindow: { tz: 'Europe/Istanbul', from: 22, to: 6 } }, okSteps);
-      expect(dsl.trigger.sendWindow).toMatchObject({ from: 22, to: 6 });
-    });
-
-    it('accepts a window with no tz (the workspace timezone answers)', () => {
-      const dsl = parseWorkflowParts({ ...okTrigger, sendWindow: { from: 9, to: 21 } }, okSteps);
-      expect(dsl.trigger.sendWindow).toEqual({ from: 9, to: 21 });
-    });
-
-    it('leaves sendWindow undefined when not supplied (every existing workflow)', () => {
-      expect(parseWorkflowParts(okTrigger, okSteps).trigger.sendWindow).toBeUndefined();
-    });
-
-    it('rejects hours that describe nothing', () => {
-      // from === to is either "always" or "never" and there is no way to tell
-      // which was meant — better a 400 at save time than a guess at 02:30.
-      expect(() => parseWorkflowParts({ ...okTrigger, sendWindow: { from: 9, to: 9 } }, okSteps)).toThrow();
-      expect(() => parseWorkflowParts({ ...okTrigger, sendWindow: { from: -1, to: 21 } }, okSteps)).toThrow();
-      expect(() => parseWorkflowParts({ ...okTrigger, sendWindow: { from: 9, to: 25 } }, okSteps)).toThrow();
-      expect(() => parseWorkflowParts({ ...okTrigger, sendWindow: { from: 9.5, to: 21 } }, okSteps)).toThrow();
-      expect(() => parseWorkflowParts({ ...okTrigger, sendWindow: { from: 9 } }, okSteps)).toThrow();
-    });
-  });
-});
-
-/**
- * The DSL and the clamp must agree on the shape, or a window saved through the
- * API is one the sender cannot read.
- */
-describe('trigger.sendWindow feeds the clamp unchanged', () => {
-  it('parses back out of the DSL into a usable SendWindow', () => {
-    const dsl = parseWorkflowParts(
-      { type: 'lead.created', filters: [], sendWindow: { tz: 'Europe/Istanbul', from: 9, to: 21 } },
-      [{ type: 'send_email', body: 'hi' }],
-    );
-    expect(normalizeSendWindow(dsl.trigger.sendWindow, null)).toEqual({
-      tz: 'Europe/Istanbul',
-      from: 9,
-      to: 21,
-    });
-  });
-
-  it('a tz-less window is resolved against the workspace timezone', () => {
-    const dsl = parseWorkflowParts(
-      { type: 'lead.created', filters: [], sendWindow: { from: 9, to: 21 } },
-      [{ type: 'send_email', body: 'hi' }],
-    );
-    expect(normalizeSendWindow(dsl.trigger.sendWindow, 'Europe/Istanbul')).toEqual({
-      tz: 'Europe/Istanbul',
-      from: 9,
-      to: 21,
+    it('does not refuse a workflow that carries one', () => {
+      // A tenant (or an MCP client) may already have saved the dead key. The
+      // next save must drop it, not 400 on a workflow that was accepted before.
+      expect(() =>
+        parseWorkflowParts({ ...okTrigger, sendWindow: { from: 9, to: 9 } }, okSteps),
+      ).not.toThrow();
     });
   });
 });

@@ -51,6 +51,18 @@ export const ar: Partial<Record<MailCopyKey, string>> = {
   'booking.manageLine': 'لإدارة حجزك أو إلغائه: {{url}}',
   'booking.fromBusiness': 'أُرسلت من {{business}}.',
 
+  // ── صفحة إدارة الموعد / إلغائه ────────────────────────────────────────────
+  'booking.manage.title': 'الموعد',
+  'booking.manage.join': 'انضم إلى الاجتماع',
+  'booking.manage.cancelled': 'تم إلغاء هذا الموعد.',
+  'booking.manage.rebook': 'اختر وقتًا جديدًا',
+  'booking.manage.cancel': 'إلغاء الموعد',
+  'booking.manage.reschedule': 'تغيير الوقت',
+  'booking.manage.cancelDone': 'تم إلغاء موعدك.',
+  'booking.manage.cancelFailed': 'تعذّر الإلغاء. يُرجى المحاولة مرة أخرى.',
+  'booking.manage.notFound.heading': 'الموعد غير موجود',
+  'booking.manage.notFound.body': 'لم يعد هذا الرابط صالحًا.',
+
   'document.greeting': 'مرحبًا {{name}}،',
   'document.signoff': '{{business}}',
   'document.invoice.subject': 'فاتورة {{number}} من {{business}}',

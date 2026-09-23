@@ -250,7 +250,11 @@ export class OutboundMailService {
     try {
       return await this.prisma.workspace.findUnique({
         where: { id: mail.workspaceId },
-        select: { status: true, settings: true, name: true, defaultLanguage: true },
+        // `timezone` is not decoration: the guard only falls back to its own
+        // read when this value is `undefined`, which it never is on a real
+        // send. Left out here, an hours-only send window has no zone to
+        // resolve against and the quiet-hours clamp ships inert.
+        select: { status: true, settings: true, name: true, defaultLanguage: true, timezone: true },
       });
     } catch (e: any) {
       this.logger.warn(`workspace read failed (workspace=${mail.workspaceId}): ${e?.message ?? e}`);
@@ -314,14 +318,23 @@ export class OutboundMailService {
     const lang = mail.lang ?? ws?.defaultLanguage ?? null;
     const business = identity.fromName || ws?.name || '';
     // A caller that already rendered the link into its own body — the campaign
-    // sender does — must not end up with two footers.
-    const carries = (body: string | undefined) => !!body && body.includes(url);
+    // sender does — must not end up with two opt-out links.
+    //
+    // Only that LINE is dropped, never the rest of the block. The 6563
+    // sender-identity lines (and who the mail is from, and which address it
+    // reached) are the gateway's to attach on EVERY bulk send, and short-
+    // circuiting the whole footer meant a campaign — the primary commercial
+    // mail path, and the one that most needs the identification — shipped
+    // without any of it while a workflow drip carried the lot.
+    //
+    // The html check compares both spellings: a compiled body escapes `&`
+    // inside an href, so a link base that ever gains a query string would
+    // otherwise read as "not carried" and earn a second footer.
+    const carriesText = !!mail.text && mail.text.includes(url);
+    const carriesHtml = !!mail.html && (mail.html.includes(url) || mail.html.includes(escapeHtml(url)));
 
-    const text = carries(mail.text) ? mail.text : `${mail.text}\n\n${this.footerText(lang, url, mail.to, business, ws)}`;
-    const html =
-      mail.html && !carries(mail.html)
-        ? `${mail.html}${this.footerHtml(lang, url, mail.to, business, ws)}`
-        : mail.html;
+    const text = `${mail.text}\n\n${this.footerText(lang, url, mail.to, business, ws, carriesText)}`;
+    const html = mail.html ? this.withHtmlFooter(mail.html, this.footerHtml(lang, url, mail.to, business, ws, carriesHtml)) : undefined;
 
     return { text, ...(html ? { html } : {}), listUnsubscribeUrl: url };
   }
@@ -352,6 +365,12 @@ export class OutboundMailService {
         ...(messageId ? { messageId: `<${messageId}>` } : {}),
         ...this.threadingFor(mail),
         ...(composed.listUnsubscribeUrl ? { listUnsubscribeUrl: composed.listUnsubscribeUrl } : {}),
+        // The invite goes wherever the mail goes. A tenant on its own mailbox
+        // is exactly the tenant that most wants a branded booking mail, and
+        // dropping the .ics here left the customer with a confirmation that
+        // never reached their calendar — and a cancellation that never
+        // withdrew the appointment.
+        ...(mail.ics ? { ics: mail.ics } : {}),
       });
       return {
         ok: r.status === 'SENT',
@@ -611,17 +630,22 @@ export class OutboundMailService {
 
   // ── the bulk footer ────────────────────────────────────────────────────────
 
+  /**
+   * `omitUnsubscribe` drops ONLY the opt-out line, for a body that already
+   * rendered its own. Everything else ships either way.
+   */
   private footerText(
     lang: string | null,
     url: string,
     to: string,
     business: string,
     ws: WorkspaceContext | null,
+    omitUnsubscribe = false,
   ): string {
     const lines = [
       t(lang, 'footer.whySending', { business }),
       t(lang, 'footer.sentTo', { email: to }),
-      t(lang, 'footer.unsubscribeText', { url }),
+      omitUnsubscribe ? '' : t(lang, 'footer.unsubscribeText', { url }),
       ...this.identityLines(lang, business, ws).map((l) => l.text),
     ];
     return lines.filter(Boolean).join('\n');
@@ -633,14 +657,25 @@ export class OutboundMailService {
     to: string,
     business: string,
     ws: WorkspaceContext | null,
+    omitUnsubscribe = false,
   ): string {
     const parts = [
       tHtml(lang, 'footer.whySending', { business }),
       tHtml(lang, 'footer.sentTo', { email: to }),
-      `<a href="${escapeHtml(url)}">${tHtml(lang, 'footer.unsubscribe')}</a>`,
+      omitUnsubscribe ? '' : `<a href="${escapeHtml(url)}">${tHtml(lang, 'footer.unsubscribe')}</a>`,
       ...this.identityLines(lang, business, ws).map((l) => l.html),
     ];
     return `<hr><div style="font-size:12px;color:#666">${parts.filter(Boolean).join('<br>')}</div>`;
+  }
+
+  /**
+   * Put the footer INSIDE the document when there is one. A compiled campaign
+   * body ends `</body></html>`, and markup appended after the closing tags is
+   * at the mercy of whichever client decides to drop it — the one part of the
+   * mail that has to survive is the part the law asks for.
+   */
+  private withHtmlFooter(html: string, footer: string): string {
+    return html.includes('</body>') ? html.replace('</body>', `${footer}</body>`) : `${html}${footer}`;
   }
 
   /**

@@ -67,6 +67,40 @@ describe('ESP webhook verifier registry', () => {
     process.env.MAILGUN_WEBHOOK_SIGNING_KEY = 'key-123';
     expect(espVerifierStatus().find((s) => s.provider === 'mailgun')?.configured).toBe(true);
   });
+
+  it('answers from an explicit env bag without touching process.env', () => {
+    const status = espVerifierStatus({ SENDGRID_EVENT_PUBLIC_KEY: 'spki' });
+    expect(status.find((s) => s.provider === 'sendgrid')).toMatchObject({
+      configured: true,
+      missing: [],
+    });
+    expect(status.find((s) => s.provider === 'postmark')?.missing).toEqual([
+      'POSTMARK_WEBHOOK_USER',
+      'POSTMARK_WEBHOOK_PASSWORD',
+    ]);
+    expect(process.env.SENDGRID_EVENT_PUBLIC_KEY).toBeUndefined();
+  });
+
+  /**
+   * `requires` is what the deploy guard forwards and what the health panel
+   * prints. If it ever names a different set than the verifier's own gate
+   * actually reads, an operator sets every key the UI asked for and the route
+   * still 401s — the failure this registry exists to end, one layer over.
+   */
+  it('keeps `requires` in step with each verifier own gate', () => {
+    for (const p of ESP_PROVIDERS) {
+      const v = getVerifier(p)!;
+      expect(v.requires.length).toBeGreaterThan(0);
+      expect(v.configured()).toBe(false);
+      // Set every key but the last: the gate must still be shut.
+      for (const k of v.requires.slice(0, -1)) process.env[k] = 'value';
+      expect(v.configured()).toBe(false);
+      process.env[v.requires[v.requires.length - 1]] = 'value';
+      expect(v.configured()).toBe(true);
+      expect(espVerifierStatus().find((s) => s.provider === p)?.configured).toBe(true);
+      for (const k of v.requires) delete process.env[k];
+    }
+  });
 });
 
 describe('generic HMAC verifier (the self-hosted relay)', () => {
@@ -115,10 +149,13 @@ describe('Mailgun verifier (timestamp + token HMAC, signature in the BODY)', () 
       'event-data': { event: 'failed', severity: 'permanent', recipient: 'dead@x.com' },
     });
 
-  it('accepts a real Mailgun signature block', () => {
+  it('accepts a real Mailgun signature block, and hands back the token to spend', () => {
     process.env.MAILGUN_WEBHOOK_SIGNING_KEY = KEY;
     const ts = String(Math.floor(Date.now() / 1000));
-    expect(v().verify(req(payload(ts)))).toEqual({ ok: true });
+    // The body is NOT signed here, so the token is the only thing that tells
+    // one accepted request from another — the caller spends it through
+    // `WebhookReplayStore` before acting on what it authenticates.
+    expect(v().verify(req(payload(ts)))).toEqual({ ok: true, replayToken: 'a'.repeat(50) });
   });
 
   it('rejects a tampered signature', () => {
@@ -140,7 +177,7 @@ describe('Mailgun verifier (timestamp + token HMAC, signature in the BODY)', () 
     const old = String(Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60);
     expect(v().verify(req(payload(old)))).toEqual({ ok: false, reason: 'STALE_TIMESTAMP' });
     const retried = String(Math.floor(Date.now() / 1000) - 6 * 60 * 60);
-    expect(v().verify(req(payload(retried)))).toEqual({ ok: true });
+    expect(v().verify(req(payload(retried))).ok).toBe(true);
   });
 
   it('is inert without the signing key, and never throws on a malformed body', () => {

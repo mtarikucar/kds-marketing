@@ -12,10 +12,13 @@ import { constantTimeEquals, timestampFresh, VerifyOutcome, WebhookRequest, Webh
  * fail. It reads three strings out of a bounded JSON parse inside a try, and
  * treats anything else as `MALFORMED`.
  *
- * The signed material is the timestamp and the token, NOT the body, so the
- * token is what stops a captured signature being re-used for a different
- * payload; that is why a mismatched token has to fail (Mailgun's own docs make
- * the token single-use on their side).
+ * The signed material is the timestamp and the token, NOT the body. So a valid
+ * (timestamp, token, signature) triple authenticates ANY payload, and the token
+ * is the only thing that can tell two of them apart. Mailgun makes the token
+ * single-use on THEIR side, which says nothing about a forgery posted straight
+ * at us — so this verifier hands the token back as `replayToken` and the caller
+ * spends it through `WebhookReplayStore` (`mailgun-body-unsigned`). Without
+ * that, one captured block suppresses arbitrary addresses for a whole day.
  */
 export const mailgunVerifier: WebhookVerifier = {
   provider: 'mailgun',
@@ -51,6 +54,9 @@ export const mailgunVerifier: WebhookVerifier = {
     // Freshness AFTER the signature check: an unsigned timestamp is just a
     // number an attacker chose, so rejecting on it first would leak nothing and
     // prove nothing.
-    return timestampFresh(timestamp) ? { ok: true } : { ok: false, reason: 'STALE_TIMESTAMP' };
+    if (!timestampFresh(timestamp)) return { ok: false, reason: 'STALE_TIMESTAMP' };
+    // The body is unsigned, so the caller has to spend this token before acting
+    // on what it authenticates.
+    return { ok: true, replayToken: token };
   },
 };

@@ -20,6 +20,7 @@ import { EntitlementsService, FeatureKey } from '../../billing/entitlements.serv
 import { ChannelAdapterRegistry, ChannelRowLike } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { MailboxHealthService } from './mailbox-health.service';
+import { mergeConfigPublic } from './config-public.merge';
 import { assertEmailSecrets } from './email-config.util';
 import { emailInboundCallbackUrl } from './email-inbound-callback.util';
 import { NEW_CHANNEL_INBOUND_POLICY } from './inbound/inbound-policy';
@@ -417,36 +418,37 @@ export class ChannelsService {
       // number with `update(ws, id, { secrets, status: 'ACTIVE' })`.
       await this.assertExternalIdFree(existing.type, existing.externalId, existing.id);
     }
-    if (dto.configPublic !== undefined) {
-      /**
-       * MERGE, never replace.
-       *
-       * `configPublic` is a settings object to a tenant, but it is also where
-       * the machines keep their place: `imapLastUid`/`imapUidValidity`, the
-       * poison-pill counters `imapFailUid`/`imapFailCount`, the Sent
-       * reconciler's `imapSentLastUid`, and the `health` block the mailbox card
-       * reads. A settings save that posts only the keys the dialog knows about
-       * used to wipe every one of them — which resets the cursor, so the next
-       * tick reads the mailbox as a FIRST RUN and holds the automation on a
-       * week of live replies, and drops the backoff a dead credential earned.
-       *
-       * Merging costs the ability to DELETE a key from the client, which no
-       * caller does; `pendingAddress` below is removed explicitly, which is
-       * how a key that genuinely has to go is removed.
-       */
-      data.configPublic = {
-        ...((existing.configPublic as Record<string, unknown> | null) ?? {}),
-        ...dto.configPublic,
-      };
-    }
+    /**
+     * MERGE, never replace — and merged by the DATABASE, not here.
+     *
+     * `configPublic` is a settings object to a tenant, but it is also where
+     * the machines keep their place: `imapLastUid`/`imapUidValidity`, the
+     * poison-pill counters `imapFailUid`/`imapFailCount`, the Sent
+     * reconciler's `imapSentLastUid`, and the `health` block the mailbox card
+     * reads. A settings save that posts only the keys the dialog knows about
+     * used to wipe every one of them — which resets the cursor, so the next
+     * tick reads the mailbox as a FIRST RUN and holds the automation on a
+     * week of live replies, and drops the backoff a dead credential earned.
+     *
+     * Merging onto `existing` in JS fixed the wipe but not the race: `existing`
+     * was read at the top of this method, several awaits (and a credential
+     * probe) ago, and every one of those machine writers can commit inside
+     * that window. `mergeConfigPublic` hands Postgres the keys this save
+     * actually owns and lets it apply them to the row as it stands.
+     *
+     * Merging costs the ability to DELETE a key from the client, which no
+     * caller does; `pendingAddress` is removed explicitly through `drop`,
+     * which is how a key that genuinely has to go is removed.
+     */
+    const publicPatch: Record<string, unknown> = { ...(dto.configPublic ?? {}) };
+    const publicDrop: string[] = [];
+    let writePublic = dto.configPublic !== undefined;
     // The parked address travels WITH the identity write, so the card never
     // shows a mailbox that is both claimed and still waiting to be proven.
     if (existing.type === 'EMAIL' && identityWritten) {
-      const base = (data.configPublic ?? existing.configPublic ?? {}) as Record<string, unknown>;
-      const next = { ...base };
-      if (pendingAddress) next.pendingAddress = pendingAddress;
-      else delete next.pendingAddress;
-      data.configPublic = next;
+      writePublic = true;
+      if (pendingAddress) publicPatch.pendingAddress = pendingAddress;
+      else publicDrop.push('pendingAddress');
     }
     const secretsWritten = !!(
       (dto.secrets && Object.keys(dto.secrets).length) ||
@@ -473,7 +475,16 @@ export class ChannelsService {
       await this.assertSecrets(existing.type, merged);
       data.configSealed = this.seal(merged);
     }
-    const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
+    // A save that touches `configPublic` is two statements — the jsonb merge
+    // and the rest of the row — so they ride one transaction and the `update`
+    // reads the merged column back for the response. A save that does not (a
+    // rename, a status flip, an agent binding) stays the single write it was.
+    const c = writePublic
+      ? await this.prisma.$transaction(async (tx) => {
+          await mergeConfigPublic(tx, { id: existing.id, workspaceId }, publicPatch, publicDrop);
+          return tx.channel.update({ where: { id: existing.id }, data });
+        })
+      : await this.prisma.channel.update({ where: { id: existing.id }, data });
     if (!secretsWritten) return this.mask(c);
     // Re-prove ONLY on a credential rewrite. This is what closes the "rotated
     // password keeps reading READY" hole that workspace-readiness documents,
@@ -724,15 +735,10 @@ export class ChannelsService {
       throw new BadRequestException(result.message ?? 'İYS webhook kaydı başarısız');
     }
 
-    await this.prisma.channel.update({
-      where: { id: c.id },
-      data: {
-        configPublic: {
-          ...((c.configPublic as Record<string, unknown> | null) ?? {}),
-          iysWebhookRegistered: true,
-        },
-      },
-    });
+    // One key, merged by the database: `configPublic` also carries the
+    // machines' cursors and health block, and `c` was read before the İYS
+    // round-trip.
+    await mergeConfigPublic(this.prisma, { id: c.id, workspaceId: c.workspaceId }, { iysWebhookRegistered: true });
 
     return { ok: true, url };
   }

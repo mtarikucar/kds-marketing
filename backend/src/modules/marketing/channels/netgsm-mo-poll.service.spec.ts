@@ -57,6 +57,9 @@ describe('NetgsmMoPollService.poll', () => {
         findFirst: jest.fn().mockResolvedValue({ configPublic: null }),
         update: jest.fn().mockResolvedValue({}),
       },
+      // The recovery stamp: ONE `configPublic || $patch` statement, so it can
+      // only ever touch the key it names.
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
     registry = {
       has: jest.fn().mockReturnValue(true),
@@ -172,7 +175,7 @@ describe('NetgsmMoPollService.poll', () => {
         expect.objectContaining({ externalMessageId: 'netgsm-mo:42' }),
       );
       expect(out.ingested).toBe(0);
-      expect(prisma.channel.update).not.toHaveBeenCalled();
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
       // No recovery for this tick — dedupe warn (if any) must not be the
       // recovery warn; assert no "recovered" log was emitted.
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('recovered'));
@@ -199,18 +202,17 @@ describe('NetgsmMoPollService.poll', () => {
       );
       expect(out.ingested).toBe(1);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('recovered 1 message(s)'));
-      // configPublic write MERGES — the pre-existing useLegacySend key survives.
-      expect(prisma.channel.update).toHaveBeenCalledWith({
-        where: { id: 'ch-1' },
-        data: {
-          configPublic: {
-            useLegacySend: false,
-            lastMoPollRecovery: expect.any(String),
-          },
-        },
-      });
-      const stamped = new Date(prisma.channel.update.mock.calls[0][0].data.configPublic.lastMoPollRecovery);
-      expect(Number.isNaN(stamped.getTime())).toBe(false);
+      // The stamp NAMES one key and the database merges it, so the
+      // pre-existing useLegacySend — and a settings save committed since this
+      // tick read the row — survive by construction rather than by luck.
+      const stmt = prisma.$executeRaw.mock.calls[0][0];
+      expect(stmt.sql).toContain('"workspaceId"');
+      const patch = JSON.parse(
+        (stmt.values as unknown[]).find((v: any) => typeof v === 'string' && v.startsWith('{')) as string,
+      );
+      expect(Object.keys(patch)).toEqual(['lastMoPollRecovery']);
+      expect(Number.isNaN(new Date(patch.lastMoPollRecovery).getTime())).toBe(false);
+      expect(prisma.channel.update).not.toHaveBeenCalled();
     });
 
     it('falls back to a digest dedupe key (netgsm-mo-digest:<sha256>) when NetGSM supplies no id', async () => {

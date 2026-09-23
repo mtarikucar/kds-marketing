@@ -47,6 +47,29 @@ export const updateDocument = (
 export const sendDocument = (id: string): Promise<{ status: string; publicToken: string }> =>
   marketingApi.post(`/documents/${id}/send`).then((r) => r.data);
 
+/**
+ * Mint the signing link AND mail it to the document's contact.
+ *
+ * `sendDocument` only mints — it hands the token back to the CALLER, which is
+ * why the page could "send" an agreement nobody was ever told about. This is
+ * the route that puts the signing request in front of the customer. It mints
+ * first, so it works straight from DRAFT in one click.
+ *
+ * A delivery failure deliberately leaves the document SENT with a live link
+ * rather than rolling back: "Copy signing link" is still there as the manual
+ * path, and rolling back would invalidate a link that may already be copied.
+ */
+export const emailDocumentForSignature = (
+  id: string,
+): Promise<{
+  status: string;
+  publicToken: string;
+  sent: true;
+  to: string;
+  via: 'mailbox' | 'platform';
+  signUrl: string;
+}> => marketingApi.post(`/documents/${id}/email`).then((r) => r.data);
+
 export const voidDocument = (id: string): Promise<MarketingDocument> =>
   marketingApi.post(`/documents/${id}/void`).then((r) => r.data);
 

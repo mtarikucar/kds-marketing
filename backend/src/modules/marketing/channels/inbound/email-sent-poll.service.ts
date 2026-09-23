@@ -16,6 +16,8 @@ import {
 } from './inbound-item.service';
 import { InboundMessage } from '../channel-adapter.interface';
 import { imapConnectOptions, imapTarget } from '../imap-target';
+import { isMailboxBackedOff } from '../mailbox-health.service';
+import { mergeConfigPublic } from '../config-public.merge';
 import { stripQuotedReply, truncateHtmlQuote } from '../email-reply-text';
 import { classifyMail, isDaemonSender } from './mail-classify';
 import {
@@ -264,6 +266,16 @@ export class EmailSentPollService implements OnModuleInit {
     let ingested = 0;
     let mailboxes = 0;
     for (const channel of channels) {
+      // The same wait the INBOX poller and the IDLE hold honour. This is the
+      // third connection this module opens against every mailbox, and the one
+      // nobody is waiting on — a credential that has already been refused must
+      // not be retried from here either, or the tenant's account is locked out
+      // by a reconciliation job.
+      //
+      // The skip only, no health WRITE: the INBOX poller owns the receive
+      // lane's health block, and two writers on one JSON column is a
+      // read-modify-write race for no gain.
+      if (isMailboxBackedOff(channel.configPublic)) continue;
       try {
         const n = await this.pollChannel(channel);
         if (n !== null) {
@@ -798,9 +810,12 @@ export class EmailSentPollService implements OnModuleInit {
     return { uid, uidValidity, count: Number.isFinite(count) && count > 0 ? count : 0 };
   }
 
-  /** Re-reads the row first (scoped by workspace, as every channel write in
-   *  this module is) so a concurrent settings save — or the INBOX poller's own
-   *  cursor write — is not clobbered by a stale copy of configPublic. */
+  /** Writes ITS OWN KEYS, in one statement the database merges onto the row
+   *  (`configPublic || $patch`, workspace-scoped as every channel write in
+   *  this module is). The column is shared with the INBOX poller's cursor, the
+   *  mailbox health block and the tenant's settings save, and nothing
+   *  serializes those against this tick — so a read-modify-write of the whole
+   *  blob would silently roll one of them back. */
   private async writeCursor(
     channel: ChannelRow,
     uidValidity: string,
@@ -808,29 +823,15 @@ export class EmailSentPollService implements OnModuleInit {
     fail: FailState | null,
   ): Promise<void> {
     if (!uidValidity) return;
-    const fresh = await this.prisma.channel.findFirst({
-      where: { id: channel.id, workspaceId: channel.workspaceId },
-      select: { configPublic: true },
-    });
-    const pub =
-      fresh?.configPublic && typeof fresh.configPublic === 'object'
-        ? (fresh.configPublic as Record<string, unknown>)
-        : {};
-    await this.prisma.channel.update({
-      where: { id: channel.id },
-      data: {
-        configPublic: {
-          ...pub,
-          imapSentLastUid: lastUid,
-          imapSentUidValidity: uidValidity,
-          // Written as explicit nulls/zero rather than deleted, so a cleared
-          // counter is visible in the row instead of looking like a key nobody
-          // ever wrote.
-          imapSentFailUid: fail ? fail.uid : null,
-          imapSentFailUidValidity: fail ? fail.uidValidity : null,
-          imapSentFailCount: fail ? fail.count : 0,
-        } as Prisma.InputJsonValue,
-      },
+    await mergeConfigPublic(this.prisma, channel, {
+      imapSentLastUid: lastUid,
+      imapSentUidValidity: uidValidity,
+      // Written as explicit nulls/zero rather than deleted, so a cleared
+      // counter is visible in the row instead of looking like a key nobody
+      // ever wrote.
+      imapSentFailUid: fail ? fail.uid : null,
+      imapSentFailUidValidity: fail ? fail.uidValidity : null,
+      imapSentFailCount: fail ? fail.count : 0,
     });
   }
 }

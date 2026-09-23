@@ -63,6 +63,22 @@ export const en = {
   'booking.manageLine': 'Manage or cancel your booking: {{url}}',
   'booking.fromBusiness': 'Sent by {{business}}.',
 
+  // ── The manage/cancel page the booking mail's link opens ──────────────────
+  // Served by `public-site.controller.ts manageBooking()`. The link sits in
+  // the mail these same dictionaries wrote, so the page has to answer in the
+  // same language — a customer who was written to in English must not land on
+  // a Turkish cancel button.
+  'booking.manage.title': 'Booking',
+  'booking.manage.join': 'Join meeting',
+  'booking.manage.cancelled': 'This booking has been cancelled.',
+  'booking.manage.rebook': 'Pick a new time',
+  'booking.manage.cancel': 'Cancel booking',
+  'booking.manage.reschedule': 'Change time',
+  'booking.manage.cancelDone': 'Your booking has been cancelled.',
+  'booking.manage.cancelFailed': 'We could not cancel that. Please try again.',
+  'booking.manage.notFound.heading': 'Booking not found',
+  'booking.manage.notFound.body': 'This link is no longer valid.',
+
   // ── Quotes, invoices, receipts, e-sign ────────────────────────────────────
   'document.greeting': 'Hello {{name}},',
   'document.signoff': '{{business}}',

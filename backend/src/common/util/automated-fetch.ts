@@ -38,9 +38,18 @@ export interface AutomatedFetchRequest {
 /**
  * Honest machines announce themselves. Kept as a weak signal on purpose — a
  * miss here costs nothing, because the header signals carry the weight.
+ *
+ * `bot` is the one alternative that must be word-bounded, and `bot/<version>`
+ * covers the `AhrefsBot/7.0` naming every real crawler uses. A bare substring
+ * fires on a Cubot phone's User-Agent, and this verdict outranks the sibling
+ * classifier (`machineHitReason` tests `hit.automated` before its own lists),
+ * so a false positive here costs that recipient every click-driven automation,
+ * their click and their open — permanently and with nothing on screen to say
+ * why. The named bots below (slackbot, twitterbot, telegrambot, discordbot)
+ * are listed in full for exactly that reason.
  */
 const BOT_UA =
-  /(bot|crawler|spider|preview|scan|monitor|curl|wget|python-requests|go-http-client|okhttp|headlesschrome|slackbot|twitterbot|facebookexternalhit|whatsapp|telegrambot|discordbot|bingpreview|msoffice|mimecast|proofpoint)/i;
+  /(\b(bot|bots)\b|bot\/\d|crawler|spider|preview|scan|monitor|curl|wget|python-requests|go-http-client|okhttp|headlesschrome|slackbot|twitterbot|facebookexternalhit|whatsapp|telegrambot|discordbot|bingpreview|msoffice|mimecast|proofpoint)/i;
 
 /** A UA is attacker-supplied text; never hand an unbounded string to a regex. */
 const UA_SCAN_LIMIT = 512;

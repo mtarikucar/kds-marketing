@@ -4,7 +4,7 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../../common/scheduling/advisory-lock';
-import { EspFeedbackService, FeedbackEvent } from '../esp-feedback.service';
+import { SuppressionService } from '../../compliance/suppression.service';
 import { normalizeMessageId } from '../email-message-id';
 import { ImapTarget, ImapTargetRefusal, imapConnectOptions, imapTarget } from '../imap-target';
 import {
@@ -17,6 +17,13 @@ import {
 import { MAX_SOURCE_BYTES, rawMailFromParsed } from './inbound-mail.types';
 
 const JOB_NAME = 'platform-bounce-poll';
+
+/** Addresses for a log line — bounded, so one forged report cannot flood it. */
+function addressList(targets: readonly SuppressibleRecipient[]): string {
+  const shown = targets.slice(0, 5).map((t) => t.address);
+  const rest = targets.length - shown.length;
+  return rest > 0 ? `${shown.join(', ')} (+${rest} more)` : shown.join(', ');
+}
 
 /** Blast-radius bounds, not correctness mechanisms — every write below is
  *  idempotent, which is what makes a re-read harmless. */
@@ -38,6 +45,17 @@ const REPORT_NODE_TYPES = new Set([
   'message/disposition-notification',
 ]);
 
+/**
+ * The returned-headers part of an oversize report, which has to come down with
+ * it — it is where `Original-Message-ID` hides when the reporting MTA did not
+ * write the field, and the id is now the AUTHORISATION for the suppression
+ * rather than a bonus. Without this an oversize bounce could never be
+ * attributed and would therefore never suppress. `message/rfc822` is excluded
+ * on purpose: it is the whole returned mail, which is exactly the megabytes the
+ * oversize path exists to avoid downloading.
+ */
+const RETURNED_HEADER_NODE_TYPES = new Set(['message/rfc822-headers', 'text/rfc822-headers']);
+
 /** What one tick did — the shape the ops snapshot and the tests both read. */
 export interface PlatformBounceTick {
   /** False when the platform mailbox is not configured: the cron is inert. */
@@ -50,8 +68,23 @@ export interface PlatformBounceTick {
   suppressed: number;
   /** Reports stamped back onto the ledger row they belong to. */
   attributed: number;
+  /**
+   * Reports that named an address but could not be proved to be about mail we
+   * sent TO that address, so nothing was written. Never silent: each one is a
+   * `warn`, because a genuine bounce landing here is the failure mode this
+   * gate can cause and it has to be visible.
+   */
+  rejected: number;
   /** Items abandoned after `MAX_ATTEMPTS`, loudly. */
   parked: number;
+}
+
+/** The ledger row a report has to resolve to before it may suppress anything. */
+interface OriginRow {
+  id: string;
+  workspaceId: string;
+  toAddressNorm: string;
+  campaignRecipientId: string | null;
 }
 
 /**
@@ -87,10 +120,14 @@ export interface PlatformBounceTick {
  * workspace-less cursor store in the schema, and this package may not add a
  * table (the migration request is written up in the package handoff). That is
  * affordable ONLY because every write here is guarded to a no-op on a repeat:
- * `EspFeedbackService.suppress` filters on `emailBouncedAt: null` /
- * `emailOptOut: false`, and both attribution writes filter on the timestamp
- * they are about to set. A restart therefore re-reads at most
- * `FIRST_RUN_LOOKBACK_MS` of mail and changes nothing it already changed.
+ * `SuppressionService.suppress` upserts its `ContactSuppression` row on a
+ * composite key and projects only onto leads that do not carry the flag yet,
+ * and both attribution writes filter on the timestamp they are about to set. A
+ * restart therefore re-reads at most `FIRST_RUN_LOOKBACK_MS` of mail and
+ * changes nothing it already changed. (The one visible repeat is that a
+ * re-asserted suppression un-lifts a suppression an operator cleared inside
+ * that window — which is exactly what the previous writer's
+ * `emailBouncedAt: null` guard did too, since a CLEAR_BOUNCE nulls it.)
  *
  * What the in-process cursor still guarantees is the rule that matters: it
  * never advances past an item that failed. A throw breaks the tick where it
@@ -98,14 +135,44 @@ export interface PlatformBounceTick {
  * parked with a loud `error` — head-of-line blocking is the real risk of
  * stopping, and silence is the failure mode this whole programme removes.
  *
+ * ## A report is not a permission
+ *
+ * This mailbox is the publicly known `From` of every mail the platform sends,
+ * so ANYONE can put a message in it. Nothing in SMTP authenticates a delivery
+ * report: `From: MAILER-DAEMON@…` is free text, and an attacker sending from a
+ * domain they own passes SPF and DKIM, so `assessAuth` cannot gate this lane
+ * (it is recorded as a signal, never trusted as the answer).
+ *
+ * The one thing an outsider cannot fabricate is our own `MailLog.id`, which is
+ * a v4 uuid and is the local part of the deterministic Message-ID on every mail
+ * we send. So the gate is:
+ *
+ * 1. The report must carry an `Original-Message-ID` (or return our headers)
+ *    that resolves to a real `MailLog` row. No row, no write.
+ * 2. The address it asks us to suppress must equal that row's
+ *    `toAddressNorm`. Every recipient of one of our mails holds a valid
+ *    Message-ID, so attribution alone is not authorisation: without this check
+ *    any lead who received a quote could forge a report quoting their own id
+ *    and silence somebody else. `singleRecipient` is `always`, so one row is
+ *    exactly one recipient and this is a one-to-one comparison — which also
+ *    bounds one report to at most one suppressed address.
+ *
+ * The cost is stated rather than hidden: `Original-Message-ID` is optional in
+ * RFC 3464, so the legacy prose-plus-`X-Failed-Recipients` NDRs that return
+ * neither the field nor our headers are now DROPPED, and the dead address they
+ * named stays mailable. That is the right trade against a writer with this
+ * blast radius, but every drop is a `warn` and a `rejected` count — silence is
+ * the failure mode this programme exists to remove.
+ *
  * ## Who writes the suppression
  *
- * `EspFeedbackService`, never a second writer. A platform bounce carries no
- * workspace — the report is about an address, and the mail could have been
- * sent for any tenant — and that service already owns the one written
- * cross-workspace exemption for exactly this fact. Attribution is the part
- * that DOES have a tenant, and it gets it from our own ledger row, never from
- * anything the reporting server chose.
+ * `SuppressionService`, scoped to the workspace of the resolved ledger row —
+ * the same writer the two tenant lanes already use. It writes the
+ * `ContactSuppression` audit row that tells the tenant WHY an address stopped
+ * receiving mail and gives them a lift path, and it cannot reach another
+ * tenant's leads. The global `EspFeedbackService` writer stays reachable only
+ * from the HMAC-verified ESP webhook, which keeps its cross-workspace
+ * arch-spec exemption pinned to one call site.
  *
  * ## Inert by default
  *
@@ -113,6 +180,9 @@ export interface PlatformBounceTick {
  * not know, and the cron no-ops after saying once what is missing. It does not
  * guess `imap.<whatever>`: a wrong host fails at login, every ten minutes,
  * against a server that counts the attempts.
+ *
+ * `PLATFORM_BOUNCE_POLL=off` stops it without a code deploy — an ops escape
+ * hatch for the day this lane misbehaves against a live mailbox.
  */
 @Injectable()
 export class PlatformBouncePollService {
@@ -127,7 +197,7 @@ export class PlatformBouncePollService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly esp: EspFeedbackService,
+    private readonly suppression: SuppressionService,
   ) {}
 
   /**
@@ -154,6 +224,7 @@ export class PlatformBouncePollService {
       reports: 0,
       suppressed: 0,
       attributed: 0,
+      rejected: 0,
       parked: 0,
     };
 
@@ -199,6 +270,14 @@ export class PlatformBouncePollService {
    * way.
    */
   private target(): ImapTarget | null {
+    // The ops stop button. Reading a live human's mailbox on a ten-minute cron
+    // is the kind of thing that has to be stoppable from the deploy settings,
+    // not from a branch.
+    if (/^(off|false|0|no)$/i.test(String(process.env.PLATFORM_BOUNCE_POLL ?? '').trim())) {
+      this.announceInert('PLATFORM_BOUNCE_POLL is off');
+      return null;
+    }
+
     // Shaped as a channel's secrets so the platform mailbox resolves through
     // the SAME rules a tenant's does — host table, port, implicit TLS.
     const resolved = imapTarget({
@@ -341,9 +420,36 @@ export class PlatformBouncePollService {
       return;
     }
 
-    await this.suppress(targets, uid);
-    tick.suppressed += targets.length;
-    if (await this.attribute(report, targets)) tick.attributed++;
+    // THE GATE. Anyone can put a message in this mailbox, so the report has to
+    // prove it is about a mail we sent, to the address it is asking us to
+    // suppress, before a single row is written. See the class doc.
+    const origin = await this.originOf(report);
+    if (!origin) {
+      tick.rejected++;
+      this.logger.warn(
+        `${JOB_NAME}: uid=${uid} is a ${report.kind} naming ${addressList(targets)} but does not ` +
+          `resolve to any mail this deployment sent ` +
+          `(Original-Message-ID=${(report.originalMessageId ?? 'absent').slice(0, 200)}) — nothing suppressed`,
+      );
+      return;
+    }
+
+    // One ledger row is exactly one recipient (`singleRecipient: 'always'`), so
+    // this is a one-to-one match and caps the report at one address.
+    const mine = targets.filter((t) => t.address === origin.toAddressNorm);
+    const foreign = targets.filter((t) => t.address !== origin.toAddressNorm);
+    if (foreign.length) {
+      tick.rejected++;
+      this.logger.warn(
+        `${JOB_NAME}: uid=${uid} quotes mail ${origin.id} (sent to ${origin.toAddressNorm}) but reports ` +
+          `${addressList(foreign)} — those addresses were NOT suppressed`,
+      );
+    }
+    if (!mine.length) return;
+
+    await this.suppress(origin, mine, uid);
+    tick.suppressed += mine.length;
+    if (await this.attribute(origin, mine)) tick.attributed++;
   }
 
   /** The whole message, for anything that fits under the source cap. */
@@ -384,19 +490,25 @@ export class PlatformBouncePollService {
     head: any,
     itemKey: string,
   ): Promise<DeliveryReportSource | null> {
-    const node = this.findReportNode(head.bodyStructure);
+    const node = this.findNode(head.bodyStructure, REPORT_NODE_TYPES);
     if (!node) {
       this.logger.debug(`${JOB_NAME}: uid=${uid} is oversize and carries no report part — skipped`);
       return null;
     }
+    // Comes down in the SAME fetch: it is where `Original-Message-ID` hides,
+    // and without the id an oversize bounce can no longer suppress anything.
+    const returned = this.findNode(head.bodyStructure, RETURNED_HEADER_NODE_TYPES);
 
+    const wanted = ['header', node.part, ...(returned ? [returned.part] : [])];
     const fetched: any = await (client as any).fetchOne(
       String(uid),
-      { uid: true, bodyParts: [node.part, 'header'] },
+      { uid: true, bodyParts: wanted },
       { uid: true },
     );
     const reportText = this.bodyPart(fetched, node.part);
     if (!reportText) return null;
+
+    const returnedText = returned ? this.bodyPart(fetched, returned.part) : null;
 
     const headerText = this.bodyPart(fetched, 'header') ?? '';
     const parsed = await simpleParser(headerText);
@@ -409,20 +521,23 @@ export class PlatformBouncePollService {
     });
     return {
       ...mail,
-      reportParts: [{ contentType: node.type, text: reportText }],
+      reportParts: [
+        { contentType: node.type, text: reportText },
+        ...(returned && returnedText ? [{ contentType: returned.type, text: returnedText }] : []),
+      ],
       // The human preamble is not downloaded, so the `text` fallback the
       // parser uses for a folded delivery-status has nothing to offer here.
       text: null,
     };
   }
 
-  /** Depth-first walk of a BODYSTRUCTURE for the first report sub-part. */
-  private findReportNode(node: any): { part: string; type: string } | null {
+  /** Depth-first walk of a BODYSTRUCTURE for the first sub-part of a kind. */
+  private findNode(node: any, types: ReadonlySet<string>): { part: string; type: string } | null {
     if (!node || typeof node !== 'object') return null;
     const type = String(node.type ?? '').toLowerCase();
-    if (node.part && REPORT_NODE_TYPES.has(type)) return { part: String(node.part), type };
+    if (node.part && types.has(type)) return { part: String(node.part), type };
     for (const child of Array.isArray(node.childNodes) ? node.childNodes : []) {
-      const hit = this.findReportNode(child);
+      const hit = this.findNode(child, types);
       if (hit) return hit;
     }
     return null;
@@ -450,49 +565,60 @@ export class PlatformBouncePollService {
   // ── the two writes ────────────────────────────────────────────────────────
 
   /**
-   * Hand the addresses to the ONE suppression writer.
+   * Which mail this report is about — and therefore whether it may write.
    *
-   * A write that failed THROWS, so the cursor does not move past this item and
+   * The hop is `Original-Message-ID` → `MailLog.id`, and it works because the
+   * gateway's Message-ID is deterministic: its local part IS the ledger row's
+   * id (`newMessageId(row.id, …)`), a v4 uuid nobody outside can guess. The
+   * lookup is id-keyed rather than a cross-workspace scan, and the workspace
+   * every write below is scoped by comes from OUR row, never from the report.
+   */
+  private async originOf(report: DeliveryReport): Promise<OriginRow | null> {
+    const id = this.mailLogIdOf(report.originalMessageId);
+    if (!id) return null;
+
+    return this.prisma.mailLog.findUnique({
+      where: { id },
+      // `toAddressNorm` is the authorisation half: a report may only speak
+      // about the address the mail it quotes was actually sent to.
+      select: { id: true, workspaceId: true, toAddressNorm: true, campaignRecipientId: true },
+    });
+  }
+
+  /**
+   * Hand the address to the WORKSPACE-scoped suppression writer.
+   *
+   * `SuppressionService` also writes the `ContactSuppression` audit row, so the
+   * tenant can see why the address stopped receiving mail and can lift it. A
+   * write that failed THROWS, so the cursor does not move past this item and
    * the next tick reads it again. Losing a bounce is losing the only signal
    * that an address is dead.
    */
-  private async suppress(targets: SuppressibleRecipient[], uid: number): Promise<void> {
-    const events: FeedbackEvent[] = targets.map((t) => ({
-      email: t.address,
+  private async suppress(
+    origin: OriginRow,
+    targets: SuppressibleRecipient[],
+    uid: number,
+  ): Promise<void> {
+    for (const t of targets) {
       // A complaint is the PERSON refusing marketing; a hard bounce is an
-      // address that does not exist. `EspFeedbackService` writes them
-      // differently on purpose (`esp-complaint-crosstenant`).
-      kind: t.reason === 'COMPLAINT' ? 'complaint' : 'bounce',
-    }));
-
-    const outcome = await this.esp.suppress(events);
-    if (outcome.failed > 0) {
-      throw new Error(`${outcome.failed} suppression write(s) failed for uid=${uid}`);
+      // address that does not exist. The two reasons ride different gates in
+      // `GATE_MATRIX` on purpose (`esp-complaint-crosstenant`).
+      await this.suppression.suppress(origin.workspaceId, t.address, 'EMAIL', t.reason, {
+        source: 'dsn',
+        note:
+          [`platform bounce uid=${uid}`, t.status, t.diagnostic].filter(Boolean).join(' ').slice(0, 300) ||
+          null,
+      });
     }
   }
 
   /**
-   * Stamp the bounce onto the ledger row it belongs to, when it can be found.
+   * Stamp the bounce onto the ledger row it came from.
    *
-   * The hop is `Original-Message-ID` → `MailLog.id` → `CampaignRecipient`, and
-   * it works because the gateway's Message-ID is deterministic: its local part
-   * IS the ledger row's id (`newMessageId(row.id, …)`). So the lookup is
-   * id-keyed rather than a cross-workspace scan, and the workspace every
-   * follow-up write is scoped by comes from OUR row, never from the report.
-   *
-   * A miss is fine and common. Address-level suppression is what stops future
-   * sends; this is the bonus that makes one campaign row read BOUNCED.
+   * Address-level suppression is what stops future sends; this is what makes
+   * the one campaign row read BOUNCED.
    */
-  private async attribute(report: DeliveryReport, targets: SuppressibleRecipient[]): Promise<boolean> {
-    const id = this.mailLogIdOf(report.originalMessageId);
-    if (!id) return false;
-
-    const row = await this.prisma.mailLog.findUnique({
-      where: { id },
-      select: { id: true, workspaceId: true, campaignRecipientId: true },
-    });
-    if (!row) return false;
-
+  private async attribute(row: OriginRow, targets: SuppressibleRecipient[]): Promise<boolean> {
     // One report is one fact: a hard bounce anywhere in it outranks a
     // complaint, because a dead address is the stronger statement.
     const complaint = targets.every((t) => t.reason === 'COMPLAINT');

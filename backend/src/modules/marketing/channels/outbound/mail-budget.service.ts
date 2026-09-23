@@ -260,19 +260,33 @@ export class MailBudgetService {
       );
   }
 
-  /** Floored decrement — a refund may never drive a counter below zero, or the
-   *  remaining budget would overstate itself for the rest of the day. */
+  /**
+   * Floored decrement — a refund may never drive a counter below zero, or the
+   * remaining budget would overstate itself for the rest of the day.
+   *
+   * ONE guarded statement, never a read-then-write. `__platform__` is a single
+   * row shared by every tenant on the relay, and refunds cluster exactly when
+   * that relay is in trouble; subtracting in JS and writing the absolute value
+   * back discards whatever committed in between. Losing an increment leaves
+   * the counter low, so the platform cap admits past its limit and the
+   * operator console under-reports the blast it exists to reveal; losing a
+   * refund leaves it high, and other tenants' transactional mail is deferred
+   * to midnight on a DAILY_CAP that was never really reached.
+   *
+   * The `WHERE` gives the old "no row → no-op" for free, `GREATEST` keeps the
+   * floor, and a single UPDATE takes the row lock for its own duration — so
+   * this needs neither a transaction nor the reserve's advisory lock (which
+   * would serialize every refund on the platform behind every reserve).
+   */
   private async giveBack(workspaceId: string, periodKey: string, count: number): Promise<void> {
     try {
-      const row = await this.prisma.usageCounter.findUnique({
-        where: { workspaceId_metric_periodKey: { workspaceId, metric: MAIL_DAILY_METRIC, periodKey } },
-        select: { value: true },
-      });
-      if (!row) return; // nothing spent today → nothing to give back
-      await this.prisma.usageCounter.update({
-        where: { workspaceId_metric_periodKey: { workspaceId, metric: MAIL_DAILY_METRIC, periodKey } },
-        data: { value: Math.max(0, (row.value ?? 0) - count) },
-      });
+      await this.prisma.$executeRaw`
+        UPDATE "usage_counters"
+           SET "value" = GREATEST(0, "value" - ${count})
+         WHERE "workspaceId" = ${workspaceId}
+           AND "metric" = ${MAIL_DAILY_METRIC}
+           AND "periodKey" = ${periodKey}
+      `;
     } catch (e: any) {
       this.logger.warn(`daily budget refund failed (workspace=${workspaceId}): ${e?.message ?? e}`);
     }

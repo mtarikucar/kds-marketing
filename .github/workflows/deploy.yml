@@ -222,6 +222,35 @@ jobs:
           # about a dead address ever reaches the suppression list and the
           # same address is mailed again next campaign.
           ESP_FEEDBACK_SECRET: ${{ secrets.ESP_FEEDBACK_SECRET }}
+          # The SAME feed, per real provider. `POST /api/public/esp/feedback/:provider`
+          # picks its verifier from the URL and each one is dark until ITS key is
+          # here — the generic HMAC above is a shape no ESP actually produces.
+          # Forwarded even though none is adopted today: an operator who pastes
+          # SendGrid's key into Secrets and points the Signed Event Webhook at us
+          # would otherwise get 401 on every event forever, because the heredoc
+          # below is what builds .env.production from scratch on each release.
+          # Empty renders `KEY=`, which every verifier reads as NOT_CONFIGURED —
+          # the correct off state, and free for anyone who never adopts an ESP.
+          #
+          # SENDGRID_EVENT_PUBLIC_KEY really is public (it only VERIFIES; nothing
+          # we hold can mint an event) but keeps the `secrets.` home its _KEY name
+          # asks for. POSTMARK_WEBHOOK_USER is half of a basic-auth pair and
+          # belongs beside its password in Secrets despite the suffix-less name —
+          # the same exemption the mail-client-id block above documents.
+          SENDGRID_EVENT_PUBLIC_KEY: ${{ secrets.SENDGRID_EVENT_PUBLIC_KEY }}
+          MAILGUN_WEBHOOK_SIGNING_KEY: ${{ secrets.MAILGUN_WEBHOOK_SIGNING_KEY }}
+          POSTMARK_WEBHOOK_USER: ${{ secrets.POSTMARK_WEBHOOK_USER }}
+          POSTMARK_WEBHOOK_PASSWORD: ${{ secrets.POSTMARK_WEBHOOK_PASSWORD }}
+          # Postmark's OPTIONAL egress allow-list, comma separated. A Variable,
+          # not a Secret: it is a published IP range and an operator has to be
+          # able to see and edit it when Postmark moves one. Unset = unenforced,
+          # which is deliberate — a stale list drops every bounce silently.
+          POSTMARK_WEBHOOK_IPS: ${{ vars.POSTMARK_WEBHOOK_IPS }}
+          # Kill switch for the cron that reads the PLATFORM mailbox (EMAIL_USER)
+          # for the bounces of platform mail. Empty = on, which is the intended
+          # state. Set it to `off` to stop the poller touching a live human's
+          # INBOX without waiting for a code deploy.
+          PLATFORM_BOUNCE_POLL: ${{ vars.PLATFORM_BOUNCE_POLL }}
           # Platform DKIM. BOTH halves or nothing is signed — a half-configured
           # deploy stays byte-identical to an unsigned one (email.service.ts
           # platformDkim()). The selector is the public DNS label, so a repo
@@ -400,6 +429,16 @@ jobs:
           # Bounce/complaint feed HMAC; empty = the feed 401s and nothing is
           # ever suppressed from a delivery report.
           ESP_FEEDBACK_SECRET=${ESP_FEEDBACK_SECRET}
+          # Per-provider feedback credentials for /esp/feedback/:provider; empty
+          # = that provider's verifier answers NOT_CONFIGURED and its events 401.
+          # POSTMARK_WEBHOOK_IPS is the optional allow-list; empty = unenforced.
+          SENDGRID_EVENT_PUBLIC_KEY=${SENDGRID_EVENT_PUBLIC_KEY}
+          MAILGUN_WEBHOOK_SIGNING_KEY=${MAILGUN_WEBHOOK_SIGNING_KEY}
+          POSTMARK_WEBHOOK_USER=${POSTMARK_WEBHOOK_USER}
+          POSTMARK_WEBHOOK_PASSWORD=${POSTMARK_WEBHOOK_PASSWORD}
+          POSTMARK_WEBHOOK_IPS=${POSTMARK_WEBHOOK_IPS}
+          # Platform-bounce cron kill switch; empty = the poller runs.
+          PLATFORM_BOUNCE_POLL=${PLATFORM_BOUNCE_POLL}
           # Platform DKIM (both halves or unsigned). Rendered here, like
           # EMAIL_INBOUND_SECRET and unlike EMAIL_HOST/USER/FROM/PASSWORD, so
           # the key travels with the deploy instead of being hand-placed on the

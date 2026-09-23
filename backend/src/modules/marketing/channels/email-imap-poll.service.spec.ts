@@ -56,6 +56,9 @@ jest.mock('imapflow', () => ({
 
 import { EmailImapPollService } from './email-imap-poll.service';
 import { EmailChannelAdapter } from './adapters/email.adapter';
+// The real detector, not a restatement of it: what makes a leaked quote
+// expensive is that OUR OWN footer reads as the customer opting out.
+import { detectOptOut } from './inbound/optout-keywords';
 
 const WS = 'ws-1';
 const CH_ID = 'ch-1';
@@ -95,12 +98,42 @@ function headerBlockOf(source: string): string {
   return end < 0 ? source : source.slice(0, end + 4);
 }
 
+/** The receive-lane health writer, recording what the sweep decided. Optional
+ *  in the service, so a test that does not care simply leaves it out. */
+function healthMock() {
+  return {
+    recordOk: jest.fn().mockResolvedValue(undefined),
+    recordFailure: jest.fn().mockResolvedValue(undefined),
+    recordBackoff: jest
+      .fn()
+      .mockResolvedValue({ failCount: 1, backoffUntil: new Date(Date.now() + 60_000) }),
+  };
+}
+
+/**
+ * The `configPublic` PATCH a cursor write hands the database.
+ *
+ * The write is one `configPublic || $patch` statement, so the keys it names
+ * are the only ones it can touch — the Sent reconciler's cursor, the health
+ * block and the tenant's settings all live in the same column and are written
+ * by things this tick is not serialized against.
+ */
+function cursorPatch(prisma: any, index = 0): any {
+  const calls = prisma.$executeRaw.mock.calls;
+  const call = index < 0 ? calls.at(index) : calls[index];
+  const json = (call[0].values as unknown[]).find(
+    (v) => typeof v === 'string' && (v as string).startsWith('{'),
+  );
+  return JSON.parse(json as string);
+}
+
 function build(
   over: {
     secrets?: Record<string, any>;
     configPublic?: any;
     channels?: any[];
     items?: any;
+    health?: any;
   } = {},
 ) {
   const secrets = over.secrets ?? GODADDY;
@@ -127,6 +160,10 @@ function build(
     mailLog: { findFirst: jest.fn().mockResolvedValue(null) },
     contactIdentity: { findFirst: jest.fn().mockResolvedValue(null) },
     lead: { findFirst: jest.fn().mockResolvedValue(null) },
+    // The cursor write: ONE `configPublic || $patch` statement, so the keys it
+    // names are the only ones it can touch. (`withAdvisoryLock` uses
+    // `$queryRaw`, so this mock sees cursor writes and nothing else.)
+    $executeRaw: jest.fn().mockResolvedValue(1),
   };
   const registry: any = {
     has: jest.fn().mockReturnValue(true),
@@ -143,13 +180,15 @@ function build(
   };
   const ingress: any = { ingest: jest.fn().mockResolvedValue({ deduped: false }) };
   const suppression: any = { suppress: jest.fn().mockResolvedValue(undefined) };
+  const health = over.health;
   return {
     prisma,
     registry,
     ingress,
     suppression,
     items: over.items,
-    svc: new EmailImapPollService(prisma, registry, ingress, suppression, over.items),
+    health,
+    svc: new EmailImapPollService(prisma, registry, ingress, suppression, over.items, health),
   };
 }
 
@@ -340,27 +379,40 @@ describe('EmailImapPollService — the cursor', () => {
     serveOne(rfc822({ 'Auto-Submitted': 'auto-replied' }));
     await svc.poll();
     expect(ingress.ingest).not.toHaveBeenCalled();
-    expect(prisma.channel.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: { configPublic: expect.objectContaining({ imapLastUid: 91, imapUidValidity: '42' }) },
-      }),
-    );
+    expect(cursorPatch(prisma)).toMatchObject({ imapLastUid: 91, imapUidValidity: '42' });
   });
 
-  it('preserves the rest of configPublic when it writes', async () => {
+  it('writes its OWN keys and nothing else — the column has other writers', async () => {
+    // `configPublic` carries the Sent reconciler's cursor, the mailbox health
+    // block and the tenant's settings, and nothing serializes those against
+    // this tick. A read-modify-write of the whole blob would silently revert
+    // whichever of them committed while this tick held its copy, so the write
+    // names five keys and the database merges them onto the row as it stands.
     const { svc, prisma } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
     mockImap.search.mockResolvedValue([91]);
     serveOne(rfc822());
     await svc.poll();
-    expect(prisma.channel.update.mock.calls[0][0].data.configPublic).toMatchObject({ keepMe: true });
+
+    expect(Object.keys(cursorPatch(prisma)).sort()).toEqual([
+      'imapFailCount',
+      'imapFailUid',
+      'imapFailUidValidity',
+      'imapLastUid',
+      'imapUidValidity',
+    ]);
+    expect(prisma.channel.update).not.toHaveBeenCalled();
   });
 
-  it('re-reads the row workspace-scoped before writing the cursor', async () => {
+  it('writes the cursor scoped to the workspace, as every channel write is', async () => {
     const { svc, prisma } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+    mockImap.search.mockResolvedValue([91]);
+    serveOne(rfc822());
     await svc.poll();
-    expect(prisma.channel.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: CH_ID, workspaceId: WS } }),
-    );
+
+    const stmt = prisma.$executeRaw.mock.calls[0][0];
+    expect(stmt.sql).toContain('"workspaceId"');
+    expect(stmt.values).toContain(WS);
+    expect(stmt.values).toContain(CH_ID);
   });
 });
 
@@ -381,7 +433,7 @@ describe('EmailImapPollService — a throw must not lose the mail', () => {
 
     await svc.poll();
 
-    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
+    const written = cursorPatch(prisma);
     expect(written.imapLastUid).toBe(90);
     // and it STOPS: draining on would leave 91 behind a cursor that has moved.
     expect(ingress.ingest).toHaveBeenCalledTimes(1);
@@ -395,7 +447,7 @@ describe('EmailImapPollService — a throw must not lose the mail', () => {
 
     await svc.poll();
 
-    expect(prisma.channel.update.mock.calls[0][0].data.configPublic).toMatchObject({
+    expect(cursorPatch(prisma)).toMatchObject({
       imapFailUid: 91,
       imapFailUidValidity: '42',
       imapFailCount: 1,
@@ -414,7 +466,7 @@ describe('EmailImapPollService — a throw must not lose the mail', () => {
 
     await svc.poll();
 
-    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
+    const written = cursorPatch(prisma);
     expect(written.imapLastUid).toBe(92);
     expect(written.imapFailUid).toBeNull();
     expect(written.imapFailCount).toBeNull();
@@ -431,7 +483,7 @@ describe('EmailImapPollService — a throw must not lose the mail', () => {
 
     await svc.poll();
 
-    expect(prisma.channel.update.mock.calls[0][0].data.configPublic).toMatchObject({
+    expect(cursorPatch(prisma)).toMatchObject({
       imapLastUid: 91,
       imapFailUid: null,
       imapFailCount: null,
@@ -449,7 +501,7 @@ describe('EmailImapPollService — a throw must not lose the mail', () => {
 
     await svc.poll();
 
-    expect(prisma.channel.update.mock.calls[0][0].data.configPublic).toMatchObject({
+    expect(cursorPatch(prisma)).toMatchObject({
       imapLastUid: 609,
       imapFailUid: 610,
     });
@@ -478,7 +530,7 @@ describe('EmailImapPollService — a throw must not lose the mail', () => {
 
     await svc.poll();
 
-    const written = prisma.channel.update.mock.calls[0][0].data.configPublic;
+    const written = cursorPatch(prisma);
     expect(written.imapLastUid).toBe(92);
     expect(written.imapFailCount).toBeNull();
     expect(ingress.ingest).not.toHaveBeenCalled();
@@ -636,7 +688,7 @@ describe('EmailImapPollService — how old is too old', () => {
     expect(ingress.ingest).not.toHaveBeenCalled();
     // The body was never pulled either — the date is known from the head fetch.
     expect(mockImap.fetchOne.mock.calls.some((c: any[]) => c[1]?.source)).toBe(false);
-    expect(prisma.channel.update.mock.calls[0][0].data.configPublic).toMatchObject({
+    expect(cursorPatch(prisma)).toMatchObject({
       imapLastUid: 91,
     });
   });
@@ -678,6 +730,91 @@ describe('EmailImapPollService — what reaches the conversation', () => {
     expect(msg.externalUserId).toBe('tarik42777@gmail.com');
     expect(msg.text).toContain('Evet, ilgileniyorum.');
     expect(msg.text).not.toContain('panelden gönderildi');
+  });
+
+  /**
+   * The HTML-only reply, which is where the quote stripping was still blind.
+   *
+   * `parsed.text` is synthesized by mailparser only for a root or alternative
+   * HTML part. A reply carrying an inline signature logo (`multipart/related`)
+   * or an attachment (`multipart/mixed`) with no `text/plain` gets neither, so
+   * `bodyOf` fell through to `flattenHtml` — and flattening DESTROYS the
+   * `<blockquote>` that identified the quote. The whole thread was ingested as
+   * the customer's own words.
+   *
+   * Two costs, and the second is the expensive one: the AI reads our previous
+   * message back as theirs and answers it, and the quoted BULK FOOTER — our
+   * own "Abonelikten çıkmak için" / "Unsubscribe" line — matches
+   * `detectOptOut`, so a customer who wrote "yes, send me a price" is
+   * suppressed for good.
+   */
+  const htmlOnlyReply = (contentType: string) =>
+    rfc822({
+      'Content-Type': `${contentType}; boundary="b"`,
+      __body: [
+        '--b',
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        '<div>Evet, ilgileniyorum, fiyat gönderin.</div>',
+        '<blockquote>',
+        '<p>Hummy Tummy sonbahar kampanyası</p>',
+        '<p>—<br>Abonelikten çıkmak için: https://jeeta.example/u/abc123</p>',
+        '</blockquote>',
+        '--b',
+        'Content-Type: image/png; name="imza.png"',
+        'Content-ID: <imza>',
+        'Content-Transfer-Encoding: base64',
+        '',
+        'iVBORw0KGgo=',
+        '--b--',
+        '',
+      ].join('\r\n'),
+    });
+
+  it.each(['multipart/related', 'multipart/mixed'])(
+    'trims the quote out of an HTML-only %s reply, footer and all',
+    async (contentType) => {
+      const { svc, ingress } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(htmlOnlyReply(contentType));
+      await svc.poll();
+
+      const text = ingress.ingest.mock.calls[0][1].text;
+      expect(text).toContain('Evet, ilgileniyorum');
+      expect(text).not.toContain('sonbahar kampanyası');
+      expect(text).not.toContain('Abonelikten çıkmak için');
+      // The reason it matters, asserted against the real detector rather than
+      // a restatement of it: this is the sentence that suppressed the customer.
+      expect(detectOptOut(text, { skipFirstLine: true }).matched).toBe(false);
+    },
+  );
+
+  it('trims the quote out of an HTML-only body read SELECTIVELY, too', async () => {
+    // The oversize branch downloads one part and flattens it itself. Same
+    // defect, different function — a reply with a 3 MB attachment quoting the
+    // campaign is exactly the shape that takes this path.
+    const { svc, ingress } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+    mockImap.search.mockResolvedValue([91]);
+    const html = [
+      '<div>Evet, ilgileniyorum, fiyat gönderin.</div>',
+      '<blockquote><p>Hummy Tummy sonbahar kampanyası</p>',
+      '<p>—<br>Abonelikten çıkmak için: https://jeeta.example/u/abc123</p></blockquote>',
+    ].join('\n');
+    serveOne(rfc822({ 'Content-Type': 'text/html; charset=utf-8', __body: html }), {
+      size: 6_000_000,
+      bodyStructure: {
+        type: 'multipart/mixed',
+        childNodes: [{ part: '1', type: 'text/html', size: 900 }, PDF_PART],
+      },
+    });
+    mockImap.download.mockResolvedValue({ content: Readable.from([Buffer.from(html, 'utf8')]) });
+
+    await svc.poll();
+
+    const text = ingress.ingest.mock.calls[0][1].text;
+    expect(text).toContain('Evet, ilgileniyorum');
+    expect(text).not.toContain('Abonelikten çıkmak için');
+    expect(detectOptOut(text, { skipFirstLine: true }).matched).toBe(false);
   });
 
   it('uses the bare Message-ID, so an ESP webhook would dedup against it', async () => {
@@ -889,7 +1026,7 @@ describe('EmailImapPollService — the ledger', () => {
       expect.anything(),
     );
     // A replay must never move the cursor: it is a second look at one item.
-    expect(prisma.channel.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('throws rather than fetch a stranger uid after the mailbox was renumbered', async () => {
@@ -934,6 +1071,122 @@ describe('EmailImapPollService — one bad mailbox', () => {
       return [];
     });
     await expect(svc.poll()).resolves.toEqual({ ingested: 0, mailboxes: 1 });
+  });
+});
+
+/**
+ * The retry storm, and the half of it that was never fixed.
+ *
+ * `EmailImapIdleService` classifies a refused password and writes a wait; this
+ * poller ran every five minutes regardless, so a tenant whose password rotated
+ * kept 288 rejected logins a day going at a host that locks accounts on
+ * exactly that — and because `imapTarget` falls back to the SMTP credential,
+ * the lockout takes outbound with it.
+ *
+ * The rule the whole block encodes: a WAIT is earned by the connection and by
+ * nothing else, and it applies only to the unattended sweep.
+ */
+describe('EmailImapPollService — a mailbox that is waiting out a backoff', () => {
+  const waiting = (mins: number) => ({
+    health: { backoffUntil: new Date(Date.now() + mins * 60_000).toISOString() },
+  });
+  const waited = () => ({
+    health: { backoffUntil: new Date(Date.now() - 60_000).toISOString() },
+  });
+
+  it('is not dialled at all while the wait is live', async () => {
+    const { svc } = build({ configPublic: waiting(30), health: healthMock() });
+    await expect(svc.poll()).resolves.toEqual({ ingested: 0, mailboxes: 0 });
+    expect(mockImap.connects).toBe(0);
+  });
+
+  it('is dialled again the moment the wait is over', async () => {
+    const { svc } = build({ configPublic: waited(), health: healthMock() });
+    await svc.poll();
+    expect(mockImap.connects).toBe(1);
+  });
+
+  it('counts as skipped, not failed, so one dead password cannot red the shared cron', async () => {
+    // `sweepHeartbeatError` reds the job only when EVERY attempted mailbox
+    // failed. A mailbox we deliberately did not attempt is not evidence of
+    // anything, and a cron that is red for reasons the operator cannot act on
+    // is a cron nobody looks at.
+    const { svc, prisma, health } = build({ configPublic: waiting(30), health: healthMock() });
+    prisma.$transaction = jest.fn(async (fn: any) =>
+      fn({ $queryRaw: async () => [{ locked: true }] }),
+    );
+    prisma.cronHeartbeat = { upsert: jest.fn().mockResolvedValue({}) };
+
+    await expect(svc.pollDue()).resolves.toBeUndefined();
+
+    const beat = prisma.cronHeartbeat.upsert.mock.calls[0][0];
+    expect(beat.create.lastError).toBeNull();
+    expect(beat.update.lastError).toBeNull();
+    // And a mailbox we never dialled is described as neither well nor ill.
+    expect(health.recordOk).not.toHaveBeenCalled();
+    expect(health.recordFailure).not.toHaveBeenCalled();
+    expect(health.recordBackoff).not.toHaveBeenCalled();
+  });
+
+  it('earns the wait itself when the credential is refused', async () => {
+    // Without this the poller could honour a wait it never writes: only the
+    // IDLE hold wrote one, so a deployment whose server has no IDLE support
+    // would hammer a dead password forever.
+    const { svc, health } = build({ health: healthMock() });
+    mockImap.connectThrows = Object.assign(new Error('Invalid credentials (Failure)'), {
+      authenticationFailed: true,
+    });
+    await svc.poll();
+    expect(health.recordBackoff).toHaveBeenCalledWith(
+      { id: CH_ID, workspaceId: WS },
+      expect.objectContaining({ reason: 'AUTH_FAILED', authFailure: true }),
+    );
+    // And the card says what actually happened, not a generic poll failure.
+    expect(health.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('calls a refused socket a connect failure, not a bad password', async () => {
+    const { svc, health } = build({ health: healthMock() });
+    mockImap.connectThrows = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+    });
+    await svc.poll();
+    expect(health.recordBackoff).toHaveBeenCalledWith(
+      { id: CH_ID, workspaceId: WS },
+      expect.objectContaining({ reason: 'CONNECT_FAILED', authFailure: false }),
+    );
+  });
+
+  it('does NOT earn a wait for a failure that came after the login', async () => {
+    // A Prisma blip writing the cursor, or a mailbox lock the server refused,
+    // is a transient of ours. Charging it a 1–60 minute wait would silence the
+    // safety-net poll for a mailbox whose credentials are perfectly fine —
+    // health state must never be the thing that stops mail arriving.
+    const { svc, health } = build({ health: healthMock() });
+    mockImap.search.mockRejectedValue(new Error('P2024: connection pool timeout'));
+    await svc.poll();
+    expect(health.recordBackoff).not.toHaveBeenCalled();
+    expect(health.recordFailure).toHaveBeenCalledWith(
+      { id: CH_ID, workspaceId: WS },
+      'receive',
+      expect.objectContaining({ reason: 'POLL_FAILED' }),
+    );
+  });
+
+  it('still fetches on demand: an operator asking for this mailbox NOW is answered', async () => {
+    // The wait exists to stop the unattended sweep. `pollOne` is a person, or
+    // an IDLE announcement off a socket that is demonstrably alive.
+    const { svc, prisma } = build({ health: healthMock() });
+    prisma.channel.findFirst.mockResolvedValue({
+      id: CH_ID,
+      workspaceId: WS,
+      type: 'EMAIL',
+      externalId: OWN,
+      configSealed: 'sealed',
+      configPublic: waiting(30),
+    });
+    await expect(svc.pollOne(WS, CH_ID)).resolves.toBe(0);
+    expect(mockImap.connects).toBe(1);
   });
 });
 
@@ -1051,10 +1304,20 @@ describe('EmailImapPollService — a bounce in the tenant mailbox', () => {
       __body: DSN_BODY.replace('5.1.1', status),
     });
 
+  /** The workspace really did mail this address — what a genuine DSN reports on. */
+  function weMailed(prisma: any, address: string) {
+    prisma.mailLog.findFirst.mockImplementation(async (args: any) => {
+      const where = args?.where ?? {};
+      const wanted = (where.OR ?? [where]).some((c: any) => c?.toAddressNorm === address);
+      return wanted ? { id: 'ml-1' } : null;
+    });
+  }
+
   it('suppresses the address a 5.x.x report names — the only live bounce source we have', async () => {
-    const { svc, suppression, ingress } = build({
+    const { svc, suppression, ingress, prisma } = build({
       configPublic: { imapLastUid: 90, imapUidValidity: '42' },
     });
+    weMailed(prisma, 'yok@musteri.com');
     mockImap.search.mockResolvedValue([91]);
     serveOne(dsn('5.1.1'));
     await svc.poll();
@@ -1077,16 +1340,119 @@ describe('EmailImapPollService — a bounce in the tenant mailbox', () => {
     expect(suppression.suppress).not.toHaveBeenCalled();
   });
 
+  /**
+   * A forged report is the whole reason provenance exists.
+   *
+   * The tenant's mailbox address is on their website, and classification is
+   * decided entirely by content the sender writes. Without a check that the
+   * workspace ever mailed the named address, one email to that mailbox
+   * suppresses anybody the sender chooses — their biggest customer, silently,
+   * with a ledger row that says the address hard-bounced.
+   */
+  describe('a forged report', () => {
+    it('suppresses nobody when the workspace never mailed the named address', async () => {
+      const { svc, suppression, prisma } = build({
+        configPublic: { imapLastUid: 90, imapUidValidity: '42' },
+      });
+      // The default mock already answers "never heard of them".
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(dsn('5.1.1'));
+      await svc.poll();
+      expect(suppression.suppress).not.toHaveBeenCalled();
+      expect(prisma.mailLog.findFirst).toHaveBeenCalled();
+    });
+
+    it('is not fooled by the bare X-Failed-Recipients shape', async () => {
+      // One header on an ordinary, correctly-authenticated message from the
+      // attacker's own domain is enough to classify as a bounce.
+      const { svc, suppression } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(
+        rfc822({
+          From: 'Rakip <satis@rakip.com>',
+          Subject: 'merhaba',
+          'X-Failed-Recipients': 'patron@buyukmusteri.com',
+          __body: 'hi',
+        }),
+      );
+      await svc.poll();
+      expect(suppression.suppress).not.toHaveBeenCalled();
+    });
+
+    it('is not fooled by a hand-typed multipart/report either', async () => {
+      // The report MIME structure is plain text an attacker writes, so
+      // demoting only the legacy header shape would move the attack sideways.
+      const { svc, suppression } = build({ configPublic: { imapLastUid: 90, imapUidValidity: '42' } });
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(
+        rfc822({
+          From: 'Rakip <mailer-daemon@rakip.com>',
+          Subject: 'Undelivered Mail Returned to Sender',
+          'Content-Type': 'multipart/report; report-type=delivery-status; boundary="b"',
+          __body: DSN_BODY.replace('yok@musteri.com', 'patron@buyukmusteri.com'),
+        }),
+      );
+      await svc.poll();
+      expect(suppression.suppress).not.toHaveBeenCalled();
+    });
+
+    it('suppresses only the addresses this workspace actually mailed', async () => {
+      const { svc, suppression, prisma } = build({
+        configPublic: { imapLastUid: 90, imapUidValidity: '42' },
+      });
+      weMailed(prisma, 'yok@musteri.com');
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(
+        rfc822({
+          From: 'Mail Delivery System <MAILER-DAEMON@secureserver.net>',
+          Subject: 'Undelivered Mail Returned to Sender',
+          'X-Failed-Recipients': 'yok@musteri.com, patron@buyukmusteri.com',
+          __body: 'Delivery has failed.',
+        }),
+      );
+      await svc.poll();
+      expect(suppression.suppress).toHaveBeenCalledTimes(1);
+      expect(suppression.suppress).toHaveBeenCalledWith(
+        WS,
+        'yok@musteri.com',
+        'EMAIL',
+        expect.any(String),
+        expect.objectContaining({ source: 'dsn' }),
+      );
+    });
+
+    it('caps how many addresses one inbound message may suppress', async () => {
+      // A genuine DSN names one address, rarely a handful. An unbounded list
+      // is a batch weapon, not a bounce.
+      const { svc, suppression, prisma } = build({
+        configPublic: { imapLastUid: 90, imapUidValidity: '42' },
+      });
+      prisma.mailLog.findFirst.mockResolvedValue({ id: 'ml-1' } as any);
+      const many = Array.from({ length: 40 }, (_, i) => `v${i}@musteri.com`).join(', ');
+      mockImap.search.mockResolvedValue([91]);
+      serveOne(
+        rfc822({
+          From: 'Mail Delivery System <MAILER-DAEMON@secureserver.net>',
+          'X-Failed-Recipients': many,
+          __body: 'Delivery has failed.',
+        }),
+      );
+      await svc.poll();
+      expect(suppression.suppress.mock.calls.length).toBeLessThanOrEqual(10);
+    });
+  });
+
   it('advances the cursor even when the suppression write fails', async () => {
     // A bounce we could not file must not hold the customer mail behind it.
     const { svc, suppression, prisma } = build({
       configPublic: { imapLastUid: 90, imapUidValidity: '42' },
     });
+    weMailed(prisma, 'yok@musteri.com');
     suppression.suppress.mockRejectedValue(new Error('P2024'));
     mockImap.search.mockResolvedValue([91]);
     serveOne(dsn('5.1.1'));
     await expect(svc.poll()).resolves.toEqual({ ingested: 0, mailboxes: 1 });
-    const written = prisma.channel.update.mock.calls.at(-1)[0].data.configPublic;
+    const written = cursorPatch(prisma, -1);
     expect(written.imapLastUid).toBe(91);
   });
 });

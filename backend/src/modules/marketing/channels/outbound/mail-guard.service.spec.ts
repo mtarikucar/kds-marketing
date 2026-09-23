@@ -288,6 +288,41 @@ describe('MailGuardService', () => {
       }
     });
 
+    it('uses the zone on the workspace the gateway already loaded, without reading it again', async () => {
+      // The real send path always passes a workspace, so the guard's own
+      // read never runs. The hours-only window — the shape the DSL documents
+      // and the one an operator writes — has to resolve against the zone that
+      // arrives on THAT object.
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-10T22:30:00Z'));
+      try {
+        const { svc, prisma } = build();
+        const refusal: any = await svc.check({ mail: mail(), workspace: LATE });
+        expect(refusal).toMatchObject({ reason: 'QUIET_HOURS', retriable: true });
+        expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('reads an hours-only window in UTC when that is all the workspace says', async () => {
+      // `Workspace.timezone` is `@default("UTC")`, so a tenant who never set a
+      // zone gets one anyway. Pinned deliberately: 09:00-18:00 then means
+      // 09:00-18:00 UTC, not 09:00-18:00 wherever the customer lives. An
+      // operator who wants otherwise puts `tz` on the window itself.
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-10T22:30:00Z'));
+      try {
+        const { svc } = build();
+        const refusal: any = await svc.check({
+          mail: mail(),
+          workspace: { status: 'ACTIVE', settings: { email: { sendWindow: { from: 9, to: 18 } } }, timezone: 'UTC' },
+        });
+        expect(refusal).toMatchObject({ reason: 'QUIET_HOURS' });
+        expect(refusal.retryAt.toISOString()).toContain('2026-03-11T09:');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('costs no quota and no daily budget, because the mail has not gone yet', async () => {
       jest.useFakeTimers().setSystemTime(new Date('2026-03-10T22:30:00Z'));
       try {

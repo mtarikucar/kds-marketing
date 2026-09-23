@@ -33,6 +33,7 @@ describe('MessageSenderService.send', () => {
     };
     prisma = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: { findFirst: jest.fn().mockResolvedValue(channel) },
       contactIdentity: { findFirst: jest.fn().mockResolvedValue(identity) },
       message: {
@@ -199,6 +200,7 @@ describe('MessageSenderService.send — the row before the send', () => {
     };
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'ch1', workspaceId: 'w1', type: 'SMS', status: 'ACTIVE', configSealed: 'x',
@@ -289,6 +291,7 @@ describe('MessageSenderService.send — channel status', () => {
     const quota = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn() };
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'ch1', workspaceId: 'w1', type: 'SMS', status, configSealed: 'x', configPublic: null,
@@ -365,6 +368,7 @@ describe('MessageSenderService.send — template body', () => {
     const created: any[] = [];
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo), update: jest.fn() },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'ch1', workspaceId: 'w1', type: 'WHATSAPP', status: 'ACTIVE', configSealed: 'x', configPublic: null,
@@ -455,6 +459,7 @@ describe('MessageSenderService.send — the subject of an email reply', () => {
     const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'm', status: 'SENT' }) };
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: {
         findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }),
       },
@@ -582,6 +587,7 @@ describe('MessageSenderService.send — threading headers', () => {
     const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'm', status: 'SENT' }) };
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }) },
       contactIdentity: {
         findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: 'tarik@example.com' }),
@@ -705,7 +711,7 @@ describe('MessageSenderService.send — consent before quota', () => {
   const convo = { id: 'c1', workspaceId: 'w1', channelId: 'ch1', leadId: 'lead-9', contactIdentityId: 'ci1' };
   const input = { workspaceId: 'w1', conversationId: 'c1', text: 'merhaba', authorType: 'AI' as const };
 
-  function build(verdict: any, type = 'EMAIL') {
+  function build(verdict: any, type = 'EMAIL', settings: unknown = null) {
     const order: string[] = [];
     const adapter = { send: jest.fn().mockResolvedValue({ externalMessageId: 'm', status: 'SENT' }) };
     const suppression = {
@@ -723,6 +729,12 @@ describe('MessageSenderService.send — consent before quota', () => {
     const settled: any[] = [];
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: {
+        findFirst: jest.fn(async () => {
+          order.push('paused');
+          return { settings };
+        }),
+      },
       channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch1', workspaceId: 'w1', type, configSealed: 'x' }) },
       contactIdentity: {
         findFirst: jest.fn().mockResolvedValue({ id: 'ci1', workspaceId: 'w1', value: 'tarik@example.com' }),
@@ -752,13 +764,15 @@ describe('MessageSenderService.send — consent before quota', () => {
       { settleSms: jest.fn().mockResolvedValue(null) } as any,
       suppression as any,
     );
-    return { service, adapter, quota, suppression, settled, order };
+    return { service, adapter, quota, suppression, settled, order, prisma };
   }
 
   it('asks about consent BEFORE it spends the tenant’s quota', async () => {
     const { service, order } = build({ suppressed: false });
     await service.send(input);
-    expect(order).toEqual(['consent', 'quota']);
+    // Both gates of the CONVERSATIONAL column run before the meter: a mail we
+    // were never allowed to send must cost the tenant nothing.
+    expect(order).toEqual(['paused', 'consent', 'quota']);
   });
 
   it('asks as CONVERSATIONAL, naming the thread that can earn the reply exemption', async () => {
@@ -799,6 +813,75 @@ describe('MessageSenderService.send — consent before quota', () => {
     await service.send(input);
     expect(adapter.send).toHaveBeenCalled();
   });
+
+  /**
+   * The operator kill switch on the same lane.
+   *
+   * `GATE_MATRIX.CONVERSATIONAL.sendingPaused` is `'always'`, and
+   * `MailAdminService.setPaused` tells the operator that pausing a tenant stops
+   * "every metered mail" — but CONVERSATIONAL mail never reaches
+   * `MailGuardService`, so the AI reply engine and the Inbox composer kept
+   * sending for a paused tenant while every surface the operator can look at
+   * said the switch had worked.
+   */
+  describe('settings.email.paused', () => {
+    const PAUSED = { email: { paused: true } };
+
+    it('refuses an AI reply for a paused workspace, without sending or metering', async () => {
+      const { service, adapter, quota } = build({ suppressed: false }, 'EMAIL', PAUSED);
+      await service.send(input);
+      expect(adapter.send).not.toHaveBeenCalled();
+      expect(quota.reserve).not.toHaveBeenCalled();
+      expect(quota.refund).not.toHaveBeenCalled();
+    });
+
+    it('refuses a human reply too, and says why in the thread', async () => {
+      const { service, adapter, settled } = build({ suppressed: false }, 'EMAIL', PAUSED);
+      const msg: any = await service.send({ ...input, authorType: 'AGENT', authorId: 'u1' });
+      expect(adapter.send).not.toHaveBeenCalled();
+      expect(msg.status).toBe('FAILED');
+      expect(settled[0].error).toMatch(/paused/i);
+    });
+
+    it('asks before it spends, and before the consent read', async () => {
+      const { service, order } = build({ suppressed: false }, 'EMAIL', PAUSED);
+      await service.send(input);
+      expect(order).toEqual(['paused']);
+    });
+
+    it('is an EMAIL switch and must not silence a tenant’s SMS replies', async () => {
+      const { service, adapter, prisma } = build({ suppressed: false }, 'SMS', PAUSED);
+      await service.send(input);
+      expect(adapter.send).toHaveBeenCalled();
+      expect(prisma.workspace.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('sends for a workspace whose settings say nothing about pausing', async () => {
+      for (const settings of [null, {}, { email: {} }, { email: { paused: false } }]) {
+        const { service, adapter } = build({ suppressed: false }, 'EMAIL', settings);
+        await service.send(input);
+        expect(adapter.send).toHaveBeenCalled();
+      }
+    });
+
+    it('reads only its own workspace’s row', async () => {
+      const { service, prisma } = build({ suppressed: false }, 'EMAIL', PAUSED);
+      await service.send(input);
+      expect(prisma.workspace.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 'w1' }) }),
+      );
+    });
+
+    it('sends anyway when the pause read itself fails', async () => {
+      // Same reading as the consent gate: a connection-pool hiccup is not an
+      // operator's decision, and the very next write (`message.create`) would
+      // fail on a real outage anyway.
+      const { service, adapter, prisma } = build({ suppressed: false }, 'EMAIL', null);
+      prisma.workspace.findFirst.mockRejectedValue(new Error('connection pool timeout'));
+      await service.send(input);
+      expect(adapter.send).toHaveBeenCalled();
+    });
+  });
 });
 
 describe('MessageSenderService.send — what the caller is told, and what the clock says', () => {
@@ -826,6 +909,7 @@ describe('MessageSenderService.send — what the caller is told, and what the cl
     };
     prisma = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'ch1',
@@ -955,6 +1039,7 @@ describe('MessageSenderService.send — the reply says where it went', () => {
     };
     const prisma: any = {
       conversation: { findFirst: jest.fn().mockResolvedValue(convo) },
+      workspace: { findFirst: jest.fn().mockResolvedValue({ settings: null }) },
       channel: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'ch1', workspaceId: 'w1', type: channelType, configSealed: 'x', configPublic: null,

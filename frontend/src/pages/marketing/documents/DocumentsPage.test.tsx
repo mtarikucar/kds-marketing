@@ -7,10 +7,11 @@ import DocumentsPage from './DocumentsPage';
 
 const get = vi.fn();
 const del = vi.fn();
+const post = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...args: unknown[]) => get(...args),
-    post: vi.fn().mockResolvedValue({ data: {} }),
+    post: (...args: unknown[]) => post(...args),
     patch: vi.fn().mockResolvedValue({ data: {} }),
     delete: (...args: unknown[]) => del(...args),
   },
@@ -51,7 +52,9 @@ describe('DocumentsPage', () => {
   beforeEach(() => {
     get.mockReset();
     del.mockReset();
+    post.mockReset();
     del.mockResolvedValue({ data: {} });
+    post.mockResolvedValue({ data: { status: 'SENT', publicToken: 'esign_tok', sent: true, to: 'jane@example.com', via: 'platform', signUrl: 'https://x/d/esign_tok' } });
     get.mockImplementation((url: string) =>
       url === '/documents' ? Promise.resolve({ data: DOCS }) : Promise.resolve({ data: {} }),
     );
@@ -84,5 +87,58 @@ describe('DocumentsPage', () => {
     const after = screen.getAllByTitle('Delete');
     expect(after[0]).toBeDisabled();
     expect(after[1]).not.toBeDisabled();
+  });
+
+  // `esign-not-emailed`: the page's only send-ish control used to be copyLink(),
+  // which mints a token and puts it on the REP'S clipboard — the customer was
+  // never told. POST /documents/:id/email is the route that actually mails the
+  // signing request, and until this test it had no caller anywhere in the repo.
+  it('emails the agreement for signature instead of only copying the link', async () => {
+    const user = userEvent.setup();
+    const draft = { ...DOCS[0], id: 'd1', leadId: 'lead-1', status: 'DRAFT', signerName: null, signedAt: null };
+    get.mockImplementation((url: string) =>
+      url === '/documents' ? Promise.resolve({ data: [draft] }) : Promise.resolve({ data: {} }),
+    );
+
+    render(<DocumentsPage />, { wrapper });
+    await screen.findByText('Service agreement');
+
+    await user.click(screen.getByTitle('Email for signature'));
+    expect(post).toHaveBeenCalledWith('/documents/d1/email');
+  });
+
+  // The backend 400s with "This agreement has no contact to email" when the
+  // document has no lead, so don't offer an action that is already doomed.
+  // Copy-the-link stays available: it is the manual fallback for exactly this.
+  it('cannot email a document that has no contact, but can still copy its link', async () => {
+    const orphan = { ...DOCS[0], id: 'd2', leadId: null, status: 'DRAFT', signerName: null, signedAt: null };
+    get.mockImplementation((url: string) =>
+      url === '/documents' ? Promise.resolve({ data: [orphan] }) : Promise.resolve({ data: {} }),
+    );
+
+    render(<DocumentsPage />, { wrapper });
+    await screen.findByText('Service agreement');
+
+    // Disabled, and the tooltip says WHY rather than leaving a dead control.
+    expect(screen.queryByTitle('Email for signature')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Link this document to a contact to email it')).toBeDisabled();
+    expect(screen.getByTitle('Copy signing link')).not.toBeDisabled();
+  });
+
+  // The manual path must keep working untouched: it is what a rep falls back to
+  // when delivery fails, and the document stays SENT with a live link.
+  it('still mints and copies the signing link from the copy action', async () => {
+    // userEvent.setup() installs its own navigator.clipboard stub.
+    const user = userEvent.setup();
+    const sent ={ ...DOCS[0], id: 'd3', leadId: 'lead-1', status: 'SENT', signerName: null, signedAt: null };
+    get.mockImplementation((url: string) =>
+      url === '/documents' ? Promise.resolve({ data: [sent] }) : Promise.resolve({ data: {} }),
+    );
+
+    render(<DocumentsPage />, { wrapper });
+    await screen.findByText('Service agreement');
+
+    await user.click(screen.getByTitle('Copy signing link'));
+    expect(post).toHaveBeenCalledWith('/documents/d3/send');
   });
 });

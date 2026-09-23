@@ -8,6 +8,10 @@ import {
   EMAIL_OAUTH,
   EMAIL_OAUTH_PROVIDERS,
 } from './modules/marketing/channels/email-oauth.config';
+import {
+  ESP_PROVIDERS,
+  getVerifier,
+} from './modules/marketing/channels/inbound/webhook-verifier';
 
 /**
  * Deploy/env parity guard for the entitlement feature gates.
@@ -210,11 +214,37 @@ describe('deploy.yml ↔ email platform env keys', () => {
     { what: `${EMAIL_OAUTH[p].label} mail client secret`, key: EMAIL_OAUTH[p].clientSecretEnv },
   ]);
 
+  /**
+   * The per-provider bounce/complaint webhook credentials, DERIVED from the
+   * verifier registry rather than listed here.
+   *
+   * `POST /api/public/esp/feedback/:provider` picks its verifier from the URL,
+   * and each verifier is dark until ITS key is set — so a provider added to
+   * `ESP_PROVIDERS` with a `requires` list nothing forwards is born dead in
+   * exactly the way this whole file exists to prevent: the operator pastes the
+   * key into GitHub Secrets, the heredoc never writes it, and every bounce and
+   * spam complaint SendGrid/Mailgun/Postmark reports is answered 401 while the
+   * health card still calls the feature armed.
+   *
+   * `ESP_FEEDBACK_SECRET` (the `generic` relay) comes out of this same list —
+   * it is that verifier's `requires`, not a separate hardcoded entry.
+   */
+  const espCases = ESP_PROVIDERS.flatMap((provider) =>
+    (getVerifier(provider)!.requires as readonly string[]).map((key) => ({
+      what: `ESP feedback (${provider})`,
+      key,
+    })),
+  );
+
   /** The platform-global email knobs, each named with the surface it powers. */
   const platformCases = [
-    // webhook-verifier/generic-hmac.ts — unset, POST /api/public/esp/feedback
-    // answers NOT_CONFIGURED and no bounce or complaint ever suppresses.
-    { what: 'ESP feedback HMAC', key: 'ESP_FEEDBACK_SECRET' },
+    // postmark.ts — the OPTIONAL egress allow-list, deliberately not in that
+    // verifier's `requires` (unset = not enforced). Still has to be settable,
+    // or the belt-and-braces operator has no way to switch it on.
+    { what: 'Postmark webhook IP allow-list', key: 'POSTMARK_WEBHOOK_IPS' },
+    // platform-bounce-poll.service.ts target() — the ops stop button for the
+    // cron that reads the platform's own INBOX. Empty = the poller runs.
+    { what: 'platform bounce poll switch', key: 'PLATFORM_BOUNCE_POLL' },
     // inbound-mail webhook — unset, a connected mailbox is send-only.
     { what: 'inbound webhook HMAC', key: 'EMAIL_INBOUND_SECRET' },
     // email.service.ts platformDkim() — both halves or nothing is signed.
@@ -225,13 +255,22 @@ describe('deploy.yml ↔ email platform env keys', () => {
     { what: 'bulk link host', key: 'LINK_BASE_URL' },
   ];
 
-  const cases = [...oauthCases, ...platformCases];
+  const cases = [...oauthCases, ...espCases, ...platformCases];
 
   // If the provider table is ever restructured this guard must red rather than
   // quietly pass on an empty `it.each`.
   it('derives a case for every configured email OAuth provider', () => {
     expect(oauthCases).toHaveLength(EMAIL_OAUTH_PROVIDERS.length * 2);
     for (const c of cases) expect(c.key).toMatch(/^[A-Z0-9_]+$/);
+  });
+
+  // Same guard for the ESP registry: an empty `requires` list anywhere would
+  // silently drop that provider's key out of every assertion below.
+  it('derives a case for every ESP feedback verifier', () => {
+    expect(espCases.length).toBeGreaterThanOrEqual(ESP_PROVIDERS.length);
+    for (const provider of ESP_PROVIDERS) {
+      expect(espCases.filter((c) => c.what.includes(`(${provider})`)).length).toBeGreaterThan(0);
+    }
   });
 
   // Not asserting secrets-vs-vars here, for the same reason the social block

@@ -16,7 +16,11 @@ function makeSvc() {
   // elsewhere (e.g. review-sync.service.spec.ts).
   (prisma.$transaction as unknown as jest.Mock) = jest.fn((fn: any) => fn(prisma));
   const outbox = { append: jest.fn().mockResolvedValue('evt-1') };
-  const iysSync = { enqueueConsent: jest.fn().mockResolvedValue(undefined), retryDlq: jest.fn() };
+  const iysSync = {
+    enqueueConsent: jest.fn().mockResolvedValue(undefined),
+    enqueueEmailWithdrawal: jest.fn().mockResolvedValue('not-ready'),
+    retryDlq: jest.fn(),
+  };
   const suppression = {
     suppress: jest.fn().mockResolvedValue(undefined),
     lift: jest.fn().mockResolvedValue(undefined),
@@ -377,7 +381,7 @@ describe('ComplianceService', () => {
     expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
   });
 
-  it('does NOT enqueue an İYS job for MARKETING_EMAIL consent', async () => {
+  it('does NOT enqueue an İYS MESAJ job for MARKETING_EMAIL consent', async () => {
     const { prisma, iysSync, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-11' });
@@ -386,6 +390,55 @@ describe('ComplianceService', () => {
     await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false, { source: 'form' });
 
     expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The email lane's İYS duty, and the line drawn across it.
+   *
+   * A withdrawal is a fact about what the recipient asked for, and 6563 says
+   * report it. A GRANT recorded here is a staff member ticking a box — nothing
+   * on this path can tell that from the recipient's own evidenced act — and
+   * pushing it as an İYS `ONAY` would assert a consent the tenant cannot
+   * evidence if asked. So: RET goes, ONAY never does.
+   */
+  it('reports a recorded email withdrawal to İYS, keyed on the address', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-12' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ email: 'Ali@Acme.test', emailNormalized: 'ali@acme.test' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false, { source: 'crm' });
+
+    expect(iysSync.enqueueEmailWithdrawal).toHaveBeenCalledWith({
+      workspaceId: WS,
+      leadId: 'lead-1',
+      address: 'ali@acme.test',
+      source: 'HS_WEB',
+    });
+  });
+
+  it('never pushes an email ONAY to İYS', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-13' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ email: 'ali@acme.test', emailNormalized: 'ali@acme.test' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', true, { source: 'crm' });
+
+    expect(iysSync.enqueueEmailWithdrawal).not.toHaveBeenCalled();
+  });
+
+  it('keeps the consent record when the İYS push cannot be queued', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-14' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ email: 'ali@acme.test', emailNormalized: 'ali@acme.test' });
+    iysSync.enqueueEmailWithdrawal.mockRejectedValue(new Error('iys down'));
+
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false)).resolves.toMatchObject({ id: 'cr-14' });
   });
 
   it('manager retry delegates to IysSyncService.retryDlq for the workspace', async () => {

@@ -79,9 +79,34 @@ const NATIVE_FIELDS = [
   'tags',
 ] as const;
 
+/**
+ * The consent flags, kept apart from the native fields because they are the
+ * only DESTRUCTIVE mapping in the wizard: the backend writes them write-once-
+ * true, so an import that suppresses a contact can never be undone by
+ * re-importing a corrected file. They were missing from the list entirely,
+ * which meant a suggested `emailOptOut` rendered as a BLANK select — the
+ * operator could neither see what the column would do nor change it. The
+ * labels say the consequence, not the field name.
+ */
+const OPT_OUT_FIELDS = [
+  { value: 'emailOptOut', label: 'Email opt-out — suppresses this contact' },
+  { value: 'smsOptOut', label: 'SMS opt-out — suppresses this contact' },
+  { value: 'waOptOut', label: 'WhatsApp opt-out — suppresses this contact' },
+] as const;
+
+const OPT_OUT_VALUES = OPT_OUT_FIELDS.map((f) => f.value) as readonly string[];
+
+/** Mirrors the backend's `OPT_OUT_TRUTHY` (import.service.ts) so the preview
+ *  counts the same cells the import would act on. */
+const OPT_OUT_TRUTHY = new Set([
+  'true', '1', 'yes', 'y', 'evet', 'e', 'x', 'opted out', 'optedout', 'opt out', 'optout',
+  'unsubscribed', 'unsubscribe', 'abonelikten çıktı', 'çıktı', 'cikti', 'iptal',
+]);
+
 const FIELD_OPTIONS = [
   { value: '__skip', label: '— skip —' },
   ...NATIVE_FIELDS.map((f) => ({ value: f, label: f })),
+  ...OPT_OUT_FIELDS.map((f) => ({ value: f.value as string, label: f.label as string })),
 ];
 
 // ── Step indicator ────────────────────────────────────────────────────────────
@@ -285,6 +310,26 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
     .map((f) => fieldOptions.find((o) => o.value === f)?.label ?? f)
     .join(', ');
 
+  // A column mapped to an opt-out flag SUPPRESSES every contact whose cell is
+  // truthy, and the backend never writes `false` — so a wrong mapping here is
+  // not repairable by re-importing a corrected file. Say so, and count it
+  // against the preview rows so the operator sees a number rather than a
+  // warning they can skim past. This is how a consent column read backwards
+  // becomes visible before it costs the tenant their mailable audience.
+  const optOutColumns = useMemo(
+    () => Object.entries(mapping).filter(([, f]) => OPT_OUT_VALUES.includes(f)),
+    [mapping],
+  );
+  const suppressedSample = useMemo(
+    () =>
+      sampleRows.filter((row) =>
+        optOutColumns.some(([header]) =>
+          OPT_OUT_TRUTHY.has(String(row[header] ?? '').trim().toLowerCase()),
+        ),
+      ).length,
+    [optOutColumns, sampleRows],
+  );
+
   const setField = (header: string, field: string) => {
     onMappingChange({ ...mapping, [header]: field });
   };
@@ -354,6 +399,18 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
           {t('import.businessNameRequired', {
             defaultValue:
               'Map a CSV column to “businessName” — it is required for every lead.',
+          })}
+        </Callout>
+      )}
+
+      {optOutColumns.length > 0 && (
+        <Callout tone="warning" icon={<AlertCircle className="h-4 w-4" />}>
+          {t('import.optOutMapped', {
+            defaultValue:
+              '“{{columns}}” is mapped to an opt-out flag. A truthy cell will suppress that contact for good — re-importing a corrected file cannot undo it. {{suppressed}} of the {{total}} preview rows would be suppressed. Check the column means refusal, not permission (“İzni” columns mean the opposite).',
+            columns: optOutColumns.map(([h]) => h).join('”, “'),
+            suppressed: suppressedSample,
+            total: sampleRows.length,
           })}
         </Callout>
       )}

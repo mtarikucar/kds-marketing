@@ -217,6 +217,7 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
     autoSubmitted,
     messageId,
     listUnsubscribeUrl,
+    ics,
   }: OutboundSend): Promise<SendResult> {
     const recipient = (to || '').trim();
     if (!recipient) {
@@ -278,6 +279,7 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
         ...(inReplyTo ? { inReplyTo } : {}),
         ...(references?.length ? { references } : {}),
         ...(autoSubmitted ? { autoSubmitted } : {}),
+        ...(ics ? { ics } : {}),
       });
       if (r.ok) return { externalMessageId: r.externalId, status: 'SENT', retriable: false };
       const error = String(r.error ?? '').slice(0, 300);
@@ -322,6 +324,19 @@ export class EmailChannelAdapter implements ChannelAdapter, OnModuleInit {
         ...(inReplyTo ? { inReplyTo } : {}),
         ...(references?.length ? { references } : {}),
         ...(Object.keys(headers).length ? { headers } : {}),
+        // nodemailer's `icalEvent.method` is what sets the MIME `method=`
+        // parameter. It is threaded from the caller and never defaulted to
+        // REQUEST: a CANCEL body announced as a REQUEST puts the cancelled
+        // appointment back on the customer's calendar.
+        ...(ics
+          ? {
+              icalEvent: {
+                method: ics.method,
+                filename: ics.filename ?? 'invite.ics',
+                content: ics.content,
+              },
+            }
+          : {}),
       });
       transport.close();
       return { externalMessageId: info?.messageId ?? null, status: 'SENT', retriable: false };

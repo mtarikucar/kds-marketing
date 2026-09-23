@@ -130,6 +130,18 @@ function build(
         return {};
       }),
     },
+    // The cursor write: ONE `configPublic || $patch` statement, so `updates`
+    // collects PATCHES — the keys this poller named — and never a whole blob.
+    // Everything else in the column belongs to its other writers (the INBOX
+    // cursor, the health block, the tenant's settings) and is untouchable from
+    // here. (`withAdvisoryLock` uses `$queryRaw`, so nothing else lands here.)
+    $executeRaw: jest.fn(async (sql: any) => {
+      const json = (sql.values as unknown[]).find(
+        (v) => typeof v === 'string' && (v as string).startsWith('{'),
+      );
+      updates.push(JSON.parse(json as string));
+      return 1;
+    }),
     mailLog: { findFirst: jest.fn().mockResolvedValue(over.mailLog ?? null) },
     message: { findFirst: jest.fn().mockResolvedValue(over.message ?? null) },
     campaignRecipient: { findFirst: jest.fn().mockResolvedValue(over.campaignRecipient ?? null) },
@@ -183,14 +195,14 @@ beforeEach(() => {
 
 describe('EmailSentPollService — opt-in', () => {
   it('never opens a mailbox whose readSentFolder knob is absent (existing channels keep today behaviour)', async () => {
-    const { svc, prisma } = build({ configPublic: { imapLastUid: 4 } });
+    const { svc, updates } = build({ configPublic: { imapLastUid: 4 } });
     serve({ 10: rfc822() });
 
     const out = await svc.poll();
 
     expect(out).toEqual({ ingested: 0, mailboxes: 0 });
     expect(mockImap.connects).toBe(0);
-    expect(prisma.channel.update).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
   });
 
   it('never opens a mailbox whose readSentFolder is explicitly false', async () => {
@@ -200,6 +212,42 @@ describe('EmailSentPollService — opt-in', () => {
     await svc.poll();
 
     expect(mockImap.connects).toBe(0);
+  });
+
+  it('leaves a mailbox alone while it is waiting out a backoff', async () => {
+    // The third dialler at the same dead credential. The INBOX poller and the
+    // IDLE hold both stand down when a password has been refused; this one
+    // added 144 more rejected logins a day on top, at a host that locks the
+    // account — and `imapTarget` falls back to the SMTP credential, so the
+    // lockout takes the tenant's OUTBOUND mail with it.
+    //
+    // Reconciling the Sent folder is the most deferrable work in the module:
+    // nobody is waiting on it, so it has the least claim of the three to keep
+    // knocking.
+    const { svc } = build({
+      configPublic: {
+        readSentFolder: true,
+        health: { backoffUntil: new Date(Date.now() + 30 * 60_000).toISOString() },
+      },
+    });
+    serve({ 10: rfc822() });
+
+    await expect(svc.poll()).resolves.toEqual({ ingested: 0, mailboxes: 0 });
+    expect(mockImap.connects).toBe(0);
+  });
+
+  it('reconciles again once the wait is over', async () => {
+    const { svc } = build({
+      configPublic: {
+        readSentFolder: true,
+        health: { backoffUntil: new Date(Date.now() - 60_000).toISOString() },
+      },
+    });
+    serve({ 10: rfc822() });
+
+    await svc.poll();
+
+    expect(mockImap.connects).toBe(1);
   });
 });
 
@@ -229,7 +277,7 @@ describe('EmailSentPollService — the echo', () => {
   });
 
   it('never pauses the AI and never touches a conversation row', async () => {
-    const { svc, ingress, prisma } = build();
+    const { svc, ingress, prisma, updates } = build();
     serve({ 10: rfc822() });
 
     await svc.poll();
@@ -240,7 +288,7 @@ describe('EmailSentPollService — the echo', () => {
     for (const [, inbound] of ingress.ingest.mock.calls) {
       expect(JSON.stringify(inbound)).not.toContain('aiPaused');
     }
-    expect(JSON.stringify(prisma.channel.update.mock.calls)).not.toContain('aiPaused');
+    expect(JSON.stringify(updates)).not.toContain('aiPaused');
   });
 
   it('opens the \\Sent special-use folder READ-ONLY', async () => {
@@ -476,7 +524,7 @@ describe('EmailSentPollService — the cursor never runs past unread mail', () =
     expect(updates.at(-1).imapSentFailCount).toBe(0);
   });
 
-  it('writes its own cursor keys and preserves the rest of configPublic', async () => {
+  it('writes its own cursor keys and NOTHING else', async () => {
     const { svc, updates } = build({
       configPublic: { readSentFolder: true, imapLastUid: 99, imapUidValidity: '7', keepMe: true },
     });
@@ -487,9 +535,17 @@ describe('EmailSentPollService — the cursor never runs past unread mail', () =
     const written = updates.at(-1);
     expect(written.imapSentLastUid).toBe(10);
     expect(written.imapSentUidValidity).toBe('7');
-    // The INBOX cursor belongs to the other poller and must survive untouched.
-    expect(written.imapLastUid).toBe(99);
-    expect(written.keepMe).toBe(true);
+    // The INBOX cursor belongs to the OTHER poller, the health block to the
+    // send path, and the rest to the tenant. None of them is named here, so
+    // none of them can be rolled back by this write however old this tick's
+    // copy of the row is.
+    expect(Object.keys(written).sort()).toEqual([
+      'imapSentFailCount',
+      'imapSentFailUid',
+      'imapSentFailUidValidity',
+      'imapSentLastUid',
+      'imapSentUidValidity',
+    ]);
   });
 
   it('treats a renumbered mailbox as a first run instead of reading from a meaningless offset', async () => {

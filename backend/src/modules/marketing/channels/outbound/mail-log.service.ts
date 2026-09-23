@@ -35,6 +35,11 @@ export interface MailLogRef {
    *  the transport that actually carried the mail, not the one this attempt
    *  would have used. */
   transport?: string;
+  /** When the row was last written. OPTIONAL because most refs are built from
+   *  a narrower read (or from `orphan()`, which has no row at all); only the
+   *  P2002 path asks for it, to tell a send still in flight from a stranded
+   *  claim. A ref without it is treated as stranded — see `inFlight()`. */
+  updatedAt?: Date;
 }
 
 export interface MailLogOpen {
@@ -78,6 +83,24 @@ export interface MailLogSettle {
 /** The provider's own words, kept short enough to sit in a support thread. */
 const MAX_ERROR = 300;
 
+/**
+ * How long a PENDING row is assumed to belong to a send that is still running.
+ *
+ * The row opens BEFORE the dispatch and settles after it, so "PENDING" means
+ * either "somebody is sending this right now" or "somebody died holding it".
+ * The clock is the only thing that tells them apart. It is deliberately not
+ * the transport's own socket timeout (15s SMTP / 20s Graph): that covers the
+ * round-trip, not the compose, the attachments and the gate around it. Too
+ * short re-admits the double send; too long only delays the retry of a row
+ * nobody is coming back for.
+ *
+ * A minute is safe against the retry paths that exist: the job reaper revives
+ * a crashed tick after 15 minutes (`STUCK_AFTER_MS`) and the outbox reclaims
+ * after 5, so no automatic retry of a genuinely dead send can arrive inside
+ * this window and be mistaken for a duplicate.
+ */
+const IN_FLIGHT_MS = 60_000;
+
 function trim(v: string | null | undefined, max: number): string | null {
   const s = (v ?? '').toString().trim();
   return s ? s.slice(0, max) : null;
@@ -119,6 +142,17 @@ export class MailLogService {
    * got out (a refusal, a transient failure) is a RETRY, not a duplicate — it
    * reuses that row rather than opening a second one the unique key would
    * refuse anyway.
+   *
+   * The winner's row is PENDING for the whole of its dispatch, so "not
+   * delivered yet" is NOT the same question as "may I send it". A PENDING row
+   * younger than `IN_FLIGHT_MS` belongs to a send that is still running and is
+   * reported as a duplicate; only an older one is the stranded claim a retry
+   * is entitled to reuse.
+   *
+   * The loser therefore answers DEDUPED on a prediction, and the trade is
+   * deliberate: the winner owns the row's terminal state, so if the winner
+   * fails only the winner's caller retries. A caller that retried the loser
+   * too would be the duplicate delivery this branch exists to stop.
    */
   async pending(input: MailLogOpen): Promise<{ deduped: boolean; row: MailLogRef }> {
     const data = this.createData(input);
@@ -135,7 +169,9 @@ export class MailLogService {
       if (e?.code === 'P2002' && input.idempotencyKey) {
         const existing = await this.claimRow(input.workspaceId, input.idempotencyKey);
         if (existing) {
-          if (this.isDelivered(existing.status)) return { deduped: true, row: existing };
+          if (this.isDelivered(existing.status) || this.inFlight(existing)) {
+            return { deduped: true, row: existing };
+          }
           await this.reopen(existing, data);
           return { deduped: false, row: { ...existing, status: data.status } };
         }
@@ -172,6 +208,20 @@ export class MailLogService {
     return status === 'SENT' || status === 'DEDUPED';
   }
 
+  /**
+   * "Another send owns this row and has not finished with it."
+   *
+   * A ref with no `updatedAt` — an older read shape, an orphan — is reported
+   * as NOT in flight, so a missing timestamp degrades to the retry this branch
+   * always did rather than to a mail silently dropped.
+   */
+  private inFlight(row: MailLogRef): boolean {
+    if (row.status !== 'PENDING') return false;
+    const at = row.updatedAt instanceof Date ? row.updatedAt.getTime() : NaN;
+    if (!Number.isFinite(at)) return false;
+    return Date.now() - at < IN_FLIGHT_MS;
+  }
+
   private createData(input: MailLogOpen): Prisma.MailLogUncheckedCreateInput {
     return {
       workspaceId: input.workspaceId,
@@ -203,7 +253,16 @@ export class MailLogService {
     try {
       return await this.prisma.mailLog.findFirst({
         where: { workspaceId, idempotencyKey },
-        select: { id: true, workspaceId: true, status: true, messageId: true, transport: true },
+        // `updatedAt` only here: this is the one read that has to date a
+        // PENDING row to tell an in-flight send from a stranded claim.
+        select: {
+          id: true,
+          workspaceId: true,
+          status: true,
+          messageId: true,
+          transport: true,
+          updatedAt: true,
+        },
       });
     } catch {
       return null;

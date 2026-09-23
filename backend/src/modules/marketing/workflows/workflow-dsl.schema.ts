@@ -161,37 +161,6 @@ const StepSchema = z.discriminatedUnion('type', [
 export type WorkflowStep = z.infer<typeof StepSchema>;
 
 /**
- * Optional per-workflow quiet hours: local hours this automation's mail may
- * leave in (`no-send-window`). Outside them a send is queued FORWARD to the
- * next opening, never dropped.
- *
- * It rides on the trigger rather than on a column of its own because the
- * Workflow row has no jsonb to spare and the programme adds no migration —
- * and because "when may this automation act" is a property of the trigger
- * rather than of any one step. `tz` is optional: absent, the workspace's own
- * timezone answers (resolved by `normalizeSendWindow`, which is the single
- * reader both this and `settings.email.sendWindow` go through).
- *
- * `to` is EXCLUSIVE and `from > to` wraps midnight. Equal bounds describe
- * either "always" or "never", and since there is no way to tell which was
- * meant, saving one is a 400 rather than a guess acted on at 02:30.
- */
-export const SendWindowSchema = z
-  .object({
-    /** IANA zone. Omitted ⇒ the workspace timezone. */
-    tz: z.string().min(1).max(64).optional(),
-    /** Local hour the window opens, 0-23. */
-    from: z.number().int().min(0).max(23),
-    /** Local hour the window closes, exclusive, 1-24. */
-    to: z.number().int().min(1).max(24),
-  })
-  .refine((w) => w.from !== w.to, {
-    message: 'sendWindow.from and sendWindow.to must differ',
-    path: ['to'],
-  });
-export type WorkflowSendWindow = z.infer<typeof SendWindowSchema>;
-
-/**
  * May the same lead start this workflow again?
  *
  * `link.clicked` is the trigger that loops: a drip mails a link, the lead
@@ -211,11 +180,22 @@ export const ReentrySchema = z.object({
 });
 export type WorkflowReentry = z.infer<typeof ReentrySchema>;
 
+/**
+ * NO per-workflow quiet hours here, deliberately.
+ *
+ * The trigger used to accept a `sendWindow`, which validated, persisted and
+ * read back as configured — and was never read by anything: the executor keeps
+ * only `dsl.steps`/`dsl.goal`, the action handler passes no window to the
+ * outbound gateway, and the gate consults `settings.email.sendWindow` alone.
+ * A knob that answers 200 and then mails the customer at 03:00 is worse than
+ * no knob, so the field is gone and zod strips it from anything already
+ * carrying it. Quiet hours per automation is a feature, not a schema line: it
+ * has to clamp BEFORE the send (the gate only knows the workspace window),
+ * resolve the workspace timezone, and agree with the deferral cap.
+ */
 export const TriggerSchema = z.object({
   type: z.enum(TRIGGER_TYPES),
   filters: z.array(FilterSchema).max(20).default([]),
-  /** Optional quiet hours for this workflow's sends. Absent = send whenever. */
-  sendWindow: SendWindowSchema.optional(),
   /** Absent = the executor's default (cooldown, one hour, `link.clicked` only). */
   reentry: ReentrySchema.optional(),
 });

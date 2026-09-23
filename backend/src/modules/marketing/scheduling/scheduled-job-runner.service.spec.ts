@@ -11,6 +11,7 @@ import {
   DISPATCH_BUDGET_MS,
   KIND_DISPATCH_CAP,
 } from './scheduled-job-runner.service';
+import { Prisma } from '@prisma/client';
 import { RESEARCH_RUN_KIND } from '../research/research-kinds';
 import {
   MCP_ACTIVITY_AGENT,
@@ -543,5 +544,90 @@ describe('ScheduledJobRunnerService — one tenant cannot hold the tick', () => 
     claim([job('j1', 'slow'), job('j2', 'slow')]);
 
     await expect(runner.tick()).resolves.toBeUndefined();
+  });
+
+  /**
+   * The release flips RUNNING back to PENDING, and that transition can hit the
+   * partial-unique index `scheduled_jobs_pending_dedup (kind, dedupKey) WHERE
+   * status = 'PENDING'`: `ScheduledJobService.schedule()` only collapses onto a
+   * row that is still PENDING, so while this tick held a row RUNNING an inbound
+   * message was free to create a PENDING successor for the same conversation.
+   *
+   * One conflict must cost exactly that one row — not the rest of the tenant's
+   * deferred batch, and certainly not every tenant after it in the map.
+   */
+  describe('a dedup conflict during the release', () => {
+    const P2002 = () =>
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '5.0.0',
+        meta: { target: 'scheduled_jobs_pending_dedup' },
+      });
+
+    const otherJob = (id: string, workspaceId: string) => ({
+      id,
+      workspaceId,
+      kind: 'conversation.ai_reply',
+      payload: {},
+      attempts: 0,
+    });
+    /** Every release write, batched or per-id, in call order. */
+    const releaseCalls = () =>
+      prisma.scheduledJob.updateMany.mock.calls
+        .map((c: any[]) => c[0])
+        .filter((c: any) => c?.data?.status === 'PENDING');
+
+    it('releases the other tenants when one tenant’s write conflicts', async () => {
+      prisma.scheduledJob.updateMany.mockImplementation(async (args: any) => {
+        if (args.where.workspaceId === 'ws-a') throw P2002();
+        return { count: 1 };
+      });
+      const handler = slowHandler(DISPATCH_BUDGET_MS * 2);
+      runner.registerHandler('conversation.ai_reply', handler);
+      claim([
+        job('first', 'slow'),
+        otherJob('a1', 'ws-a'),
+        otherJob('b1', 'ws-b'),
+        otherJob('c1', 'ws-c'),
+      ]);
+      runner.registerHandler('slow', handler);
+
+      await runner.tick();
+
+      const released = releaseCalls().map((c: any) => c.where);
+      expect(released.some((w: any) => w.workspaceId === 'ws-b')).toBe(true);
+      expect(released.some((w: any) => w.workspaceId === 'ws-c')).toBe(true);
+    });
+
+    it('retries the conflicting tenant one row at a time, so only the conflicting row is left behind', async () => {
+      prisma.scheduledJob.updateMany.mockImplementation(async (args: any) => {
+        const id = args.where.id;
+        // The batched write for ws-a, and the single id that really conflicts.
+        if (id?.in?.includes('a1') || id === 'a1') throw P2002();
+        return { count: 1 };
+      });
+      const handler = slowHandler(DISPATCH_BUDGET_MS * 2);
+      runner.registerHandler('slow', handler);
+      runner.registerHandler('conversation.ai_reply', handler);
+      claim([job('first', 'slow'), otherJob('a1', 'ws-a'), otherJob('a2', 'ws-a')]);
+
+      await runner.tick();
+
+      // a2 has nothing to collide with and must be back in the queue now,
+      // rather than waiting fifteen minutes for the reaper.
+      expect(releaseCalls()).toContainEqual({
+        where: { workspaceId: 'ws-a', id: 'a2', status: 'RUNNING' },
+        data: { status: 'PENDING', lockedAt: null },
+      });
+    });
+
+    it('still ends the tick cleanly when every release conflicts', async () => {
+      prisma.scheduledJob.updateMany.mockRejectedValue(P2002());
+      const handler = slowHandler(DISPATCH_BUDGET_MS * 2);
+      runner.registerHandler('slow', handler);
+      claim([job('j1', 'slow'), job('j2', 'slow')]);
+
+      await expect(runner.tick()).resolves.toBeUndefined();
+    });
   });
 });

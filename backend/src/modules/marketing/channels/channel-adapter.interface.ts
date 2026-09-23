@@ -179,6 +179,18 @@ export interface OutboundSend {
    * Per-recipient, because the token behind it is what identifies who opted out.
    */
   listUnsubscribeUrl?: string;
+  /**
+   * Email-only. An iTIP calendar invite carried alongside the body, so a
+   * booking mail sent from a tenant's OWN mailbox still lands in the
+   * customer's calendar — before this field existed only the platform
+   * transport could attach one and every connected-mailbox tenant silently
+   * lost the invite.
+   *
+   * `method` is threaded, never defaulted: a `METHOD:CANCEL` VCALENDAR inside
+   * a `method=REQUEST` MIME part re-adds the appointment the customer just
+   * cancelled.
+   */
+  ics?: { method: 'REQUEST' | 'CANCEL'; content: string; filename?: string };
 }
 
 export interface SendResult {

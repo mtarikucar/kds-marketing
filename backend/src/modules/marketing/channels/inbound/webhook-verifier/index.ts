@@ -62,6 +62,20 @@ export interface VerifyOutcome {
   ok: boolean;
   /** Set whenever `ok` is false. Machine code; never printed raw at a user. */
   reason?: VerifyFailure;
+  /**
+   * A single-use token the signature covers INSTEAD of the body.
+   *
+   * Only Mailgun sets it, and only because its signature is over
+   * `timestamp + token`: the payload is unsigned, so nothing but the token
+   * distinguishes one accepted request from another. The caller spends it
+   * through `WebhookReplayStore`, which is what turns "one captured block, any
+   * body, for 24 hours" back into "one token, one body".
+   *
+   * A verifier that signs the raw body (sendgrid, generic-hmac) leaves this
+   * unset: for those a replay necessarily carries identical bytes, and the
+   * writes behind this path are idempotent.
+   */
+  replayToken?: string;
 }
 
 export interface WebhookVerifier {
@@ -80,9 +94,15 @@ export interface WebhookVerifier {
  * guide would suggest: Mailgun retries a failed webhook for 8 hours and
  * SendGrid for 24, both REPLAYING the original signed payload, so a tight
  * window would turn one bad deploy into permanently lost bounce events — the
- * exact failure this package exists to end. The replay it still bounds is
- * cheap for an attacker to no effect: re-posting a captured event re-applies a
- * suppression that is already on file, and `EspFeedbackService` is idempotent.
+ * exact failure this package exists to end.
+ *
+ * What that window costs depends on WHAT was signed. For `sendgrid` (ECDSA
+ * over `timestamp || rawBody`) and `generic-hmac` (HMAC over `rawBody`) a
+ * replay necessarily carries the same bytes, so it re-applies a suppression
+ * already on file and `EspFeedbackService` is idempotent. For `mailgun` the
+ * body is NOT signed, so a captured block would authenticate any payload for a
+ * whole day — that one is bounded by `WebhookReplayStore` instead, which spends
+ * the token on one specific body.
  */
 export const SIGNATURE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -130,17 +150,60 @@ export function getVerifier(provider: string | undefined | null): WebhookVerifie
   return (ESP_PROVIDERS as readonly string[]).includes(key) ? REGISTRY[key as EspProvider] : null;
 }
 
+/** Every env key any feedback verifier can need, generic relay first. The
+ *  deploy parity guard derives the keys it forwards from `requires` directly;
+ *  this is the flattened view for a panel that has to name the whole menu. */
+export const ESP_FEEDBACK_ENV_KEYS: readonly string[] = [
+  ...new Set(ESP_PROVIDERS.flatMap((p) => [...REGISTRY[p].requires])),
+];
+
+/** Set, and not the empty string an unset deploy Secret renders as. */
+function present(env: Record<string, string | undefined>, key: string): boolean {
+  return !!(env[key] ?? '').trim();
+}
+
+/**
+ * Which of a verifier's keys are still unset, in `requires` order.
+ *
+ * Derived from `requires` rather than by asking `configured()`, so a caller
+ * already answering "what is inert on THIS deployment" from an explicit env bag
+ * — the mail-health panel and its spec — gets the same answer without mutating
+ * `process.env`. The spec pins the two in agreement for every provider, so
+ * `requires` cannot drift into a list that documents a gate it does not open.
+ */
+export function verifierMissing(
+  v: WebhookVerifier,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return v.requires.filter((k) => !present(env, k));
+}
+
+/** Armed exactly when nothing it requires is missing. A verifier with an empty
+ *  `requires` would otherwise read as armed for free — it cannot exist here,
+ *  and must not be invented by this helper either. */
+export function verifierConfigured(
+  v: WebhookVerifier,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return v.requires.length > 0 && verifierMissing(v, env).length === 0;
+}
+
 export interface EspVerifierStatus {
   provider: EspProvider;
   configured: boolean;
   requires: readonly string[];
+  /** The subset still unset. Only key NAMES — a value never leaves this file. */
+  missing: string[];
 }
 
 /** "Which feedback providers are actually armed?" — for the ops/health view. */
-export function espVerifierStatus(): EspVerifierStatus[] {
+export function espVerifierStatus(
+  env: Record<string, string | undefined> = process.env,
+): EspVerifierStatus[] {
   return ESP_PROVIDERS.map((provider) => ({
     provider,
-    configured: REGISTRY[provider].configured(),
+    configured: verifierConfigured(REGISTRY[provider], env),
     requires: REGISTRY[provider].requires,
+    missing: verifierMissing(REGISTRY[provider], env),
   }));
 }

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
+import { emailPaused } from '../../../../common/util/email-paused';
 import { MailClass } from '../outbound/mail-class';
 import { MailBudgetService } from '../outbound/mail-budget.service';
 import {
@@ -12,6 +13,12 @@ import {
   SENDING_DOMAIN_ENV_KEYS,
   sendingDomainEspStatus,
 } from '../../sending-domains/sending-domains.config';
+import {
+  ESP_FEEDBACK_ENV_KEYS,
+  getVerifier,
+  verifierMissing,
+  WebhookVerifier,
+} from '../inbound/webhook-verifier';
 
 /**
  * "What is this workspace's mail actually doing?" — the one reader of the
@@ -179,9 +186,18 @@ export const INERT_MAIL_FEATURES: readonly InertSpec[] = [
    * Listed here so the key NAMES stay in one place with their siblings.
    */
   { key: 'SENDING_DOMAIN_ESP', env: [...SENDING_DOMAIN_ENV_KEYS] },
-  /** Bounce/complaint webhooks from the ESP. Without it the only bounce source
-   *  is a DSN landing in the tenant's own mailbox. */
-  { key: 'ESP_FEEDBACK', env: ['ESP_FEEDBACK_SECRET'] },
+  /**
+   * Bounce/complaint webhooks from the ESP. Without them the only bounce source
+   * is a DSN landing in the tenant's own mailbox.
+   *
+   * Four verifiers stand behind `POST /api/public/esp/feedback/:provider` and
+   * each is dark until ITS key is set, so this entry asks the VERIFIER the
+   * deployment actually adopted rather than the environment (see
+   * `espFeedbackVerifier`). The full menu is listed here so the key NAMES stay
+   * in one place with their siblings; `inertMailFeatures` narrows both `env`
+   * and `missing` to the one provider that matters on this deployment.
+   */
+  { key: 'ESP_FEEDBACK', env: [...ESP_FEEDBACK_ENV_KEYS] },
   /** "Connect with Google" for a mailbox. */
   { key: 'MAILBOX_OAUTH_GOOGLE', env: ['GOOGLE_MAIL_CLIENT_ID', 'GOOGLE_MAIL_CLIENT_SECRET'] },
   /** "Connect with Microsoft" for a mailbox. */
@@ -204,21 +220,51 @@ function isSet(env: Record<string, string | undefined>, key: string): boolean {
   return !!(env[key] ?? '').trim();
 }
 
+/**
+ * Which feedback verifier this deployment's operator actually has to arm.
+ *
+ * The feedback path has four verifiers and an operator uses exactly one, so a
+ * panel that answers "is ESP_FEEDBACK_SECRET set" gives the wrong answer twice
+ * over: it drops the entry — reporting bounce and complaint feedback as ARMED —
+ * for a SendGrid deployment where every event is still answered 401, and when
+ * it does show the entry it names a key that would not help that operator.
+ *
+ * The deployment already states which ESP was adopted (`SENDING_DOMAIN_ESP`),
+ * so that is what picks the verifier. An ESP with no native scheme here (`ses`,
+ * `resend`), an unrecognised value and an unset flag all fall back to the
+ * `generic` self-hosted relay, which is the only feedback route those
+ * deployments have.
+ */
+function espFeedbackVerifier(env: Record<string, string | undefined>): WebhookVerifier {
+  const adopted = getVerifier((env.SENDING_DOMAIN_ESP ?? '').trim().toLowerCase());
+  return adopted ?? getVerifier('generic')!;
+}
+
 /** Which email features this environment leaves inert. Values never leave. */
 export function inertMailFeatures(
   env: Record<string, string | undefined> = process.env,
 ): InertMailFeature[] {
   const out: InertMailFeature[] = [];
   for (const spec of INERT_MAIL_FEATURES) {
-    // The sending-domain path has a gate of its own, and the entitlement, the
-    // register endpoint and the From-override all obey it. Re-deriving a looser
-    // "is the key set" answer here is how a panel ends up telling an operator
-    // the path is armed while the product refuses it.
-    const missing =
-      spec.key === 'SENDING_DOMAIN_ESP'
-        ? sendingDomainEspStatus(env).missing
-        : spec.env.filter((k) => !isSet(env, k));
-    if (missing.length) out.push({ key: spec.key, env: [...spec.env], missing });
+    // Two entries have a gate of their own and must not be re-derived here as a
+    // looser "is the key set" answer — that is how a panel ends up telling an
+    // operator a path is armed while the product refuses it.
+    //   SENDING_DOMAIN_ESP: the entitlement, the register endpoint and the
+    //     From-override all obey `sendingDomainEspStatus`.
+    //   ESP_FEEDBACK: the route picks a verifier per provider, so only the
+    //     adopted one's keys are the operator's to-do list.
+    let keys: string[] = [...spec.env];
+    let missing: string[];
+    if (spec.key === 'SENDING_DOMAIN_ESP') {
+      missing = sendingDomainEspStatus(env).missing;
+    } else if (spec.key === 'ESP_FEEDBACK') {
+      const verifier = espFeedbackVerifier(env);
+      keys = [...verifier.requires];
+      missing = verifierMissing(verifier, env);
+    } else {
+      missing = spec.env.filter((k) => !isSet(env, k));
+    }
+    if (missing.length) out.push({ key: spec.key, env: keys, missing });
   }
   return out;
 }
@@ -622,18 +668,13 @@ export class MailOpsService {
     });
   }
 
-  /** `settings.email.paused` — absent means "not paused", for every existing
-   *  row (G3). The same reading `MailGuardService` makes. */
+  /** `settings.email.paused` — the same reading every send path makes. */
   private async readPaused(workspaceId: string): Promise<boolean> {
     const ws = await this.prisma.workspace.findFirst({
       where: { id: workspaceId },
       select: { settings: true },
     });
-    const settings = ws?.settings;
-    if (!settings || typeof settings !== 'object') return false;
-    const email = (settings as Record<string, unknown>).email;
-    if (!email || typeof email !== 'object') return false;
-    return (email as Record<string, unknown>).paused === true;
+    return emailPaused(ws?.settings);
   }
 }
 

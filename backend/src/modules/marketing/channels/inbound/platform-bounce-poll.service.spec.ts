@@ -177,6 +177,24 @@ function mdn(): string {
   );
 }
 
+/**
+ * A forged NDR: an ordinary mail anyone can send to the publicly known platform
+ * address, carrying only the pre-RFC-3464 header that names its "victims".
+ */
+function forged(victims: string[]): string {
+  return mime(
+    {
+      From: 'Mail Delivery Subsystem <MAILER-DAEMON@attacker.example>',
+      To: PLATFORM,
+      Subject: 'Delivery Status Notification (Failure)',
+      'X-Failed-Recipients': victims.join(', '),
+      'Message-ID': '<forged-1@attacker.example>',
+      'Content-Type': 'text/plain; charset=utf-8',
+    },
+    'Your message could not be delivered.',
+  );
+}
+
 /** Somebody writing to admin@ — this poller has nothing to do with it. */
 function human(): string {
   return mime(
@@ -200,7 +218,7 @@ interface Item {
   bodyParts?: Record<string, string>;
 }
 
-function build(items: Record<number, Item>, over: { suppress?: any } = {}) {
+function build(items: Record<number, Item>, over: { suppress?: any; sentTo?: string } = {}) {
   const uids = Object.keys(items).map(Number).sort((a, b) => a - b);
 
   mockImap.search.mockImplementation(async (q: any) => {
@@ -237,16 +255,19 @@ function build(items: Record<number, Item>, over: { suppress?: any } = {}) {
       findUnique: jest.fn().mockResolvedValue({
         id: MAIL_LOG_ID,
         workspaceId: WS,
+        // The mail this deployment actually sent, and the only address a
+        // report quoting its id is allowed to speak about.
+        toAddressNorm: over.sentTo ?? 'dead@example.com',
         campaignRecipientId: RECIPIENT_ROW,
       }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     campaignRecipient: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
   };
-  const esp: any = {
-    suppress: over.suppress ?? jest.fn().mockResolvedValue({ suppressed: 1, failed: 0 }),
+  const suppression: any = {
+    suppress: over.suppress ?? jest.fn().mockResolvedValue(undefined),
   };
-  return { prisma, esp, svc: new PlatformBouncePollService(prisma, esp) };
+  return { prisma, suppression, svc: new PlatformBouncePollService(prisma, suppression) };
 }
 
 describe('PlatformBouncePollService', () => {
@@ -266,6 +287,7 @@ describe('PlatformBouncePollService', () => {
     process.env.EMAIL_PASSWORD = 'pw';
     delete process.env.EMAIL_IMAP_HOST;
     delete process.env.EMAIL_IMAP_PORT;
+    delete process.env.PLATFORM_BOUNCE_POLL;
     warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
@@ -281,7 +303,7 @@ describe('PlatformBouncePollService', () => {
 
   it('is inert without the platform mailbox credentials, and says so once', async () => {
     delete process.env.EMAIL_PASSWORD;
-    const { svc, esp } = build({});
+    const { svc, suppression } = build({});
 
     const first = await svc.poll();
     const second = await svc.poll();
@@ -289,9 +311,20 @@ describe('PlatformBouncePollService', () => {
     expect(first.configured).toBe(false);
     expect(second.configured).toBe(false);
     expect(mockImap.constructed).toBe(0);
-    expect(esp.suppress).not.toHaveBeenCalled();
+    expect(suppression.suppress).not.toHaveBeenCalled();
     // Named once, not every ten minutes forever.
     expect(warn.mock.calls.filter((c) => String(c[0]).includes('EMAIL_PASSWORD'))).toHaveLength(1);
+  });
+
+  it('can be stopped from the deploy settings without a code change', async () => {
+    process.env.PLATFORM_BOUNCE_POLL = 'off';
+    const { svc, suppression } = build({ 10: { source: dsn() } });
+
+    const tick = await svc.poll();
+
+    expect(tick.configured).toBe(false);
+    expect(mockImap.constructed).toBe(0);
+    expect(suppression.suppress).not.toHaveBeenCalled();
   });
 
   it('derives the IMAP host from EMAIL_HOST and refuses to guess an unknown one', async () => {
@@ -329,56 +362,112 @@ describe('PlatformBouncePollService', () => {
   // ── what suppresses and what does not ────────────────────────────────────
 
   it('suppresses the 5.1.1 recipient of a DSN', async () => {
-    const { svc, esp } = build({ 10: { source: dsn({ status: '5.1.1' }) } });
+    const { svc, suppression } = build({ 10: { source: dsn({ status: '5.1.1' }) } });
     const tick = await svc.poll();
 
-    expect(esp.suppress).toHaveBeenCalledWith([{ email: 'dead@example.com', kind: 'bounce' }]);
+    // Scoped to the workspace the LEDGER row named — never a global write.
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'dead@example.com',
+      'EMAIL',
+      'HARD_BOUNCE',
+      expect.objectContaining({ source: 'dsn' }),
+    );
     expect(tick.reports).toBe(1);
     expect(tick.suppressed).toBe(1);
+    expect(tick.rejected).toBe(0);
   });
 
   it('never suppresses a 4.2.2 — a full mailbox is not a dead address', async () => {
-    const { svc, esp } = build({ 10: { source: dsn({ status: '4.2.2' }) } });
+    const { svc, suppression } = build({ 10: { source: dsn({ status: '4.2.2' }) } });
     const tick = await svc.poll();
 
-    expect(esp.suppress).not.toHaveBeenCalled();
+    expect(suppression.suppress).not.toHaveBeenCalled();
     expect(tick.suppressed).toBe(0);
   });
 
   it('never suppresses on a read receipt', async () => {
-    const { svc, esp, prisma } = build({ 10: { source: mdn() } });
+    const { svc, suppression, prisma } = build({ 10: { source: mdn() } });
     const tick = await svc.poll();
 
-    expect(esp.suppress).not.toHaveBeenCalled();
+    expect(suppression.suppress).not.toHaveBeenCalled();
     expect(prisma.mailLog.updateMany).not.toHaveBeenCalled();
     expect(tick.reports).toBe(0);
   });
 
   it('records an ARF abuse report as a complaint, never as a bounce', async () => {
-    const { svc, esp, prisma } = build({ 10: { source: arf() } });
+    const { svc, suppression, prisma } = build(
+      { 10: { source: arf() } },
+      { sentTo: 'angry@example.com' },
+    );
     await svc.poll();
 
-    expect(esp.suppress).toHaveBeenCalledWith([{ email: 'angry@example.com', kind: 'complaint' }]);
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'angry@example.com',
+      'EMAIL',
+      'COMPLAINT',
+      expect.objectContaining({ source: 'dsn' }),
+    );
     expect(prisma.mailLog.updateMany.mock.calls[0][0].data).toEqual({ complainedAt: expect.any(Date) });
   });
 
   it('suppresses only the 5.x.x rows of a mixed report', async () => {
-    const { svc, esp } = build({
+    const { svc, suppression } = build({
       10: { source: dsn({ status: '5.1.1', second: { recipient: 'busy@example.com', status: '4.2.2' } }) },
     });
     await svc.poll();
 
-    expect(esp.suppress).toHaveBeenCalledWith([{ email: 'dead@example.com', kind: 'bounce' }]);
+    expect(suppression.suppress).toHaveBeenCalledTimes(1);
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'dead@example.com',
+      'EMAIL',
+      'HARD_BOUNCE',
+      expect.anything(),
+    );
   });
 
   it('leaves ordinary mail in the platform mailbox alone', async () => {
-    const { svc, esp, prisma } = build({ 10: { source: human() } });
+    const { svc, suppression, prisma } = build({ 10: { source: human() } });
     const tick = await svc.poll();
 
-    expect(esp.suppress).not.toHaveBeenCalled();
+    expect(suppression.suppress).not.toHaveBeenCalled();
     expect(prisma.mailLog.findUnique).not.toHaveBeenCalled();
     expect(tick.examined).toBe(1);
     expect(tick.reports).toBe(0);
+  });
+
+  // ── a report is not a permission ─────────────────────────────────────────
+
+  it('refuses a forged NDR that names victims in a header', async () => {
+    const { svc, suppression } = build({ 10: { source: forged(['ceo@bigcustomer.com', 'finance@bigcustomer.com']) } });
+    const tick = await svc.poll();
+
+    expect(suppression.suppress).not.toHaveBeenCalled();
+    expect(tick.suppressed).toBe(0);
+    expect(tick.rejected).toBe(1);
+  });
+
+  it('refuses a report about mail this deployment never sent', async () => {
+    const { svc, suppression, prisma } = build({ 10: { source: dsn({ recipient: 'ceo@bigcustomer.com' }) } });
+    prisma.mailLog.findUnique.mockResolvedValue(null);
+    const tick = await svc.poll();
+
+    expect(suppression.suppress).not.toHaveBeenCalled();
+    expect(tick.suppressed).toBe(0);
+    expect(tick.rejected).toBe(1);
+  });
+
+  it('refuses a report that quotes a real Message-ID but names somebody else', async () => {
+    // Every recipient of one of our mails holds a valid Message-ID. It is not
+    // a licence to suppress a third party.
+    const { svc, suppression } = build({ 10: { source: dsn({ recipient: 'ceo@bigcustomer.com' }) } });
+    const tick = await svc.poll();
+
+    expect(suppression.suppress).not.toHaveBeenCalled();
+    expect(tick.suppressed).toBe(0);
+    expect(tick.rejected).toBe(1);
   });
 
   // ── attribution ──────────────────────────────────────────────────────────
@@ -418,30 +507,40 @@ describe('PlatformBouncePollService', () => {
     );
   });
 
-  it('accepts a miss: suppression still happens with nothing to attribute to', async () => {
-    const { svc, esp, prisma } = build({ 10: { source: dsn({ originalMessageId: null }) } });
+  it('drops an unattributable report loudly instead of trusting it', async () => {
+    // The stated cost of the gate: `Original-Message-ID` is optional in RFC
+    // 3464, so a genuine bounce that carries neither it nor our returned
+    // headers now goes unsuppressed. It must never do so silently.
+    const { svc, suppression, prisma } = build({ 10: { source: dsn({ originalMessageId: null }) } });
     const tick = await svc.poll();
 
-    expect(esp.suppress).toHaveBeenCalledTimes(1);
+    expect(suppression.suppress).not.toHaveBeenCalled();
     expect(prisma.mailLog.findUnique).not.toHaveBeenCalled();
     expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalled();
+    expect(tick.rejected).toBe(1);
     expect(tick.attributed).toBe(0);
+    expect(
+      warn.mock.calls.filter((c) => String(c[0]).includes('dead@example.com')),
+    ).toHaveLength(1);
   });
 
   it('does not invent a ledger row for a foreign Message-ID', async () => {
-    const { svc, prisma } = build({
+    const { svc, suppression, prisma } = build({
       10: { source: dsn({ originalMessageId: '<CAF-not-ours-123@mail.gmail.com>' }) },
     });
-    await svc.poll();
+    const tick = await svc.poll();
 
     expect(prisma.mailLog.findUnique).not.toHaveBeenCalled();
+    expect(suppression.suppress).not.toHaveBeenCalled();
+    expect(tick.rejected).toBe(1);
   });
 
   it('writes nothing when the ledger row is gone', async () => {
-    const { svc, prisma } = build({ 10: { source: dsn() } });
+    const { svc, suppression, prisma } = build({ 10: { source: dsn() } });
     prisma.mailLog.findUnique.mockResolvedValue(null);
     const tick = await svc.poll();
 
+    expect(suppression.suppress).not.toHaveBeenCalled();
     expect(prisma.mailLog.updateMany).not.toHaveBeenCalled();
     expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalled();
     expect(tick.attributed).toBe(0);
@@ -465,7 +564,7 @@ describe('PlatformBouncePollService', () => {
   });
 
   it('retries an item whose suppression write failed', async () => {
-    const suppress = jest.fn().mockResolvedValue({ suppressed: 0, failed: 1 });
+    const suppress = jest.fn().mockRejectedValue(new Error('deadlock detected'));
     const { svc } = build({ 10: { source: dsn() } }, { suppress });
 
     await svc.poll();
@@ -479,21 +578,30 @@ describe('PlatformBouncePollService', () => {
   });
 
   it('parks a poison item after three attempts instead of blocking the mailbox', async () => {
-    const { svc, esp } = build({
-      10: { throws: new Error('mailparser exploded') },
-      11: { source: dsn({ recipient: 'behind@example.com' }) },
-    });
+    const { svc, suppression } = build(
+      {
+        10: { throws: new Error('mailparser exploded') },
+        11: { source: dsn({ recipient: 'behind@example.com' }) },
+      },
+      { sentTo: 'behind@example.com' },
+    );
 
     await svc.poll();
     await svc.poll();
-    expect(esp.suppress).not.toHaveBeenCalled(); // uid 11 is stuck behind it
+    expect(suppression.suppress).not.toHaveBeenCalled(); // uid 11 is stuck behind it
 
     const third = await svc.poll();
 
     expect(third.parked).toBe(1);
     expect(error).toHaveBeenCalledTimes(1);
     // The mail queued behind the poison item gets through in the same tick.
-    expect(esp.suppress).toHaveBeenCalledWith([{ email: 'behind@example.com', kind: 'bounce' }]);
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'behind@example.com',
+      'EMAIL',
+      'HARD_BOUNCE',
+      expect.anything(),
+    );
     expect(third.examined).toBe(1);
 
     mockImap.searchQueries = [];
@@ -546,7 +654,7 @@ describe('PlatformBouncePollService', () => {
       },
       '',
     );
-    const { svc, esp, prisma } = build({
+    const { svc, suppression, prisma } = build({
       10: {
         size: 3_000_000,
         bodyStructure: {
@@ -559,17 +667,82 @@ describe('PlatformBouncePollService', () => {
         },
         bodyParts: { header: headers, '2': report },
       },
-    });
+    }, { sentTo: 'huge@example.com' });
 
     const tick = await svc.poll();
 
-    expect(esp.suppress).toHaveBeenCalledWith([{ email: 'huge@example.com', kind: 'bounce' }]);
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'huge@example.com',
+      'EMAIL',
+      'HARD_BOUNCE',
+      expect.anything(),
+    );
     expect(prisma.mailLog.findUnique).toHaveBeenCalled();
     expect(tick.reports).toBe(1);
   });
 
+  it('pulls the returned headers of an oversize bounce so it can still be attributed', async () => {
+    // Without the id there is no authorisation, so an oversize DSN whose MTA
+    // omitted Original-Message-ID would be dropped — the headers part it
+    // returns is the only other place that id exists.
+    const report = [
+      'Reporting-MTA: dns; smtpout.secureserver.net',
+      '',
+      'Final-Recipient: rfc822; huge@example.com',
+      'Action: failed',
+      'Status: 5.2.1',
+    ].join(CRLF);
+    const headers = mime(
+      {
+        From: 'Mail Delivery System <MAILER-DAEMON@smtpout.secureserver.net>',
+        To: PLATFORM,
+        Subject: 'Undelivered Mail Returned to Sender',
+        'Message-ID': '<dsn-big-2@secureserver.net>',
+        'Content-Type': 'multipart/report; report-type=delivery-status; boundary="BIG"',
+      },
+      '',
+    );
+    const { svc, suppression, prisma } = build(
+      {
+        10: {
+          size: 3_000_000,
+          bodyStructure: {
+            type: 'multipart/report',
+            parameters: { 'report-type': 'delivery-status' },
+            childNodes: [
+              { part: '1', type: 'text/plain' },
+              { part: '2', type: 'message/delivery-status' },
+              { part: '3', type: 'message/rfc822-headers' },
+            ],
+          },
+          bodyParts: {
+            header: headers,
+            '2': report,
+            '3': [`Message-ID: <${MAIL_LOG_ID}@jeetagrowth.com>`, 'Subject: Faturanız'].join(CRLF),
+          },
+        },
+      },
+      { sentTo: 'huge@example.com' },
+    );
+
+    const tick = await svc.poll();
+
+    expect(prisma.mailLog.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: MAIL_LOG_ID } }),
+    );
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'huge@example.com',
+      'EMAIL',
+      'HARD_BOUNCE',
+      expect.anything(),
+    );
+    expect(tick.suppressed).toBe(1);
+  });
+
   it('skips an oversize mail that carries no report part', async () => {
-    const { svc, esp } = build({
+    const { svc, suppression } = build({
       10: {
         size: 3_000_000,
         bodyStructure: { type: 'multipart/mixed', childNodes: [{ part: '1', type: 'text/plain' }] },
@@ -577,7 +750,7 @@ describe('PlatformBouncePollService', () => {
     });
 
     const tick = await svc.poll();
-    expect(esp.suppress).not.toHaveBeenCalled();
+    expect(suppression.suppress).not.toHaveBeenCalled();
     expect(tick.examined).toBe(1);
   });
 });

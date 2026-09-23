@@ -20,6 +20,8 @@ const DataDeletionStatusPage   = lazy(() => import('./pages/legal/DataDeletionSt
 const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
 const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvitePage'));
+const ForgotPasswordPage       = lazy(() => import('./pages/marketing/ForgotPasswordPage'));
+const ResetPasswordPage        = lazy(() => import('./pages/marketing/ResetPasswordPage'));
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
 const CommandCenterPage        = lazy(() => import('./pages/marketing/command/CommandCenterPage'));
 const MarketingDashboardPage   = lazy(() => import('./pages/marketing/MarketingDashboardPage'));
@@ -177,6 +179,14 @@ export default function App() {
       {/* Public accept-invite landing — the invite TOKEN in the query string
           is the only credential (Task 15); no auth guard, unlike login/register. */}
       <Route path="/accept-invite" element={<S><AcceptInvitePage /></S>} />
+      {/* Password recovery. Both public, and both must stay outside
+          MarketingProtectedRoute: having no session is the problem being
+          solved. `/reset-password` is the exact path the mailed link points
+          at (`${FRONTEND_URL}/reset-password?token=…`), so the catch-all
+          below must never be the one that answers it — it redirects to the
+          landing page and drops the query string with the token in it. */}
+      <Route path="/forgot-password" element={<S><ForgotPasswordPage /></S>} />
+      <Route path="/reset-password"  element={<S><ResetPasswordPage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
       <Route path="/widget"   element={<S><WidgetChatPage /></S>} />
       {/* Public self-service booking page (no auth). */}
