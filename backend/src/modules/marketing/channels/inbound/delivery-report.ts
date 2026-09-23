@@ -1,6 +1,12 @@
 import { isSingleAddress, normalizeAddress } from '../../../../common/util/email-address';
 import { normalizeMessageId } from '../email-message-id';
-import { MailContentType, MailPart, RawMailHeaderLine, headerLineValues } from './inbound-mail.types';
+import {
+  MailContentType,
+  MailPart,
+  RawMailHeaderLine,
+  headerLineValues,
+  parseAddressList,
+} from './inbound-mail.types';
 
 /**
  * Read a bounce, a complaint or a read receipt out of the mail that reports it.
@@ -159,15 +165,32 @@ function parseDsn(text: string | null, parts: readonly MailPart[]): DeliveryRepo
   // The per-message block is the first one that names no recipient.
   const perMessage = blocks.find((b) => !b['final-recipient'] && !b['original-recipient']) ?? {};
   const recipients: DeliveryReportRecipient[] = [];
+  /** Per-recipient blocks whose recipient we could not read as an address. */
+  const unnamed: Record<string, string>[] = [];
   for (const block of blocks) {
     // Prefer the address the SENDER used: an alias rewrite puts the internal
     // mailbox in Final-Recipient, and suppressing that helps nobody.
     const recipient = addressOf(block['original-recipient']) || addressOf(block['final-recipient']);
-    if (!recipient) continue;
-    const action = lower(block['action']) || null;
-    const diagnostic = block['diagnostic-code'] || null;
-    const status = statusOf(block['status'], diagnostic);
-    recipients.push({ recipient, outcome: outcomeOf(status, action), status, action, diagnostic });
+    if (!recipient) {
+      // `Status` is a per-recipient field (RFC 3464 §2.3.4); the per-message
+      // block never carries one.
+      if (block['status'] !== undefined) unnamed.push(block);
+      continue;
+    }
+    recipients.push(recipientOf(recipient, block));
+  }
+
+  // A per-recipient block MUST name its recipient, but the name is not always
+  // one we can read: `rfc822; <>`, an X.400 address, a bare local alias. The
+  // returned headers then are the only place the address is written. Taken
+  // only when it is unambiguous — ONE unreadable block and ONE address in the
+  // returned `To` — because guessing which of several people a status belongs
+  // to is how the wrong customer gets suppressed. (This names a candidate, it
+  // does not authorise one: `dsn-provenance.ts` still has to tie the address
+  // to mail the workspace sent.)
+  if (!recipients.length && unnamed.length === 1) {
+    const returned = parseAddressList(headerFromReturnedMessage(parts, 'to'));
+    if (returned.length === 1) recipients.push(recipientOf(returned[0].address, unnamed[0]));
   }
   if (!recipients.length) return EMPTY;
   return {
@@ -175,6 +198,14 @@ function parseDsn(text: string | null, parts: readonly MailPart[]): DeliveryRepo
     originalMessageId: originalMessageIdFrom(parts, perMessage['original-message-id']),
     recipients,
   };
+}
+
+/** One per-recipient block, read. */
+function recipientOf(recipient: string, block: Record<string, string>): DeliveryReportRecipient {
+  const action = lower(block['action']) || null;
+  const diagnostic = block['diagnostic-code'] || null;
+  const status = statusOf(block['status'], diagnostic);
+  return { recipient, outcome: outcomeOf(status, action), status, action, diagnostic };
 }
 
 function parseArf(text: string | null, parts: readonly MailPart[]): DeliveryReport {
@@ -318,13 +349,28 @@ function partOf(parts: readonly MailPart[], contentType: string): string | null 
   return hit?.text ? hit.text : null;
 }
 
-/** Read one header out of the `message/rfc822-headers` part a report returns. */
+/**
+ * Read one header out of the headers a report returns (`text/rfc822-headers`,
+ * or the head of a whole `message/rfc822`).
+ *
+ * Two details decide whether the bounce can be tied back to our mail at all:
+ *
+ * - **Unfolded first.** Plenty of MTAs fold a long id onto its own line —
+ *   `Message-ID:` then ` <…@…>` — and reading only the first physical line
+ *   returned an empty id, so a genuine bounce of our own mail could never be
+ *   proved to be ours.
+ * - **The head only.** A returned `message/rfc822` carries the original BODY
+ *   too, and a `Message-ID:` or `To:` line typed into a body is not a header.
+ */
 function headerFromReturnedMessage(parts: readonly MailPart[], name: string): string | null {
   const part = (parts ?? []).find((p) => /rfc822/i.test(String(p?.contentType ?? '')));
   if (!part?.text) return null;
-  const re = new RegExp(`^${name}\\s*:(.*)$`, 'im');
-  const m = re.exec(part.text);
-  return m ? m[1].trim() : null;
+  const head = part.text.replace(/^(?:[ \t]*\r?\n)+/, '').split(/\r?\n[ \t]*\r?\n/)[0] ?? '';
+  const unfolded = head.replace(/\r?\n[ \t]+/g, ' ');
+  const re = new RegExp(`^${name}[ \\t]*:(.*)$`, 'im');
+  const m = re.exec(unfolded);
+  const value = m ? m[1].trim() : '';
+  return value || null;
 }
 
 /** Every address named by `X-Failed-Recipients`, across repeats of the header. */

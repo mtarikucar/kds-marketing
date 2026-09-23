@@ -233,6 +233,86 @@ describe('parseDeliveryReport — attributing the report to the mail we sent', (
     expect(report.originalMessageId).toBeNull();
     expect(suppressibleRecipients(report)).toHaveLength(1);
   });
+
+  /** A report that returns the bounced mail's headers — Postfix's shape. */
+  const withReturned = (status: string, returned: string[], finalRecipient = 'rfc822; <>') =>
+    dsn('', {
+      reportParts: [
+        {
+          contentType: 'message/delivery-status',
+          text: ['Reporting-MTA: dns; mx.acme.com', '', `Final-Recipient: ${finalRecipient}`, 'Action: failed', `Status: ${status}`].join(
+            '\r\n',
+          ),
+        },
+        { contentType: 'text/rfc822-headers', text: returned.join('\r\n') },
+      ],
+    });
+
+  it('reads a returned Message-ID that the MTA folded onto its own line', () => {
+    // Reading only the first physical line returned an empty id here, and the
+    // bounce of our own mail could never be proved to be ours.
+    const report = parseDeliveryReport(
+      withReturned(
+        '5.1.1',
+        ['From: destek@acme.com', 'To: yok@musteri.com.tr', 'Message-ID:', ' <9f1c-uuid@Acme.com>', 'Subject: Teklif'],
+        'rfc822; yok@musteri.com.tr',
+      ),
+    );
+    expect(report.originalMessageId).toBe('9f1c-uuid@acme.com');
+  });
+
+  it('never reads a header out of the returned BODY', () => {
+    const report = parseDeliveryReport(
+      dsn('Final-Recipient: rfc822; yok@musteri.com.tr\nStatus: 5.1.1', {
+        reportParts: [
+          { contentType: 'message/delivery-status', text: 'Final-Recipient: rfc822; yok@musteri.com.tr\nStatus: 5.1.1' },
+          {
+            contentType: 'message/rfc822',
+            text: ['From: destek@acme.com', 'Subject: Teklif', '', 'Message-ID: <typed-in-the-body@acme.com>'].join('\r\n'),
+          },
+        ],
+      }),
+    );
+    expect(report.originalMessageId).toBeNull();
+  });
+
+  it('takes the recipient from the returned To when the report names nobody it can read', () => {
+    // `Final-Recipient: rfc822; <>` — the address is written only in the
+    // returned headers, beside the id that proves the mail was ours.
+    const report = parseDeliveryReport(
+      withReturned('5.1.1', ['From: destek@acme.com', 'To: "Yok Bey" <Yok@Musteri.com.tr>', 'Message-ID: <9f1c-uuid@acme.com>']),
+    );
+    expect(report.originalMessageId).toBe('9f1c-uuid@acme.com');
+    expect(suppressibleRecipients(report)).toEqual([
+      { address: 'yok@musteri.com.tr', reason: 'HARD_BOUNCE', status: '5.1.1', diagnostic: null },
+    ]);
+  });
+
+  it('still suppresses nobody on a 4.x.x whose recipient came from the returned To', () => {
+    const report = parseDeliveryReport(
+      withReturned('4.2.2', ['From: destek@acme.com', 'To: dolu@musteri.com.tr', 'Message-ID: <9f1c-uuid@acme.com>']),
+    );
+    expect(report.recipients.map((r) => r.outcome)).toEqual(['SOFT_BOUNCE']);
+    expect(suppressibleRecipients(report)).toEqual([]);
+  });
+
+  it('does not guess when the returned To names more than one person', () => {
+    const report = parseDeliveryReport(
+      withReturned('5.1.1', ['From: destek@acme.com', 'To: a@musteri.com.tr, b@musteri.com.tr', 'Message-ID: <x@acme.com>']),
+    );
+    expect(suppressibleRecipients(report)).toEqual([]);
+  });
+
+  it('never replaces a recipient the report DID name with the returned To', () => {
+    const report = parseDeliveryReport(
+      withReturned(
+        '5.1.1',
+        ['From: destek@acme.com', 'To: baska@musteri.com.tr', 'Message-ID: <x@acme.com>'],
+        'rfc822; yok@musteri.com.tr',
+      ),
+    );
+    expect(suppressibleRecipients(report).map((t) => t.address)).toEqual(['yok@musteri.com.tr']);
+  });
 });
 
 describe('parseDeliveryReport — ARF', () => {

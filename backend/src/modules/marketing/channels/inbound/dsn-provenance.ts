@@ -36,17 +36,76 @@ import { DeliveryReport, SuppressibleRecipient } from './delivery-report';
  *
  * ## What is actually checked
  *
- * A `MailLog` row in THIS workspace addressed to THIS recipient:
+ * A record, in THIS workspace, of mail sent to THIS recipient. First a
+ * `MailLog` row:
  *
- * - matched by `Original-Message-ID` when the report carried one. The ids are
- *   UUID-seeded (`email-message-id.ts`), so they cannot be guessed — but they
- *   CAN be known by anyone who received mail from the tenant, which is why the
- *   row's recipient must match the reported one too. Knowing a Message-ID must
- *   not become a licence to suppress a third party.
+ * - matched by the report's id (`Original-Message-ID`, else the `Message-ID`
+ *   of the headers it returns). The ids are UUID-seeded
+ *   (`email-message-id.ts`), so they cannot be guessed — but they CAN be known
+ *   by anyone who received mail from the tenant, which is why the row's
+ *   recipient must match the reported one too. Knowing a Message-ID must not
+ *   become a licence to suppress a third party.
  * - otherwise by address, over a bounded window. `Original-Message-ID` is
  *   genuinely often absent (delivery-report.ts says so), and refusing every
  *   report without one would throw away the feature's whole reason for
  *   existing: the typo'd address we really did mail.
+ *
+ * Then, failing that, an OUTBOUND `Message` in this address's own email thread
+ * that really left. Two writers put one there, and neither writes `MailLog`:
+ *
+ * - the conversational lane (`message-sender.service.ts` — the Inbox composer,
+ *   the AI reply engine, a workflow's reply), which settles its row `SENT`
+ *   with the Message-ID it put on the wire;
+ * - the Sent-folder reconciler (`email-sent-poll.service.ts`), which files the
+ *   mail the owner typed in Outlook or on a phone as an OUTBOUND echo.
+ *
+ * Same two halves, same pairing: by id to that message's own recipient, or by
+ * address inside the window. See "The rule, lane by lane" for why this one is
+ * sound.
+ *
+ * ## The rule, lane by lane
+ *
+ * Three doors read delivery reports, and the question is the same at each:
+ * "did we send mail to the address this report names?" What differs is what
+ * each door can SEE, and so what it can use as proof.
+ *
+ * - **The platform mailbox** (`platform-bounce-poll.service.ts`) is the
+ *   publicly known `From` of every platform mail and has no workspace of its
+ *   own. It keeps its own, stricter gate: the report's id must resolve to one
+ *   `MailLog` row, the address must be that row's recipient, and the row's
+ *   workspace is the only one written to. No id, no write — it cannot scope an
+ *   address-level match to a tenant, so it does not try.
+ * - **The tenant's own mailbox** (the IMAP poller, and the tokenized relay
+ *   webhook) has a workspace, so it may also match by address over a window,
+ *   and it may use the workspace's conversation ledger: the replies the product
+ *   sent from this mailbox, and what only that mailbox can produce — the mail
+ *   its owner sent, as the Sent-folder reconciler read it back. Nobody outside
+ *   can write into a tenant's Sent folder, which is what makes that proof and
+ *   not just another header. (The same residual as the `MailLog` window
+ *   applies: someone who gets the workspace to MAIL an address — by writing in
+ *   as it so the AI answers — can then bounce it inside the window.)
+ *
+ * What the tenant lane may NOT treat as proof, and why each was rejected:
+ *
+ * - **The mailbox itself.** The IMAP login authenticates US reading the box;
+ *   it says nothing about who wrote what is in it. The tenant's address is on
+ *   their website — it is exactly as open to strangers as the platform's.
+ * - **"The address is one of our leads."** That is the list an attacker most
+ *   wants to hit — quotes, invoices, bookings go to leads — and research
+ *   imports fill it with public addresses anybody can guess. A lead record
+ *   says the workspace KNOWS a person, not that it mailed them. The cost of
+ *   refusing the rare genuine bounce with no evidence at all (the owner mailed
+ *   a lead from Outlook with Sent reading switched off) is ONE more bounce: the
+ *   next product send carries our id, its DSN resolves, and the address is
+ *   suppressed then — with proof.
+ * - **The returned headers alone.** `From: <our mailbox>` / `To: <victim>` in
+ *   a `text/rfc822-headers` part is typed by whoever sends the report. The
+ *   returned headers are used for what they POINT AT — the id that has to
+ *   resolve to our own row, and (when the report names nobody readable) the
+ *   candidate address — never as evidence on their own.
+ * - **The reporter's domain.** `MAILER-DAEMON@<the recipient's domain>` is free
+ *   text; without a DMARC-aligned pass it is forged in one line, and genuine
+ *   bounces mostly come from the SENDER's provider anyway.
  *
  * ## What is deliberately NOT solved here
  *
@@ -77,10 +136,26 @@ export const PROVENANCE_WINDOW_DAYS = 30;
  */
 export const MAX_SUPPRESSIONS_PER_REPORT = 10;
 
-/** The slice of Prisma this needs — narrow, so tests hand it a plain object. */
+/**
+ * The slice of Prisma this needs — narrow, so tests hand it a plain object.
+ *
+ * The conversation ledger is optional: a caller that hands over only
+ * `mailLog` still gets every `MailLog` proof, and simply cannot use the
+ * Sent-folder one.
+ */
 export interface MailLogLookup {
   mailLog: { findFirst: (args: any) => Promise<{ id: string } | null> };
+  contactIdentity?: { findMany: (args: any) => Promise<Array<{ id: string }>> };
+  conversation?: { findMany: (args: any) => Promise<Array<{ id: string }>> };
+  message?: { findFirst: (args: any) => Promise<{ id: string } | null> };
 }
+
+/** The `Message.status` values that mean the mail left. */
+const SETTLED_SENDS = ['SENT', 'DELIVERED', 'READ'];
+
+/** Bounds on the echo lookup — one address, one mailbox; never a scan. */
+const MAX_IDENTITIES = 20;
+const MAX_CONVERSATIONS = 50;
 
 export interface CorroboratedReport {
   /** Addresses this workspace provably mailed. Safe to suppress. */
@@ -140,10 +215,77 @@ export async function corroborateReport(
     } catch {
       row = null;
     }
-    if (row) out.corroborated.push(t);
+    const proved = Boolean(row) || (await sentByMailbox(db, workspaceId, norm, originalMessageId, since));
+    if (proved) out.corroborated.push(t);
     else out.rejected.push({ address: t.address, reason: 'not-our-recipient' });
   }
   return out;
+}
+
+/**
+ * Did this workspace send `address` a mail that `MailLog` never saw?
+ *
+ * Two kinds of OUTBOUND message sit in the address's own email thread, and both
+ * are mail that really left:
+ * - the conversational lane's own sends (`message-sender.service.ts`: the Inbox
+ *   composer, the AI reply engine, a workflow reply). That lane deliberately
+ *   bypasses the gateway, so its only record is this row;
+ * - the owner's own mail typed in Outlook, on a phone or in the Gmail web
+ *   client, filed back as an echo by the Sent-folder reconciler — read out of
+ *   their Sent folder over their own login, which nobody outside can write to.
+ *
+ * Same two halves as the `MailLog` match, and the same pairing:
+ * - the report's id, on a message filed under THIS address's own identity —
+ *   so knowing an id suppresses only the person that mail went to;
+ * - or, with no id, a message to this address inside the window.
+ *
+ * Only a settled send counts (`SENT`, or a later `DELIVERED`/`READ`). `FAILED`
+ * never left, for the reason `REFUSED` is excluded on the ledger, and
+ * `PENDING` is a send whose outcome was never recorded: "we cannot tell
+ * whether it left" falls on the side of not suppressing, like every other
+ * unknown in this module. Never throws.
+ */
+async function sentByMailbox(
+  db: MailLogLookup,
+  workspaceId: string,
+  address: string,
+  originalMessageId: string | null,
+  since: Date,
+): Promise<boolean> {
+  if (!db.contactIdentity || !db.conversation || !db.message) return false;
+  try {
+    const identities = await db.contactIdentity.findMany({
+      where: { workspaceId, kind: 'EMAIL', value: address },
+      select: { id: true },
+      take: MAX_IDENTITIES,
+    });
+    if (!identities?.length) return false;
+
+    const conversations = await db.conversation.findMany({
+      where: { workspaceId, contactIdentityId: { in: identities.map((i) => i.id) } },
+      select: { id: true },
+      take: MAX_CONVERSATIONS,
+    });
+    if (!conversations?.length) return false;
+
+    const spellings = originalMessageId ? [originalMessageId, `<${originalMessageId}>`] : [];
+    const message = await db.message.findFirst({
+      where: {
+        workspaceId,
+        conversationId: { in: conversations.map((c) => c.id) },
+        direction: 'OUTBOUND',
+        status: { in: SETTLED_SENDS },
+        OR: [
+          ...(spellings.length ? [{ externalMessageId: { in: spellings } }] : []),
+          { createdAt: { gte: since } },
+        ],
+      },
+      select: { id: true },
+    });
+    return Boolean(message);
+  } catch {
+    return false;
+  }
 }
 
 /** One line an operator can act on, or null when everything checked out. */

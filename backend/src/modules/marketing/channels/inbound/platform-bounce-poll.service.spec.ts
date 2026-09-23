@@ -546,6 +546,61 @@ describe('PlatformBouncePollService', () => {
     expect(tick.attributed).toBe(0);
   });
 
+  // ── the returned `To` names a candidate, never a permission ─────────────
+
+  it('refuses a report naming nobody readable whose returned To is a stranger, even beside a real id', async () => {
+    // `Final-Recipient: rfc822; <>` makes the parser fall back to the returned
+    // headers' `To`. Those headers are typed by whoever sends the report, so
+    // quoting the real id of a mail to dead@example.com must not buy the
+    // victim's address.
+    const { svc, suppression } = build({
+      10: {
+        source: dsn({
+          recipient: '<>',
+          originalMessageId: null,
+          returnedHeaders: [
+            `From: Jeeta <${PLATFORM}>`,
+            'To: ceo@bigcustomer.com',
+            `Message-ID: <${MAIL_LOG_ID}@jeetagrowth.com>`,
+          ].join(CRLF),
+        }),
+      },
+    });
+    const tick = await svc.poll();
+
+    expect(suppression.suppress).not.toHaveBeenCalled();
+    expect(tick.suppressed).toBe(0);
+    expect(tick.rejected).toBe(1);
+  });
+
+  it('suppresses the row’s own recipient when only the returned To names them', async () => {
+    const { svc, suppression } = build({
+      10: {
+        source: dsn({
+          recipient: '<>',
+          originalMessageId: null,
+          returnedHeaders: [
+            `From: Jeeta <${PLATFORM}>`,
+            'To: "Ölü Adres" <dead@example.com>',
+            'Message-ID:',
+            ` <${MAIL_LOG_ID}@jeetagrowth.com>`,
+          ].join(CRLF),
+        }),
+      },
+    });
+    const tick = await svc.poll();
+
+    expect(suppression.suppress).toHaveBeenCalledTimes(1);
+    expect(suppression.suppress).toHaveBeenCalledWith(
+      WS,
+      'dead@example.com',
+      'EMAIL',
+      'HARD_BOUNCE',
+      expect.objectContaining({ source: 'dsn' }),
+    );
+    expect(tick.suppressed).toBe(1);
+  });
+
   // ── never lose a bounce ──────────────────────────────────────────────────
 
   it('does not advance the cursor past an item it could not read', async () => {
