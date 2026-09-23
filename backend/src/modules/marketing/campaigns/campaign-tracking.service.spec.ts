@@ -1,5 +1,43 @@
-import { CampaignTrackingService } from './campaign-tracking.service';
+import { CampaignTrackingService, machineHitReason } from './campaign-tracking.service';
 import { signLeadUnsubscribeToken } from '../channels/lead-unsubscribe.token';
+
+/**
+ * The classifier on its own. It is a DENY-list: it names the machines it can
+ * name and lets everything else count, because over-blocking deletes a tenant's
+ * real engagement and nothing on the screen would ever say why.
+ */
+describe('machineHitReason', () => {
+  it.each([
+    ['a HEAD request', { method: 'HEAD', ua: 'Mozilla/5.0' }, 'head'],
+    ['a mail-security gateway', { method: 'GET', ua: 'Mimecast Link Scanner' }, 'scanner'],
+    ['a script', { method: 'GET', ua: 'python-requests/2.31.0' }, 'tool'],
+    // The naming every real crawler uses — and the one a bare word-boundary
+    // rule misses, because there is no boundary inside "AhrefsBot".
+    ['a versioned crawler', { method: 'GET', ua: 'Mozilla/5.0 (compatible; AhrefsBot/7.0)' }, 'bot'],
+    ['a standalone bot token', { method: 'GET', ua: 'Mozilla/5.0 (some bot; +http://x.test)' }, 'bot'],
+  ])('names %s', (_label, hit, reason) => {
+    expect(machineHitReason(hit)).toBe(reason);
+  });
+
+  it.each([
+    ['an ordinary browser', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 Mobile Safari/604.1'],
+    ['the Gmail image proxy — that fetch IS the open', 'Mozilla/5.0 (via ggpht.com GoogleImageProxy)'],
+    ['a UA that merely contains the letters bot', 'Mozilla/5.0 (Linux; Android 13; Cubot X30)'],
+  ])('lets %s through', (_label, ua) => {
+    expect(machineHitReason({ method: 'GET', ua })).toBeNull();
+  });
+
+  it('reads a hit landing seconds after the send as a delivery-time prefetch', () => {
+    expect(machineHitReason({ method: 'GET', ua: 'Mozilla/5.0' }, new Date())).toBe('prefetch');
+    // …and one an hour later as a person, on the same User-Agent.
+    expect(machineHitReason({ method: 'GET', ua: 'Mozilla/5.0' }, new Date(Date.now() - 3_600_000))).toBeNull();
+  });
+
+  it('counts a hit it knows nothing about', () => {
+    expect(machineHitReason(undefined)).toBeNull();
+    expect(machineHitReason({})).toBeNull();
+  });
+});
 
 /**
  * Tracking security: click resolves ONLY to a campaign-authored http(s) link
@@ -8,6 +46,8 @@ import { signLeadUnsubscribeToken } from '../channels/lead-unsubscribe.token';
  */
 describe('CampaignTrackingService', () => {
   const WS = 'ws-1';
+  /** An ordinary reader: a real browser UA on a GET. */
+  const HUMAN = { method: 'GET', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15' };
   let prisma: any;
   let outbox: { append: jest.Mock };
   let iysSync: { enqueueConsent: jest.Mock };
@@ -252,8 +292,13 @@ describe('CampaignTrackingService', () => {
         where: { id: 'lead-1', workspaceId: WS, emailOptOut: false },
         data: { emailOptOut: true },
       });
-      // The guess must not reach the SMS mirrors.
-      expect(outbox.append).not.toHaveBeenCalled();
+      // The guess must not reach the SMS mirrors. (The EMAIL branch DOES emit
+      // its own `marketing.email.unsubscribed.v1`, so the assertion names the
+      // event it must not raise rather than counting appends.)
+      expect(outbox.append).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'marketing.sms.optout.v1' }),
+        expect.anything(),
+      );
       expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
     });
 
@@ -425,5 +470,226 @@ describe('CampaignTrackingService', () => {
     suppression.suppress.mockRejectedValue(new Error('db down'));
 
     await expect(svc.unsubscribe('tok')).rejects.toThrow('db down');
+  });
+
+  /**
+   * `click-not-open`: a reader whose client blocks images never loads the
+   * pixel, so a campaign that was read and acted on reported "opened 0,
+   * clicked 40". A click is proof of an open — claimed, never set, so the
+   * pixel and the click racing each other still count one unique open.
+   */
+  describe('a click implies an open', () => {
+    const emailClick = (over: any = {}) => {
+      prisma.campaignRecipient.findUnique.mockResolvedValue({
+        id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', openedAt: null, clickedAt: null, sentAt: null, ...over,
+      });
+      prisma.campaign.findFirst.mockResolvedValue({ links: ['https://shop.example/pricing'], channel: 'EMAIL' });
+    };
+    /** Which counters the run bumped, in order. */
+    const bumped = () => (prisma.$executeRawUnsafe as jest.Mock).mock.calls.map((c: any[]) => c[1]);
+
+    it('claims openedAt on the same conditional idiom the pixel uses, and bumps both counters', async () => {
+      emailClick();
+      await expect(svc.click('tok', 0, HUMAN)).resolves.toBe('https://shop.example/pricing');
+      expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'r1', openedAt: null } }),
+      );
+      expect(bumped()).toEqual(expect.arrayContaining(['opened', 'clicked']));
+    });
+
+    it('does not bump opened when the open claim loses the race with the pixel', async () => {
+      emailClick();
+      prisma.campaignRecipient.updateMany.mockImplementation(async ({ where }: any) =>
+        'openedAt' in where ? { count: 0 } : { count: 1 },
+      );
+      await svc.click('tok', 0, HUMAN);
+      expect(bumped()).toEqual(['clicked']);
+    });
+
+    it('still claims the first open on a SECOND click (the claim is outside the clickedAt guard)', async () => {
+      emailClick({ clickedAt: new Date('2026-01-01T00:00:00Z') });
+      await svc.click('tok', 0, HUMAN);
+      // Nothing left to claim on the click, everything left to claim on the open.
+      expect(bumped()).toEqual(['opened']);
+    });
+
+    it('never fabricates an open on a channel that has none (SMS)', async () => {
+      emailClick();
+      prisma.campaign.findFirst.mockResolvedValue({ links: ['https://shop.example/pricing'], channel: 'SMS' });
+      await expect(svc.click('tok', 0, HUMAN)).resolves.toBe('https://shop.example/pricing');
+      expect(bumped()).toEqual(['clicked']);
+      expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ openedAt: null }) }),
+      );
+      // …and an SMS click is not an "email.clicked" either.
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * `engagement-unqualified`: a mail-security scanner and an image proxy hit
+   * the same URLs a person does. A hit we can NAME as a machine is not
+   * recorded at all — deliberately not stamped onto the row either, so the
+   * later genuine hit can still claim the open (a flag written from the first
+   * hit would hide that person's engagement forever).
+   */
+  describe('machine hits do not count as engagement', () => {
+    beforeEach(() => {
+      prisma.campaignRecipient.findUnique.mockResolvedValue({
+        id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', openedAt: null, clickedAt: null, sentAt: null,
+      });
+      prisma.campaign.findFirst.mockResolvedValue({ links: ['https://shop.example/pricing'], channel: 'EMAIL' });
+    });
+
+    it('a HEAD request on the pixel records nothing', async () => {
+      await svc.open('tok', { method: 'HEAD', ua: 'Mozilla/5.0' });
+      expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a link scanner', 'Mozilla/5.0 (compatible; Barracuda Sentinel; +https://barracuda.com)'],
+      ['a URL rewriter', 'Mozilla/5.0 urldefense.proofpoint.com'],
+      ['a crawler', 'Mozilla/5.0 (compatible; SomeBot/2.1; +http://bot.example)'],
+      ['a script', 'curl/8.4.0'],
+    ])('%s does not record an open', async (_label, ua) => {
+      await svc.open('tok', { method: 'GET', ua });
+      expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it('a delivery-time prefetch (a hit within seconds of the send) does not record an open', async () => {
+      prisma.campaignRecipient.findUnique.mockResolvedValue({
+        id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', openedAt: null, sentAt: new Date(),
+      });
+      await svc.open('tok', HUMAN);
+      expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('a scanner click still resolves the destination — only the counting stops', async () => {
+      await expect(svc.click('tok', 0, { method: 'GET', ua: 'curl/8.4.0' })).resolves.toBe(
+        'https://shop.example/pricing',
+      );
+      expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      // The Gmail image proxy fetch IS the open — it happens when the mail is
+      // displayed. Reading it as a machine would zero every Gmail open.
+      ['the Gmail image proxy', 'Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 (via ggpht.com GoogleImageProxy)'],
+      ['a phone that happens to be a Cubot', 'Mozilla/5.0 (Linux; Android 13; Cubot X30) AppleWebKit/537.36'],
+      ['a client that sends no User-Agent at all', undefined],
+    ])('%s still counts', async (_label, ua) => {
+      await svc.open('tok', { method: 'GET', ua: ua ?? null });
+      expect(prisma.campaignRecipient.updateMany).toHaveBeenCalled();
+    });
+
+    it('counts the hit when the caller says nothing about it (an old call site)', async () => {
+      await svc.open('tok');
+      expect(prisma.campaignRecipient.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * `no-email-event-triggers`: "clicked the pricing link → create a call task"
+   * could not be built at all. The event carries the URL, so the filter
+   * `trigger.url contains /pricing` works with no DSL change, and it is keyed
+   * so a redelivery cannot start a second run.
+   */
+  describe('email engagement raises workflow trigger events', () => {
+    beforeEach(() => {
+      prisma.campaignRecipient.findUnique.mockResolvedValue({
+        id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', openedAt: null, clickedAt: null, sentAt: null, status: 'SENT', channel: 'EMAIL',
+      });
+      prisma.campaign.findFirst.mockResolvedValue({ links: ['https://shop.example/pricing'], channel: 'EMAIL' });
+    });
+    const appended = (type: string) =>
+      (outbox.append as jest.Mock).mock.calls.filter((c: any[]) => c[0]?.type === type);
+
+    it('a human open emits marketing.email.opened.v1, keyed on the recipient', async () => {
+      await svc.open('tok', HUMAN);
+      expect(appended('marketing.email.opened.v1')).toHaveLength(1);
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'marketing.email.opened.v1',
+          idempotencyKey: 'ws-1:marketing.email.opened.v1:r1',
+          payload: expect.objectContaining({ workspaceId: WS, leadId: 'lead-1', campaignId: 'c1', recipientId: 'r1' }),
+        }),
+      );
+    });
+
+    it('does not emit when the open claim was already taken', async () => {
+      prisma.campaignRecipient.updateMany.mockResolvedValue({ count: 0 });
+      await svc.open('tok', HUMAN);
+      expect(appended('marketing.email.opened.v1')).toHaveLength(0);
+    });
+
+    it('a click emits marketing.email.clicked.v1 carrying the destination and its index', async () => {
+      await svc.click('tok', 0, HUMAN);
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'marketing.email.clicked.v1',
+          // Per LINK, so "clicked pricing" still fires for someone who clicked
+          // another link first — and a double-click still collapses into one.
+          idempotencyKey: 'ws-1:marketing.email.clicked.v1:r1:0',
+          payload: expect.objectContaining({ url: 'https://shop.example/pricing', linkIndex: 0 }),
+        }),
+      );
+      // The click is an open too, so both triggers fire from one hit.
+      expect(appended('marketing.email.opened.v1')).toHaveLength(1);
+    });
+
+    it('a machine hit raises nothing', async () => {
+      await svc.click('tok', 0, { method: 'HEAD', ua: null });
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+
+    it('an EMAIL unsubscribe emits marketing.email.unsubscribed.v1', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ email: 'a@b.com', emailNormalized: 'a@b.com' });
+      await svc.unsubscribe('tok');
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'marketing.email.unsubscribed.v1',
+          idempotencyKey: 'ws-1:marketing.email.unsubscribed.v1:r1',
+          payload: expect.objectContaining({ workspaceId: WS, leadId: 'lead-1', campaignId: 'c1', recipientId: 'r1' }),
+        }),
+      );
+    });
+
+    it('an SMS unsubscribe raises no email event (SmsOptedOut already covers it)', async () => {
+      prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT', channel: 'SMS' });
+      await svc.unsubscribe('tok');
+      expect(appended('marketing.email.unsubscribed.v1')).toHaveLength(0);
+    });
+
+    it('a lead-token unsubscribe (drip mail, no recipient row) emits it keyed on the lead', async () => {
+      const OLD = process.env.MARKETING_SECRET_KEY;
+      process.env.MARKETING_SECRET_KEY = Buffer.from('unit-test-master-key').toString('base64');
+      try {
+        prisma.campaignRecipient.findUnique.mockResolvedValue(null);
+        prisma.lead.findFirst.mockResolvedValue({ email: 'drip@acme.com', emailNormalized: 'drip@acme.com' });
+        await svc.unsubscribe(signLeadUnsubscribeToken(WS, 'lead-9')!);
+        expect(outbox.append).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'marketing.email.unsubscribed.v1',
+            idempotencyKey: 'ws-1:marketing.email.unsubscribed.v1:lead:lead-9',
+            payload: expect.objectContaining({ leadId: 'lead-9', campaignId: null, recipientId: null }),
+          }),
+        );
+      } finally {
+        if (OLD === undefined) delete process.env.MARKETING_SECRET_KEY;
+        else process.env.MARKETING_SECRET_KEY = OLD;
+      }
+    });
+
+    it('never lets a failed append break the tracking hit it rode on', async () => {
+      outbox.append.mockRejectedValue(new Error('outbox down'));
+      await expect(svc.open('tok', HUMAN)).resolves.toBeUndefined();
+      await expect(svc.click('tok', 0, HUMAN)).resolves.toBe('https://shop.example/pricing');
+      prisma.lead.findFirst.mockResolvedValue({ email: 'a@b.com', emailNormalized: 'a@b.com' });
+      await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    });
   });
 });

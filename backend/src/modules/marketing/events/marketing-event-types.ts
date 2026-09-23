@@ -63,6 +63,18 @@ export const MarketingEventTypes = {
   // `link.clicked` workflow trigger; filter on trigger.triggerLinkId.
   LinkClicked: "marketing.link.clicked.v1",
 
+  // Campaign email engagement (emitted by CampaignTrackingService). Backs the
+  // `email.opened` / `email.clicked` / `email.unsubscribed` workflow triggers.
+  // Raised ONLY for a hit that survives the machine-hit filter, so a security
+  // scanner sweeping the links cannot start an automation; `clicked` carries
+  // the destination, so `trigger.url contains /pricing` is expressible with no
+  // DSL change. There is deliberately no `email.bounced` here yet: the bounce
+  // writers (SuppressionService / EspFeedbackService) emit nothing, and a
+  // picker entry that can never fire is worse than its absence.
+  EmailOpened: "marketing.email.opened.v1",
+  EmailClicked: "marketing.email.clicked.v1",
+  EmailUnsubscribed: "marketing.email.unsubscribed.v1",
+
   // Inbound webhook received (emitted by InboundWebhooksService). Backs the
   // `webhook.received` workflow trigger; the posted JSON is carried under
   // payload.body, filter on trigger.body.<field> / trigger.webhookId.
@@ -266,6 +278,24 @@ export interface MarketingSmsOptStatusPayload {
   workspaceId: string;
   leadId: string;
   phone: string;
+}
+
+/**
+ * What a recipient did to a campaign email (opened / clicked / unsubscribed).
+ *
+ * `campaignId` and `recipientId` are null for drip and workflow mail, which
+ * carries a signed LEAD token instead of a CampaignRecipient row — the trigger
+ * still fires, it just has no campaign to name.
+ */
+export interface MarketingEmailEngagementPayload {
+  workspaceId: string;
+  leadId: string;
+  campaignId: string | null;
+  recipientId: string | null;
+  /** `clicked` only: the campaign-authored destination and its position. */
+  url?: string;
+  linkIndex?: number;
+  occurredAt: string;
 }
 
 /**

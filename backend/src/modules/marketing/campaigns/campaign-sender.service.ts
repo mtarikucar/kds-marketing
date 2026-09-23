@@ -15,11 +15,27 @@ import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { VoicesmsSendClient, VoicesmsSendResult } from '../../netgsm/voice/voicesms-send.client';
 import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 import { ConversationSpendService } from '../budget/conversation-spend.service';
+import { notifyCommerce } from '../invoicing/commerce-notify';
 import { toIysMsisdn } from '../utils/lead-normalize';
 import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND, CAMPAIGN_LAUNCH_KIND, AB_TEST_WINDOW_MS } from './campaigns.service';
 
 const BATCH_SIZE = 50;
 const BATCH_INTERVAL_SEC = 60; // ~50 sends/min throttle
+
+/**
+ * How long one tick may spend in the per-recipient send loop.
+ *
+ * A tick runs inside the shared job runner's single global advisory lock
+ * (`scheduled-job-runner.service.ts`), which dispatches claimed jobs
+ * sequentially — so fifty SMTP round-trips in a row are fifty round-trips every
+ * other tenant's AI reply, workflow resume and booking reminder waits for
+ * (`batches-stall-runner`). The loop is already built for resumption (rows are
+ * claimed one at a time and the tail reschedules whatever is left), so stopping
+ * halfway costs the campaign nothing but the next sixty seconds — while the
+ * runner's own budget, which this stays under, keeps the queue moving.
+ */
+export const BATCH_BUDGET_MS = 30_000;
+
 /** İYS's documented per-account rate limit — shared across the WHOLE İYS
  *  surface (this preflight's `/iys/search` calls contend for the same
  *  AccountRateBudgeter bucket, `'iys'`, as iys-sync.service.ts's `/iys/add`
@@ -40,6 +56,11 @@ const IYS_SEARCH_BUDGET_WINDOW_MS = 60_000;
  * merge spread-first, so it needs no column (`campaign-failures-terminal`).
  */
 const FAIL_STREAK_LIMIT = 3;
+
+/** The bell a stalled campaign rings. Its own type, so the notification list
+ *  can tell "your send stopped" apart from the commerce moments that share
+ *  this writer. */
+const CAMPAIGN_STALLED_NOTIFICATION = 'CAMPAIGN_STALLED';
 
 /** An A/B call needs a cohort worth calling: this many sends on at least two
  *  variants, and this many events on the leader. Below that the numbers are
@@ -190,9 +211,72 @@ export class CampaignSenderService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.runner.registerHandler(CAMPAIGN_BATCH_KIND, (job) => this.batch(job));
+    this.runner.registerHandler(CAMPAIGN_BATCH_KIND, (job) => this.batch(job), (job, error) => this.settleDeadLetter(job, error));
     this.runner.registerHandler(CAMPAIGN_AB_DECIDE_KIND, (job) => this.decideAbWinner(job));
-    this.runner.registerHandler(CAMPAIGN_LAUNCH_KIND, (job) => this.launchScheduled(job));
+    this.runner.registerHandler(CAMPAIGN_LAUNCH_KIND, (job) => this.launchScheduled(job), (job, error) => this.settleDeadLetter(job, error));
+  }
+
+  /**
+   * The send job gave up — say so on the campaign instead of leaving it SENDING
+   * forever (`campaign-dead-letter`).
+   *
+   * Under sustained load a tick's fifty-odd queries can time out on an
+   * exhausted connection pool while the runner's single claim query keeps
+   * succeeding; five ticks later the job is FAILED, the campaign is still
+   * SENDING, the remaining recipients are still PENDING, the counters are
+   * frozen at the partial count and there is nothing anywhere the tenant can
+   * read. Pause-then-Resume already recovers it — nobody was ever told to try.
+   *
+   * PAUSED is the settled state precisely because `resume()` is the recovery:
+   * it flips back to SENDING and kicks a fresh batch, and every remaining
+   * recipient is still PENDING and still claimable.
+   *
+   * Three rules, each protecting a sibling path:
+   *  - a **guarded updateMany**, never `update()`: a campaign that reached
+   *    SENT/CANCELLED/PAUSED meanwhile must be untouched, and a campaign
+   *    deleted meanwhile must be a no-op rather than a P2025 thrown out of a
+   *    best-effort hook;
+   *  - the reason goes in the **stats blob** (`Campaign` has no error column),
+   *    merged spread-first like every other writer of that blob, so it cannot
+   *    clobber `delivered`/`undelivered`/`iysBlocked`, which the DLR poller's
+   *    rollup merges in independently;
+   *  - it **never throws**. It runs after the runner has already written the
+   *    DLQ row; a bell that cannot be rung must not disturb that bookkeeping.
+   */
+  private async settleDeadLetter(job: ClaimedJob, error: string): Promise<void> {
+    const workspaceId = job.payload?.workspaceId as string | undefined;
+    const campaignId = job.payload?.campaignId as string | undefined;
+    if (!workspaceId || !campaignId) return;
+    try {
+      const claimed = await this.prisma.campaign.updateMany({
+        where: { id: campaignId, workspaceId, status: 'SENDING' },
+        data: { status: 'PAUSED' },
+      });
+      if (claimed.count === 0) return;
+      const s = await this.currentStats(campaignId);
+      await this.prisma.campaign.update({
+        where: { id: campaignId },
+        data: {
+          stats: { ...s, stalledError: error.slice(0, 300), stalledAt: new Date().toISOString() } as Prisma.InputJsonValue,
+        },
+      });
+      this.logger.error(`campaign ${campaignId} paused after its ${job.kind} job dead-lettered: ${error}`);
+      await notifyCommerce(
+        this.prisma,
+        {
+          workspaceId,
+          type: CAMPAIGN_STALLED_NOTIFICATION,
+          title: 'Campaign paused',
+          message: 'The send stopped after repeated errors. Review it, then resume to continue.',
+          metadata: { campaignId, kind: job.kind, error: error.slice(0, 300) },
+        },
+        this.logger,
+      );
+    } catch (e: unknown) {
+      this.logger.warn(
+        `campaign dead-letter settle skipped (campaign=${campaignId}): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**
@@ -500,8 +584,21 @@ export class CampaignSenderService implements OnModuleInit {
     let lastFailReason: string | undefined;
     /** A send-window clamp asked us to come back at a particular time. */
     let deferUntil: Date | null = null;
+    /** How many rows this tick actually claimed — the forward-progress guard. */
+    let claimedInLoop = 0;
+    const deadline = Date.now() + BATCH_BUDGET_MS;
 
     for (const r of ticariLegacyBlocked || voiceCredsBlocked ? [] : recipients) {
+      // Hand the lock back rather than hold it for the rest of the audience
+      // (`batches-stall-runner`). `break`, never `return`: the tail below
+      // settles the batched SMS/VOICE sends whose quota is already reserved,
+      // recomputes the stats and reschedules the remainder — a `return` would
+      // strand all three. At least one row is always attempted, so a tick can
+      // never make zero progress and re-queue the same rows forever.
+      if (claimedInLoop > 0 && Date.now() >= deadline) {
+        this.logger.debug(`campaign ${campaignId}: tick budget spent after ${claimedInLoop} recipient(s) — resuming next tick`);
+        break;
+      }
       // Atomic claim: a concurrent batch — e.g. a slow run reaped after 15 min and
       // re-dispatched while still in flight — that re-read the same PENDING rows
       // cannot also process this recipient. Only one updateMany flips PENDING→
@@ -511,6 +608,7 @@ export class CampaignSenderService implements OnModuleInit {
         data: { status: 'SENDING' },
       });
       if (claim.count === 0) continue;
+      claimedInLoop += 1;
 
       // Exclude a lead bulk-deleted (deletedAt) or merged-away (mergedIntoId)
       // AFTER the audience froze: bulk-delete means "stop contacting", and a
@@ -844,7 +942,16 @@ export class CampaignSenderService implements OnModuleInit {
   }
 
   private isOptedOut(channel: string, lead: any): boolean {
-    if (channel === 'EMAIL') return !!lead.emailOptOut;
+    // EMAIL reads all three deliverability columns, not just the opt-out. The
+    // audience froze at launch; a lead that hard-bounced or was verified
+    // INVALID since then is an address `MailGuardService` refuses anyway, so
+    // sending buys nothing, spends a metered message and costs another point of
+    // reputation on a shared relay. The other channels keep their own single
+    // flag — an unconditional check would silently skip an SMS or a VOICE
+    // recipient whose EMAIL happens to be bad.
+    if (channel === 'EMAIL') {
+      return !!lead.emailOptOut || !!lead.emailBouncedAt || lead.emailVerifiedStatus === 'INVALID';
+    }
     if (channel === 'SMS') return !!lead.smsOptOut;
     if (channel === 'WHATSAPP') return !!lead.waOptOut;
     // VOICE (NetGSM Phase 5): Lead has no dedicated call/voice opt-out flag
@@ -895,9 +1002,9 @@ export class CampaignSenderService implements OnModuleInit {
     token: string;
     ticari: boolean;
   }): Promise<RecipientOutcome> {
-    const base = (this.config.get<string>('PUBLIC_BASE_URL') ?? '').trim();
-    // The unsubscribe link is mandatory and is built from PUBLIC_BASE_URL; if
-    // it's unset the rendered body has no opt-out, so refuse to send rather
+    const base = this.linkBase();
+    // The unsubscribe link is mandatory and is built from the link base; if it
+    // is unset the rendered body has no opt-out, so refuse to send rather
     // than ship non-compliant mail (a misconfigured deploy fails closed). It is
     // a deploy problem, not this recipient's, so the row waits rather than dies.
     if (!base) {
@@ -963,10 +1070,12 @@ export class CampaignSenderService implements OnModuleInit {
     workspaceId: string, channel: string, to: string, body: string,
   ): Promise<{ ok: boolean; messageId?: string | null; error?: string }> {
     try {
-      // The unsubscribe link is mandatory and is built from PUBLIC_BASE_URL; if
-      // it's unset the rendered body has no opt-out, so refuse to send rather
+      // The unsubscribe link is mandatory and is built from the link base; if
+      // it is unset the rendered body has no opt-out, so refuse to send rather
       // than ship non-compliant mail (a misconfigured deploy fails closed).
-      if (!(this.config.get<string>('PUBLIC_BASE_URL') ?? '')) {
+      // Checked on the base `render()` actually uses, never on PUBLIC_BASE_URL
+      // alone, or a links-host-only deploy would refuse mail it could render.
+      if (!this.linkBase()) {
         return { ok: false, error: 'PUBLIC_BASE_URL not configured (unsubscribe link required)' };
       }
       const channelType = channel === 'SMS' ? 'SMS' : 'WHATSAPP';
@@ -1558,9 +1667,29 @@ export class CampaignSenderService implements OnModuleInit {
     );
   }
 
+  /**
+   * The host every BULK link goes out on: click redirects, the open pixel and
+   * the unsubscribe link (`shared-tracking-domain`).
+   *
+   * `LINK_BASE_URL` lets an operator put bulk links on their own host — one DNS
+   * record, no per-tenant provisioning — so one tenant's URL getting listed
+   * cannot take the login, invoice and password-reset mail down with it. Unset
+   * (the default, and today's behaviour) it IS `PUBLIC_BASE_URL`.
+   *
+   * There is one reader on purpose: the body link, the pixel and the RFC 8058
+   * List-Unsubscribe URI must share a base or the header stops matching the
+   * footer the body carries, and the gateway then appends a second one.
+   * Everything that is not bulk — invoice, quote, funnel, site and the NetGSM
+   * callback URLs — stays on PUBLIC_BASE_URL.
+   */
+  private linkBase(): string {
+    const links = (this.config.get<string>('LINK_BASE_URL') ?? '').trim();
+    return links || (this.config.get<string>('PUBLIC_BASE_URL') ?? '').trim();
+  }
+
   /** Rewrite links to click-tracked URLs + append a mandatory unsubscribe footer. */
   private render(channel: string, body: string, token: string, links: string[]): string {
-    const base = this.config.get<string>('PUBLIC_BASE_URL') ?? '';
+    const base = this.linkBase();
     let out = body;
     if (base) {
       // Rewrite longest URLs first (keeping the original index for ?i=) so a URL
@@ -1581,7 +1710,7 @@ export class CampaignSenderService implements OnModuleInit {
    * (decoded) URLs so the tracked redirect target stays correct.
    */
   private renderHtml(html: string, token: string, links: string[]): string {
-    const base = this.config.get<string>('PUBLIC_BASE_URL') ?? '';
+    const base = this.linkBase();
     let out = html;
     if (base) {
       // ATTRIBUTE-SCOPED, never a document-wide split/join.

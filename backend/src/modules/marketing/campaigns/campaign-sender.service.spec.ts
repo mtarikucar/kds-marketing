@@ -1,4 +1,4 @@
-import { CampaignSenderService } from './campaign-sender.service';
+import { CampaignSenderService, BATCH_BUDGET_MS } from './campaign-sender.service';
 import { MailReceipt } from '../channels/outbound/outbound-mail.types';
 
 /** A gateway receipt, in the shape the sender reads it. */
@@ -334,6 +334,67 @@ describe('CampaignSenderService.batch', () => {
     // No PENDING left → campaign marked SENT.
     const finalUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.status === 'SENT');
     expect(finalUpdate).toBeTruthy();
+  });
+
+  /**
+   * DELIVERABILITY IS PART OF "DO NOT SEND", not a separate question.
+   *
+   * The audience freezes at launch and a throttled campaign sends over hours.
+   * A lead that hard-bounced or was verified INVALID in between is an address
+   * the gateway will refuse anyway — so sending to it buys nothing and spends a
+   * metered message, and each refusal is another point of reputation damage on
+   * the shared relay. The three columns are the same three the audience filter
+   * already excludes on; this is the freeze-window mirror of it.
+   *
+   * ONLY the EMAIL branch. An unconditional check would silently skip an SMS or
+   * a VOICE recipient whose EMAIL happens to be bad.
+   */
+  describe('email deliverability at send time, not only at launch', () => {
+    const only = (lead: any) => {
+      prisma.campaignRecipient.findMany.mockResolvedValue([{ id: 'r1', leadId: 'l1', token: 't1' }]);
+      prisma.lead.findFirst.mockResolvedValue(lead);
+    };
+
+    it.each([
+      ['a hard bounce since the freeze', { emailBouncedAt: new Date() }],
+      ['an address verified INVALID since the freeze', { emailVerifiedStatus: 'INVALID' }],
+    ])('skips %s without spending a message', async (_what, over) => {
+      only({ id: 'l1', email: 'dead@lead.com', emailOptOut: false, ...over });
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(outboundMail.send).not.toHaveBeenCalled();
+      expect(quota.reserve).not.toHaveBeenCalled();
+      expect(
+        prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status),
+      ).toContain('SKIPPED');
+    });
+
+    it('still sends to an address that is merely UNKNOWN', async () => {
+      // Nothing has checked it. "Not yet verified" is the state every lead in
+      // the product starts in — refusing it would empty every audience.
+      only({ id: 'l1', email: 'ok@lead.com', emailOptOut: false, emailVerifiedStatus: 'UNKNOWN' });
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(outboundMail.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not read the email columns on an SMS campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'SMS', body: 'Hi', links: [],
+      });
+      only({
+        id: 'l1', phone: '+905551112233', smsOptOut: false,
+        email: 'dead@lead.com', emailBouncedAt: new Date(), emailVerifiedStatus: 'INVALID',
+      });
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(
+        prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status),
+      ).not.toContain('SKIPPED');
+    });
   });
 
   // The audience freezes at send-start, but a throttled campaign sends over
@@ -1004,6 +1065,200 @@ describe('CampaignSenderService.batch', () => {
       );
       expect(out).toContain('href="https://other.test/page"');
     });
+  });
+
+  /**
+   * `batches-stall-runner`. A tick runs inside the shared job runner's single
+   * global advisory lock, so fifty SMTP round-trips in a row are fifty
+   * round-trips every other tenant's AI reply and booking reminder waits for.
+   * The tick is already built for resumption — rows are claimed one at a time
+   * and the tail reschedules whatever is left — so bounding its wall clock
+   * costs nothing but the next sixty seconds.
+   */
+  describe('the per-tick wall clock', () => {
+    beforeEach(() => {
+      prisma.campaignRecipient.findMany.mockResolvedValue([
+        { id: 'r1', leadId: 'l1', token: 't1' },
+        { id: 'r2', leadId: 'l2', token: 't2' },
+        { id: 'r3', leadId: 'l3', token: 't3' },
+      ]);
+      prisma.lead.findFirst.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        email: `${where.id}@lead.com`,
+        emailOptOut: false,
+      }));
+      // Whatever this tick does not reach is still PENDING afterwards.
+      prisma.campaignRecipient.count.mockResolvedValue(1);
+    });
+
+    afterEach(() => jest.restoreAllMocks());
+
+    /** A send that costs `ms` of wall clock, on a clock the test owns. */
+    function slowSend(ms: number): void {
+      let clock = Date.now();
+      jest.spyOn(Date, 'now').mockImplementation(() => clock);
+      outboundMail.send.mockImplementation(async () => {
+        clock += ms;
+        return receipt();
+      });
+    }
+
+    it('stops sending at the deadline and leaves the rest of the audience PENDING', async () => {
+      slowSend(BATCH_BUDGET_MS / 2 + 1);
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(outboundMail.send).toHaveBeenCalledTimes(2);
+      // The third row was never claimed, so it is still PENDING for next tick —
+      // not SENDING, not FAILED.
+      expect(prisma.campaignRecipient.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 'r3' }) }),
+      );
+    });
+
+    it('breaks rather than returns, so the tail bookkeeping and the reschedule still run', async () => {
+      // A `return` here would skip the batched SMS/VOICE settlement, strand the
+      // quota those paths already reserved, and skip recomputeStats.
+      slowSend(BATCH_BUDGET_MS * 2);
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(prisma.campaignRecipient.groupBy).toHaveBeenCalled(); // recomputeStats
+      expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'campaign.batch', dedupKey: 'c1' }),
+      );
+    });
+
+    it('always sends to the first recipient, so a tick can never make zero progress', async () => {
+      slowSend(BATCH_BUDGET_MS * 10);
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(outboundMail.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('sends the whole batch when the sends are quick (no behaviour change for a healthy tick)', async () => {
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(outboundMail.send).toHaveBeenCalledTimes(3);
+    });
+  });
+});
+
+/**
+ * `campaign-dead-letter`. Under sustained load a tick's fifty queries can time
+ * out on an exhausted connection pool while the runner's single claim query
+ * keeps succeeding; five ticks later the job is FAILED and the campaign sits
+ * SENDING forever with its remaining recipients PENDING, its counters frozen
+ * mid-send, and nothing anywhere the tenant can read. Pause-then-Resume already
+ * recovers it — nobody was ever told to try.
+ */
+describe('CampaignSenderService — a dead-lettered job settles the campaign', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let runner: { registerHandler: jest.Mock };
+  let svc: CampaignSenderService;
+
+  /** The exhausted-hook the sender handed the runner for this kind. */
+  const hookFor = (kind: string) =>
+    runner.registerHandler.mock.calls.find((c: any[]) => c[0] === kind)?.[2] as
+      | ((job: any, error: string) => Promise<void>)
+      | undefined;
+
+  beforeEach(() => {
+    prisma = {
+      campaign: {
+        // The campaign is still SENDING: the guarded flip claims it.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({ stats: { sent: 12, delivered: 9, iysBlocked: 1 } }),
+        update: jest.fn().mockResolvedValue({}),
+        findFirst: jest.fn(),
+      },
+      campaignRecipient: { count: jest.fn().mockResolvedValue(0) },
+      lead: { findFirst: jest.fn().mockResolvedValue(null) },
+      workspaceMembership: { findFirst: jest.fn().mockResolvedValue({ userId: 'owner-1' }) },
+      marketingNotification: { create: jest.fn().mockResolvedValue({ id: 'n1' }) },
+    };
+    runner = { registerHandler: jest.fn() };
+    svc = new CampaignSenderService(
+      prisma as any, { get: jest.fn() } as any, { send: jest.fn() } as any,
+      { schedule: jest.fn() } as any, runner as any,
+      { get: jest.fn(), resolveConfig: jest.fn() } as any, { reserve: jest.fn(), refund: jest.fn() } as any,
+      { send: jest.fn() } as any, { settleCampaignSms: jest.fn() } as any,
+      { search: jest.fn() } as any, { tryTake: jest.fn() } as any, { send: jest.fn() } as any,
+    );
+    svc.onModuleInit();
+  });
+
+  it('registers an exhausted-hook for both the batch and the launch job', () => {
+    expect(hookFor('campaign.batch')).toBeInstanceOf(Function);
+    expect(hookFor('campaign.launch')).toBeInstanceOf(Function);
+  });
+
+  it('pauses a campaign that is still SENDING, with a guarded updateMany', async () => {
+    await hookFor('campaign.batch')!({ payload: { workspaceId: WS, campaignId: 'c1' } }, 'P2024 pool timeout');
+
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c1', workspaceId: WS, status: 'SENDING' },
+      data: { status: 'PAUSED' },
+    });
+  });
+
+  it('writes WHY into the stats blob without clobbering what other writers put there', async () => {
+    await hookFor('campaign.batch')!({ payload: { workspaceId: WS, campaignId: 'c1' } }, 'P2024 pool timeout');
+
+    const stats = prisma.campaign.update.mock.calls[0][0].data.stats;
+    // Spread-first: the DLR poller's rollup merges delivered/iysBlocked into
+    // this same blob independently.
+    expect(stats).toMatchObject({ sent: 12, delivered: 9, iysBlocked: 1 });
+    expect(stats.stalledError).toContain('P2024');
+    expect(typeof stats.stalledAt).toBe('string');
+  });
+
+  it('tells the workspace owner, because a silently paused campaign is the whole bug', async () => {
+    await hookFor('campaign.batch')!({ payload: { workspaceId: WS, campaignId: 'c1' } }, 'P2024 pool timeout');
+
+    expect(prisma.marketingNotification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          workspaceId: WS,
+          userId: 'owner-1',
+          metadata: expect.objectContaining({ campaignId: 'c1' }),
+        }),
+      }),
+    );
+  });
+
+  it('leaves a campaign that moved on alone — no stats write, no bell', async () => {
+    // Sent, cancelled or already paused by the tenant meanwhile: the guarded
+    // updateMany claims nothing, and a vanished campaign is a no-op rather than
+    // a P2025 thrown inside a best-effort hook.
+    prisma.campaign.updateMany.mockResolvedValue({ count: 0 });
+
+    await hookFor('campaign.batch')!({ payload: { workspaceId: WS, campaignId: 'c1' } }, 'boom');
+
+    expect(prisma.campaign.update).not.toHaveBeenCalled();
+    expect(prisma.marketingNotification.create).not.toHaveBeenCalled();
+  });
+
+  it('truncates the recorded error rather than storing an unbounded blob', async () => {
+    await hookFor('campaign.batch')!({ payload: { workspaceId: WS, campaignId: 'c1' } }, 'x'.repeat(1000));
+
+    expect(prisma.campaign.update.mock.calls[0][0].data.stats.stalledError.length).toBe(300);
+  });
+
+  it('never throws — the DLQ bookkeeping must complete even if this hook cannot', async () => {
+    prisma.campaign.updateMany.mockRejectedValue(new Error('db gone'));
+
+    await expect(
+      hookFor('campaign.batch')!({ payload: { workspaceId: WS, campaignId: 'c1' } }, 'boom'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('is a no-op for a job whose payload carries no campaign', async () => {
+    await hookFor('campaign.batch')!({ payload: {} }, 'boom');
+
+    expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -2158,5 +2413,105 @@ describe('CampaignSenderService.batch — VOICE campaigns', () => {
     expect(iysClient.search).not.toHaveBeenCalled();
     expect(voicesmsSend.send).toHaveBeenCalledTimes(3);
     expect(voicesmsSend.send.mock.calls[0][1].iysfilter).toBe('0');
+  });
+});
+
+/**
+ * `shared-tracking-domain`: every tenant's click, pixel and unsubscribe links
+ * sit on the one app domain, so one tenant's listing takes the login and
+ * invoice mail down with it. `LINK_BASE_URL` lets an operator point bulk links
+ * at a separate host (one DNS record, no per-tenant provisioning).
+ *
+ * The three places share ONE base or the RFC 8058 header stops matching the
+ * body link — the gateway then sees a footer it does not recognise and adds a
+ * second one.
+ */
+describe('CampaignSenderService — the bulk link base', () => {
+  const WS = 'ws-1';
+  const make = (env: Record<string, string | undefined>) => {
+    const config = { get: jest.fn((k: string) => env[k]) };
+    const prisma = {
+      campaign: { findFirst: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+      campaignRecipient: { findMany: jest.fn(), update: jest.fn(), updateMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
+      campaignVariant: { findMany: jest.fn(), update: jest.fn() },
+      workspace: { findUnique: jest.fn() },
+      lead: { findFirst: jest.fn() },
+      channel: { findFirst: jest.fn() },
+    };
+    const outboundMail = { send: jest.fn().mockResolvedValue(receipt()) };
+    const quota = { reserve: jest.fn(), refund: jest.fn() };
+    const svc = new CampaignSenderService(
+      prisma as any, config as any, outboundMail as any,
+      { schedule: jest.fn() } as any, { registerHandler: jest.fn() } as any,
+      { get: jest.fn(), resolveConfig: jest.fn() } as any, quota as any,
+      { send: jest.fn() } as any, { settleCampaignSms: jest.fn() } as any,
+      { search: jest.fn() } as any, { tryTake: jest.fn() } as any, { send: jest.fn() } as any,
+    );
+    return { svc, outboundMail, quota };
+  };
+  const sendOne = async (svc: any) =>
+    svc.sendEmail({
+      workspaceId: WS, campaignId: 'c1', recipientId: 'r1', leadId: 'l1',
+      to: 'a@b.com', subject: 'S', text: 'Hi', token: 'tok-1', ticari: false,
+    });
+
+  describe('when LINK_BASE_URL is set', () => {
+    const env = { LINK_BASE_URL: 'https://links.test', PUBLIC_BASE_URL: 'https://app.test' };
+
+    it('rewrites the body links onto it', () => {
+      const { svc } = make(env);
+      const out = (svc as any).render('EMAIL', 'Go to https://shop.test/x', 'tok-1', ['https://shop.test/x']);
+      expect(out).toContain('https://links.test/api/public/t/c/tok-1?i=0');
+      expect(out).toContain('https://links.test/api/public/u/tok-1');
+      expect(out).not.toContain('https://app.test');
+    });
+
+    it('puts the open pixel and the HTML footer on it too', () => {
+      const { svc } = make(env);
+      const out = (svc as any).renderHtml('<html><body><a href="https://shop.test/x">Go</a></body></html>', 'tok-1', ['https://shop.test/x']);
+      expect(out).toContain('src="https://links.test/api/public/t/o/tok-1"');
+      expect(out).toContain('https://links.test/api/public/u/tok-1');
+      expect(out).not.toContain('https://app.test');
+    });
+
+    it('sends the SAME base in the List-Unsubscribe URI the body carries', async () => {
+      const { svc, outboundMail } = make(env);
+      await sendOne(svc);
+      expect(outboundMail.send).toHaveBeenCalledWith(
+        expect.objectContaining({ unsubscribe: { token: 'tok-1', url: 'https://links.test/api/public/u/tok-1' } }),
+      );
+    });
+  });
+
+  describe('when it is not set', () => {
+    const env = { PUBLIC_BASE_URL: 'https://app.test' };
+
+    it('falls back to PUBLIC_BASE_URL byte-identically', async () => {
+      const { svc, outboundMail } = make(env);
+      expect((svc as any).render('EMAIL', 'Go to https://shop.test/x', 'tok-1', ['https://shop.test/x'])).toBe(
+        'Go to https://app.test/api/public/t/c/tok-1?i=0\n\n—\nUnsubscribe: https://app.test/api/public/u/tok-1',
+      );
+      expect((svc as any).renderHtml('<html><body>Hi</body></html>', 'tok-1', [])).toContain(
+        'src="https://app.test/api/public/t/o/tok-1"',
+      );
+      await sendOne(svc);
+      expect(outboundMail.send).toHaveBeenCalledWith(
+        expect.objectContaining({ unsubscribe: { token: 'tok-1', url: 'https://app.test/api/public/u/tok-1' } }),
+      );
+    });
+  });
+
+  it('still fails closed when NEITHER is configured (no opt-out link = non-compliant mail)', async () => {
+    const { svc, outboundMail } = make({});
+    await expect(sendOne(svc)).resolves.toEqual(
+      expect.objectContaining({ disposition: 'RETRY', reason: 'MISSING_PUBLIC_BASE_URL', stopTick: true }),
+    );
+    expect(outboundMail.send).not.toHaveBeenCalled();
+  });
+
+  it('sends when only LINK_BASE_URL is configured — the guard checks the base actually used', async () => {
+    const { svc, outboundMail } = make({ LINK_BASE_URL: 'https://links.test' });
+    await sendOne(svc);
+    expect(outboundMail.send).toHaveBeenCalled();
   });
 });

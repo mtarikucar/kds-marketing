@@ -3,11 +3,102 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DEFAULT_MAIL_LANG, MailLang, resolveMailLang } from '../../../common/i18n/mail-copy';
 import { OutboxService } from '../../outbox/outbox.service';
-import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
+import {
+  MarketingEmailEngagementPayload,
+  MarketingEventTypes,
+  MarketingSmsOptStatusPayload,
+} from '../events/marketing-event-types';
 import { verifyLeadUnsubscribeToken } from '../channels/lead-unsubscribe.token';
 import { ConsentLedgerService, ConsentType } from '../compliance/consent-ledger.service';
 import { IysSyncService } from '../compliance/iys-sync.service';
 import { SuppressionService } from '../compliance/suppression.service';
+
+/**
+ * What the HTTP request behind a pixel or a click looked like.
+ *
+ * Optional everywhere, and an absent hit counts as a person: a caller that
+ * cannot describe its request must not silently stop every open being counted.
+ */
+export interface TrackingHit {
+  /** `User-Agent`, as sent. Null/absent when the client sent none. */
+  ua?: string | null;
+  /** The method the public route was reached on. */
+  method?: string | null;
+  /**
+   * The shared `isAutomatedFetch` verdict, set ONLY by a route a person reaches
+   * by navigating — the click redirect. It reads the `Sec-Fetch-*`/`Accept`
+   * shape, which a scanner cannot fake without actually being a browser.
+   *
+   * Absent on the open pixel on purpose: a pixel is a subresource fetch, so its
+   * `Sec-Fetch-Dest` is `image` and every genuine open would come back `true`.
+   */
+  automated?: boolean;
+}
+
+/**
+ * Mail-security gateways and link previewers fetch every URL in a message, and
+ * they do it from the recipient's own mail path — so their hits are
+ * indistinguishable from a reader's unless we look. These three lists are
+ * DENY-lists on purpose (`engagement-unqualified`): an unrecognised agent is a
+ * person, because over-blocking silently deletes a tenant's real engagement and
+ * nothing on the screen would say why.
+ *
+ * Deliberately NOT here: `GoogleImageProxy` / `YahooMailProxy`. Those fetch the
+ * pixel when the mail is DISPLAYED — that fetch IS the open, and reading it as
+ * a machine would zero every Gmail open in the product.
+ */
+const SCANNER_UA_RE =
+  /safelinks|urldefense|proofpoint|mimecast|barracuda|bluecoat|symantec|forcepoint|ironport|messagelabs|sophos|fireeye|trend ?micro|bitdefender|kaspersky|avast|avira|eset|zscaler|netskope|cloudmark|virustotal|bingpreview|facebookexternalhit|twitterbot|telegrambot|discordbot|slackbot/;
+/**
+ * Two shapes, both deliberate. The word-bounded list catches a standalone
+ * token; `bot/<version>` catches the `AhrefsBot/7.0` / `Googlebot/2.1` naming
+ * every real crawler uses. A bare `bot` substring would be a third and is left
+ * out: it fires on a Cubot phone's User-Agent, and losing that person's opens
+ * forever is a worse trade than missing an unversioned crawler.
+ */
+const BOT_UA_RE =
+  /\b(bot|bots|crawler|spider|scraper|slurp|fetcher|monitor|monitoring|scanner|validator|checker|probe|preview|prefetch|archiver|indexer)\b|bot\/\d/;
+const TOOL_UA_RE =
+  /curl\/|wget|libwww|python-requests|python-urllib|aiohttp|httpx|go-http-client|okhttp|java\/|apache-httpclient|node-fetch|axios\/|guzzlehttp|restsharp|powershell|headlesschrome|phantomjs|puppeteer|playwright|selenium|lighthouse/;
+
+/**
+ * How close to the send a hit has to land to be a delivery-time prefetch.
+ *
+ * A gateway scans on delivery, seconds after the relay hand-off; a person has
+ * to notice the mail first. Five seconds is short enough that no reader is
+ * plausibly inside it and long enough to catch the scanners that arrive with an
+ * ordinary browser User-Agent (Apple MPP, most notably, which is invisible to
+ * every rule above).
+ */
+const PREFETCH_WINDOW_MS = 5_000;
+
+/**
+ * Why this hit is a machine, or null when it counts as a person.
+ *
+ * Pure and exported so the question has ONE answer wherever a tracked link is
+ * hit — the honest limit of it is written down in the rules above: it names the
+ * machines it can name and lets the rest through.
+ */
+export function machineHitReason(hit: TrackingHit | undefined, sentAt?: Date | null): string | null {
+  // A HEAD is never a render: no client displaying a message asks for the
+  // headers of its images.
+  if ((hit?.method ?? 'GET').toUpperCase() === 'HEAD') return 'head';
+  // The navigation-shaped evidence, where the caller could gather it. It is the
+  // strongest signal available — Defender detonation forges a current Chrome
+  // User-Agent, but it cannot forge being a top-level browser navigation.
+  if (hit?.automated === true) return 'automated';
+  const ua = (hit?.ua ?? '').toLowerCase();
+  if (ua) {
+    if (SCANNER_UA_RE.test(ua)) return 'scanner';
+    if (TOOL_UA_RE.test(ua)) return 'tool';
+    if (BOT_UA_RE.test(ua)) return 'bot';
+  }
+  if (sentAt) {
+    const since = Date.now() - new Date(sentAt).getTime();
+    if (since >= 0 && since < PREFETCH_WINDOW_MS) return 'prefetch';
+  }
+  return null;
+}
 
 /** What an unsubscribe token turned out to be. */
 type UnsubscribeSubject =
@@ -26,6 +117,15 @@ interface CampaignRecipientRow {
   /** Frozen at launch; null on rows created before that column existed. */
   channel?: string | null;
 }
+
+type EmailEngagementKind = 'opened' | 'clicked' | 'unsubscribed';
+
+/** What this service raises, per thing a recipient did to the mail. */
+const EMAIL_ENGAGEMENT_EVENT: Record<EmailEngagementKind, string> = {
+  opened: MarketingEventTypes.EmailOpened,
+  clicked: MarketingEventTypes.EmailClicked,
+  unsubscribed: MarketingEventTypes.EmailUnsubscribed,
+};
 
 /** The opt-out column + the consent type that goes with it, per channel. */
 const CHANNEL_OPT_OUT: Record<string, { column: 'emailOptOut' | 'smsOptOut' | 'waOptOut'; consent: ConsentType }> = {
@@ -58,33 +158,44 @@ export class CampaignTrackingService {
     private readonly ledger: ConsentLedgerService,
   ) {}
 
-  async open(token: string): Promise<void> {
+  /**
+   * The open pixel was fetched. `hit` describes the request, because most of
+   * those fetches are not people (`engagement-unqualified`): a mail-security
+   * gateway scanning on delivery, a link previewer, a monitor. One we can name
+   * is not recorded at all — and deliberately not written onto the row either,
+   * so the reader's own open a minute later still counts.
+   */
+  async open(token: string, hit?: TrackingHit): Promise<void> {
     const r = await this.prisma.campaignRecipient.findUnique({ where: { token } });
     if (!r || r.openedAt) return;
+    if (this.isMachine(r.id, 'open', hit, r.sentAt)) return;
     // A mail-client prefetch + the real open (or a proxied retry) hit the pixel
     // near-simultaneously — a VERY common case. The old check-then-act let BOTH
     // pass the openedAt-null check and each `bump`, double-counting the campaign's
     // "unique opens". Gate the bump on WINNING the openedAt:null→set transition:
     // only the first concurrent hit's updateMany matches a row (count 1), so the
     // open is counted exactly once. (The bump itself was already atomic.)
-    const claim = await this.prisma.campaignRecipient.updateMany({
-      where: { id: r.id, openedAt: null },
-      data: { openedAt: new Date() },
-    });
-    if (claim.count === 1) await this.bump(r.campaignId, 'opened');
+    await this.claimOpen(r.id, r.campaignId, r.workspaceId, r.leadId);
   }
 
   /** Returns the campaign-authored destination URL, or null (no open redirect). */
-  async click(token: string, index: number): Promise<string | null> {
+  async click(token: string, index: number, hit?: TrackingHit): Promise<string | null> {
     const r = await this.prisma.campaignRecipient.findUnique({ where: { token } });
     if (!r) return null;
     const campaign = await this.prisma.campaign.findFirst({
       where: { id: r.campaignId, workspaceId: r.workspaceId },
-      select: { links: true },
+      // `channel` decides whether this click is also an open: an SMS campaign
+      // has no pixel and no such thing as an "open", and an opened count there
+      // would silently flip an SMS A/B decision off its no-signal path.
+      select: { links: true, channel: true },
     });
     const links = (Array.isArray(campaign?.links) ? campaign!.links : []) as string[];
     const url = links[index];
     if (!url || !/^https?:\/\//i.test(url)) return null;
+    // The redirect is NOT conditional on any of this: a scanner that fetched
+    // the link still gets taken to the destination, exactly as before. Only the
+    // counting stops.
+    if (this.isMachine(r.id, 'click', hit, r.sentAt)) return url;
     if (!r.clickedAt) {
       // Same race-safe claim as open(): only the first concurrent click counts.
       const claim = await this.prisma.campaignRecipient.updateMany({
@@ -93,7 +204,50 @@ export class CampaignTrackingService {
       });
       if (claim.count === 1) await this.bump(r.campaignId, 'clicked');
     }
+    if (campaign?.channel === 'EMAIL') {
+      // `click-not-open`: an image-blocking reader never loads the pixel, so a
+      // campaign that was read and acted on reported "opened 0, clicked 40".
+      // The claim sits OUTSIDE the clickedAt guard on purpose — someone who
+      // clicks twice must still be able to claim their first open on the second.
+      await this.claimOpen(r.id, r.campaignId, r.workspaceId, r.leadId);
+      // Keyed per LINK, not per recipient: "clicked the pricing link" has to
+      // fire for someone who clicked another link first, while a double-click
+      // on the same one collapses into a single event (and one workflow run).
+      await this.emitEngagement('clicked', `${r.id}:${index}`, {
+        workspaceId: r.workspaceId,
+        leadId: r.leadId,
+        campaignId: r.campaignId,
+        recipientId: r.id,
+        url,
+        linkIndex: index,
+      });
+    }
     return url;
+  }
+
+  /**
+   * Claim the one open this recipient gets, and tell the workflow engine about
+   * it — from the winning claim only, so a re-hit neither re-counts nor
+   * re-starts an automation.
+   */
+  private async claimOpen(id: string, campaignId: string, workspaceId: string, leadId: string): Promise<void> {
+    const claim = await this.prisma.campaignRecipient.updateMany({
+      where: { id, openedAt: null },
+      data: { openedAt: new Date() },
+    });
+    if (claim.count !== 1) return;
+    await this.bump(campaignId, 'opened');
+    await this.emitEngagement('opened', id, { workspaceId, leadId, campaignId, recipientId: id });
+  }
+
+  /** True when this hit must not be counted; it is logged, never stamped. */
+  private isMachine(recipientId: string, kind: string, hit: TrackingHit | undefined, sentAt?: Date | null): boolean {
+    const reason = machineHitReason(hit, sentAt);
+    if (!reason) return false;
+    // Deliberately not written to the row: stamping the FIRST hit would mark
+    // the recipient a machine forever and hide the real person's later open.
+    this.logger.debug(`${kind} on recipient=${recipientId} not counted (${reason})`);
+    return true;
   }
 
   /**
@@ -116,6 +270,12 @@ export class CampaignTrackingService {
       // and WhatsApp opt-out run through İYS and the NetGSM blacklist, which
       // this path deliberately does not touch.
       await this.optOutEmail(subject.workspaceId, subject.leadId, 'lead-token');
+      await this.emitEngagement('unsubscribed', `lead:${subject.leadId}`, {
+        workspaceId: subject.workspaceId,
+        leadId: subject.leadId,
+        campaignId: null,
+        recipientId: null,
+      });
       return true;
     }
 
@@ -130,6 +290,14 @@ export class CampaignTrackingService {
       await this.emitSmsOptOutEvent(r.workspaceId, r.leadId, r.id);
     } else if (flag.column === 'emailOptOut') {
       await this.optOutEmail(r.workspaceId, r.leadId, 'unsubscribe-link');
+      // Only this branch: the SMS one already raises SmsOptedOut, and a second
+      // event there would double-start any automation listening to both.
+      await this.emitEngagement('unsubscribed', r.id, {
+        workspaceId: r.workspaceId,
+        leadId: r.leadId,
+        campaignId: r.campaignId,
+        recipientId: r.id,
+      });
     } else {
       await this.flipAndRecord(r.workspaceId, r.leadId, flag.column, flag.consent, 'unsubscribe-link');
     }
@@ -350,6 +518,39 @@ export class CampaignTrackingService {
         this.logger.warn(`Failed to enqueue İYS sync job for lead=${leadId}: ${e?.message ?? e}`);
       }
     });
+  }
+
+  /**
+   * Tell the workflow engine what this recipient just did
+   * (`no-email-event-triggers`).
+   *
+   * Best-effort and always OUTSIDE a transaction. The claims above are bare
+   * conditional `updateMany`s rather than interactive transactions precisely so
+   * this append cannot take one down with it: a caught error inside a Prisma
+   * interactive transaction still turns the COMMIT into a ROLLBACK (the trap
+   * `emitSmsOptOutEvent` needs savepoints for), which would discard the very
+   * claim the event is reporting and have the open re-counted on the next hit.
+   *
+   * The key is deterministic so a redelivery — an event the outbox retries, a
+   * provider re-POSTing — collapses into one row and the executor's
+   * start(..., event.id) dedupe cannot double-enrol the lead.
+   */
+  private async emitEngagement(
+    kind: EmailEngagementKind,
+    subjectKey: string,
+    payload: Omit<MarketingEmailEngagementPayload, 'occurredAt'>,
+  ): Promise<void> {
+    const type = EMAIL_ENGAGEMENT_EVENT[kind];
+    try {
+      await this.outbox.append({
+        type,
+        tenantId: null,
+        payload: { ...payload, occurredAt: new Date().toISOString() } satisfies MarketingEmailEngagementPayload,
+        idempotencyKey: `${payload.workspaceId}:${type}:${subjectKey}`,
+      });
+    } catch (e: any) {
+      this.logger.warn(`Failed to enqueue ${type} for ${subjectKey}: ${e?.message ?? e}`);
+    }
   }
 
   /**

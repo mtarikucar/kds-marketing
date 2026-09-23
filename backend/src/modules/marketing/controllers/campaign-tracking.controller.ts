@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Param, Query, Res, Logger } from '@nestjs/common';
-import { Response } from 'express';
+import { Controller, Get, Post, Param, Query, Req, Res, Logger } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
-import { CampaignTrackingService } from '../campaigns/campaign-tracking.service';
-import { ONE_CLICK_UNSUBSCRIBE_THROTTLE } from '../public-throttle.const';
+import { CampaignTrackingService, TrackingHit } from '../campaigns/campaign-tracking.service';
+import { ONE_CLICK_UNSUBSCRIBE_THROTTLE, TRACKING_GET_THROTTLE } from '../public-throttle.const';
+import { isAutomatedFetch } from '../../../common/util/automated-fetch';
 import { MailLang, escapeHtml, t } from '../../../common/i18n/mail-copy';
 
 // 1x1 transparent GIF.
@@ -23,6 +24,36 @@ function tokenRef(token: string): string {
 }
 
 /**
+ * What the tracker needs to know about the request, and nothing else.
+ *
+ * Only the controller can see this: Express routes a HEAD to the GET handler,
+ * so `req.method` is the one place a scanner's headers-only fetch is still
+ * distinguishable from a render. No IP is read — the published privacy notice
+ * describes campaign measurement as the pixel and the link, and an IP column
+ * would be a new category of personal data for every KVKK/GDPR tenant.
+ */
+function hitOf(req: Request): TrackingHit {
+  const ua = (req as any)?.headers?.['user-agent'];
+  return { method: (req as any)?.method ?? 'GET', ua: typeof ua === 'string' ? ua : null };
+}
+
+/**
+ * The same thing for a route a person reaches by NAVIGATING.
+ *
+ * A click redirect is a top-level navigation, so it also carries the
+ * `Sec-Fetch-*` / `Accept` shape a scanner cannot fake without actually being a
+ * browser. That is read through the SHARED `isAutomatedFetch`, which the
+ * trigger-link redirect already uses — one list, so the two public click paths
+ * cannot drift into two half-right answers.
+ *
+ * The open pixel deliberately does NOT get this: it is a subresource fetch, so
+ * its `Sec-Fetch-Dest` is `image` and every genuine open would read as a machine.
+ */
+function navigationHitOf(req: Request): TrackingHit {
+  return { ...hitOf(req), automated: isAutomatedFetch(req as any) };
+}
+
+/**
  * Public campaign tracking: open pixel, click redirect (open-redirect-safe —
  * only campaign-authored links resolve), and one-click unsubscribe. No auth —
  * gated by the unguessable per-recipient token.
@@ -37,11 +68,19 @@ export class CampaignTrackingController {
   ) {}
 
   @Get('t/o/:token')
-  async open(@Param('token') token: string, @Res() res: Response): Promise<void> {
+  // Its own loose tracking bucket. This GET writes, so it needs a bound — but
+  // the global 300/min one carries a 60 s blackout, and one office behind a NAT
+  // gateway turns a campaign into a minute of uncounted opens (see the constant).
+  @Throttle(TRACKING_GET_THROTTLE)
+  async open(
+    @Param('token') token: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
     // The pixel must be returned whatever happens — a broken image in an inbox
     // is a worse outcome than a missed open — but a swallowed error that logs
     // nothing is how "opens stopped counting" goes unnoticed for weeks.
-    await this.tracking.open(token).catch((e: any) => {
+    await this.tracking.open(token, hitOf(req)).catch((e: any) => {
       this.logger.warn(`open tracking failed for ${tokenRef(token)}: ${e?.message ?? e}`);
     });
     res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate, private' });
@@ -49,17 +88,23 @@ export class CampaignTrackingController {
   }
 
   @Get('t/c/:token')
+  // Same bucket as the pixel, and for a sharper reason: a 429 here is a click
+  // that went nowhere, with no way for the recipient to retry.
+  @Throttle(TRACKING_GET_THROTTLE)
   async click(
     @Param('token') token: string,
     @Query('i') i: string,
+    @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
     // Same rule as the pixel: the recipient still gets taken somewhere, but the
     // failure is no longer invisible.
-    const url = await this.tracking.click(token, Number(i) || 0).catch((e: any) => {
-      this.logger.warn(`click tracking failed for ${tokenRef(token)}: ${e?.message ?? e}`);
-      return null;
-    });
+    const url = await this.tracking
+      .click(token, Number(i) || 0, navigationHitOf(req))
+      .catch((e: any) => {
+        this.logger.warn(`click tracking failed for ${tokenRef(token)}: ${e?.message ?? e}`);
+        return null;
+      });
     res.redirect(302, url ?? this.config.get<string>('PUBLIC_BASE_URL') ?? '/');
   }
 

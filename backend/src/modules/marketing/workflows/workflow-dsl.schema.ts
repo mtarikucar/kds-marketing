@@ -40,6 +40,16 @@ export const TRIGGER_TYPES = [
   // voiceConfig.keys. Filter on trigger.key for a specific digit (e.g.
   // "pressed 1 -> create task/transfer").
   'voice_keypress',
+  // Campaign email engagement (`no-email-event-triggers`). Only hits that
+  // survive the machine-hit filter fire these, so a mail-security scanner
+  // sweeping the links cannot start an automation. `email.clicked` carries the
+  // destination: filter on trigger.url (e.g. {"field":"trigger.url",
+  // "op":"contains","value":"/pricing"}) to react to ONE link.
+  // `email.bounced` is deliberately absent until a bounce writer emits it —
+  // a trigger that can never fire is worse than none.
+  'email.opened',
+  'email.clicked',
+  'email.unsubscribed',
 ] as const;
 export type WorkflowTriggerType = (typeof TRIGGER_TYPES)[number];
 

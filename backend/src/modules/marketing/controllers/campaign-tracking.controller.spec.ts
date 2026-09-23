@@ -1,7 +1,11 @@
 import 'reflect-metadata';
 import { CampaignTrackingController } from './campaign-tracking.controller';
 import { PublicInvoiceController } from './public-invoice.controller';
-import { ONE_CLICK_UNSUBSCRIBE_THROTTLE, PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
+import {
+  ONE_CLICK_UNSUBSCRIBE_THROTTLE,
+  PUBLIC_WRITE_THROTTLE,
+  TRACKING_GET_THROTTLE,
+} from '../public-throttle.const';
 
 /**
  * Unsubscribe must be a GET-confirm → POST-act flow: a GET that flipped the
@@ -142,6 +146,47 @@ describe('CampaignTrackingController — unsubscribe is scanner-safe', () => {
     });
   });
 
+  /**
+   * `engagement-unqualified`: only the controller knows how the hit arrived, so
+   * it is the one place that can tell the service. A mail-security scanner
+   * fetching every link (often with HEAD) must not read as a person.
+   */
+  describe('the tracking routes describe the hit they got', () => {
+    const req = (over: any = {}) => ({ method: 'GET', headers: {}, ...over });
+
+    it('passes the method and the User-Agent through to the open', async () => {
+      const tracking = trackingDouble({ open: jest.fn().mockResolvedValue(undefined) });
+      const res = makeRes();
+      await make(tracking).open('tok', req({ method: 'HEAD', headers: { 'user-agent': 'Barracuda' } }) as any, res);
+      expect(tracking.open).toHaveBeenCalledWith('tok', { method: 'HEAD', ua: 'Barracuda' });
+      // The pixel is still served — a broken image is a worse outcome than an
+      // uncounted open, and a HEAD must not 500 either.
+      expect(res._headers['Content-Type']).toBe('image/gif');
+    });
+
+    it('passes the hit through to the click and still redirects', async () => {
+      const tracking = trackingDouble({ click: jest.fn().mockResolvedValue('https://shop.example/x') });
+      const res = makeRes();
+      res.redirect = jest.fn();
+      await make(tracking).click('tok', '2', req({ headers: { 'user-agent': 'curl/8.4.0' } }) as any, res);
+      // The click also carries the navigation verdict, which the pixel cannot
+      // have — curl announces itself, so it is `true` here either way.
+      expect(tracking.click).toHaveBeenCalledWith('tok', 2, {
+        method: 'GET',
+        ua: 'curl/8.4.0',
+        automated: true,
+      });
+      expect(res.redirect).toHaveBeenCalledWith(302, 'https://shop.example/x');
+    });
+
+    it('survives a request object with no headers at all', async () => {
+      const tracking = trackingDouble({ open: jest.fn().mockResolvedValue(undefined) });
+      const res = makeRes();
+      await make(tracking).open('tok', {} as any, res);
+      expect(tracking.open).toHaveBeenCalledWith('tok', { method: 'GET', ua: null });
+    });
+  });
+
   it('renders the page in the workspace language', async () => {
     const tracking = trackingDouble({ pageLang: jest.fn().mockResolvedValue('tr') });
     const ctrl = make(tracking);
@@ -191,5 +236,89 @@ describe('CampaignTrackingController — unsubscribe is scanner-safe', () => {
       // burst into a minute of dropped opt-outs.
       expect((ONE_CLICK_UNSUBSCRIBE_THROTTLE.default as Record<string, unknown>).blockDuration).toBeUndefined();
     });
+
+    // The two tracking GETs write (a counter, a recipient timestamp, a workflow
+    // event) and had no bucket of their own, so they fell to the global 300/min
+    // IP limit — with its 60 s blackout. One office behind a NAT gateway, or a
+    // security gateway detonating a blast from a few egress addresses, and a
+    // 429 here is a click that vanished with nowhere for the reader to retry.
+    it('gives the open pixel and the click redirect their own loose bucket', () => {
+      expect(limitOf(CampaignTrackingController.prototype, 'open')).toBe(
+        TRACKING_GET_THROTTLE.default.limit,
+      );
+      expect(limitOf(CampaignTrackingController.prototype, 'click')).toBe(
+        TRACKING_GET_THROTTLE.default.limit,
+      );
+      expect(TRACKING_GET_THROTTLE.default.limit).toBeGreaterThanOrEqual(300);
+      expect((TRACKING_GET_THROTTLE.default as Record<string, unknown>).blockDuration).toBeUndefined();
+    });
+  });
+});
+
+/**
+ * WHO IS BEHIND THE CLICK.
+ *
+ * `machineHitReason` reads the User-Agent and the send time; that is all the
+ * open pixel can see. A click redirect is a top-level NAVIGATION, so it also
+ * carries the `Sec-Fetch-*` / `Accept` shape that a scanner cannot fake without
+ * actually being a browser — the same evidence the trigger-link redirect reads
+ * through the shared `isAutomatedFetch`.
+ *
+ * The pixel must NOT be judged that way: it is a subresource fetch, so its
+ * `Sec-Fetch-Dest` is `image` and every genuine open would be read as a machine.
+ */
+describe('CampaignTrackingController — the click redirect uses the shared classifier', () => {
+  const config = { get: () => 'https://app.test' } as any;
+  const res = () => {
+    const r: any = {};
+    r.set = () => r;
+    r.send = () => r;
+    r.redirect = jest.fn(() => r);
+    r.status = () => r;
+    return r;
+  };
+  const BROWSER = {
+    'user-agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'tr-TR,tr;q=0.9',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-dest': 'document',
+  };
+
+  it('marks a scanner-shaped click automated, and a real navigation not', async () => {
+    const tracking: any = {
+      click: jest.fn().mockResolvedValue('https://acme.test/pricing'),
+      pageLang: jest.fn().mockResolvedValue('en'),
+    };
+    const ctrl = new CampaignTrackingController(tracking, config);
+
+    await ctrl.click('tok', '0', { method: 'GET', headers: BROWSER } as any, res());
+    expect(tracking.click.mock.calls[0][2]).toMatchObject({ automated: false });
+
+    // Present-but-wrong `Sec-Fetch-Mode` is the giveaway a detonation cannot hide.
+    await ctrl.click(
+      'tok',
+      '0',
+      { method: 'GET', headers: { ...BROWSER, 'sec-fetch-mode': 'cors' } } as any,
+      res(),
+    );
+    expect(tracking.click.mock.calls[1][2]).toMatchObject({ automated: true });
+  });
+
+  it('never judges the open pixel by the navigation headers', async () => {
+    const tracking: any = { open: jest.fn().mockResolvedValue(undefined) };
+    const ctrl = new CampaignTrackingController(tracking, config);
+    // Exactly what a mail client's image load looks like. Reading this as a
+    // machine would zero every open in the product.
+    await ctrl.open(
+      'tok',
+      {
+        method: 'GET',
+        headers: { ...BROWSER, 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'image', accept: 'image/*,*/*;q=0.8' },
+      } as any,
+      res(),
+    );
+    expect(tracking.open.mock.calls[0][1].automated).toBeUndefined();
   });
 });

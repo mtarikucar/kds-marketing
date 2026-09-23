@@ -24,6 +24,9 @@ const EVENT_FOR_TRIGGER: Record<WorkflowTriggerType, string> = {
   'webhook.received': MarketingEventTypes.WebhookReceived,
   'certificate.issued': MarketingEventTypes.CertificateIssued,
   'voice_keypress': MarketingEventTypes.VoiceKeypress,
+  'email.opened': MarketingEventTypes.EmailOpened,
+  'email.clicked': MarketingEventTypes.EmailClicked,
+  'email.unsubscribed': MarketingEventTypes.EmailUnsubscribed,
 };
 
 /**
