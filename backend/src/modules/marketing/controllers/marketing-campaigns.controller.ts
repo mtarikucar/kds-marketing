@@ -7,6 +7,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -22,6 +23,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { CampaignsService } from '../campaigns/campaigns.service';
+import { CampaignPreviewService } from '../campaigns/campaign-preview.service';
 import { VoiceAudioUploadService, UploadedWavFile } from '../campaigns/voice-audio-upload.service';
 import { CreateCampaignDto, UpdateCampaignDto, SetVariantsDto } from '../dto/campaign.dto';
 import { Audit } from '../../audit/audit.decorator';
@@ -42,6 +44,7 @@ export class MarketingCampaignsController {
     private readonly campaigns: CampaignsService,
     private readonly socialLink: SocialCampaignLinkService,
     private readonly voiceAudio: VoiceAudioUploadService,
+    private readonly preview: CampaignPreviewService,
   ) {}
 
   @Get()
@@ -87,9 +90,48 @@ export class MarketingCampaignsController {
     return this.campaigns.get(a.workspaceId, id);
   }
 
+  /**
+   * One page of recipients, with the person attached.
+   *
+   * `status`/`skip`/`take` arrive as raw query strings and are bounded in the
+   * service (unknown status ignored, take clamped) — the tenant is never taken
+   * from the query, only from the authenticated payload.
+   */
   @Get(':id/recipients')
-  recipients(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
-    return this.campaigns.recipients(a.workspaceId, id);
+  recipients(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Query('status') status?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.campaigns.recipients(a.workspaceId, id, {
+      ...(status ? { status } : {}),
+      ...(skip ? { skip: Number(skip) || 0 } : {}),
+      ...(take ? { take: Number(take) || 0 } : {}),
+    });
+  }
+
+  /**
+   * Who this campaign would reach right now, and who it would not — computed
+   * with the predicate `launch()` freezes the audience with, so the number on
+   * the confirm sheet and the number in the blast cannot disagree. A read: it
+   * spends no quota and writes no ledger row.
+   */
+  @Get(':id/audience-preview')
+  audiencePreview(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.preview.audience(a.workspaceId, id);
+  }
+
+  /**
+   * One copy of this campaign to the person about to launch it — through the
+   * gateway, as BULK, counted in nothing the campaign reports.
+   */
+  @Post(':id/test-send')
+  @RequirePermission('campaigns.send')
+  @Audit({ action: 'campaign.test_send', resourceType: 'campaign', resourceIdParam: 'id' })
+  testSend(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.preview.testSend(a.workspaceId, id, { id: a.id, email: a.email });
   }
 
   @Patch(':id')

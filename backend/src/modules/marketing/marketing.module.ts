@@ -194,6 +194,10 @@ import { InboundItemService } from './channels/inbound/inbound-item.service';
 import { InboundRetryJob } from './channels/inbound/inbound-retry.job';
 import { EmailSentPollService } from './channels/inbound/email-sent-poll.service';
 import { PlatformBouncePollService } from './channels/inbound/platform-bounce-poll.service';
+// Email flawless wave 5 — observability: the snapshot over the two ledgers and
+// the alert cron that pushes what it finds.
+import { MailOpsService } from './channels/ops/mail-ops.service';
+import { MailAlertsCron } from './channels/ops/mail-alerts.cron';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
 import { OutboundConversationService } from './channels/outbound-conversation.service';
@@ -238,6 +242,7 @@ import { WorkflowTriggerService } from './workflows/workflow-trigger.service';
 import { MarketingCampaignsController } from './controllers/marketing-campaigns.controller';
 import { CampaignTrackingController } from './controllers/campaign-tracking.controller';
 import { CampaignsService } from './campaigns/campaigns.service';
+import { CampaignPreviewService } from './campaigns/campaign-preview.service';
 import { CampaignSenderService } from './campaigns/campaign-sender.service';
 import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
 import { CampaignSmsStatsService } from './campaigns/campaign-sms-stats.service';
@@ -1032,6 +1037,15 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // inert while those env vars are absent (G6) — registering it costs an
     // idle cron, not a connection.
     PlatformBouncePollService,
+    // Email flawless wave 5 — observability (`no-email-observability`).
+    // `MailOpsService` is the ONLY reader of the two ledgers: the tenant's
+    // "E-posta sağlığı" card, the operator console and the alert cron all ask
+    // it the same question, so there is one set of numbers and no second
+    // source of truth. `MailAlertsCron` is the push half — until it existed a
+    // platform-SMTP 535 reached `CronHeartbeat.lastError` and stayed there
+    // until a customer complained.
+    MailOpsService,
+    MailAlertsCron,
     ChannelsService,
     ConversationStreamService,
     MessageSenderService,
@@ -1079,6 +1093,9 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // Phase F P4 — campaigns: CRUD/launch, the throttled batch sender (registers
     // the campaign.batch ScheduledJob handler), and public open/click/unsub.
     CampaignsService,
+    // prelaunch-safety — the audience count, the suppression breakdown, the
+    // resolved sender and the test send the confirm sheet asks for.
+    CampaignPreviewService,
     CampaignSenderService,
     CampaignTrackingService,
     // Slow reconciler (15-min tick): NetGSM per-jobid stats() rollups

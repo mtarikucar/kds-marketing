@@ -216,6 +216,10 @@ const GATEWAY_CALLERS: Record<string, MailClass[]> = {
   // unsubscribe mechanism.
   'modules/marketing/workflows/workflow-action.handler.ts': ['BULK'],
   'modules/marketing/campaigns/campaign-sender.service.ts': ['BULK'],
+  // The pre-launch rehearsal: one copy of a campaign to the operator about to
+  // launch it, and the card's `preflight()`. BULK on purpose — a test that
+  // skipped the bulk gates would rehearse a mail the real send never makes.
+  'modules/marketing/campaigns/campaign-preview.service.ts': ['BULK'],
 };
 
 // ── the detector ─────────────────────────────────────────────────────────────

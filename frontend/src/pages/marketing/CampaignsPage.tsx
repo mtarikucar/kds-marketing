@@ -72,7 +72,11 @@ interface CampaignRow {
 
 const CHANNELS = ['EMAIL', 'SMS', 'WHATSAPP', 'VOICE'] as const;
 const FILTER_FIELDS = ['status', 'city', 'businessType', 'priority', 'source'] as const;
-const OPS = ['eq', 'neq', 'in', 'contains', 'gte', 'lte'] as const;
+// `exists` compiles to IS NULL / IS NOT NULL on the backend, and its value is a
+// boolean — so the value box below becomes a two-option select for it rather
+// than free text, where "false" used to be typed and read as truthy.
+const OPS = ['eq', 'neq', 'in', 'contains', 'gte', 'lte', 'exists'] as const;
+const EXISTS_VALUES = ['true', 'false'] as const;
 
 // NetGSM Phase 5 — a VOICE campaign's TTS-text-vs-uploaded-audio toggle.
 const VOICE_MODES = ['TTS', 'AUDIO'] as const;
@@ -149,6 +153,23 @@ export const campaignSchema = z
         });
       }
     }
+    // The subject is what the recipient sees before they open anything, and the
+    // sender's last-resort "Update" default was never meant to ship
+    // (`prelaunch-safety`). EMAIL only — the other channels do not render the
+    // field at all, so a flat `.min(1)` would make them unsavable.
+    if (v.channel === 'EMAIL' && !v.subject?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['subject'], message: 'Required' });
+    }
+    // A half-written rule used to be discarded on the way out, so "status =
+    // (blank)" quietly widened the audience to everybody. It is an error the
+    // operator can see and fix, not a silent drop.
+    v.filters.forEach((f, i) => {
+      if (!f.field?.trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['filters', i, 'field'], message: 'Required' });
+      } else if (!String(f.value ?? '').trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['filters', i, 'value'], message: 'Required' });
+      }
+    });
   });
 type CampaignFormValues = z.infer<typeof campaignSchema>;
 
@@ -245,6 +266,264 @@ export function CampaignSocialLinkButton({ campaignId }: { campaignId: string })
   );
 }
 
+// ── Pre-launch sheet ─────────────────────────────────────────────────────────
+
+/** `GET /marketing/campaigns/:id/audience-preview`. */
+/** Mirrors `SUPPRESSION_SAMPLE` in campaigns/campaign-preview.service.ts — how
+ *  many addresses the server checks before it reports `truncated`. */
+const SUPPRESSION_SAMPLE = 5000;
+
+interface AudiencePreview {
+  channel: string;
+  /** What the send will actually attempt — suppression already subtracted. */
+  matched: number;
+  excluded: { optedOut: number; bounced: number; invalid: number; suppressed: number; noEmail: number };
+  /** The suppression scan is sampled; true means the audience is larger than
+   *  the sample, so `excluded.suppressed` is a floor rather than a count. */
+  truncated: boolean;
+  /** Absent when the gateway could not answer — the card then says nothing
+   *  about the sender rather than showing an invented identity. */
+  sender?: {
+    /** False only for something that stops the WHOLE campaign. */
+    ok: boolean;
+    transport: string;
+    from: { email: string; name: string; replyTo?: string };
+    degraded?: { code: string; fix: string } | null;
+    reason?: string;
+  };
+}
+
+/**
+ * What the operator sees before the one action in this product that cannot be
+ * undone.
+ *
+ * It used to be a bare confirm dialog: no audience count, no idea who had been
+ * dropped and why, no way to tell which address the mail would leave from, and
+ * no way to look at the thing first — so an empty filter row (silently
+ * discarded on the way out) mailed the entire list a subject line reading
+ * "Update" (`prelaunch-safety`). The counts come from the endpoint that reuses
+ * the send's own audience predicate, so this card and the blast cannot
+ * disagree, and the confirm button stays inert until they have arrived.
+ */
+export function CampaignLaunchSheet({
+  campaign,
+  onCancel,
+  onConfirm,
+  launching,
+}: {
+  campaign: CampaignRow | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+  launching: boolean;
+}) {
+  const { t } = useTranslation('marketing');
+  const open = !!campaign;
+  // A future "Send at" makes this a SCHEDULE, not an instant send — same rule
+  // the row and the backend use.
+  const scheduled = isFutureSchedule(campaign?.scheduledAt);
+
+  const preview = useQuery<AudiencePreview>({
+    queryKey: ['marketing', 'campaigns', campaign?.id, 'audience-preview'],
+    queryFn: () => marketingApi.get(`/campaigns/${campaign!.id}/audience-preview`).then((r) => r.data),
+    enabled: open,
+  });
+
+  const testSend = useMutation({
+    mutationFn: () => marketingApi.post(`/campaigns/${campaign!.id}/test-send`).then((r) => r.data),
+    onSuccess: (d: { ok?: boolean; to?: string; reason?: string }) => {
+      if (d?.ok) {
+        toast.success(
+          t('campaigns.prelaunch.testSendSent', { defaultValue: 'Test email sent to {{email}}', email: d.to ?? '' }),
+        );
+        return;
+      }
+      // A refusal is an answer, not a failure — and it is the same answer every
+      // recipient would have got, which is the point of a rehearsal.
+      toast.error(
+        t('mail.notSent', { defaultValue: 'Not sent: {{reason}}', reason: t(`mail.reason.${d?.reason ?? 'UNKNOWN'}`) }),
+      );
+    },
+    onError: (e: any) =>
+      toast.error(
+        e.response?.data?.message ?? t('campaigns.prelaunch.testSendFailed', 'Could not send the test email'),
+      ),
+  });
+
+  const p = preview.data;
+  const x = p?.excluded;
+  const excludedTotal = x ? x.optedOut + x.bounced + x.invalid + x.suppressed + x.noEmail : 0;
+  // Only a real number unlocks the button: an undefined count is "we do not
+  // know yet", and nobody may blast on that.
+  const audienceKnown = typeof p?.matched === 'number';
+  const canLaunch = audienceKnown && (p as AudiencePreview).matched > 0;
+
+  const excludedLine = (key: string, fallback: string, count: number) =>
+    count > 0 ? (
+      <li key={key}>{t(`campaigns.prelaunch.${key}`, { defaultValue: fallback, count })}</li>
+    ) : null;
+
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onCancel(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {scheduled
+              ? t('campaigns.scheduleTitle', 'Schedule this campaign?')
+              : t('campaigns.prelaunch.title', 'Before you send')}
+          </DialogTitle>
+          <DialogDescription>
+            {scheduled
+              ? t('campaigns.scheduleDesc', {
+                  defaultValue: 'It will be sent automatically at {{when}}.',
+                  when: campaign?.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : '',
+                })
+              : t('campaigns.prelaunch.desc', 'Who this campaign reaches, and which address it goes out from.')}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* Audience */}
+          {preview.isError ? (
+            <Callout tone="danger">
+              {t('campaigns.prelaunch.audienceFailed', 'Could not work out the audience — try again.')}
+              <div className="mt-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => preview.refetch()}>
+                  {t('common.retry', 'Retry')}
+                </Button>
+              </div>
+            </Callout>
+          ) : !audienceKnown ? (
+            <p className="text-sm text-muted-foreground">
+              {t('campaigns.prelaunch.audienceLoading', 'Working out the audience…')}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                {t('campaigns.prelaunch.audience', {
+                  defaultValue: '{{count}} people will be reached',
+                  count: p!.matched,
+                })}
+              </p>
+              {p!.matched === 0 && (
+                <Callout tone="warning">
+                  {t('campaigns.prelaunch.noRecipients', 'Nobody in this audience can be mailed.')}
+                </Callout>
+              )}
+              {excludedTotal > 0 && (
+                <div className="rounded-md border border-border p-3">
+                  <p className="text-caption font-medium text-muted-foreground">
+                    {t('campaigns.prelaunch.excluded', { defaultValue: '{{count}} excluded', count: excludedTotal })}
+                  </p>
+                  {/* The per-reason breakdown is email deliverability; the other
+                      channels only have an opt-out to report, which the total
+                      above already carries. */}
+                  {p!.channel === 'EMAIL' && (
+                    <ul className="mt-1 space-y-0.5 text-caption text-muted-foreground">
+                      {excludedLine('excludedOptedOut', 'Unsubscribed: {{count}}', x!.optedOut)}
+                      {excludedLine('excludedBounced', 'Hard-bounced: {{count}}', x!.bounced)}
+                      {excludedLine('excludedInvalid', 'Invalid address: {{count}}', x!.invalid)}
+                      {excludedLine('excludedSuppressed', 'Blocked for another reason: {{count}}', x!.suppressed)}
+                      {excludedLine('excludedNoEmail', 'No email address: {{count}}', x!.noEmail)}
+                    </ul>
+                  )}
+                  {/* The suppression half is sampled, so on a very large
+                      audience the figure above is a FLOOR. Saying so is the
+                      difference between a number and a guess. */}
+                  {p!.truncated && (
+                    <p className="mt-1 text-caption text-muted-foreground">
+                      {t('campaigns.prelaunch.truncated', {
+                        defaultValue:
+                          'The first {{count}} addresses were checked — the audience is larger, so the excluded figure is a floor.',
+                        count: SUPPRESSION_SAMPLE,
+                      })}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Sender identity */}
+          {p?.sender && (
+            <div className="space-y-1">
+              <p className="text-caption font-medium text-muted-foreground">
+                {t('campaigns.prelaunch.sender', 'Sender')}
+              </p>
+              <p className="text-sm text-foreground">
+                {p.sender.from.name} &lt;{p.sender.from.email}&gt;
+              </p>
+              {p.sender.transport === 'PLATFORM' && p.sender.from.replyTo && (
+                <p className="text-caption text-muted-foreground">
+                  {t('campaigns.prelaunch.senderPlatform', {
+                    defaultValue: 'Jeeta sender — replies come back to {{replyTo}}.',
+                    replyTo: p.sender.from.replyTo,
+                  })}
+                </p>
+              )}
+              {p.sender.degraded && (
+                <p className="text-caption text-warning">
+                  {t('campaigns.prelaunch.senderDegraded', {
+                    defaultValue: 'Your own mailbox cannot be used: {{reason}}',
+                    reason: t(`campaigns.prelaunch.degradedReason.${p.sender.degraded.code}`, p.sender.degraded.code),
+                  })}
+                </p>
+              )}
+              {!p.sender.ok && p.sender.reason && (
+                <Callout tone="warning">
+                  {t('mail.notSent', {
+                    defaultValue: 'Not sent: {{reason}}',
+                    reason: t(`mail.reason.${p.sender.reason}`),
+                  })}
+                </Callout>
+              )}
+            </div>
+          )}
+
+          {/* Rehearsal — the same mail, through the same gates, to the operator. */}
+          {p?.channel === 'EMAIL' && (
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                loading={testSend.isPending}
+                disabled={testSend.isPending}
+                onClick={() => testSend.mutate()}
+              >
+                <Send className="h-3.5 w-3.5" />
+                {t('campaigns.prelaunch.testSend', 'Send a test to yourself')}
+              </Button>
+              <p className="mt-1 text-caption text-muted-foreground">
+                {t('campaigns.prelaunch.testSendHint', 'One copy goes to you and is not counted in the stats.')}
+              </p>
+            </div>
+          )}
+
+          {!scheduled && (
+            <p className="text-caption text-muted-foreground">
+              {t('campaigns.prelaunch.irreversible', 'Once sending starts it cannot be undone.')}
+            </p>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onCancel}>
+            {t('common.cancel', 'Cancel')}
+          </Button>
+          <Button
+            type="button"
+            onClick={onConfirm}
+            loading={launching}
+            disabled={!canLaunch || launching}
+          >
+            {scheduled ? t('campaigns.scheduleConfirm', 'Schedule') : t('campaigns.launch', 'Launch')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
@@ -324,9 +603,24 @@ export default function CampaignsPage() {
     control: form.control,
     name: 'filters',
   });
+  /**
+   * The audience filter as the SERVER has it, for a campaign being edited.
+   *
+   * The builder can only express `field op value` over five lead columns, but a
+   * filter can also carry `id`, `tag`, `segmentId`, an array value or a boolean
+   * `exists` — an MCP-created campaign usually does. Reading one of those into
+   * the form and writing it back out rewrote it, which the backend read as an
+   * audience CHANGE and used to silently cancel a scheduled send
+   * (`mcp-filter-rewrite`). So an untouched filter is round-tripped exactly as
+   * it was stored, and only a filter the operator actually edited is rebuilt.
+   */
+  const savedFilter = useRef<unknown[] | null>(null);
+  // Read during render so react-hook-form's formState proxy subscribes to it.
+  const filtersEdited = !!form.formState.dirtyFields.filters;
 
   const openCreate = () => {
     setEditId('');
+    savedFilter.current = null;
     form.reset(DEFAULT_VALUES);
     setAiGoal('');
     setFormOpen(true);
@@ -335,6 +629,9 @@ export default function CampaignsPage() {
   const openEdit = async (c: CampaignRow) => {
     const full = await marketingApi.get(`/campaigns/${c.id}`).then((r) => r.data);
     setEditId(full.id);
+    // What the campaign actually has on file, kept aside so an edit that never
+    // touches the audience can send it back verbatim (see buildPayload).
+    savedFilter.current = Array.isArray(full.audienceFilter) ? full.audienceFilter : [];
     form.reset({
       name: full.name,
       channel: full.channel,
@@ -403,13 +700,17 @@ export default function CampaignsPage() {
     // HTML in the DB and keep shipping it. The service maps '' → null.
     bodyHtml: values.channel === 'EMAIL' ? (values.bodyHtml || '') : '',
     emailTemplateId: values.channel === 'EMAIL' ? (values.emailTemplateId || '') : '',
-    audienceFilter: values.filters
-      .filter((f) => f.field && f.value)
-      .map((f) => ({
-        field: `lead.${f.field}`,
-        op: f.op,
-        value: f.op === 'in' ? f.value.split(',').map((s) => s.trim()) : f.value,
-      })),
+    // Verbatim when untouched (see `savedFilter`); rebuilt only when the
+    // operator edited the rules. Nothing is dropped here any more — the schema
+    // refuses a half-written rule instead.
+    audienceFilter:
+      savedFilter.current && !filtersEdited
+        ? savedFilter.current
+        : values.filters.map((f) => ({
+            field: `lead.${f.field}`,
+            op: f.op,
+            value: f.op === 'in' ? f.value.split(',').map((s) => s.trim()) : f.value,
+          })),
     // Backend validates this with @IsDateString(), which (unlike @IsString()
     // above) does NOT treat '' as "skip validation" — only null/undefined do.
     // So clearing the picker must send null, not ''.
@@ -526,12 +827,6 @@ export default function CampaignsPage() {
       setDeleteTarget(null);
     },
   });
-
-  // The Launch confirm's copy depends on whether the campaign has a future
-  // scheduledAt (set via the form above) — launch() will SCHEDULE it instead
-  // of sending immediately, so the confirm must say so rather than implying
-  // an instant, irreversible send.
-  const launchIsScheduled = isFutureSchedule(launchTarget?.scheduledAt);
 
   return (
     <div className="space-y-6">
@@ -651,15 +946,20 @@ export default function CampaignsPage() {
                 )}
               </p>
               <div className="space-y-2">
-                {filterFields.map((f, i) => (
-                  <div key={f.id} className="flex flex-wrap gap-2">
+                {filterFields.map((f, i) => {
+                  const rowError =
+                    form.formState.errors.filters?.[i]?.field?.message ??
+                    form.formState.errors.filters?.[i]?.value?.message;
+                  return (
+                  <div key={f.id} className="space-y-1">
+                    <div className="flex flex-wrap gap-2">
                     {/* Field select */}
                     <Controller
                       control={form.control}
                       name={`filters.${i}.field`}
                       render={({ field }) => (
                         <Select value={field.value} onValueChange={field.onChange}>
-                          <SelectTrigger className="flex-1 min-w-[8rem]">
+                          <SelectTrigger className="flex-1 min-w-[8rem]" aria-invalid={!!rowError}>
                             <SelectValue placeholder={t('campaigns.field', 'field')} />
                           </SelectTrigger>
                           <SelectContent>
@@ -677,7 +977,22 @@ export default function CampaignsPage() {
                       control={form.control}
                       name={`filters.${i}.op`}
                       render={({ field }) => (
-                        <Select value={field.value} onValueChange={field.onChange}>
+                        <Select
+                          value={field.value}
+                          onValueChange={(op) => {
+                            field.onChange(op);
+                            // `exists` is a boolean: seed a real choice rather
+                            // than leaving the row in an invalid in-between
+                            // state, and clear a stale text value on the way
+                            // back out.
+                            const current = form.getValues(`filters.${i}.value`);
+                            if (op === 'exists' && !EXISTS_VALUES.includes(current as any)) {
+                              form.setValue(`filters.${i}.value`, 'true', { shouldDirty: true });
+                            } else if (op !== 'exists' && EXISTS_VALUES.includes(current as any)) {
+                              form.setValue(`filters.${i}.value`, '', { shouldDirty: true });
+                            }
+                          }}
+                        >
                           <SelectTrigger className="w-24">
                             <SelectValue />
                           </SelectTrigger>
@@ -691,11 +1006,32 @@ export default function CampaignsPage() {
                         </Select>
                       )}
                     />
-                    {/* Value */}
-                    <Input
-                      placeholder={t('campaigns.value', 'value')}
-                      className="flex-1 min-w-[8rem]"
-                      {...form.register(`filters.${i}.value`)}
+                    {/* Value — a two-option select for `exists`, free text otherwise. */}
+                    <Controller
+                      control={form.control}
+                      name={`filters.${i}.value`}
+                      render={({ field }) =>
+                        form.watch(`filters.${i}.op`) === 'exists' ? (
+                          <Select value={field.value || 'true'} onValueChange={field.onChange}>
+                            <SelectTrigger className="flex-1 min-w-[8rem]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="true">{t('common.yes', 'Yes')}</SelectItem>
+                              <SelectItem value="false">{t('common.no', 'No')}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            placeholder={t('campaigns.value', 'value')}
+                            className="flex-1 min-w-[8rem]"
+                            aria-invalid={!!rowError}
+                            value={field.value}
+                            onChange={field.onChange}
+                            onBlur={field.onBlur}
+                          />
+                        )
+                      }
                     />
                     <IconButton
                       type="button"
@@ -707,8 +1043,15 @@ export default function CampaignsPage() {
                     >
                       <Trash2 className="h-4 w-4" />
                     </IconButton>
+                    </div>
+                    {rowError && (
+                      <p role="alert" className="text-caption text-danger">
+                        {t('common.required', 'Required')}
+                      </p>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 <button
                   type="button"
                   onClick={() => appendFilter({ field: '', op: 'eq', value: '' })}
@@ -946,11 +1289,16 @@ export default function CampaignsPage() {
               </div>
             )}
 
-            {/* Subject (EMAIL only) */}
+            {/* Subject (EMAIL only) — required: the sender's "Update" default
+                was never meant to be what a recipient sees. */}
             {selectedChannel === 'EMAIL' && (
-              <Field label={t('campaigns.subject', 'Subject')}>
-                {({ id }) => (
-                  <Input id={id} maxLength={200} {...form.register('subject')} />
+              <Field
+                label={t('campaigns.subject', 'Subject')}
+                required
+                error={form.formState.errors.subject?.message ? t('common.required', 'Required') : undefined}
+              >
+                {({ id, invalid }) => (
+                  <Input id={id} aria-invalid={invalid} maxLength={200} {...form.register('subject')} />
                 )}
               </Field>
             )}
@@ -1064,34 +1412,18 @@ export default function CampaignsPage() {
       {/* ── Campaign detail (recipients + delivery stats) ──────────────────── */}
       <CampaignDetailDialog campaignId={detailId} onClose={() => setDetailId(null)} />
 
-      {/* ── Launch confirm ─────────────────────────────────────────────────── */}
-      {/* Launching sends the campaign to its whole audience right away (and can't
-          be undone / costs message quota), so guard it behind a confirm — the
-          Launch button used to fire on a single click. When the campaign has a
-          future "Send at" set, launch() SCHEDULES it instead — the copy below
-          reflects that rather than implying an instant send. */}
-      <ConfirmDialog
-        open={!!launchTarget}
-        onOpenChange={(o) => { if (!o) setLaunchTarget(null); }}
-        title={
-          launchIsScheduled
-            ? t('campaigns.scheduleTitle', 'Schedule this campaign?')
-            : t('campaigns.launchTitle', 'Launch this campaign?')
-        }
-        description={
-          launchIsScheduled
-            ? t('campaigns.scheduleDesc', {
-                defaultValue: 'It will be sent automatically at {{when}}.',
-                when: launchTarget?.scheduledAt ? new Date(launchTarget.scheduledAt).toLocaleString() : '',
-              })
-            : t(
-                'campaigns.launchDesc',
-                'It will be sent to everyone in the audience now. This cannot be undone.',
-              )
-        }
-        confirmLabel={launchIsScheduled ? t('campaigns.scheduleConfirm', 'Schedule') : t('campaigns.launch', 'Launch')}
-        loading={launch.isPending}
+      {/* ── Pre-launch sheet ───────────────────────────────────────────────── */}
+      {/* Launching sends the campaign to its whole audience right away (and
+          can't be undone / costs message quota), so it is guarded by a sheet
+          that first says WHO it reaches, who was left out and why, which
+          address it leaves from, and offers one copy to the operator. When the
+          campaign has a future "Send at" set, launch() SCHEDULES it instead —
+          the copy reflects that rather than implying an instant send. */}
+      <CampaignLaunchSheet
+        campaign={launchTarget}
+        onCancel={() => setLaunchTarget(null)}
         onConfirm={() => launchTarget && launch.mutate(launchTarget.id)}
+        launching={launch.isPending}
       />
 
       {/* ── Cancel scheduled send confirm ───────────────────────────────────── */}

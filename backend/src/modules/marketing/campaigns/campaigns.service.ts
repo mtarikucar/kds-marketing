@@ -1,18 +1,11 @@
-import {
-  Inject,
-  Injectable,
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 import { SegmentCompilerService, SegmentNode } from '../services/segment-compiler.service';
-import { extractCampaignLinks } from './campaign-links.util';
+import { extractCampaignLinks, screenCampaignLinks } from './campaign-links.util';
 import { IYS_EMAIL_PORT, IysEmailPort } from '../compliance/iys-email.port';
 
 export const CAMPAIGN_BATCH_KIND = 'campaign.batch';
@@ -58,6 +51,38 @@ const ENUMISH_FILTER_FIELDS = new Set(['status', 'priority', 'source', 'business
  *  read and is resolved by `resolveAudienceWhere`. */
 const TAG_FILTER_FIELD = 'tag';
 const SEGMENT_FILTER_FIELD = 'segmentId';
+
+/** The one message every caller gets for a subject-less EMAIL campaign —
+ *  `launch()` and the pre-launch test send enforce the same rule. */
+export const EMAIL_SUBJECT_REQUIRED = 'An email campaign needs a subject';
+
+/** A tracked link the shared public redirector must not be pointed at. The
+ *  refusal carries the machine reason after the colon, never a bare URL. */
+export const CAMPAIGN_LINK_REFUSED = 'A link in this campaign cannot be tracked';
+
+/**
+ * Ask `buildAudienceWhere` for the audience RULES without the channel's
+ * reachability half.
+ *
+ * The reachability guards are added per KNOWN channel, so a channel it does
+ * not know compiles the filter alone. That is what lets the pre-launch card
+ * count each exclusion (opted out / bounced / invalid / no address) separately
+ * while still going through the one compiler the send uses — a second
+ * implementation of the audience is exactly the drift the card exists to
+ * prevent. Never a real `Campaign.channel`.
+ */
+export const RULES_ONLY_CHANNEL = '__rules_only__';
+
+/** Recipient statuses the console may page through (`campaign-sender.service.ts`
+ *  writes these; anything else is a caller typo and is ignored rather than
+ *  compiled into a where that matches nothing). */
+const RECIPIENT_STATUSES = new Set(['PENDING', 'HOLD', 'SENDING', 'SENT', 'FAILED', 'SKIPPED', 'UNSUBSCRIBED']);
+
+/** Page size for the recipients list: the console's default, and the ceiling a
+ *  caller may ask for. 500 unpaged rows was the old answer to a 4,000-recipient
+ *  campaign (`campaign-results-unreadable`). */
+const RECIPIENTS_PAGE = 50;
+const RECIPIENTS_MAX_PAGE = 200;
 
 interface AudienceFilter {
   field: string;
@@ -396,7 +421,7 @@ export class CampaignsService {
     // the new filter. Same revert pattern the scheduledAt-cleared branch uses.
     const audienceChanged =
       dto.audienceFilter !== undefined &&
-      JSON.stringify(existing.audienceFilter ?? null) !== JSON.stringify(dto.audienceFilter ?? null);
+      this.canonicalAudience(existing.audienceFilter) !== this.canonicalAudience(dto.audienceFilter);
     if (existing.status === 'SCHEDULED' && audienceChanged) {
       await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
       await this.prisma.campaignRecipient.deleteMany({ where: { campaignId: existing.id, workspaceId } });
@@ -447,6 +472,39 @@ export class CampaignsService {
     return updated;
   }
 
+  /**
+   * Is this the same audience, written differently?
+   *
+   * The old comparison was a raw `JSON.stringify` of two jsonb values, which
+   * made a SCHEDULED campaign revert to DRAFT — silently cancelling its send —
+   * whenever the composer re-serialised a filter an MCP agent had written: the
+   * composer prefixes `lead.`, stringifies every value and emits its own key
+   * order, none of which changes who gets the mail (`mcp-filter-rewrite`).
+   *
+   * Arrays rather than objects, so jsonb key order cannot matter; the `lead.`
+   * strip mirrors what `buildAudienceWhere` already does; `String()` makes the
+   * form's stringification a non-change. Deliberately order-SENSITIVE across
+   * rules: no client reorders them, and treating a reorder as a real change
+   * errs towards re-freezing rather than towards mailing a stale audience.
+   *
+   * Only the COMPARISON is canonical. What is persisted stays verbatim — an
+   * agent's filter is round-tripped exactly as it wrote it.
+   */
+  private canonicalAudience(value: unknown): string {
+    const rules = Array.isArray(value) ? value : [];
+    return JSON.stringify(
+      rules.map((f: any) => [
+        String(f?.field ?? '').replace(/^lead\./, ''),
+        String(f?.op ?? ''),
+        Array.isArray(f?.value)
+          ? f.value.map((v: any) => String(v))
+          : f?.value === undefined || f?.value === null
+            ? null
+            : String(f.value),
+      ]),
+    );
+  }
+
   async remove(workspaceId: string, id: string) {
     const res = await this.prisma.campaign.deleteMany({ where: { id, workspaceId } });
     if (res.count === 0) throw new NotFoundException('Campaign not found');
@@ -492,13 +550,65 @@ export class CampaignsService {
     return { message: 'Campaign cancelled' };
   }
 
-  async recipients(workspaceId: string, id: string) {
-    return this.prisma.campaignRecipient.findMany({
-      where: { workspaceId, campaignId: id },
-      orderBy: { createdAt: 'asc' },
-      take: 500,
-      select: { id: true, leadId: true, status: true, sentAt: true, openedAt: true, clickedAt: true, error: true },
-    });
+  /**
+   * One page of a campaign's recipients, with the person attached.
+   *
+   * It used to answer with 500 unpaged rows carrying a raw `leadId` and a raw
+   * status, so a 4,000-recipient campaign was unreadable and unfollowable: the
+   * operator could not see who bounced, could not reach the people who clicked,
+   * and could not tell an empty list from a truncated one
+   * (`campaign-results-unreadable`).
+   *
+   * The people are read in a SECOND, workspace-scoped query rather than as a
+   * Prisma `select`: `CampaignRecipient.leadId` is a bare column with no
+   * `@relation` (schema.prisma), and giving it one is a migration this pass
+   * deliberately does not make. It is one bounded query per page, not per row.
+   */
+  async recipients(
+    workspaceId: string,
+    id: string,
+    opts: { status?: string; skip?: number; take?: number } = {},
+  ) {
+    const status = opts.status && RECIPIENT_STATUSES.has(opts.status) ? opts.status : undefined;
+    const where = { workspaceId, campaignId: id, ...(status ? { status } : {}) };
+    const take = Math.min(RECIPIENTS_MAX_PAGE, Math.max(1, Math.trunc(opts.take || RECIPIENTS_PAGE)));
+    const skip = Math.max(0, Math.trunc(opts.skip || 0));
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.campaignRecipient.findMany({
+        // The tenant is re-named at the call site, not merely inside `where`:
+        // the scoping arch spec reads these calls one at a time.
+        where: { ...where, workspaceId },
+        // `id` as a second key: recipient rows are written WHILE a send is in
+        // flight, and a page boundary that only sorts on createdAt can show one
+        // row twice and skip another.
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        skip,
+        take,
+        select: {
+          id: true,
+          leadId: true,
+          status: true,
+          sentAt: true,
+          openedAt: true,
+          clickedAt: true,
+          error: true,
+        },
+      }),
+      this.prisma.campaignRecipient.count({ where: { ...where, workspaceId } }),
+    ]);
+
+    const leadIds = [...new Set((rows as Array<{ leadId: string }>).map((r) => r.leadId).filter(Boolean))];
+    const leads = leadIds.length
+      ? await this.prisma.lead.findMany({
+          where: { id: { in: leadIds }, workspaceId },
+          select: { id: true, contactPerson: true, businessName: true, email: true, phone: true },
+        })
+      : [];
+    const byId = new Map(leads.map((l) => [l.id, l]));
+    return {
+      rows: (rows as Array<{ leadId: string }>).map((r) => ({ ...r, lead: byId.get(r.leadId) ?? null })),
+      total,
+    };
   }
 
   /**
@@ -511,6 +621,16 @@ export class CampaignsService {
     if (!campaign) throw new NotFoundException('Campaign not found');
     if (campaign.status !== 'DRAFT' && campaign.status !== 'SCHEDULED') {
       throw new BadRequestException('Campaign already launched');
+    }
+    // `prelaunch-safety`: the sender's last-resort `subject ?? 'Update'` default
+    // (campaign-sender.service.ts:513) exists so an A/B variant can never strand
+    // a recipient mid-blast — it was never meant to be how a campaign ships. This
+    // is the single chokepoint every caller passes (the composer, the MCP
+    // `jeeta_create_campaign` tool and any direct API call), which a DTO-only
+    // rule would not cover. Checked before the audience query: it costs nothing
+    // and the operator gets the cheaper error first.
+    if (campaign.channel === 'EMAIL' && !campaign.subject?.trim()) {
+      throw new BadRequestException(EMAIL_SUBJECT_REQUIRED);
     }
     const where = await this.resolveAudienceWhere(workspaceId, campaign.channel, campaign.audienceFilter);
     const leads = await this.prisma.lead.findMany({ where: { ...where, workspaceId }, select: { id: true } });
@@ -562,6 +682,18 @@ export class CampaignsService {
       { body: campaign.body, bodyHtml: campaignHtml },
       (variants as any[]).map((v) => ({ body: v.body, bodyHtml: v.bodyHtml })),
     );
+
+    // `shared-tracking-domain`: the click redirect resolves out of this array
+    // on the PLATFORM's own domain, and the only check it ever made was
+    // "starts with http", at redirect time. Screening here is what stops the
+    // shared redirector being aimed at a phishing page with the platform's
+    // reputation behind it — and launch is the right moment, because it is the
+    // one chokepoint every caller (composer, MCP tool, direct API) passes and
+    // the array is frozen straight after.
+    const screened = screenCampaignLinks(links);
+    if (screened.ok === false) {
+      throw new BadRequestException(`${CAMPAIGN_LINK_REFUSED}: ${screened.reason}`);
+    }
 
     // WINNER mode: only abTestPercent% of the audience is the test cohort (sent
     // now across variants); the remainder is HELD until the winner is decided.
@@ -772,7 +904,15 @@ export class CampaignsService {
         case 'contains': where[field] = { contains: String(f.value), mode: 'insensitive' }; break;
         case 'gte': if (scalar) where[field] = { gte: value }; break;
         case 'lte': if (scalar) where[field] = { lte: value }; break;
-        case 'exists': where[field] = f.value ? { not: null } : null; break;
+        // Every value that reaches here from a form is a STRING, and "false" is
+        // truthy — so "has no city" compiled to "has a city" and the campaign
+        // went to exactly the people it was meant to skip (`mcp-filter-rewrite`).
+        // An omitted value still means "does not exist", as it always has.
+        case 'exists': {
+          const want = f.value === true || f.value === 'true' || f.value === 1 || f.value === '1';
+          where[field] = want ? { not: null } : null;
+          break;
+        }
       }
     }
     if (ands.length) where.AND = ands;
@@ -791,6 +931,28 @@ export class CampaignsService {
     audienceFilter: unknown,
   ): Promise<Prisma.LeadWhereInput> {
     const where = this.buildAudienceWhere(workspaceId, channel, audienceFilter) as any;
+
+    // NOT IMPLEMENTED HERE, and the reason is structural rather than a choice.
+    //
+    // `settings.email.requireConsent` is meant to narrow an EMAIL audience to
+    // leads carrying a granted MARKETING_EMAIL `ConsentRecord` — the read half
+    // of the consent that forms and imports now WRITE at the source. The
+    // predicate the findings name is
+    //   { consents: { some: { type: 'MARKETING_EMAIL', granted: true } } }
+    // and it does not compile: `ConsentRecord.leadId` (schema.prisma:3339) is a
+    // bare column with no `@relation` to `Lead`, so there is no `consents`
+    // navigation property to filter on.
+    //
+    // The expressible alternative — resolve the consenting lead ids and AND in
+    // an `id: { in: [...] }` — is unbounded in the size of the consenting set,
+    // which for the tenants who would switch this on is most of their CRM. An
+    // audience predicate that silently degrades on the biggest workspaces is
+    // worse than one that does not exist yet.
+    //
+    // So it wants the relation, i.e. a reversible migration, which this pass
+    // does not take. The WRITE half is live and is the part that was missing;
+    // nothing here changes for any existing tenant.
+
     const filters = Array.isArray(audienceFilter) ? (audienceFilter as AudienceFilter[]) : [];
     const segmentIds = filters
       .filter((f) => f.field?.replace(/^lead\./, '') === SEGMENT_FILTER_FIELD && typeof f.value === 'string')

@@ -16,15 +16,42 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
   },
 }));
 
+// Interpolates `{{var}}` the way i18next does, so a count or an address the
+// copy carries can actually be asserted on instead of the raw placeholder.
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, opts?: { defaultValue?: string } | string) =>
-      (typeof opts === 'string' ? opts : opts?.defaultValue) ?? key,
+    t: (key: string, opts?: Record<string, unknown> | string) => {
+      const raw = (typeof opts === 'string' ? opts : (opts?.defaultValue as string)) ?? key;
+      if (!opts || typeof opts === 'string') return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_m, name: string) => String(opts[name] ?? ''));
+    },
     i18n: { language: 'en' },
   }),
 }));
 
 const DRAFT = [{ id: 'c1', name: 'Promo', channel: 'EMAIL', status: 'DRAFT', stats: null }];
+
+/** What the pre-launch sheet reads before it lets anybody press the button. */
+const PREVIEW = {
+  channel: 'EMAIL',
+  matched: 42,
+  excluded: { optedOut: 3, bounced: 1, invalid: 0, suppressed: 2, noEmail: 4 },
+  truncated: false,
+  sender: {
+    ok: true,
+    transport: 'PLATFORM',
+    from: { email: 'admin@jeetagrowth.com', name: 'Acme via Jeeta', replyTo: 'acme@acme.test' },
+  },
+};
+
+/** `/campaigns` → rows, `/audience-preview` → a preview, everything else → []. */
+function mockCampaigns(rows: unknown[], preview: unknown = PREVIEW) {
+  get.mockImplementation((url: string) => {
+    if (url === '/campaigns') return Promise.resolve({ data: rows });
+    if (url.endsWith('/audience-preview')) return Promise.resolve({ data: preview });
+    return Promise.resolve({ data: [] });
+  });
+}
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -39,9 +66,7 @@ describe('CampaignsPage launch', () => {
   beforeEach(() => {
     get.mockReset();
     post.mockClear();
-    get.mockImplementation((url: string) =>
-      url === '/campaigns' ? Promise.resolve({ data: DRAFT }) : Promise.resolve({ data: [] }),
-    );
+    mockCampaigns(DRAFT);
   });
 
   it('confirms before launching — a single click does NOT mass-send', async () => {
@@ -73,9 +98,7 @@ describe('CampaignsPage — launch a campaign with a future scheduledAt', () => 
     get.mockReset();
     post.mockReset();
     post.mockResolvedValue({ data: { recipients: 5, scheduledAt: FUTURE } });
-    get.mockImplementation((url: string) =>
-      url === '/campaigns' ? Promise.resolve({ data: SCHEDULED_DRAFT }) : Promise.resolve({ data: [] }),
-    );
+    mockCampaigns(SCHEDULED_DRAFT);
   });
 
   it('shows "Schedule" copy (not "Launch now") in the confirm dialog and posts /launch on confirm', async () => {
@@ -112,10 +135,20 @@ describe('CampaignsPage — schedule picker past-time warning', () => {
 
     const input = (await screen.findByLabelText('Send at (optional)')) as HTMLInputElement;
     expect(input).toHaveAttribute('type', 'datetime-local');
-    // Well-formed "YYYY-MM-DDTHH:mm", close to now — an exact-time assertion
-    // would be flaky across the tick this test runs on.
+    // Well-formed "YYYY-MM-DDTHH:mm", in LOCAL time and never in the future.
+    //
+    // The regression this actually guards is a UTC/local mix-up (building the
+    // value from `toISOString()`), which lands a whole timezone offset away and
+    // makes the browser reject every time the operator picks in the next few
+    // hours. A tight wall-clock delta cannot express that: `min` is truncated
+    // DOWN to the minute at render time, so under a loaded suite run the gap to
+    // the assertion legitimately exceeds a minute — which is how this went red
+    // for something that was never broken. So: never ahead of now (truncation
+    // only ever goes backwards), and nowhere near an hour behind it.
     expect(input.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
-    expect(Math.abs(new Date(input.min).getTime() - Date.now())).toBeLessThan(60_000);
+    const drift = Date.now() - new Date(input.min).getTime();
+    expect(drift).toBeGreaterThanOrEqual(0);
+    expect(drift).toBeLessThan(10 * 60_000);
 
     expect(screen.getByText('Leave blank to send immediately when you launch.')).toBeInTheDocument();
 
@@ -411,5 +444,179 @@ describe('CampaignsPage — VOICE composer', () => {
         keys: ['1'],
       }),
     })));
+  });
+});
+
+// prelaunch-safety: a launch cannot be undone, so the sheet has to answer "who
+// exactly, from which address, and can I see it first" BEFORE the button works.
+describe('CampaignsPage — the pre-launch sheet', () => {
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: { recipients: 42 } });
+    mockCampaigns(DRAFT);
+  });
+
+  async function openSheet() {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await user.click(await screen.findByRole('button', { name: /Launch/i }));
+    return { user, dialog: await screen.findByRole('dialog') };
+  }
+
+  it('keeps the launch button disabled until the audience count has loaded', async () => {
+    // The preview never resolves — the operator must not be able to blast in
+    // the meantime.
+    get.mockImplementation((url: string) => {
+      if (url === '/campaigns') return Promise.resolve({ data: DRAFT });
+      if (url.endsWith('/audience-preview')) return new Promise(() => {});
+      return Promise.resolve({ data: [] });
+    });
+
+    const { user, dialog } = await openSheet();
+
+    expect(within(dialog).getByText('Working out the audience…')).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: /^Launch$/i });
+    expect(confirm).toBeDisabled();
+    await user.click(confirm);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('shows the audience, the suppression breakdown and the resolved sender', async () => {
+    const { dialog } = await openSheet();
+
+    expect(await within(dialog).findByText('42 people will be reached')).toBeInTheDocument();
+    expect(within(dialog).getByText('10 excluded')).toBeInTheDocument();
+    expect(within(dialog).getByText('Unsubscribed: 3')).toBeInTheDocument();
+    expect(within(dialog).getByText('Hard-bounced: 1')).toBeInTheDocument();
+    expect(within(dialog).getByText('Blocked for another reason: 2')).toBeInTheDocument();
+    expect(within(dialog).getByText('No email address: 4')).toBeInTheDocument();
+    // A zero bucket is not a line — it would read as a problem that is not there.
+    expect(within(dialog).queryByText(/Invalid address/)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/Acme via Jeeta/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Jeeta sender — replies come back to acme@acme.test.'),
+    ).toBeInTheDocument();
+  });
+
+  it('refuses to launch at nobody', async () => {
+    mockCampaigns(DRAFT, { ...PREVIEW, matched: 0 });
+    const { dialog } = await openSheet();
+
+    expect(await within(dialog).findByText('Nobody in this audience can be mailed.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^Launch$/i })).toBeDisabled();
+  });
+
+  it('names what would stop the whole campaign', async () => {
+    mockCampaigns(DRAFT, { ...PREVIEW, sender: { ...PREVIEW.sender, ok: false, reason: 'SENDING_PAUSED' } });
+    const { dialog } = await openSheet();
+    expect(await within(dialog).findByText(/mail\.reason\.SENDING_PAUSED/)).toBeInTheDocument();
+  });
+
+  it('sends one test copy to the operator without launching anything', async () => {
+    post.mockResolvedValue({ data: { ok: true, to: 'owner@acme.test', outcome: 'SENT' } });
+    const { user, dialog } = await openSheet();
+    await within(dialog).findByText('42 people will be reached');
+
+    await user.click(within(dialog).getByRole('button', { name: /Send a test to yourself/i }));
+
+    expect(post).toHaveBeenCalledWith('/campaigns/c1/test-send');
+    expect(post).not.toHaveBeenCalledWith('/campaigns/c1/launch');
+  });
+});
+
+// mcp-filter-rewrite: an agent writes `[{field:'id',op:'eq',value:'lead-9'}]`,
+// the composer cannot express it, and saving a subject fix used to rewrite the
+// audience — which on a SCHEDULED campaign silently cancels the send.
+describe('CampaignsPage — an MCP-written audience survives an edit', () => {
+  const MCP_FILTER = [{ field: 'lead.id', op: 'eq', value: 'lead-9' }];
+  const patch = vi.fn().mockResolvedValue({ data: {} });
+
+  beforeEach(async () => {
+    get.mockReset();
+    post.mockReset();
+    patch.mockClear();
+    const api = (await import('../../features/marketing/api/marketingApi')).default as any;
+    api.patch = (...a: unknown[]) => patch(...a);
+    get.mockImplementation((url: string) => {
+      if (url === '/campaigns') return Promise.resolve({ data: DRAFT });
+      if (url === '/campaigns/c1') {
+        return Promise.resolve({
+          data: {
+            id: 'c1', name: 'Promo', channel: 'EMAIL', subject: 'Eski konu', body: 'Merhaba',
+            bodyHtml: null, emailTemplateId: null, audienceFilter: MCP_FILTER, scheduledAt: null,
+            iysMessageType: 'BILGILENDIRME',
+          },
+        });
+      }
+      if (url.endsWith('/audience-preview')) return Promise.resolve({ data: PREVIEW });
+      return Promise.resolve({ data: [] });
+    });
+  });
+
+  it('round-trips the untouched filter verbatim when only the subject changes', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+
+    await user.click(await screen.findByRole('button', { name: /Edit/i }));
+    const subject = await screen.findByLabelText(/^Subject/);
+    await user.clear(subject);
+    await user.type(subject, 'Yeni konu');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    const body = patch.mock.calls[0][1] as any;
+    expect(body.subject).toBe('Yeni konu');
+    expect(body.audienceFilter).toEqual(MCP_FILTER);
+  });
+});
+
+// An EMAIL campaign with no subject ships "Update" as the subject line, and
+// launch() now refuses it server-side — the form must say so first.
+describe('CampaignsPage — an email campaign needs a subject', () => {
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: {} });
+    mockCampaigns(DRAFT);
+  });
+
+  it('blocks the save and does not post', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }));
+
+    await user.type(await screen.findByLabelText(/^Name/), 'Promo');
+    await user.type(await screen.findByLabelText(/^Message/), 'Merhaba');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+// prelaunch-safety item 1: a rule with a blank value used to be dropped on the
+// way out, so "status = (blank)" quietly meant "everybody".
+describe('CampaignsPage — an incomplete audience rule is an error, not a silent drop', () => {
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: {} });
+    mockCampaigns(DRAFT);
+  });
+
+  it('blocks the save while a rule has no value', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }));
+
+    await user.type(await screen.findByLabelText(/^Name/), 'Promo');
+    await user.type(await screen.findByLabelText(/^Subject/), 'Konu');
+    await user.type(await screen.findByLabelText(/^Message/), 'Merhaba');
+    await user.click(screen.getByRole('button', { name: /Add rule/i }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    expect(post).not.toHaveBeenCalled();
   });
 });

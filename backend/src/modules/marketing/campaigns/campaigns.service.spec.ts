@@ -95,6 +95,22 @@ describe('CampaignsService', () => {
     // the audience is materialized (recipient count / send). The `in` case
     // already guards Array.isArray; the scalar ops must too. Drop the malformed
     // leaf rather than emit a poisoned where.
+    /**
+     * `mcp-filter-rewrite`: every value that reaches here from a form is a
+     * STRING, and "false" is truthy — so "has no email" compiled to "has an
+     * email" and the campaign went to exactly the people it was meant to skip.
+     */
+    it('exists:false means IS NULL, however it was spelled', () => {
+      for (const value of [false, 'false', 0, '0', undefined, null]) {
+        const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'city', op: 'exists', value }]);
+        expect(w.city).toBeNull();
+      }
+      for (const value of [true, 'true', 1, '1']) {
+        const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'city', op: 'exists', value }]);
+        expect(w.city).toEqual({ not: null });
+      }
+    });
+
     it('skips a scalar op whose value is an array (avoids a Prisma 500)', () => {
       const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [
         { field: 'lead.status', op: 'eq', value: ['NEW', 'CONTACTED'] },
@@ -152,7 +168,7 @@ describe('CampaignsService', () => {
 
   describe('launch', () => {
     it('materializes recipients, flips to SENDING, and kicks a batch', async () => {
-      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi see https://x.com', audienceFilter: [] });
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi see https://x.com', audienceFilter: [] });
       const res = await svc.launch(WS, 'c1');
       expect(res.recipients).toBe(2);
       expect(prisma.campaignRecipient.createMany).toHaveBeenCalled();
@@ -164,8 +180,25 @@ describe('CampaignsService', () => {
       );
     });
 
+    /**
+     * `prelaunch-safety`: the sender defaults a missing subject to "Update",
+     * so an EMAIL campaign could blast thousands of people a mail whose subject
+     * line said nothing. Launch is the one chokepoint every caller passes —
+     * the composer, the MCP tool and a raw API call.
+     */
+    it('refuses an EMAIL campaign with no subject, before it touches the audience', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: '  ', body: 'x', audienceFilter: [] });
+      await expect(svc.launch(WS, 'c1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.lead.findMany).not.toHaveBeenCalled();
+    });
+
+    it('does not ask an SMS campaign for a subject', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'SMS', subject: null, body: 'x', audienceFilter: [] });
+      await expect(svc.launch(WS, 'c1')).resolves.toEqual(expect.objectContaining({ recipients: 2 }));
+    });
+
     it('refuses an empty audience', async () => {
-      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'x', audienceFilter: [] });
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'x', audienceFilter: [] });
       prisma.lead.findMany.mockResolvedValue([]);
       await expect(svc.launch(WS, 'c1')).rejects.toBeInstanceOf(BadRequestException);
     });
@@ -176,7 +209,7 @@ describe('CampaignsService', () => {
     });
 
     it('assigns every recipient a variant key when A/B is enabled', async () => {
-      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null, abEnabled: true, audienceFilter: [] });
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', bodyHtml: null, abEnabled: true, audienceFilter: [] });
       prisma.campaignVariant = {
         findMany: jest.fn().mockResolvedValue([
           { key: 'A', weight: 1, body: 'Hi A', bodyHtml: null },
@@ -192,7 +225,7 @@ describe('CampaignsService', () => {
     it('WINNER mode with an audience too small to hold back (leads <= variants) falls back to SPLIT — no decide job, no HOLD', async () => {
       // 2 default leads, 3 variants → can't test ≥1/variant AND hold back ≥1.
       prisma.campaign.findFirst.mockResolvedValue({
-        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null,
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', bodyHtml: null,
         abEnabled: true, abMode: 'WINNER', abTestPercent: 20, audienceFilter: [],
       });
       prisma.campaignVariant = {
@@ -215,7 +248,7 @@ describe('CampaignsService', () => {
     });
 
     it('leaves variantKey null when A/B is off', async () => {
-      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', abEnabled: false, audienceFilter: [] });
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', abEnabled: false, audienceFilter: [] });
       await svc.launch(WS, 'c1');
       const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
       expect(rows.every((r: any) => r.variantKey === null)).toBe(true);
@@ -228,7 +261,7 @@ describe('CampaignsService', () => {
       it('a FUTURE scheduledAt freezes the audience but flips to SCHEDULED and queues campaign.launch (no batch kick)', async () => {
         const scheduledAt = new Date(Date.now() + 60 * 60 * 1000); // 1h out
         prisma.campaign.findFirst.mockResolvedValue({
-          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt,
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', audienceFilter: [], scheduledAt,
         });
 
         const res = await svc.launch(WS, 'c1');
@@ -251,7 +284,7 @@ describe('CampaignsService', () => {
       it('a scheduledAt within the 30s tolerance sends immediately (SENDING + batch kick), not SCHEDULED', async () => {
         const almostNow = new Date(Date.now() + 5_000); // well under the 30s tolerance
         prisma.campaign.findFirst.mockResolvedValue({
-          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: almostNow,
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', audienceFilter: [], scheduledAt: almostNow,
         });
 
         await svc.launch(WS, 'c1');
@@ -266,7 +299,7 @@ describe('CampaignsService', () => {
       it('a past scheduledAt (e.g. a stale SCHEDULED campaign re-launched) sends immediately', async () => {
         const past = new Date(Date.now() - 60_000);
         prisma.campaign.findFirst.mockResolvedValue({
-          id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: past,
+          id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', subject: 'Konu', body: 'Hi', audienceFilter: [], scheduledAt: past,
         });
 
         await svc.launch(WS, 'c1');
@@ -277,7 +310,7 @@ describe('CampaignsService', () => {
 
       it('an absent scheduledAt keeps the existing immediate-send behavior', async () => {
         prisma.campaign.findFirst.mockResolvedValue({
-          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: null,
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', audienceFilter: [], scheduledAt: null,
         });
 
         await svc.launch(WS, 'c1');
@@ -745,7 +778,7 @@ describe('CampaignsService', () => {
   // stale-recipients + the wave-1 channel handoff.
   describe('launch — recipient freeze hygiene', () => {
     const draft = {
-      id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null, audienceFilter: [],
+      id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi', bodyHtml: null, audienceFilter: [],
     };
 
     it('clears PENDING/HOLD rows before re-freezing a DRAFT audience', async () => {
@@ -820,7 +853,7 @@ describe('CampaignsService', () => {
   describe('launch — tracked links', () => {
     it('tracks the <a href> and leaves the <img src> out of links[]', async () => {
       prisma.campaign.findFirst.mockResolvedValue({
-        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL',
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu',
         body: 'Hi',
         bodyHtml: '<a href="https://shop.test/sale">Sale</a><img src="https://cdn.test/hero.jpg">',
         audienceFilter: [],
@@ -842,6 +875,41 @@ describe('CampaignsService', () => {
 
       const update = prisma.campaign.update.mock.calls.at(-1)[0].data;
       expect(update.links).toEqual(['https://only.test']);
+    });
+
+    /**
+     * The click redirect resolves out of `links[]` on the PLATFORM's domain.
+     * Launch is the one chokepoint every caller passes and the moment the array
+     * is frozen, so it is where an unusable destination has to be refused —
+     * afterwards the only check is "starts with http", at redirect time, which
+     * is an open redirector with the platform's reputation behind it.
+     */
+    it('refuses to launch a campaign whose link hides credentials in the authority', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu',
+        body: 'Hi',
+        // Reads as acme.com to a person, resolves to evil.test.
+        bodyHtml: '<a href="https://acme.com@evil.test/login">Hesabınız</a>',
+        audienceFilter: [],
+      });
+
+      await expect(svc.launch(WS, 'c1')).rejects.toThrow(/CREDENTIALS_IN_URL/);
+      // Nothing was frozen: the refusal lands before the campaign moves.
+      expect(prisma.campaign.update).not.toHaveBeenCalled();
+    });
+
+    it('does not refuse an ordinary link with a port, a query and a fragment', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu',
+        body: 'Hi',
+        bodyHtml: '<a href="https://acme.com:8443/spring?utm_source=mail&amp;a=b#top">Bak</a>',
+        audienceFilter: [],
+      });
+
+      await svc.launch(WS, 'c1');
+
+      const update = prisma.campaign.update.mock.calls.at(-1)[0].data;
+      expect(update.links).toEqual(['https://acme.com:8443/spring?utm_source=mail&a=b#top']);
     });
   });
 
@@ -906,7 +974,7 @@ describe('CampaignsService', () => {
 
     it('launch re-renders the template so an edit made after the draft was built does ship', async () => {
       prisma.campaign.findFirst.mockResolvedValue({
-        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi',
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi',
         bodyHtml: '<a href="https://old.test">old</a>', emailTemplateId: 't1', audienceFilter: [],
       });
       prisma.emailTemplate.findMany.mockResolvedValue([
@@ -924,7 +992,7 @@ describe('CampaignsService', () => {
     // A deleted template must not strand a draft that can no longer launch.
     it('launch falls back to the stored bodyHtml when the template is gone (no throw)', async () => {
       prisma.campaign.findFirst.mockResolvedValue({
-        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi',
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', subject: 'Konu', body: 'Hi',
         bodyHtml: '<a href="https://old.test">old</a>', emailTemplateId: 'deleted', audienceFilter: [],
       });
       prisma.emailTemplate.findMany.mockResolvedValue([]);
@@ -1006,6 +1074,134 @@ describe('CampaignsService', () => {
       await svc.update(WS, 'c1', { body: 'New https://new.test' });
 
       expect(prisma.campaign.update.mock.calls[0][0].data.links).toBeUndefined();
+    });
+  });
+
+  /**
+   * `mcp-filter-rewrite`: an agent-created campaign writes its filter one way
+   * and the composer re-reads and re-serialises it another, so saving a typo
+   * fix in the subject looked like an audience change and silently cancelled
+   * the send.
+   */
+  describe('update — an MCP-written filter survives an edit', () => {
+    const scheduled = (filter: unknown) => ({
+      id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', subject: 'Konu',
+      audienceFilter: filter, scheduledAt: new Date(Date.now() + 86_400_000),
+    });
+
+    it('does not revert when only the stringification differs', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(
+        scheduled([{ op: 'eq', field: 'id', value: 'lead-9' }]),
+      );
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+
+      // What the composer sends back: `lead.`-prefixed, values stringified,
+      // keys in its own order.
+      await svc.update(WS, 'c1', {
+        subject: 'Yeni konu',
+        audienceFilter: [{ field: 'lead.id', op: 'eq', value: 'lead-9' }],
+      });
+
+      expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+    });
+
+    it('still reverts when the audience really changes', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(
+        scheduled([{ field: 'city', op: 'eq', value: 'Izmir' }]),
+      );
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+
+      const out: any = await svc.update(WS, 'c1', {
+        audienceFilter: [{ field: 'city', op: 'eq', value: 'Ankara' }],
+      });
+
+      expect(out.status).toBe('DRAFT');
+      expect(prisma.campaignRecipient.deleteMany).toHaveBeenCalled();
+    });
+
+    it('treats a number and its string form as the same rule', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(scheduled([{ field: 'priority', op: 'eq', value: 3 }]));
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { audienceFilter: [{ field: 'priority', op: 'eq', value: '3' }] });
+
+      expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recipients', () => {
+    beforeEach(() => {
+      prisma.campaignRecipient.findMany = jest.fn().mockResolvedValue([]);
+      prisma.campaignRecipient.count = jest.fn().mockResolvedValue(0);
+      prisma.$transaction = jest.fn((ops: any[]) => Promise.all(ops));
+    });
+
+    it('attaches the person so the console shows a name, not an id', async () => {
+      prisma.campaignRecipient.findMany.mockResolvedValue([
+        { id: 'r1', leadId: 'l1', status: 'SENT' },
+        { id: 'r2', leadId: 'l2', status: 'FAILED' },
+      ]);
+      prisma.lead.findMany.mockResolvedValue([
+        { id: 'l1', contactPerson: 'Ayşe Yılmaz', businessName: 'Acme', email: 'a@x.io', phone: null },
+      ]);
+
+      const out = await svc.recipients(WS, 'c1');
+
+      expect(prisma.campaignRecipient.findMany.mock.calls[0][0].where).toEqual({
+        workspaceId: WS, campaignId: 'c1',
+      });
+      // The lead read is workspace-scoped in its own right, never trusted to
+      // the recipient row alone.
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['l1', 'l2'] }, workspaceId: WS },
+        select: { id: true, contactPerson: true, businessName: true, email: true, phone: true },
+      });
+      expect(out.rows[0].lead).toEqual({ id: 'l1', contactPerson: 'Ayşe Yılmaz', businessName: 'Acme', email: 'a@x.io', phone: null });
+      // A deleted lead leaves its recipient row readable, with no person on it.
+      expect(out.rows[1].lead).toBeNull();
+    });
+
+    it('returns rows AND the total, so the console can say "x of n"', async () => {
+      prisma.campaignRecipient.findMany.mockResolvedValue([{ id: 'r1', leadId: 'l1' }]);
+      prisma.campaignRecipient.count.mockResolvedValue(412);
+      prisma.lead.findMany.mockResolvedValue([]);
+      const out = await svc.recipients(WS, 'c1');
+      expect(out).toEqual({ rows: [{ id: 'r1', leadId: 'l1', lead: null }], total: 412 });
+    });
+
+    it('pages with a stable order, defaults to 50 and clamps take to 200', async () => {
+      await svc.recipients(WS, 'c1', { take: 5000, skip: 20 });
+      const args = prisma.campaignRecipient.findMany.mock.calls[0][0];
+      expect(args.take).toBe(200);
+      expect(args.skip).toBe(20);
+      // A second key: rows are written WHILE a send is in flight, so createdAt
+      // alone lets a row cross a page boundary and be shown twice or not at all.
+      expect(args.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
+
+      prisma.campaignRecipient.findMany.mockClear();
+      await svc.recipients(WS, 'c1');
+      expect(prisma.campaignRecipient.findMany.mock.calls[0][0].take).toBe(50);
+    });
+
+    it('filters by a known status and ignores an unknown one', async () => {
+      await svc.recipients(WS, 'c1', { status: 'FAILED' });
+      expect(prisma.campaignRecipient.findMany.mock.calls[0][0].where).toEqual({
+        workspaceId: WS, campaignId: 'c1', status: 'FAILED',
+      });
+
+      prisma.campaignRecipient.findMany.mockClear();
+      await svc.recipients(WS, 'c1', { status: "'; DROP TABLE" });
+      expect(prisma.campaignRecipient.findMany.mock.calls[0][0].where).toEqual({
+        workspaceId: WS, campaignId: 'c1',
+      });
+    });
+
+    it('counts with the same where it lists with', async () => {
+      await svc.recipients(WS, 'c1', { status: 'SENT' });
+      expect(prisma.campaignRecipient.count.mock.calls[0][0].where).toEqual(
+        prisma.campaignRecipient.findMany.mock.calls[0][0].where,
+      );
     });
   });
 });
