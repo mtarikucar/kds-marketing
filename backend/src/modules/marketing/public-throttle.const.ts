@@ -48,3 +48,29 @@ export const ONE_CLICK_UNSUBSCRIBE_THROTTLE = {
 export const EMAIL_INBOUND_THROTTLE = {
   default: { limit: 600, ttl: 60_000 },
 };
+
+/**
+ * Public tracking GETs — the trigger-link redirect, and the campaign open/click
+ * redirects that share its shape.
+ *
+ * They write (a click row, a counter, a workflow event), so they need a bound.
+ * But they are the only public route whose failure mode is a RECIPIENT being
+ * sent nowhere: a 429 is a click that vanished, and the person who clicked has
+ * no way to know or retry meaningfully. So this bucket is deliberately LOOSER
+ * than the global 300/min default rather than tighter, for two reasons the
+ * 20/min form bucket gets wrong:
+ *
+ * - a whole office sits behind one NAT gateway, and a campaign lands on all of
+ *   them within the same minute;
+ * - a mail-security gateway detonates every link in every mail from a handful
+ *   of shared egress addresses, so the bursts that look worst are exactly the
+ *   ones a real tenant causes.
+ *
+ * `blockDuration` is omitted on purpose, like one-click unsubscribe: the 60 s
+ * blackout its siblings carry is what turns a single burst into a whole minute
+ * of lost clicks. The point of the limit is to bound what an unauthenticated
+ * flood can cost, not to punish a busy minute.
+ */
+export const TRACKING_GET_THROTTLE = {
+  default: { limit: 600, ttl: 60_000 },
+};

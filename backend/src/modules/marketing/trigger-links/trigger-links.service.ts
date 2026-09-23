@@ -11,9 +11,24 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
+import {
+  canSignTriggerLinkContact,
+  signTriggerLinkContact,
+  verifyTriggerLinkContact,
+} from './trigger-link-contact.token';
 
 const HTTP_URL = /^https?:\/\/.+/i;
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{1,60}$/;
+
+/**
+ * How long one clicker's `link.clicked` events collapse into a single outbox
+ * row. Ten minutes: long enough to swallow a scanner's retries, a double-click
+ * and a back-button re-open, short enough that someone genuinely returning to
+ * the link later in the day still trips the automation. It is a floor-divided
+ * window, so two clicks either side of a boundary both emit — a burst-collapse,
+ * not a lock.
+ */
+const CLICK_EVENT_WINDOW_MS = 10 * 60_000;
 
 export interface CreateTriggerLinkInput {
   name: string;
@@ -46,9 +61,20 @@ export class TriggerLinksService {
   private baseUrl(): string {
     return (this.config.get<string>('PUBLIC_BASE_URL') ?? '').replace(/\/$/, '');
   }
-  /** The public click URL for a slug (what the QR encodes and the UI copies). */
-  publicUrl(slug: string): string {
-    return `${this.baseUrl()}/api/public/l/${slug}`;
+  /**
+   * The public click URL for a slug (what the QR encodes and the UI copies).
+   *
+   * Pass `contact` to mint the per-lead attribution link a send should use.
+   * When the platform cannot sign (no `MARKETING_SECRET_KEY`) the `?c=` is
+   * omitted rather than emitted raw — an unsigned id would be refused by
+   * `click()` on the very deployments that CAN sign, so printing one would be
+   * printing a link we know does not attribute.
+   */
+  publicUrl(slug: string, contact?: { workspaceId: string; leadId: string }): string {
+    const base = `${this.baseUrl()}/api/public/l/${slug}`;
+    if (!contact) return base;
+    const token = signTriggerLinkContact(contact.workspaceId, contact.leadId);
+    return token ? `${base}?c=${token}` : base;
   }
 
   async list(workspaceId: string) {
@@ -56,7 +82,43 @@ export class TriggerLinksService {
       where: { workspaceId },
       orderBy: { createdAt: 'desc' },
     });
-    return rows.map((r) => ({ ...r, url: this.publicUrl(r.slug) }));
+    if (rows.length === 0) return [];
+
+    // `clickCount` CHANGED MEANING: it is the HUMAN counter now, because a
+    // mail-security scanner sweeping every link in a mail no longer bumps it.
+    // For a tenant with no scanner traffic the number is what it always was;
+    // for everyone else it fell overnight, and A5.1 says a tenant must be able
+    // to see why. This list is the only surface that renders these links.
+    //
+    // One grouped read for the page, workspace named in the predicate. A
+    // failure is UNKNOWN, not zero: "0 filtered" is a claim we cannot make, and
+    // a counting read must never be able to empty the page it annotates.
+    const ids = rows.map((r) => r.id);
+    const totals = await this.prisma.triggerLinkClick
+      .groupBy({
+        by: ['triggerLinkId'],
+        where: { workspaceId, triggerLinkId: { in: ids } },
+        _count: { _all: true },
+      })
+      .catch((e: any) => {
+        this.logger.warn(`trigger-link click totals unreadable (workspace=${workspaceId}): ${e?.message ?? e}`);
+        return null;
+      });
+    const totalById = new Map<string, number>(
+      (totals ?? []).map((t: any) => [String(t.triggerLinkId), Number(t._count?._all ?? 0)]),
+    );
+
+    return rows.map((r) => {
+      const total = totals ? (totalById.get(r.id) ?? 0) : null;
+      return {
+        ...r,
+        url: this.publicUrl(r.slug),
+        totalClicks: total,
+        // Never negative: a counter bumped by a path that wrote no row, or a
+        // row aged out by retention, would otherwise read as nonsense.
+        botCount: total === null ? null : Math.max(0, total - (r.clickCount ?? 0)),
+      };
+    });
   }
 
   async create(workspaceId: string, dto: CreateTriggerLinkInput) {
@@ -108,13 +170,28 @@ export class TriggerLinksService {
     return { message: 'Trigger link deleted' };
   }
 
-  /** Click stats + the most recent clicks for one link (scoped). */
+  /**
+   * Click stats + the most recent clicks for one link (scoped).
+   *
+   * Two numbers, because since `scanner-clicks` they answer two questions:
+   *
+   * - `clickCount` — the cached counter, now bumped for HUMAN clicks only. This
+   *   is the badge, and it is what `list()` returns, so the list and the detail
+   *   view cannot disagree.
+   * - `totalClicks` — `COUNT(*)` over the rows, which are still written for
+   *   every hit because they are the audit/KVKK record (exported by
+   *   `ComplianceService`, erased with the subject).
+   *
+   * `botCount` is the difference, clamped at zero. It is an inference, not a
+   * fact: `TriggerLinkClick` has no `automated` column yet, so a counter bump
+   * that lost a hot-row race is indistinguishable from a scanner hit. The
+   * column is the proper fix and is handed off; until then this undercounts
+   * humans by a rounding error and never overstates a click that happened.
+   */
   async stats(workspaceId: string, id: string) {
     const link = await this.prisma.triggerLink.findFirst({ where: { id, workspaceId } });
     if (!link) throw new NotFoundException('Trigger link not found');
-    // clickCount is a best-effort cache; the click rows are the truth, so report
-    // the authoritative COUNT here (self-heals any dropped-increment drift).
-    const [recent, clickCount] = await Promise.all([
+    const [recent, totalClicks] = await Promise.all([
       this.prisma.triggerLinkClick.findMany({
         where: { workspaceId, triggerLinkId: id },
         orderBy: { clickedAt: 'desc' },
@@ -123,19 +200,33 @@ export class TriggerLinksService {
       }),
       this.prisma.triggerLinkClick.count({ where: { workspaceId, triggerLinkId: id } }),
     ]);
-    return { ...link, clickCount, url: this.publicUrl(link.slug), recent };
+    return {
+      ...link,
+      totalClicks,
+      botCount: Math.max(0, totalClicks - (link.clickCount ?? 0)),
+      url: this.publicUrl(link.slug),
+      recent,
+    };
   }
 
   /**
    * Public click handler: resolve the link by its globally-unique slug, record
-   * the click (+ attribute to a lead when `contactId` resolves in-workspace),
+   * the click (+ attribute to a lead when `contactId` verifies in-workspace),
    * emit `link.clicked`, and return the validated target URL to 302 to. Returns
    * null when the slug is unknown or the stored target is unsafe (caller falls
    * back to the base URL — never an open redirect).
+   *
+   * `automated` says the caller believes a machine fetched this, not a person
+   * (see `isAutomatedFetch`). It is a CLASSIFICATION, not a block: the row is
+   * still written, because it is the audit record the KVKK export and erasure
+   * both read, and the redirect still happens. What a machine does not get is
+   * the two things only a human earns — the `link.clicked` workflow trigger and
+   * the click counter. Corporate mail security detonating every link in a
+   * campaign is the difference between 200 qualified leads and none of them.
    */
   async click(
     slug: string,
-    opts: { contactId?: string; ip?: string; userAgent?: string } = {},
+    opts: { contactId?: string; ip?: string; userAgent?: string; automated?: boolean } = {},
   ): Promise<string | null> {
     const link = await this.prisma.triggerLink.findUnique({ where: { slug } });
     if (!link) return null;
@@ -146,16 +237,17 @@ export class TriggerLinksService {
     const contactId = typeof opts.contactId === 'string' ? opts.contactId : undefined;
 
     try {
+      const claimed = this.claimedLeadId(contactId, link.workspaceId);
       // Attribute to a lead only if the id resolves IN the link's workspace; a
       // lookup failure degrades to no attribution, never dropping the click.
       let leadId: string | null = null;
-      if (contactId) {
+      if (claimed) {
         leadId = await this.prisma.lead
-          .findFirst({ where: { id: contactId, workspaceId: link.workspaceId }, select: { id: true } })
+          .findFirst({ where: { id: claimed, workspaceId: link.workspaceId }, select: { id: true } })
           .then((l) => l?.id ?? null)
           .catch(() => null);
       }
-      const click = await this.prisma.triggerLinkClick.create({
+      await this.prisma.triggerLinkClick.create({
         data: {
           workspaceId: link.workspaceId,
           triggerLinkId: link.id,
@@ -164,13 +256,21 @@ export class TriggerLinksService {
           userAgent: opts.userAgent?.slice(0, 512) ?? null,
         },
       });
+      if (opts.automated) return link.targetUrl;
       // Emit the automation-critical event FIRST and independently of the display
       // counter — a counter-update failure (hot-row contention) must never steal
       // the workflow trigger. Each side-effect has its OWN catch.
       await this.outbox
         .append({
           type: MarketingEventTypes.LinkClicked,
-          idempotencyKey: `${MarketingEventTypes.LinkClicked}:${click.id}`,
+          // Keyed on the SUBJECT and a time window, not on the click row: a
+          // per-row key is unique by construction and so dedupes nothing. A
+          // burst — scanner retries that slipped the classifier, a double
+          // click, a leadless flood — collapses into one event here, which is
+          // the only dedupe a LEADLESS enrolment gets (workflow-executor's
+          // durable guard keys on the source event id, so one event per burst
+          // is exactly what it needs).
+          idempotencyKey: this.clickEventKey(link.id, leadId, opts.ip),
           payload: {
             workspaceId: link.workspaceId,
             triggerLinkId: link.id,
@@ -180,8 +280,7 @@ export class TriggerLinksService {
           },
         })
         .catch((e) => this.logger.warn(`link.clicked emit failed: ${(e as Error).message}`));
-      // Best-effort display counter — the trigger_link_clicks rows are the truth
-      // (stats() recomputes from COUNT), so a dropped increment only undercounts
+      // Best-effort HUMAN click counter — a dropped increment only understates
       // the cached badge, never the automation or the click history.
       await this.prisma.triggerLink
         .update({ where: { id: link.id }, data: { clickCount: { increment: 1 } } })
@@ -191,6 +290,37 @@ export class TriggerLinksService {
       this.logger.warn(`trigger-link click record failed: ${(e as Error).message}`);
     }
     return link.targetUrl;
+  }
+
+  /**
+   * The lead a `?c=` is allowed to claim, or null.
+   *
+   * A signed token is the only claim accepted — a raw lead id in a query string
+   * is a forgeable trigger for every `link.clicked` automation the workspace
+   * owns, and ids leak through exports, forwards and former employees.
+   *
+   * The exception is a deployment with no `MARKETING_SECRET_KEY`: it cannot
+   * MINT a signed link either, so refusing raw ids there would silently switch
+   * attribution off for a workspace that has been running fine, with nothing to
+   * switch it back on (G3 — a new rule defaults to today's behaviour). Nothing
+   * is weakened by the fallback, because where there is no key there is no
+   * signature to forge around.
+   */
+  private claimedLeadId(contactId: string | undefined, workspaceId: string): string | null {
+    if (!contactId) return null;
+    if (!canSignTriggerLinkContact()) return contactId;
+    const claim = verifyTriggerLinkContact(contactId);
+    // The token carries its own workspace, so a claim minted for another tenant
+    // is refused before the lookup rather than relying on the scoped query.
+    if (!claim || claim.workspaceId !== workspaceId) return null;
+    return claim.leadId;
+  }
+
+  /** One key per (link, clicker, window) — see `CLICK_EVENT_WINDOW_MS`. */
+  private clickEventKey(linkId: string, leadId: string | null, ip?: string): string {
+    const subject = leadId ?? ip ?? 'anon';
+    const window = Math.floor(Date.now() / CLICK_EVENT_WINDOW_MS);
+    return `${MarketingEventTypes.LinkClicked}:${linkId}:${subject}:${window}`;
   }
 
   private normalizeSlug(raw: string): string {
