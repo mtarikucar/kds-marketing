@@ -1,17 +1,36 @@
 import { EmailHygieneService, classifyEmailSyntax } from './email-hygiene.service';
 
 const resolveMx = jest.fn();
-jest.mock('dns', () => ({ promises: { resolveMx: (...a: any[]) => resolveMx(...a) } }));
+const resolve4 = jest.fn();
+const resolve6 = jest.fn();
+jest.mock('dns', () => ({
+  promises: {
+    resolveMx: (...a: any[]) => resolveMx(...a),
+    resolve4: (...a: any[]) => resolve4(...a),
+    resolve6: (...a: any[]) => resolve6(...a),
+  },
+}));
 jest.mock('../../../common/util/safe-fetch', () => ({ safeFetch: jest.fn() }));
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { safeFetch } = require('../../../common/util/safe-fetch');
 const safeFetchMock = safeFetch as jest.Mock;
+
+/** A resolver error exactly as `dns.promises` raises it: an Error with a c-ares `code`. */
+const dnsError = (code: string) => Object.assign(new Error(`query ${code}`), { code });
+/** A lookup that never answers — the shape of a dead resolver or a dropped UDP packet. */
+const never = () => new Promise<never>(() => undefined);
 
 describe('EmailHygieneService', () => {
   let svc: EmailHygieneService;
   beforeEach(() => {
     svc = new EmailHygieneService();
     resolveMx.mockReset();
+    resolve4.mockReset();
+    resolve6.mockReset();
+    // An A/AAAA lookup a test did not stub is a resolver that told us nothing —
+    // never a definitive "no records", so it can never be what makes INVALID.
+    resolve4.mockRejectedValue(dnsError('ETIMEOUT'));
+    resolve6.mockRejectedValue(dnsError('ETIMEOUT'));
     safeFetchMock.mockReset();
   });
 
@@ -37,9 +56,51 @@ describe('EmailHygieneService', () => {
     expect(resolveMx).toHaveBeenCalledWith('example.com');
   });
 
-  it('returns INVALID when the domain resolves but has no MX', async () => {
+  it('treats a domain with no MX but an A record as deliverable (RFC 5321 implicit MX), not INVALID', async () => {
+    // RFC 5321 §5.1: with no MX, the domain's own address IS the mail host.
+    // `resolveMx` raises ENODATA for exactly this, and reading that as INVALID
+    // suppressed a real customer's address on every send path.
+    resolveMx.mockRejectedValue(dnsError('ENODATA'));
+    resolve4.mockResolvedValue(['203.0.113.7']);
+    resolve6.mockRejectedValue(dnsError('ENODATA'));
+    expect(await svc.verify('user@no-mx.com')).toBe('VALID');
+    expect(resolve4).toHaveBeenCalledWith('no-mx.com');
+  });
+
+  it('treats a domain with no MX but an AAAA record as deliverable, and an empty MX list like ENODATA', async () => {
     resolveMx.mockResolvedValue([]);
-    expect(await svc.verify('user@no-mx.com')).toBe('INVALID');
+    resolve4.mockRejectedValue(dnsError('ENODATA'));
+    resolve6.mockResolvedValue(['2001:db8::25']);
+    expect(await svc.verify('user@v6-only.com')).toBe('VALID');
+  });
+
+  it('is INVALID only when the domain exists with no MX and DEFINITIVELY no A and no AAAA', async () => {
+    // RFC 5321 §5.1: "the implicit MX is unusable" MUST be reported as an error.
+    // Every one of the three answers is an authoritative "no such record" —
+    // there is no mail route to this domain, not merely one we failed to find.
+    resolveMx.mockRejectedValue(dnsError('ENODATA'));
+    resolve4.mockRejectedValue(dnsError('ENODATA'));
+    resolve6.mockResolvedValue([]);
+    expect(await svc.verify('user@parked.com')).toBe('INVALID');
+  });
+
+  it.each(['ETIMEOUT', 'ESERVFAIL', 'ECONNREFUSED', 'EREFUSED'])(
+    'is UNKNOWN when MX is ENODATA but the address lookup fails with %s — an unanswered fallback proves nothing',
+    async (code) => {
+      resolveMx.mockRejectedValue(dnsError('ENODATA'));
+      resolve4.mockRejectedValue(dnsError(code));
+      resolve6.mockRejectedValue(dnsError('ENODATA'));
+      expect(await svc.verify('user@half-answered.com')).toBe('UNKNOWN');
+      resolve4.mockRejectedValue(dnsError('ENODATA'));
+      resolve6.mockRejectedValue(dnsError(code));
+      expect(await svc.verify('user@half-answered.com')).toBe('UNKNOWN');
+    },
+  );
+
+  it('is UNKNOWN — not INVALID — for MX records that are neither usable nor a null MX', async () => {
+    // A malformed answer is not the domain saying "no mail"; only `0 .` is.
+    resolveMx.mockResolvedValue([{ priority: 10 }]);
+    expect(await svc.verify('user@odd-answer.com')).toBe('UNKNOWN');
   });
 
   it('treats an RFC 7505 null MX ("." exchange) as INVALID, not as a working domain', async () => {
@@ -69,6 +130,86 @@ describe('EmailHygieneService', () => {
   it('returns UNKNOWN on a transient DNS error (never suppress on a blip)', async () => {
     resolveMx.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }));
     expect(await svc.verify('user@flaky.com')).toBe('UNKNOWN');
+  });
+
+  /**
+   * INVALID suppresses the address on EVERY send path (campaigns, 1:1 mail,
+   * documents, audience sync) and — through the address-level union in
+   * SuppressionService — on every other lead that shares it. So only an answer
+   * that PROVES the domain takes no mail may produce it: NXDOMAIN, a null MX,
+   * or an existing domain with no MX/A/AAAA at all. Anything the resolver
+   * failed to answer is UNKNOWN, which every send path still mails.
+   */
+  describe('a resolver that fails to answer can never make an address INVALID', () => {
+    it.each([
+      'ETIMEOUT', // c-ares gave up
+      'ESERVFAIL', // upstream/DNSSEC failure
+      'ECONNREFUSED', // no resolver listening (a CI box / container with no DNS)
+      'EREFUSED', // resolver refused the query
+      'EAI_AGAIN', // getaddrinfo-style "try again"
+      'ECANCELLED', // resolver torn down mid-query (shutdown)
+      'EBADRESP', // garbled reply
+      'ECONNRESET',
+      'EBADNAME', // a name the resolver would not even send
+      'ENOTINITIALIZED',
+    ])('%s on the MX lookup is UNKNOWN', async (code) => {
+      resolveMx.mockRejectedValue(dnsError(code));
+      expect(await svc.verify('user@real-customer.com.tr')).toBe('UNKNOWN');
+    });
+
+    it('an error with no code at all is UNKNOWN', async () => {
+      resolveMx.mockRejectedValue(new Error('socket hang up'));
+      expect(await svc.verify('user@real-customer.com.tr')).toBe('UNKNOWN');
+    });
+
+    it('a resolver that throws synchronously is UNKNOWN, not a rejected lead create', async () => {
+      resolveMx.mockImplementation(() => {
+        throw new TypeError('resolver exploded');
+      });
+      await expect(svc.verify('user@real-customer.com.tr')).resolves.toBe('UNKNOWN');
+    });
+  });
+
+  /**
+   * `verify()` sits on the request path of lead create/edit, so a resolver that
+   * never answers (a CI runner with no DNS, a dropped packet) must cost at most
+   * the tier-1 budget — and the implicit-MX fallback shares that budget rather
+   * than getting a fresh one.
+   */
+  describe('the DNS verdict is bounded in time', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('a hung MX lookup settles UNKNOWN at the 2.5 s budget', async () => {
+      resolveMx.mockImplementation(never);
+      let settled: string | undefined;
+      void svc.verify('user@black-hole.com').then((v) => (settled = v));
+      await jest.advanceTimersByTimeAsync(2499);
+      expect(settled).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(settled).toBe('UNKNOWN');
+    });
+
+    it('a slow ENODATA followed by hung A/AAAA lookups still settles UNKNOWN by 2.5 s in total', async () => {
+      resolveMx.mockImplementation(
+        () => new Promise((_, reject) => setTimeout(() => reject(dnsError('ENODATA')), 2000)),
+      );
+      resolve4.mockImplementation(never);
+      resolve6.mockImplementation(never);
+      let settled: string | undefined;
+      void svc.verify('user@slow-zone.com').then((v) => (settled = v));
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(resolve4).toHaveBeenCalled();
+      expect(settled).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(500);
+      expect(settled).toBe('UNKNOWN');
+    });
+
+    it('leaves no timer armed once a fast answer wins the race', async () => {
+      resolveMx.mockResolvedValue([{ exchange: 'mx.fast.com', priority: 10 }]);
+      expect(await svc.verify('user@fast.com')).toBe('VALID');
+      expect(jest.getTimerCount()).toBe(0);
+    });
   });
 
   describe('tier-2 mailbox verification (env-gated)', () => {
@@ -111,11 +252,53 @@ describe('EmailHygieneService', () => {
       expect(await svc.verify('user@example.com')).toBe('VALID');
     });
 
-    it('does NOT spend a paid lookup on an already-INVALID (no MX) address', async () => {
+    it('does NOT spend a paid lookup on an already-INVALID (null MX / NXDOMAIN) address', async () => {
       enable();
-      resolveMx.mockResolvedValue([]); // tier-1 INVALID
-      expect(await svc.verify('user@no-mx.com')).toBe('INVALID');
+      resolveMx.mockResolvedValue([{ exchange: '', priority: 0 }]); // tier-1 INVALID (RFC 7505)
+      expect(await svc.verify('user@null-mx.com')).toBe('INVALID');
+      resolveMx.mockRejectedValue(dnsError('ENOTFOUND')); // tier-1 INVALID (NXDOMAIN)
+      expect(await svc.verify('user@nope.com')).toBe('INVALID');
       expect(safeFetchMock).not.toHaveBeenCalled();
+    });
+
+    describe('the provider call is bounded end to end, not just its fetch()', () => {
+      beforeEach(() => jest.useFakeTimers());
+      afterEach(() => jest.useRealTimers());
+
+      it('a provider that never answers costs at most 4 s and keeps the tier-1 verdict', async () => {
+        // safeFetch's own timer arms AFTER its SSRF hostname lookup and is
+        // cleared once headers arrive, so neither a hung lookup nor a stalled
+        // body is covered by it — the cap has to sit around the whole call.
+        enable();
+        resolveMx.mockResolvedValue([{ exchange: 'mx', priority: 10 }]);
+        safeFetchMock.mockImplementation(never);
+        let settled: string | undefined;
+        void svc.verify('user@example.com').then((v) => (settled = v));
+        await jest.advanceTimersByTimeAsync(3999);
+        expect(settled).toBeUndefined();
+        await jest.advanceTimersByTimeAsync(1);
+        expect(settled).toBe('VALID');
+      });
+
+      it('a provider that sends headers and then stalls the body is capped the same way', async () => {
+        enable();
+        resolveMx.mockRejectedValue(dnsError('ETIMEOUT'));
+        safeFetchMock.mockResolvedValue({ ok: true, json: never });
+        let settled: string | undefined;
+        void svc.verify('user@example.com').then((v) => (settled = v));
+        await jest.advanceTimersByTimeAsync(2500 + 4000);
+        expect(settled).toBe('UNKNOWN');
+        expect(jest.getTimerCount()).toBe(0);
+      });
+    });
+
+    it('still asks the provider about an implicit-MX domain — tier-1 did not rule it out', async () => {
+      enable();
+      resolveMx.mockRejectedValue(dnsError('ENODATA'));
+      resolve4.mockResolvedValue(['203.0.113.7']);
+      safeFetchMock.mockResolvedValue({ ok: true, json: async () => ({ status: 'valid' }) });
+      expect(await svc.verify('user@no-mx.com')).toBe('VALID');
+      expect(safeFetchMock).toHaveBeenCalled();
     });
   });
 });
