@@ -55,6 +55,11 @@ import {
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 const CHANNELS_STOP_ENDPOINT = `${CALENDAR_API_BASE}/channels/stop`;
 const EXTERNAL_BUSY = 'EXTERNAL_BUSY';
+// What an erased booking's event is renamed to. Deliberately the same literal
+// ComplianceService writes onto the scrubbed Booking row, so the calendar and
+// the CRM read the same; it is duplicated rather than imported because
+// compliance is a consumer of this module, not the other way round.
+const ERASED_MARKER = '[Silinmiş]';
 // Durable job that re-fetches a Google Meet link when conferenceData came back
 // `pending` on the initial insert (Google provisions the conference async).
 const CONFERENCE_RESOLVE_KIND = 'booking.conference.resolve';
@@ -385,6 +390,89 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     } catch (e) {
       this.logger.warn(
         `cancelBooking(${bookingId}) Google delete failed: ${(e as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Carry an erasure onto the mirrored Google event (`erasure-calendar`).
+   *
+   * `fulfillErasure` scrubs the Booking row and stops there, so the host's
+   * calendar kept the person's name in the summary, their notes in the
+   * description and their address in `attendees` — the most visible copy of
+   * the data they asked us to destroy.
+   *
+   * Three deliberate choices, each of which the obvious implementation gets
+   * wrong:
+   *
+   *  - EXPLICIT clearing values, not a re-push. events.patch has MERGE
+   *    semantics and `pushBooking` OMITS `description`/`attendees` when the
+   *    booking column is null, so re-pushing an erased booking rewrites the
+   *    summary and leaves the attendee address exactly where it was. The
+   *    omission cannot be fixed in `eventBody` either: every ordinary
+   *    reschedule patch would then wipe an organiser's manual description.
+   *
+   *  - `sendUpdates=none`. Dropping an attendee makes Google mail them an
+   *    "invitation updated" notice — i.e. mail the person who just demanded
+   *    erasure, at an address we have already deleted. Nothing else in this
+   *    service sets the parameter, and the API default is not `none`.
+   *
+   *  - PATCH, never DELETE. `fulfillErasure` puts bookings in the
+   *    scrub-and-RETAIN tier ("kept for the operator's calendar history");
+   *    `cancelBooking` would destroy that history and tear down the attached
+   *    Meet conference. Cancelling the appointment is a separate product
+   *    decision, and would have to flip `booking.status` with it.
+   *
+   * Best-effort and idempotent: returns false (never throws) so a Google
+   * outage cannot hold up the sweep, which simply retries on its next pass.
+   */
+  async scrubBooking(workspaceId: string, bookingId: string): Promise<boolean> {
+    if (!this.google.isConfigured()) return false;
+
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, workspaceId },
+      select: {
+        googleEventId: true,
+        status: true,
+        calendarId: true,
+        assigneeUserId: true,
+        conferenceProvider: true,
+      },
+    });
+    if (!booking || !booking.googleEventId || booking.status === EXTERNAL_BUSY) {
+      return false;
+    }
+    // Patch on the SAME connection the event lives on (the host's, for a Meet
+    // booking) — the workspace's active connection may not even see it.
+    const conn = await this.resolveGoogleConnection(
+      workspaceId,
+      booking,
+      booking.conferenceProvider === 'GOOGLE_MEET',
+    );
+    if (!conn) return false;
+
+    try {
+      const accessToken = await this.google.getFreshAccessToken(conn);
+      const cal = encodeURIComponent(conn.googleCalendarId);
+      await this.apiJson(
+        `${CALENDAR_API_BASE}/calendars/${cal}/events/${encodeURIComponent(
+          booking.googleEventId,
+        )}?sendUpdates=none`,
+        accessToken,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            summary: ERASED_MARKER,
+            description: '',
+            attendees: [],
+          }),
+        },
+      );
+      return true;
+    } catch (e) {
+      this.logger.warn(
+        `scrubBooking(${bookingId}) Google patch failed: ${(e as Error).message}`,
       );
       return false;
     }

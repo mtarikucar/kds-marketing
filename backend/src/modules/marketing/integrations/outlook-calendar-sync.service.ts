@@ -48,6 +48,9 @@ import { HostResolverService } from './conferencing/host-resolver.service';
 const GRAPH_API_BASE = 'https://graph.microsoft.com/v1.0';
 const SUBSCRIPTIONS_ENDPOINT = `${GRAPH_API_BASE}/subscriptions`;
 const EXTERNAL_BUSY = 'EXTERNAL_BUSY';
+// What an erased booking's event is renamed to — the same literal
+// ComplianceService writes onto the scrubbed Booking row (see the Google twin).
+const ERASED_MARKER = '[Silinmiş]';
 // A transient outlookEventId value claiming an in-flight create. Format is
 // `pending:<epochMs>:<uuid>` so a claim that died before linking (process crash
 // / lost Graph response) can be detected as STALE and re-claimed, rather than
@@ -339,6 +342,76 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     } catch (e) {
       this.logger.warn(
         `cancelBooking(${bookingId}) Graph delete failed: ${(e as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Carry an erasure onto the mirrored Graph event (`erasure-calendar`) — the
+   * Graph twin of `GoogleCalendarSyncService.scrubBooking`, and the same three
+   * choices for the same reasons:
+   *
+   *  - EXPLICIT clearing values. Graph PATCH merges, and `eventBody` omits
+   *    `body`/`attendees` when the booking column is null, so a post-erasure
+   *    re-push leaves the attendee address on the organiser's event.
+   *
+   *  - No DELETE. Graph has no `sendUpdates` equivalent, so the only way not
+   *    to mail the erased person is to leave no attendee behind and not to
+   *    cancel the meeting — which is also what `fulfillErasure` wants
+   *    (bookings are retained as the operator's calendar history).
+   *
+   *  - A `pending:` sentinel is skipped: it is a claim on an in-flight create,
+   *    not an event id, and patching it would 404.
+   *
+   * Best-effort and idempotent: returns false, never throws.
+   */
+  async scrubBooking(workspaceId: string, bookingId: string): Promise<boolean> {
+    if (!this.outlook.isConfigured()) return false;
+
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, workspaceId },
+      select: {
+        outlookEventId: true,
+        status: true,
+        calendarId: true,
+        assigneeUserId: true,
+        conferenceProvider: true,
+      },
+    });
+    if (
+      !booking ||
+      !booking.outlookEventId ||
+      booking.outlookEventId.startsWith(PENDING_PREFIX) ||
+      booking.status === EXTERNAL_BUSY
+    ) {
+      return false;
+    }
+    const conn = await this.resolveOutlookConnection(
+      workspaceId,
+      booking,
+      booking.conferenceProvider === 'TEAMS',
+    );
+    if (!conn) return false;
+
+    try {
+      const accessToken = await this.outlook.getFreshAccessToken(conn);
+      await this.apiVoid(
+        `${GRAPH_API_BASE}/me/events/${encodeURIComponent(booking.outlookEventId)}`,
+        accessToken,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            subject: ERASED_MARKER,
+            body: { contentType: 'text', content: '' },
+            attendees: [],
+          }),
+        },
+      );
+      return true;
+    } catch (e) {
+      this.logger.warn(
+        `scrubBooking(${bookingId}) Graph patch failed: ${(e as Error).message}`,
       );
       return false;
     }

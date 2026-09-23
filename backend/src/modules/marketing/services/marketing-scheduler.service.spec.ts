@@ -16,7 +16,7 @@ function makeSvc() {
     },
   };
   // `leads` (MarketingLeadsService) is only used by the orphan-reconcile cron.
-  const svc = new MarketingSchedulerService(prisma, {} as any);
+  const svc = new MarketingSchedulerService(prisma, {} as any, {} as any, {} as any);
   return { prisma, svc };
 }
 
@@ -66,7 +66,7 @@ describe('MarketingSchedulerService.sweepExpiredPendingConnections', () => {
     const prisma: any = {
       pendingSocialConnection: { deleteMany: jest.fn().mockResolvedValue({ count }) },
     };
-    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any) };
+    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any, {} as any, {} as any) };
   };
 
   it('deletes only rows whose expiry has passed', async () => {
@@ -118,7 +118,7 @@ describe('MarketingSchedulerService.expireStaleApprovals', () => {
       workspace: { findMany: jest.fn().mockResolvedValue([{ id: WS }]) },
       approvalRequest: { updateMany: jest.fn().mockResolvedValue({ count }) },
     };
-    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any) };
+    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any, {} as any, {} as any) };
   };
 
   it('retires only lapsed requests that are still PENDING', async () => {
@@ -174,7 +174,7 @@ describe('MarketingSchedulerService.cancelAbandonedCalls', () => {
       workspace: { findMany: jest.fn().mockResolvedValue([{ id: 'ws1' }, { id: 'ws2' }]) },
       salesCall: { updateMany: jest.fn().mockResolvedValue({ count: updated }) },
     };
-    return { prisma, svc: new MarketingSchedulerService(prisma as never, {} as never) };
+    return { prisma, svc: new MarketingSchedulerService(prisma as never, {} as never, {} as never, {} as never) };
   };
 
   it('only ever touches rows that are still INITIATED', async () => {
@@ -209,5 +209,343 @@ describe('MarketingSchedulerService.cancelAbandonedCalls', () => {
     const cutoff = prisma.salesCall.updateMany.mock.calls[0][0].where.startedAt.lt.getTime();
     expect(before - cutoff).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000 - 5_000);
     expect(out).toEqual({ cancelled: 4 });
+  });
+});
+
+/**
+ * `no-retention` — the periodic destruction job.
+ *
+ * Per-subject erasure already works (compliance.service.ts) and recordings
+ * already age out; what did not exist was a TIME-based sweep, so email bodies,
+ * inbound ledger rows, tracked clicks, AI tool logs and finished workflow
+ * contexts were kept for good against a privacy notice that promises deletion.
+ *
+ * The knob is per workspace and ABSENT by default: an existing tenant keeps
+ * every row until an operator chooses a period (G3). The two sibling paths a
+ * naive purge would break are asserted below — the campaign stats recomputed
+ * from recipient rows, and the Message row whose `externalMessageId` is the
+ * IMAP dedupe token.
+ */
+describe('MarketingSchedulerService.purgeExpiredData', () => {
+  const WS = 'ws-1';
+
+  const build = (retention: unknown, counts: Record<string, number> = {}) => {
+    const n = (k: string) => ({ count: counts[k] ?? 0 });
+    const prisma: any = {
+      workspace: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: WS, settings: retention === undefined ? null : { retention } }]),
+      },
+      triggerLinkClick: {
+        updateMany: jest.fn().mockResolvedValue(n('triggerLinkClick')),
+        count: jest.fn().mockResolvedValue(counts.triggerLinkClick ?? 0),
+      },
+      toolCallLog: {
+        deleteMany: jest.fn().mockResolvedValue(n('toolCallLog')),
+        count: jest.fn().mockResolvedValue(counts.toolCallLog ?? 0),
+      },
+      workflowRun: {
+        findMany: jest.fn().mockResolvedValue(counts.workflowRun ? [{ id: 'run-1' }] : []),
+        deleteMany: jest.fn().mockResolvedValue(n('workflowRun')),
+      },
+      workflowStepRun: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      mailLog: {
+        deleteMany: jest.fn().mockResolvedValue(n('mailLog')),
+        count: jest.fn().mockResolvedValue(counts.mailLog ?? 0),
+      },
+      emailInboundItem: {
+        deleteMany: jest.fn().mockResolvedValue(n('emailInboundItem')),
+        count: jest.fn().mockResolvedValue(counts.emailInboundItem ?? 0),
+      },
+      message: {
+        updateMany: jest.fn().mockResolvedValue(n('message')),
+        count: jest.fn().mockResolvedValue(counts.message ?? 0),
+      },
+      netgsmWebhookEvent: {
+        deleteMany: jest.fn().mockResolvedValue(n('netgsmWebhookEvent')),
+        count: jest.fn().mockResolvedValue(counts.netgsmWebhookEvent ?? 0),
+      },
+      campaignRecipient: { deleteMany: jest.fn() },
+    };
+    return { prisma, svc: new MarketingSchedulerService(prisma, {} as any, {} as any, {} as any) };
+  };
+
+  const FULL = {
+    triggerClickDays: 90,
+    toolCallDays: 30,
+    workflowRunDays: 60,
+    mailLogDays: 180,
+    inboundItemDays: 90,
+    messageBodyDays: 365,
+  };
+
+  it('does nothing at all for a workspace that never set a period', async () => {
+    const { prisma, svc } = build(undefined);
+
+    const out = await svc.purgeExpiredData();
+
+    expect(prisma.toolCallLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.mailLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.message.updateMany).not.toHaveBeenCalled();
+    expect(prisma.triggerLinkClick.updateMany).not.toHaveBeenCalled();
+    expect(out.toolCallLogsDeleted).toBe(0);
+  });
+
+  it('scopes every single write to the workspace and to rows past that category cutoff', async () => {
+    const { prisma, svc } = build(FULL, { toolCallLog: 3, mailLog: 5 });
+    const before = Date.now();
+
+    await svc.purgeExpiredData();
+
+    const tool = prisma.toolCallLog.deleteMany.mock.calls[0][0].where;
+    expect(tool.workspaceId).toBe(WS);
+    expect(before - tool.createdAt.lt.getTime()).toBeGreaterThanOrEqual(
+      30 * 24 * 60 * 60 * 1000 - 5_000,
+    );
+    const mail = prisma.mailLog.deleteMany.mock.calls[0][0].where;
+    expect(mail.workspaceId).toBe(WS);
+    expect(before - mail.createdAt.lt.getTime()).toBeGreaterThanOrEqual(
+      180 * 24 * 60 * 60 * 1000 - 5_000,
+    );
+  });
+
+  it('ignores a period below the category floor instead of destroying live data', async () => {
+    const { prisma, svc } = build({ messageBodyDays: 3, toolCallDays: 0, mailLogDays: -1 });
+
+    await svc.purgeExpiredData();
+
+    expect(prisma.message.updateMany).not.toHaveBeenCalled();
+    expect(prisma.toolCallLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.mailLog.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('SCRUBS message bodies in place — the row and its dedupe token survive', async () => {
+    const { prisma, svc } = build(FULL, { message: 7 });
+
+    const out = await svc.purgeExpiredData();
+
+    // Deleting the row would drop `externalMessageId`, the only thing stopping
+    // the IMAP poller re-ingesting the same mail as a duplicate inbox item.
+    expect(prisma.message.deleteMany).toBeUndefined();
+    const call = prisma.message.updateMany.mock.calls[0][0];
+    expect(call.where.workspaceId).toBe(WS);
+    expect(call.data).toEqual({ body: '[Silinmiş]' });
+    // Idempotent: an already-scrubbed row is not rewritten every night.
+    expect(call.where.body).toEqual({ not: '[Silinmiş]' });
+    expect(out.messageBodiesScrubbed).toBe(7);
+  });
+
+  it('ANONYMISES tracked clicks instead of deleting them — the click count is a tenant-visible stat', async () => {
+    const { prisma, svc } = build(FULL, { triggerLinkClick: 4 });
+
+    const out = await svc.purgeExpiredData();
+
+    const call = prisma.triggerLinkClick.updateMany.mock.calls[0][0];
+    expect(call.data).toEqual({ ip: null, userAgent: null, leadId: null });
+    expect(call.where.workspaceId).toBe(WS);
+    expect(out.triggerClicksAnonymised).toBe(4);
+  });
+
+  it('never purges campaign recipients (their rows ARE the campaign report)', async () => {
+    const { prisma, svc } = build(FULL);
+
+    await svc.purgeExpiredData();
+
+    // recomputeStats() derives sent/failed/opened/clicked FROM these rows and is
+    // re-triggered long after the send, so purging them silently zeroes a
+    // historic campaign report.
+    expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('purges only finished workflow runs, step rows first', async () => {
+    const { prisma, svc } = build(FULL, { workflowRun: 1 });
+
+    await svc.purgeExpiredData();
+
+    const where = prisma.workflowRun.findMany.mock.calls[0][0].where;
+    // RUNNING / WAITING carry live execution state in cursor + context.
+    expect(where.status).toEqual({ in: ['DONE', 'FAILED', 'STOPPED'] });
+    expect(where.workspaceId).toBe(WS);
+    // WorkflowStepRun has no FK to its run, so deleting the run first orphans them.
+    const stepOrder = prisma.workflowStepRun.deleteMany.mock.invocationCallOrder[0];
+    const runOrder = prisma.workflowRun.deleteMany.mock.invocationCallOrder[0];
+    expect(stepOrder).toBeLessThan(runOrder);
+    expect(prisma.workflowStepRun.deleteMany.mock.calls[0][0].where).toEqual({
+      workspaceId: WS,
+      runId: { in: ['run-1'] },
+    });
+  });
+
+  it('keeps inbound ledger rows a human still needs — only DONE and SKIPPED age out', async () => {
+    const { prisma, svc } = build(FULL, { emailInboundItem: 2 });
+
+    await svc.purgeExpiredData();
+
+    const where = prisma.emailInboundItem.deleteMany.mock.calls[0][0].where;
+    // NEW / FAILED are still retryable and QUARANTINED is the one the channel
+    // card offers a "Tekrar dene" button for.
+    expect(where.state).toEqual({ in: ['DONE', 'SKIPPED'] });
+    expect(where.workspaceId).toBe(WS);
+  });
+
+  it('drops archived provider payloads only once they have been processed', async () => {
+    const { prisma, svc } = build({ webhookEventDays: 60 }, { netgsmWebhookEvent: 9 });
+
+    const out = await svc.purgeExpiredData();
+
+    const where = prisma.netgsmWebhookEvent.deleteMany.mock.calls[0][0].where;
+    // An unprocessed archive row is still work in hand, and its (workspace,
+    // purpose, externalId) key is what stops a provider redelivery running twice.
+    expect(where.processedAt).toEqual({ not: null });
+    expect(where.workspaceId).toBe(WS);
+    expect(out.webhookEventsDeleted).toBe(9);
+  });
+
+  it('keeps sweeping the other workspaces when one of them fails', async () => {
+    const prisma: any = {
+      workspace: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'ws-a', settings: { retention: { toolCallDays: 30 } } },
+          { id: 'ws-b', settings: { retention: { toolCallDays: 30 } } },
+        ]),
+      },
+      toolCallLog: {
+        deleteMany: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('deadlock detected'))
+          .mockResolvedValueOnce({ count: 2 }),
+      },
+    };
+    const svc = new MarketingSchedulerService(prisma, {} as any, {} as any, {} as any);
+
+    const out = await svc.purgeExpiredData();
+
+    expect(prisma.toolCallLog.deleteMany).toHaveBeenCalledTimes(2);
+    expect(out.toolCallLogsDeleted).toBe(2);
+  });
+
+  it('a dry run reports the same counts and writes nothing', async () => {
+    const { prisma, svc } = build(FULL, {
+      toolCallLog: 3,
+      mailLog: 5,
+      emailInboundItem: 2,
+      message: 7,
+      triggerLinkClick: 4,
+    });
+
+    const out = await svc.purgeExpiredData({ dryRun: true });
+
+    expect(out).toEqual(
+      expect.objectContaining({
+        dryRun: true,
+        toolCallLogsDeleted: 3,
+        mailLogsDeleted: 5,
+        inboundItemsDeleted: 2,
+        messageBodiesScrubbed: 7,
+        triggerClicksAnonymised: 4,
+      }),
+    );
+    expect(prisma.toolCallLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.mailLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.message.updateMany).not.toHaveBeenCalled();
+    expect(prisma.triggerLinkClick.updateMany).not.toHaveBeenCalled();
+    expect(prisma.workflowRun.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `erasure-calendar` — the sweep that carries an erasure onto the mirrored
+ * Google / Outlook events.
+ *
+ * `fulfillErasure` scrubs the Booking row inside one transaction and emits
+ * nothing, and neither sync service subscribes to anything but BookingCreated /
+ * BookingCancelled — so the host's calendar kept the erased person's name,
+ * notes and address. The sweep reads the scrub the erasure already wrote
+ * (`deletedAt` + the erased marker on the lead) and re-issues it against the
+ * provider copies, which also makes it self-healing: a mailbox that was
+ * disconnected when the erasure ran is scrubbed on the next pass.
+ */
+describe('MarketingSchedulerService.scrubErasedCalendarCopies', () => {
+  const WS = 'ws-1';
+
+  const build = (leads: any[], bookings: any[]) => {
+    const prisma: any = {
+      workspace: { findMany: jest.fn().mockResolvedValue([{ id: WS }]) },
+      lead: { findMany: jest.fn().mockResolvedValue(leads) },
+      booking: { findMany: jest.fn().mockResolvedValue(bookings) },
+    };
+    const google = { scrubBooking: jest.fn().mockResolvedValue(true) };
+    const outlook = { scrubBooking: jest.fn().mockResolvedValue(true) };
+    return {
+      prisma,
+      google,
+      outlook,
+      svc: new MarketingSchedulerService(prisma, {} as any, google as any, outlook as any),
+    };
+  };
+
+  it('scrubs both provider copies of an erased person’s booking', async () => {
+    const { google, outlook, svc } = build(
+      [{ id: 'lead-1' }],
+      [{ id: 'b-1', googleEventId: 'g1', outlookEventId: 'o1' }],
+    );
+
+    const out = await svc.scrubErasedCalendarCopies();
+
+    expect(google.scrubBooking).toHaveBeenCalledWith(WS, 'b-1');
+    expect(outlook.scrubBooking).toHaveBeenCalledWith(WS, 'b-1');
+    expect(out).toEqual({ scanned: 1, scrubbed: 2 });
+  });
+
+  it('only looks at leads the ERASURE scrubbed, not every soft-deleted lead', async () => {
+    const { prisma, svc } = build([], []);
+
+    await svc.scrubErasedCalendarCopies();
+
+    const where = prisma.lead.findMany.mock.calls[0][0].where;
+    expect(where.workspaceId).toBe(WS);
+    expect(where.contactPerson).toBe('[Silinmiş]');
+    expect(where.deletedAt.gte).toBeInstanceOf(Date);
+  });
+
+  it('asks the provider only for the mirror the booking actually has', async () => {
+    const { google, outlook, svc } = build(
+      [{ id: 'lead-1' }],
+      [{ id: 'b-1', googleEventId: null, outlookEventId: 'o1' }],
+    );
+
+    await svc.scrubErasedCalendarCopies();
+
+    expect(google.scrubBooking).not.toHaveBeenCalled();
+    expect(outlook.scrubBooking).toHaveBeenCalledWith(WS, 'b-1');
+  });
+
+  it('never queries bookings when the workspace has no erased lead in the window', async () => {
+    const { prisma, google, svc } = build([], []);
+
+    await svc.scrubErasedCalendarCopies();
+
+    expect(prisma.booking.findMany).not.toHaveBeenCalled();
+    expect(google.scrubBooking).not.toHaveBeenCalled();
+  });
+
+  it('keeps going when one provider call fails', async () => {
+    const { google, outlook, svc } = build(
+      [{ id: 'lead-1' }],
+      [
+        { id: 'b-1', googleEventId: 'g1', outlookEventId: null },
+        { id: 'b-2', googleEventId: 'g2', outlookEventId: null },
+      ],
+    );
+    google.scrubBooking
+      .mockRejectedValueOnce(new Error('token revoked'))
+      .mockResolvedValueOnce(true);
+
+    const out = await svc.scrubErasedCalendarCopies();
+
+    expect(google.scrubBooking).toHaveBeenCalledTimes(2);
+    expect(outlook.scrubBooking).not.toHaveBeenCalled();
+    expect(out).toEqual({ scanned: 2, scrubbed: 1 });
   });
 });
