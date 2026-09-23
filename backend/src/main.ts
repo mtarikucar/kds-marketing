@@ -55,6 +55,32 @@ function validateEnv(): void {
     );
   }
 
+  // Outbound mail. Without all three of these EmailService never builds a
+  // transporter: every send is LOGGED and reported `ok: true`, so campaigns
+  // "succeed", invoices "go out" and password resets "are sent" while nothing
+  // leaves the box. That is the single most expensive way for this service to
+  // be misconfigured, and it is invisible from the outside.
+  //
+  // A warning, never an exit: mock mode is the correct, deliberate state in dev
+  // and in any deploy that has not bought a mailbox yet, and mail is not what
+  // the CRM exists for.
+  //
+  // This check earns its place because these keys are the ONE part of the email
+  // config that `deploy-env-parity.spec.ts` cannot guard: they do not come from
+  // deploy.yml's render step at all, but from the server's `.env.shared` plus
+  // the base64 EMAIL_PASSWORD round-trip in the "Ship env + compose" step. A
+  // static guard cannot see whether that file still carries them; only the
+  // running process can.
+  const mailMissing = ['EMAIL_HOST', 'EMAIL_USER', 'EMAIL_PASSWORD'].filter(
+    (k) => !process.env[k],
+  );
+  if (isProd && mailMissing.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[env] ${mailMissing.join(', ')} not set — outbound email runs in MOCK mode: every message is logged instead of sent and the send is still reported as successful. Check .env.shared / the EMAIL_PASSWORD secret.`,
+    );
+  }
+
   // Rate limiter: without REDIS_URL the ThrottlerModule falls back to a
   // per-process in-memory store, so under more than one replica the global
   // limit is diluted (a "5/min" rule becomes 5×N). Single-replica deploys are

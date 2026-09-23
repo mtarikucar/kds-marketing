@@ -4,6 +4,10 @@ import {
   OAUTH_NETWORKS,
   credentialEnvNames,
 } from './modules/marketing/social-planner/oauth/social-oauth.config';
+import {
+  EMAIL_OAUTH,
+  EMAIL_OAUTH_PROVIDERS,
+} from './modules/marketing/channels/email-oauth.config';
 
 /**
  * Deploy/env parity guard for the entitlement feature gates.
@@ -164,5 +168,89 @@ describe('deploy.yml ↔ social OAuth app credentials', () => {
 
   it.each(cases)('$network $kind never fails the deploy when unset', ({ names }) => {
     for (const k of names) expect(requiredArray).not.toContain(k);
+  });
+});
+
+/**
+ * Deploy/env parity for the email platform keys — the same "born dead" failure,
+ * on the surface that hurts most when it is silent.
+ *
+ * A mailbox consent app whose credentials never reach the server cannot be
+ * connected by anyone: `isEmailOAuthConfigured()` is false, so the M365 tenant
+ * that answers 535 5.7.139 to SMTP AUTH is offered no OAuth route at all and
+ * the Gmail user never sees "Connect with Google". Neither the connect flow's
+ * own tests nor anything else in the suite can see that, because the bug lives
+ * in the workflow file — exactly how Pinterest shipped unconnectable.
+ *
+ * The OAuth half is DERIVED from `EMAIL_OAUTH`, so a third provider added to
+ * that table is covered here the day it lands.
+ *
+ * The rest is an EXPLICIT list, deliberately not a `process.env` sweep over the
+ * email modules, because several email keys legitimately do not travel through
+ * the env:/heredoc pair these assertions check and a sweep would red the build
+ * for keys that are correctly plumbed elsewhere:
+ *   - EMAIL_HOST/PORT/USER/FROM/PASSWORD are appended by the "Ship env +
+ *     compose" step from `.env.shared` plus the base64 password round-trip,
+ *     AFTER this heredoc, so that the marketing sender identity wins over
+ *     core's. They never appear as `KEY: ${{ secrets.KEY }}` here.
+ *   - PUBLIC_BASE_URL (read by `emailOAuthRedirectUri()`) is a literal in the
+ *     heredoc, not a `${PUBLIC_BASE_URL}` expansion.
+ *   - MARKETING_SECRET_KEY is already covered as a hard-required secret.
+ *
+ * As above: this asserts PLUMBED, never SET. Every key here is optional and an
+ * unset Secret renders `KEY=` (dotenv reads '' -> falsy), which is the correct
+ * feature-off state. Putting one in `required=(...)` would fail every deploy
+ * until the owner registers an app / buys an ESP, so the third assertion pins
+ * that it is absent from there.
+ */
+describe('deploy.yml ↔ email platform env keys', () => {
+  /** The mailbox-consent app registrations, derived from the provider table. */
+  const oauthCases = EMAIL_OAUTH_PROVIDERS.flatMap((p) => [
+    { what: `${EMAIL_OAUTH[p].label} mail client id`, key: EMAIL_OAUTH[p].clientIdEnv },
+    { what: `${EMAIL_OAUTH[p].label} mail client secret`, key: EMAIL_OAUTH[p].clientSecretEnv },
+  ]);
+
+  /** The platform-global email knobs, each named with the surface it powers. */
+  const platformCases = [
+    // webhook-verifier/generic-hmac.ts — unset, POST /api/public/esp/feedback
+    // answers NOT_CONFIGURED and no bounce or complaint ever suppresses.
+    { what: 'ESP feedback HMAC', key: 'ESP_FEEDBACK_SECRET' },
+    // inbound-mail webhook — unset, a connected mailbox is send-only.
+    { what: 'inbound webhook HMAC', key: 'EMAIL_INBOUND_SECRET' },
+    // email.service.ts platformDkim() — both halves or nothing is signed.
+    { what: 'platform DKIM selector', key: 'EMAIL_DKIM_SELECTOR' },
+    { what: 'platform DKIM private key', key: 'EMAIL_DKIM_PRIVATE_KEY_B64' },
+    // campaign-sender.service.ts linkBase() — unset, bulk links stay on
+    // PUBLIC_BASE_URL, which is today's behaviour.
+    { what: 'bulk link host', key: 'LINK_BASE_URL' },
+  ];
+
+  const cases = [...oauthCases, ...platformCases];
+
+  // If the provider table is ever restructured this guard must red rather than
+  // quietly pass on an empty `it.each`.
+  it('derives a case for every configured email OAuth provider', () => {
+    expect(oauthCases).toHaveLength(EMAIL_OAUTH_PROVIDERS.length * 2);
+    for (const c of cases) expect(c.key).toMatch(/^[A-Z0-9_]+$/);
+  });
+
+  // Not asserting secrets-vs-vars here, for the same reason the social block
+  // does not: `GOOGLE_MAIL_CLIENT_ID` and `MICROSOFT_MAIL_CLIENT_ID` do not
+  // match the generic /(_KEY|_SECRET|_TOKEN|_PASSWORD)$/ name rule, yet a
+  // client id is half of an app credential and belongs in Secrets beside its
+  // secret. Demanding `vars.` for them would push that half into a plaintext,
+  // world-readable repo Variable — the guard would create the leak.
+  it.each(cases)('$what ($key) is passed into the render step env: block', ({ key }) => {
+    expect(envBlock).toMatch(
+      new RegExp(`^\\s*${key}: \\$\\{\\{ (secrets|vars)\\.${key} \\}\\}$`, 'm'),
+    );
+  });
+
+  it.each(cases)('$what ($key) is echoed into the rendered .env.production', ({ key }) => {
+    expect(heredoc).toMatch(new RegExp(`^\\s*${key}=\\$\\{${key}\\}$`, 'm'));
+  });
+
+  it.each(cases)('$what ($key) never fails the deploy when unset', ({ key }) => {
+    expect(requiredArray).not.toContain(key);
   });
 });

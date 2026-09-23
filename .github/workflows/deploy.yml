@@ -194,6 +194,46 @@ jobs:
           # until the next release, because the step below rebuilds
           # .env.production from scratch every deploy.
           EMAIL_INBOUND_SECRET: ${{ secrets.EMAIL_INBOUND_SECRET }}
+          # Mailbox connect WITHOUT a password: the Google / Microsoft app
+          # registrations the consent flow runs on (EMAIL_OAUTH in
+          # channels/email-oauth.config.ts). ALL OPTIONAL — unset means
+          # isEmailOAuthConfigured() is false and that provider's button is
+          # simply not offered, which is the honest off state. Set them only
+          # once the app exists AND the callback
+          # https://jeetagrowth.com/api/marketing/channels/email/oauth/callback
+          # is registered on it; a half-registered app dies on the provider's
+          # own redirect_uri_mismatch page, which is worse than no button.
+          #
+          # These are NOT the GOOGLE_OAUTH_* pair above — that is the
+          # Calendar/SSO registration, which has neither the gmail.send scope
+          # nor this callback URI. Separate apps, separate secrets, on purpose.
+          #
+          # `secrets.` for all four, including the client ids: a client id is
+          # half of an app credential and belongs beside its secret, not in a
+          # world-readable repo Variable (same exemption the social OAuth block
+          # documents).
+          GOOGLE_MAIL_CLIENT_ID: ${{ secrets.GOOGLE_MAIL_CLIENT_ID }}
+          GOOGLE_MAIL_CLIENT_SECRET: ${{ secrets.GOOGLE_MAIL_CLIENT_SECRET }}
+          MICROSOFT_MAIL_CLIENT_ID: ${{ secrets.MICROSOFT_MAIL_CLIENT_ID }}
+          MICROSOFT_MAIL_CLIENT_SECRET: ${{ secrets.MICROSOFT_MAIL_CLIENT_SECRET }}
+          # HMAC key the bounce/complaint feed is verified with
+          # (POST /api/public/esp/feedback). Unset, every delivery report is
+          # answered NOT_CONFIGURED, so nothing a receiving domain tells us
+          # about a dead address ever reaches the suppression list and the
+          # same address is mailed again next campaign.
+          ESP_FEEDBACK_SECRET: ${{ secrets.ESP_FEEDBACK_SECRET }}
+          # Platform DKIM. BOTH halves or nothing is signed — a half-configured
+          # deploy stays byte-identical to an unsigned one (email.service.ts
+          # platformDkim()). The selector is the public DNS label, so a repo
+          # Variable; the PEM travels base64 because .env is written line by
+          # line and a multi-line value would corrupt the file.
+          EMAIL_DKIM_SELECTOR: ${{ vars.EMAIL_DKIM_SELECTOR }}
+          EMAIL_DKIM_PRIVATE_KEY_B64: ${{ secrets.EMAIL_DKIM_PRIVATE_KEY_B64 }}
+          # The host bulk links (click redirect, open pixel, unsubscribe) go out
+          # on. Unset it IS PUBLIC_BASE_URL, which is today's behaviour. Point
+          # it at a separate hostname so one tenant's campaign URL getting
+          # listed cannot take login, invoice and password-reset mail with it.
+          LINK_BASE_URL: ${{ vars.LINK_BASE_URL }}
           # Runware — second media vendor for the catalogue models that carry a
           # `runware` binding (Seedance 2.5, Seedance 1.0 Pro Fast, Qwen-Image,
           # BiRefNet). OPTIONAL — unset = every model stays on fal.
@@ -350,6 +390,28 @@ jobs:
           # .env.shared because core has no such key, so there is nothing to
           # lose a last-wins race against.
           EMAIL_INBOUND_SECRET=${EMAIL_INBOUND_SECRET}
+          # Mailbox consent apps (Google / Microsoft); empty = that provider's
+          # Connect button is not offered. See the env: block above for why
+          # these are NOT the GOOGLE_OAUTH_* Calendar pair.
+          GOOGLE_MAIL_CLIENT_ID=${GOOGLE_MAIL_CLIENT_ID}
+          GOOGLE_MAIL_CLIENT_SECRET=${GOOGLE_MAIL_CLIENT_SECRET}
+          MICROSOFT_MAIL_CLIENT_ID=${MICROSOFT_MAIL_CLIENT_ID}
+          MICROSOFT_MAIL_CLIENT_SECRET=${MICROSOFT_MAIL_CLIENT_SECRET}
+          # Bounce/complaint feed HMAC; empty = the feed 401s and nothing is
+          # ever suppressed from a delivery report.
+          ESP_FEEDBACK_SECRET=${ESP_FEEDBACK_SECRET}
+          # Platform DKIM (both halves or unsigned). Rendered here, like
+          # EMAIL_INBOUND_SECRET and unlike EMAIL_HOST/USER/FROM/PASSWORD, so
+          # the key travels with the deploy instead of being hand-placed on the
+          # box and erased by the next release. The signing domain follows the
+          # EMAIL_FROM appended below (admin@jeetagrowth.com). If core ever
+          # starts exporting EMAIL_DKIM_* in .env.shared that copy would win
+          # (appended after, last-wins) — look there first if `d=` comes out
+          # wrong.
+          EMAIL_DKIM_SELECTOR=${EMAIL_DKIM_SELECTOR}
+          EMAIL_DKIM_PRIVATE_KEY_B64=${EMAIL_DKIM_PRIVATE_KEY_B64}
+          # Separate host for bulk links; empty = PUBLIC_BASE_URL (unchanged).
+          LINK_BASE_URL=${LINK_BASE_URL}
           # Runware media vendor (per-model routing); empty = all on fal.
           RUNWARE_API_KEY=${RUNWARE_API_KEY}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
