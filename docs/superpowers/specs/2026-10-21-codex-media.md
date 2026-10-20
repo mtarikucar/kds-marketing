@@ -126,7 +126,7 @@ Yanıt `202`:
 
 ### 1.5 İş akışı (tek iş)
 
-1. Referansları indir (`https`, host izni, ≤ 20 MB, tür kontrolü) → `/work/<jobId>/ref-N.<ext>`.
+1. Referansları indir (`https`, host izni, ≤ 20 MB, tür kontrolü) → `/work/<jobId>/ref-N.<ext>`. İndirme **iş içinde** yapılır (`POST /generate` 202'yi hemen döner; backend HTTP zaman aşımı 15 s); hata iş düzeyinde `REFERENCE_FETCH_FAILED`.
 2. `thread/start` (§1.6 ayarlarıyla) → `turn/start` girdisi: her referans için `{type:'localImage', path}` + `{type:'text', text: <şablon>}`.
    Şablon: `"<prompt>\n\nOutput: exactly one image, aspect ratio <aspectRatio> (<W>x<H> framing). " + (ref ? "Use the attached reference image(s) as the subject; keep it recognisable." : "")`.
 3. `item/completed` + `type: 'imageGeneration'`: `failure` → `CONTENT_BLOCKED`; yoksa `savedPath` dosyasını, o yoksa `result` base64'ü oku.
@@ -487,7 +487,7 @@ Komutlar: backend `cd backend && npx jest <yol>` / `npm test`; frontend `cd fron
 |---|---|---|
 | **ChatGPT kullanım şartları**: kişisel/abonelik ChatGPT hesabını çok kiracılı bir SaaS'ın arka ucu olarak kullanmak OpenAI şartlarına aykırı sayılabilir | hesabın kısıtlanması/kapanması → tüm görsel üretimi durur; sahibin kişisel hesabı risk altında | **Sahibe açıkça bildirilir.** Yan servis arayüzü sağlayıcıdan bağımsızdır: aynı `/generate` sözleşmesi ileride OpenAI Images API (ücretli, API anahtarı) ile doldurulabilir — backend değişmez. Karar sahibinde |
 | **İçerik politikası**: istemler müşteriden/yapay zekâdan gelir; politika ihlali tekrarları hesabı işaretler | hesap uyarısı/kısıtlama | `CONTENT_BLOCKED` sayacı çalışma alanı başına; günde > 5 ise o çalışma alanı 24 saat kapanır (yan serviste basit sayaç) ve admin uyarısı |
-| **Ortak kota**: görseller ofisteki Codex çalışanlarıyla aynı haftalık Codex kotasından düşer (deneme: 2 görsel ≈ %1) | yoğun görsel üretimi ofis çalışanlarını durdurabilir ya da tersi | `/health.weeklyUsedPercent` izlenir; `CODEX_MEDIA_QUOTA_CEILING` (varsayılan %60) üstünde yan servis 503 `CODEX_QUOTA_EXHAUSTED` döner — ofis için pay bırakır. Ayrı ChatGPT hesabı (ayrı abonelik) sahibin kararı (**satın alma**) |
+| **Ortak kota**: görseller ofisteki Codex çalışanlarıyla aynı haftalık Codex kotasından düşer (deneme: 2 görsel ≈ %1) | yoğun görsel üretimi ofis çalışanlarını durdurabilir ya da tersi | `/health.weeklyUsedPercent` izlenir; `CODEX_MEDIA_QUOTA_CEILING` (varsayılan %60) üstünde yan servis 503 `CODEX_QUOTA_EXHAUSTED` döner — ofis için pay bırakır. **Canlı değeri koordinatör ofis kotasıyla birlikte belirler** (21 Eki: ofis kullanımı %75+; %60 ile servis her isteği reddeder). Ayrı ChatGPT hesabı (ayrı abonelik) sahibin kararı (**satın alma**) |
 | **Device-auth girişi / oturum süresi**: sunucuda oturum düşebilir (token yenileme hatası, şifre değişimi, hesap çıkışı) | görsel üretimi 503; içerik akışı görselsiz kalır | `/health` `auth_required` → admin bildirimi; yeniden giriş koordinatör + sahibi (§1.8). Sosyal kampanya zaten görselsiz devam eder (`social-campaigns.service.ts:682-690`) |
 | **Codex CLI/protokol değişikliği** (`app-server` "experimental") | yan servis kırılır | CLI sürümü konteynerde **sabitlenir** (`@openai/codex@0.162.1`); yükseltme ayrı PR + A3-A9 testleri |
 | **Kalite/oran**: aspect parametresi yok, oran istemle | yanlış kadraj | §1.5 kırpma; A8 testi |
