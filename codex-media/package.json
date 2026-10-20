@@ -1,0 +1,23 @@
+{
+  "name": "codex-media",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jeeta image generation sidecar: codex app-server (ChatGPT image generation) behind a small authenticated HTTP API, results uploaded to R2.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "sharp": "^0.34.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.6.0"
+  }
+}
