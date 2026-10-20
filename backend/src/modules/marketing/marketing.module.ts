@@ -1543,6 +1543,8 @@ export class MarketingModule {
     researchSpend: ResearchSpendService,
     agentRuns: AgentRunService,
     brandProfiles: BrandProfileService,
+    // Powers jeeta.add/list/delete_brand_knowledge — the docs search reads.
+    knowledge: KnowledgeService,
     // Faz 5 D5 — commerce & reputation.
     products: ProductsService,
     invoices: InvoicesService,
@@ -1569,7 +1571,7 @@ export class MarketingModule {
     slotEditor: SlotEditorService,
   ) {
     registerAnalyticsTools(registry, { analytics, aiUsage, vendorSpend });
-    registerBrandTools(registry, { brand, profiles: brandProfiles });
+    registerBrandTools(registry, { brand, profiles: brandProfiles, knowledge });
     // The same computation the setup panel reads, so the two can never
     // disagree about what this workspace is missing.
     registerReadinessTools(registry, { readiness });

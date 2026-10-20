@@ -311,8 +311,8 @@ tool's `approvalKind`. The kinds in use are `SEND`, `PUBLISH`,
 `BUDGET_REALLOCATION`, `MEDIA_SPEND`, `AI_SPEND`, `TARGET_CHANGE`,
 `CHANNEL_LAUNCH`, `STRATEGY_ACTION` and `DESTRUCTIVE`.
 
-**Read this before turning on `AUTONOMOUS`:** 29 tools are approval-gated, and
-only the 3 `DESTRUCTIVE` ones stay gated in autonomous mode. The other 26 run
+**Read this before turning on `AUTONOMOUS`:** 30 tools are approval-gated, and
+only the 4 `DESTRUCTIVE` ones stay gated in autonomous mode. The other 26 run
 immediately — including all 10 `SPEND` tools (`jeeta.generate_image`,
 `jeeta.generate_video`, `jeeta.reallocate_budget`, `jeeta.synthesize_strategy`,
 `jeeta.run_research`, `jeeta.trigger_workflow`, `jeeta.approve_strategy_action`
@@ -338,6 +338,9 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.search_brand_knowledge` | Free-text search over the Brand Brain (tone, positioning, products, policies), cited passages | `reports.read` | READ | — | yes |
 | `jeeta.get_brand_profile` | The workspace's brand profile (name, voice guide, audience) | `reports.read` | READ | — | no |
 | `jeeta.update_brand_profile` | Rewrite the brand profile every piece of AI copy is written from | `settings.manage` | WRITE | — | no |
+| `jeeta.add_brand_knowledge` | Add a markdown knowledge doc (title, content ≤ 50 000 chars, optional tags); indexed at once so `jeeta.search_brand_knowledge` finds it. Counts against the package `maxKnowledgeDocs` | `settings.manage` | WRITE | — | no |
+| `jeeta.list_brand_knowledge` | The workspace's knowledge docs (id, title, source, language, status, updatedAt) | `reports.read` | READ | — | no |
+| `jeeta.delete_brand_knowledge` | **Permanently delete** a knowledge doc and its search chunks | `settings.manage` | **DESTRUCTIVE** | **`DESTRUCTIVE`** | no |
 | `jeeta.get_workspace_info` | Effective plan: package, subscription status, quotas/limits, enabled features | `reports.read` | READ | — | yes |
 | `jeeta.get_setup_readiness` | Everything this workspace still needs before the engine runs at full strength | `reports.read` | READ | — | no |
 | `jeeta.list_pending_approvals` | Actions waiting on a human decision. Read-only by design — no tool approves | `reports.read` | READ | — | no |
@@ -352,6 +355,39 @@ gated in autonomous mode (see [Risk and approval classes](#risk-and-approval-cla
 | `jeeta.list_scheduled_runs` | The deployment's recurring jobs: last run, last success, failure counts | `reports.read` | READ | — | no |
 | `jeeta.list_team` | List this workspace's team members with their user ids, names, role and status | `reports.read` | READ | — | yes |
 | `jeeta.verify_email_transport` | Check whether this deployment can actually send email: a live handshake with the configured SMTP host | `reports.read` | READ | — | no |
+
+##### Brand knowledge documents
+
+`jeeta.search_brand_knowledge` reads the same documents the panel shows under
+**Branding → Brand Brain** (and Agent Studio's knowledge base). The three
+deferred tools above are the write side, so a workspace set up over MCP alone
+no longer searches an empty index:
+
+```text
+jeeta.call_tool { name: "jeeta.add_brand_knowledge",
+                  arguments: { title: "Refund policy",
+                               content: "# Refunds
+
+Within 14 days of delivery …",
+                               tags: ["policy", "refund"] } }
+→ { doc: { id, title, status: "ACTIVE" }, chunks: 1, searchable: true }
+
+jeeta.search_brand_knowledge { query: "refund policy" }
+→ [{ docId, docTitle: "Refund policy", snippet: "Refund policy
+
+# Refunds …" }]
+```
+
+- `tags` are appended to the stored content as a last `Tags: a, b` line (there
+  is no tags column), so they are visible in the panel and searchable.
+- `searchable: false` means the doc was created but indexing failed: press
+  **Reindex** on the Brand Brain tab instead of adding it again.
+- The package limit (`maxKnowledgeDocs`) is checked under a per-workspace lock;
+  past it, `add` fails with "Knowledge doc limit reached (N)".
+- Search matches every word of the query (any order, case-insensitive) and the
+  document title counts as content.
+- `jeeta.delete_brand_knowledge` is `DESTRUCTIVE`: it is queued for a human in
+  **every** write mode, `AUTONOMOUS` included.
 
 #### Leads · Contacts · Tasks · Pipeline
 
@@ -962,7 +998,7 @@ Design spec §7, enforced by absence and re-asserted per wave:
 
 ## Approval-gated tools
 
-**29 tools are registered `requiresApproval: true`** — the ones that
+**30 tools are registered `requiresApproval: true`** — the ones that
 reach a customer, speak to an audience, spend money or delete something. See
 the Gated column in [the catalogue](#the-catalogue) for the full list; the
 short version is:
@@ -976,7 +1012,8 @@ short version is:
   inline):** `jeeta.reallocate_budget`, `jeeta.generate_image`,
   `jeeta.generate_video`, `jeeta.approve_strategy_action`,
   `jeeta.synthesize_strategy`, `jeeta.run_research`, `jeeta.trigger_workflow`
-- **destroys a row (gated in EVERY mode):** `jeeta.delete_social_post`
+- **destroys a row (gated in EVERY mode):** `jeeta.delete_social_post`,
+  `jeeta.delete_brand_knowledge`
 - **hands over authority:** `jeeta.set_workflow_enabled` (arms an automation),
   `jeeta.set_strategy_autonomy`
 

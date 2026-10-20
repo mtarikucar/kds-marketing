@@ -56,7 +56,8 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     aiUsage: { breakdown: jest.fn(), daily: jest.fn() } as any,
   });
   registerBrandTools(registry, {
-    brand: { search: jest.fn() } as any,
+    brand: { search: jest.fn(), indexDoc: jest.fn() } as any,
+    knowledge: { create: jest.fn(), list: jest.fn(), remove: jest.fn() } as any,
     profiles: { get: jest.fn(), upsert: jest.fn() } as any,
   });
   registerLeadsTools(registry, { leads: { findAll: jest.fn() } as any });
@@ -542,6 +543,10 @@ describe('MCP tool catalogue', () => {
         'jeeta.research_scrape_page',
         'jeeta.get_brand_profile',
         'jeeta.update_brand_profile',
+        // Brand knowledge documents — the write side of search_brand_knowledge.
+        'jeeta.add_brand_knowledge',
+        'jeeta.list_brand_knowledge',
+        'jeeta.delete_brand_knowledge',
         // Faz 5 D5 — commerce & reputation (the final wave).
         'jeeta.list_products',
         'jeeta.create_product',
@@ -682,7 +687,9 @@ describe('MCP tool catalogue', () => {
     // along. The lesson is in the guard, not the arithmetic — which is why the
     // registrar-parity test below now pins the SET of registrars against the
     // module, so the next one cannot ship unguarded.
-    expect(names).toHaveLength(163);
+    //
+    // +3 for the brand knowledge documents (add/list/delete), all deferred.
+    expect(names).toHaveLength(166);
   });
 
   /**
@@ -793,7 +800,7 @@ describe('MCP tool catalogue', () => {
       registry.listAdvertised(ALL_SCOPES).filter((t) => !DISCOVERY_TOOLS.includes(t.name)),
     ).toHaveLength(46);
     expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(46 + DISCOVERY_TOOLS.length);
-    // 163 total, 46 advertised (+2 discovery) and 115 deferred: everything a
+    // 166 total, 46 advertised (+2 discovery) and 118 deferred: everything a
     // wave adds beyond the ceiling is deferred — which is exactly why the
     // advertised count above stayed fixed while the catalogue grew past a
     // hundred. `jeeta.set_channel_agent` is the newest, and deferred for that
@@ -802,7 +809,7 @@ describe('MCP tool catalogue', () => {
     // remembered: this comment has twice disagreed with its own assertion, and
     // a comment that does that is how a measured number quietly becomes a
     // recalled one.
-    expect(registry.list(ALL_SCOPES)).toHaveLength(163);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(166);
   });
 });
 
@@ -833,6 +840,8 @@ const ID_SOURCES: Record<string, string> = {
   canonicalId: 'jeeta.list_duplicate_leads',
   duplicateIds: 'jeeta.list_duplicate_leads',
   companyId: 'jeeta.list_companies',
+  // brand knowledge
+  docId: 'jeeta.list_brand_knowledge',
   adAccountId: 'jeeta.list_ad_accounts',
   // A Meta/TikTok campaign or ad-set id. It lives in the ad provider's own
   // console, never in Jeeta's tables, so no read tool here can supply it —
