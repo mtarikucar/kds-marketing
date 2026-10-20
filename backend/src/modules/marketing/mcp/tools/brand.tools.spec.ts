@@ -200,6 +200,24 @@ describe('brand MCP tools', () => {
       expect(() => schema.parse({ title: 'ok', content: 'x', tags: Array(21).fill('t') })).toThrow();
     });
 
+    it('counts the Tags line against the 50k cap, so the panel can still save the doc', async () => {
+      // The panel PATCHes the whole stored content back (UpdateKnowledgeDto
+      // @MaxLength(50000)); a doc stored longer than that can never be edited.
+      const { registry, deps } = build();
+      const tool = registry.get('jeeta.add_brand_knowledge')!;
+      const tags = Array.from({ length: 10 }, (_, i) => `tag-${i}`);
+      const tagLine = `
+
+Tags: ${tags.join(', ')}`;
+      await expect(
+        tool.handler(CTX, { title: 't', content: 'x'.repeat(50_000 - tagLine.length + 1), tags }),
+      ).rejects.toThrow(/50000/);
+      expect(deps.knowledge.create).not.toHaveBeenCalled();
+
+      await tool.handler(CTX, { title: 't', content: 'x'.repeat(50_000 - tagLine.length), tags });
+      expect(deps.knowledge.create.mock.calls[0][1].content).toHaveLength(50_000);
+    });
+
     it('list returns the workspace docs with a count', async () => {
       const { registry, deps } = build();
       const out = (await registry.get('jeeta.list_brand_knowledge')!.handler(CTX, {})) as {

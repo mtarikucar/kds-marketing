@@ -185,6 +185,13 @@ export function registerBrandTools(registry: McpToolRegistry, deps: BrandToolDep
       // No tags column on knowledge_docs; a trailing line keeps them visible in
       // the panel and searchable without a migration.
       const content = tags.length ? `${String(args.content)}\n\nTags: ${tags.join(', ')}` : String(args.content);
+      // The cap applies to what is STORED: the panel PATCHes the whole content
+      // back under the same 50k limit, so a longer doc could never be saved there.
+      if (content.length > MAX_DOC_CHARS) {
+        throw new BadRequestException(
+          `The document with its Tags line is ${content.length} characters; the limit is ${MAX_DOC_CHARS}. Shorten the content or drop some tags.`,
+        );
+      }
       const doc = await deps.knowledge.create(ctx.workspaceId, {
         title,
         content,
