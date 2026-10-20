@@ -82,3 +82,35 @@ describe('commerceActivity', () => {
     expect((row.metadata as Record<string, unknown>).docId).toBe('inv1');
   });
 });
+
+describe('commerceActivity — external store orders (commerce ingest)', () => {
+  it('names a paid store order by its order number, with amount and method', () => {
+    const row = commerceActivity({
+      event: 'order_paid',
+      docId: 'ord1',
+      number: 'FIG-7K2M9QXA',
+      totalMinor: 349900,
+      currency: 'TRY',
+      paidVia: 'card',
+    });
+    expect(row.type).toBe('COMMERCE');
+    expect(row.title).toBe('Order FIG-7K2M9QXA paid');
+    expect(row.description).toBe('3499 TRY · card');
+    expect((row.metadata as Record<string, unknown>).event).toBe('order_paid');
+    expect(assignmentOf(row.metadata)).toBeNull();
+    expect(salesCallIdOf(row.metadata)).toBeNull();
+  });
+
+  it('states the cumulative refunded amount on a refund', () => {
+    const row = commerceActivity({
+      event: 'order_refunded',
+      docId: 'ord1',
+      number: 'FIG-7K2M9QXA',
+      totalMinor: 100000,
+      currency: 'TRY',
+    });
+    expect(row.title).toBe('Order FIG-7K2M9QXA refunded');
+    expect(row.description).toBe('1000 TRY');
+  });
+});
+

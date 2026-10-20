@@ -14,8 +14,10 @@ function makeDb(opts: {
   invoices?: any[];
   offers?: any[];
   estimates?: any[];
+  externalOrders?: any[];
 }) {
   return {
+    externalOrder: { findMany: jest.fn().mockResolvedValue(opts.externalOrders ?? []) },
     opportunity: { findMany: jest.fn().mockResolvedValue(opts.opps ?? []) },
     invoice: { findMany: jest.fn().mockResolvedValue(opts.invoices ?? []) },
     leadOffer: { findMany: jest.fn().mockResolvedValue(opts.offers ?? []) },
@@ -151,5 +153,89 @@ describe('collectRevenueEvents', () => {
     });
     const events = await collectRevenueEvents(db, 'ws1', SINCE);
     expect(events).toHaveLength(0);
+  });
+});
+
+/**
+ * Commerce ingest (contract §3): a PAID external order is the third tier —
+ * WON Opportunity > PAID Invoice > PAID ExternalOrder > ACCEPTED Offer >
+ * ACCEPTED Estimate — and only ever when the caller opts in.
+ */
+describe('collectRevenueEvents — external orders', () => {
+  const PAID_AT = new Date('2026-06-12T09:00:00.000Z');
+
+  it('does not query external orders unless asked (flag off = ROAS exactly as before)', async () => {
+    const db = makeDb({ externalOrders: [{ leadId: 'L1', amountMinor: 100, refundedMinor: 0, paidAt: PAID_AT }] });
+    expect(await collectRevenueEvents(db, 'ws1', SINCE)).toEqual([]);
+    await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: false, currency: 'TRY' });
+    expect(db.externalOrder.findMany).not.toHaveBeenCalled();
+  });
+
+  it('does not query without a workspace currency to compare against (no silent FX mixing)', async () => {
+    const db = makeDb({});
+    await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: true });
+    expect(db.externalOrder.findMany).not.toHaveBeenCalled();
+  });
+
+  it('queries PAID/REFUNDED orders with a lead, in the window, in the workspace currency only', async () => {
+    const db = makeDb({});
+    await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: true, currency: 'TRY' });
+    expect(db.externalOrder.findMany).toHaveBeenCalledWith({
+      where: {
+        workspaceId: 'ws1',
+        status: { in: ['PAID', 'REFUNDED'] },
+        paidAt: { gte: SINCE },
+        leadId: { not: null },
+        currency: 'TRY',
+      },
+      select: { leadId: true, amountMinor: true, refundedMinor: true, paidAt: true },
+    });
+  });
+
+  it('values an order at (amount − refunded) in major units, dated on the sale day; a full refund is no sale', async () => {
+    const db = makeDb({
+      externalOrders: [
+        { leadId: 'L1', amountMinor: 349900, refundedMinor: 100000, paidAt: PAID_AT },
+        { leadId: 'L2', amountMinor: 349900, refundedMinor: 349900, paidAt: PAID_AT },
+      ],
+    });
+    const events = await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: true, currency: 'TRY' });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ leadId: 'L1', source: 'EXTERNAL_ORDER', at: PAID_AT });
+    expect(events[0].value.toString()).toBe('2499');
+  });
+
+  it('ranks below invoices and above offers/estimates, per lead', async () => {
+    const db = makeDb({
+      invoices: [{ leadId: 'L1', total: 5000, paidAt: AT }],
+      externalOrders: [
+        { leadId: 'L1', amountMinor: 100, refundedMinor: 0, paidAt: PAID_AT }, // suppressed by the invoice
+        { leadId: 'L2', amountMinor: 200, refundedMinor: 0, paidAt: PAID_AT },
+      ],
+      offers: [{ leadId: 'L2', customPrice: D(9), planMonthlyPrice: null, respondedAt: AT }], // suppressed by the order
+      estimates: [{ leadId: 'L2', total: 900, acceptedAt: AT }], // suppressed by the order
+    });
+    const events = await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: true, currency: 'TRY' });
+    expect(events.map((e) => `${e.leadId}:${e.source}`).sort()).toEqual(['L1:INVOICE', 'L2:EXTERNAL_ORDER']);
+  });
+
+  it('a WON opportunity suppresses the same lead’s orders', async () => {
+    const db = makeDb({
+      opps: [{ leadId: 'L1', value: D(10), wonAt: AT }],
+      externalOrders: [{ leadId: 'L1', amountMinor: 100, refundedMinor: 0, paidAt: PAID_AT }],
+    });
+    const events = await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: true, currency: 'TRY' });
+    expect(events.map((e) => e.source)).toEqual(['OPPORTUNITY']);
+  });
+
+  it('keeps two orders of one lead as two sales', async () => {
+    const db = makeDb({
+      externalOrders: [
+        { leadId: 'L1', amountMinor: 100, refundedMinor: 0, paidAt: PAID_AT },
+        { leadId: 'L1', amountMinor: 250, refundedMinor: 0, paidAt: AT },
+      ],
+    });
+    const events = await collectRevenueEvents(db, 'ws1', SINCE, { includeExternalOrders: true, currency: 'TRY' });
+    expect(events.map((e) => e.value.toString()).sort()).toEqual(['1', '2.5']);
   });
 });

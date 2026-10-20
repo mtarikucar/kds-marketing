@@ -8,6 +8,7 @@ function makePrisma(opts: {
   invoices?: any[];
   offers?: any[];
   estimates?: any[];
+  externalOrders?: any[];
   attributions?: any[];
   anchor?: any;
   existing?: any;
@@ -18,6 +19,8 @@ function makePrisma(opts: {
     invoice: { findMany: jest.fn().mockResolvedValue(opts.invoices ?? []) },
     leadOffer: { findMany: jest.fn().mockResolvedValue(opts.offers ?? []) },
     estimate: { findMany: jest.fn().mockResolvedValue(opts.estimates ?? []) },
+    externalOrder: { findMany: jest.fn().mockResolvedValue(opts.externalOrders ?? []) },
+    workspace: { findUnique: jest.fn().mockResolvedValue({ defaultCurrency: 'TRY' }) },
     leadAttribution: { findMany: jest.fn().mockResolvedValue(opts.attributions ?? []) },
     adMetric: {
       findFirst: jest.fn().mockResolvedValue(opts.anchor ?? null),
@@ -114,3 +117,35 @@ describe('PerformanceLoopService', () => {
     expect(upsert.mock.calls[0][0].create.roas).toBeUndefined();
   });
 });
+
+describe('PerformanceLoopService — commerce revenue flag (COMMERCE_REVENUE_IN_ROAS)', () => {
+  const saved = process.env.COMMERCE_REVENUE_IN_ROAS;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.COMMERCE_REVENUE_IN_ROAS;
+    else process.env.COMMERCE_REVENUE_IN_ROAS = saved;
+  });
+
+  it('off: never reads external orders or the workspace currency', async () => {
+    delete process.env.COMMERCE_REVENUE_IN_ROAS;
+    const { prisma } = makePrisma({});
+    await new PerformanceLoopService(prisma).reconcile('ws1');
+    expect(prisma.externalOrder.findMany).not.toHaveBeenCalled();
+    expect(prisma.workspace.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('on: attributes a paid order to its campaign, in the workspace currency', async () => {
+    process.env.COMMERCE_REVENUE_IN_ROAS = 'true';
+    const { prisma, upsert } = makePrisma({
+      externalOrders: [{ leadId: 'L1', amountMinor: 349900, refundedMinor: 0, paidAt: new Date('2026-07-03T10:00:00Z') }],
+      attributions: [{ leadId: 'L1', sourceAdCampaignId: 'camp-9' }],
+      anchor: { adAccountId: 'acc-1' },
+      existing: { spend: D(100) },
+    });
+    const r = await new PerformanceLoopService(prisma).reconcile('ws1');
+    expect(prisma.workspace.findUnique).toHaveBeenCalledWith({ where: { id: 'ws1' }, select: { defaultCurrency: true } });
+    expect(prisma.externalOrder.findMany.mock.calls[0][0].where.currency).toBe('TRY');
+    expect(r.revenueAttributed).toBe(3499);
+    expect(upsert).toHaveBeenCalled();
+  });
+});
+
