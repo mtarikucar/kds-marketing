@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 
-export type RevenueSource = 'OPPORTUNITY' | 'INVOICE' | 'OFFER' | 'ESTIMATE';
+export type RevenueSource = 'OPPORTUNITY' | 'INVOICE' | 'EXTERNAL_ORDER' | 'OFFER' | 'ESTIMATE';
 
 export interface RevenueEvent {
   leadId: string;
@@ -16,13 +16,27 @@ export interface RevenueEventsDb {
   invoice: { findMany(args: unknown): Promise<unknown[]> };
   leadOffer: { findMany(args: unknown): Promise<unknown[]> };
   estimate: { findMany(args: unknown): Promise<unknown[]> };
+  externalOrder: { findMany(args: unknown): Promise<unknown[]> };
+}
+
+export interface CollectRevenueOptions {
+  /**
+   * Count PAID orders reported by the workspace's own store (commerce ingest).
+   * Off by default: the performance loop passes `commerceRevenueEnabled()`.
+   */
+  includeExternalOrders?: boolean;
+  /**
+   * The workspace's `defaultCurrency`. Orders in any other currency are left
+   * out — there is no FX conversion — and without it no order is read at all.
+   */
+  currency?: string;
 }
 
 /**
  * Unified sale signal (Growth Autopilot spec D9). Collects every money event
  * in the window from the four revenue records, then applies PER-LEAD
- * PRECEDENCE — WON Opportunity > PAID Invoice > ACCEPTED LeadOffer > ACCEPTED
- * Estimate — so one deal that was recorded as offer → invoice → opportunity
+ * PRECEDENCE — WON Opportunity > PAID Invoice > PAID ExternalOrder (opt-in) >
+ * ACCEPTED LeadOffer > ACCEPTED Estimate — so one deal that was recorded as offer → invoice → opportunity
  * along the way is only counted once (at the strongest tier). Same-tier
  * multiples for one lead are all kept (two paid invoices = two sales).
  * Workspace-scoped; defensive against missing leadId/timestamp.
@@ -31,8 +45,10 @@ export async function collectRevenueEvents(
   db: RevenueEventsDb,
   workspaceId: string,
   since: Date,
+  opts: CollectRevenueOptions = {},
 ): Promise<RevenueEvent[]> {
-  const [opps, invoices, offers, estimates] = await Promise.all([
+  const withOrders = !!opts.includeExternalOrders && !!opts.currency;
+  const [opps, invoices, offers, estimates, orders] = await Promise.all([
     db.opportunity.findMany({
       where: { workspaceId, status: 'WON', wonAt: { gte: since }, leadId: { not: null } },
       select: { leadId: true, value: true, wonAt: true },
@@ -49,6 +65,21 @@ export async function collectRevenueEvents(
       where: { workspaceId, status: 'ACCEPTED', acceptedAt: { gte: since }, leadId: { not: null } },
       select: { leadId: true, total: true, acceptedAt: true },
     }) as Promise<Array<{ leadId: string | null; total: number | null; acceptedAt: Date | null }>>,
+    // Not even queried unless opted in: with the flag off ROAS is exactly what it was.
+    (withOrders
+      ? db.externalOrder.findMany({
+          where: {
+            workspaceId,
+            status: { in: ['PAID', 'REFUNDED'] },
+            paidAt: { gte: since },
+            leadId: { not: null },
+            currency: opts.currency,
+          },
+          select: { leadId: true, amountMinor: true, refundedMinor: true, paidAt: true },
+        })
+      : Promise.resolve([])) as Promise<
+      Array<{ leadId: string | null; amountMinor: number; refundedMinor: number; paidAt: Date | null }>
+    >,
   ]);
 
   const tiers: Array<{ source: RevenueSource; events: RevenueEvent[] }> = [
@@ -59,6 +90,15 @@ export async function collectRevenueEvents(
     {
       source: 'INVOICE',
       events: mapEvents(invoices, 'INVOICE', (i) => i.paidAt, (i) => minorToMajor(i.total)),
+    },
+    {
+      source: 'EXTERNAL_ORDER',
+      // Net of refunds, dated on the sale day (a refund lowers that day's
+      // revenue; it does not move it). A full refund is no sale at all.
+      events: mapEvents(orders, 'EXTERNAL_ORDER', (o) => o.paidAt, (o) => {
+        const net = (o.amountMinor ?? 0) - (o.refundedMinor ?? 0);
+        return net > 0 ? minorToMajor(net) : null;
+      }),
     },
     {
       source: 'OFFER',

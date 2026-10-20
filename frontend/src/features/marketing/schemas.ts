@@ -34,7 +34,7 @@ export const leadSchema = z.object({
   // HARDWARE_QUOTE / IMPORT) so an AI-ingested or CSV-imported lead stays
   // EDITABLE — otherwise opening its edit form seeds a source the zod enum
   // rejects and the save 400s.
-  source: z.enum(['INSTAGRAM', 'REFERRAL', 'FIELD_VISIT', 'ADS', 'WEBSITE', 'PHONE', 'OTHER', 'AI_RESEARCH', 'HARDWARE_QUOTE', 'IMPORT', 'EMAIL']),
+  source: z.enum(['INSTAGRAM', 'REFERRAL', 'FIELD_VISIT', 'ADS', 'WEBSITE', 'PHONE', 'OTHER', 'AI_RESEARCH', 'HARDWARE_QUOTE', 'IMPORT', 'EMAIL', 'COMMERCE']),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   phone: optionalPhone,
   whatsapp: optionalPhone,

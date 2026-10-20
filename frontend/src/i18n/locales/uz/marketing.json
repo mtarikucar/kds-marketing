@@ -27,7 +27,8 @@
     "PHONE": "Phone",
     "OTHER": "Other",
     "AI_RESEARCH": "AI tadqiqot",
-    "HARDWARE_QUOTE": "Uskuna so'rovi"
+    "HARDWARE_QUOTE": "Uskuna so'rovi",
+    "COMMERCE": "Internet-do'kon"
   },
   "activityType": {
     "CALL": "Call",

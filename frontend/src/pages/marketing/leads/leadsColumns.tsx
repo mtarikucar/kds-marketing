@@ -22,6 +22,7 @@ const SOURCE_TONE: Record<string, 'neutral' | 'primary' | 'info' | 'warning' | '
   OTHER: 'neutral',
   AI_RESEARCH: 'info',
   EMAIL: 'primary',
+  COMMERCE: 'success',
 };
 
 /**

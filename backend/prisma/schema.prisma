@@ -351,6 +351,8 @@ model Lead {
   commissions Commission[]     @relation("CommissionLead")
   tags        LeadTag[]
   attribution LeadAttribution?
+  /// Store orders matched to this lead (commerce ingest).
+  externalOrders ExternalOrder[]
 
   // v3.0.1 round-4 — hardware "Teklif Al" leads (source=HARDWARE_QUOTE)
   // capture (a) the requesting tenant via soft-FK string and (b) a
@@ -5861,4 +5863,90 @@ model EmailInboundItem {
   @@unique([channelId, source, itemKey])
   @@index([workspaceId, state, updatedAt])
   @@map("email_inbound_items")
+}
+
+// ── Commerce ingest (2026-10-21) ──
+// A workspace's own store (Shopify, WooCommerce or a custom shop) reports its
+// orders to POST /api/marketing/commerce/ingest/orders. Contract:
+// docs/superpowers/specs/2026-10-21-commerce-ingest-contracts.md §2.
+
+/// One store that may report orders. `slug` is the x-jeeta-source header;
+/// the signing secrets are SEALED (secret-box `v1:`), because verifying an
+/// HMAC needs the secret itself — a hash would not do.
+model CommerceSource {
+  id                      String    @id @default(uuid())
+  workspaceId             String
+  slug                    String // [a-z0-9-]{2,40}
+  kind                    String // SHOPIFY | WOOCOMMERCE | CUSTOM
+  signingSecret           String // SEALED
+  previousSecret          String? // SEALED; accepted until previousSecretExpiresAt
+  previousSecretExpiresAt DateTime?
+  status                  String    @default("ACTIVE") // ACTIVE | REVOKED
+  lastEventAt             DateTime?
+  createdAt               DateTime  @default(now())
+  revokedAt               DateTime?
+
+  orders ExternalOrder[]
+  events ExternalOrderEvent[]
+
+  @@unique([workspaceId, slug])
+  @@map("commerce_sources")
+}
+
+/// A store order as the store last described it. Amounts are integer MINOR
+/// units; the status only moves forward (PENDING < PAID < REFUNDED|CANCELLED).
+model ExternalOrder {
+  id            String         @id @default(uuid())
+  workspaceId   String
+  sourceId      String
+  source        CommerceSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  externalId    String
+  groupRef      String?
+  status        String // PENDING | PAID | REFUNDED | CANCELLED
+  currency      String         @db.VarChar(3)
+  amountMinor   Int
+  refundedMinor Int            @default(0)
+  paymentMethod String?
+  items         Json?
+  orderedAt     DateTime?
+  paidAt        DateTime?
+  refundedAt    DateTime?
+  cancelledAt   DateTime?
+  leadId        String?
+  lead          Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  attribution   Json?
+  utmSource     String?
+  utmMedium     String?
+  utmCampaign   String?
+  lastEventAt   DateTime
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  events ExternalOrderEvent[]
+
+  @@unique([workspaceId, sourceId, externalId])
+  @@index([workspaceId, status, paidAt])
+  @@index([workspaceId, leadId])
+  @@map("external_orders")
+}
+
+/// Every event a store sent, applied or not — the idempotency record. Only the
+/// body's sha256 is kept, never the body (it carries the customer's PII).
+model ExternalOrderEvent {
+  id          String         @id @default(uuid())
+  workspaceId String
+  sourceId    String
+  source      CommerceSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  orderId     String
+  order       ExternalOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  eventId     String
+  type        String // order.created | order.paid | order.refunded | order.cancelled
+  occurredAt  DateTime
+  bodyHash    String
+  applied     Boolean
+  receivedAt  DateTime       @default(now())
+
+  @@unique([sourceId, eventId])
+  @@index([workspaceId, receivedAt])
+  @@map("external_order_events")
 }

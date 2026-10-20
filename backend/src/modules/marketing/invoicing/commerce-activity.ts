@@ -35,11 +35,20 @@ import { Prisma } from '@prisma/client';
  *    would render wearing an assignment badge, or offering a recording that
  *    does not exist. The spec asserts both readers answer null.
  */
-export type CommerceEvent = 'quote_sent' | 'quote_answered' | 'invoice_sent' | 'invoice_paid';
+export type CommerceEvent =
+  | 'quote_sent'
+  | 'quote_answered'
+  | 'invoice_sent'
+  | 'invoice_paid'
+  // An order from the workspace's own store (commerce ingest). `docId` is the
+  // ExternalOrder id, `number` the store's order number; a refund carries the
+  // cumulative refunded amount as `totalMinor`.
+  | 'order_paid'
+  | 'order_refunded';
 
 export interface CommerceActivityInput {
   event: CommerceEvent;
-  /** Invoice or Estimate row id. */
+  /** Invoice, Estimate or ExternalOrder row id. */
   docId: string;
   /** The human-facing number: `INV-1042`, `EST-7`. */
   number: string;
@@ -52,7 +61,7 @@ export interface CommerceActivityInput {
   via?: 'mailbox' | 'platform' | null;
   /** `quote_answered`: what the customer said on the public page. */
   answer?: 'ACCEPTED' | 'DECLINED' | null;
-  /** `invoice_paid`: MANUAL | STRIPE | PAYTR | IYZICO | WALLET. */
+  /** `invoice_paid`: MANUAL | STRIPE | PAYTR | IYZICO | WALLET. `order_paid`: the store's payment method. */
   paidVia?: string | null;
 }
 
@@ -94,6 +103,12 @@ export function commerceActivity(input: CommerceActivityInput): {
   } else if (event === 'invoice_sent') {
     title = `Invoice ${number} emailed`;
     parts.push(to, amount);
+  } else if (event === 'order_paid') {
+    title = `Order ${number} paid`;
+    parts.push(amount, paidVia);
+  } else if (event === 'order_refunded') {
+    title = `Order ${number} refunded`;
+    parts.push(amount);
   } else {
     title = `Invoice ${number} paid`;
     parts.push(amount, paidVia);

@@ -488,7 +488,8 @@
     "PHONE": "Telefon",
     "OTHER": "Diğer",
     "AI_RESEARCH": "AI Araştırma",
-    "HARDWARE_QUOTE": "Donanım teklifi"
+    "HARDWARE_QUOTE": "Donanım teklifi",
+    "COMMERCE": "E-ticaret"
   },
   "activityType": {
     "CALL": "Telefon",

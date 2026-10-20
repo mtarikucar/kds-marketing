@@ -56,6 +56,9 @@ export enum LeadSource {
   // System-set when someone writes to the workspace's own inbox (backend
   // conversation-ingress.service).
   EMAIL = 'EMAIL',
+  // System-set for a customer first seen through a store order (backend
+  // commerce-ingest).
+  COMMERCE = 'COMMERCE',
 }
 
 export enum ActivityType {
@@ -329,6 +332,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   [LeadSource.HARDWARE_QUOTE]: 'Hardware quote',
   [LeadSource.IMPORT]: 'Imported',
   [LeadSource.EMAIL]: 'Email',
+  [LeadSource.COMMERCE]: 'E-commerce',
 };
 
 // ── Installation ops (Faz 3 backend; UI Faz 6) ────────────────────

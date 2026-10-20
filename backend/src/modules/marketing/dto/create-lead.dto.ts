@@ -51,6 +51,10 @@ export enum LeadSource {
   // SOURCE_BY_CHANNEL). Like IMPORT, it must be first-class or editing one of
   // these leads fails validation on a source the system itself assigned.
   EMAIL = 'EMAIL',
+  // A customer of the workspace's own store, first seen through an order event
+  // (commerce ingest). System-assigned like IMPORT/EMAIL, so it must be
+  // first-class or editing one of these leads fails validation.
+  COMMERCE = 'COMMERCE',
 }
 
 export enum LeadPriority {

@@ -314,7 +314,8 @@
     "PHONE": "Phone",
     "OTHER": "Other",
     "AI_RESEARCH": "AI Research",
-    "HARDWARE_QUOTE": "Hardware quote"
+    "HARDWARE_QUOTE": "Hardware quote",
+    "COMMERCE": "E-commerce"
   },
   "activityType": {
     "CALL": "Call",

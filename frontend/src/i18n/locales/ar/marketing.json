@@ -27,7 +27,8 @@
     "PHONE": "Phone",
     "OTHER": "Other",
     "AI_RESEARCH": "بحث الذكاء الاصطناعي",
-    "HARDWARE_QUOTE": "عرض أجهزة"
+    "HARDWARE_QUOTE": "عرض أجهزة",
+    "COMMERCE": "متجر إلكتروني"
   },
   "activityType": {
     "CALL": "Call",

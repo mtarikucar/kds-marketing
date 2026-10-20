@@ -24,6 +24,13 @@ describe('leadSchema source', () => {
     expect(r.success).toBe(true);
   });
 
+  // Commerce ingest opens leads with source='COMMERCE' for store customers;
+  // the same un-editable trap applies if the enum does not know it.
+  it('accepts source=COMMERCE so store-order leads stay editable', () => {
+    const r = leadSchema.safeParse({ ...leadBase, source: 'COMMERCE' });
+    expect(r.success).toBe(true);
+  });
+
   it('still rejects an unknown source', () => {
     const r = leadSchema.safeParse({ ...leadBase, source: 'NOPE' });
     expect(r.success).toBe(false);

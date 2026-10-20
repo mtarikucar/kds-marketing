@@ -27,7 +27,8 @@
     "PHONE": "Phone",
     "OTHER": "Other",
     "AI_RESEARCH": "AI исследование",
-    "HARDWARE_QUOTE": "Запрос на оборудование"
+    "HARDWARE_QUOTE": "Запрос на оборудование",
+    "COMMERCE": "Интернет-магазин"
   },
   "activityType": {
     "CALL": "Call",

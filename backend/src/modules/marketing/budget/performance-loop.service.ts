@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { collectRevenueEvents } from './revenue-events.util';
+import { commerceRevenueEnabled } from '../commerce-ingest/commerce-ingest.flag';
 
 export interface ReconcileResult {
   /** Revenue events in the window (all sources, post per-lead precedence). */
@@ -36,7 +37,14 @@ export class PerformanceLoopService {
     // offers and ACCEPTED estimates — with per-lead precedence so one deal
     // recorded several ways is only counted once. A workspace that sells via
     // invoices/order-forms (no Opportunity ever) now feeds the loop too.
-    const events = await collectRevenueEvents(this.prisma, workspaceId, since);
+    // Store orders (commerce ingest) join only behind COMMERCE_REVENUE_IN_ROAS:
+    // this loop overwrites AdMetric revenue/ROAS, which the autopilot acts on.
+    const includeExternalOrders = commerceRevenueEnabled();
+    const currency = includeExternalOrders
+      ? (await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { defaultCurrency: true } }))
+          ?.defaultCurrency
+      : undefined;
+    const events = await collectRevenueEvents(this.prisma, workspaceId, since, { includeExternalOrders, currency });
     if (events.length === 0) return { wonOpportunities: 0, attributed: 0, campaignDaysUpdated: 0, revenueAttributed: 0 };
 
     const leadIds = [...new Set(events.map((e) => e.leadId))];

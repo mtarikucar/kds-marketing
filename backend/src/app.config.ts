@@ -62,6 +62,9 @@ export function configureApp(app: NestExpressApplication): void {
   app.use('/api/public/channels/email', bodyParser.raw({ type: '*/*', limit: '2mb' }));
   // ESP delivery-feedback (bounces/complaints) — HMAC over the raw body too.
   app.use('/api/public/esp/feedback', bodyParser.raw({ type: '*/*', limit: '2mb' }));
+  // Store order events (commerce ingest) — HMAC over `${timestamp}.${rawBody}`,
+  // so the controller must see the exact bytes. 256kb is the contract's cap.
+  app.use('/api/marketing/commerce/ingest', bodyParser.raw({ type: '*/*', limit: '256kb' }));
 
   // CSV lead imports advertise up to 50,000 rows / 10MB (the upload DTO
   // validates exactly that) — the generic 200kb JSON cap below would reject any

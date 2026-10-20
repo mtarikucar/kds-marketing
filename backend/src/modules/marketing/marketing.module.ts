@@ -668,6 +668,14 @@ import { StrategyController } from './strategy/strategy.controller';
 import { StrategyIntakeController } from './strategy/strategy-intake.controller';
 import { CommunityChannelService } from './strategy/channels/community-channel.service';
 import { CommunityChannelController } from './strategy/channels/community-channel.controller';
+// Commerce ingest — a workspace's own store reports its orders.
+import {
+  CommerceIngestController,
+  CommerceIngestEnabledGuard,
+} from './commerce-ingest/commerce-ingest.controller';
+import { CommerceSourcesController } from './commerce-ingest/commerce-sources.controller';
+import { CommerceIngestService } from './commerce-ingest/commerce-ingest.service';
+import { CommerceSourcesService } from './commerce-ingest/commerce-sources.service';
 
 @Module({
   imports: [
@@ -714,6 +722,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // (Nest matches literals before params regardless, but explicit
     // ordering avoids ambiguity for anyone reading the wiring.)
     MarketingLeadsIngestController,
+    CommerceIngestController,
+    CommerceSourcesController,
     MarketingAuthController,
     MarketingLeadsController,
     MarketingActivitiesController,
@@ -1290,6 +1300,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // commerce rows they leave on the person's timeline.
     DocumentEmailService,
     CommerceTraceService,
+    // Commerce ingest: store order events → ExternalOrder + lead + attribution.
+    CommerceIngestService,
+    CommerceSourcesService,
+    CommerceIngestEnabledGuard,
     // Puts the payment itself on the person's stream — every settlement route
     // (PSP, wallet, manual) reaches it through the one invoice.paid event.
     InvoicePaidConsumer,
