@@ -472,7 +472,12 @@ Reklam edilen araçlar tavanda (46/46). Karar: `jeeta.get_weekly_report` adverti
 kalır. `B/mcp/tools/tool-catalogue.spec.ts`'de:
 - `:685` `toHaveLength(163)` → `164`; isim listesine (`:413-417`) `jeeta.get_weekly_report`.
 - D4/D5 kalıbında yeni test: `it('paid for the weekly report by deferring jeeta.get_funnel', …)` (ad ile sabitlenir).
-- `docs/marketing/mcp-connector.md`'ye araç girişi (katalog testi belgeyi de kontrol eder).
+- `docs/marketing/mcp-connector.md`'ye araç girişi (katalog testi belgeyi de kontrol eder). Aynı PR'da belgedeki `jeeta.get_funnel`
+  örnekleri `jeeta.call_tool { name: "jeeta.get_funnel", … }` biçimine çevrilir ve "deferred: tools/list'te görünmez, `find_tools` /
+  `call_tool` ile çağrılır" notu eklenir.
+- **Araç kullanıcılarına duyuru (D birleşmeden önce):** `jeeta.get_funnel` kaldırılmıyor, yalnız doğrudan listeden çıkıyor. Elif'in KPI raporu
+  talimatları ve görev metinleri `get_weekly_report`'a (huni dahil) ya da `call_tool` ile `get_funnel`'a göre güncellenir; aksi halde
+  `tools/list`'te göremeyip "araç kalktı" sanılabilir. Sorumlu: D'yi inceleyen (Kerem), birleştirme öncesi koordinatöre bildirir.
 
 ---
 
@@ -623,6 +628,10 @@ Alan eşlemesi: `externalId = orders.orderNumber`, `groupRef = orders.parentRefe
 Ateşle-unut değil: yeni BullMQ kuyruğu `jeeta-commerce` (`P/src/lib/queue/queues.ts`, `attempts: 8`, üstel `backoff` 30 s'den;
 `jobId = eventId` → kuyrukta tekil). Worker `P/src/lib/queue/workers/jeeta-commerce.worker.ts`, `workers/start.ts`'e kaydedilir.
 İmzalama/gönderme `P/src/lib/integrations/jeeta-commerce.ts` (`buildEvent`, `sign`, `send`); 4xx (429 hariç) → yeniden deneme yok, log.
+**`x-jeeta-timestamp` ve imza her denemede gönderim anında yeniden üretilir** — olay anında değil, kuyruğa eklenirken de değil.
+Kuyrukta yalnız gövde baytları (ve `eventId`) saklanır; 30 s'den başlayan backoff 5.-6. denemede 300 s'lik pencereyi aşar,
+saklanan imza o noktada `401 STALE_TIMESTAMP` alırdı. Gövde denemeler arasında **aynı bayt** kalır (yeniden serileştirilmez),
+böylece `eventId` + `bodyHash` idempotency'si (§1.5) bozulmaz.
 Kalıcı kurtarma gerekirse kalıp `P/src/lib/services/refund-record-analytics.ts` (lease/claim/retry).
 
 ### 8.3 `.env` değişkenleri (`P/.env.example` analitik bloğu `:117-154` altına)
@@ -669,7 +678,7 @@ printer `npx tsx scripts/test-jeeta-commerce.ts` (ve `npm run test:unit` zinciri
 
 | # | Ölçüt | Doğrulama |
 |---|---|---|
-| A1 | §1.2 test vektörü aynı imzayı üretir; yanlış imza, eksik başlık, ±300 s dışı zaman reddedilir; iki `v1=` değerinden biri tutarsa geçer | `B/commerce-ingest/commerce-signature.spec.ts` — `it('reproduces the contract vector 7d5da73a…')` |
+| A1 | §1.2 test vektörü aynı imzayı üretir; yanlış imza, eksik başlık, ±300 s dışı zaman reddedilir; iki `v1=` değerinden biri tutarsa geçer; aynı gövde + yeni zaman damgası + yeni imza (yeniden deneme) → 200 `duplicate:true` | `B/commerce-ingest/commerce-signature.spec.ts` — `it('reproduces the contract vector 7d5da73a…')` |
 | A2 | Geçerli `order.paid` → 200, `ExternalOrder` `PAID`, `paidAt=occurredAt`, olay satırı `applied=true` | `B/commerce-ingest/commerce-ingest.service.spec.ts`; e2e `backend/test/e2e/commerce-ingest.e2e-spec.ts` |
 | A3 | Aynı `eventId` + aynı gövde → 200 `duplicate:true`, satır sayısı değişmez; farklı gövde → 409 `EVENT_ID_REUSED` | service spec `it('is idempotent on eventId')` |
 | A4 | `order.refunded` kümülatif: 100000 sonra 349900 → `REFUNDED`; ardından gelen eski 100000 `refundedMinor`'ı düşürmez | service spec `it('refunds only grow')` |
@@ -727,7 +736,7 @@ curl -sS -w '\n%{http_code}\n' -X POST "$JEETA/api/marketing/commerce/ingest/ord
 
 | # | Ölçüt | Doğrulama |
 |---|---|---|
-| E1 | `sign()` §1.2 test vektörünü üretir (aynı gövde baytları, aynı imza) | `scripts/test-jeeta-commerce.ts` |
+| E1 | `sign()` §1.2 test vektörünü üretir (aynı gövde baytları, aynı imza); worker her denemede yeni zaman damgası ve imza üretir (sahte saatle 400 s sonraki deneme farklı `x-jeeta-timestamp`, aynı gövde baytları) | `scripts/test-jeeta-commerce.ts` |
 | E2 | `buildEvent(order)` alan eşlemesi §8.1; sepet alt siparişleri ayrı olay, aynı `groupRef` | aynı betik |
 | E3 | `JEETA_COMMERCE_ENABLED=false` → kuyruğa iş eklenmez; `true` → `finishDraftPromotion` yeni sipariş başına bir iş, `jobId=eventId` | aynı betik (kuyruk mock'u) |
 | E4 | Worker: 5xx/429 yeniden dener, 4xx denemez | aynı betik |
@@ -813,6 +822,9 @@ Yeni: `jeeta.get_weekly_report` (advertised). Değişen: `jeeta.get_funnel` → 
 - Meta CAPI / TikTok Events API'ye Jeeta'dan sunucu olayı göndermek.
 
 ## Açık sorular (sahibe, koordinatör üzerinden)
+
+Cevaplar gelene kadar: Parça B'nin OAuth onay ekranı/hesabı (soru 1) ve Parça A'nın `customer` PII alanlarının canlıda açılması (soru 3)
+kesin değildir. Kod ve testler bu sözleşmeyle yazılabilir; bayraklar (§9) kapalı kalır.
 
 1. GA4 property'si hangi Google hesabında? OAuth o hesapla yapılacak; `analytics.readonly` için Google Cloud onay ekranı güncellemesi gerekiyor.
 2. `COMMERCE_REVENUE_IN_ROAS` açılınca Growth Autopilot ROAS'ı sipariş gelirini görür ve bütçe kararlarını etkiler — açma zamanı sahibin.
