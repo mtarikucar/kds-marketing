@@ -468,6 +468,11 @@ Komutlar: backend `cd backend && npx jest <yol>` / `npm test`; frontend `cd fron
 | B12 | Tüm takım: `npm test` yeşil, `tsc --noEmit` 0; frontend `vitest run` yeşil, `tsc` 0 | komut son satırları |
 | B13 | Uçtan uca (yerel, gerçek yan servis): backend `.env` `CODEX_MEDIA_URL=http://localhost:7311` → stüdyodan ya da `jeeta.generate_image` ile bir görsel → `GeneratedAsset` `READY`, `provider='codex'`, `costCredits=2` | ekran/komut çıktısı + `psql` satırı |
 
+### Ön koşul (canlıya alma)
+| # | Ölçüt | Doğrulama |
+|---|---|---|
+| G1 | **Canlıya alma, sahibinin §7'deki ChatGPT kullanım şartları riskini okuyup verdiği yazılı onaya bağlıdır** (kişisel abonelik + ortak kota kabulü). Onay olmadan yan servis sunucuda başlatılmaz ve `CODEX_MEDIA_URL` canlı `.env`'e yazılmaz; dallar birleşebilir, yayın bekler | ofis onay kaydı (approval id) teslimde |
+
 ### C. Frontend
 | # | Ölçüt | Doğrulama |
 |---|---|---|
