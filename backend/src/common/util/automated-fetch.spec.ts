@@ -1,4 +1,4 @@
-import { isAutomatedFetch } from './automated-fetch';
+import { isAutomatedFetch, isBotUserAgent } from './automated-fetch';
 
 /**
  * A real recipient clicking a link in their mail client. Every current browser
@@ -173,5 +173,19 @@ describe('isAutomatedFetch', () => {
       const ua = `${'a'.repeat(5000)}bot`;
       expect(isAutomatedFetch(humanClick({ 'user-agent': ua }))).toBe(false);
     });
+  });
+});
+
+describe('isBotUserAgent — the UA half alone, for subresource fetches (a page-view pixel)', () => {
+  it.each([
+    ['Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', true],
+    ['Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 HeadlessChrome/129.0 Safari/537.36', true],
+    ['curl/8.4.0', true],
+    ['', true],
+    [undefined, true],
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36', false],
+    ['Mozilla/5.0 (Linux; Android 13; Cubot P80) AppleWebKit/537.36 Chrome/129.0 Mobile Safari/537.36', false],
+  ])('%p → %p', (ua, expected) => {
+    expect(isBotUserAgent(ua as string | undefined)).toBe(expected);
   });
 });

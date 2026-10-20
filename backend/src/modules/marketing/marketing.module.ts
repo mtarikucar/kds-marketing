@@ -668,6 +668,16 @@ import { StrategyController } from './strategy/strategy.controller';
 import { StrategyIntakeController } from './strategy/strategy-intake.controller';
 import { CommunityChannelService } from './strategy/channels/community-channel.service';
 import { CommunityChannelController } from './strategy/channels/community-channel.controller';
+// GA4 (workspace property, daily pull) and the jeeta.js site snippet.
+import { Ga4EnabledGuard, Ga4OAuthController, Ga4PublicController } from './analytics/ga4/ga4-oauth.controller';
+import { Ga4HttpClient } from './analytics/ga4/ga4-http.client';
+import { Ga4OAuthService } from './analytics/ga4/ga4-oauth.service';
+import { Ga4DataClient } from './analytics/ga4/ga4-data.client';
+import { Ga4SyncService } from './analytics/ga4/ga4-sync.service';
+import { Ga4SyncCron } from './analytics/ga4/ga4-sync.cron';
+import { SiteKeysController, SiteTrackingEnabledGuard } from './site-tracking/site-keys.controller';
+import { SiteTrackingPublicController } from './site-tracking/site-tracking-public.controller';
+import { SiteTrackingService } from './site-tracking/site-tracking.service';
 
 @Module({
   imports: [
@@ -714,6 +724,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // (Nest matches literals before params regardless, but explicit
     // ordering avoids ambiguity for anyone reading the wiring.)
     MarketingLeadsIngestController,
+    Ga4OAuthController,
+    Ga4PublicController,
+    SiteKeysController,
+    SiteTrackingPublicController,
     MarketingAuthController,
     MarketingLeadsController,
     MarketingActivitiesController,
@@ -1290,6 +1304,15 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // commerce rows they leave on the person's timeline.
     DocumentEmailService,
     CommerceTraceService,
+    // GA4 + site snippet.
+    Ga4HttpClient,
+    Ga4OAuthService,
+    Ga4DataClient,
+    Ga4SyncService,
+    Ga4SyncCron,
+    Ga4EnabledGuard,
+    SiteTrackingService,
+    SiteTrackingEnabledGuard,
     // Puts the payment itself on the person's stream — every settlement route
     // (PSP, wallet, manual) reaches it through the one invoice.paid event.
     InvoicePaidConsumer,

@@ -16,6 +16,8 @@ vi.mock('../settings/connections/ConnectionsPage', () => ({
 }));
 vi.mock('../settings/connections/SsoTab', () => ({ SsoTab: () => <div>sso-stub</div> }));
 vi.mock('../settings/connections/SlackTab', () => ({ SlackTab: () => <div>slack-stub</div> }));
+vi.mock('../settings/connections/Ga4Card', () => ({ Ga4Card: () => <div>ga4-stub</div> }));
+vi.mock('../settings/connections/SiteTrackingCard', () => ({ SiteTrackingCard: () => <div>site-stub</div> }));
 // Interpolates, unlike a bare default-value mock. The page's summary line is
 // built from counts, and asserting on a literal `{{count}}` would pass while
 // the person reads a template.
@@ -303,6 +305,10 @@ describe('AccountCenterPage — the shape of the page', () => {
 
       expect(await screen.findByRole('heading', { name: 'Only you' })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'Everyone in this workspace' })).toBeInTheDocument();
+      // The store's own site (GA4 + the jeeta.js snippet) is workspace-wide, under its own heading.
+      expect(screen.getByRole('heading', { name: 'Your website' })).toBeInTheDocument();
+      expect(screen.getByText('ga4-stub')).toBeInTheDocument();
+      expect(screen.getByText('site-stub')).toBeInTheDocument();
       expect(screen.getByText(/Changing these changes it for everybody/i)).toBeInTheDocument();
     });
   });

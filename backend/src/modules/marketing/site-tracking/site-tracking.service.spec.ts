@@ -147,6 +147,8 @@ describe('normaliseSitePath (C3)', () => {
     ['/', '/'],
     ['', null],
     ['https://evil.test/x', null],
+    [`/${'ab-'.repeat(60)}x`, null],
+    [`/${'a'.repeat(200)}`, '/:id'],
   ])('%p → %p', (input, expected) => {
     expect(normaliseSitePath(input)).toBe(expected);
   });

@@ -36,6 +36,8 @@ import { FeatureGate } from '@/components/ui/access-gates';
 // personal-only) Settings › Connections page.
 import { SsoTab } from '../settings/connections/SsoTab';
 import { SlackTab } from '../settings/connections/SlackTab';
+import { Ga4Card } from '../settings/connections/Ga4Card';
+import { SiteTrackingCard } from '../settings/connections/SiteTrackingCard';
 import type { ChannelType } from '../channels/channelFields';
 
 // Personal Google/Outlook calendar connections, absorbed here as the
@@ -736,6 +738,22 @@ export default function AccountCenterPage({ embedded }: { embedded?: boolean } =
               <NetgsmOnboardingCard />
             </section>
           </FeatureGate>
+
+          {/* The store's own site: what visitors do there (GA4) and where they
+              came from (the jeeta.js snippet). Workspace-wide; each card
+              hides itself while its feature is switched off on the server. */}
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                {t('accounts.website', 'Your website')}
+              </h2>
+              <p className="text-caption text-muted-foreground">
+                {t('accounts.websiteDesc', 'Site traffic and where visitors came from, for the whole workspace.')}
+              </p>
+            </div>
+            <Ga4Card />
+            <SiteTrackingCard />
+          </section>
 
           {/* Company (workspace-level) identity + notifications. */}
           <section className="space-y-3">

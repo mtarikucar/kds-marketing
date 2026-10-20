@@ -5862,3 +5862,91 @@ model EmailInboundItem {
   @@index([workspaceId, state, updatedAt])
   @@map("email_inbound_items")
 }
+
+// ── GA4 (2026-10-21) ──
+// A workspace's Google Analytics 4 property, read daily over OAuth
+// (analytics.readonly). Contract: docs/superpowers/specs/2026-10-21-commerce-ingest-contracts.md §6.
+
+/// One GA4 property per workspace. Tokens are SEALED (secret-box `v1:`).
+model Ga4Connection {
+  id              String    @id @default(uuid())
+  workspaceId     String    @unique
+  marketingUserId String
+  googleEmail     String?
+  propertyId      String? // "properties/123456789"; null until chosen
+  propertyName    String?
+  accessToken     String // SEALED
+  refreshToken    String // SEALED
+  tokenExpiresAt  DateTime
+  scopes          String?
+  lastSyncedAt    DateTime?
+  lastError       String?
+  enabled         Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("ga4_connections")
+}
+
+/// One day of a GA4 property, per breakdown. `key` is "" for TOTAL, the
+/// "source / medium" pair, or the campaign name; at most 50 keys per day plus
+/// "(other)". A re-pulled day is replaced wholesale.
+model Ga4DailyStat {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  propertyId    String
+  date          DateTime @db.Date // the property's own calendar day
+  dimension     String // TOTAL | SOURCE_MEDIUM | CAMPAIGN
+  key           String   @default("")
+  sessions      Int      @default(0)
+  totalUsers    Int      @default(0)
+  newUsers      Int      @default(0)
+  conversions   Int      @default(0) // GA4 keyEvents
+  purchaseCount Int      @default(0) // ecommercePurchases
+  purchaseValue Decimal  @default(0) @db.Decimal(14, 2) // purchaseRevenue
+  currency      String?  @db.VarChar(3)
+  pulledAt      DateTime @default(now())
+
+  @@unique([workspaceId, propertyId, date, dimension, key])
+  @@index([workspaceId, date])
+  @@map("ga4_daily_stats")
+}
+
+// ── Site tracking (2026-10-21) ──
+// The jeeta.js snippet's anonymous page-view counter. Contract §7.
+
+/// A key a store pastes into its pages (`data-site-key`). `allowedHosts`
+/// empty = any host.
+model SiteTrackingKey {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  key          String    @unique // jst_<32 hex>
+  label        String?
+  allowedHosts String[]
+  status       String    @default("ACTIVE") // ACTIVE | REVOKED
+  createdAt    DateTime  @default(now())
+  revokedAt    DateTime?
+
+  traffic SiteTrafficDaily[]
+
+  @@index([workspaceId])
+  @@map("site_tracking_keys")
+}
+
+/// Views per day, path and source. No visitor id, IP or user agent is stored.
+model SiteTrafficDaily {
+  id          String          @id @default(uuid())
+  workspaceId String
+  siteKeyId   String
+  siteKey     SiteTrackingKey @relation(fields: [siteKeyId], references: [id], onDelete: Cascade)
+  date        DateTime        @db.Date // workspace-local day
+  path        String
+  source      String          @default("(direct)")
+  medium      String          @default("")
+  campaign    String          @default("")
+  views       Int             @default(0)
+
+  @@unique([siteKeyId, date, path, source, medium, campaign])
+  @@index([workspaceId, date])
+  @@map("site_traffic_daily")
+}

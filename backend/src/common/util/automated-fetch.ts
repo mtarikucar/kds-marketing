@@ -61,6 +61,16 @@ function header(req: AutomatedFetchRequest, name: string): string | undefined {
 }
 
 /**
+ * The user-agent half of the verdict on its own, for a SUBRESOURCE fetch (a
+ * page-view pixel) where the Sec-Fetch/Accept checks below would flag every
+ * genuine browser: an `<img>` is never a navigation. Empty UA counts as a machine.
+ */
+export function isBotUserAgent(ua: string | null | undefined): boolean {
+  const v = (ua ?? '').slice(0, UA_SCAN_LIMIT);
+  return !v.trim() || BOT_UA.test(v);
+}
+
+/**
  * True when this request looks like a machine rather than a recipient.
  *
  * Pure and total: it never throws, never does I/O, and treats a header bag it
