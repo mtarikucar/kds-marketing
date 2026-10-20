@@ -149,8 +149,9 @@ Yanıt `200`:
 ```json
 { "ok": true, "duplicate": false, "orderId": "6f0c…uuid", "status": "PAID", "leadId": "1b2d…uuid", "leadMatched": "created" }
 ```
-`leadMatched`: `"email" | "phone" | "created" | "none"` (anonim). Aynı `eventId` tekrar gelirse `200` ve
-`"duplicate": true` (gövde ilk yanıttaki `orderId`/`status` ile).
+`leadMatched`: `"email" | "phone" | "created" | "none"` (anonim); yalnız eşleme o olayda çalıştıysa bulunur (siparişin ilk olayı ya da
+henüz lead'i olmayan siparişin sonraki olayı). Aynı `eventId` tekrar gelirse `200` ve `"duplicate": true`; gövde `orderId`, `status`,
+`leadId` taşır, `leadMatched` taşımaz.
 
 ### 1.5 Idempotency ve sıra
 
@@ -384,6 +385,12 @@ Yeni dosya `B/commerce-ingest/external-order-lead.matcher.ts`, saf fonksiyon + t
    `frontend/src/pages/marketing/leads/leadsColumns.tsx` (Türkçe etiket: "E-ticaret").
 8. Lead zaman çizelgesi: `CommerceTraceService.record` (`B/invoicing/commerce-trace.service.ts:43, :57`) ile `COMMERCE` aktivitesi;
    `CommerceEvent` (`B/invoicing/commerce-activity.ts:38`) birliğine `'order_paid' | 'order_refunded'` eklenir.
+9. **KVKK silme (2026-10-21 eklendi, Parça A incelemesinde bulundu):** `B/compliance/compliance.service.ts` silme transaction'ı
+   (lead anonimleştirme + `leadAttribution.deleteMany` vb., ≈`:630-665`) aynı adımda
+   `externalOrder.updateMany({ where: { workspaceId, leadId: subjects }, data: { attribution: Prisma.DbNull } })` çalıştırır.
+   Tutar, durum, tarih ve kampanya düzeyindeki `utm*` kolonları ticari kayıt ve rapor toplamları için kalır; tıklama kimlikleri,
+   açılış URL'si ve referrer gider. `ExternalOrder` müşteri e-posta/telefon/adı **saklamaz** (bunlar yalnız Lead'de). Test: compliance
+   spec'inde silmeden sonra siparişin `attribution`'ı null, `amountMinor` aynı.
 
 ---
 
