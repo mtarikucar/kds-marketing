@@ -65,6 +65,7 @@ export async function startTestApp(o: {
     codexEnv: { ...process.env, FAKE_LOG: fakeLog, FAKE_IMAGE: imagePath, ...o.fakeEnv },
     restartMinMs: 30,
     restartMaxMs: 200,
+    log: () => {},
     ...o.config,
   };
   const app = createApp(config, { storage, fetch: o.fetch });

@@ -1,0 +1,41 @@
+# Example only: the coordinator adds this service to docker-compose.prod.yml on the server.
+# No `ports:` — the service is reachable only from the backend on kds_marketing_net
+# (backend: CODEX_MEDIA_URL=http://codex-media:7311).
+services:
+  codex-media:
+    build: ./codex-media
+    container_name: kds_marketing_codex_media
+    restart: always
+    environment:
+      CODEX_MEDIA_SECRET: ${CODEX_MEDIA_SECRET}        # ≥ 32 random bytes, same value as the backend's
+      CODEX_MEDIA_CONCURRENCY: 2
+      CODEX_MEDIA_MAX_QUEUE: 20
+      CODEX_MEDIA_JOB_TIMEOUT_MS: 180000
+      CODEX_MEDIA_QUOTA_CEILING: 60
+      # CODEX_MEDIA_REF_HOSTS: cdn.example.com          # extra reference hosts besides R2_PUBLIC_BASE_URL's
+      # CODEX_MEDIA_MODEL: ""                            # empty = the account's default model
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL}
+    volumes:
+      - codex-home:/home/codex/.codex                    # auth.json lives here (device-auth login)
+    tmpfs:
+      - /work:uid=10001,gid=10001
+      - /tmp:uid=10001,gid=10001
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - marketing_net
+
+volumes:
+  codex-home:
+
+networks:
+  marketing_net:
+    name: kds_marketing_net
+    external: true

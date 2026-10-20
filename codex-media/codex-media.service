@@ -1,0 +1,30 @@
+# Example systemd unit for running codex-media on the host instead of in Docker (the contract prefers Docker).
+# Listens on the docker bridge only; open 7311 in iptables for the backend container alone.
+#   sudo useradd --system --uid 10001 --create-home codex
+#   sudo -u codex CODEX_HOME=/home/codex/.codex codex login --device-auth
+#   sudo install -m 600 -o root codex-media.env /etc/codex-media.env
+[Unit]
+Description=Jeeta codex-media (Codex image generation sidecar)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=codex
+Group=codex
+WorkingDirectory=/opt/codex-media
+EnvironmentFile=/etc/codex-media.env
+Environment=CODEX_HOME=/home/codex/.codex
+Environment=CODEX_MEDIA_HOST=172.17.0.1
+Environment=CODEX_MEDIA_WORK_DIR=/run/codex-media/work
+RuntimeDirectory=codex-media
+ExecStart=/usr/bin/node /opt/codex-media/dist/server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/codex/.codex /run/codex-media
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

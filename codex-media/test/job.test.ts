@@ -60,8 +60,7 @@ describe('A3 savedPath and references', () => {
       const r = await api(t.base, '/generate', { body: { prompt: 'apple' } });
       const job = await untilDone(t.base, r.body.jobId);
       assert.equal(job.status, 'COMPLETED');
-      const leftovers = readdirSync(saved, { recursive: true }).filter((f) => String(f).endsWith('.png'));
-      assert.deepEqual(leftovers, []);
+      assert.deepEqual(readdirSync(saved), [], 'the image and its now-empty thread folder are removed');
     } finally { await t.close(); }
   });
 
