@@ -28,6 +28,8 @@ export interface SearchOptions {
 }
 
 const SNIPPET_LEN = 280;
+/** Each term is one ILIKE; bound them so a pasted paragraph cannot fan out. */
+const MAX_TERMS = 8;
 
 /**
  * Brand Brain retrieval (Faz 1) — a source-grounded, CITED knowledge layer over
@@ -50,15 +52,29 @@ export class BrandBrainService {
   async reindexWorkspace(workspaceId: string): Promise<{ docs: number; chunks: number }> {
     const docs = await this.prisma.knowledgeDoc.findMany({
       where: { workspaceId, status: 'ACTIVE' },
-      select: { id: true, content: true },
+      select: { id: true, title: true, content: true },
     });
     let chunks = 0;
     for (const d of docs) {
-      await this.prisma.knowledgeChunk.deleteMany({ where: { workspaceId, docId: d.id } });
-      const parts = splitIntoChunks(d.content ?? '');
-      chunks += await this.ingestChunks(workspaceId, d.id, parts.map((content, ord) => ({ content, ord })));
+      chunks += await this.indexDoc(workspaceId, d.id, d);
     }
     return { docs: docs.length, chunks };
+  }
+
+  /**
+   * (Re)chunk ONE doc — what a single add needs, without rebuilding the whole
+   * workspace. The title leads the indexed text so a doc can be found by what
+   * it is called, not only by words in its body. Idempotent (replaces chunks).
+   */
+  async indexDoc(
+    workspaceId: string,
+    docId: string,
+    doc: { title?: string | null; content?: string | null },
+  ): Promise<number> {
+    await this.prisma.knowledgeChunk.deleteMany({ where: { workspaceId, docId } });
+    const text = [doc.title?.trim(), doc.content ?? ''].filter(Boolean).join('\n\n');
+    const parts = splitIntoChunks(text);
+    return this.ingestChunks(workspaceId, docId, parts.map((content, ord) => ({ content, ord })));
   }
 
   /** Store pre-computed chunks for a doc (embeddings filled by the caller). */
@@ -89,8 +105,14 @@ export class BrandBrainService {
       workspaceId,
       doc: { status: 'ACTIVE' },
     };
-    if (opts.queryText && opts.queryText.trim()) {
-      where.content = { contains: opts.queryText.trim().slice(0, 200), mode: 'insensitive' };
+    // Word by word: every term must appear in the chunk, in any order. One
+    // `contains` over the whole query only matched the exact phrase, so
+    // "tone of voice" never found "our voice and tone".
+    const terms = (opts.queryText ?? '').slice(0, 200).split(/\s+/).filter(Boolean).slice(0, MAX_TERMS);
+    if (terms.length === 1) {
+      where.content = { contains: terms[0], mode: 'insensitive' };
+    } else if (terms.length > 1) {
+      where.AND = terms.map((t) => ({ content: { contains: t, mode: 'insensitive' as const } }));
     }
 
     const candidates = await this.prisma.knowledgeChunk.findMany({

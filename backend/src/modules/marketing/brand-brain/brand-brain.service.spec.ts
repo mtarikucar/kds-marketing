@@ -71,6 +71,36 @@ describe('BrandBrainService', () => {
     expect(where).toMatchObject({ workspaceId: 'ws1', doc: { status: 'ACTIVE' }, content: { contains: 'implant', mode: 'insensitive' } });
   });
 
+  it('matches a multi-word query word by word, not as one exact substring', async () => {
+    // "tone of voice" used to be a single `contains`, so a doc that said
+    // "our voice and tone" was never found.
+    const { prisma, findMany } = makePrisma([]);
+    const svc = new BrandBrainService(prisma);
+    await svc.search('ws1', { queryText: '  iade   politikası ', k: 3 });
+    const where = findMany.mock.calls[0][0].where;
+    expect(where.content).toBeUndefined();
+    expect(where.AND).toEqual([
+      { content: { contains: 'iade', mode: 'insensitive' } },
+      { content: { contains: 'politikası', mode: 'insensitive' } },
+    ]);
+    expect(where).toMatchObject({ workspaceId: 'ws1', doc: { status: 'ACTIVE' } });
+  });
+
+  it('indexes one doc: replaces only its chunks, title included so it is searchable', async () => {
+    const deleteMany = jest.fn().mockResolvedValue({ count: 3 });
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
+    const prisma = { knowledgeChunk: { deleteMany, createMany, findMany: jest.fn() } } as any;
+    const svc = new BrandBrainService(prisma);
+    const n = await svc.indexDoc('ws1', 'd9', { title: 'İade politikası', content: '14 gün içinde iade.' });
+    expect(n).toBe(1);
+    expect(deleteMany).toHaveBeenCalledWith({ where: { workspaceId: 'ws1', docId: 'd9' } });
+    const rows = createMany.mock.calls[0][0].data;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ workspaceId: 'ws1', docId: 'd9', ord: 0 });
+    expect(rows[0].content).toContain('İade politikası');
+    expect(rows[0].content).toContain('14 gün içinde iade.');
+  });
+
   it('caps k and returns recency order when no embedding is provided', async () => {
     const { prisma } = makePrisma([
       chunk('c1', 'd1', 'A', 'first', []),
