@@ -4,6 +4,13 @@
 //! single transaction: `TenantRepos` (one workspace's rows only), `UserRepos` (user-level data and
 //! registration) and `PlatformRepos` (platform-wide reads and lookups that cannot know the
 //! workspace in advance). A bundle commits with `commit`; dropping it uncommitted rolls back.
+//!
+//! Contracts every adapter keeps:
+//! - Every timestamp the application can see is passed in, taken from the `Clock` port; a
+//!   database default such as `now()` is only a fallback and never the source of such a value.
+//! - A row or entry whose `workspace_id` differs from the tenant bundle's workspace is refused
+//!   with `INTERNAL` (it is a programming error) and nothing is written.
+//! - Mutations documented as such return `NOT_FOUND` when the id does not exist in scope.
 
 use std::collections::BTreeSet;
 
@@ -258,13 +265,15 @@ pub trait SessionRepo: Send + Sync {
         &mut self,
         token_hash: &str,
     ) -> Result<Option<SessionRow>, AppError>;
-    /// Marks the session revoked; a no-op when it already is.
-    async fn revoke(&mut self, id: SessionId) -> Result<(), AppError>;
-    /// Revokes every live session of `user_id` whose current workspace is `ws`.
+    /// Sets `revoked_at` to `at`; a no-op when the session is already revoked.
+    async fn revoke(&mut self, id: SessionId, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Revokes, with `revoked_at = now`, every session of `user_id` whose current workspace is
+    /// `workspace_id` and which is live at `now` (not revoked and `expires_at > now`).
     async fn revoke_all_for_workspace(
         &mut self,
         user_id: UserId,
-        ws: WorkspaceId,
+        workspace_id: WorkspaceId,
+        now: OffsetDateTime,
     ) -> Result<(), AppError>;
     async fn set_current_workspace(
         &mut self,
@@ -285,12 +294,14 @@ pub trait RoleRepo: Send + Sync {
     async fn find(&mut self, id: RoleId) -> Result<Option<RoleDef>, AppError>;
     /// A taken key is `CONFLICT`.
     async fn insert(&mut self, role: RoleDef) -> Result<(), AppError>;
+    /// Replaces the role's permissions. An unknown id is `NOT_FOUND`.
     async fn update_permissions(
         &mut self,
         id: RoleId,
         permissions: BTreeSet<Permission>,
     ) -> Result<(), AppError>;
-    /// Deletes the role unless it is a system role.
+    /// Deletes a custom role. An unknown id is `NOT_FOUND`; a system role is `FORBIDDEN` and
+    /// stays.
     async fn delete_custom(&mut self, id: RoleId) -> Result<(), AppError>;
     /// How many memberships, in any status, reference the role.
     async fn count_memberships_using(&mut self, id: RoleId) -> Result<i64, AppError>;
@@ -304,23 +315,34 @@ pub trait MembershipRepo: Send + Sync {
     async fn find(&mut self, id: MembershipId) -> Result<Option<MembershipRow>, AppError>;
     /// The user's membership here that is not `Removed`.
     async fn find_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError>;
-    /// Stores an `Invited` membership with its invite fields set.
+    /// Stores an `Invited` membership with its invite fields set. A `row.workspace_id` other than
+    /// the bundle's is `INTERNAL`.
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError>;
-    /// Binds an invitation to `user_id` and makes it `Active`.
+    /// Binds an invitation to `user_id` and makes it `Active`. Only `Invited` → `Active` is
+    /// allowed: an unknown id is `NOT_FOUND`, a membership in any other status is `CONFLICT`.
     async fn activate(&mut self, id: MembershipId, user_id: UserId) -> Result<(), AppError>;
+    /// Moves the membership to `role_id`. An unknown id is `NOT_FOUND`. Callers that may demote
+    /// an owner call `count_active_owners` first, in the same transaction.
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError>;
-    /// Sets the status to `Removed`.
+    /// Sets the status to `Removed`. An unknown id is `NOT_FOUND`. Callers that may remove an
+    /// owner call `count_active_owners` first, in the same transaction.
     async fn remove(&mut self, id: MembershipId) -> Result<(), AppError>;
     /// Active memberships holding the `owner` system role.
+    ///
+    /// Implementations lock those memberships until the transaction ends (select their rows
+    /// `FOR UPDATE`, then count; Postgres refuses `FOR UPDATE` on an aggregate), so that
+    /// `can_change_role(.., target_is_last_owner)` followed by `set_role` or `remove` in the same
+    /// transaction cannot race another transaction demoting or removing an owner.
     async fn count_active_owners(&mut self) -> Result<i64, AppError>;
 }
 
 /// The workspace's API keys. Lookup by key hash lives on `PlatformRepos`.
 #[async_trait]
 pub trait ApiKeyRepo: Send + Sync {
+    /// A `row.workspace_id` other than the bundle's is `INTERNAL`.
     async fn insert(&mut self, row: ApiKeyRow) -> Result<(), AppError>;
     async fn list(&mut self) -> Result<Vec<ApiKeyRow>, AppError>;
-    /// Sets the status to `Revoked` at `at`.
+    /// Sets the status to `Revoked` and `revoked_at` to `at`. An unknown id is `NOT_FOUND`.
     async fn revoke(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError>;
     async fn touch_last_used(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError>;
 }
@@ -329,8 +351,9 @@ pub trait ApiKeyRepo: Send + Sync {
 #[async_trait]
 pub trait AgentConnectionRepo: Send + Sync {
     /// Inserts `row`, or, when the same (key, client name, client version) is already known,
-    /// refreshes its `last_seen_at` and `protocol_version`. Returns the stored id and whether the
-    /// connection was created.
+    /// sets its `last_seen_at` and `protocol_version` from `row`. Returns the stored id and
+    /// whether the connection was created. A `row.workspace_id` other than the bundle's is
+    /// `INTERNAL`.
     async fn upsert_on_initialize(
         &mut self,
         row: AgentConnectionRow,
@@ -349,7 +372,8 @@ pub trait AgentConnectionRepo: Send + Sync {
 /// The workspace's append-only ledger.
 #[async_trait]
 pub trait LedgerRepo: Send + Sync {
-    /// Appends the entry and returns its sequence id.
+    /// Appends the entry and returns its sequence id. An `entry.workspace_id` other than the
+    /// bundle's is `INTERNAL`.
     async fn append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn list(&mut self, filter: LedgerFilter) -> Result<Vec<LedgerRow>, AppError>;
 }
@@ -387,7 +411,8 @@ pub trait PlatformSessionRepo: Send + Sync {
 // Bundles and the unit of work
 // ---------------------------------------------------------------------------------------------
 
-/// One transaction scoped to a single workspace.
+/// One transaction scoped to a single workspace: every repo it hands out reads and writes only
+/// that workspace's rows.
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
     fn roles(&mut self) -> &mut dyn RoleRepo;
@@ -416,6 +441,7 @@ pub trait UserRepos: Send + Sync {
         name: &str,
         slug: &str,
         status: WorkspaceStatus,
+        created_at: OffsetDateTime,
     ) -> Result<(), AppError>;
     /// Stores the system roles of a newly created workspace.
     async fn roles_create_system(
@@ -427,10 +453,14 @@ pub trait UserRepos: Send + Sync {
     async fn memberships_insert_active(
         &mut self,
         id: MembershipId,
-        ws: WorkspaceId,
+        workspace_id: WorkspaceId,
         user_id: UserId,
         role_id: RoleId,
+        created_at: OffsetDateTime,
     ) -> Result<(), AppError>;
+    /// Writes into the workspace named by the entry; used by registration in the same
+    /// transaction. Returns the entry's sequence id.
+    async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 
@@ -441,6 +471,7 @@ pub trait PlatformRepos: Send + Sync {
     fn platform_sessions(&mut self) -> &mut dyn PlatformSessionRepo;
     async fn workspaces_list(&mut self) -> Result<Vec<WorkspaceRow>, AppError>;
     async fn workspace_get(&mut self, ws: WorkspaceId) -> Result<Option<WorkspaceRow>, AppError>;
+    /// An unknown workspace is `NOT_FOUND`.
     async fn workspace_set_status(
         &mut self,
         ws: WorkspaceId,
