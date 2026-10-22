@@ -155,7 +155,7 @@ pub async fn register(deps: &Deps, input: RegisterInput) -> Result<SessionOut, A
     let display_name = required("display_name", &input.display_name)?;
     let workspace_name = required("workspace_name", &input.workspace_name)?;
     // Hashing is slow and needs no connection, so it runs before any transaction opens.
-    let password_hash = deps.hasher.hash(&input.password)?;
+    let password_hash = deps.hasher.hash(&input.password).await?;
     let account = NewAccount {
         stem: slug_stem(&workspace_name),
         email,
@@ -192,10 +192,14 @@ pub async fn login(deps: &Deps, input: LoginInput) -> Result<SessionOut, AppErro
     };
     let Some(user) = user else {
         // The hash is discarded: it only spends the time a verification would.
-        let _ = deps.hasher.hash(&input.password);
+        let _ = deps.hasher.hash(&input.password).await;
         return Err(invalid_credentials());
     };
-    if !deps.hasher.verify(&input.password, &user.password_hash)? {
+    if !deps
+        .hasher
+        .verify(&input.password, &user.password_hash)
+        .await?
+    {
         return Err(invalid_credentials());
     }
 

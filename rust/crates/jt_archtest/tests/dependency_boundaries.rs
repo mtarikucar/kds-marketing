@@ -20,7 +20,8 @@ fn domain_crates_depend_only_on_pure_crates() {
 }
 
 // The application core: the domain crates, serialisation and time, and the pure-Rust crates
-// behind `jt_app::std_impls` and token hashing. No adapter, database, HTTP or runtime crate.
+// behind `jt_app::std_impls` and token hashing, plus `tokio` only so `Argon2Hasher` can move its
+// CPU-bound work onto a blocking thread. No adapter, database or HTTP crate.
 const APP_ALLOW: &[&str] = &[
     "jt_tenancy",
     "jt_ledger",
@@ -35,6 +36,7 @@ const APP_ALLOW: &[&str] = &[
     "sha2",
     "base64",
     "tracing",
+    "tokio",
 ];
 
 #[test]

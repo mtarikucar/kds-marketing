@@ -85,8 +85,8 @@ async fn register(uow: &InMemoryUow, owner: &str, slug: &str) -> (WorkspaceId, U
     (ws, user, owner_role)
 }
 
-#[test]
-fn service_fakes_are_deterministic() {
+#[tokio::test]
+async fn service_fakes_are_deterministic() {
     assert_eq!(FixedClock(T0).now(), T0);
 
     let ids = SeqIdGen::new();
@@ -97,12 +97,12 @@ fn service_fakes_are_deterministic() {
     assert_eq!(tokens.token(32), "first");
     assert_eq!(tokens.token(32), "second");
 
-    let hash = PlainHasher.hash("correct horse").unwrap();
+    let hash = PlainHasher.hash("correct horse").await.unwrap();
     assert_eq!(hash, "plain:correct horse");
-    assert!(PlainHasher.verify("correct horse", &hash).unwrap());
-    assert!(!PlainHasher.verify("wrong", &hash).unwrap());
+    assert!(PlainHasher.verify("correct horse", &hash).await.unwrap());
+    assert!(!PlainHasher.verify("wrong", &hash).await.unwrap());
     assert_eq!(
-        code(PlainHasher.verify("x", "$argon2id$...").unwrap_err()),
+        code(PlainHasher.verify("x", "$argon2id$...").await.unwrap_err()),
         ErrorCode::Internal
     );
 }

@@ -50,14 +50,15 @@ pub trait TokenGen: Send + Sync {
     fn token(&self, bytes: usize) -> String;
 }
 
-/// One-way password hashing. Both methods are synchronous and may be CPU-bound (Argon2id takes
-/// tens of milliseconds); `std_impls::Argon2Hasher` says how async adapters keep them off the
-/// reactor threads.
+/// One-way password hashing. The work may be CPU-bound (Argon2id takes tens of milliseconds), so
+/// implementations keep it off the async reactor threads themselves (`std_impls::Argon2Hasher`
+/// runs it on a blocking thread); callers simply await.
+#[async_trait]
 pub trait PasswordHasher: Send + Sync {
     /// A self-describing hash of `pw` that `verify` accepts.
-    fn hash(&self, pw: &str) -> Result<String, AppError>;
+    async fn hash(&self, pw: &str) -> Result<String, AppError>;
     /// Whether `pw` matches `hash`; `Ok(false)` on a mismatch, `Err` only for an unusable hash.
-    fn verify(&self, pw: &str, hash: &str) -> Result<bool, AppError>;
+    async fn verify(&self, pw: &str, hash: &str) -> Result<bool, AppError>;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -110,12 +110,13 @@ pub const PLAIN_PREFIX: &str = "plain:";
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlainHasher;
 
+#[async_trait]
 impl PasswordHasher for PlainHasher {
-    fn hash(&self, pw: &str) -> Result<String, AppError> {
+    async fn hash(&self, pw: &str) -> Result<String, AppError> {
         Ok(format!("{PLAIN_PREFIX}{pw}"))
     }
 
-    fn verify(&self, pw: &str, hash: &str) -> Result<bool, AppError> {
+    async fn verify(&self, pw: &str, hash: &str) -> Result<bool, AppError> {
         hash.strip_prefix(PLAIN_PREFIX)
             .map(|stored| stored == pw)
             .ok_or_else(|| AppError::internal("not a plain: hash"))
