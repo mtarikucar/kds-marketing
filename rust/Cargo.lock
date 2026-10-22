@@ -1016,8 +1016,11 @@ dependencies = [
  "jt_outbound",
  "jt_panel_http",
  "jt_pg",
+ "jt_testkit",
+ "serde_json",
  "sqlx",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

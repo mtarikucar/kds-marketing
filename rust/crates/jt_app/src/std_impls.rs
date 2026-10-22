@@ -15,13 +15,17 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::ports::{Clock, IdGen, PasswordHasher, TokenGen};
 
-/// The operating system's clock, in UTC.
+/// The operating system's clock, in UTC, truncated to whole microseconds: the precision
+/// Postgres stores, so an instant the application holds equals the one it reads back.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> OffsetDateTime {
-        OffsetDateTime::now_utc()
+        let now = OffsetDateTime::now_utc();
+        // Truncating keeps the value below one second, so the replacement cannot fail.
+        now.replace_nanosecond(now.nanosecond() / 1_000 * 1_000)
+            .unwrap_or(now)
     }
 }
 
@@ -226,6 +230,20 @@ mod tests {
         let second = UuidV7Gen.uuid();
         assert_eq!(first.get_version_num(), 7);
         assert!(first < second);
+    }
+
+    #[test]
+    fn the_system_clock_has_microsecond_precision() {
+        // Postgres keeps microseconds; a clock with nanoseconds would hand out instants that
+        // differ from what is stored and read back.
+        for _ in 0..100 {
+            let now = SystemClock.now();
+            assert_eq!(
+                now.nanosecond() % 1_000,
+                0,
+                "{now} has sub-microsecond digits"
+            );
+        }
     }
 
     #[test]

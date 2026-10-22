@@ -1,6 +1,6 @@
 //! MCP adapter: the agent gate. An rmcp server over streamable HTTP ([`http_service`]) and
 //! stdio ([`run_stdio`]), authenticated by bearer API keys ([`auth`]), exposing one tool per
-//! use case of the catalog that has an MCP tool ([`registry`]).
+//! use case of the catalog that has an MCP tool ([`registry()`]).
 //!
 //! Each HTTP session is bound to the key that created it ([`sessions`]).
 //!

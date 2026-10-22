@@ -1,5 +1,5 @@
 //! The tool registry: one [`ToolSpec`] per `CATALOG` row with an MCP tool, built from the tool
-//! definitions in [`crate::tools`].
+//! definitions in the private `tools` module.
 //!
 //! The registry is data: the handler never names a tool. Adding a use case with an MCP tool to
 //! the catalog without a definition here (or the reverse) stops the server at startup.
@@ -69,7 +69,7 @@ pub fn risk_tag(risk: Risk) -> &'static str {
 ///
 /// # Panics
 ///
-/// When a catalog row with an MCP tool has no definition in [`crate::tools`], a definition has
+/// When a catalog row with an MCP tool has no definition in the `tools` module, a definition has
 /// no such catalog row, or a description does not end with the catalog risk's [`risk_tag`]:
 /// the registry and the catalog must agree before the server starts.
 pub fn registry() -> Vec<ToolSpec> {

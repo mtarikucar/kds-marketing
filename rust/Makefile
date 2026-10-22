@@ -1,6 +1,6 @@
 # Developer entry points for the Rust workspace. Run from rust/.
 
-.PHONY: fmt lint deny test check dev panel-install panel-test panel-build
+.PHONY: fmt lint doc deny test check dev panel-install panel-test panel-build
 
 fmt:
 	cargo fmt --all -- --check
@@ -8,14 +8,19 @@ fmt:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
+doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
 deny:
 	cargo deny check
 
+# Needs JEETA_TEST_DATABASE_URL in the environment (see README).
 test:
 	cargo test --workspace
 
-check: fmt lint deny test
+check: fmt lint doc deny test
 
+# Reads rust/.env (see .env.example).
 dev:
 	cargo run -p jeeta -- serve
 

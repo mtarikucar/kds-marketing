@@ -44,11 +44,10 @@ cd .. && JEETA_PANEL_DIR=panel/dist JEETA_COOKIE_SECURE=false JEETA_DATABASE_URL
 # http://127.0.0.1:8080/ → panel
 ```
 
-`serve` alt komutunu ve ortam değişkenlerini Görev 16 bağlar; bu görevde ikili değişmedi, o yüzden
-yukarıdaki elle deneme Görev 16'dan sonra yapılabilir. Bu görevde derlenmiş paket `vite preview` ile
-sunulup başsız bir tarayıcıda, sahte bir `/api` ile açıldı: giriş, ana sayfa, ekip ve günlük sayfaları
-çizildi; dil (TR → EN) ve tema (koyu) değişti; davet isteği `X-Requested-With: jeeta-panel` başlığıyla
-gitti, `GET` istekleri başlıksız gitti.
+Değişkenlerin tamamı ve yerel kurulum: `rust/README.md`. Panel ilk yazıldığında derlenmiş paket
+`vite preview` ile sunulup başsız bir tarayıcıda, sahte bir `/api` ile açıldı: giriş, ana sayfa, ekip ve
+günlük sayfaları çizildi; dil (TR → EN) ve tema (koyu) değişti; davet isteği
+`X-Requested-With: jeeta-panel` başlığıyla gitti, `GET` istekleri başlıksız gitti.
 
 Geliştirmede `pnpm dev`, `/api` ve `/healthz` isteklerini çalışan bir `jeeta serve`'e aktarır
 (varsayılan `http://127.0.0.1:8080`, değiştirmek için `JEETA_PANEL_API`); oturum çerezi böylece aynı
