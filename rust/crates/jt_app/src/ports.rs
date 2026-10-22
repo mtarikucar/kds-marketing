@@ -4,6 +4,10 @@
 //! single transaction: `TenantRepos` (one workspace's rows only), `UserRepos` (user-level data and
 //! registration) and `PlatformRepos` (platform-wide reads and lookups that cannot know the
 //! workspace in advance). A bundle commits with `commit`; dropping it uncommitted rolls back.
+//! After any call on a bundle, or on a repo it hands out, returns an error, the bundle must be
+//! dropped: its `commit` fails with `INTERNAL` (always in the in-memory fakes; in Postgres
+//! whenever the failed statement aborted the transaction). A use case that wants to go on after
+//! an expected refusal checks first (e.g. `find_by_email` before `insert`) or opens a new bundle.
 //!
 //! Contracts every adapter keeps:
 //! - Every timestamp the application can see is passed in, taken from the `Clock` port; a
@@ -46,7 +50,9 @@ pub trait TokenGen: Send + Sync {
     fn token(&self, bytes: usize) -> String;
 }
 
-/// One-way password hashing.
+/// One-way password hashing. Both methods are synchronous and may be CPU-bound (Argon2id takes
+/// tens of milliseconds); `std_impls::Argon2Hasher` says how async adapters keep them off the
+/// reactor threads.
 pub trait PasswordHasher: Send + Sync {
     /// A self-describing hash of `pw` that `verify` accepts.
     fn hash(&self, pw: &str) -> Result<String, AppError>;
@@ -292,7 +298,9 @@ pub trait RoleRepo: Send + Sync {
     async fn list(&mut self) -> Result<Vec<RoleDef>, AppError>;
     async fn find_by_key(&mut self, key: &str) -> Result<Option<RoleDef>, AppError>;
     async fn find(&mut self, id: RoleId) -> Result<Option<RoleDef>, AppError>;
-    /// A taken key is `CONFLICT`.
+    /// Stores a custom role. A taken key is `CONFLICT`. A role with `is_system` set is
+    /// `INTERNAL`: system roles are created only with their workspace, by
+    /// `UserRepos::roles_create_system`.
     async fn insert(&mut self, role: RoleDef) -> Result<(), AppError>;
     /// Replaces the role's permissions. An unknown id is `NOT_FOUND`.
     async fn update_permissions(
@@ -316,13 +324,15 @@ pub trait MembershipRepo: Send + Sync {
     /// The user's membership here that is not `Removed`.
     async fn find_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError>;
     /// Stores an `Invited` membership with its invite fields set. A `row.workspace_id` other than
-    /// the bundle's is `INTERNAL`.
+    /// the bundle's is `INTERNAL`; a role that is not this workspace's (or does not exist) is
+    /// `NOT_FOUND`.
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError>;
     /// Binds an invitation to `user_id` and makes it `Active`. Only `Invited` → `Active` is
     /// allowed: an unknown id is `NOT_FOUND`, a membership in any other status is `CONFLICT`.
     async fn activate(&mut self, id: MembershipId, user_id: UserId) -> Result<(), AppError>;
-    /// Moves the membership to `role_id`. An unknown id is `NOT_FOUND`. Callers that may demote
-    /// an owner call `count_active_owners` first, in the same transaction.
+    /// Moves the membership to `role_id`. An unknown id, or a role that is not this workspace's,
+    /// is `NOT_FOUND`. Callers that may demote an owner call `count_active_owners` first, in the
+    /// same transaction.
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError>;
     /// Sets the status to `Removed`. An unknown id is `NOT_FOUND`. Callers that may remove an
     /// owner call `count_active_owners` first, in the same transaction.
@@ -413,6 +423,9 @@ pub trait PlatformSessionRepo: Send + Sync {
 
 /// One transaction scoped to a single workspace: every repo it hands out reads and writes only
 /// that workspace's rows.
+///
+/// After an error from any call the bundle must be dropped, not committed: `commit` fails (see
+/// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
     fn roles(&mut self) -> &mut dyn RoleRepo;
@@ -425,6 +438,9 @@ pub trait TenantRepos: Send + Sync {
 }
 
 /// One transaction over user-level data, including registering a new workspace.
+///
+/// After an error from any call the bundle must be dropped, not committed: `commit` fails (see
+/// the module docs).
 #[async_trait]
 pub trait UserRepos: Send + Sync {
     fn users(&mut self) -> &mut dyn UserRepo;
@@ -449,7 +465,9 @@ pub trait UserRepos: Send + Sync {
         ws: WorkspaceId,
         roles: &[RoleDef],
     ) -> Result<(), AppError>;
-    /// Stores an `Active` membership, e.g. the owner of a newly created workspace.
+    /// Stores an `Active` membership, e.g. the owner of a newly created workspace. A role that is
+    /// not `workspace_id`'s (or does not exist) is `NOT_FOUND`; a user who is already a member is
+    /// `CONFLICT`.
     async fn memberships_insert_active(
         &mut self,
         id: MembershipId,
@@ -465,6 +483,9 @@ pub trait UserRepos: Send + Sync {
 }
 
 /// One platform-wide transaction: operators, all workspaces, and lookups by secret hash.
+///
+/// After an error from any call the bundle must be dropped, not committed: `commit` fails (see
+/// the module docs).
 #[async_trait]
 pub trait PlatformRepos: Send + Sync {
     fn operators(&mut self) -> &mut dyn OperatorRepo;

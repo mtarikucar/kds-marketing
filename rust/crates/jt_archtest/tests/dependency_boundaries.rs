@@ -19,12 +19,30 @@ fn domain_crates_depend_only_on_pure_crates() {
     }
 }
 
+// The application core: the domain crates, serialisation and time, and the pure-Rust crates
+// behind `jt_app::std_impls` and token hashing. No adapter, database, HTTP or runtime crate.
+const APP_ALLOW: &[&str] = &[
+    "jt_tenancy",
+    "jt_ledger",
+    "serde",
+    "serde_json",
+    "uuid",
+    "time",
+    "thiserror",
+    "async-trait",
+    "argon2",
+    "rand",
+    "sha2",
+    "base64",
+    "tracing",
+];
+
 #[test]
 fn app_depends_on_no_adapter() {
     for d in direct_deps("jt_app") {
         assert!(
-            !d.starts_with("jt_") || ["jt_tenancy", "jt_ledger"].contains(&d.as_str()),
-            "jt_app depends on {d}"
+            APP_ALLOW.contains(&d.as_str()),
+            "jt_app depends on {d}, which is not on its allowlist"
         );
     }
 }

@@ -256,6 +256,8 @@ async fn roles_and_memberships_keep_their_contracts() {
     let (ws, owner, _) = register(&uow, "owner@example.com", "acme").await;
     let (_, invitee, _) = register(&uow, "invitee@example.com", "elsewhere").await;
 
+    // Refusals, probed in a bundle that is then dropped: a bundle that saw an error never
+    // commits.
     let mut t = uow.tenant(ws).await.unwrap();
     let rep = t.roles().find_by_key("rep").await.unwrap().unwrap();
     let owner_role = t.roles().find_by_key("owner").await.unwrap().unwrap();
@@ -267,7 +269,18 @@ async fn roles_and_memberships_keep_their_contracts() {
         code(t.roles().delete_custom(RoleId::new_v7()).await.unwrap_err()),
         ErrorCode::NotFound
     );
+    assert_eq!(
+        code(
+            t.memberships()
+                .remove(MembershipId::new_v7())
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    drop(t);
 
+    let mut t = uow.tenant(ws).await.unwrap();
     let invite = MembershipId::new_v7();
     t.memberships()
         .insert_invite(MembershipRow {
@@ -291,10 +304,6 @@ async fn roles_and_memberships_keep_their_contracts() {
 
     t.memberships().activate(invite, invitee).await.unwrap();
     assert_eq!(
-        code(t.memberships().activate(invite, invitee).await.unwrap_err()),
-        ErrorCode::Conflict
-    );
-    assert_eq!(
         t.memberships()
             .find_by_user(invitee)
             .await
@@ -312,16 +321,15 @@ async fn roles_and_memberships_keep_their_contracts() {
     assert_eq!(t.memberships().count_active_owners().await.unwrap(), 2);
     t.memberships().remove(invite).await.unwrap();
     assert_eq!(t.memberships().count_active_owners().await.unwrap(), 1);
-    assert_eq!(
-        code(
-            t.memberships()
-                .remove(MembershipId::new_v7())
-                .await
-                .unwrap_err()
-        ),
-        ErrorCode::NotFound
-    );
     t.commit().await.unwrap();
+
+    // Only an open invitation can be activated.
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        code(t.memberships().activate(invite, invitee).await.unwrap_err()),
+        ErrorCode::Conflict
+    );
+    drop(t);
 
     let mut p = uow.platform().await.unwrap();
     let found = p
@@ -415,11 +423,13 @@ async fn sessions_revoke_once_and_per_workspace() {
     let mut u = uow.user().await.unwrap();
     u.sessions().insert(live.clone()).await.unwrap();
     u.sessions().insert(elsewhere.clone()).await.unwrap();
+    u.commit().await.unwrap();
+    let mut u = uow.user().await.unwrap();
     assert_eq!(
         code(u.sessions().insert(live.clone()).await.unwrap_err()),
         ErrorCode::Conflict
     );
-    u.commit().await.unwrap();
+    drop(u);
 
     let now = T0 + Duration::hours(1);
     let mut u = uow.user().await.unwrap();
@@ -438,4 +448,229 @@ async fn sessions_revoke_once_and_per_workspace() {
     assert_eq!(live_after.unwrap().revoked_at, Some(now));
     let other_after = u.sessions().find_by_token_hash("elsewhere").await.unwrap();
     assert_eq!(other_after.unwrap().revoked_at, None);
+}
+
+#[tokio::test]
+async fn a_failed_call_spoils_the_bundle_so_commit_fails() {
+    let uow = InMemoryUow::new();
+    let (ws, owner, _) = register(&uow, "owner@example.com", "acme").await;
+    let spoiled = |e: AppError| {
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert!(e.message.contains("nothing was committed"), "{}", e.message);
+    };
+
+    // User bundle: a good write, then a refused one; the commit refuses both.
+    let mut u = uow.user().await.unwrap();
+    u.users()
+        .insert(UserRow {
+            id: UserId::new_v7(),
+            email: email("new@example.com"),
+            password_hash: "plain:pw".into(),
+            display_name: "New".into(),
+            created_at: T0,
+        })
+        .await
+        .unwrap();
+    let dup = UserRow {
+        id: UserId::new_v7(),
+        email: email("owner@example.com"),
+        password_hash: "plain:pw".into(),
+        display_name: "Dup".into(),
+        created_at: T0,
+    };
+    assert_eq!(
+        code(u.users().insert(dup).await.unwrap_err()),
+        ErrorCode::Conflict
+    );
+    spoiled(u.commit().await.unwrap_err());
+    assert_eq!(uow.snapshot().users.len(), 1, "nothing was committed");
+
+    // Tenant bundle.
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.ledger()
+        .append(entry(ws, owner, "test.kept", T0))
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            t.memberships()
+                .remove(MembershipId::new_v7())
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    spoiled(t.commit().await.unwrap_err());
+    assert_eq!(uow.snapshot().ledger.len(), 1);
+
+    // Platform bundle.
+    let mut p = uow.platform().await.unwrap();
+    p.workspace_set_status(ws, WorkspaceStatus::Suspended)
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            p.workspace_set_status(WorkspaceId::new_v7(), WorkspaceStatus::Active)
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    spoiled(p.commit().await.unwrap_err());
+    assert_eq!(uow.snapshot().workspaces[0].status, WorkspaceStatus::Active);
+}
+
+#[tokio::test]
+async fn a_role_outside_the_workspace_is_not_found() {
+    let uow = InMemoryUow::new();
+    let (a, owner_a, _) = register(&uow, "a@example.com", "a").await;
+    let (_, user_b, owner_role_b) = register(&uow, "b@example.com", "b").await;
+    let invitation = |role_id: RoleId| MembershipRow {
+        id: MembershipId::new_v7(),
+        workspace_id: a,
+        user_id: None,
+        role_id,
+        status: MembershipStatus::Invited,
+        invited_email: Some(email("invitee@example.com")),
+        invite_token_hash: Some(format!("hash-{role_id}")),
+        invite_expires_at: Some(T0 + Duration::days(7)),
+        invited_by: Some(owner_a),
+        created_at: T0,
+    };
+
+    for role in [owner_role_b, RoleId::new_v7()] {
+        let mut t = uow.tenant(a).await.unwrap();
+        assert_eq!(
+            code(
+                t.memberships()
+                    .insert_invite(invitation(role))
+                    .await
+                    .unwrap_err()
+            ),
+            ErrorCode::NotFound,
+            "insert_invite"
+        );
+        drop(t);
+
+        let mut t = uow.tenant(a).await.unwrap();
+        let own = t
+            .memberships()
+            .find_by_user(owner_a)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            code(t.memberships().set_role(own.id, role).await.unwrap_err()),
+            ErrorCode::NotFound,
+            "set_role"
+        );
+        drop(t);
+
+        let mut u = uow.user().await.unwrap();
+        assert_eq!(
+            code(
+                u.memberships_insert_active(MembershipId::new_v7(), a, user_b, role, T0)
+                    .await
+                    .unwrap_err()
+            ),
+            ErrorCode::NotFound,
+            "memberships_insert_active"
+        );
+    }
+    assert_eq!(uow.snapshot().memberships.len(), 2);
+}
+
+#[tokio::test]
+async fn role_insert_refuses_system_roles() {
+    let uow = InMemoryUow::new();
+    let (ws, _, _) = register(&uow, "owner@example.com", "acme").await;
+    let mut t = uow.tenant(ws).await.unwrap();
+    let system = RoleDef {
+        id: RoleId::new_v7(),
+        key: "auditor".into(),
+        name: "Auditor".into(),
+        permissions: BTreeSet::from([Permission::LedgerRead]),
+        is_system: true,
+    };
+    assert_eq!(
+        code(t.roles().insert(system).await.unwrap_err()),
+        ErrorCode::Internal
+    );
+    drop(t);
+    assert_eq!(uow.snapshot().roles.len(), 3);
+}
+
+#[tokio::test]
+async fn a_missing_user_or_workspace_is_not_found() {
+    let uow = InMemoryUow::new();
+    let (ws, user, _) = register(&uow, "owner@example.com", "acme").await;
+    let session = |user_id: UserId, current: Option<WorkspaceId>| SessionRow {
+        id: SessionId::new_v7(),
+        user_id,
+        token_hash: format!("hash-{user_id}"),
+        current_workspace_id: current,
+        created_at: T0,
+        expires_at: T0 + Duration::days(30),
+        revoked_at: None,
+    };
+    let ghost_ws = WorkspaceId::new_v7();
+
+    let mut u = uow.user().await.unwrap();
+    assert_eq!(
+        code(
+            u.sessions()
+                .insert(session(UserId::new_v7(), None))
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    let mut u = uow.user().await.unwrap();
+    assert_eq!(
+        code(
+            u.sessions()
+                .insert(session(user, Some(ghost_ws)))
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    let mut u = uow.user().await.unwrap();
+    assert_eq!(
+        code(
+            u.ledger_append(entry(ghost_ws, user, "test.ghost", T0))
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    drop(u);
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    let rep = t.roles().find_by_key("rep").await.unwrap().unwrap();
+    let invite = MembershipId::new_v7();
+    t.memberships()
+        .insert_invite(MembershipRow {
+            id: invite,
+            workspace_id: ws,
+            user_id: None,
+            role_id: rep.id,
+            status: MembershipStatus::Invited,
+            invited_email: Some(email("invitee@example.com")),
+            invite_token_hash: Some("invite".into()),
+            invite_expires_at: Some(T0 + Duration::days(7)),
+            invited_by: Some(user),
+            created_at: T0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            t.memberships()
+                .activate(invite, UserId::new_v7())
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
 }

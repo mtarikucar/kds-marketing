@@ -4,10 +4,23 @@
 //! [`InMemoryUow`] keeps its tables behind one shared lock. Each bundle it opens works on a copy
 //! taken when it opens (reads see that copy plus the bundle's own writes) and records its writes;
 //! `commit` replays them onto the shared tables, and dropping a bundle uncommitted discards them.
-//! Bundles keep the contracts of `jt_app::ports` and the constraints of migration 0001: a duplicate
-//! where the schema has a unique key is `CONFLICT`, a dangling reference is `INTERNAL`, a tenant
-//! bundle sees only its own workspace's rows and refuses rows for another with `INTERNAL`.
+//! Bundles keep the contracts of `jt_app::ports` and the constraints of migration 0001, answering
+//! as `jt_pg` does so that a fake is never more permissive than the database:
+//! - a duplicate where the schema has a unique key is `CONFLICT`;
+//! - a reference to a role, user or workspace that does not exist is `NOT_FOUND`, as is a role
+//!   that is not the membership's workspace's; any other dangling reference is `INTERNAL`;
+//! - a tenant bundle sees only its own workspace's rows and refuses rows for another with
+//!   `INTERNAL`;
+//! - `RoleRepo::insert` refuses a role marked `is_system` with `INTERNAL`;
+//! - once any call on a bundle has failed, the bundle is spoiled: its `commit` returns
+//!   `INTERNAL` and writes nothing, as a Postgres transaction aborted by a failed statement does.
+//!
 //! Ledger ids come from one shared sequence that, like a database sequence, never rolls back.
+//!
+//! Commit replays a bundle's buffered writes onto the shared tables without validating them again,
+//! so two bundles that each passed their checks on their own copy both commit, where Postgres
+//! would refuse one (a unique key, a row lock). Tests of races and concurrent transactions must
+//! run against Postgres (`TestDb`), not these fakes.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -199,15 +212,13 @@ impl MemState {
         )
     }
 
-    /// Checks a new membership's references and the one-live-membership-per-user rule.
+    /// Checks a new membership's references and the one-live-membership-per-user rule. A role that
+    /// is not the membership's workspace's is `NOT_FOUND`, checked first as in `jt_pg`.
     fn check_new_membership(&self, row: &MembershipRow) -> Result<(), AppError> {
+        role_in_workspace(self, row.workspace_id, row.role_id)?;
         exists(
             self.workspace(row.workspace_id).is_some(),
             "memberships.workspace_id",
-        )?;
-        exists(
-            self.roles.iter().any(|r| r.role.id == row.role_id),
-            "memberships.role_id",
         )?;
         if let Some(user) = row.user_id {
             exists(self.user(user).is_some(), "memberships.user_id")?;
@@ -271,12 +282,36 @@ fn dangling(reference: &str) -> AppError {
     AppError::internal(format!("{reference} references a row that does not exist"))
 }
 
-/// `INTERNAL` unless the referenced row exists (a foreign key in the schema).
+/// Refuses a write whose reference, a foreign key in the schema named `table.column`, points
+/// nowhere, answering as `jt_pg::map_sqlx` does: `NOT_FOUND` for a role, user or workspace (which
+/// the caller supplied), `INTERNAL` for anything else.
 fn exists(found: bool, reference: &str) -> Result<(), AppError> {
     if found {
+        return Ok(());
+    }
+    let column = reference.rsplit('.').next().unwrap_or(reference);
+    let kind = if column.ends_with("role_id") {
+        Some("role")
+    } else if column.ends_with("workspace_id") {
+        Some("workspace")
+    } else if matches!(column, "user_id" | "invited_by" | "issued_by") {
+        Some("user")
+    } else {
+        None
+    };
+    match kind {
+        Some(kind) => Err(AppError::not_found(format!("no such {kind}"))),
+        None => Err(dangling(reference)),
+    }
+}
+
+/// `NOT_FOUND` unless role `id` belongs to workspace `ws`, as `jt_pg` checks before every write
+/// that sets a role (a foreign key alone would accept another workspace's role).
+fn role_in_workspace(state: &MemState, ws: WorkspaceId, id: RoleId) -> Result<(), AppError> {
+    if state.role_in(ws, id).is_some() {
         Ok(())
     } else {
-        Err(dangling(reference))
+        Err(AppError::not_found("no such role"))
     }
 }
 
@@ -338,6 +373,8 @@ struct MemTx {
     ledger_seq: Arc<AtomicI64>,
     work: MemState,
     ops: Vec<Op>,
+    /// Set once a call on the bundle has failed; `commit` then refuses.
+    spoiled: bool,
 }
 
 impl MemTx {
@@ -347,6 +384,7 @@ impl MemTx {
             ledger_seq: Arc::clone(&uow.ledger_seq),
             work: lock(&uow.state).clone(),
             ops: Vec::new(),
+            spoiled: false,
         }
     }
 
@@ -356,11 +394,20 @@ impl MemTx {
         self.ops.push(Box::new(op));
     }
 
-    fn commit(self) {
+    /// Replays the writes onto the shared tables, or, when a call failed, refuses with `INTERNAL`
+    /// and writes nothing.
+    fn commit(self) -> Result<(), AppError> {
+        if self.spoiled {
+            return Err(AppError::internal(
+                "an earlier call failed, so the transaction was rolled back and nothing was \
+                 committed",
+            ));
+        }
         let mut shared = lock(&self.shared);
         for op in &self.ops {
             op(&mut shared);
         }
+        Ok(())
     }
 
     fn append_ledger(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
@@ -369,6 +416,21 @@ impl MemTx {
         let row = LedgerRow { id, entry };
         self.write(move |s| s.ledger.push(row.clone()));
         Ok(id)
+    }
+}
+
+/// A bundle over one [`MemTx`].
+trait MemBundle: Sized {
+    fn tx(&mut self) -> &mut MemTx;
+
+    /// Runs one fallible repo call. An error spoils the transaction, so `commit` refuses it.
+    /// Every call that can fail goes through here.
+    fn call<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, AppError>) -> Result<T, AppError> {
+        let result = f(self);
+        if result.is_err() {
+            self.tx().spoiled = true;
+        }
+        result
     }
 }
 
@@ -410,6 +472,12 @@ impl MemTenant {
     }
 }
 
+impl MemBundle for MemTenant {
+    fn tx(&mut self) -> &mut MemTx {
+        &mut self.tx
+    }
+}
+
 #[async_trait]
 impl TenantRepos for MemTenant {
     fn roles(&mut self) -> &mut dyn RoleRepo {
@@ -437,8 +505,7 @@ impl TenantRepos for MemTenant {
     }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
-        self.tx.commit();
-        Ok(())
+        self.tx.commit()
     }
 }
 
@@ -467,14 +534,23 @@ impl RoleRepo for MemTenant {
         Ok(self.state().role_in(self.ws, id).cloned())
     }
 
+    /// A role marked `is_system` is `INTERNAL`, as in `jt_pg`: system roles are created only with
+    /// their workspace.
     async fn insert(&mut self, role: RoleDef) -> Result<(), AppError> {
-        self.state().check_new_role(self.ws, &role)?;
-        let stored = StoredRole {
-            workspace_id: self.ws,
-            role,
-        };
-        self.tx.write(move |s| s.roles.push(stored.clone()));
-        Ok(())
+        self.call(|this| {
+            if role.is_system {
+                return Err(AppError::internal(
+                    "system roles are created only with their workspace",
+                ));
+            }
+            this.state().check_new_role(this.ws, &role)?;
+            let stored = StoredRole {
+                workspace_id: this.ws,
+                role,
+            };
+            this.tx.write(move |s| s.roles.push(stored.clone()));
+            Ok(())
+        })
     }
 
     async fn update_permissions(
@@ -482,40 +558,44 @@ impl RoleRepo for MemTenant {
         id: RoleId,
         permissions: BTreeSet<Permission>,
     ) -> Result<(), AppError> {
-        if self.state().role_in(self.ws, id).is_none() {
-            return Err(AppError::not_found("no such role"));
-        }
-        let ws = self.ws;
-        self.tx.write(move |s| {
-            if let Some(r) = s
-                .roles
-                .iter_mut()
-                .find(|r| r.workspace_id == ws && r.role.id == id)
-            {
-                r.role.permissions = permissions.clone();
+        self.call(|this| {
+            if this.state().role_in(this.ws, id).is_none() {
+                return Err(AppError::not_found("no such role"));
             }
-        });
-        Ok(())
+            let ws = this.ws;
+            this.tx.write(move |s| {
+                if let Some(r) = s
+                    .roles
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.role.id == id)
+                {
+                    r.role.permissions = permissions.clone();
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn delete_custom(&mut self, id: RoleId) -> Result<(), AppError> {
-        let role = self
-            .state()
-            .role_in(self.ws, id)
-            .ok_or_else(|| AppError::not_found("no such role"))?;
-        if role.is_system {
-            return Err(AppError::forbidden("a system role cannot be deleted"));
-        }
-        // `memberships.role_id` references the role without a cascade.
-        if self.state().memberships.iter().any(|m| m.role_id == id) {
-            return Err(AppError::conflict("the role is still in use"));
-        }
-        let ws = self.ws;
-        self.tx.write(move |s| {
-            s.roles
-                .retain(|r| !(r.workspace_id == ws && r.role.id == id));
-        });
-        Ok(())
+        self.call(|this| {
+            let role = this
+                .state()
+                .role_in(this.ws, id)
+                .ok_or_else(|| AppError::not_found("no such role"))?;
+            if role.is_system {
+                return Err(AppError::forbidden("a system role cannot be deleted"));
+            }
+            // `memberships.role_id` references the role without a cascade.
+            if this.state().memberships.iter().any(|m| m.role_id == id) {
+                return Err(AppError::conflict("the role is still in use"));
+            }
+            let ws = this.ws;
+            this.tx.write(move |s| {
+                s.roles
+                    .retain(|r| !(r.workspace_id == ws && r.role.id == id));
+            });
+            Ok(())
+        })
     }
 
     async fn count_memberships_using(&mut self, id: RoleId) -> Result<i64, AppError> {
@@ -532,40 +612,42 @@ impl RoleRepo for MemTenant {
 #[async_trait]
 impl MembershipRepo for MemTenant {
     async fn list(&mut self) -> Result<Vec<MemberOut>, AppError> {
-        let state = self.state();
-        let mut rows: Vec<&MembershipRow> = state
-            .memberships
-            .iter()
-            .filter(|m| m.workspace_id == self.ws && m.status != MembershipStatus::Removed)
-            .collect();
-        rows.sort_by_key(|m| (m.created_at, m.id));
-        rows.into_iter()
-            .map(|m| {
-                let role = state
-                    .role_in(self.ws, m.role_id)
-                    .ok_or_else(|| dangling("memberships.role_id"))?;
-                let user = m.user_id.and_then(|u| state.user(u));
-                let email = match (user, &m.invited_email) {
-                    (Some(u), _) => u.email.clone(),
-                    (None, Some(invited)) => invited.clone(),
-                    (None, None) => {
-                        return Err(AppError::internal(
-                            "a membership has neither user nor email",
-                        ));
-                    }
-                };
-                Ok(MemberOut {
-                    membership_id: m.id,
-                    user_id: m.user_id,
-                    email,
-                    display_name: user.map(|u| u.display_name.clone()),
-                    role_key: role.key.clone(),
-                    role_name: role.name.clone(),
-                    status: m.status,
-                    created_at: m.created_at,
+        self.call(|this| {
+            let (state, ws) = (this.state(), this.ws);
+            let mut rows: Vec<&MembershipRow> = state
+                .memberships
+                .iter()
+                .filter(|m| m.workspace_id == ws && m.status != MembershipStatus::Removed)
+                .collect();
+            rows.sort_by_key(|m| (m.created_at, m.id));
+            rows.into_iter()
+                .map(|m| {
+                    let role = state
+                        .role_in(ws, m.role_id)
+                        .ok_or_else(|| dangling("memberships.role_id"))?;
+                    let user = m.user_id.and_then(|u| state.user(u));
+                    let email = match (user, &m.invited_email) {
+                        (Some(u), _) => u.email.clone(),
+                        (None, Some(invited)) => invited.clone(),
+                        (None, None) => {
+                            return Err(AppError::internal(
+                                "a membership has neither user nor email",
+                            ));
+                        }
+                    };
+                    Ok(MemberOut {
+                        membership_id: m.id,
+                        user_id: m.user_id,
+                        email,
+                        display_name: user.map(|u| u.display_name.clone()),
+                        role_key: role.key.clone(),
+                        role_name: role.name.clone(),
+                        status: m.status,
+                        created_at: m.created_at,
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        })
     }
 
     async fn find(&mut self, id: MembershipId) -> Result<Option<MembershipRow>, AppError> {
@@ -586,61 +668,67 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError> {
-        same_workspace(self.ws, row.workspace_id)?;
-        self.state().check_new_membership(&row)?;
-        self.tx.write(move |s| s.memberships.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            same_workspace(this.ws, row.workspace_id)?;
+            this.state().check_new_membership(&row)?;
+            this.tx.write(move |s| s.memberships.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn activate(&mut self, id: MembershipId, user_id: UserId) -> Result<(), AppError> {
-        let m = self
-            .state()
-            .membership_in(self.ws, id)
-            .ok_or_else(|| AppError::not_found("no such membership"))?;
-        if m.status != MembershipStatus::Invited {
-            return Err(AppError::conflict(
-                "the membership is not an open invitation",
-            ));
-        }
-        exists(self.state().user(user_id).is_some(), "memberships.user_id")?;
-        unique(
-            !self.state().has_live_membership(self.ws, user_id, id),
-            "the user is already a member of this workspace",
-        )?;
-        self.tx.write(move |s| {
-            if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
-                m.user_id = Some(user_id);
-                m.status = MembershipStatus::Active;
+        self.call(|this| {
+            let m = this
+                .state()
+                .membership_in(this.ws, id)
+                .ok_or_else(|| AppError::not_found("no such membership"))?;
+            if m.status != MembershipStatus::Invited {
+                return Err(AppError::conflict(
+                    "the membership is not an open invitation",
+                ));
             }
-        });
-        Ok(())
+            exists(this.state().user(user_id).is_some(), "memberships.user_id")?;
+            unique(
+                !this.state().has_live_membership(this.ws, user_id, id),
+                "the user is already a member of this workspace",
+            )?;
+            this.tx.write(move |s| {
+                if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
+                    m.user_id = Some(user_id);
+                    m.status = MembershipStatus::Active;
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError> {
-        if self.state().membership_in(self.ws, id).is_none() {
-            return Err(AppError::not_found("no such membership"));
-        }
-        if self.state().role_in(self.ws, role_id).is_none() {
-            return Err(AppError::not_found("no such role"));
-        }
-        self.tx.write(move |s| {
-            if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
-                m.role_id = role_id;
+        self.call(|this| {
+            role_in_workspace(this.state(), this.ws, role_id)?;
+            if this.state().membership_in(this.ws, id).is_none() {
+                return Err(AppError::not_found("no such membership"));
             }
-        });
-        Ok(())
+            this.tx.write(move |s| {
+                if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
+                    m.role_id = role_id;
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn remove(&mut self, id: MembershipId) -> Result<(), AppError> {
-        if self.state().membership_in(self.ws, id).is_none() {
-            return Err(AppError::not_found("no such membership"));
-        }
-        self.tx.write(move |s| {
-            if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
-                m.status = MembershipStatus::Removed;
+        self.call(|this| {
+            if this.state().membership_in(this.ws, id).is_none() {
+                return Err(AppError::not_found("no such membership"));
             }
-        });
-        Ok(())
+            this.tx.write(move |s| {
+                if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
+                    m.status = MembershipStatus::Removed;
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn count_active_owners(&mut self) -> Result<i64, AppError> {
@@ -651,22 +739,24 @@ impl MembershipRepo for MemTenant {
 #[async_trait]
 impl ApiKeyRepo for MemTenant {
     async fn insert(&mut self, row: ApiKeyRow) -> Result<(), AppError> {
-        same_workspace(self.ws, row.workspace_id)?;
-        let state = self.state();
-        exists(
-            state.workspace(row.workspace_id).is_some(),
-            "api_keys.workspace_id",
-        )?;
-        exists(state.user(row.issued_by).is_some(), "api_keys.issued_by")?;
-        unique(
-            !state
-                .api_keys
-                .iter()
-                .any(|k| k.id == row.id || k.key_hash == row.key_hash),
-            "API key is already taken",
-        )?;
-        self.tx.write(move |s| s.api_keys.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            same_workspace(this.ws, row.workspace_id)?;
+            let state = this.state();
+            exists(
+                state.workspace(row.workspace_id).is_some(),
+                "api_keys.workspace_id",
+            )?;
+            exists(state.user(row.issued_by).is_some(), "api_keys.issued_by")?;
+            unique(
+                !state
+                    .api_keys
+                    .iter()
+                    .any(|k| k.id == row.id || k.key_hash == row.key_hash),
+                "API key is already taken",
+            )?;
+            this.tx.write(move |s| s.api_keys.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn list(&mut self) -> Result<Vec<ApiKeyRow>, AppError> {
@@ -682,22 +772,24 @@ impl ApiKeyRepo for MemTenant {
     }
 
     async fn revoke(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError> {
-        let ws = self.ws;
-        if !self
-            .state()
-            .api_keys
-            .iter()
-            .any(|k| k.workspace_id == ws && k.id == id)
-        {
-            return Err(AppError::not_found("no such API key"));
-        }
-        self.tx.write(move |s| {
-            if let Some(k) = s.api_keys.iter_mut().find(|k| k.id == id) {
-                k.status = ApiKeyStatus::Revoked;
-                k.revoked_at = Some(at);
+        self.call(|this| {
+            let ws = this.ws;
+            if !this
+                .state()
+                .api_keys
+                .iter()
+                .any(|k| k.workspace_id == ws && k.id == id)
+            {
+                return Err(AppError::not_found("no such API key"));
             }
-        });
-        Ok(())
+            this.tx.write(move |s| {
+                if let Some(k) = s.api_keys.iter_mut().find(|k| k.id == id) {
+                    k.status = ApiKeyStatus::Revoked;
+                    k.revoked_at = Some(at);
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn touch_last_used(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError> {
@@ -721,44 +813,47 @@ impl AgentConnectionRepo for MemTenant {
         &mut self,
         row: AgentConnectionRow,
     ) -> Result<(AgentConnectionId, bool), AppError> {
-        same_workspace(self.ws, row.workspace_id)?;
-        let existing = self
-            .state()
-            .agent_connections
-            .iter()
-            .find(|c| {
-                c.workspace_id == self.ws
-                    && c.api_key_id == row.api_key_id
-                    && c.client_name == row.client_name
-                    && c.client_version == row.client_version
-            })
-            .map(|c| c.id);
-        if let Some(id) = existing {
-            let (last_seen_at, protocol_version) = (row.last_seen_at, row.protocol_version);
-            self.tx.write(move |s| {
-                if let Some(c) = s.agent_connections.iter_mut().find(|c| c.id == id) {
-                    c.last_seen_at = last_seen_at;
-                    c.protocol_version = protocol_version.clone();
-                }
-            });
-            return Ok((id, false));
-        }
-        let state = self.state();
-        exists(
-            state
-                .api_keys
+        self.call(|this| {
+            same_workspace(this.ws, row.workspace_id)?;
+            let ws = this.ws;
+            let existing = this
+                .state()
+                .agent_connections
                 .iter()
-                .any(|k| k.workspace_id == self.ws && k.id == row.api_key_id),
-            "agent_connections.api_key_id",
-        )?;
-        unique(
-            !state.agent_connections.iter().any(|c| c.id == row.id),
-            "agent connection id is already taken",
-        )?;
-        let id = row.id;
-        self.tx
-            .write(move |s| s.agent_connections.push(row.clone()));
-        Ok((id, true))
+                .find(|c| {
+                    c.workspace_id == ws
+                        && c.api_key_id == row.api_key_id
+                        && c.client_name == row.client_name
+                        && c.client_version == row.client_version
+                })
+                .map(|c| c.id);
+            if let Some(id) = existing {
+                let (last_seen_at, protocol_version) = (row.last_seen_at, row.protocol_version);
+                this.tx.write(move |s| {
+                    if let Some(c) = s.agent_connections.iter_mut().find(|c| c.id == id) {
+                        c.last_seen_at = last_seen_at;
+                        c.protocol_version = protocol_version.clone();
+                    }
+                });
+                return Ok((id, false));
+            }
+            let state = this.state();
+            exists(
+                state
+                    .api_keys
+                    .iter()
+                    .any(|k| k.workspace_id == ws && k.id == row.api_key_id),
+                "agent_connections.api_key_id",
+            )?;
+            unique(
+                !state.agent_connections.iter().any(|c| c.id == row.id),
+                "agent connection id is already taken",
+            )?;
+            let id = row.id;
+            this.tx
+                .write(move |s| s.agent_connections.push(row.clone()));
+            Ok((id, true))
+        })
     }
 
     async fn touch_tool_call(
@@ -808,8 +903,10 @@ impl AgentConnectionRepo for MemTenant {
 #[async_trait]
 impl LedgerRepo for MemTenant {
     async fn append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
-        same_workspace(self.ws, entry.workspace_id)?;
-        self.tx.append_ledger(entry)
+        self.call(|this| {
+            same_workspace(this.ws, entry.workspace_id)?;
+            this.tx.append_ledger(entry)
+        })
     }
 
     async fn list(&mut self, filter: LedgerFilter) -> Result<Vec<LedgerRow>, AppError> {
@@ -842,10 +939,12 @@ impl LedgerRepo for MemTenant {
 #[async_trait]
 impl WorkspaceRepo for MemTenant {
     async fn get(&mut self) -> Result<WorkspaceRow, AppError> {
-        self.state()
-            .workspace(self.ws)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("no such workspace"))
+        self.call(|this| {
+            this.state()
+                .workspace(this.ws)
+                .cloned()
+                .ok_or_else(|| AppError::not_found("no such workspace"))
+        })
     }
 }
 
@@ -861,6 +960,12 @@ struct MemUser {
 impl MemUser {
     fn state(&self) -> &MemState {
         &self.tx.work
+    }
+}
+
+impl MemBundle for MemUser {
+    fn tx(&mut self) -> &mut MemTx {
+        &mut self.tx
     }
 }
 
@@ -880,39 +985,43 @@ impl UserRepo for MemUser {
     }
 
     async fn insert(&mut self, row: UserRow) -> Result<(), AppError> {
-        unique(
-            !self
-                .state()
-                .users
-                .iter()
-                .any(|u| u.id == row.id || u.email == row.email),
-            "email is already registered",
-        )?;
-        self.tx.write(move |s| s.users.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            unique(
+                !this
+                    .state()
+                    .users
+                    .iter()
+                    .any(|u| u.id == row.id || u.email == row.email),
+                "email is already registered",
+            )?;
+            this.tx.write(move |s| s.users.push(row.clone()));
+            Ok(())
+        })
     }
 }
 
 #[async_trait]
 impl SessionRepo for MemUser {
     async fn insert(&mut self, row: SessionRow) -> Result<(), AppError> {
-        let state = self.state();
-        exists(state.user(row.user_id).is_some(), "sessions.user_id")?;
-        if let Some(ws) = row.current_workspace_id {
-            exists(
-                state.workspace(ws).is_some(),
-                "sessions.current_workspace_id",
+        self.call(|this| {
+            let state = this.state();
+            exists(state.user(row.user_id).is_some(), "sessions.user_id")?;
+            if let Some(ws) = row.current_workspace_id {
+                exists(
+                    state.workspace(ws).is_some(),
+                    "sessions.current_workspace_id",
+                )?;
+            }
+            unique(
+                !state
+                    .sessions
+                    .iter()
+                    .any(|x| x.id == row.id || x.token_hash == row.token_hash),
+                "session token is already taken",
             )?;
-        }
-        unique(
-            !state
-                .sessions
-                .iter()
-                .any(|x| x.id == row.id || x.token_hash == row.token_hash),
-            "session token is already taken",
-        )?;
-        self.tx.write(move |s| s.sessions.push(row.clone()));
-        Ok(())
+            this.tx.write(move |s| s.sessions.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn find_by_token_hash(
@@ -964,18 +1073,20 @@ impl SessionRepo for MemUser {
         id: SessionId,
         ws: Option<WorkspaceId>,
     ) -> Result<(), AppError> {
-        if let Some(ws) = ws {
-            exists(
-                self.state().workspace(ws).is_some(),
-                "sessions.current_workspace_id",
-            )?;
-        }
-        self.tx.write(move |s| {
-            if let Some(x) = s.sessions.iter_mut().find(|x| x.id == id) {
-                x.current_workspace_id = ws;
+        self.call(|this| {
+            if let Some(ws) = ws {
+                exists(
+                    this.state().workspace(ws).is_some(),
+                    "sessions.current_workspace_id",
+                )?;
             }
-        });
-        Ok(())
+            this.tx.write(move |s| {
+                if let Some(x) = s.sessions.iter_mut().find(|x| x.id == id) {
+                    x.current_workspace_id = ws;
+                }
+            });
+            Ok(())
+        })
     }
 }
 
@@ -993,14 +1104,16 @@ impl UserRepos for MemUser {
         &mut self,
         user_id: UserId,
     ) -> Result<Vec<MembershipView>, AppError> {
-        let state = self.state();
-        let mut rows: Vec<&MembershipRow> = state
-            .memberships
-            .iter()
-            .filter(|m| m.user_id == Some(user_id) && m.status == MembershipStatus::Active)
-            .collect();
-        rows.sort_by_key(|m| (m.created_at, m.id));
-        rows.into_iter().map(|m| state.membership_view(m)).collect()
+        self.call(|this| {
+            let state = this.state();
+            let mut rows: Vec<&MembershipRow> = state
+                .memberships
+                .iter()
+                .filter(|m| m.user_id == Some(user_id) && m.status == MembershipStatus::Active)
+                .collect();
+            rows.sort_by_key(|m| (m.created_at, m.id));
+            rows.into_iter().map(|m| state.membership_view(m)).collect()
+        })
     }
 
     async fn workspaces_create(
@@ -1011,23 +1124,25 @@ impl UserRepos for MemUser {
         status: WorkspaceStatus,
         created_at: OffsetDateTime,
     ) -> Result<(), AppError> {
-        unique(
-            !self
-                .state()
-                .workspaces
-                .iter()
-                .any(|w| w.id == id || w.slug == slug),
-            "workspace slug is already taken",
-        )?;
-        let row = WorkspaceRow {
-            id,
-            name: name.to_owned(),
-            slug: slug.to_owned(),
-            status,
-            created_at,
-        };
-        self.tx.write(move |s| s.workspaces.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            unique(
+                !this
+                    .state()
+                    .workspaces
+                    .iter()
+                    .any(|w| w.id == id || w.slug == slug),
+                "workspace slug is already taken",
+            )?;
+            let row = WorkspaceRow {
+                id,
+                name: name.to_owned(),
+                slug: slug.to_owned(),
+                status,
+                created_at,
+            };
+            this.tx.write(move |s| s.workspaces.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn roles_create_system(
@@ -1035,19 +1150,21 @@ impl UserRepos for MemUser {
         ws: WorkspaceId,
         roles: &[RoleDef],
     ) -> Result<(), AppError> {
-        for role in roles {
-            let role = RoleDef {
-                is_system: true,
-                ..role.clone()
-            };
-            self.state().check_new_role(ws, &role)?;
-            let stored = StoredRole {
-                workspace_id: ws,
-                role,
-            };
-            self.tx.write(move |s| s.roles.push(stored.clone()));
-        }
-        Ok(())
+        self.call(|this| {
+            for role in roles {
+                let role = RoleDef {
+                    is_system: true,
+                    ..role.clone()
+                };
+                this.state().check_new_role(ws, &role)?;
+                let stored = StoredRole {
+                    workspace_id: ws,
+                    role,
+                };
+                this.tx.write(move |s| s.roles.push(stored.clone()));
+            }
+            Ok(())
+        })
     }
 
     async fn memberships_insert_active(
@@ -1058,34 +1175,31 @@ impl UserRepos for MemUser {
         role_id: RoleId,
         created_at: OffsetDateTime,
     ) -> Result<(), AppError> {
-        let row = MembershipRow {
-            id,
-            workspace_id,
-            user_id: Some(user_id),
-            role_id,
-            status: MembershipStatus::Active,
-            invited_email: None,
-            invite_token_hash: None,
-            invite_expires_at: None,
-            invited_by: None,
-            created_at,
-        };
-        self.state().check_new_membership(&row)?;
-        exists(
-            self.state().role_in(workspace_id, role_id).is_some(),
-            "memberships.role_id",
-        )?;
-        self.tx.write(move |s| s.memberships.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            let row = MembershipRow {
+                id,
+                workspace_id,
+                user_id: Some(user_id),
+                role_id,
+                status: MembershipStatus::Active,
+                invited_email: None,
+                invite_token_hash: None,
+                invite_expires_at: None,
+                invited_by: None,
+                created_at,
+            };
+            this.state().check_new_membership(&row)?;
+            this.tx.write(move |s| s.memberships.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
-        self.tx.append_ledger(entry)
+        self.call(|this| this.tx.append_ledger(entry))
     }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
-        self.tx.commit();
-        Ok(())
+        self.tx.commit()
     }
 }
 
@@ -1104,6 +1218,12 @@ impl MemPlatform {
     }
 }
 
+impl MemBundle for MemPlatform {
+    fn tx(&mut self) -> &mut MemTx {
+        &mut self.tx
+    }
+}
+
 #[async_trait]
 impl OperatorRepo for MemPlatform {
     async fn count(&mut self) -> Result<i64, AppError> {
@@ -1111,16 +1231,18 @@ impl OperatorRepo for MemPlatform {
     }
 
     async fn insert(&mut self, row: OperatorRow) -> Result<(), AppError> {
-        unique(
-            !self
-                .state()
-                .operators
-                .iter()
-                .any(|o| o.id == row.id || o.email == row.email),
-            "operator email is already registered",
-        )?;
-        self.tx.write(move |s| s.operators.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            unique(
+                !this
+                    .state()
+                    .operators
+                    .iter()
+                    .any(|o| o.id == row.id || o.email == row.email),
+                "operator email is already registered",
+            )?;
+            this.tx.write(move |s| s.operators.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn find_by_email(&mut self, email: &Email) -> Result<Option<OperatorRow>, AppError> {
@@ -1136,21 +1258,23 @@ impl OperatorRepo for MemPlatform {
 #[async_trait]
 impl PlatformSessionRepo for MemPlatform {
     async fn insert(&mut self, row: PlatformSessionRow) -> Result<(), AppError> {
-        let state = self.state();
-        exists(
-            state.operators.iter().any(|o| o.id == row.operator_id),
-            "platform_sessions.operator_id",
-        )?;
-        unique(
-            !state
-                .platform_sessions
-                .iter()
-                .any(|x| x.id == row.id || x.token_hash == row.token_hash),
-            "platform session token is already taken",
-        )?;
-        self.tx
-            .write(move |s| s.platform_sessions.push(row.clone()));
-        Ok(())
+        self.call(|this| {
+            let state = this.state();
+            exists(
+                state.operators.iter().any(|o| o.id == row.operator_id),
+                "platform_sessions.operator_id",
+            )?;
+            unique(
+                !state
+                    .platform_sessions
+                    .iter()
+                    .any(|x| x.id == row.id || x.token_hash == row.token_hash),
+                "platform session token is already taken",
+            )?;
+            this.tx
+                .write(move |s| s.platform_sessions.push(row.clone()));
+            Ok(())
+        })
     }
 
     async fn find_by_token_hash(
@@ -1191,15 +1315,17 @@ impl PlatformRepos for MemPlatform {
         ws: WorkspaceId,
         status: WorkspaceStatus,
     ) -> Result<(), AppError> {
-        if self.state().workspace(ws).is_none() {
-            return Err(AppError::not_found("no such workspace"));
-        }
-        self.tx.write(move |s| {
-            if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == ws) {
-                w.status = status;
+        self.call(|this| {
+            if this.state().workspace(ws).is_none() {
+                return Err(AppError::not_found("no such workspace"));
             }
-        });
-        Ok(())
+            this.tx.write(move |s| {
+                if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == ws) {
+                    w.status = status;
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn workspace_owner_email(&mut self, ws: WorkspaceId) -> Result<Option<Email>, AppError> {
@@ -1247,11 +1373,10 @@ impl PlatformRepos for MemPlatform {
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
-        self.tx.append_ledger(entry)
+        self.call(|this| this.tx.append_ledger(entry))
     }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
-        self.tx.commit();
-        Ok(())
+        self.tx.commit()
     }
 }
