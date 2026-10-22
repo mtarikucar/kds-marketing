@@ -675,7 +675,7 @@ export type WorkKind =
   | { kind: 'approve_strategy' }
   | { kind: 'verify_capability'; capability_id: Uuid; name: string; stale: boolean }
   | { kind: 'declare_first_capability' }
-  | { kind: 'connect_connector'; capability_id: Uuid };
+  | { kind: 'connect_connector'; capability_id: Uuid; name: string };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {

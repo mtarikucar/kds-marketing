@@ -366,17 +366,17 @@ async fn pending_lists_connect_connector_for_declared_connector_kinds() {
         [
             WorkKind::ConsultStrategy,
             WorkKind::ConnectConnector {
-                capability_id: declared
+                capability_id: declared,
+                name: "Destek".to_owned(),
             },
         ]
     );
     let connect = &out.items[1];
     assert_eq!(connect.priority, 2);
     assert!(!connect.hint.is_empty());
-    assert_eq!(
-        serde_json::to_value(connect).unwrap()["kind"],
-        "connect_connector"
-    );
+    let wire = serde_json::to_value(connect).unwrap();
+    assert_eq!(wire["kind"], "connect_connector");
+    assert_eq!(wire["name"], "Destek");
 }
 
 #[tokio::test]
@@ -626,7 +626,7 @@ async fn capability_ids_in_items_are_the_capabilities() {
         .iter()
         .filter_map(|i| match &i.kind {
             WorkKind::VerifyCapability { capability_id, .. }
-            | WorkKind::ConnectConnector { capability_id } => Some(*capability_id),
+            | WorkKind::ConnectConnector { capability_id, .. } => Some(*capability_id),
             _ => None,
         })
         .collect();

@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { listAgents } from '@/api/agents';
 import type { AgentConnectionOut } from '@/api/types';
 import { QueryState } from '@/components/QueryState';
-import { DataTable, EmptyState, PageHeader } from '@/components/ui';
+import { Badge, DataTable, EmptyState, PageHeader } from '@/components/ui';
 import { formatDateTime, formatNumber } from '@/lib/format';
 
 export function AgentsPage() {
@@ -59,6 +59,17 @@ export function AgentsPage() {
         cell: ({ row }) => (
           <span className="tabular-nums">{formatNumber(row.original.tool_calls, i18n.language)}</span>
         ),
+      },
+      {
+        id: 'checkin',
+        header: t('agents.columns.checkin'),
+        accessorKey: 'overdue',
+        cell: ({ row }) =>
+          row.original.overdue ? (
+            <Badge tone="danger">{t('agents.overdue')}</Badge>
+          ) : (
+            <Badge tone="success">{t('agents.onTime')}</Badge>
+          ),
       },
     ];
   }, [t, i18n.language]);

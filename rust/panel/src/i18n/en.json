@@ -271,7 +271,7 @@
       "verify_capability": "{{name}} awaits verification.",
       "verify_capability_stale": "The verification of {{name}} has lapsed; verify it again.",
       "declare_first_capability": "Declare the first capability the workspace can act through.",
-      "connect_connector": "A declared connector capability awaits its connection.",
+      "connect_connector": "{{name}} awaits its connection.",
       "open": "Open",
       "priority": "Priority {{priority}}"
     }
@@ -371,8 +371,11 @@
       "key": "API key",
       "firstSeen": "First seen",
       "lastSeen": "Last seen",
-      "toolCalls": "Tool calls"
+      "toolCalls": "Tool calls",
+      "checkin": "Check-in"
     },
+    "overdue": "Overdue",
+    "onTime": "On time",
     "empty": "No agent has connected yet.",
     "emptyBody": "The first client to connect with an API key will show up here."
   },

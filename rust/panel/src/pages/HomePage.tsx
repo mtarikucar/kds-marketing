@@ -269,6 +269,8 @@ function itemText(t: TFunction, item: WorkItem): string {
       return item.stale
         ? t('home.pending.verify_capability_stale', { name: item.name })
         : t('home.pending.verify_capability', { name: item.name });
+    case 'connect_connector':
+      return t('home.pending.connect_connector', { name: item.name });
     default:
       return t(`home.pending.${item.kind}`);
   }

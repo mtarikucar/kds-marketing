@@ -31,6 +31,26 @@ describe('HomePage', () => {
     expect(screen.queryByText('verify it again')).not.toBeInTheDocument();
   });
 
+  it('names the connector capability that awaits its connection', async () => {
+    const connector = {
+      ...pendingOverdue,
+      items: [
+        {
+          kind: 'connect_connector' as const,
+          capability_id: '0190a000-0000-7000-8000-000000000044',
+          name: 'Marka Instagram',
+          priority: 2,
+          hint: 'connect it',
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': connector });
+    renderAt('/');
+    const text = await screen.findByText(i18n.t('home.pending.connect_connector', { name: 'Marka Instagram' }));
+    expect(text).toHaveTextContent('Marka Instagram');
+    expect(screen.queryByText('connect it')).not.toBeInTheDocument();
+  });
+
   it('offers the approval shortcut only to someone who may approve', async () => {
     const submitted = { ...pendingOverdue, strategy: 'submitted' as const };
     mockFetch({ 'GET /api/auth/me': repMe, 'GET /api/workspace': workspace, 'GET /api/work/pending': submitted });

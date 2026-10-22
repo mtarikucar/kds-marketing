@@ -10,8 +10,10 @@ use crate::error::{ApiError, ApiQuery};
 use crate::session::WorkspaceCtx;
 use crate::state::AppState;
 
-/// `GET /api/ledger?action_prefix=&actor_kind=&limit=&before_id=`; every parameter is optional.
+/// `GET /api/ledger?action_prefix=&actor_kind=&limit=&before_id=`; every parameter is optional,
+/// and an unknown one is `VALIDATION`.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerQuery {
     /// Keep only actions starting with this text, e.g. `team.`.
     pub action_prefix: Option<String>,

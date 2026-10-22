@@ -418,13 +418,15 @@ async fn consultation_pages_by_keyset() {
     // Without a limit, a page holds them all.
     assert_eq!(consultation(&p, &owner, id, "").await.len(), 7);
 
-    // The cursor is both halves or neither, and each must parse.
+    // The cursor is both halves or neither, and each must parse; an unknown parameter is refused,
+    // as on every panel list.
     let entry = "0192f0c0-0000-7000-8000-000000000001";
     for query in [
         format!("?before_id={entry}"),
         "?before_at=2026-10-22T09%3A00%3A00Z".to_owned(),
         format!("?before_at=yesterday&before_id={entry}"),
         "?limit=many".to_owned(),
+        "?limit=3&page=2".to_owned(),
     ] {
         let path = format!("/api/strategy/versions/{id}/consultation{query}");
         let resp = p.get(&path, &owner).await;
@@ -443,4 +445,37 @@ async fn consultation_pages_by_keyset() {
         .get("/api/strategy/versions/v1/consultation", &owner)
         .await;
     expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+}
+
+#[tokio::test]
+async fn pending_payment_workspace_can_call_strategy_routes() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register_pending(OWNER, "Alpha").await;
+
+    // The strategy may be worked out before payment: `strategy.*` is exempt from the
+    // workspace-status check, so the whole consultation runs, up to approval.
+    let empty = ok_json(p.get("/api/strategy", &owner).await).await;
+    assert!(empty["approved"].is_null(), "{empty}");
+    assert!(empty["draft"].is_null(), "{empty}");
+    let draft = ok_json(post(&p, "/api/strategy/consultation", &owner, None).await).await;
+    assert_eq!(draft["status"], "draft");
+    let approved = approve_a_strategy(&p, &owner).await;
+    assert_eq!(approved["status"], "approved");
+    let got = ok_json(p.get("/api/strategy", &owner).await).await;
+    assert_eq!(got["approved"]["id"], approved["id"]);
+    assert_eq!(
+        consultation(&p, &owner, approved["id"].as_str().unwrap(), "")
+            .await
+            .first()
+            .map(|e| e["kind"].clone()),
+        Some(json!("approved"))
+    );
+
+    // Everything else stays locked until the operator activates the workspace.
+    expect_error(
+        p.get("/api/capabilities", &owner).await,
+        StatusCode::LOCKED,
+        "WORKSPACE_INACTIVE",
+    )
+    .await;
 }

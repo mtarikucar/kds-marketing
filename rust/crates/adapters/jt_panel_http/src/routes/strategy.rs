@@ -53,6 +53,7 @@ pub struct ArchiveBody {
 /// parameter is optional, but `before_at` and `before_id` (the previous page's last entry) come
 /// together.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsultationQuery {
     /// At most this many entries: default 50, at most 500 (a larger value is capped).
     pub limit: Option<u32>,

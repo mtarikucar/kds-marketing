@@ -234,7 +234,9 @@ fn optional_section_key_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({ "type": ["string", "null"], "enum": keys })
 }
 
-/// The JSON Schema of a list of hypotheses as written.
+/// The JSON Schema of a list of hypotheses as written. Like `HypothesisInput`, which reads them,
+/// it asks for no field (a missing one is empty, and the use case lists what a hypothesis lacks
+/// as gaps) and takes a null `id` for a new hypothesis; it still refuses unknown fields.
 fn hypotheses_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({
         "type": "array",
@@ -242,9 +244,10 @@ fn hypotheses_schema(_: &mut SchemaGenerator) -> Schema {
             "type": "object",
             "properties": {
                 "id": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "format": "uuid",
-                    "description": "The id of a hypothesis to keep; leave it out to add one.",
+                    "description": "The id of a hypothesis to keep; leave it out (or null) to \
+                                    add one.",
                 },
                 "title": { "type": "string" },
                 "segment_key": {
@@ -262,7 +265,6 @@ fn hypotheses_schema(_: &mut SchemaGenerator) -> Schema {
                 "metric": { "type": "string", "description": "The measure that decides it." },
                 "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
             },
-            "required": ["title", "segment_key", "angle", "channel", "metric", "confidence"],
             "additionalProperties": false,
         },
     })

@@ -271,7 +271,7 @@
       "verify_capability": "{{name}} doğrulanmayı bekliyor.",
       "verify_capability_stale": "{{name}} için doğrulama eskidi; yeniden doğrulanmalı.",
       "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
-      "connect_connector": "Bildirilen bir bağlayıcı kabiliyet bağlanmayı bekliyor.",
+      "connect_connector": "{{name}} bağlanmayı bekliyor.",
       "open": "Aç",
       "priority": "Öncelik {{priority}}"
     }
@@ -371,8 +371,11 @@
       "key": "API anahtarı",
       "firstSeen": "İlk görülme",
       "lastSeen": "Son görülme",
-      "toolCalls": "Araç çağrısı"
+      "toolCalls": "Araç çağrısı",
+      "checkin": "Yoklama"
     },
+    "overdue": "Gecikti",
+    "onTime": "Zamanında",
     "empty": "Henüz bağlanan ajan yok.",
     "emptyBody": "Bir API anahtarıyla bağlanan ilk istemci burada görünecek."
   },

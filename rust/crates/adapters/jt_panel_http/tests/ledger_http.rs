@@ -112,6 +112,9 @@ async fn bad_ledger_queries_are_structured_422() {
     let resp = p.get("/api/ledger?actor_kind=robot", &owner).await;
     let body = expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
     assert_eq!(body["details"], json!({ "field": "actor_kind" }));
+    // An unknown parameter is refused, not ignored, as on every panel list.
+    let resp = p.get("/api/ledger?action=team.invite", &owner).await;
+    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
 }
 
 #[tokio::test]

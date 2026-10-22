@@ -192,6 +192,38 @@ fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
     assert_eq!(schema["required"], serde_json::json!(["version_id"]));
 }
 
+/// A hypothesis is read as `HypothesisInput`, whose every field has a default and whose `id` may
+/// be null (a new hypothesis): the schema asks for no field and allows a null id, so a client
+/// that validates against it sends what the use case accepts. The use case itself reports what a
+/// hypothesis lacks as gaps.
+#[test]
+fn the_hypotheses_schema_requires_no_field_and_allows_a_null_id() {
+    let set = registry()
+        .into_iter()
+        .find(|t| t.name == "jeeta.strategy.set_hypotheses")
+        .unwrap();
+    let schema = set.input_schema.to_value();
+    assert_eq!(schema["required"], serde_json::json!(["hypotheses"]));
+    let item = &schema["properties"]["hypotheses"]["items"];
+    assert_eq!(item["type"], "object");
+    assert!(item.get("required").is_none(), "{item}");
+    assert_eq!(item["additionalProperties"], false);
+    assert_eq!(
+        item["properties"]["id"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+    let keys: BTreeSet<&str> = item["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        jt_strategy::HypothesisInput::KEYS.iter().copied().collect()
+    );
+}
+
 #[test]
 fn capability_tools_need_the_permissions_their_use_cases_check() {
     let specs: Vec<ToolSpec> = registry()

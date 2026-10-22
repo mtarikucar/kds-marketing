@@ -108,7 +108,10 @@ pub enum WorkKind {
     /// Declare something the workspace can act through.
     DeclareFirstCapability,
     /// Connect a declared connector capability (M1b sets connectors up).
-    ConnectConnector { capability_id: CapabilityId },
+    ConnectConnector {
+        capability_id: CapabilityId,
+        name: String,
+    },
 }
 
 /// The workspace's agent check-in.
@@ -310,6 +313,7 @@ fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
             Reach::Connector if status == EffectiveStatus::Declared => items.push(WorkItem {
                 kind: WorkKind::ConnectConnector {
                     capability_id: c.id,
+                    name: c.name.clone(),
                 },
                 priority: 2,
                 hint: "Declared but not connected: its account must be connected so that its \
