@@ -140,3 +140,64 @@ fn entry_round_trips_through_json_with_rfc3339_time() {
     let back: LedgerEntry = serde_json::from_value(v).unwrap();
     assert_eq!(back, e);
 }
+
+#[test]
+fn action_rejects_empty_segments() {
+    for bad in ["team..invite", "a.b..c", "a...b"] {
+        assert!(
+            matches!(Action::new(bad), Err(LedgerError::InvalidAction(ref s)) if s == bad),
+            "{bad}"
+        );
+    }
+    assert!(serde_json::from_str::<Action>("\"team..invite\"").is_err());
+    assert!(Action::new("a.b.c").is_ok());
+}
+
+#[test]
+fn redaction_masks_every_secret_key_by_exact_name_in_any_case() {
+    let secret_keys = [
+        "password",
+        "token",
+        "secret",
+        "api_key",
+        "access_token",
+        "refresh_token",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "key_hash",
+        "token_hash",
+        "invite_token",
+        "plaintext",
+    ];
+    let mut payload = serde_json::Map::new();
+    let mut expected = serde_json::Map::new();
+    for key in secret_keys {
+        payload.insert(key.to_owned(), json!("s"));
+        payload.insert(key.to_uppercase(), json!({"deep": "s"}));
+        expected.insert(key.to_owned(), json!("***"));
+        expected.insert(key.to_uppercase(), json!("***"));
+    }
+    // Near misses are not secret keys: only an exact (case-insensitive) name is masked.
+    for kept in [
+        "key",
+        "hash",
+        "token_count",
+        "plaintext_length",
+        "authorized",
+        "prefix",
+    ] {
+        payload.insert(kept.to_owned(), json!("kept"));
+        expected.insert(kept.to_owned(), json!("kept"));
+    }
+    let e = entry(
+        Actor::System {
+            component: "test".to_owned(),
+        },
+        json!({ "outer": [serde_json::Value::Object(payload)] }),
+    );
+    assert_eq!(
+        e.redacted().payload,
+        json!({ "outer": [serde_json::Value::Object(expected)] })
+    );
+}

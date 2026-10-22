@@ -6,8 +6,23 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-/// Payload keys whose values `LedgerEntry::redacted` masks (compared case-insensitively).
-const SECRET_KEYS: &[&str] = &["password", "token", "secret", "api_key"];
+/// Payload keys whose values `LedgerEntry::redacted` masks. A key matches only by its exact
+/// name, compared case-insensitively: `token` is masked, `token_count` is not.
+const SECRET_KEYS: &[&str] = &[
+    "password",
+    "token",
+    "secret",
+    "api_key",
+    "access_token",
+    "refresh_token",
+    "apikey",
+    "authorization",
+    "client_secret",
+    "key_hash",
+    "token_hash",
+    "invite_token",
+    "plaintext",
+];
 
 /// What a redacted value is replaced with.
 const MASK: &str = "***";
@@ -15,7 +30,8 @@ const MASK: &str = "***";
 /// A ledger rule refused the input.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LedgerError {
-    /// The action name is not lowercase `[a-z0-9_.]` with at least one inner dot.
+    /// The action name is not dot-separated, non-empty segments of lowercase `[a-z0-9_]`, with at
+    /// least two segments.
     #[error("invalid ledger action: {0:?}")]
     InvalidAction(String),
 }
@@ -42,13 +58,17 @@ pub enum Actor {
 pub struct Action(String);
 
 impl Action {
-    /// Accepts lowercase ASCII letters, digits, `_` and `.`, with at least one `.` and none at
-    /// either end.
+    /// Accepts two or more `.`-separated segments, each one or more lowercase ASCII letters,
+    /// digits or `_`: `team.invite` and `mcp.tool_call`, but not `team`, `.team`, `team.` or
+    /// `team..invite`.
     pub fn new(s: &str) -> Result<Action, LedgerError> {
-        let allowed =
-            |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.';
-        let valid =
-            s.chars().all(allowed) && s.contains('.') && !s.starts_with('.') && !s.ends_with('.');
+        let segment_ok = |seg: &str| {
+            !seg.is_empty()
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        };
+        let valid = s.contains('.') && s.split('.').all(segment_ok);
         if valid {
             Ok(Action(s.to_owned()))
         } else {
@@ -110,8 +130,10 @@ impl LedgerEntry {
         }
     }
 
-    /// A copy whose payload has the value of every `password`, `token`, `secret` or `api_key` key
-    /// (any case, at any depth, including inside arrays) replaced with `"***"`.
+    /// A copy whose payload has the value of every secret key (`password`, `token`, `secret`,
+    /// `api_key`, `access_token`, `refresh_token`, `apikey`, `authorization`, `client_secret`,
+    /// `key_hash`, `token_hash`, `invite_token`, `plaintext`; exact name, any case, at any depth,
+    /// including inside arrays) replaced with `"***"`.
     pub fn redacted(&self) -> LedgerEntry {
         let mut copy = self.clone();
         redact(&mut copy.payload);
