@@ -64,6 +64,16 @@ export function parseMinor(text: string, digits: number): number | null {
   return normalised.startsWith('-') ? -minor : minor;
 }
 
+/**
+ * An amount in minor units as a person would type it in major units: `1050` with 2 digits is
+ * `10.5`, `1000` with 0 digits (JPY) stays `1000`. Trailing decimal zeros are dropped, never the
+ * zeros of the whole part.
+ */
+export function minorToInput(minor: number, digits: number): string {
+  const text = (minor / 10 ** digits).toFixed(digits);
+  return digits > 0 ? text.replace(/\.?0+$/, '') : text;
+}
+
 /** ISO weekday `day` (1 = Monday … 7 = Sunday) as a short name in the panel's language. */
 export function weekdayName(day: number, language: string): string {
   // 2024-01-01 was a Monday.

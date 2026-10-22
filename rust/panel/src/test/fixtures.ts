@@ -283,6 +283,7 @@ export const consultation: ConsultationEntry[] = [
 // ---------------------------------------------------------------------------------------------
 
 export const BUDGET_ITEM_ID = '0190a000-0000-7000-8000-000000000060';
+export const CASH_ITEM_ID = '0190a000-0000-7000-8000-000000000062';
 
 const defaultPolicy: Policy = {
   active_hours: null,
@@ -333,7 +334,8 @@ export const capabilities: CapabilityOut[] = [
   capability(4, 'Destek kutusu', 'mailbox', 'connector', 'unreachable', 'unreachable'),
   capability(5, 'Eski hat', 'sms_line', 'connector', 'retired', 'retired'),
 ];
-capabilities[1].capability.budget_item_ids = [BUDGET_ITEM_ID];
+// A phone may spend only from a cash item (`can_link_budget`).
+capabilities[1].capability.budget_item_ids = [CASH_ITEM_ID];
 capabilities[1].capability.policy = {
   active_hours: { tz: 'Europe/Istanbul', from: 9, to: 24, days: [1, 2, 3, 4, 5] },
   daily_ops_cap: 50,
@@ -364,6 +366,21 @@ export const budgetItems: BudgetItemOut[] = [
     },
     spent_in_period: 125000,
     remaining: -25000,
+  },
+  {
+    item: {
+      id: CASH_ITEM_ID,
+      workspace_id: WS_ID,
+      name: 'Saha giderleri',
+      kind: 'cash',
+      unit: { kind: 'currency', value: 'TRY' },
+      cap: 50000,
+      period: 'monthly',
+      strategy_version_id: null,
+      created_at: '2026-10-21T08:00:00Z',
+    },
+    spent_in_period: 0,
+    remaining: 50000,
   },
 ];
 

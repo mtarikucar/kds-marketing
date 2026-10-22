@@ -24,7 +24,8 @@ describe('BudgetPage', () => {
       [`POST /api/budget/items/${BUDGET_ITEM_ID}/spend`]: { spend: spend[0], remaining: -26250 },
     });
     renderAt('/budget');
-    await user.click(await screen.findByRole('button', { name: tr.budget.spend }));
+    const row = (await screen.findByText('Ekim kampanyası')).closest('tr') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: tr.budget.spend }));
     const sheet = await screen.findByRole('dialog');
     expect(await within(sheet).findByText('FTR-2026-001')).toBeInTheDocument();
     await user.type(within(sheet).getByLabelText(tr.fields.amount, { exact: false }), '12.50');

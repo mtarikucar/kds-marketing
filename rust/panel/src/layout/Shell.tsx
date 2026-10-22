@@ -207,7 +207,9 @@ export function Shell() {
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
             {current ? (
-              <Outlet />
+              // Keyed by workspace: a switch mounts every page afresh, so no local state (an open
+              // editor, a half-typed form) carries over and is saved into the other workspace.
+              <Outlet key={me.current_workspace ?? 'none'} />
             ) : me.memberships.length > 0 ? (
               <EmptyState
                 title={t('shell.chooseWorkspace')}

@@ -27,7 +27,7 @@ describe('CapabilitiesPage', () => {
     );
     expect(new Set(shown)).toEqual(new Set(EFFECTIVE_STATUSES));
     // Links and groups are named, not shown as ids.
-    expect(screen.getAllByText('Ekim kampanyası').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Saha giderleri').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Marka A').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: tr.capabilities.declare })).toBeInTheDocument();
   });

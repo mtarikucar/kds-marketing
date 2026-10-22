@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, IconButton, Input } from '@/components/ui';
-import { minorDigits, parseMinor } from '@/lib/format';
+import { minorDigits, minorToInput, parseMinor } from '@/lib/format';
 
 /**
  * An editable list: one bordered row per item with a remove button, and an add button below.
@@ -108,8 +108,7 @@ export function MoneyInput({
 }) {
   const { i18n } = useTranslation();
   const digits = minorDigits(currency);
-  const show = (value: number | null) =>
-    value === null ? '' : (value / 10 ** digits).toFixed(digits).replace(/\.?0+$/, '');
+  const show = (value: number | null) => (value === null ? '' : minorToInput(value, digits));
   const [text, setText] = useState(() => show(minor));
   // Follow a value changed from outside (a reset), but not the echo of what was just typed.
   useEffect(() => {

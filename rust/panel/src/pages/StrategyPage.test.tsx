@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
+import type { MeOut } from '@/api/types';
 import {
   APPROVED_ID,
   DRAFT_ID,
@@ -135,5 +136,42 @@ describe('StrategyPage', () => {
     const sheet = await screen.findByRole('dialog');
     expect(await within(sheet).findByText(i18n.t('strategy.versionLabel', { number: 2 }))).toBeInTheDocument();
     expect(within(sheet).getByText(tr.status.version.draft)).toBeInTheDocument();
+  });
+});
+
+describe('StrategyPage across a workspace switch', () => {
+  it('drops an open editor, so nothing typed in one workspace is saved into another', async () => {
+    const user = userEvent.setup();
+    const B = '0190a000-0000-7000-8000-0000000000b1';
+    const inA: MeOut = {
+      ...me,
+      memberships: [
+        me.memberships[0],
+        { ...me.memberships[0], membership_id: '0190a000-0000-7000-8000-0000000000b2', workspace_id: B, workspace_name: 'Beta Fırın', workspace_slug: 'beta-firin' },
+      ],
+    };
+    const inB: MeOut = { ...inA, current_workspace: B };
+    const calls = mockFetch({
+      'GET /api/auth/me': inA,
+      'POST /api/auth/switch-workspace': inB,
+      'GET /api/strategy': strategyWithDraft,
+      [`GET /api/strategy/versions/${DRAFT_ID}/consultation`]: [],
+      'GET /api/capability-groups': [],
+    });
+    renderAt('/strategy');
+    const identity = tr.strategy.sections.identity;
+    await screen.findByRole('heading', { name: identity });
+    await user.click(screen.getAllByRole('button', { name: tr.common.edit })[0]);
+    const form = await screen.findByRole('form', { name: identity });
+    await user.type(within(form).getByLabelText(tr.strategy.fields.product, { exact: false }), 'A ürünü');
+
+    await user.click(screen.getByRole('combobox', { name: tr.shell.switchWorkspace }));
+    await user.click(await screen.findByRole('option', { name: 'Beta Fırın' }));
+    await waitFor(() => expect(calls.some((c) => c.path === '/api/auth/switch-workspace')).toBe(true));
+
+    // The page is mounted afresh for workspace B: the editor and what was typed are gone.
+    await waitFor(() => expect(screen.queryByRole('form', { name: identity })).not.toBeInTheDocument());
+    expect(screen.queryByDisplayValue('A ürünü')).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 });
