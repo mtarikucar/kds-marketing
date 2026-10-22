@@ -16,7 +16,8 @@ use jt_pg::PgUnitOfWork;
 use jt_tenancy::{MembershipId, SystemRole, WorkspaceId, WorkspaceStatus};
 use jt_testkit::TestDb;
 use jt_testkit::fakes::{
-    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+    SeqIdGen,
 };
 use serde_json::json;
 use time::macros::datetime;
@@ -66,6 +67,7 @@ async fn register_login_resolve_and_switch_through_postgres() {
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(NoChannelsYet),
         archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(RecordingTenantHosts::new()),
     };
 
     // Registration.
@@ -225,6 +227,7 @@ fn scripted(uow: Arc<dyn UnitOfWork>) -> Deps {
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(NoChannelsYet),
         archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(RecordingTenantHosts::new()),
     }
 }
 

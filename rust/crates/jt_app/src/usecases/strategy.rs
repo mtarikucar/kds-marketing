@@ -54,6 +54,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use uuid::Uuid;
 
 use super::{Deps, acting_user, invalid, ledger_entry};
 use crate::ctx::Ctx;
@@ -87,7 +88,8 @@ pub struct VersionOut {
     /// Entries in the version's consultation log.
     pub consultation_count: i64,
     /// For a draft, everything that stops it from being approved today (completeness, the
-    /// workspace's channels, the hypotheses); empty for any other version.
+    /// workspace's channels and the capability groups they are narrowed to, the hypotheses);
+    /// empty for any other version.
     pub gaps: Vec<Gap>,
 }
 
@@ -441,7 +443,8 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     let draft = locked_draft(repos.as_mut()).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
     let hypotheses = repos.hypotheses().list(draft.id).await?;
-    let gaps = approval_gaps(&draft.sections, &hypotheses, &known);
+    let groups = group_ids(repos.as_mut()).await?;
+    let gaps = approval_gaps(&draft.sections, &hypotheses, &known, &groups);
     if !gaps.is_empty() {
         return Err(not_ready(gaps));
     }
@@ -494,7 +497,8 @@ pub async fn approve(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
         return Err(conflict("not submitted", "not_submitted"));
     }
     let hypotheses = repos.hypotheses().list(draft.id).await?;
-    let gaps = approval_gaps(&draft.sections, &hypotheses, &known);
+    let groups = group_ids(repos.as_mut()).await?;
+    let gaps = approval_gaps(&draft.sections, &hypotheses, &known, &groups);
     if !gaps.is_empty() {
         return Err(not_ready(gaps));
     }
@@ -787,13 +791,15 @@ async fn channel_kinds(deps: &Deps, ctx: &Ctx) -> Result<BTreeSet<String>, AppEr
 }
 
 /// Every gap that stops a draft with `sections` and `hypotheses` from being approved, given the
-/// workspace's channel kinds `known`: all of `validate_for_approval`, where a live hypothesis's
-/// channel must moreover be one the strategy chose itself (or `any`), not merely one the
-/// workspace has.
+/// workspace's channel kinds `known` and capability group ids `groups`: all of
+/// `validate_for_approval`, where a live hypothesis's channel must moreover be one the strategy
+/// chose itself (or `any`), not merely one the workspace has; then, after those, every chosen
+/// channel narrowed to a capability group the workspace does not have (`channels[i].group_id`).
 fn approval_gaps(
     sections: &Sections,
     hypotheses: &[Hypothesis],
     known: &BTreeSet<String>,
+    groups: &BTreeSet<Uuid>,
 ) -> Vec<Gap> {
     let chosen: BTreeSet<String> = sections
         .channels
@@ -814,7 +820,28 @@ fn approval_gaps(
             }
         }
     }
+    for (i, choice) in sections.channels.iter().enumerate() {
+        if let Some(group) = choice.group_id
+            && !groups.contains(&group)
+        {
+            gaps.push(Gap {
+                field: format!("channels[{i}].group_id"),
+                message: "the workspace has no such capability group".to_owned(),
+            });
+        }
+    }
     gaps
+}
+
+/// The ids of the workspace's capability groups, which a chosen channel may be narrowed to.
+async fn group_ids(repos: &mut dyn TenantRepos) -> Result<BTreeSet<Uuid>, AppError> {
+    Ok(repos
+        .capability_groups()
+        .list()
+        .await?
+        .into_iter()
+        .map(|(group, _)| group.id.as_uuid())
+        .collect())
 }
 
 /// The draft's new hypothesis list from what was written (see [`set_hypotheses`]): the written
@@ -982,7 +1009,10 @@ async fn version_out(
         None => None,
     };
     let gaps = match version.status {
-        VersionStatus::Draft => approval_gaps(&version.sections, &hypotheses, known),
+        VersionStatus::Draft => {
+            let groups = group_ids(repos).await?;
+            approval_gaps(&version.sections, &hypotheses, known, &groups)
+        }
         VersionStatus::Approved | VersionStatus::Archived => Vec::new(),
     };
     Ok(VersionOut {

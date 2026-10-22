@@ -1,6 +1,6 @@
 //! Fakes for the application ports: a fixed clock, sequential ids, scripted tokens, a plain-text
-//! "hasher", a plain-text "secret box", a fixed channel catalog and an in-memory unit of work,
-//! plus [`deps`], which wires them all into a `Deps`.
+//! "hasher", a plain-text "secret box", a fixed channel catalog, a recording tenant host registry
+//! and an in-memory unit of work, plus [`deps`], which wires them all into a `Deps`.
 //!
 //! [`InMemoryUow`] keeps its tables behind one shared lock. Each bundle it opens works on a copy
 //! taken when it opens (reads see that copy plus the bundle's own writes) and records its writes;
@@ -46,8 +46,8 @@ mod tenant;
 mod user;
 
 pub use services::{
-    DEPS_TOKENS, FIXED_NOW, FixedChannelCatalog, FixedClock, FixedTokenGen, PLAIN_PREFIX,
-    PlainHasher, PlainSecretBox, SeqIdGen, deps,
+    DEPS_TOKENS, FIXED_NOW, FixedChannelCatalog, FixedClock, FixedTokenGen, HostCall, PLAIN_PREFIX,
+    PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen, deps,
 };
 pub use state::{
     InMemoryUow, MemState, StoredBudgetLink, StoredCapability, StoredCapabilityGroup,

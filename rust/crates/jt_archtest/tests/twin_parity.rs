@@ -21,7 +21,7 @@ use jt_mcp::McpState;
 use jt_panel_http::AppState;
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_testkit::TestDb;
-use jt_testkit::fakes::{PlainHasher, PlainSecretBox};
+use jt_testkit::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -50,6 +50,7 @@ fn deps(db: &TestDb) -> Deps {
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(NoChannelsYet),
         archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(RecordingTenantHosts::new()),
     }
 }
 

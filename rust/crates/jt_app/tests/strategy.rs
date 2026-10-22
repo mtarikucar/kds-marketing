@@ -22,6 +22,7 @@ use jt_app::ports::{
 use jt_app::usecases::Deps;
 use jt_app::usecases::api_keys::{self, CreateKey};
 use jt_app::usecases::auth::{self, RegisterInput};
+use jt_app::usecases::groups;
 use jt_app::usecases::roles::{self, CreateRole};
 use jt_app::usecases::strategy::{self, ArchiveInput, RecordInput, RecordKind, VersionOut};
 use jt_ledger::{Actor, LedgerEntry, Subject};
@@ -1182,6 +1183,44 @@ async fn submit_refuses_gaps_with_validation_listing_them() {
     );
     assert_eq!(w.version(draft.id).submitted_at, None);
     assert!(w.entries("strategy.submit").is_empty());
+}
+
+#[tokio::test]
+async fn a_channel_narrowed_to_a_capability_group_needs_the_group() {
+    let w = world().await;
+    complete_draft(&w, &w.owner_ctx).await;
+    let channels = |group_id: Value| json!([{ "channel": "instagram", "rationale": "genç kitle", "group_id": group_id }]);
+    let missing = uuid::Uuid::from_u128(4242);
+    let out = strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "channels".into(),
+        channels(json!(missing)),
+    )
+    .await
+    .unwrap();
+    let fields: Vec<&str> = out.gaps.iter().map(|g| g.field.as_str()).collect();
+    assert_eq!(fields, ["channels[0].group_id"]);
+    let err = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap_err();
+    assert_eq!(gap_fields(&err), ["channels[0].group_id"]);
+
+    // A group of the workspace will do.
+    let group = groups::create(&w.deps, &w.owner_ctx, "Marka A".into(), None)
+        .await
+        .unwrap()
+        .group
+        .id;
+    let out = strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "channels".into(),
+        channels(json!(group)),
+    )
+    .await
+    .unwrap();
+    assert!(out.gaps.is_empty(), "{:?}", out.gaps);
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
 }
 
 #[tokio::test]

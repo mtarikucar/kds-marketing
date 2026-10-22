@@ -293,7 +293,8 @@ mod tests {
     use jt_app::usecases::Deps;
     use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
     use jt_testkit::fakes::{
-        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+        SeqIdGen,
     };
     use time::macros::datetime;
     use tower::ServiceExt;
@@ -333,6 +334,7 @@ mod tests {
                 seal: Arc::new(PlainSecretBox),
                 channels: Arc::new(NoChannelsYet),
                 archived_hook: Arc::new(NoopArchivedHook),
+                hosts: Arc::new(RecordingTenantHosts::new()),
             },
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,

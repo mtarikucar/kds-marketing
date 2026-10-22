@@ -1,6 +1,6 @@
 //! The service fakes: a fixed clock, sequential ids, scripted tokens, a plain-text "hasher", a
-//! plain-text "secret box", a fixed channel catalog, and [`deps`], which wires them all into a
-//! `Deps`.
+//! plain-text "secret box", a fixed channel catalog, a recording tenant host registry, and
+//! [`deps`], which wires them all into a `Deps`.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,11 +9,13 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, TokenGen, UnitOfWork,
+    ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, TenantHostRegistry, TokenGen,
+    UnitOfWork,
 };
 use jt_app::usecases::Deps;
 use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_tenancy::WorkspaceId;
+use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -135,6 +137,65 @@ impl ChannelCatalog for FixedChannelCatalog {
     }
 }
 
+/// One change [`RecordingTenantHosts`] was asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostCall {
+    Allow(WorkspaceId, String),
+    Revoke(WorkspaceId, String),
+}
+
+/// A tenant host registry that records every `allow` and `revoke`, in order, and refuses (as
+/// `jt_outbound`'s adapter does, `VALIDATION` "host is not public" naming the host) only the
+/// hosts it was built [`refusing`](RecordingTenantHosts::refusing). Clones share the record.
+#[derive(Clone, Debug, Default)]
+pub struct RecordingTenantHosts {
+    calls: Arc<Mutex<Vec<HostCall>>>,
+    refused: Arc<BTreeSet<String>>,
+}
+
+impl RecordingTenantHosts {
+    /// A registry that accepts every host.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A registry that refuses exactly `hosts`.
+    pub fn refusing(hosts: &[&str]) -> Self {
+        RecordingTenantHosts {
+            calls: Arc::default(),
+            refused: Arc::new(hosts.iter().map(|h| (*h).to_owned()).collect()),
+        }
+    }
+
+    /// Every `allow` and `revoke` so far, in order.
+    pub fn calls(&self) -> Vec<HostCall> {
+        lock(&self.calls).clone()
+    }
+}
+
+impl TenantHostRegistry for RecordingTenantHosts {
+    fn check(&self, host: &str) -> Result<(), AppError> {
+        if self.refused.contains(host) {
+            return Err(AppError::validation(
+                "host is not public",
+                json!({ "host": host, "reason": "refused_by_test" }),
+            ));
+        }
+        Ok(())
+    }
+
+    fn allow(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError> {
+        self.check(host)?;
+        lock(&self.calls).push(HostCall::Allow(ws, host.to_owned()));
+        Ok(())
+    }
+
+    fn revoke(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError> {
+        lock(&self.calls).push(HostCall::Revoke(ws, host.to_owned()));
+        Ok(())
+    }
+}
+
 /// The instant the clock of [`deps`] reads.
 pub const FIXED_NOW: OffsetDateTime = time::macros::datetime!(2026-10-22 09:00 UTC);
 
@@ -144,8 +205,9 @@ pub const DEPS_TOKENS: usize = 256;
 /// The use-case dependencies over `uow`, with every other port a fake: a [`FixedClock`] at
 /// [`FIXED_NOW`], a [`SeqIdGen`], a [`FixedTokenGen`] scripted with [`DEPS_TOKENS`] distinct
 /// tokens (`token-001`, `token-002`, …), [`PlainHasher`], [`PlainSecretBox`], a
-/// [`FixedChannelCatalog`] with no kinds and a [`NoopArchivedHook`]. A test that needs particular
-/// tokens, channels or another time builds `Deps` itself or replaces the field.
+/// [`FixedChannelCatalog`] with no kinds, a [`NoopArchivedHook`] and a [`RecordingTenantHosts`]
+/// that accepts every host. A test that needs particular tokens, channels, hosts or another time
+/// builds `Deps` itself or replaces the field.
 pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
     Deps {
         uow,
@@ -158,5 +220,6 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(FixedChannelCatalog::default()),
         archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(RecordingTenantHosts::new()),
     }
 }

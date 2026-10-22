@@ -23,7 +23,7 @@ use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
-use jt_outbound::{Egress, FIXED_HOSTS};
+use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
 use jt_panel_http::AppState;
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_seal::AesSecretBox;
@@ -53,9 +53,6 @@ pub async fn run(config: Config) -> Result<()> {
         bootstrap_operator(&deps, bootstrap).await?;
     }
     let gate = strategy_gate(pool.clone());
-    // The one egress client, built at start so a bad fixed-tier entry stops it; M1's connectors
-    // take it from here.
-    let egress = Egress::new(FIXED_HOSTS);
 
     let app = app(deps, gate, &config);
     let listener = TcpListener::bind(config.bind)
@@ -70,7 +67,6 @@ pub async fn run(config: Config) -> Result<()> {
     );
 
     serve(listener, app).await?;
-    drop(egress);
     pool.close().await;
     tracing::info!("stopped");
     Ok(())
@@ -143,8 +139,12 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 
 /// The production ports over `pool`, sealing secrets under `secret_key`. One [`Argon2Hasher`]
 /// for the whole process: its concurrency permits are per instance, and every clone of the
-/// returned `Deps` shares it.
+/// returned `Deps` shares it. Likewise one egress client, built here so that a bad fixed-tier
+/// entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The connectors
+/// M1b adds must share this same client, so that what the registry allows is what they reach;
+/// the tier lives in memory, so it starts empty at every start.
 pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
+    let egress = Arc::new(Egress::new(FIXED_HOSTS));
     Deps {
         uow: Arc::new(PgUnitOfWork::new(pool)),
         clock: Arc::new(SystemClock),
@@ -157,6 +157,7 @@ pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
         channels: Arc::new(NoChannelsYet),
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
         archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(EgressTenantHosts::new(egress)),
     }
 }
 
@@ -351,7 +352,7 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-    use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox};
+    use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -368,6 +369,7 @@ mod tests {
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
+            hosts: Arc::new(RecordingTenantHosts::new()),
         }
     }
 

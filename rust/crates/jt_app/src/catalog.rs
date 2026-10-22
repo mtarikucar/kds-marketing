@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 use GateMode::Exempt;
-use Risk::{Destructive, Read, Write};
+use Risk::{Destructive, Read, Spend, Write};
 
 /// Whether the strategy gate applies to a use case. The workspace-status check is separate
 /// ([`UseCase::status_exempt`]).
@@ -157,6 +157,28 @@ pub static CATALOG: &[UseCase] = &[
     twin("strategy.archive", Exempt, "jeeta.strategy.archive", ("POST", "/api/strategy/archive"), Destructive),
     twin("strategy.list_versions", Exempt, "jeeta.strategy.list_versions", ("GET", "/api/strategy/versions"), Read),
     twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),
+    // Capabilities, their groups and the budget are exempt from the strategy gate (the
+    // consultation needs to know what the workspace has), but not from the status check.
+    twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),
+    twin("capability.get", Exempt, "jeeta.capability.get", ("GET", "/api/capabilities/{capability_id}"), Read),
+    twin("capability.declare", Exempt, "jeeta.capability.declare", ("POST", "/api/capabilities"), Write),
+    twin("capability.verify", Exempt, "jeeta.capability.verify", ("POST", "/api/capabilities/{capability_id}/verify"), Write),
+    twin("capability.mark_unreachable", Exempt, "jeeta.capability.mark_unreachable", ("POST", "/api/capabilities/{capability_id}/unreachable"), Write),
+    twin("capability.set_policy", Exempt, "jeeta.capability.set_policy", ("PUT", "/api/capabilities/{capability_id}/policy"), Write),
+    // Body and arguments `{ confirm }`.
+    twin("capability.retire", Exempt, "jeeta.capability.retire", ("POST", "/api/capabilities/{capability_id}/retire"), Destructive),
+    twin("capability.link_budget", Exempt, "jeeta.capability.link_budget", ("POST", "/api/capabilities/{capability_id}/budget-links"), Write),
+    twin("capability.unlink_budget", Exempt, "jeeta.capability.unlink_budget", ("DELETE", "/api/capabilities/{capability_id}/budget-links/{budget_item_id}"), Write),
+    twin("capability.groups.list", Exempt, "jeeta.capability.groups_list", ("GET", "/api/capability-groups"), Read),
+    twin("capability.groups.create", Exempt, "jeeta.capability.groups_create", ("POST", "/api/capability-groups"), Write),
+    twin("capability.groups.rename", Exempt, "jeeta.capability.groups_rename", ("PATCH", "/api/capability-groups/{group_id}"), Write),
+    twin("capability.groups.delete", Exempt, "jeeta.capability.groups_delete", ("DELETE", "/api/capability-groups/{group_id}"), Destructive),
+    twin("capability.groups.add_member", Exempt, "jeeta.capability.groups_add_member", ("POST", "/api/capability-groups/{group_id}/members"), Write),
+    twin("capability.groups.remove_member", Exempt, "jeeta.capability.groups_remove_member", ("DELETE", "/api/capability-groups/{group_id}/members/{capability_id}"), Write),
+    twin("budget.items.list", Exempt, "jeeta.budget.items_list", ("GET", "/api/budget/items"), Read),
+    twin("budget.items.create", Exempt, "jeeta.budget.items_create", ("POST", "/api/budget/items"), Write),
+    twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
+    twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
     panel_only("platform.login", Exempt, ("POST", "/api/platform/login"), Write),
     panel_only("platform.workspaces.list", Exempt, ("GET", "/api/platform/workspaces"), Read),
     panel_only("platform.workspaces.set_status", Exempt, ("PATCH", "/api/platform/workspaces/{workspace_id}/status"), Write),

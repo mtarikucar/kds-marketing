@@ -66,10 +66,30 @@ pub fn risk_tag(risk: Risk) -> &'static str {
 }
 
 /// Catalog tools not defined here yet: a use case may enter the catalog before its tool, while a
-/// plan lands it in steps. [`registry`] leaves them out. Empty while every catalog tool is defined
-/// (the strategy's are since their definitions landed); each entry must still be a catalog tool
-/// without a definition, so defining one stops the server until it is dropped from here.
-pub const NOT_YET_DEFINED: &[&str] = &[];
+/// plan lands it in steps. [`registry`] leaves them out. Each entry must still be a catalog tool
+/// without a definition, so defining one stops the server until it is dropped from here. Now the
+/// capability, group and budget tools, whose use cases landed before their definitions.
+pub const NOT_YET_DEFINED: &[&str] = &[
+    "jeeta.capability.list",
+    "jeeta.capability.get",
+    "jeeta.capability.declare",
+    "jeeta.capability.verify",
+    "jeeta.capability.mark_unreachable",
+    "jeeta.capability.set_policy",
+    "jeeta.capability.retire",
+    "jeeta.capability.link_budget",
+    "jeeta.capability.unlink_budget",
+    "jeeta.capability.groups_list",
+    "jeeta.capability.groups_create",
+    "jeeta.capability.groups_rename",
+    "jeeta.capability.groups_delete",
+    "jeeta.capability.groups_add_member",
+    "jeeta.capability.groups_remove_member",
+    "jeeta.budget.items_list",
+    "jeeta.budget.items_create",
+    "jeeta.budget.spend_record",
+    "jeeta.budget.spend_list",
+];
 
 /// One tool per `CATALOG` row with an MCP tool, in catalog order, but those in
 /// [`NOT_YET_DEFINED`].

@@ -109,11 +109,31 @@ fn catalog_is_the_release_table() {
         ("strategy.archive", Some("jeeta.strategy.archive"), Some(("POST", "/api/strategy/archive")), false, Risk::Destructive),
         ("strategy.list_versions", Some("jeeta.strategy.list_versions"), Some(("GET", "/api/strategy/versions")), false, Risk::Read),
         ("strategy.consultation", Some("jeeta.strategy.consultation"), Some(("GET", "/api/strategy/versions/{version_id}/consultation")), false, Risk::Read),
+        ("capability.list", Some("jeeta.capability.list"), Some(("GET", "/api/capabilities")), false, Risk::Read),
+        ("capability.get", Some("jeeta.capability.get"), Some(("GET", "/api/capabilities/{capability_id}")), false, Risk::Read),
+        ("capability.declare", Some("jeeta.capability.declare"), Some(("POST", "/api/capabilities")), false, Risk::Write),
+        ("capability.verify", Some("jeeta.capability.verify"), Some(("POST", "/api/capabilities/{capability_id}/verify")), false, Risk::Write),
+        ("capability.mark_unreachable", Some("jeeta.capability.mark_unreachable"), Some(("POST", "/api/capabilities/{capability_id}/unreachable")), false, Risk::Write),
+        ("capability.set_policy", Some("jeeta.capability.set_policy"), Some(("PUT", "/api/capabilities/{capability_id}/policy")), false, Risk::Write),
+        ("capability.retire", Some("jeeta.capability.retire"), Some(("POST", "/api/capabilities/{capability_id}/retire")), false, Risk::Destructive),
+        ("capability.link_budget", Some("jeeta.capability.link_budget"), Some(("POST", "/api/capabilities/{capability_id}/budget-links")), false, Risk::Write),
+        ("capability.unlink_budget", Some("jeeta.capability.unlink_budget"), Some(("DELETE", "/api/capabilities/{capability_id}/budget-links/{budget_item_id}")), false, Risk::Write),
+        ("capability.groups.list", Some("jeeta.capability.groups_list"), Some(("GET", "/api/capability-groups")), false, Risk::Read),
+        ("capability.groups.create", Some("jeeta.capability.groups_create"), Some(("POST", "/api/capability-groups")), false, Risk::Write),
+        ("capability.groups.rename", Some("jeeta.capability.groups_rename"), Some(("PATCH", "/api/capability-groups/{group_id}")), false, Risk::Write),
+        ("capability.groups.delete", Some("jeeta.capability.groups_delete"), Some(("DELETE", "/api/capability-groups/{group_id}")), false, Risk::Destructive),
+        ("capability.groups.add_member", Some("jeeta.capability.groups_add_member"), Some(("POST", "/api/capability-groups/{group_id}/members")), false, Risk::Write),
+        ("capability.groups.remove_member", Some("jeeta.capability.groups_remove_member"), Some(("DELETE", "/api/capability-groups/{group_id}/members/{capability_id}")), false, Risk::Write),
+        ("budget.items.list", Some("jeeta.budget.items_list"), Some(("GET", "/api/budget/items")), false, Risk::Read),
+        ("budget.items.create", Some("jeeta.budget.items_create"), Some(("POST", "/api/budget/items")), false, Risk::Write),
+        ("budget.spend.record", Some("jeeta.budget.spend_record"), Some(("POST", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Spend),
+        ("budget.spend.list", Some("jeeta.budget.spend_list"), Some(("GET", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Read),
         ("platform.login", None, Some(("POST", "/api/platform/login")), true, Risk::Write),
         ("platform.workspaces.list", None, Some(("GET", "/api/platform/workspaces")), true, Risk::Read),
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
+    assert_eq!(CATALOG.len(), 53);
     assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
     let status_exempt: Vec<&str> =
         CATALOG.iter().filter(|uc| uc.status_exempt).map(|uc| uc.id).collect();

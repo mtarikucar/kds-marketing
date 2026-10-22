@@ -26,7 +26,7 @@ use jt_mcp::{McpState, ToolFuture, ToolSpec, http_service, registry, risk_tag};
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_tenancy::{SystemRole, UserId, WorkspaceId, WorkspaceStatus};
 use jt_testkit::TestDb;
-use jt_testkit::fakes::{PlainHasher, PlainSecretBox};
+use jt_testkit::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
     ProtocolVersion,
@@ -104,6 +104,7 @@ impl World {
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
+            hosts: Arc::new(RecordingTenantHosts::new()),
         };
         let (a, a_owner) = db.seed_workspace("alpha").await;
         let (b, b_owner) = db.seed_workspace("beta").await;

@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::db::TestDb;
-use crate::fakes::{PlainHasher, PlainSecretBox};
+use crate::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
 use crate::flows::activate_workspace;
 
 /// The password every account the harness opens uses.
@@ -67,6 +67,7 @@ impl Panel {
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
+            hosts: Arc::new(RecordingTenantHosts::new()),
         };
         let state = AppState {
             deps: deps.clone(),
