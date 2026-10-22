@@ -1,4 +1,4 @@
-//! `jeeta.agent.whoami` (`auth.me`) and `jeeta.agents.list` (`agents.list`).
+//! `jeeta.agent.whoami` (`agents.whoami`) and `jeeta.agents.list` (`agents.list`).
 
 use jt_app::ctx::Ctx;
 use jt_app::usecases::{Deps, agents};
@@ -11,7 +11,7 @@ use crate::registry::{ToolFuture, schema_for};
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
-            use_case: "auth.me",
+            use_case: "agents.whoami",
             description: "Who this API key acts as: the agent actor (its connection and the user \
                           who issued the key), the workspace, the issuer's role and the key's \
                           effective permissions. [risk: READ]",
@@ -35,7 +35,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
 fn whoami<'a>(_deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let NoArgs {} = args(raw)?;
-        to_json(&agents::whoami(ctx))
+        to_json(&agents::whoami(ctx)?)
     })
 }
 

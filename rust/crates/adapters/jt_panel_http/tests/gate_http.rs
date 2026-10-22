@@ -219,6 +219,16 @@ async fn an_inactive_workspace_closes_gated_routes_whatever_the_strategy() {
     }
 }
 
+/// The routes of every M0 use case that is not status-exempt and needs no path parameter.
+const CLOSED_WHILE_INACTIVE: [&str; 6] = [
+    "/api/team",
+    "/api/roles",
+    "/api/api-keys",
+    "/api/agents",
+    "/api/whoami",
+    "/api/ledger",
+];
+
 #[tokio::test]
 async fn the_status_check_binds_every_route_but_auth_workspace_and_platform() {
     let w = World::new().await;
@@ -233,13 +243,7 @@ async fn the_status_check_binds_every_route_but_auth_workspace_and_platform() {
             "{path}"
         );
     }
-    for path in [
-        "/api/team",
-        "/api/roles",
-        "/api/api-keys",
-        "/api/agents",
-        "/api/ledger",
-    ] {
+    for path in CLOSED_WHILE_INACTIVE {
         assert_eq!(
             ask(&app, path, Some(cookie)).await,
             (StatusCode::LOCKED, "WORKSPACE_INACTIVE".to_owned()),
@@ -248,13 +252,7 @@ async fn the_status_check_binds_every_route_but_auth_workspace_and_platform() {
     }
 
     w.set_status(WorkspaceStatus::Active).await;
-    for path in [
-        "/api/team",
-        "/api/roles",
-        "/api/api-keys",
-        "/api/agents",
-        "/api/ledger",
-    ] {
+    for path in CLOSED_WHILE_INACTIVE {
         assert_eq!(
             ask(&app, path, Some(cookie)).await.0,
             StatusCode::OK,

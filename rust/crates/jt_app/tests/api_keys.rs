@@ -777,7 +777,7 @@ async fn whoami_reports_the_actor_role_and_permissions() {
     let connection_id = AgentConnectionId::new_v7();
     let ctx = api_keys::ctx_for_agent(&principal, connection_id, T0);
 
-    let me = agents::whoami(&ctx);
+    let me = agents::whoami(&ctx).unwrap();
     assert_eq!(
         me,
         WhoAmI {
@@ -797,10 +797,15 @@ async fn whoami_reports_the_actor_role_and_permissions() {
         json!(["workspace.read", "ledger.read"])
     );
 
-    let human = agents::whoami(&t.owner_ctx);
+    let human = agents::whoami(&t.owner_ctx).unwrap();
     assert_eq!(human.actor, Actor::Human { user_id: t.owner });
     assert_eq!(human.role_key.as_deref(), Some("owner"));
     assert_eq!(human.permissions.len(), Permission::all().len());
+
+    // It needs `workspace.read`, from a user as from an agent.
+    let mut blind = ctx.clone();
+    blind.permissions.remove(&Permission::WorkspaceRead);
+    assert_forbidden_permission(&agents::whoami(&blind).unwrap_err(), "workspace.read");
 }
 
 #[tokio::test]

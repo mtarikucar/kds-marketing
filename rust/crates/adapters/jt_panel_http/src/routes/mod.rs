@@ -48,6 +48,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/api-keys"),
     ("DELETE", "/api/api-keys/{key_id}"),
     ("GET", "/api/agents"),
+    ("GET", "/api/whoami"),
     ("GET", "/api/ledger"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
@@ -162,6 +163,7 @@ pub fn api_routes() -> Vec<ApiRoute> {
             api_keys::revoke,
         ),
         api_route("GET", "/agents", "agents.list", agents::list),
+        api_route("GET", "/whoami", "agents.whoami", agents::whoami),
         api_route("GET", "/ledger", "ledger.list", ledger::list),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(

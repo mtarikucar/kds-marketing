@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { whoami } from './agents';
 import { ApiError, request, setUnauthorizedHandler } from './client';
 import { mockFetch } from '@/test/render';
 
@@ -49,6 +50,19 @@ describe('api client', () => {
     await request('GET', '/api/team');
     const init = stub.mock.calls[0] as unknown as [string, RequestInit];
     expect(init[1].credentials).toBe('same-origin');
+  });
+
+  it('asks who the caller is at /api/whoami', async () => {
+    const answer = {
+      actor: { kind: 'human', user_id: 'u1' },
+      workspace_id: 'w1',
+      role_key: 'owner',
+      permissions: ['workspace.read'],
+    };
+    const calls = mockFetch({ 'GET /api/whoami': answer });
+    await expect(whoami()).resolves.toEqual(answer);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers.get('x-requested-with')).toBeNull();
   });
 
   it('adds query parameters and skips empty ones', async () => {

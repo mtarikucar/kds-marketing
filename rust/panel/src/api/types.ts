@@ -136,6 +136,14 @@ export type Actor =
 export type ActorKind = Actor['kind'];
 export const ACTOR_KINDS: readonly ActorKind[] = ['human', 'agent', 'system'];
 
+/** `jt_app::usecases::agents::WhoAmI`: who the caller is, where, and what it may do. */
+export interface WhoAmI {
+  actor: Actor;
+  workspace_id: Uuid;
+  role_key: string | null;
+  permissions: Permission[];
+}
+
 /** `jt_ledger::Subject`. */
 export interface Subject {
   kind: string;

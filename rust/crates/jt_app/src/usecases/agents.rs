@@ -1,5 +1,6 @@
 //! Agents acting through API keys: recording the clients that connect (`register_initialize`),
-//! counting their tool calls, `agents.list`, and `whoami`, the twin of `auth.me` for agents.
+//! counting their tool calls, `agents.list`, and `agents.whoami`, which tells any caller, a
+//! signed-in user or an agent, who it is in its workspace.
 //!
 //! A connection is one agent client seen through one key: the same key, client name and client
 //! version are the same connection however often the client initialises. The first sight of a
@@ -239,9 +240,12 @@ pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<AgentConnectionOut>, App
         .collect()
 }
 
-/// The caller as its context describes it. Reads nothing.
-pub fn whoami(ctx: &Ctx) -> WhoAmI {
-    WhoAmI {
+/// `agents.whoami`: the caller as its context describes it, the same for a user in the panel
+/// and an agent over MCP (only the actor differs: the human, or the agent on its issuer's
+/// authority). Reads nothing. Needs `workspace.read`.
+pub fn whoami(ctx: &Ctx) -> Result<WhoAmI, AppError> {
+    ctx.require(Permission::WorkspaceRead)?;
+    Ok(WhoAmI {
         actor: ctx.actor.clone(),
         workspace_id: ctx.workspace_id,
         role_key: ctx.role_key.clone(),
@@ -249,7 +253,7 @@ pub fn whoami(ctx: &Ctx) -> WhoAmI {
             .into_iter()
             .map(str::to_owned)
             .collect(),
-    }
+    })
 }
 
 /// `raw` without control characters, trimmed, cut to [`CLIENT_FIELD_MAX`] characters; or

@@ -81,7 +81,7 @@ fn catalog_is_the_m0_table() {
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
-        ("auth.me", Some("jeeta.agent.whoami"), Some(("GET", "/api/auth/me")), false, Risk::Read),
+        ("auth.me", None, Some(("GET", "/api/auth/me")), true, Risk::Read),
         ("workspace.info", Some("jeeta.workspace.info"), Some(("GET", "/api/workspace")), false, Risk::Read),
         ("workspace.switch", None, Some(("POST", "/api/auth/switch-workspace")), true, Risk::Write),
         ("team.list", Some("jeeta.team.list"), Some(("GET", "/api/team")), false, Risk::Read),
@@ -97,6 +97,7 @@ fn catalog_is_the_m0_table() {
         ("api_keys.list", Some("jeeta.api_keys.list"), Some(("GET", "/api/api-keys")), false, Risk::Read),
         ("api_keys.revoke", Some("jeeta.api_keys.revoke"), Some(("DELETE", "/api/api-keys/{key_id}")), false, Risk::Destructive),
         ("agents.list", Some("jeeta.agents.list"), Some(("GET", "/api/agents")), false, Risk::Read),
+        ("agents.whoami", Some("jeeta.agent.whoami"), Some(("GET", "/api/whoami")), false, Risk::Read),
         ("ledger.list", Some("jeeta.ledger.list"), Some(("GET", "/api/ledger")), false, Risk::Read),
         ("platform.login", None, Some(("POST", "/api/platform/login")), true, Risk::Write),
         ("platform.workspaces.list", None, Some(("GET", "/api/platform/workspaces")), true, Risk::Read),
@@ -104,6 +105,22 @@ fn catalog_is_the_m0_table() {
     ];
     assert_eq!(rows, expected);
     assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "M0 has no gated use case");
+    let status_exempt: Vec<&str> =
+        CATALOG.iter().filter(|uc| uc.status_exempt).map(|uc| uc.id).collect();
+    assert_eq!(
+        status_exempt,
+        [
+            "auth.register",
+            "auth.login",
+            "auth.logout",
+            "auth.me",
+            "workspace.info",
+            "workspace.switch",
+            "platform.login",
+            "platform.workspaces.list",
+            "platform.workspaces.set_status",
+        ]
+    );
 }
 
 #[test]
@@ -115,9 +132,10 @@ fn lookups_by_id_and_mcp_tool() {
     assert!(find("team.nope").is_none());
     assert_eq!(
         by_mcp_tool("jeeta.agent.whoami").map(|uc| uc.id),
-        Some("auth.me")
+        Some("agents.whoami")
     );
-    assert!(by_mcp_tool("auth.me").is_none());
+    assert!(by_mcp_tool("agents.whoami").is_none());
+    assert_eq!(find("auth.me").map(|uc| uc.mcp_tool), Some(None));
 }
 
 #[test]

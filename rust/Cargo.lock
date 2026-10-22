@@ -1060,10 +1060,15 @@ dependencies = [
 name = "jt_archtest"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "jt_app",
  "jt_mcp",
  "jt_panel_http",
+ "jt_pg",
+ "jt_testkit",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
