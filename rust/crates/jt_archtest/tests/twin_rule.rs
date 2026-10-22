@@ -9,14 +9,9 @@ use jt_app::catalog::{CATALOG, by_mcp_tool};
 /// Routes the panel serves that are infrastructure, not use cases.
 const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
-/// Catalog panel routes not served yet: the platform console's routes arrive with the platform
-/// operator task. Each entry must still be unserved, so serving one fails this test until it is
-/// dropped from here.
-const NOT_YET_SERVED: &[(&str, &str)] = &[
-    ("POST", "/api/platform/login"),
-    ("GET", "/api/platform/workspaces"),
-    ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
-];
+/// Catalog panel routes not served yet; none at present. Each entry must still be unserved, so
+/// serving one fails this test until it is dropped from here.
+const NOT_YET_SERVED: &[(&str, &str)] = &[];
 
 #[test]
 fn panel_routes_table_matches_catalog() {

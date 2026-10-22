@@ -9,6 +9,7 @@ pub mod agents;
 pub mod api_keys;
 pub mod auth;
 pub mod ledger;
+pub mod platform;
 pub mod roles;
 pub mod team;
 pub mod workspace;

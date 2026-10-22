@@ -11,6 +11,7 @@ pub mod agents;
 pub mod api_keys;
 pub mod auth;
 pub mod ledger;
+pub mod platform;
 pub mod roles;
 pub mod team;
 pub mod workspace;
@@ -48,6 +49,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/api-keys/{key_id}"),
     ("GET", "/api/agents"),
     ("GET", "/api/ledger"),
+    ("POST", "/api/platform/login"),
+    ("GET", "/api/platform/workspaces"),
+    ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
     ("GET", "/healthz"),
 ];
 
@@ -163,6 +167,19 @@ pub fn api_routes() -> Vec<ApiRoute> {
         ),
         api_route("GET", "/agents", "agents.list", agents::list),
         api_route("GET", "/ledger", "ledger.list", ledger::list),
+        api_route("POST", "/platform/login", "platform.login", platform::login),
+        api_route(
+            "GET",
+            "/platform/workspaces",
+            "platform.workspaces.list",
+            platform::list_workspaces,
+        ),
+        api_route(
+            "PATCH",
+            "/platform/workspaces/{workspace_id}/status",
+            "platform.workspaces.set_status",
+            platform::set_status,
+        ),
     ]
 }
 

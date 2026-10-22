@@ -16,8 +16,9 @@ use jt_app::gate::{NoStrategyYet, StrategyGate};
 use jt_app::ports::LedgerFilter;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::api_keys::{self, CreateKey, KeyOut};
+use jt_app::usecases::auth::LoginInput;
 use jt_app::usecases::team::{self, InviteInput};
-use jt_app::usecases::{Deps, agents};
+use jt_app::usecases::{Deps, agents, platform};
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_mcp::{McpState, ToolFuture, ToolSpec, http_service, registry, risk_tag};
 use jt_pg::PgUnitOfWork;
@@ -766,6 +767,77 @@ async fn call_on_pending_payment_workspace_returns_workspace_inactive() {
     // Exempt tools keep working while the workspace is inactive.
     let info = ok(&call(&client, "jeeta.workspace.info", json!({})).await);
     assert_eq!(info["status"], "pending_payment");
+}
+
+#[tokio::test]
+async fn gated_tool_passes_after_operator_activates_and_gate_stub_says_strategy_exists() {
+    let w = World::new().await;
+    let key = w.key(w.a, &[]).await;
+    // A workspace awaiting payment.
+    w.set_status(w.a, WorkspaceStatus::PendingPayment).await;
+    let approved =
+        McpState::new(w.deps.clone(), Arc::new(Approved)).with_test_tool(gated_spec(), &GATED);
+    let url = serve(approved).await;
+    let client = connect(&url, &key.plaintext, "acme-agent").await;
+    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "WORKSPACE_INACTIVE");
+    assert_eq!(refused["details"], json!({ "status": "pending_payment" }));
+
+    // The platform operator signs in and activates the workspace, which its ledger records.
+    assert!(
+        platform::bootstrap(&w.deps, "ops@jeeta.test", "operator passphrase")
+            .await
+            .unwrap()
+    );
+    let session = platform::login(
+        &w.deps,
+        LoginInput {
+            email: "ops@jeeta.test".into(),
+            password: "operator passphrase".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let pctx = platform::resolve(&w.deps, &session.token).await.unwrap();
+    let out = platform::set_status(&w.deps, &pctx, w.a, WorkspaceStatus::Active)
+        .await
+        .unwrap();
+    assert_eq!(out.status, WorkspaceStatus::Active);
+    let operator = Actor::System {
+        component: format!("platform_operator:{}", pctx.operator_id),
+    };
+    let changes = w.entries(w.a, "platform.workspace_status").await;
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].actor, operator);
+    assert_eq!(
+        changes[0].payload,
+        json!({ "from": "pending_payment", "to": "active" })
+    );
+    assert!(w.entries(w.b, "platform.workspace_status").await.is_empty());
+
+    // The same session's next call passes: the gate reads the status afresh, and the stub says
+    // a strategy is approved.
+    assert_eq!(
+        ok(&call(&client, "jeeta.demo.gated", json!({})).await),
+        json!({ "ran": true })
+    );
+
+    // Without an approved strategy, the now active workspace meets the strategy check instead.
+    let url = serve(w.state().with_test_tool(gated_spec(), &GATED)).await;
+    let no_strategy = connect(&url, &key.plaintext, "acme-agent").await;
+    let refused = err(&call(&no_strategy, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "STRATEGY_REQUIRED");
+
+    // Suspension closes the gate again; the key itself still works for exempt tools.
+    platform::set_status(&w.deps, &pctx, w.a, WorkspaceStatus::Suspended)
+        .await
+        .unwrap();
+    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "WORKSPACE_INACTIVE");
+    assert_eq!(refused["details"], json!({ "status": "suspended" }));
+    let info = ok(&call(&client, "jeeta.workspace.info", json!({})).await);
+    assert_eq!(info["status"], "suspended");
+    assert_eq!(w.entries(w.a, "platform.workspace_status").await.len(), 2);
 }
 
 #[tokio::test]

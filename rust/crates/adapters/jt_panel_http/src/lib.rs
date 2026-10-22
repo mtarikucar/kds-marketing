@@ -1,7 +1,10 @@
-//! Panel HTTP adapter: axum JSON API, session cookie, request-header check and static panel files.
+//! Panel HTTP adapter: axum JSON API, session cookies, request-header check and static panel
+//! files.
 //!
 //! [`router`] serves:
-//! - `/api/*`: the JSON API of [`ROUTES`]. Every mutating request must carry
+//! - `/api/*`: the JSON API of [`ROUTES`]. Users sign in with the `jt_session` cookie
+//!   ([`session`]); the platform console's `/api/platform/*` routes take the operator's separate
+//!   `jt_platform` cookie ([`platform_session`]). Every mutating request must carry
 //!   `X-Requested-With: jeeta-panel` ([`csrf`]), checked before authentication and body
 //!   parsing. Errors, including bad bodies, malformed path parameters and unknown paths, are
 //!   structured: `{ "code", "message", "details" }`.
@@ -11,6 +14,7 @@
 
 pub mod csrf;
 pub mod error;
+pub mod platform_session;
 pub mod routes;
 pub mod session;
 pub mod state;
@@ -22,6 +26,7 @@ use jt_app::catalog::{CATALOG, UseCase};
 use routes::{ApiRoute, RouteUseCase};
 
 pub use error::{ApiError, ApiJson, ApiPath, ApiQuery};
+pub use platform_session::PlatformAuthed;
 pub use routes::ROUTES;
 pub use session::{Authed, WorkspaceCtx};
 pub use state::AppState;
