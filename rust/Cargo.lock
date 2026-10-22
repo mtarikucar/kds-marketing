@@ -1102,10 +1102,12 @@ dependencies = [
 name = "jt_outbound"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "jt_app",
  "jt_tenancy",
  "reqwest 0.12.28",
  "thiserror",
+ "tokio",
  "tracing",
  "url",
 ]
