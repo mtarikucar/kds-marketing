@@ -58,18 +58,43 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
    İkili önce `rust/.env`'i, yoksa çalışılan dizindeki `.env`'i okur; ortamda zaten tanımlı değişkenler
    dosyadakileri ezer. Açılışta sırasıyla: veritabanına bağlanır, rolün RLS'i atlamadığını denetler,
-   bekleyen göçleri uygular
-   (`migrations are up to date applied=1 total=1`), yapılandırılmışsa ilk platform operatörünü açar,
-   sonra dinlemeye başlar:
+   bekleyen göçleri uygular (boş bir veritabanında `migrations are up to date applied=4 total=4`),
+   yapılandırılmışsa ilk platform operatörünü açar, sonra dinlemeye başlar:
 
    ```text
-   INFO jeeta::serve: jeeta is listening bind=127.0.0.1:8080 panel=served from panel/dist allowed_hosts=0 migrations_applied=1
+   INFO jeeta::serve: jeeta is listening bind=127.0.0.1:8080 panel=served from panel/dist allowed_hosts=0 migrations_applied=4
    ```
 
    `curl -s localhost:8080/healthz` → `{"ok":true}`; tarayıcıda `http://127.0.0.1:8080/` paneli açar.
 
 4. Durdurma: `Ctrl-C` (SIGINT) ya da SIGTERM. Sunucu yeni bağlantı almayı bırakır, açık bağlantılara
    en çok 10 saniye tanır, sonra kapanır (açık bir MCP olay akışı bu süreyi doldurur).
+
+### Göçler
+
+`migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
+çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
+döndürür. Dört göç vardır:
+
+| Göç | Ne yapar |
+|---|---|
+| `0001_foundation` | çalışma alanları, kullanıcılar, oturumlar, roller, üyelikler, API anahtarları, ajan bağlantıları, günlük, platform operatörleri |
+| `0002_strategy` | strateji sürümleri, hipotezler, istişare kaydı |
+| `0003_capabilities` | kabiliyetler, gruplar, bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
+| `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan dizini (`ledger_entries_agent_connection_idx`) açar |
+
+**Geliştirme veritabanını yeniden açın.** `0002` ve `0003` M1a sırasında, yayımlanmadan önce
+değiştirildi (en son `0003`'ün benzersiz çiftleri `(workspace_id, id)` sırasına geçti). Bu göçlerin eski
+bir hâlini uygulamış bir veritabanında `jeeta serve` sağlama toplamı (checksum) uyuşmazlığıyla durur
+(`migration 3 was previously applied but has been modified`). Veritabanını yönetici olarak silip
+yeniden açın, `jeeta serve` göçleri baştan uygular:
+
+```sh
+psql postgres://postgres@localhost:5432/postgres \
+  -c 'drop database if exists jeeta with (force)' -c 'create database jeeta owner jeeta'
+```
+
+Yayımlanmış bir göç bundan sonra değişmez; her değişiklik yeni bir göçtür.
 
 ## Yapılandırma
 
@@ -183,6 +208,66 @@ denetler: varsayılan olarak yalnızca `localhost`, `127.0.0.1` ve `::1` kabul e
 Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (reverse proxy) arkasında bile)
 `JEETA_ALLOWED_HOSTS` o adı içermelidir. Port yazılmayan bir ad her portta kabul edilir.
 
+## MCP araçları
+
+Sunucu 47 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
+risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan iki araç,
+`jeeta.strategy.archive` ve `jeeta.capability.retire`, ayrıca `confirm: true` ister. Hatalar yapısaldır: `{"code": …, "message": …, "details": …}` hem
+`structuredContent` hem metin olarak döner. Panelde her aracın ikiz bir rotası vardır, yalnızca
+ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta.work.pending`'dir
+(bkz. [Sırada ne var](#sırada-ne-var)).
+
+| Alan | Araç | Ne yapar | Risk |
+|---|---|---|---|
+| ajan | `jeeta.agent.whoami` | Anahtarın kimin adına çalıştığı: ajan bağlantısı, anahtarı çıkaran üye, alan, rol ve etkin izinler | READ |
+| alan | `jeeta.workspace.info` | Çalışma alanının kimliği, adı, kısa adı ve durumu | READ |
+| ekip | `jeeta.team.list` | Üyeler ve açık davetler | READ |
+| | `jeeta.team.invite` | Bir e-postayı bir rolle davet eder; tek seferlik davet jetonunu döndürür | WRITE |
+| | `jeeta.team.set_role` | Bir üyenin rolünü değiştirir | WRITE |
+| | `jeeta.team.remove` | Bir üyeyi çıkarır (açtığı anahtarlar iptal olur) ya da bir daveti iptal eder | DESTRUCTIVE |
+| roller | `jeeta.roles.list` | Sistem ve özel roller, izinleriyle | READ |
+| | `jeeta.roles.create` | Özel rol açar | WRITE |
+| | `jeeta.roles.update` | Özel rolün izinlerini değiştirir | WRITE |
+| | `jeeta.roles.delete` | Kullanılmayan bir özel rolü siler | DESTRUCTIVE |
+| API anahtarları | `jeeta.api_keys.create` | Anahtar çıkarır; düz metni yalnızca bu yanıtta görünür | WRITE |
+| | `jeeta.api_keys.list` | Anahtarlar, önekleri, kapsamları ve son kullanımları (sırları asla) | READ |
+| | `jeeta.api_keys.revoke` | Anahtarı hemen iptal eder | DESTRUCTIVE |
+| ajanlar | `jeeta.agents.list` | Bağlanan istemciler: sürüm, kullanılan anahtar, ilk/son görülme, araç çağrısı, `overdue` | READ |
+| günlük | `jeeta.ledger.list` | Alanın değişmez günlüğü, en yenisi başta, sır değerleri maskeli | READ |
+| strateji | `jeeta.strategy.get` | Onaylı sürüm, açık taslak ve taslağın eksikleri; istişare protokolünü anlatır | READ |
+| | `jeeta.strategy.start_consultation` | Taslağı açar (onaylı sürümün kopyası) ya da açık olanı döndürür | WRITE |
+| | `jeeta.strategy.record` | İstişareye soru, cevap, varsayım ya da not yazar | WRITE |
+| | `jeeta.strategy.write_section` | Taslağın bir bölümünü bütünüyle yazar | WRITE |
+| | `jeeta.strategy.set_hypotheses` | Taslağın hipotezlerini yazar (kimliğiyle tutar, kimliksiz ekler, eksik olanı emekliye ayırır) | WRITE |
+| | `jeeta.strategy.submit` | Taslağı onaya sunar; eksik varsa `VALIDATION` ve `details.gaps` | WRITE |
+| | `jeeta.strategy.approve` | Sunulmuş taslağı onaylar, önceki onaylı sürümü arşivler | WRITE |
+| | `jeeta.strategy.archive` | Adı verilen onaylı sürümü arşivler, strateji kapısını kapatır | DESTRUCTIVE |
+| | `jeeta.strategy.list_versions` | Bütün sürümler, en yenisi başta | READ |
+| | `jeeta.strategy.consultation` | Bir sürümün istişare kaydı, sayfa sayfa | READ |
+| kabiliyet | `jeeta.capability.list` | Kabiliyetler, etkin durumlarıyla; grup, tür, durum ve kabiliyet grubu süzgeçleri | READ |
+| | `jeeta.capability.get` | Tek bir kabiliyet | READ |
+| | `jeeta.capability.declare` | Bir kabiliyet bildirir (`declared` başlar) | WRITE |
+| | `jeeta.capability.verify` | Ajan ya da cihaz kabiliyetini kanıtıyla doğrular | WRITE |
+| | `jeeta.capability.mark_unreachable` | Kabiliyeti nedeniyle ulaşılamaz işaretler | WRITE |
+| | `jeeta.capability.set_policy` | Çalışma saatleri, günlük işlem ve harcama tavanı, insan onayı, doğrulama yaşı | WRITE |
+| | `jeeta.capability.retire` | Kabiliyeti kesin olarak emekliye ayırır, gruplardan ve bütçe kalemlerinden çıkarır | DESTRUCTIVE |
+| | `jeeta.capability.link_budget` | Kabiliyeti türüne uyan bir bütçe kalemine bağlar | WRITE |
+| | `jeeta.capability.unlink_budget` | Bütçe bağını kaldırır | WRITE |
+| | `jeeta.capability.groups_list` | Kabiliyet grupları, üyeleriyle | READ |
+| | `jeeta.capability.groups_create` | Grup açar (marka, şube, amaç …) | WRITE |
+| | `jeeta.capability.groups_rename` | Grubu yeniden adlandırır | WRITE |
+| | `jeeta.capability.groups_delete` | Grubu siler; üyeler kalır | DESTRUCTIVE |
+| | `jeeta.capability.groups_add_member` | Gruba bir kabiliyet ekler | WRITE |
+| | `jeeta.capability.groups_remove_member` | Gruptan bir kabiliyeti çıkarır | WRITE |
+| bütçe | `jeeta.budget.items_list` | Bütçe kalemleri, dönemdeki harcama ve kalanla | READ |
+| | `jeeta.budget.items_create` | Bütçe kalemi açar (tür, birim, tavan, dönem) | WRITE |
+| | `jeeta.budget.spend_record` | Bir kaleme harcama yazar; tavan aşılsa da kaydedilir ve işaretlenir | SPEND |
+| | `jeeta.budget.spend_list` | Bir kalemin harcamaları, sayfa sayfa | READ |
+| iş | `jeeta.work.pending` | Bekleyen işler, stratejinin durumu, ajanın gecikmesi | READ |
+| | `jeeta.work.checkin` | Ajanın yoklaması: kaydedilir ve bekleyen işleri döndürür (yalnızca MCP) | WRITE |
+| | `jeeta.work.set_checkin_interval` | Beklenen yoklama aralığını değiştirir | WRITE |
+
 ## Strateji
 
 Stratejisi onaylanmamış bir alanda stratejiye bağlı (`Gated`) her araç ve rota (bu sürümde henüz yoktur)
@@ -209,16 +294,53 @@ yeniden kapatır. Bir anahtarın kapsamları her zaman daraltır: `team.manage` 
 istişareyi yürütemez, onaylayamaz ve arşivleyemez. Stratejinin kanalları kabiliyet kaydından okunur
 (bkz. [Kabiliyetler](#kabiliyetler)): bir kanal `any` ya da alanın emekliye ayrılmamış bir kabiliyetinin
 türüyse (`phone`, `mailbox`, `instagram` …) onaylanabilir; bir kanalın daraltıldığı grup (`group_id`) alanın
-bir kabiliyet grubu olmalıdır.
+bir kabiliyet grubu olmalıdır; bir hipotezin kanalı stratejinin seçtiği kanallardan biri ya da `any`
+olmalıdır. Strateji, alan ödeme beklerken de hazırlanıp onaylanabilir (`strategy.*` çalışma alanı durumu
+denetiminden muaftır, bkz. [Kayıt](#kayıt)).
+
+**Ajan için istişare protokolü.** İstişare sohbette ajanla sahip arasında geçer; sistem onu yapılandırır
+ve kaydeder. Ajan şu sırayı izler:
+
+1. `jeeta.work.pending` bir `consult_strategy` işi gösterir (strateji yok ya da taslak açık).
+2. `jeeta.strategy.get`: onaylı sürümü, açık taslağı ve taslağın eksiklerini (`gaps`) okur.
+3. `jeeta.strategy.start_consultation`: taslak açar; onaylı bir sürüm varsa taslak onun kopyasıdır ve her
+   hipotezi korur. Açık bir taslak varsa onu döndürür, yeniden açmaz.
+4. Sahibe açık soruları sohbette sorar ve her soruyu, cevabı, cevapsız koyduğu varsayımı ve notu
+   `jeeta.strategy.record` ile yazar (`kind`: `question`, `answer`, `assumption`, `note`; isteğe bağlı
+   `section_key`). Metin günlüğe değil istişare kaydına girer.
+5. `jeeta.strategy.write_section` ile her bölümü bütünüyle yazar: `identity`, `audience`, `channels`,
+   `goals`, `budget_frame`, `prohibitions`, `cadence`, `paid_enabled`. Yanıt kalan eksikleri gösterir;
+   eksikler yazmayı engellemez.
+6. `jeeta.strategy.set_hypotheses` ile hipotezleri yazar: tutulan hipotez kimliğiyle verilir, yenisi
+   kimliksiz (ya da `id: null`); onaylı sürümde olup listede olmayan emekliye ayrılır.
+7. `jeeta.strategy.submit`: eksik kalmadıysa taslak onaya sunulur; kalmışsa `VALIDATION` ve
+   `details.gaps` döner, ajan 4–6'ya döner.
+8. Onay sahibin ya da yöneticinin işidir: panelde onaylar ya da sohbette onayladığını söyler ve ajan,
+   sahibin ya da yöneticinin `team.manage` taşıyan anahtarıyla `jeeta.strategy.approve` çağırır (ek kod
+   istenmez). `jeeta.work.pending` artık `{"approved": {"number": …}}` okur.
 
 ## Kabiliyetler
 
 Kabiliyet, alanın eylemde bulunabildiği her şeydir: bir hesap, bir cihaz, bir ajan bağlantısı, bilgisayar
-erişimi ya da üçüncü taraf bir araç. Türler kapalı bir listedir (`social_account`, `messaging`,
-`telephony`, `community`, `ads`, `calendar`, `device`, `agent_connection`, `computer_access`,
-`third_party` gruplarında); listede olmayan bir tür `422 VALIDATION` alır, `third_party` içindeki `other`
-türü ise aracın adını `key_detail` alanında ister. Kabiliyet araçları strateji kapısından muaftır (istişare
-alanın neye sahip olduğunu bilmek ister), çalışma alanı durumu denetiminden muaf değildir.
+erişimi ya da üçüncü taraf bir araç. Türler, on grupta 49 anahtarlık kapalı bir listedir; listede olmayan
+bir tür `422 VALIDATION` alır, `third_party` içindeki `other` türü ise aracın adını `key_detail` alanında
+ister (`[a-z0-9_-]`, 2–40 karakter). Aynı türden birden çok kabiliyet olabilir (iki SMS hattı, iki ajan
+bağlantısı); aynı dış hesap (tür ve `external_id`) ise emekliye ayrılmamış tek bir kabiliyette durur.
+Kabiliyet araçları strateji kapısından muaftır (istişare alanın neye sahip olduğunu bilmek ister), çalışma
+alanı durumu denetiminden muaf değildir.
+
+| Grup (ulaşım yolu) | Türler (anahtar: paneldeki ad) |
+|---|---|
+| `social_account` Sosyal hesaplar (bağlayıcı) | `instagram`: Instagram, `facebook_page`: Facebook sayfası, `x`: X, `linkedin_page`: LinkedIn sayfası, `tiktok`: TikTok, `pinterest`: Pinterest, `youtube`: YouTube, `google_business`: Google İşletme Profili |
+| `messaging` Mesajlaşma (bağlayıcı) | `whatsapp_cloud`: WhatsApp Business, `instagram_dm`: Instagram mesajları, `messenger`: Messenger, `sms_line`: SMS hattı, `mailbox`: E-posta kutusu, `webchat`: Web sohbeti |
+| `telephony` Telefon (bağlayıcı) | `netgsm_pbx`: NetGSM santrali |
+| `community` Topluluk (bağlayıcı) | `discord`: Discord, `reddit`: Reddit, `review_google`: Google yorumları, `review_facebook`: Facebook yorumları |
+| `ads` Reklam (bağlayıcı) | `meta_ads`: Meta reklamları, `tiktok_ads`: TikTok reklamları, `linkedin_ads`: LinkedIn reklamları, `google_ads`: Google reklamları |
+| `calendar` Takvim (bağlayıcı) | `google_calendar`: Google Takvim, `outlook_calendar`: Outlook takvimi |
+| `device` Cihazlar (cihaz) | `phone`: Telefon, `computer`: Bilgisayar, `printer`: Yazıcı, `printer_3d`: 3B yazıcı, `audio_io`: Ses giriş/çıkışı, `camera`: Kamera, `screen`: Ekran, `scanner`: Belge tarayıcı, `usb_storage`: USB bellek |
+| `agent_connection` Ajan bağlantıları (ajan) | `claude_code`: Komut satırı kod ajanı, `codex`: Kod ajanı, `claude_ai`: Web sohbet asistanı, `other_agent`: Başka bir ajan |
+| `computer_access` Bilgisayar erişimi (ajan) | `filesystem_root`: Dosya sistemi, `browser_profile`: Tarayıcı profili, `shell`: Kabuk, `adb`: Android hata ayıklama köprüsü, `screen_control`: Ekran denetimi |
+| `third_party` Üçüncü taraf araçlar (ajan) | `notion`: Notion, `slack`: Slack, `gmail`: Gmail, `apify`: Apify, `firecrawl`: Firecrawl, `other`: Başka bir araç (`key_detail` ile) |
 
 **Ajan kendi ellerini nasıl bildirir.** Ajan, kendi tuttuğu bir cihazı (`phone`, `printer` …) ya da
 erişimi (`shell`, `adb`, `browser_profile` …) `jeeta.capability.declare` ile bildirir; kabiliyet
@@ -253,13 +375,25 @@ gelir. Bir bağlayıcının ulaşacağı adresler `connector_public.hosts` alan�
 | Harcamalar (`limit`, `before_at` + `before_id`) | `GET /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_list` | `workspace.read` |
 
 Her değişiklik iki kapıda da aynı yanıtı verir: panel rotası, `DELETE` rotaları dahil, ikiz MCP aracının
-döndürdüğü JSON'u döndürür (açma `201`, gerisi `200`). Paneldeki liste ve sayfa uçları
-(`GET /api/capabilities`, `GET /api/budget/items/{budget_item_id}/spend`) tanımadıkları bir sorgu
-parametresini `422 VALIDATION` ile reddeder.
+döndürdüğü JSON'u döndürür (açma `201`, gerisi `200`). Panelde sorgu parametresi alan her liste ve sayfa
+ucu (`GET /api/ledger`, `GET /api/capabilities`, `GET /api/budget/items/{budget_item_id}/spend`,
+`GET /api/strategy/versions/{version_id}/consultation`) tanımadığı bir parametreyi yok saymaz,
+`422 VALIDATION` ile reddeder.
 
-Bütçe kalemleri alanın kendi parası ve tavanlarıdır (sistemin kredisi değil); harcama tavanı aşsa da kaydedilir
-ve `budget.over_cap` kaydıyla işaretlenir. Emekliye ayırma kesindir: kabiliyet gruplarından ve bütçe
-kalemlerinden aynı işlemde çıkar, kaydı kalır.
+Bütçe kalemleri alanın kendi parası ve tavanlarıdır (sistemin kredisi değil). Kalemin birimi türüne uyar:
+nakit, reklam ve SMS bütçesi bir para birimiyle (en küçük biriminde, ör. kuruş), ajan kotası ve sarf
+malzeme bir sayı birimiyle, ajan çalışma saati dakikayla; uymayan `422 VALIDATION`
+(`details.reason = "unit_mismatch"`). Bir kabiliyet yalnızca türüne uyan kaleme bağlanır (reklam
+hesabı reklam bütçesine ya da nakde, SMS hattı SMS bütçesine ya da nakde, ajan bağlantısı ajan kotasına ya
+da çalışma saatine, yazıcılar sarf malzemeye ya da nakde, gerisi nakde). Harcama tavanı aşsa da kaydedilir
+ve `budget.over_cap` kaydıyla işaretlenir; bağlayıcıların harcamasında tavan M3'te sert sınır olur.
+
+Emekliye ayırma kesindir: kabiliyet gruplarından ve bütçe kalemlerinden aynı işlemde çıkar, kaydı kalır;
+emekliye ayrılmış bir kabiliyet artık doğrulanamaz, ulaşılamaz işaretlenemez, bir gruba eklenemez, bir
+kaleme bağlanamaz ve politikası değişmez (`409 CONFLICT`, "capability is retired"). Politikanın çalışma
+saatleri yarı açık bir aralıktır: `from` 0–23, `to` 1–24 (`24` gün sonundaki gece yarısı; `18`–`24`
+akşam, `0`–`24` bütün gün), `from < to`; gece yarısını aşan bir pencere iki günün pencereleri olarak
+yazılır.
 
 Sistem rollerinin izinleri:
 
@@ -271,6 +405,10 @@ Sistem rollerinin izinleri:
 | `ledger.read` | ✓ | ✓ | — |
 | `capabilities.manage` (kabiliyetleri ve grupları değiştirme) | ✓ | ✓ | — |
 | `budget.manage` (bütçe kalemi açma) | ✓ | ✓ | — |
+
+`capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
+açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.
+[Göçler](#göçler)). Özel rollere kendiliğinden eklenmezler: bir özel role sahibi ya da yöneticisi verir.
 
 Bir API anahtarının kapsamları sahibinin izinlerini daraltır: yalnızca `workspace.read` taşıyan bir anahtarla
 ajan okur, kendi kabiliyetini doğrular ve harcama bildirir, ama bildiremez, gruplayamaz ve kalem açamaz.
@@ -292,19 +430,22 @@ durumu denetiminden de muaftır: ajan, strateji yokken ve alan ödeme beklerken 
 | `consult_strategy` | 1 | strateji hiç yok ya da açık (sunulmamış) bir taslak var |
 | `approve_strategy` | 1 | sunulmuş bir taslak var ve soran onaylayabilir (sahip ya da yönetici + `team.manage`) |
 | `verify_capability` (`capability_id`, `name`, `stale`) | 2 | ajan ya da cihazla ulaşılan, `declared` ya da `stale` okunan her kabiliyet |
-| `connect_connector` (`capability_id`) | 2 | bağlayıcıyla ulaşılan, `declared` okunan her kabiliyet (bağlayıcılar M1b ile gelir) |
+| `connect_connector` (`capability_id`, `name`) | 2 | bağlayıcıyla ulaşılan, `declared` okunan her kabiliyet (bağlayıcılar M1b ile gelir) |
 | `declare_first_capability` | 3 | emekliye ayrılmamış hiçbir kabiliyet yok |
 
 - **`agent`**: `last_seen_at` (alanın ajan bağlantılarından en son görüleni, hiç yoksa `null`),
   `interval_minutes` (yoklama aralığı) ve `overdue` (hiç bağlantı yok ya da en son görülen aralıktan eski).
-  `GET /api/agents` ve `jeeta.agents.list` her bağlantı için aynı `overdue` bayrağını verir.
+  `GET /api/agents` ve `jeeta.agents.list` her bağlantı için aynı `overdue` bayrağını verir. Panelde ana
+  sayfanın ajan kartı gecikmeyi kırmızı bir uyarıyla, **Ajanlar** sayfası her bağlantının satırında
+  "Gecikti" ya da "Zamanında" olarak gösterir.
 
 **Ajanın yoklaması.** Ajanı uyandırmak sistemin değil kiracının işidir: ajan kendi zamanlayıcısıyla en az
 yoklama aralığında bir `jeeta.work.checkin` çağırır (yanıtı `jeeta.work.pending` ile aynıdır); geç kaldığında
 sistem yalnızca uyarır. Yoklama yalnızca bir ajanın çağrısıdır, panelde rotası yoktur (`mcp_only`); bir kişi
 çağıramaz (`403 FORBIDDEN`, `details.reason = "agents_only"`). Ajanın her çağrısı bağlantısının
 `last_seen_at` alanını zaten günceller; yoklama ise bağlantı başına en çok saatte bir `work.checkin` olarak
-kaydedilir.
+kaydedilir (bağlantının son yoklama kaydı `ledger_entries_agent_connection_idx` dizininden okunur). Aralık
+çalışma alanı başınadır (`workspace_policies`), 15 dakika ile bir hafta arasıdır; varsayılanı bir gündür.
 
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
@@ -348,6 +489,11 @@ export JEETA_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postg
 
 Testler bu değeri `.env` dosyasından değil, ortam değişkeninden okur.
 
+Panelin HTTP yüzeyini süreç içinde süren yardımcılar (`jt_testkit::panel`) `jt_testkit`'in `panel`
+özelliğinin arkasındadır; onu yalnızca testleri paneli süren `jt_panel_http` ve `jeeta` açar. Böylece
+`cargo test -p jt_app` paneli derlemez; `cargo test --workspace` ise özellikleri birleştirir ve bütün
+testleri çalıştırır.
+
 Bu adresin rolü süper kullanıcı olmalıdır, ama testler bu rolle çalışmaz: her test
 `jt_test_<12 onaltılık>` adlı bir veritabanı ve aynı adlı, rastgele parolalı, sıradan bir oturum rolü
 (`NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`) açar, veritabanını o role verir, göçleri ve sorguları o
@@ -388,21 +534,26 @@ olmalıdır; göçleri ayrı bir adımda göç rolüyle çalıştırmak sonraki 
 
 ## Sırların mühürlenmesi
 
-Bağlayıcı sırları (bir hesabın parolası ya da erişim jetonu) veritabanına yalnızca mühürlü olarak yazılır;
-mühürlü baytları ya da açılmış sırrı hiçbir kullanım durumu geri döndürmez. Mühürleme `jt_seal` içindedir
-ve uygulama ona `SecretBox` kapısından (port) ulaşır:
+`JEETA_SECRET_KEY` M1a'dan beri kullanılır: bağlayıcı sırları (bir hesabın parolası ya da erişim jetonu)
+veritabanına (`capabilities.connector_sealed`) yalnızca onunla mühürlenmiş olarak yazılır; mühürlü baytları
+ya da açılmış sırrı hiçbir kullanım durumu, günlük kaydı ya da panel yanıtı geri döndürmez (bir kabiliyet
+yalnızca `has_sealed_config` bayrağını taşır). Mühürleme `jt_seal` içindedir ve uygulama ona `SecretBox`
+kapısından (port) ulaşır:
 
 - Her çalışma alanının anahtarı `JEETA_SECRET_KEY`'den HKDF-SHA256 ile türetilir (tuz `jeeta-seal-v1`,
   bilgi alanı çalışma alanı kimliğinin 16 baytı). Bellekte yalnızca ana anahtar durur; türetilen anahtar
-  tek bir çağrı boyunca yaşar ve ardından silinir.
+  tek bir çağrı boyunca yaşar ve ardından silinir. HKDF'nin ara anahtarını (PRK) tutan HMAC-SHA-256
+  durumları da: `sha2` `zeroize` özelliğiyle derlenir, her SHA-256 durumu düşerken kendini siler.
 - Biçim `v1 || nonce || şifreli metin`: bir sürüm baytı (`0x01`), her mühürde yeniden çekilen rastgele
   96 bitlik bir nonce, ardından AES-256-GCM şifreli metni ve 128 bitlik etiketi. Çalışma alanı kimliği
   ayrıca ek doğrulanmış veridir (AAD): bir alanın mühürlü sırrı başka bir alanın satırına kopyalansa
   bile açılmaz.
 - Başka bir alanın, başka bir anahtarın ya da değiştirilmiş veya kesilmiş bir mührün açılması
   nedenini söylemeden `INTERNAL` "sealed data cannot be opened" ile reddedilir.
-- `JEETA_SECRET_KEY` değişirse önceden mühürlenmiş bütün sırlar açılamaz olur; anahtar döndürme
-  (yeniden mühürleme) sonraki bir kilometre taşına kalmıştır.
+- **Anahtarı değiştirmeyin.** `JEETA_SECRET_KEY` değişirse önceden mühürlenmiş bütün bağlayıcı
+  yapılandırmaları açılamaz olur ve o bağlayıcılar yeniden bağlanmalıdır; anahtar döndürme (eski anahtarla
+  açıp yenisiyle yeniden mühürleme) sonraki bir kilometre taşına kalmıştır. Anahtarı yedekleyin: veritabanı
+  yedeği onsuz bu sırları geri getiremez.
 
 ## Üretim notları
 
@@ -441,12 +592,19 @@ durur (bir bağımlılık değiştiğinde kilit dosyasını bir kez düz `cargo 
 
 Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalışır:
 
-- `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`, `jt_strategy`) yalnızca `serde`,
-  `serde_json`, `uuid`, `time`, `thiserror` ve birbirlerini (`jt_tenancy`, `jt_ledger`) kullanır; `jt_app`
-  hiçbir adaptöre bağlı değildir; `reqwest` yalnızca `jt_outbound`'da, `sqlx` yalnızca `jt_pg`'de (havuz
-  kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme ve anahtar türetme kütüphaneleri (`aes-gcm`, `hkdf`)
-  yalnızca `jt_seal`'de bulunur.
+- `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`, `jt_strategy`, `jt_capability`)
+  yalnızca `serde`, `serde_json`, `uuid`, `time`, `thiserror` ve birbirlerini (`jt_tenancy`, `jt_ledger`)
+  kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca `jt_outbound`'da, `sqlx` yalnızca
+  `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme ve anahtar türetme kütüphaneleri
+  (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur. Aynı crate kapı kurallarını da sabitler: strateji
+  kapısından yalnızca `auth.`, `workspace.`, `team.`, `roles.`, `api_keys.`, `agents.`, `platform.`,
+  `strategy.`, `capability.`, `budget.`, `work.` önekli kullanım durumları ve `ledger.list` muaf olabilir;
+  çalışma alanı durumu denetiminden tam olarak `auth.`, `workspace.`, `platform.`, `strategy.`, `work.`
+  önekliler muaftır; panel rotaları ve MCP araçları kataloğun tam karşılığıdır, MCP'ye özgü tek kullanım
+  durumu `work.checkin`'dir ve kayıt 47 araç tutar.
 - `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
   `isahc`, `surf`, `attohttpc`, `curl`, ağacın hiçbir yerinde bulunmaz) ile yapay zekâ, medya üretimi, ses
   tanıma ve ses sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans,
-  güvenlik bildirimi ve kaynak denetimleri.
+  güvenlik bildirimi ve kaynak denetimleri. Bir crate'in iki sürümü yalnızca `[bans] skip` listesinde
+  nedeniyle yazılıysa kabul edilir (ör. `sqlx` 0.8'in kullandığı önceki RustCrypto kuşağı: `hkdf` 0.12,
+  `hmac` 0.12, `sha2` 0.10, `digest` 0.10); `cargo deny check` uyarısız geçer.

@@ -102,3 +102,45 @@ fn mcp_registry_matches_catalog() {
         );
     }
 }
+
+/// The MCP tools there are after M1a, by domain: 15 from M0 (`agent`, `workspace`, `team`,
+/// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget`, and 3
+/// `work`. Written out, so a tool added or dropped without updating the documentation (the README
+/// lists them) fails here.
+const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
+    ("agent", 1),
+    ("workspace", 1),
+    ("team", 4),
+    ("roles", 4),
+    ("api_keys", 3),
+    ("agents", 1),
+    ("ledger", 1),
+    ("strategy", 10),
+    ("capability", 15),
+    ("budget", 4),
+    ("work", 3),
+];
+
+#[test]
+fn the_registry_holds_47_tools() {
+    let specs = jt_mcp::registry();
+    assert_eq!(specs.len(), 47);
+    let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
+    assert_eq!(total, 47);
+    for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
+        let prefix = format!("jeeta.{domain}.");
+        let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
+        assert_eq!(found, *expected, "tools named {prefix}*");
+    }
+}
+
+/// An MCP-only use case has no human caller: only an agent's check-in is one.
+#[test]
+fn only_the_agent_check_in_is_mcp_only() {
+    let mcp_only: Vec<&str> = CATALOG
+        .iter()
+        .filter(|uc| uc.mcp_only)
+        .map(|uc| uc.id)
+        .collect();
+    assert_eq!(mcp_only, ["work.checkin"]);
+}
