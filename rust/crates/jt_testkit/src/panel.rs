@@ -16,6 +16,7 @@ use jt_app::gate::NoStrategyYet;
 use jt_app::ports::PasswordHasher;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
+use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_panel_http::{AppState, router};
 use jt_pg::PgUnitOfWork;
 use jt_tenancy::WorkspaceId;
@@ -64,6 +65,8 @@ impl Panel {
             tokens: Arc::new(RandTokenGen),
             hasher,
             seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
         };
         let state = AppState {
             deps: deps.clone(),

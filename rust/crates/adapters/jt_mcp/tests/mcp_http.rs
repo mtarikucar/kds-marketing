@@ -17,6 +17,7 @@ use jt_app::ports::LedgerFilter;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::api_keys::{self, CreateKey, KeyOut};
 use jt_app::usecases::auth::LoginInput;
+use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_app::usecases::team::{self, InviteInput};
 use jt_app::usecases::{Deps, agents, platform};
 use jt_ledger::{Action, Actor, LedgerEntry};
@@ -100,6 +101,8 @@ impl World {
             tokens: Arc::new(RandTokenGen),
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
         };
         let (a, a_owner) = db.seed_workspace("alpha").await;
         let (b, b_owner) = db.seed_workspace("beta").await;

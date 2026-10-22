@@ -449,6 +449,8 @@ async fn consultation_lists_newest_first_with_limit_and_before() {
             .unwrap(),
         entries[..1]
     );
+    assert_eq!(c.count(v1.id).await.unwrap(), 3);
+    assert_eq!(c.count(StrategyVersionId::new_v7()).await.unwrap(), 0);
     assert_eq!(
         code(c.append(entries[0].clone()).await),
         ErrorCode::Conflict
@@ -467,6 +469,7 @@ async fn consultation_lists_newest_first_with_limit_and_before() {
         t.consultation().list(v1.id, 10, None).await.unwrap(),
         vec![]
     );
+    assert_eq!(t.consultation().count(v1.id).await.unwrap(), 0);
 }
 
 #[tokio::test]

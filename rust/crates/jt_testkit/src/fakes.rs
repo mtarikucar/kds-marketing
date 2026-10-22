@@ -1,6 +1,6 @@
 //! Fakes for the application ports: a fixed clock, sequential ids, scripted tokens, a plain-text
-//! "hasher", a plain-text "secret box" and an in-memory unit of work, plus [`deps`], which wires
-//! them all into a `Deps`.
+//! "hasher", a plain-text "secret box", a fixed channel catalog and an in-memory unit of work,
+//! plus [`deps`], which wires them all into a `Deps`.
 //!
 //! [`InMemoryUow`] keeps its tables behind one shared lock. Each bundle it opens works on a copy
 //! taken when it opens (reads see that copy plus the bundle's own writes) and records its writes;
@@ -35,14 +35,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, Clock,
-    ConsultationRepo, HypothesisRepo, IdGen, LedgerFilter, LedgerRepo, LedgerRow,
+    AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, ChannelCatalog,
+    Clock, ConsultationRepo, HypothesisRepo, IdGen, LedgerFilter, LedgerRepo, LedgerRow,
     MAX_CONSULTATION_PAGE, MemberOut, MembershipRepo, MembershipRow, MembershipView, OperatorRepo,
     OperatorRow, PasswordHasher, PlatformRepos, PlatformSessionRepo, PlatformSessionRow, RoleRepo,
     SecretBox, SessionRepo, SessionRow, StrategyRepo, TenantRepos, TokenGen, UnitOfWork, UserRepo,
     UserRepos, UserRow, WorkspaceRepo, WorkspaceRow,
 };
 use jt_app::usecases::Deps;
+use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_ledger::{Actor, LedgerEntry};
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, Hypothesis, HypothesisId, HypothesisState, Sections,
@@ -164,6 +165,17 @@ impl SecretBox for PlainSecretBox {
     }
 }
 
+/// A channel catalog that answers the same kinds for every workspace.
+#[derive(Clone, Debug, Default)]
+pub struct FixedChannelCatalog(pub BTreeSet<String>);
+
+#[async_trait]
+impl ChannelCatalog for FixedChannelCatalog {
+    async fn kinds_in_use(&self, _ws: WorkspaceId) -> Result<BTreeSet<String>, AppError> {
+        Ok(self.0.clone())
+    }
+}
+
 /// The instant the clock of [`deps`] reads.
 pub const FIXED_NOW: OffsetDateTime = time::macros::datetime!(2026-10-22 09:00 UTC);
 
@@ -172,8 +184,9 @@ pub const DEPS_TOKENS: usize = 256;
 
 /// The use-case dependencies over `uow`, with every other port a fake: a [`FixedClock`] at
 /// [`FIXED_NOW`], a [`SeqIdGen`], a [`FixedTokenGen`] scripted with [`DEPS_TOKENS`] distinct
-/// tokens (`token-001`, `token-002`, …), [`PlainHasher`] and [`PlainSecretBox`]. A test that
-/// needs particular tokens or another time builds `Deps` itself or replaces the field.
+/// tokens (`token-001`, `token-002`, …), [`PlainHasher`], [`PlainSecretBox`], a
+/// [`FixedChannelCatalog`] with no kinds and a [`NoopArchivedHook`]. A test that needs particular
+/// tokens, channels or another time builds `Deps` itself or replaces the field.
 pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
     Deps {
         uow,
@@ -184,6 +197,8 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         )),
         hasher: Arc::new(PlainHasher),
         seal: Arc::new(PlainSecretBox),
+        channels: Arc::new(FixedChannelCatalog::default()),
+        archived_hook: Arc::new(NoopArchivedHook),
     }
 }
 
@@ -1497,6 +1512,16 @@ impl ConsultationRepo for MemTenant {
         entries.sort_by_key(|e| std::cmp::Reverse((e.at, e.id)));
         entries.truncate(limit.clamp(1, MAX_CONSULTATION_PAGE) as usize);
         Ok(entries)
+    }
+
+    async fn count(&mut self, version_id: StrategyVersionId) -> Result<i64, AppError> {
+        let n = self
+            .state()
+            .consultation
+            .iter()
+            .filter(|e| e.workspace_id == self.ws && e.entry.version_id == version_id)
+            .count();
+        i64::try_from(n).map_err(|_| AppError::internal("too many consultation entries"))
     }
 }
 

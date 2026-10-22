@@ -13,23 +13,17 @@ use jt_ledger::Actor;
 use jt_tenancy::{
     AgentConnectionId, MembershipId, Permission, SystemRole, UserId, WorkspaceStatus,
 };
-use jt_testkit::fakes::{
-    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
-};
+use jt_testkit::fakes::{FIXED_NOW, FixedTokenGen, InMemoryUow, deps};
 use time::OffsetDateTime;
-use time::macros::datetime;
 
-const T0: OffsetDateTime = datetime!(2026-10-22 09:00 UTC);
+/// The instant the clock of `fakes::deps` reads.
+const T0: OffsetDateTime = FIXED_NOW;
 
 fn world(tokens: &[&str]) -> (InMemoryUow, Deps) {
     let uow = InMemoryUow::new();
     let deps = Deps {
-        uow: Arc::new(uow.clone()),
-        clock: Arc::new(FixedClock(T0)),
-        ids: Arc::new(SeqIdGen::new()),
         tokens: Arc::new(FixedTokenGen::new(tokens.iter().copied())),
-        hasher: Arc::new(PlainHasher),
-        seal: Arc::new(PlainSecretBox),
+        ..deps(Arc::new(uow.clone()))
     };
     (uow, deps)
 }

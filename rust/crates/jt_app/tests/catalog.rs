@@ -72,7 +72,7 @@ fn panel_routes_are_unique() {
 
 #[test]
 #[rustfmt::skip]
-fn catalog_is_the_m0_table() {
+fn catalog_is_the_release_table() {
     let rows: Vec<_> = CATALOG
         .iter()
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
@@ -99,12 +99,22 @@ fn catalog_is_the_m0_table() {
         ("agents.list", Some("jeeta.agents.list"), Some(("GET", "/api/agents")), false, Risk::Read),
         ("agents.whoami", Some("jeeta.agent.whoami"), Some(("GET", "/api/whoami")), false, Risk::Read),
         ("ledger.list", Some("jeeta.ledger.list"), Some(("GET", "/api/ledger")), false, Risk::Read),
+        ("strategy.get", Some("jeeta.strategy.get"), Some(("GET", "/api/strategy")), false, Risk::Read),
+        ("strategy.start_consultation", Some("jeeta.strategy.start_consultation"), Some(("POST", "/api/strategy/consultation")), false, Risk::Write),
+        ("strategy.record", Some("jeeta.strategy.record"), Some(("POST", "/api/strategy/consultation/entries")), false, Risk::Write),
+        ("strategy.write_section", Some("jeeta.strategy.write_section"), Some(("PUT", "/api/strategy/draft/sections/{section_key}")), false, Risk::Write),
+        ("strategy.set_hypotheses", Some("jeeta.strategy.set_hypotheses"), Some(("PUT", "/api/strategy/draft/hypotheses")), false, Risk::Write),
+        ("strategy.submit", Some("jeeta.strategy.submit"), Some(("POST", "/api/strategy/draft/submit")), false, Risk::Write),
+        ("strategy.approve", Some("jeeta.strategy.approve"), Some(("POST", "/api/strategy/draft/approve")), false, Risk::Write),
+        ("strategy.archive", Some("jeeta.strategy.archive"), Some(("POST", "/api/strategy/archive")), false, Risk::Destructive),
+        ("strategy.list_versions", Some("jeeta.strategy.list_versions"), Some(("GET", "/api/strategy/versions")), false, Risk::Read),
+        ("strategy.consultation", Some("jeeta.strategy.consultation"), Some(("GET", "/api/strategy/versions/{version_id}/consultation")), false, Risk::Read),
         ("platform.login", None, Some(("POST", "/api/platform/login")), true, Risk::Write),
         ("platform.workspaces.list", None, Some(("GET", "/api/platform/workspaces")), true, Risk::Read),
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "M0 has no gated use case");
+    assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
     let status_exempt: Vec<&str> =
         CATALOG.iter().filter(|uc| uc.status_exempt).map(|uc| uc.id).collect();
     assert_eq!(
@@ -116,6 +126,16 @@ fn catalog_is_the_m0_table() {
             "auth.me",
             "workspace.info",
             "workspace.switch",
+            "strategy.get",
+            "strategy.start_consultation",
+            "strategy.record",
+            "strategy.write_section",
+            "strategy.set_hypotheses",
+            "strategy.submit",
+            "strategy.approve",
+            "strategy.archive",
+            "strategy.list_versions",
+            "strategy.consultation",
             "platform.login",
             "platform.workspaces.list",
             "platform.workspaces.set_status",

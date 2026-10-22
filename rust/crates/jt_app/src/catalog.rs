@@ -45,15 +45,16 @@ pub struct UseCase {
     pub panel_route: Option<(&'static str, &'static str)>,
     /// Reachable from the panel only; then `mcp_tool` is `None`.
     pub panel_only: bool,
-    /// Runs whatever the workspace's status. Only identity, workspace and platform use cases
-    /// (`auth.*`, `workspace.*`, `platform.*`) are; every other one answers `WORKSPACE_INACTIVE`
-    /// while its workspace is `pending_payment` or `suspended`, whatever its [`GateMode`].
+    /// Runs whatever the workspace's status. Only identity, workspace, platform and strategy use
+    /// cases (`auth.*`, `workspace.*`, `platform.*`, `strategy.*`) are; every other one answers
+    /// `WORKSPACE_INACTIVE` while its workspace is `pending_payment` or `suspended`, whatever its
+    /// [`GateMode`]. The strategy may be worked out before payment, nothing else may.
     pub status_exempt: bool,
     pub risk: Risk,
 }
 
 /// The id prefixes whose use cases are [`UseCase::status_exempt`].
-pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."];
+pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform.", "strategy."];
 
 /// Whether use case `id` runs whatever its workspace's status: whether it starts with one of
 /// [`STATUS_EXEMPT_PREFIXES`].
@@ -121,7 +122,7 @@ const fn panel_only(
     }
 }
 
-/// Every use case of this release. M0 has no `Gated` entry; M1 adds the first.
+/// Every use case of this release. None is `Gated` yet.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
@@ -145,6 +146,16 @@ pub static CATALOG: &[UseCase] = &[
     twin("agents.list", Exempt, "jeeta.agents.list", ("GET", "/api/agents"), Read),
     twin("agents.whoami", Exempt, "jeeta.agent.whoami", ("GET", "/api/whoami"), Read),
     twin("ledger.list", Exempt, "jeeta.ledger.list", ("GET", "/api/ledger"), Read),
+    twin("strategy.get", Exempt, "jeeta.strategy.get", ("GET", "/api/strategy"), Read),
+    twin("strategy.start_consultation", Exempt, "jeeta.strategy.start_consultation", ("POST", "/api/strategy/consultation"), Write),
+    twin("strategy.record", Exempt, "jeeta.strategy.record", ("POST", "/api/strategy/consultation/entries"), Write),
+    twin("strategy.write_section", Exempt, "jeeta.strategy.write_section", ("PUT", "/api/strategy/draft/sections/{section_key}"), Write),
+    twin("strategy.set_hypotheses", Exempt, "jeeta.strategy.set_hypotheses", ("PUT", "/api/strategy/draft/hypotheses"), Write),
+    twin("strategy.submit", Exempt, "jeeta.strategy.submit", ("POST", "/api/strategy/draft/submit"), Write),
+    twin("strategy.approve", Exempt, "jeeta.strategy.approve", ("POST", "/api/strategy/draft/approve"), Write),
+    twin("strategy.archive", Exempt, "jeeta.strategy.archive", ("POST", "/api/strategy/archive"), Destructive),
+    twin("strategy.list_versions", Exempt, "jeeta.strategy.list_versions", ("GET", "/api/strategy/versions"), Read),
+    twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),
     panel_only("platform.login", Exempt, ("POST", "/api/platform/login"), Write),
     panel_only("platform.workspaces.list", Exempt, ("GET", "/api/platform/workspaces"), Read),
     panel_only("platform.workspaces.set_status", Exempt, ("PATCH", "/api/platform/workspaces/{workspace_id}/status"), Write),

@@ -108,4 +108,16 @@ impl ConsultationRepo for PgTenantRepos {
         .map_err(|e| map_sqlx(e, "list consultation entries"))?;
         records.into_iter().map(EntryRecord::into_entry).collect()
     }
+
+    async fn count(&mut self, version_id: StrategyVersionId) -> Result<i64, AppError> {
+        let ws = self.workspace_id();
+        sqlx::query_scalar(
+            "select count(*) from consultation_entries where workspace_id = $1 and version_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(version_id.as_uuid())
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count consultation entries"))
+    }
 }

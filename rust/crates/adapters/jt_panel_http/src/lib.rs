@@ -125,6 +125,7 @@ mod tests {
     use jt_app::ports::UnitOfWork;
     use jt_app::usecases::Deps;
     use jt_app::usecases::auth::{self, RegisterInput};
+    use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
     use jt_tenancy::{WorkspaceId, WorkspaceStatus};
     use jt_testkit::fakes::{
         FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
@@ -173,6 +174,8 @@ mod tests {
             tokens: Arc::new(FixedTokenGen::new(["aaaa", "session-1"])),
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
         }
     }
 

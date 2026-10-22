@@ -83,6 +83,29 @@ pub trait SecretBox: Send + Sync {
     fn open(&self, ws: WorkspaceId, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError>;
 }
 
+/// The kinds of channel a workspace can use: the kind keys (e.g. `instagram`, `mailbox`) of its
+/// capabilities that are not retired. A strategy may choose only these, or `any`.
+#[async_trait]
+pub trait ChannelCatalog: Send + Sync {
+    /// The kind keys in use in `ws`; none at all is an empty set.
+    async fn kinds_in_use(&self, ws: WorkspaceId) -> Result<BTreeSet<String>, AppError>;
+}
+
+/// Told when a workspace's approved strategy version has been archived, after the archive is
+/// committed, so that work planned under it can be called off (spec §5: the gate closes again).
+///
+/// An error does not undo the archive, which already holds; the archive use case passes it on.
+/// Implementations are therefore idempotent, so that telling them twice about one version is
+/// harmless.
+#[async_trait]
+pub trait StrategyArchivedHook: Send + Sync {
+    async fn on_archived(
+        &self,
+        ws: WorkspaceId,
+        version_id: StrategyVersionId,
+    ) -> Result<(), AppError>;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rows and views
 //
@@ -572,6 +595,8 @@ pub trait ConsultationRepo: Send + Sync {
         limit: u32,
         before: Option<(OffsetDateTime, ConsultationEntryId)>,
     ) -> Result<Vec<ConsultationEntry>, AppError>;
+    /// How many entries the version's log holds; an unknown version has none.
+    async fn count(&mut self, version_id: StrategyVersionId) -> Result<i64, AppError>;
 }
 
 // ---------------------------------------------------------------------------------------------

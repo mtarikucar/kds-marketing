@@ -9,9 +9,21 @@ use jt_app::catalog::{CATALOG, by_mcp_tool};
 /// Routes the panel serves that are infrastructure, not use cases.
 const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
-/// Catalog panel routes not served yet; none at present. Each entry must still be unserved, so
-/// serving one fails this test until it is dropped from here.
-const NOT_YET_SERVED: &[(&str, &str)] = &[];
+/// Catalog panel routes not served yet: the strategy's, whose use cases exist and whose routes
+/// come next. Each entry must still be unserved, so serving one fails this test until it is
+/// dropped from here.
+const NOT_YET_SERVED: &[(&str, &str)] = &[
+    ("GET", "/api/strategy"),
+    ("POST", "/api/strategy/consultation"),
+    ("POST", "/api/strategy/consultation/entries"),
+    ("PUT", "/api/strategy/draft/sections/{section_key}"),
+    ("PUT", "/api/strategy/draft/hypotheses"),
+    ("POST", "/api/strategy/draft/submit"),
+    ("POST", "/api/strategy/draft/approve"),
+    ("POST", "/api/strategy/archive"),
+    ("GET", "/api/strategy/versions"),
+    ("GET", "/api/strategy/versions/{version_id}/consultation"),
+];
 
 #[test]
 fn panel_routes_table_matches_catalog() {
@@ -76,7 +88,12 @@ fn mcp_registry_matches_catalog() {
     let specs = jt_mcp::registry();
     let registered: BTreeSet<&str> = specs.iter().map(|s| s.name).collect();
     assert_eq!(registered.len(), specs.len(), "no tool is registered twice");
-    let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
+    // Tools the registry does not define yet; it checks each is still undefined.
+    let catalog: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter_map(|uc| uc.mcp_tool)
+        .filter(|tool| !jt_mcp::NOT_YET_DEFINED.contains(tool))
+        .collect();
     assert_eq!(registered, catalog, "MCP registry and catalog tools differ");
 
     for spec in &specs {

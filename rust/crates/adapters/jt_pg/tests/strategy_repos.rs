@@ -809,6 +809,8 @@ async fn consultation_is_append_only_and_lists_newest_first() {
     );
     // The limit is clamped to at least one.
     assert_eq!(c.list(v1.id, 0, None).await.unwrap(), vec![e3.clone()]);
+    assert_eq!(c.count(v1.id).await.unwrap(), 3);
+    assert_eq!(c.count(StrategyVersionId::new_v7()).await.unwrap(), 0);
     drop(t);
 
     // Another workspace sees none of them.
@@ -817,6 +819,7 @@ async fn consultation_is_append_only_and_lists_newest_first() {
         t.consultation().list(v1.id, 10, None).await.unwrap(),
         vec![]
     );
+    assert_eq!(t.consultation().count(v1.id).await.unwrap(), 0);
     drop(t);
 
     // A taken id is CONFLICT; an unknown version NOT_FOUND.

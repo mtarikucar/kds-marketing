@@ -20,14 +20,12 @@ use jt_tenancy::{
     AgentConnectionId, ApiKeyId, MembershipId, Permission, SystemRole, UserId, WorkspaceId,
     WorkspaceStatus,
 };
-use jt_testkit::fakes::{
-    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
-};
+use jt_testkit::fakes::{FIXED_NOW, FixedClock, FixedTokenGen, InMemoryUow, deps};
 use serde_json::{Value, json};
-use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 
-const T0: OffsetDateTime = datetime!(2026-10-22 09:00 UTC);
+/// The instant the clock of `fakes::deps` reads.
+const T0: OffsetDateTime = FIXED_NOW;
 const PASSWORD: &str = "correct horse battery";
 const INVALID_KEY: &str = "invalid api key";
 
@@ -49,12 +47,8 @@ impl World {
             .chain((3..=80).map(|i| format!("t{i:02}{}", "x".repeat(40))));
         let uow = InMemoryUow::new();
         let deps = Deps {
-            uow: Arc::new(uow.clone()),
-            clock: Arc::new(FixedClock(T0)),
-            ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(tokens)),
-            hasher: Arc::new(PlainHasher),
-            seal: Arc::new(PlainSecretBox),
+            ..deps(Arc::new(uow.clone()))
         };
         World { uow, deps }
     }

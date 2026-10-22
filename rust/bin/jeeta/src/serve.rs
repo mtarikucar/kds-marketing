@@ -20,6 +20,7 @@ use axum::response::Response;
 use jt_app::error::ErrorCode;
 use jt_app::gate::{NoStrategyYet, StrategyGate};
 use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
+use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
 use jt_outbound::{Egress, FIXED_HOSTS};
@@ -150,6 +151,11 @@ pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
         seal: Arc::new(AesSecretBox::new(*secret_key.bytes())),
+        // Until the capability registry answers, no workspace has a channel kind: a strategy can
+        // only be approved on the `any` channel.
+        channels: Arc::new(NoChannelsYet),
+        // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
+        archived_hook: Arc::new(NoopArchivedHook),
     }
 }
 
@@ -352,6 +358,8 @@ mod tests {
             tokens: Arc::new(RandTokenGen),
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
         }
     }
 

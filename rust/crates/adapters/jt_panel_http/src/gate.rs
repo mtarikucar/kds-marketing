@@ -36,8 +36,8 @@ pub struct RouteGate {
 
 /// Whether the layer checks `uc` at all. It does for every `Gated` use case, and for every use
 /// case the workspace-status check binds, except those of [`OUTSIDE_CURRENT_WORKSPACE`]. Use
-/// cases exempt from both checks (`auth.*`, `workspace.*`, `platform.*`) pass untouched; their
-/// handlers authenticate the caller themselves where they need to.
+/// cases exempt from both checks (`auth.*`, `workspace.*`, `platform.*`, `strategy.*`) pass
+/// untouched; their handlers authenticate the caller themselves where they need to.
 pub fn applies(uc: &UseCase) -> bool {
     match uc.gate {
         GateMode::Gated => true,

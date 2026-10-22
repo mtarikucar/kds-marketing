@@ -11,6 +11,7 @@ pub mod auth;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
+pub mod strategy;
 pub mod team;
 pub mod workspace;
 
@@ -25,7 +26,10 @@ use sha2::{Digest, Sha256};
 
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
-use crate::ports::{Clock, IdGen, PasswordHasher, SecretBox, TokenGen, UnitOfWork};
+use crate::ports::{
+    ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, StrategyArchivedHook, TokenGen,
+    UnitOfWork,
+};
 
 /// The ports a use case may call, built once by the binary (or a test) and shared by every
 /// adapter.
@@ -38,6 +42,10 @@ pub struct Deps {
     pub hasher: Arc<dyn PasswordHasher>,
     /// Seals connector secrets per workspace.
     pub seal: Arc<dyn SecretBox>,
+    /// The channel kinds a workspace has, against which a strategy's channels are checked.
+    pub channels: Arc<dyn ChannelCatalog>,
+    /// Told after an approved strategy version is archived.
+    pub archived_hook: Arc<dyn StrategyArchivedHook>,
 }
 
 /// The stored form of a secret token (a session, invite or API-key token): the lowercase hex

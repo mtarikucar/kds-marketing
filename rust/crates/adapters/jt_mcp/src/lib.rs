@@ -21,6 +21,8 @@ pub mod stdio;
 mod tools;
 
 pub use http::{MCP_PATH, http_service};
-pub use registry::{ToolFuture, ToolRun, ToolSpec, registry, registry_with, risk_tag};
+pub use registry::{
+    NOT_YET_DEFINED, ToolFuture, ToolRun, ToolSpec, registry, registry_with, risk_tag,
+};
 pub use state::{LOOPBACK_HOSTS, McpState};
 pub use stdio::{run_io, run_stdio};

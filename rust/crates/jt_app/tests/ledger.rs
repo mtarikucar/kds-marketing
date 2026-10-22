@@ -12,25 +12,19 @@ use jt_app::usecases::auth::{self, RegisterInput};
 use jt_app::usecases::ledger::{self, DEFAULT_LIMIT, MAX_LIMIT};
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_tenancy::{AgentConnectionId, Permission, WorkspaceId};
-use jt_testkit::fakes::{
-    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
-};
+use jt_testkit::fakes::{FIXED_NOW, FixedTokenGen, InMemoryUow, deps};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
-use time::macros::datetime;
 
-const T0: OffsetDateTime = datetime!(2026-10-22 09:00 UTC);
+/// The instant the clock of `fakes::deps` reads.
+const T0: OffsetDateTime = FIXED_NOW;
 
 /// A registered workspace and its owner's context.
 async fn owner() -> (InMemoryUow, Deps, Ctx) {
     let uow = InMemoryUow::new();
     let deps = Deps {
-        uow: Arc::new(uow.clone()),
-        clock: Arc::new(FixedClock(T0)),
-        ids: Arc::new(SeqIdGen::new()),
         tokens: Arc::new(FixedTokenGen::new(["aaaa", "owner-session"])),
-        hasher: Arc::new(PlainHasher),
-        seal: Arc::new(PlainSecretBox),
+        ..deps(Arc::new(uow.clone()))
     };
     let out = auth::register(
         &deps,

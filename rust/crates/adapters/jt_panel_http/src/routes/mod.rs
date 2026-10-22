@@ -225,6 +225,7 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
     use jt_app::usecases::Deps;
+    use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
     use jt_testkit::fakes::{
         FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
     };
@@ -264,6 +265,8 @@ mod tests {
                 tokens: Arc::new(FixedTokenGen::new(["t1", "t2", "t3"])),
                 hasher: Arc::new(PlainHasher),
                 seal: Arc::new(PlainSecretBox),
+                channels: Arc::new(NoChannelsYet),
+                archived_hook: Arc::new(NoopArchivedHook),
             },
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,

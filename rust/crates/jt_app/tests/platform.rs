@@ -14,14 +14,12 @@ use jt_app::usecases::platform::{self, PLATFORM_SESSION_LIFETIME};
 use jt_app::usecases::{Deps, hash_token};
 use jt_ledger::Actor;
 use jt_tenancy::{Email, WorkspaceId, WorkspaceStatus};
-use jt_testkit::fakes::{
-    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
-};
+use jt_testkit::fakes::{FIXED_NOW, FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, deps};
 use serde_json::json;
-use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 
-const T0: OffsetDateTime = datetime!(2026-10-22 09:00 UTC);
+/// The instant the clock of `fakes::deps` reads.
+const T0: OffsetDateTime = FIXED_NOW;
 const OPERATOR_PASSWORD: &str = "operator passphrase";
 const TENANT_PASSWORD: &str = "correct horse battery";
 
@@ -63,12 +61,9 @@ impl World {
         let uow = InMemoryUow::new();
         let hasher = Arc::new(CountingHasher::default());
         let deps = Deps {
-            uow: Arc::new(uow.clone()),
-            clock: Arc::new(FixedClock(T0)),
-            ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(tokens.iter().copied())),
             hasher: hasher.clone(),
-            seal: Arc::new(PlainSecretBox),
+            ..deps(Arc::new(uow.clone()))
         };
         World { uow, hasher, deps }
     }

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use jt_app::catalog::{CATALOG, Risk};
-use jt_mcp::{ToolSpec, registry, registry_with, risk_tag};
+use jt_mcp::{NOT_YET_DEFINED, ToolSpec, registry, registry_with, risk_tag};
 use serde_json::Value;
 
 const M0_TOOLS: &[&str] = &[
@@ -27,7 +27,11 @@ const M0_TOOLS: &[&str] = &[
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
-    let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
+    let catalog: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter_map(|uc| uc.mcp_tool)
+        .filter(|tool| !NOT_YET_DEFINED.contains(tool))
+        .collect();
     let registered: BTreeSet<&str> = registry().iter().map(|t| t.name).collect();
     assert_eq!(registered, catalog);
     assert_eq!(registered, M0_TOOLS.iter().copied().collect());

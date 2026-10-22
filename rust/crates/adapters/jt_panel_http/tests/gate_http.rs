@@ -16,6 +16,7 @@ use jt_app::gate::{NoStrategyYet, StrategyGate};
 use jt_app::ports::UnitOfWork;
 use jt_app::usecases::Deps;
 use jt_app::usecases::auth::{self, RegisterInput};
+use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_panel_http::gate::{OUTSIDE_CURRENT_WORKSPACE, applies};
 use jt_panel_http::routes::api_route;
 use jt_panel_http::{AppState, Authed, WorkspaceCtx, router, router_with_test_route};
@@ -85,6 +86,8 @@ impl World {
             tokens: Arc::new(jt_app::std_impls::RandTokenGen),
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
         };
         let out = auth::register(
             &deps,
