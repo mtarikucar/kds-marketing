@@ -1144,6 +1144,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "base64 0.23.1",
+ "jt_capability",
  "jt_ledger",
  "jt_strategy",
  "jt_tenancy",
@@ -1264,6 +1265,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "jt_app",
+ "jt_capability",
  "jt_ledger",
  "jt_strategy",
  "jt_tenancy",
@@ -1324,6 +1326,7 @@ dependencies = [
  "axum",
  "hex",
  "jt_app",
+ "jt_capability",
  "jt_ledger",
  "jt_panel_http",
  "jt_pg",

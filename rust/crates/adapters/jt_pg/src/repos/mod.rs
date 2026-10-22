@@ -7,7 +7,9 @@
 //!
 //! Rules every statement keeps:
 //! - A statement on a tenant table (`roles`, `memberships`, `api_keys`, `agent_connections`,
-//!   `ledger_entries`, `strategy_versions`, `strategy_hypotheses`, `consultation_entries`) names
+//!   `ledger_entries`, `strategy_versions`, `strategy_hypotheses`, `consultation_entries`,
+//!   `capabilities`, `capability_groups`, `capability_group_members`, `budget_items`,
+//!   `capability_budget_links`, `budget_spend_entries`, `workspace_policies`) names
 //!   `workspace_id`, and one on `workspaces` names its `id`, even though row-level security scopes
 //!   it too.
 //! - A statement that runs with `app.platform = 'on'` (the platform and user bundles) is preceded
@@ -19,11 +21,15 @@
 
 mod agent_connections;
 pub(crate) mod api_keys;
+mod budget;
+mod capabilities;
 mod consultation;
+mod groups;
 mod hypotheses;
 pub(crate) mod ledger;
 pub(crate) mod memberships;
 mod operators;
+mod policies;
 pub(crate) mod roles;
 mod sessions;
 mod strategy;

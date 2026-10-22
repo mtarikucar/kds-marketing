@@ -17,9 +17,13 @@ async fn table_count(pool: &PgPool) -> i64 {
 
 /// Tables after `0001_foundation`.
 const TABLES_AFTER_FOUNDATION: i64 = 10;
-/// Tables after every migration: `0002_strategy` adds `strategy_versions`, `strategy_hypotheses`
-/// and `consultation_entries`.
-const TABLES_AFTER_ALL: i64 = 13;
+/// Tables after `0002_strategy`, which adds `strategy_versions`, `strategy_hypotheses` and
+/// `consultation_entries`.
+const TABLES_AFTER_STRATEGY: i64 = 13;
+/// Tables after every migration: `0003_capabilities` adds `capabilities`, `capability_groups`,
+/// `capability_group_members`, `budget_items`, `capability_budget_links`,
+/// `budget_spend_entries` and `workspace_policies`.
+const TABLES_AFTER_ALL: i64 = 20;
 
 fn migrations_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../migrations")
@@ -54,51 +58,54 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     let db = TestDb::new().await; // already migrated up
     let dir = migrations_dir();
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+    let run = |sql: String| {
+        let pool = db.pool.clone();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
     let (foundation_up, foundation_down) = (
         read("0001_foundation.up.sql"),
         read("0001_foundation.down.sql"),
     );
     let (strategy_up, strategy_down) =
         (read("0002_strategy.up.sql"), read("0002_strategy.down.sql"));
+    let (capabilities_up, capabilities_down) = (
+        read("0003_capabilities.up.sql"),
+        read("0003_capabilities.down.sql"),
+    );
 
     // Re-running each `up` over an applied schema changes nothing.
-    sqlx::raw_sql(&foundation_up)
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(&strategy_up).execute(&db.pool).await.unwrap();
+    run(foundation_up.clone()).await;
+    run(strategy_up.clone()).await;
+    run(capabilities_up.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
 
     // Newest first, each `down` twice: the second run is a no-op, and its trigger function is
     // gone too.
-    sqlx::raw_sql(&strategy_down)
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(&strategy_down)
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    run(capabilities_down.clone()).await;
+    run(capabilities_down.clone()).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_STRATEGY);
+    assert!(!function_exists(&db.pool, "budget_spend_entries_immutable").await);
+
+    // 0003 applies again on its own, and reverts again.
+    run(capabilities_up).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(function_exists(&db.pool, "budget_spend_entries_immutable").await);
+    run(capabilities_down).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_STRATEGY);
+
+    run(strategy_down.clone()).await;
+    run(strategy_down.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_FOUNDATION);
     assert!(!function_exists(&db.pool, "consultation_entries_immutable").await);
 
     // 0002 applies again on its own, and reverts again.
-    sqlx::raw_sql(&strategy_up).execute(&db.pool).await.unwrap();
-    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    run(strategy_up).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_STRATEGY);
     assert!(function_exists(&db.pool, "consultation_entries_immutable").await);
-    sqlx::raw_sql(&strategy_down)
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    run(strategy_down).await;
 
-    sqlx::raw_sql(&foundation_down)
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(&foundation_down)
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    run(foundation_down.clone()).await;
+    run(foundation_down).await;
     assert_eq!(table_count(&db.pool).await, 0);
     assert!(!function_exists(&db.pool, "ledger_entries_immutable").await);
 }

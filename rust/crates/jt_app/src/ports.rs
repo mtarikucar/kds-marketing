@@ -19,6 +19,10 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
+use jt_capability::{
+    BudgetItem, BudgetItemId, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
+    CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
+};
 use jt_ledger::LedgerEntry;
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, Hypothesis, HypothesisId, HypothesisState, Sections,
@@ -600,6 +604,208 @@ pub trait ConsultationRepo: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Capability repositories: tenant repositories too, over one workspace's capabilities, their
+// groups, budget items and spend, and its workspace-wide policies.
+// ---------------------------------------------------------------------------------------------
+
+/// Which capabilities [`CapabilityRepo::list`] returns: those matching every field that is set
+/// (all of them when none is).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CapabilityFilter {
+    /// Only kinds of this group.
+    pub group: Option<KindGroup>,
+    /// Only this kind key (a [`jt_capability::CapabilityKind::key`]).
+    pub kind: Option<&'static str>,
+    /// Only this stored status.
+    pub status: Option<StoredStatus>,
+    /// Only members of this capability group; a group that is not the workspace's has none.
+    pub group_id: Option<CapabilityGroupId>,
+}
+
+/// The workspace's capabilities.
+///
+/// A kind may have many capabilities (B10), but one external account (the same `kind_key` and
+/// `external_id`) is held by at most one capability that is not `Retired`. Postgres enforces it
+/// with a partial unique index, so of two transactions racing to break it the second one fails
+/// with `CONFLICT`; the fakes refuse the same writes.
+///
+/// The sealed connector credentials are stored beside a capability but never inside the
+/// [`Capability`] value: it only says whether there are any (`has_sealed_config`), and the bytes
+/// come back only from [`CapabilityRepo::read_sealed`]. `has_sealed_config` and
+/// `budget_item_ids` are derived on read (from the sealed column and from the budget links), so
+/// `insert` and `update` ignore them: the blob is written by `insert`'s `sealed` and by
+/// `set_sealed`, the links by [`BudgetRepo::link`] and [`BudgetRepo::unlink`].
+///
+/// Values are stored as given: callers build them with `Capability::new` and validate changes
+/// first.
+#[async_trait]
+pub trait CapabilityRepo: Send + Sync {
+    /// Stores a capability with its sealed credentials, if any. A `capability.workspace_id` other
+    /// than the bundle's is `INTERNAL`; a taken id, or an external account already held by a
+    /// capability of the same kind that is not retired, is `CONFLICT`.
+    async fn insert(
+        &mut self,
+        capability: Capability,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError>;
+    /// The capability, with `has_sealed_config` and its budget item ids (in id order).
+    async fn find(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError>;
+    /// The capabilities `filter` matches, oldest (`created_at`, then id) first.
+    async fn list(&mut self, filter: CapabilityFilter) -> Result<Vec<Capability>, AppError>;
+    /// Writes every stored field of `capability` but its identity: `kind_key` and `created_at`
+    /// stay as stored, and the sealed blob and the budget links are not touched. A
+    /// `capability.workspace_id` other than the bundle's is `INTERNAL`; an unknown id is
+    /// `NOT_FOUND`; moving it onto an external account another live capability of its kind
+    /// holds is `CONFLICT` (in Postgres the transaction is then aborted).
+    async fn update(&mut self, capability: Capability) -> Result<(), AppError>;
+    /// Replaces the sealed credentials (`None` removes them). An unknown id is `NOT_FOUND`.
+    async fn set_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError>;
+    /// The sealed credentials, `None` when there are none. An unknown id is `NOT_FOUND`.
+    ///
+    /// Only the connector use cases call it, to open the blob with the `SecretBox`; no use case
+    /// returns what it gives back.
+    async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
+    /// Sets the stored status and `updated_at = at`. An unknown id is `NOT_FOUND`; bringing a
+    /// retired capability back while another live one holds its external account is `CONFLICT`
+    /// (in Postgres the transaction is then aborted).
+    async fn set_status(
+        &mut self,
+        id: CapabilityId,
+        status: StoredStatus,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// The kind keys of the capabilities that are not retired; none at all is an empty set. The
+    /// `ChannelCatalog` answers from it.
+    async fn kinds_in_use(&mut self) -> Result<BTreeSet<String>, AppError>;
+}
+
+/// The workspace's capability groups and their members. A group's name is unique within the
+/// workspace (exactly, case included). Member ids come in id order.
+#[async_trait]
+pub trait CapabilityGroupRepo: Send + Sync {
+    /// Stores a group created at `at`. A `group.workspace_id` other than the bundle's is
+    /// `INTERNAL`; a taken id or name is `CONFLICT`.
+    async fn insert(&mut self, group: CapabilityGroup, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Every group with its members, oldest group first.
+    async fn list(&mut self) -> Result<Vec<(CapabilityGroup, Vec<CapabilityId>)>, AppError>;
+    /// The group with its members.
+    async fn find(
+        &mut self,
+        id: CapabilityGroupId,
+    ) -> Result<Option<(CapabilityGroup, Vec<CapabilityId>)>, AppError>;
+    /// Renames the group (callers validate the name). An unknown id is `NOT_FOUND`; a name
+    /// another group of the workspace has is `CONFLICT` (in Postgres the transaction is then
+    /// aborted).
+    async fn rename(&mut self, id: CapabilityGroupId, name: &str) -> Result<(), AppError>;
+    /// Deletes the group; its members are detached, the capabilities stay. An unknown id is
+    /// `NOT_FOUND`.
+    async fn delete(&mut self, id: CapabilityGroupId) -> Result<(), AppError>;
+    /// Adds the capability to the group; adding a member again changes nothing. A group or a
+    /// capability that is not the bundle's workspace's is `NOT_FOUND` (Review Focus 3).
+    async fn add_member(
+        &mut self,
+        group: CapabilityGroupId,
+        capability: CapabilityId,
+    ) -> Result<(), AppError>;
+    /// Removes the capability from the group. A pair that is not a member of a group of the
+    /// workspace is `NOT_FOUND`.
+    async fn remove_member(
+        &mut self,
+        group: CapabilityGroupId,
+        capability: CapabilityId,
+    ) -> Result<(), AppError>;
+}
+
+/// The most entries one [`BudgetRepo::list_spend`] returns.
+pub const MAX_SPEND_PAGE: u32 = 500;
+
+/// The workspace's budget items, the capabilities linked to them, and the append-only ledger of
+/// what was spent from each. Spend entries are never changed or deleted (Postgres refuses it with
+/// a trigger).
+///
+/// Values are stored as given: callers build them with `BudgetItem::new` and `BudgetSpend::new`.
+/// A negative cap or an amount that is not positive breaks a check constraint and is `INTERNAL`.
+#[async_trait]
+pub trait BudgetRepo: Send + Sync {
+    /// Stores a budget item. An `item.workspace_id` other than the bundle's is `INTERNAL`; a
+    /// taken id is `CONFLICT`.
+    async fn insert_item(&mut self, item: BudgetItem) -> Result<(), AppError>;
+    /// Every budget item, oldest (`created_at`, then id) first.
+    async fn list_items(&mut self) -> Result<Vec<BudgetItem>, AppError>;
+    async fn find_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError>;
+    /// Links the capability to the budget item it spends from; linking again changes nothing. A
+    /// capability or an item that is not the bundle's workspace's is `NOT_FOUND` (Review Focus
+    /// 3). Whether the kinds fit (`can_link_budget`) is the caller's rule.
+    async fn link(&mut self, capability: CapabilityId, item: BudgetItemId) -> Result<(), AppError>;
+    /// Removes the link. A pair that is not linked in the workspace is `NOT_FOUND`.
+    async fn unlink(
+        &mut self,
+        capability: CapabilityId,
+        item: BudgetItemId,
+    ) -> Result<(), AppError>;
+    /// Appends a spend to the ledger of its item and returns its id. A `spend.workspace_id`
+    /// other than the bundle's is `INTERNAL`; an item that is not the workspace's is
+    /// `NOT_FOUND`; a taken id is `CONFLICT`.
+    async fn append_spend(&mut self, spend: BudgetSpend) -> Result<BudgetSpendId, AppError>;
+    /// The sum of the item's spend at `from` or later and before `to` (the half-open window of
+    /// `period_window`); 0 for an item with none (or not the workspace's). A sum beyond
+    /// `i64::MAX` reads as `i64::MAX`.
+    async fn spent_between(
+        &mut self,
+        item: BudgetItemId,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<i64, AppError>;
+    /// The item's spend newest first, ordered by `(at, id)` descending, at most `limit` (clamped
+    /// to `1..=MAX_SPEND_PAGE`). `before` is a keyset cursor, the `(at, id)` of the previous
+    /// page's last entry: only entries ordered after it are returned.
+    async fn list_spend(
+        &mut self,
+        item: BudgetItemId,
+        limit: u32,
+        before: Option<(OffsetDateTime, BudgetSpendId)>,
+    ) -> Result<Vec<BudgetSpend>, AppError>;
+}
+
+/// How often an agent checks in unless the workspace says otherwise: once a day.
+pub const DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 1_440;
+/// The shortest check-in interval a workspace may set, in minutes.
+pub const MIN_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 15;
+/// The longest check-in interval a workspace may set, in minutes: a week.
+pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
+
+/// The workspace-wide policies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct WorkspacePolicy {
+    /// How often an agent is expected to check in, in minutes:
+    /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES`.
+    pub agent_checkin_interval_minutes: u32,
+}
+
+impl Default for WorkspacePolicy {
+    fn default() -> Self {
+        WorkspacePolicy {
+            agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
+        }
+    }
+}
+
+/// The workspace's policies.
+#[async_trait]
+pub trait WorkspacePolicyRepo: Send + Sync {
+    /// The stored policies, or [`WorkspacePolicy::default`] while none are stored.
+    async fn get(&mut self) -> Result<WorkspacePolicy, AppError>;
+    /// Stores the policies, updated at `at`, replacing any stored before. An interval outside
+    /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check
+    /// constraint and is `INTERNAL`: callers validate first.
+    async fn set(&mut self, policy: WorkspacePolicy, at: OffsetDateTime) -> Result<(), AppError>;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Platform repositories
 // ---------------------------------------------------------------------------------------------
 
@@ -642,6 +848,10 @@ pub trait TenantRepos: Send + Sync {
     fn strategy(&mut self) -> &mut dyn StrategyRepo;
     fn hypotheses(&mut self) -> &mut dyn HypothesisRepo;
     fn consultation(&mut self) -> &mut dyn ConsultationRepo;
+    fn capabilities(&mut self) -> &mut dyn CapabilityRepo;
+    fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo;
+    fn budget(&mut self) -> &mut dyn BudgetRepo;
+    fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 

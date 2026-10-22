@@ -6,9 +6,10 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, ConsultationRepo,
-    HypothesisRepo, LedgerFilter, LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow,
-    RoleRepo, StrategyRepo, TenantRepos, WorkspaceRepo, WorkspaceRow,
+    AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, BudgetRepo,
+    CapabilityGroupRepo, CapabilityRepo, ConsultationRepo, HypothesisRepo, LedgerFilter,
+    LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow, RoleRepo, StrategyRepo,
+    TenantRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
 use jt_ledger::LedgerEntry;
 use jt_tenancy::{
@@ -75,6 +76,22 @@ impl TenantRepos for MemTenant {
     }
 
     fn consultation(&mut self) -> &mut dyn ConsultationRepo {
+        self
+    }
+
+    fn capabilities(&mut self) -> &mut dyn CapabilityRepo {
+        self
+    }
+
+    fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo {
+        self
+    }
+
+    fn budget(&mut self) -> &mut dyn BudgetRepo {
+        self
+    }
+
+    fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo {
         self
     }
 

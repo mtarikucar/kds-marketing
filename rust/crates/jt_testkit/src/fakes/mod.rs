@@ -18,6 +18,11 @@
 //!   hypothesis or consultation entry must hang off a version of the bundle's own workspace
 //!   (`NOT_FOUND`); a hypothesis confidence outside `0.0..=1.0` breaks the check constraint
 //!   (`INTERNAL`);
+//! - one external account (kind and external id) is held by at most one capability that is not
+//!   retired (`CONFLICT`, as the partial unique index of migration 0003 answers); group members,
+//!   budget links and spend hang only off rows of the bundle's own workspace (`NOT_FOUND`); a
+//!   negative budget cap, a spend amount that is not positive and a check-in interval outside
+//!   `15..=10080` break check constraints (`INTERNAL`); spend is never changed or removed;
 //! - once any call on a bundle has failed, the bundle is spoiled: its `commit` returns
 //!   `INTERNAL` and writes nothing, as a Postgres transaction aborted by a failed statement does.
 //!
@@ -29,8 +34,10 @@
 //! run against Postgres (`TestDb`), not these fakes.
 //!
 //! Layout: `services` holds the service fakes and [`deps`]; `state` the tables, the shared checks
-//! and the unit of work; `tenant`, `strategy`, `user` and `platform` the bundles' repos.
+//! and the unit of work; `tenant`, `strategy`, `capability`, `user` and `platform` the bundles'
+//! repos.
 
+mod capability;
 mod platform;
 mod services;
 mod state;
@@ -42,4 +49,8 @@ pub use services::{
     DEPS_TOKENS, FIXED_NOW, FixedChannelCatalog, FixedClock, FixedTokenGen, PLAIN_PREFIX,
     PlainHasher, PlainSecretBox, SeqIdGen, deps,
 };
-pub use state::{InMemoryUow, MemState, StoredConsultationEntry, StoredHypothesis, StoredRole};
+pub use state::{
+    InMemoryUow, MemState, StoredBudgetLink, StoredCapability, StoredCapabilityGroup,
+    StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredRole,
+    StoredWorkspacePolicy,
+};

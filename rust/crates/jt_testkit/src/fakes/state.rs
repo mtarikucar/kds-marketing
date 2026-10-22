@@ -9,7 +9,11 @@ use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRow, ApiKeyRow, LedgerRow, MembershipRow, MembershipView, OperatorRow,
     PlatformRepos, PlatformSessionRow, SessionRow, TenantRepos, UnitOfWork, UserRepos, UserRow,
-    WorkspaceRow,
+    WorkspacePolicy, WorkspaceRow,
+};
+use jt_capability::{
+    BudgetItem, BudgetItemId, BudgetSpend, Capability, CapabilityGroup, CapabilityGroupId,
+    CapabilityId,
 };
 use jt_ledger::{Actor, LedgerEntry};
 use jt_strategy::{
@@ -48,6 +52,46 @@ pub struct StoredConsultationEntry {
     pub entry: ConsultationEntry,
 }
 
+/// A capability together with its sealed credentials. The stored `capability` keeps
+/// `has_sealed_config` false and `budget_item_ids` empty: reads derive both, from `sealed` and
+/// from the budget links, as `jt_pg` does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredCapability {
+    pub capability: Capability,
+    pub sealed: Option<Vec<u8>>,
+}
+
+/// A capability group together with when it was created.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredCapabilityGroup {
+    pub group: CapabilityGroup,
+    pub created_at: OffsetDateTime,
+}
+
+/// One capability in one group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredGroupMember {
+    pub workspace_id: WorkspaceId,
+    pub group_id: CapabilityGroupId,
+    pub capability_id: CapabilityId,
+}
+
+/// One capability spending from one budget item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredBudgetLink {
+    pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
+    pub budget_item_id: BudgetItemId,
+}
+
+/// A workspace's policies together with when they were last set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredWorkspacePolicy {
+    pub workspace_id: WorkspaceId,
+    pub policy: WorkspacePolicy,
+    pub updated_at: OffsetDateTime,
+}
+
 /// Every table, in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
@@ -64,6 +108,13 @@ pub struct MemState {
     pub strategy_versions: Vec<StrategyVersion>,
     pub hypotheses: Vec<StoredHypothesis>,
     pub consultation: Vec<StoredConsultationEntry>,
+    pub capabilities: Vec<StoredCapability>,
+    pub capability_groups: Vec<StoredCapabilityGroup>,
+    pub capability_group_members: Vec<StoredGroupMember>,
+    pub budget_items: Vec<BudgetItem>,
+    pub capability_budget_links: Vec<StoredBudgetLink>,
+    pub budget_spend: Vec<BudgetSpend>,
+    pub workspace_policies: Vec<StoredWorkspacePolicy>,
 }
 
 impl MemState {

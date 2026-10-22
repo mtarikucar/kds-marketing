@@ -32,6 +32,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_tenancy",
     "jt_ledger",
     "jt_strategy",
+    "jt_capability",
     "serde",
     "serde_json",
     "uuid",

@@ -14,9 +14,10 @@ use async_trait::async_trait;
 use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{
-    AgentConnectionRepo, ApiKeyRepo, ConsultationRepo, HypothesisRepo, LedgerRepo, MembershipRepo,
-    PlatformRepos, RoleRepo, StrategyArchivedHook, StrategyRepo, TenantRepos, UnitOfWork,
-    UserRepos, UserRow, WorkspaceRepo,
+    AgentConnectionRepo, ApiKeyRepo, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
+    ConsultationRepo, HypothesisRepo, LedgerRepo, MembershipRepo, PlatformRepos, RoleRepo,
+    StrategyArchivedHook, StrategyRepo, TenantRepos, UnitOfWork, UserRepos, UserRow,
+    WorkspacePolicyRepo, WorkspaceRepo,
 };
 use jt_app::usecases::Deps;
 use jt_app::usecases::api_keys::{self, CreateKey};
@@ -145,6 +146,22 @@ impl TenantRepos for SpyTenant {
 
     fn consultation(&mut self) -> &mut dyn ConsultationRepo {
         self
+    }
+
+    fn capabilities(&mut self) -> &mut dyn CapabilityRepo {
+        self.inner.capabilities()
+    }
+
+    fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo {
+        self.inner.capability_groups()
+    }
+
+    fn budget(&mut self) -> &mut dyn BudgetRepo {
+        self.inner.budget()
+    }
+
+    fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo {
+        self.inner.workspace_policy()
     }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {

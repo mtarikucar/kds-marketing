@@ -254,7 +254,9 @@ gösterebilir.
 ## Satır düzeyi güvenlik (RLS) ve veritabanı rolleri
 
 Kiracı tabloları (`roles`, `memberships`, `api_keys`, `agent_connections`, `ledger_entries`,
-`strategy_versions`, `strategy_hypotheses`, `consultation_entries`) ve `workspaces`,
+`strategy_versions`, `strategy_hypotheses`, `consultation_entries`, `capabilities`,
+`capability_groups`, `capability_group_members`, `budget_items`, `capability_budget_links`,
+`budget_spend_entries`, `workspace_policies`) ve `workspaces`,
 `ENABLE` + `FORCE ROW LEVEL SECURITY` ile korunur: bir satır yalnızca işlem içinde `app.workspace_id` o
 çalışma alanını gösterdiğinde ya da `app.platform = 'on'` olduğunda görünür ve yazılabilir. Bu ayarları
 yalnızca `jt_pg`'nin `TenantTx`, `PlatformTx` ve `UserTx` işlemleri koyar.
