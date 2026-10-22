@@ -104,7 +104,7 @@ describe('StrategyPage', () => {
       'GET /api/strategy': approvedOnly,
       [`GET /api/strategy/versions/${APPROVED_ID}/consultation`]: [],
       'GET /api/capability-groups': [],
-      'POST /api/strategy/archive': null,
+      'POST /api/strategy/archive': { version_id: APPROVED_ID, archived: true },
     });
     renderAt('/strategy');
     await user.click(await screen.findByRole('button', { name: tr.strategy.archive }));

@@ -5,7 +5,8 @@
 //! draft, records questions, answers, assumptions and notes, writes sections and hypotheses and
 //! submits; an owner or a manager approves, or archives the version in force by naming it. Every
 //! write answers the draft as it now stands (`200`), but recording an entry, which answers its
-//! id (`201`), and archiving, which leaves nothing to show (`204`). A request that is not valid,
+//! id (`201`), and archiving, which answers the confirmation `{version_id, archived: true}`
+//! (`200`), exactly as `jeeta.strategy.archive` does. A request that is not valid,
 //! a draft not ready for approval among them, is `422 VALIDATION` with `details.gaps` where the
 //! use case lists them.
 
@@ -38,6 +39,14 @@ pub struct RecordBody {
 #[derive(Serialize)]
 pub struct RecordedBody {
     pub id: ConsultationEntryId,
+}
+
+/// The answer to archiving, as `jeeta.strategy.archive` answers it.
+#[derive(Serialize)]
+pub struct ArchivedBody {
+    pub version_id: StrategyVersionId,
+    /// Always `true`.
+    pub archived: bool,
 }
 
 /// `POST /api/strategy/archive`: the approved version meant, and the confirmation (missing reads
@@ -135,18 +144,22 @@ pub async fn approve(
     Ok(Json(strategy::approve(&state.deps, &ctx).await?))
 }
 
-/// `204`: the named version is archived and the workspace has no strategy in force.
+/// `200` with `{version_id, archived: true}`: the named version is archived and the workspace has
+/// no strategy in force.
 pub async fn archive(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(body): ApiJson<ArchiveBody>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<ArchivedBody>, ApiError> {
     let input = ArchiveInput {
         version_id: body.version_id,
         confirm: body.confirm,
     };
     strategy::archive(&state.deps, &ctx, input).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(ArchivedBody {
+        version_id: body.version_id,
+        archived: true,
+    }))
 }
 
 /// `200` with every version, newest first.

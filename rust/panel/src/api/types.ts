@@ -574,6 +574,12 @@ export interface GroupOut {
   members: CapabilityOut[];
 }
 
+/** `jt_panel_http::routes::strategy::ArchivedBody`, as `jeeta.strategy.archive` answers too. */
+export interface ArchivedOut {
+  version_id: Uuid;
+  archived: boolean;
+}
+
 /** `jt_panel_http::routes::groups::DeletedBody`. */
 export interface GroupDeletedOut {
   group_id: Uuid;

@@ -62,9 +62,12 @@ describe('api wrappers: query parameters', () => {
 });
 
 describe('api wrappers: bodies and answers', () => {
-  it('archives with the version and the confirmation, and takes the 204', async () => {
-    const calls = mockFetch({ 'POST /api/strategy/archive': null });
-    await expect(archiveVersion({ version_id: VERSION, confirm: true })).resolves.toBeUndefined();
+  it('archives with the version and the confirmation, and answers as the MCP tool does', async () => {
+    const calls = mockFetch({ 'POST /api/strategy/archive': { version_id: VERSION, archived: true } });
+    await expect(archiveVersion({ version_id: VERSION, confirm: true })).resolves.toEqual({
+      version_id: VERSION,
+      archived: true,
+    });
     expect(calls[0].body).toEqual({ version_id: VERSION, confirm: true });
     expect(calls[0].headers.get('x-requested-with')).toBe('jeeta-panel');
   });

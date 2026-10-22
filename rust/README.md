@@ -289,7 +289,7 @@ kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get` açıklam
 | Hipotezler | `PUT /api/strategy/draft/hypotheses` | `jeeta.strategy.set_hypotheses` | `team.manage` |
 | Onaya sunma | `POST /api/strategy/draft/submit` | `jeeta.strategy.submit` | `team.manage` |
 | Onaylama | `POST /api/strategy/draft/approve` | `jeeta.strategy.approve` | sahip ya da yönetici + `team.manage` |
-| Arşivleme (gövde `{"version_id": …, "confirm": true}`) | `POST /api/strategy/archive` | `jeeta.strategy.archive` | sahip ya da yönetici + `team.manage` |
+| Arşivleme (gövde `{"version_id": …, "confirm": true}`; yanıt iki kapıda da `200 {"version_id": …, "archived": true}`) | `POST /api/strategy/archive` | `jeeta.strategy.archive` | sahip ya da yönetici + `team.manage` |
 | Sürümler | `GET /api/strategy/versions` | `jeeta.strategy.list_versions` | `workspace.read` |
 | İstişare kaydı (`limit`, `before_at` + `before_id`) | `GET /api/strategy/versions/{version_id}/consultation` | `jeeta.strategy.consultation` | `workspace.read` |
 

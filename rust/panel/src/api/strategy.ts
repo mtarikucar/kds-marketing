@@ -1,5 +1,6 @@
 import { request, seg } from './client';
 import type {
+  ArchivedOut,
   ConsultationEntry,
   HypothesisInput,
   RecordKind,
@@ -58,8 +59,11 @@ export function approveDraft(): Promise<VersionOut> {
   return request('POST', '/api/strategy/draft/approve');
 }
 
-/** `POST /api/strategy/archive` (`204`): archives the named approved version. */
-export function archiveVersion(input: { version_id: string; confirm: boolean }): Promise<void> {
+/**
+ * `POST /api/strategy/archive`: archives the named approved version; answers `{version_id, archived: true}`,
+ * as `jeeta.strategy.archive` does.
+ */
+export function archiveVersion(input: { version_id: string; confirm: boolean }): Promise<ArchivedOut> {
   return request('POST', '/api/strategy/archive', {
     body: { version_id: input.version_id, confirm: input.confirm },
   });

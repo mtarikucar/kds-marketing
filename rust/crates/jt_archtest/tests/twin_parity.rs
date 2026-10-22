@@ -7,6 +7,9 @@
 //!   human's authority over MCP.
 //! - `strategy.get`: after an approval, `GET /api/strategy` and `jeeta.strategy.get` answer the
 //!   same JSON, field for field.
+//! - `strategy.archive`: archiving the version in force answers `{version_id, archived: true}` on
+//!   both surfaces (each archives a version of its own: one can be archived only once), and the
+//!   same error once nothing is left to archive.
 //! - `capability.list`: after declarations, `GET /api/capabilities` answers the very list
 //!   `jeeta.capability.list` answers under `capabilities`.
 //! - `capability.unlink_budget`, `capability.groups.remove_member`, `capability.groups.delete`:
@@ -256,7 +259,7 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
 }
 
 #[tokio::test]
-async fn strategy_get_answers_the_same_over_the_panel_and_mcp() {
+async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let db = TestDb::new().await;
     let (_, user) = db.seed_workspace("alpha").await;
     let deps = deps(&db);
@@ -340,6 +343,49 @@ async fn strategy_get_answers_the_same_over_the_panel_and_mcp() {
     );
     assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
     assert!(human["approved"]["id"].is_string());
+
+    // Archiving: the agent archives version 1; the owner approves the open draft as version 2
+    // and archives it on the panel. Both answer the same confirmation for their own version.
+    let first = human["approved"]["id"].clone();
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.archive",
+        json!({ "version_id": first, "confirm": true }),
+    )
+    .await;
+    assert_eq!(agent, json!({ "version_id": first, "archived": true }));
+    ok(post("/api/strategy/draft/submit", None).await).await;
+    let second = ok(post("/api/strategy/draft/approve", None).await).await["id"].clone();
+    let resp = post(
+        "/api/strategy/archive",
+        Some(json!({ "version_id": second, "confirm": true })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    assert_eq!(human, json!({ "version_id": second, "archived": true }));
+
+    // Nothing is left to archive: the same refusal on both surfaces.
+    let resp = post(
+        "/api/strategy/archive",
+        Some(json!({ "version_id": second, "confirm": true })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.archive",
+        json!({ "version_id": second, "confirm": true }),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["code"], "CONFLICT");
 }
 
 #[tokio::test]

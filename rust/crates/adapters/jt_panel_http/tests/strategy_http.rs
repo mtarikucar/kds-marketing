@@ -363,9 +363,14 @@ async fn archive_with_wrong_version_is_409() {
     let still = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(still["approved"]["id"], json!(id));
 
-    // Confirmed: archived, and the strategy gate is closed again.
+    // Confirmed: archived (`200` with the confirmation `jeeta.strategy.archive` answers), and the
+    // strategy gate is closed again.
     let resp = archive(json!({ "version_id": id, "confirm": true })).await;
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(resp).await,
+        json!({ "version_id": id, "archived": true })
+    );
     let strategy = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(strategy["approved"], Value::Null);
     let versions = ok_json(p.get("/api/strategy/versions", &owner).await).await;
