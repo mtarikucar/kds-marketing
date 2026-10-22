@@ -331,6 +331,7 @@ function capability(
       policy: defaultPolicy,
       budget_item_ids: [],
       strategy_version_id: null,
+      declared_by_connection: null,
       created_at: '2026-10-21T08:00:00Z',
       updated_at: '2026-10-21T08:00:00Z',
     },

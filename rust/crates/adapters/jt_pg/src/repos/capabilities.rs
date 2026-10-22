@@ -7,6 +7,7 @@
 //! capability selects `connector_sealed is not null` instead of the bytes. The budget item ids
 //! come from `capability_budget_links`, in the same statement. The partial unique index
 //! `capabilities_live_external_account` keeps one live capability per external account.
+//! `declared_by_connection` is written once, by `insert`: `update` leaves it as declared.
 
 use std::collections::BTreeSet;
 
@@ -16,7 +17,7 @@ use jt_app::ports::{CapabilityFilter, CapabilityRepo};
 use jt_capability::{
     BudgetItemId, Capability, CapabilityId, Evidence, Policy, Reach, StoredStatus, kinds_in_group,
 };
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{AgentConnectionId, WorkspaceId};
 use sqlx::PgConnection;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -32,7 +33,7 @@ const LIVE_EXTERNAL_ACCOUNT: &str = "capabilities_live_external_account";
 const COLUMNS: &str = "c.id, c.workspace_id, c.kind_key, c.key_detail, c.name, c.description, \
      c.reach, c.status, c.external_id, c.connector_public, \
      c.connector_sealed is not null as has_sealed_config, c.last_verified_at, c.evidence, \
-     c.policy, c.strategy_version_id, c.created_at, c.updated_at, \
+     c.policy, c.strategy_version_id, c.declared_by_connection, c.created_at, c.updated_at, \
      array(select l.budget_item_id from capability_budget_links l \
      where l.workspace_id = c.workspace_id and l.capability_id = c.id \
      order by l.budget_item_id) as budget_item_ids";
@@ -54,6 +55,7 @@ struct CapabilityRecord {
     evidence: Option<serde_json::Value>,
     policy: serde_json::Value,
     strategy_version_id: Option<Uuid>,
+    declared_by_connection: Option<Uuid>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     budget_item_ids: Vec<Uuid>,
@@ -85,6 +87,7 @@ impl CapabilityRecord {
             policy,
             budget_item_ids: self.budget_item_ids.into_iter().map(BudgetItemId).collect(),
             strategy_version_id: self.strategy_version_id,
+            declared_by_connection: self.declared_by_connection.map(AgentConnectionId),
             created_at: self.created_at,
             updated_at: self.updated_at,
         })
@@ -151,8 +154,10 @@ impl CapabilityRepo for PgTenantRepos {
         let done = sqlx::query(
             "insert into capabilities (id, workspace_id, kind_key, key_detail, name, \
              description, reach, status, external_id, connector_public, connector_sealed, \
-             last_verified_at, evidence, policy, strategy_version_id, created_at, updated_at) \
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+             last_verified_at, evidence, policy, strategy_version_id, declared_by_connection, \
+             created_at, updated_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
+             $18) \
              on conflict do nothing",
         )
         .bind(c.id.as_uuid())
@@ -170,6 +175,7 @@ impl CapabilityRepo for PgTenantRepos {
         .bind(evidence_json(c.evidence.as_ref())?)
         .bind(policy_json(&c.policy)?)
         .bind(c.strategy_version_id)
+        .bind(c.declared_by_connection.map(|id| id.as_uuid()))
         .bind(c.created_at)
         .bind(c.updated_at)
         .execute(self.tx.conn())

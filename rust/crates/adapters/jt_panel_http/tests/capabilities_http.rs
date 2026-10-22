@@ -521,29 +521,82 @@ async fn call_tool(app: &Router, key: &str, session: &str, name: &str, arguments
     sse_message(resp, 2).await["result"].clone()
 }
 
-#[tokio::test]
-async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
-    let p = Panel::new().await;
-    let (owner, _) = p.register(OWNER, "Alpha").await;
-    let phone = declare(&p, &owner, "phone", "Saha telefonu").await;
-
-    // The owner issues the agent a key that may only read the workspace.
+/// A key the owner issues on the panel with `scopes`; its plaintext.
+async fn issue_key(p: &Panel, owner: &str, name: &str, scopes: &[&str]) -> String {
     let key = expect(
         post(
-            &p,
+            p,
             "/api/api-keys",
-            &owner,
-            json!({ "name": "telefon ajanı", "scopes": ["workspace.read"] }),
+            owner,
+            json!({ "name": name, "scopes": scopes }),
         )
         .await,
         StatusCode::CREATED,
     )
     .await;
-    let key = key["plaintext"].as_str().unwrap().to_owned();
+    key["plaintext"].as_str().unwrap().to_owned()
+}
 
-    // The agent proves the phone is in its hands: its claim, recorded as given.
+#[tokio::test]
+async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register(OWNER, "Alpha").await;
+
+    // The owner issues the agent a key that may declare capabilities; the agent declares the
+    // phone it holds through its connection.
+    let key = issue_key(
+        &p,
+        &owner,
+        "telefon ajanı",
+        &["workspace.read", "capabilities.manage"],
+    )
+    .await;
     let app = with_mcp(&p);
     let session = mcp_session(&app, &key).await;
+    let declared = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.declare",
+        json!({ "kind_key": "phone", "name": "Saha telefonu" }),
+    )
+    .await;
+    assert_ne!(declared["isError"], json!(true), "{declared}");
+    let phone = declared["structuredContent"]["capability"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(declared["structuredContent"]["capability"]["declared_by_connection"].is_string());
+
+    // A key that may only read the workspace, on a connection of its own: it may not declare,
+    // nor verify a phone another connection declared.
+    let reader = issue_key(&p, &owner, "okuyucu", &["workspace.read"]).await;
+    let reader_session = mcp_session(&app, &reader).await;
+    let refused = call_tool(
+        &app,
+        &reader,
+        &reader_session,
+        "jeeta.capability.declare",
+        json!({ "kind_key": "printer", "name": "Yazıcı" }),
+    )
+    .await;
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    assert_eq!(refused["structuredContent"]["code"], "FORBIDDEN");
+    let refused = call_tool(
+        &app,
+        &reader,
+        &reader_session,
+        "jeeta.capability.verify",
+        json!({ "capability_id": phone, "evidence": { "text": "bende" } }),
+    )
+    .await;
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    assert_eq!(
+        refused["structuredContent"]["details"],
+        json!({ "permission": "capabilities.manage" })
+    );
+
+    // The declaring agent proves the phone is in its hands: its claim, recorded as given.
     let evidence = json!({
         "text": "adb devices listed the phone and a test SMS was sent",
         "refs": ["serial:R58M12345", "screenshot:0f3a"],
@@ -558,18 +611,6 @@ async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
     .await;
     assert_ne!(result["isError"], json!(true), "{result}");
     assert_eq!(result["structuredContent"]["effective_status"], "verified");
-
-    // The same key may not declare anything.
-    let refused = call_tool(
-        &app,
-        &key,
-        &session,
-        "jeeta.capability.declare",
-        json!({ "kind_key": "printer", "name": "Yazıcı" }),
-    )
-    .await;
-    assert_eq!(refused["isError"], json!(true), "{refused}");
-    assert_eq!(refused["structuredContent"]["code"], "FORBIDDEN");
 
     // The panel shows the phone verified, with the agent's evidence.
     let got = ok_json(p.get(&format!("/api/capabilities/{phone}"), &owner).await).await;

@@ -554,6 +554,8 @@ export interface Capability {
   policy: Policy;
   budget_item_ids: Uuid[];
   strategy_version_id: Uuid | null;
+  /** The agent connection that declared it; `null` when a person did. */
+  declared_by_connection: Uuid | null;
   created_at: Rfc3339;
   updated_at: Rfc3339;
 }

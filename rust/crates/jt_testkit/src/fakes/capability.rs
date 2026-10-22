@@ -234,6 +234,7 @@ impl CapabilityRepo for MemTenant {
                     stored.capability = Capability {
                         kind_key: kept.kind_key.clone(),
                         created_at: kept.created_at,
+                        declared_by_connection: kept.declared_by_connection,
                         has_sealed_config: false,
                         budget_item_ids: Vec::new(),
                         ..capability.clone()

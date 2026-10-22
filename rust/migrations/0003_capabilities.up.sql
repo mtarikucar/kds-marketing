@@ -31,6 +31,7 @@ create table if not exists capabilities (
     evidence jsonb,
     policy jsonb not null default '{}'::jsonb,
     strategy_version_id uuid,
+    declared_by_connection uuid null,
     created_at timestamptz not null,
     updated_at timestamptz not null,
     unique (workspace_id, id)

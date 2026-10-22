@@ -1,6 +1,6 @@
 //! The capability: one thing a workspace can act through (spec §6.1).
 
-use jt_tenancy::{WorkspaceId, define_id};
+use jt_tenancy::{AgentConnectionId, WorkspaceId, define_id};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
@@ -99,6 +99,11 @@ pub struct Capability {
     /// The strategy version its policies came from. Missing reads as `None`.
     #[serde(default)]
     pub strategy_version_id: Option<Uuid>,
+    /// The agent connection that declared it, when an agent did; `None` when a person did.
+    /// An agent may verify a capability on its own evidence with `workspace.read` alone only
+    /// through this connection. Missing reads as `None`.
+    #[serde(default)]
+    pub declared_by_connection: Option<AgentConnectionId>,
     /// Missing reads as the Unix epoch.
     #[serde(default = "epoch", with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -128,8 +133,9 @@ pub struct NewCapability {
 
 impl Capability {
     /// A new, declared capability with the reach of its kind, created and updated at `now`, no
-    /// verification, no sealed credentials, no budget links and no strategy version (the use
-    /// case sets one when a strategy is approved).
+    /// verification, no sealed credentials, no budget links, no strategy version (the use case
+    /// sets one when a strategy is approved) and no declaring connection (the use case sets the
+    /// agent's).
     ///
     /// Refuses, in this order: a kind not on the list (`UnknownKind`); a missing, malformed or
     /// unexpected `key_detail` ([`validate_key_detail`]); a bad name (trimmed, then
@@ -195,6 +201,7 @@ impl Capability {
             policy,
             budget_item_ids: Vec::new(),
             strategy_version_id: None,
+            declared_by_connection: None,
             created_at: now,
             updated_at: now,
         })

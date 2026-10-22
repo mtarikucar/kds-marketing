@@ -8,6 +8,7 @@ mod support;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{ChannelCatalog, TenantHostRegistry, UnitOfWork};
 use jt_app::usecases::budget::{self, BudgetItemInput};
@@ -15,12 +16,14 @@ use jt_app::usecases::capabilities::{
     self, CapabilityQuery, DeclareInput, UowChannelCatalog, parse_policy_strict,
 };
 use jt_app::usecases::groups;
+use jt_app::usecases::strategy;
 use jt_capability::{
     BudgetItemId, BudgetKind, CapabilityGroupId, CapabilityId, EffectiveStatus, Evidence, Hours,
     Period, Policy, Reach, StoredStatus, Unit,
 };
 use jt_ledger::Actor;
-use jt_tenancy::WorkspaceId;
+use jt_strategy::{ChannelChoice, Sections, StrategyVersion, StrategyVersionId, VersionStatus};
+use jt_tenancy::{Permission, WorkspaceId};
 use jt_testkit::fakes::{FIXED_NOW, HostCall, InMemoryUow, RecordingTenantHosts};
 use serde_json::{Value, json};
 use support::*;
@@ -471,12 +474,25 @@ async fn list_filters_by_group_kind_status_and_capability_group() {
 // ---------------------------------------------------------------------------------------------
 
 #[tokio::test]
-async fn agent_verifies_its_own_device_with_workspace_read_only() {
+async fn agent_can_verify_only_what_its_connection_declared() {
     let w = world().await;
-    let phone = w.declare("phone", "Satış telefonu").await.capability.id;
-    let shell = w.declare("shell", "Kabuk").await.capability.id;
-    let agent = w.agent(&["workspace.read"]).await;
-    for id in [phone, shell] {
+    // The agent declares its own phone and shell through its connection ...
+    let declarer = w.agent(&["workspace.read", "capabilities.manage"]).await;
+    let declare = |kind, name| capabilities::declare(&w.deps, &declarer, declaring(kind, name));
+    let phone = declare("phone", "Satış telefonu").await.unwrap().capability;
+    let shell = declare("shell", "Kabuk").await.unwrap().capability;
+    assert_eq!(phone.declared_by_connection, declarer.agent_connection_id);
+    assert!(declarer.agent_connection_id.is_some());
+    // ... and a person's declaration names no connection.
+    let printer = w.declare("printer", "Yazıcı").await.capability;
+    assert_eq!(printer.declared_by_connection, None);
+
+    // Through the same connection, reading the workspace is enough to verify them.
+    let agent = Ctx {
+        permissions: BTreeSet::from([Permission::WorkspaceRead]),
+        ..declarer.clone()
+    };
+    for id in [phone.id, shell.id] {
         let out = capabilities::verify(
             &w.deps,
             &agent,
@@ -489,6 +505,7 @@ async fn agent_verifies_its_own_device_with_workspace_read_only() {
         assert_eq!(c.status, StoredStatus::Verified);
         assert_eq!(out.effective_status, EffectiveStatus::Verified);
         assert_eq!(c.last_verified_at, Some(FIXED_NOW));
+        assert_eq!(c.declared_by_connection, agent.agent_connection_id);
         assert_eq!(
             c.evidence,
             Some(evidence(
@@ -506,12 +523,58 @@ async fn agent_verifies_its_own_device_with_workspace_read_only() {
         assert!(!wire(entry).contains("answered adb"));
     }
 
-    // Without workspace.read, an agent may not even claim it.
-    let auditor = w.agent(&["ledger.read"]).await;
+    // What a person declared is not the agent's own: reading is not enough.
     assert_forbidden(
-        &err(capabilities::verify(&w.deps, &auditor, phone, evidence("x", &[])).await),
+        &err(capabilities::verify(&w.deps, &agent, printer.id, evidence("x", &[])).await),
+        "capabilities.manage",
+    );
+
+    // Without workspace.read, an agent may not even claim its own.
+    let auditor = Ctx {
+        permissions: BTreeSet::from([Permission::LedgerRead]),
+        ..declarer.clone()
+    };
+    assert_forbidden(
+        &err(capabilities::verify(&w.deps, &auditor, phone.id, evidence("x", &[])).await),
         "workspace.read",
     );
+    assert_eq!(w.entries("capability.verify").len(), 2);
+}
+
+#[tokio::test]
+async fn another_agent_connection_needs_capabilities_manage() {
+    let w = world().await;
+    let declarer = w.agent(&["workspace.read", "capabilities.manage"]).await;
+    let phone = capabilities::declare(&w.deps, &declarer, declaring("phone", "Telefon"))
+        .await
+        .unwrap()
+        .capability
+        .id;
+
+    // Another connection reading the workspace only: refused, nothing written.
+    let other = w.agent(&["workspace.read"]).await;
+    assert_ne!(other.agent_connection_id, declarer.agent_connection_id);
+    assert_forbidden(
+        &err(capabilities::verify(&w.deps, &other, phone, evidence("bende", &[])).await),
+        "capabilities.manage",
+    );
+    assert!(w.entries("capability.verify").is_empty());
+    let c = capabilities::get(&w.deps, &w.owner_ctx, phone)
+        .await
+        .unwrap();
+    assert_eq!(c.capability.status, StoredStatus::Declared);
+
+    // Another connection holding capabilities.manage may, as a person holding it may.
+    let manager = w.agent(&["workspace.read", "capabilities.manage"]).await;
+    let out = capabilities::verify(&w.deps, &manager, phone, evidence("bende", &[]))
+        .await
+        .unwrap();
+    assert_eq!(out.capability.status, StoredStatus::Verified);
+    assert_eq!(
+        out.capability.declared_by_connection,
+        declarer.agent_connection_id
+    );
+    assert_eq!(w.entries("capability.verify")[0].actor, manager.actor);
 }
 
 #[tokio::test]
@@ -1337,4 +1400,71 @@ async fn groups_need_capabilities_manage_to_change_and_workspace_read_to_list() 
     assert_eq!(groups::list(d, &rep).await.unwrap().len(), 1);
     let auditor = w.agent(&["ledger.read"]).await;
     assert_forbidden(&err(groups::list(d, &auditor).await), "workspace.read");
+}
+
+#[tokio::test]
+async fn group_referenced_by_strategy_cannot_be_deleted() {
+    let w = world().await;
+    let (d, o) = (&w.deps, &w.owner_ctx);
+    let brand = groups::create(d, o, "Marka A".into(), None)
+        .await
+        .unwrap()
+        .group
+        .id;
+    let spare = groups::create(d, o, "Yedek".into(), None)
+        .await
+        .unwrap()
+        .group
+        .id;
+    let narrowed_to = |group: Option<CapabilityGroupId>| Sections {
+        channels: vec![ChannelChoice {
+            channel: "any".into(),
+            rationale: "her yerde".into(),
+            group_id: group.map(|g| g.as_uuid()),
+        }],
+        ..Sections::default()
+    };
+
+    // The approved version narrows its channel to the brand's group; the draft opened from it
+    // copies the choice.
+    let approved = StrategyVersionId::new_v7();
+    {
+        let mut t = w.uow.tenant(w.ws).await.unwrap();
+        t.strategy()
+            .insert(StrategyVersion {
+                id: approved,
+                workspace_id: w.ws,
+                number: 1,
+                status: VersionStatus::Approved,
+                sections: narrowed_to(Some(brand)),
+                created_at: FIXED_NOW,
+                created_by: Actor::Human { user_id: w.owner },
+                submitted_at: Some(FIXED_NOW),
+                approved_at: Some(FIXED_NOW),
+                approved_by: Some(w.owner),
+                archived_at: None,
+            })
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+    let draft = strategy::start_consultation(d, o).await.unwrap().id;
+    let e = err(groups::delete(d, o, brand).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.message, "group is referenced by the strategy");
+    assert_eq!(e.details, json!({ "version_ids": [approved, draft] }));
+
+    // The draft drops the group; the approved version still names it.
+    let channels = json!([{ "channel": "any", "rationale": "her yerde" }]);
+    strategy::write_section(d, o, "channels".into(), channels)
+        .await
+        .unwrap();
+    let e = err(groups::delete(d, o, brand).await);
+    assert_eq!(e.details, json!({ "version_ids": [approved] }));
+    assert_eq!(groups::list(d, o).await.unwrap().len(), 2);
+    assert!(w.entries("capability.groups.delete").is_empty());
+
+    // A group nothing refers to is deleted as before.
+    groups::delete(d, o, spare).await.unwrap();
+    assert_eq!(w.entries("capability.groups.delete").len(), 1);
 }

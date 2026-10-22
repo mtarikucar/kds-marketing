@@ -15,7 +15,7 @@ use jt_capability::{
     NewBudgetSpend, NewCapability, Period, Policy, SpendSource, StoredStatus, Unit, period_window,
 };
 use jt_pg::{PgUnitOfWork, PlatformTx, TenantTx};
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{AgentConnectionId, WorkspaceId};
 use jt_testkit::TestDb;
 use serde_json::json;
 use time::macros::datetime;
@@ -125,7 +125,11 @@ async fn capability_insert_find_list_update_and_sealed_round_trip() {
     let (b, _) = db.seed_workspace("b").await;
 
     let instagram = capability(a, "instagram", Some("ig-1"), T0);
-    let phone = capability(a, "phone", None, T0 + Duration::minutes(1));
+    // An agent's declaration keeps the connection that made it.
+    let phone = Capability {
+        declared_by_connection: Some(AgentConnectionId::new_v7()),
+        ..capability(a, "phone", None, T0 + Duration::minutes(1))
+    };
     let other = capability(a, "other", None, T0 + Duration::minutes(2));
     let sealed = b"v1-nonce-and-ciphertext".to_vec();
     insert(&uow, &instagram, Some(sealed.clone())).await;
@@ -225,6 +229,8 @@ async fn capability_insert_find_list_update_and_sealed_round_trip() {
             kind_key: "camera".into(),
             created_at: t1,
             has_sealed_config: true,
+            // The declaring connection is written once, by the insert.
+            declared_by_connection: None,
             ..verified_phone.clone()
         })
         .await

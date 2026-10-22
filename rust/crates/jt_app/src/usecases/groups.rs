@@ -6,7 +6,8 @@
 //! may be in many groups and groups do not nest. Listing needs `workspace.read`; every change
 //! needs `capabilities.manage`. A name is trimmed, 1 to 64 characters, and unique within the
 //! workspace whatever its case ("Marka A" and "marka a" are one name): a taken name is `CONFLICT`.
-//! A retired capability cannot join a group (`CONFLICT` "capability is retired"). Each change
+//! A retired capability cannot join a group (`CONFLICT` "capability is retired"), and a group
+//! the strategy narrows a channel to cannot be deleted (`CONFLICT`). Each change
 //! writes one ledger entry about the group (`subject.kind = "capability_group"`) under the
 //! strategy version in force, if any.
 
@@ -136,12 +137,38 @@ pub async fn rename(
 }
 
 /// Deletes group `id`; its members are detached and stay. Needs `capabilities.manage`. A group
-/// that is not this workspace's is `NOT_FOUND`. Writes `capability.groups.delete` (payload
-/// `name`, `members`: how many it had).
+/// that is not this workspace's is `NOT_FOUND`. A group a channel of the strategy is narrowed to
+/// (`ChannelChoice::group_id` of the approved version or of the open draft) is `CONFLICT` "group
+/// is referenced by the strategy", listing those versions in `details.version_ids` (the approved
+/// one first), and nothing changes: deleting a group stays recoverable only while nothing refers
+/// to it. Writes `capability.groups.delete` (payload `name`, `members`: how many it had).
+///
+/// The draft lock is taken first, as every draft mutation takes it, so a concurrent edit or
+/// approval waits for the delete (or the delete for it) and the check reads a settled strategy.
 pub async fn delete(deps: &Deps, ctx: &Ctx, id: CapabilityGroupId) -> Result<(), AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let draft = repos.strategy().lock_draft().await?;
     let (group, members) = find_group(repos.as_mut(), id).await?;
+    let approved = repos.strategy().current_approved().await?;
+    let referencing: Vec<StrategyVersionId> = approved
+        .iter()
+        .chain(draft.iter())
+        .filter(|v| {
+            v.sections
+                .channels
+                .iter()
+                .any(|c| c.group_id == Some(id.as_uuid()))
+        })
+        .map(|v| v.id)
+        .collect();
+    if !referencing.is_empty() {
+        return Err(AppError {
+            code: ErrorCode::Conflict,
+            message: "group is referenced by the strategy".to_owned(),
+            details: json!({ "version_ids": referencing }),
+        });
+    }
     repos.capability_groups().delete(id).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
     record(

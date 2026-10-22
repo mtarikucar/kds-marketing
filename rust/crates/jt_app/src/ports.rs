@@ -804,8 +804,9 @@ pub trait CapabilityRepo: Send + Sync {
     async fn lock(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError>;
     /// The capabilities `filter` matches, oldest (`created_at`, then id) first.
     async fn list(&mut self, filter: CapabilityFilter) -> Result<Vec<Capability>, AppError>;
-    /// Writes every stored field of `capability` but its identity: `kind_key` and `created_at`
-    /// stay as stored, and the sealed blob and the budget links are not touched. A
+    /// Writes every stored field of `capability` but its identity: `kind_key`, `created_at` and
+    /// `declared_by_connection` stay as stored, and the sealed blob and the budget links are not
+    /// touched. A
     /// `capability.workspace_id` other than the bundle's is `INTERNAL`; an unknown id is
     /// `NOT_FOUND`; moving it onto an external account another live capability of its kind
     /// holds is `CONFLICT` (in Postgres the transaction is then aborted).

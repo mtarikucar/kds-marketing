@@ -5,11 +5,12 @@
 //! from them. The groups are in [`super::groups`], the budget items in [`super::budget`].
 //!
 //! **Who may do what.** Reading needs `workspace.read`. Every change needs `capabilities.manage`,
-//! except verifying: an agent (whatever its key's other scopes) may verify a capability reached
-//! through an agent or a device with `workspace.read` alone, because the evidence is its own claim
-//! about its own hands (spec §6.4); a person needs `capabilities.manage`. A capability reached
-//! through a connector is verified by its connector's probe, never by a claim: verifying one is
-//! `CONFLICT` for everyone.
+//! except verifying: an agent may verify a capability reached through an agent or a device with
+//! `workspace.read` alone when its own connection declared it, because the evidence is then its
+//! own claim about its own hands (spec §6.4); verifying one another connection (or a person)
+//! declared needs `capabilities.manage`, as it does for a person. A capability reached through a
+//! connector is verified by its connector's probe, never by a claim: verifying one is `CONFLICT`
+//! for everyone.
 //!
 //! **Retired is final.** A retired capability keeps its row for the record and can no longer be
 //! verified, marked unreachable, given a policy, grouped or linked to a budget item (`CONFLICT`
@@ -204,7 +205,8 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<CapabilityO
 /// Declares a capability and returns it. Needs `capabilities.manage`.
 ///
 /// The capability is `declared`, reached as its kind is (`CapabilityKind::default_reach`), with
-/// the policy given (or the default) and the strategy version in force, if any. Refused with
+/// the policy given (or the default), the strategy version in force, if any, and, when an agent
+/// declares it, the agent's connection (`declared_by_connection`). Refused with
 /// `VALIDATION`: an unknown kind (naming `kind_key`), a missing, malformed or unexpected
 /// `key_detail`, a bad `name`, an over-long `description`, a blank or over-long `external_id`
 /// (each naming its field); public connector fields that are not an object or hold a
@@ -255,6 +257,9 @@ pub async fn declare(
         deps.hosts.check(host)?;
     }
 
+    // An agent's connection; a person's call has none.
+    capability.declared_by_connection = ctx.agent_connection_id;
+
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
     capability.strategy_version_id = in_force.map(|v| v.as_uuid());
@@ -293,12 +298,15 @@ pub async fn declare(
 
 /// Marks capability `id` verified on the strength of `evidence`, at `ctx.now`, and returns it.
 ///
-/// An agent needs `workspace.read`; anyone else `capabilities.manage`. The evidence is checked
-/// (`validate_evidence`; gaps are `VALIDATION` with `details.gaps`) and stored as given, never
-/// checked against the world. An unknown id is `NOT_FOUND`; a capability reached through a
-/// connector is `CONFLICT` "connector capabilities are verified by their probe"; a retired one
-/// `CONFLICT` "capability is retired". Writes `capability.verify` (payload `evidence_refs`: how
-/// many references the evidence has; never its text).
+/// An agent needs `workspace.read`, and `capabilities.manage` as well unless its own connection
+/// declared the capability (`declared_by_connection`); anyone else needs `capabilities.manage`.
+/// The evidence is checked (`validate_evidence`; gaps are `VALIDATION` with `details.gaps`) and
+/// stored as given, never checked against the world. An unknown id is `NOT_FOUND`; a capability
+/// reached through a connector is `CONFLICT` "connector capabilities are verified by their
+/// probe"; a retired one `CONFLICT` "capability is retired"; then an agent verifying what
+/// another connection declared without `capabilities.manage` is `FORBIDDEN` naming it. Writes
+/// `capability.verify` (payload `evidence_refs`: how many references the evidence has; never
+/// its text).
 pub async fn verify(
     deps: &Deps,
     ctx: &Ctx,
@@ -306,7 +314,8 @@ pub async fn verify(
     evidence: Evidence,
 ) -> Result<CapabilityOut, AppError> {
     match ctx.actor {
-        // The agent's claim about its own hands: reading the workspace is enough.
+        // The agent's claim about its own hands: reading the workspace is enough for what its
+        // connection declared (checked once the capability is read).
         Actor::Agent { .. } => ctx.require(Permission::WorkspaceRead)?,
         Actor::Human { .. } | Actor::System { .. } => {
             ctx.require(Permission::CapabilitiesManage)?;
@@ -324,6 +333,11 @@ pub async fn verify(
         ));
     }
     not_retired(&capability)?;
+    let declared_here = ctx.agent_connection_id.is_some()
+        && capability.declared_by_connection == ctx.agent_connection_id;
+    if matches!(ctx.actor, Actor::Agent { .. }) && !declared_here {
+        ctx.require(Permission::CapabilitiesManage)?;
+    }
     let refs = evidence.refs.len();
     capability.status = StoredStatus::Verified;
     capability.last_verified_at = Some(ctx.now);
