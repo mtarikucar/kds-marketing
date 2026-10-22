@@ -9,8 +9,10 @@
 //!
 //! The same check binds sessions to keys ([`crate::sessions`]): a response that carries a new
 //! `Mcp-Session-Id` binds that session to the request's key, a `DELETE` drops the binding, and a
-//! request naming a session bound to another key is answered `404` "unknown session" before
-//! rmcp sees it.
+//! request naming a session that is not bound to its own key (bound to another key, or bound to
+//! none: never created here, evicted or deleted) is answered `404` "unknown session" before rmcp
+//! sees it. The check fails closed: only a binding to the request's own key lets a session id
+//! through, so a client whose binding is gone re-initialises.
 
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, Method, header};
@@ -27,12 +29,13 @@ pub const INVALID_KEY: &str = "invalid api key";
 
 /// The header naming an MCP session.
 pub const SESSION_HEADER: &str = "mcp-session-id";
-/// The answer to a request naming a session of another key, as to an unknown one.
+/// The answer to a request naming a session that is not bound to its key: of another key, or
+/// unknown.
 pub const UNKNOWN_SESSION: &str = "unknown session";
 
 /// Authenticates the request's bearer key, keeps sessions to their own key, and stores the
 /// principal in the request's extensions; or answers `401` (`500` when the key cannot be
-/// checked at all), or `404` for a session bound to another key.
+/// checked at all), or `404` for a session id that is not bound to this key.
 pub async fn require_api_key(
     State(state): State<McpState>,
     mut req: Request,
@@ -47,8 +50,11 @@ pub async fn require_api_key(
     };
     let key = principal.api_key_id;
     let session = session_id(req.headers()).map(str::to_owned);
+    // Fail closed: a session id passes only when it is bound to this very key. An id bound to
+    // no key (evicted, deleted, or never created here) is refused like another key's, so
+    // evicting a binding never opens its session to anyone.
     if let Some(id) = &session
-        && state.sessions().owner(id).is_some_and(|owner| owner != key)
+        && state.sessions().owner(id) != Some(key)
     {
         return http_error(AppError::not_found(UNKNOWN_SESSION));
     }

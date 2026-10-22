@@ -92,6 +92,14 @@ impl McpState {
         self
     }
 
+    /// The same state keeping at most `capacity` session bindings instead of
+    /// [`crate::sessions::MAX_BOUND_SESSIONS`]. Meant for tests of eviction; the binary serves
+    /// the default.
+    pub fn with_session_capacity(mut self, capacity: usize) -> McpState {
+        self.sessions = Arc::new(SessionKeys::with_capacity(capacity));
+        self
+    }
+
     /// The hosts the HTTP endpoint accepts.
     pub fn allowed_hosts(&self) -> &[String] {
         &self.allowed_hosts

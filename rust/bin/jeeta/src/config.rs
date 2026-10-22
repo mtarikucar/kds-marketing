@@ -53,7 +53,9 @@ const VARS: &[&str] = &[
 ];
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
-pub const DEFAULT_LOG: &str = "info";
+/// `info`, with rmcp held to warnings: rmcp logs every new MCP session id at `info`, and a
+/// session id must not reach the logs.
+pub const DEFAULT_LOG: &str = "info,rmcp=warn";
 
 /// The env files tried in order; the first that exists is loaded (from the repository root, or
 /// from `rust/` itself).
@@ -415,6 +417,7 @@ mod tests {
         assert_eq!(config.bootstrap, None);
         assert_eq!(config.stdio_api_key, None);
         assert_eq!(config.log_filter, DEFAULT_LOG);
+        assert_eq!(config.log_filter, "info,rmcp=warn");
         assert_eq!(config.log_format, LogFormat::Compact);
     }
 

@@ -86,7 +86,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_PLATFORM_BOOTSTRAP_EMAIL` | — | İlk platform operatörünün e-postası; parolayla birlikte verilir |
 | `JEETA_PLATFORM_BOOTSTRAP_PASSWORD` | — | İlk platform operatörünün parolası (en az 12 karakter); e-postayla birlikte verilir |
 | `JEETA_STDIO_API_KEY` | — | `jeeta mcp-stdio` kipinin kullandığı API anahtarı (`jt_live_…`) |
-| `JEETA_LOG` | `info` | `tracing` süzgeci, ör. `info,jeeta=debug` |
+| `JEETA_LOG` | `info,rmcp=warn` | `tracing` süzgeci, ör. `info,rmcp=warn,jeeta=debug`. Kendi süzgecinizde `rmcp=warn`'u koruyun: rmcp her yeni MCP oturum kimliğini (`Mcp-Session-Id`) `info` düzeyinde yazar |
 | `JEETA_LOG_FORMAT` | `compact` | `compact` ya da `json`. Günlükler stderr'e yazılır |
 
 Erişim günlüğü her istek için yalnızca yöntemi, rota şablonunu (`/api/team/{membership_id}`), durumu ve
@@ -131,7 +131,10 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    bir kez gösterilir. API'den: `POST /api/api-keys` gövdesi `{"name":"ajan"}`, oturum çereziyle.
 2. Uç nokta `http://127.0.0.1:8080/mcp`, taşıma **streamable HTTP**, kimlik
    `Authorization: Bearer jt_live_…`. Anahtar her istekte doğrulanır; bir MCP oturumu (`Mcp-Session-Id`) onu
-   açan anahtara bağlıdır. Ajan anahtarın çalışma alanında, anahtarın kapsamlarıyla çalışır.
+   açan anahtara bağlıdır. Bu bağı olmayan bir oturum kimliği (başka bir anahtarın, silinmiş, hiç
+   açılmamış ya da bellekteki 10.000 bağın en eskisi olarak düşmüş bir oturum) her anahtar için
+   `404 {"code":"NOT_FOUND","message":"unknown session","details":{}}` alır; istemci yeniden
+   `initialize` eder. Ajan anahtarın çalışma alanında, anahtarın kapsamlarıyla çalışır.
 
    Claude Code:
 

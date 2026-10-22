@@ -3,15 +3,16 @@
 //! rmcp serves any request that names a live `Mcp-Session-Id`, whoever sends it. The bearer
 //! check ([`crate::auth`]) therefore binds each session to the key that created it (the key of
 //! the request whose response carried the new session id) and answers a request naming a
-//! session bound to another key exactly as rmcp answers an unknown session: `404`, here with
-//! the structured body `{"code":"NOT_FOUND","message":"unknown session","details":{}}`. So a
-//! leaked session id is worth nothing to anyone but its own key, and its existence is not
-//! revealed.
+//! session that is not bound to its key exactly as rmcp answers an unknown session: `404`, here
+//! with the structured body `{"code":"NOT_FOUND","message":"unknown session","details":{}}`.
+//! That covers a session bound to another key and one bound to none at all, so a leaked session
+//! id is worth nothing to anyone but its own key, and its existence is not revealed.
 //!
 //! The bindings live in memory, one process, like rmcp's sessions themselves. An entry is
 //! dropped when its session is deleted; beyond [`MAX_BOUND_SESSIONS`] the oldest binding is
-//! evicted (rmcp closes a session after five idle minutes, so only far more new sessions than
-//! that within those minutes would evict a live one).
+//! evicted. Eviction fails closed: the evicted session can no longer be used by anyone, its own
+//! key included (that client re-initialises), so flooding the map with new sessions cannot make
+//! another key's session reachable.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};

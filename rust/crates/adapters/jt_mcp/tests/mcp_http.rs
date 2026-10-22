@@ -424,6 +424,31 @@ async fn sse_message(resp: axum::response::Response, id: i64) -> Value {
         .expect("the response message")
 }
 
+fn initialize_request(id: i64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "acme-agent", "version": "1.0" },
+        },
+    })
+}
+
+/// Initialises a session on `app` with `key` and completes the handshake; returns the session id.
+async fn open_session(app: &axum::Router, key: &str) -> String {
+    let resp = raw(app, Method::POST, key, None, Some(initialize_request(1))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let session = resp.headers()[SESSION_HEADER].to_str().unwrap().to_owned();
+    assert!(sse_message(resp, 1).await["result"].is_object());
+    let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+    let resp = raw(app, Method::POST, key, Some(&session), Some(initialized)).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+    session
+}
+
 async fn assert_unknown_session(resp: axum::response::Response) {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -438,26 +463,11 @@ async fn session_bound_to_other_key_is_unknown() {
     let w = World::new().await;
     let a = w.key(w.a, &[]).await.plaintext;
     let b = w.key(w.b, &[]).await.plaintext;
-    let app = http_service(w.state());
+    let state = w.state();
+    let app = http_service(state.clone());
 
     // Key A initialises and gets a session.
-    let init = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "acme-agent", "version": "1.0" },
-        },
-    });
-    let resp = raw(&app, Method::POST, &a, None, Some(init)).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let session = resp.headers()[SESSION_HEADER].to_str().unwrap().to_owned();
-    assert!(sse_message(resp, 1).await["result"].is_object());
-    let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    let resp = raw(&app, Method::POST, &a, Some(&session), Some(initialized)).await;
-    assert!(resp.status().is_success(), "{}", resp.status());
+    let session = open_session(&app, &a).await;
 
     // Key B, valid in its own workspace, cannot reach it in any way.
     let list = |id: i64| json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list" });
@@ -485,11 +495,68 @@ async fn session_bound_to_other_key_is_unknown() {
             .is_empty()
     );
 
-    // Once A ends the session it is gone for everyone (rmcp's own 404).
+    // Once A ends the session its binding is gone too, so it is unknown for everyone, A
+    // included, before rmcp is even asked.
     let resp = raw(&app, Method::DELETE, &a, Some(&session), None).await;
     assert!(resp.status().is_success(), "{}", resp.status());
-    let resp = raw(&app, Method::POST, &a, Some(&session), Some(list(4))).await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(state.sessions().is_empty());
+    assert_unknown_session(raw(&app, Method::POST, &a, Some(&session), Some(list(4))).await).await;
+    assert_unknown_session(raw(&app, Method::POST, &b, Some(&session), Some(list(5))).await).await;
+}
+
+#[tokio::test]
+async fn evicted_or_unknown_session_id_is_refused() {
+    let w = World::new().await;
+    let a = w.key(w.a, &[]).await.plaintext;
+    let b = w.key(w.b, &[]).await.plaintext;
+    // Room for a single binding, so one new session evicts the previous one.
+    let state = w.state().with_session_capacity(1);
+    let app = http_service(state.clone());
+    let list = |id: i64| json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list" });
+
+    // A session id never created here is refused, structured, for any key and any method.
+    for key in [&a, &b] {
+        let made_up = "0193c7a2-made-up-session";
+        assert_unknown_session(raw(&app, Method::POST, key, Some(made_up), Some(list(2))).await)
+            .await;
+        assert_unknown_session(raw(&app, Method::GET, key, Some(made_up), None).await).await;
+        assert_unknown_session(raw(&app, Method::DELETE, key, Some(made_up), None).await).await;
+    }
+
+    // A's session works while it is bound.
+    let victim = open_session(&app, &a).await;
+    let resp = raw(&app, Method::POST, &a, Some(&victim), Some(list(3))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(sse_message(resp, 3).await["result"]["tools"].is_array());
+
+    // B opens a session of its own, which evicts A's binding (rmcp still holds A's session and
+    // its completed stream for replay).
+    let attacker = open_session(&app, &b).await;
+    assert_eq!(state.sessions().len(), 1);
+    assert_eq!(state.sessions().owner(&victim), None);
+
+    // The evicted id is refused for B, whatever it asks: a request, a stream resumption with
+    // `Last-Event-ID`, or ending it.
+    assert_unknown_session(raw(&app, Method::POST, &b, Some(&victim), Some(list(4))).await).await;
+    let resume = Request::get("/mcp")
+        .header(header::HOST, "127.0.0.1")
+        .header(header::ACCEPT, "text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {b}"))
+        .header(SESSION_HEADER, &victim)
+        .header("last-event-id", "0")
+        .body(Body::empty())
+        .unwrap();
+    assert_unknown_session(app.clone().oneshot(resume).await.unwrap()).await;
+    assert_unknown_session(raw(&app, Method::DELETE, &b, Some(&victim), None).await).await;
+
+    // And for A itself: an unbound session is closed to everyone, so A initialises again.
+    assert_unknown_session(raw(&app, Method::POST, &a, Some(&victim), Some(list(5))).await).await;
+    let again = open_session(&app, &a).await;
+    let resp = raw(&app, Method::POST, &a, Some(&again), Some(list(6))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // B's own session was evicted in turn by A's new one: it too is refused now.
+    assert_unknown_session(raw(&app, Method::POST, &b, Some(&attacker), Some(list(7))).await).await;
 }
 
 // ---------------------------------------------------------------------------------------------
