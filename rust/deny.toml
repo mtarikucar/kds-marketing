@@ -18,9 +18,15 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
-# Only jt_outbound may pull an HTTP client; only jt_pg may pull sqlx.
+# Only jt_outbound may pull an HTTP client, and that client is reqwest: no other HTTP client at
+# all (spec §4.3). Only jt_pg may pull sqlx.
 deny = [
   { crate = "reqwest", wrappers = ["jt_outbound"] },
+  { crate = "ureq", wrappers = ["jt_outbound"] },
+  { crate = "isahc", wrappers = ["jt_outbound"] },
+  { crate = "surf", wrappers = ["jt_outbound"] },
+  { crate = "attohttpc", wrappers = ["jt_outbound"] },
+  { crate = "curl", wrappers = ["jt_outbound"] },
   { crate = "sqlx", wrappers = ["jt_pg", "jt_testkit", "jeeta"] },
   # AI / media / speech providers: never, anywhere (spec §4.2).
   { crate = "async-openai" }, { crate = "openai" }, { crate = "openai-api-rs" }, { crate = "openai_api_rust" },

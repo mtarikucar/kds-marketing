@@ -35,7 +35,9 @@ pnpm build        # tsc --noEmit && vite build → dist/
 
 ### Yerel sunucuya karşı çalıştırma
 
-İkili `JEETA_PANEL_DIR`'i `rust/` klasörüne göre okur:
+İkili göreli bir `JEETA_PANEL_DIR`'i **çalışılan dizine** göre okur: `rust/` içinden başlatılınca
+`panel/dist`, depo kökünden başlatılınca `rust/panel/dist`. Dizinde `index.html` yoksa açılış günlüğü
+bunu söyler (`panel=missing: …`).
 
 ```sh
 cd rust/panel && pnpm build
@@ -43,6 +45,9 @@ cd .. && JEETA_PANEL_DIR=panel/dist JEETA_COOKIE_SECURE=false JEETA_DATABASE_URL
   cargo run -p jeeta -- serve
 # http://127.0.0.1:8080/ → panel
 ```
+
+Eksik ya da hatalı bir değişken tek satırlık bir hatayla durdurur, ör.
+`jeeta: configuration: JEETA_SECRET_KEY: must be 64 hexadecimal characters …`.
 
 Değişkenlerin tamamı ve yerel kurulum: `rust/README.md`. Panel ilk yazıldığında derlenmiş paket
 `vite preview` ile sunulup başsız bir tarayıcıda, sahte bir `/api` ile açıldı: giriş, ana sayfa, ekip ve
@@ -63,13 +68,17 @@ kökende kalır.
   ile kendisi ele alır. Girişten sonra gelinen sayfaya dönülür (yalnızca yönlendirici durumunda, URL'de
   değil; panel dışına işaret edemez).
 - `types.ts`: Rust çıktı yapılarının karşılıkları (`MeOut`, `WorkspaceOut`, `MemberOut`, `InviteOut`,
-  `AcceptOut`, `RoleDef`, `KeyOut`, `KeySummary`, `AgentConnectionOut`, `LedgerEntryOut`,
+  `AcceptOut`, `RoleDef`, `KeyOut`, `KeySummary`, `AgentConnectionOut`, `WhoAmI`, `LedgerEntryOut`,
   `WorkspaceAdminOut`, `PlatformSessionOut`).
 - Rota başına sarmalayıcılar: `auth.ts`, `workspace.ts`, `team.ts`, `roles.ts`, `apiKeys.ts`, `agents.ts`,
   `ledger.ts`, `platform.ts`. Oturum çerezleri (`jt_session`, `jt_platform`) `HttpOnly`'dir; panel onları
   hiç okumaz.
+- `agents.ts` ayrıca `whoami()` (`GET /api/whoami`) sunar: ajanın `jeeta.agent.whoami` ile aldığı yanıtın
+  insan için ikizi; arayüz henüz kullanmıyor.
 - Tek seferlik sırlar (davet jetonu, API anahtarının düz metni) yalnızca açık diyalogun durumunda
-  tutulur; mutasyon önbelleğe yazılmaz (`gcTime: 0`) ve diyalog kapanınca silinir.
+  tutulur; mutasyon önbelleğe yazılmaz (`gcTime: 0`) ve diyalog kapanınca silinir. Sır gösterilirken
+  diyalog ne Escape ile ne dışına tıklanarak kapanır, köşedeki kapatma simgesi de gizlenir: yalnızca
+  açık "Kapat" düğmesi kapatır (`DialogContent`'in `dismissible={false}` kipi).
 
 ## Diller (`src/i18n/`)
 
@@ -83,7 +92,7 @@ bileşenlerde sabit metin yoktur.
 | Yol | Sayfa |
 |---|---|
 | `/login`, `/register` | giriş, kayıt (hesap + ilk çalışma alanı) |
-| `/invite/:token` | daveti kabul: oturum varsa tek tık; yoksa ad + parola ile hesap; e-posta zaten kayıtlıysa giriş bağlantısı |
+| `/invite/:token` | daveti kabul: oturum varsa tek tık, ardından oturum katılınan çalışma alanına geçer; yoksa ad + parola ile hesap; e-posta zaten kayıtlıysa giriş bağlantısı |
 | `/` | çalışma alanı kartı, durum rozeti, "Strateji bekleniyor" yer tutucusu |
 | `/team` | üyeler, rol seçimi, çıkarma (onaylı), davet diyaloğu: tek seferlik `/invite/<token>` bağlantısı + kopyala |
 | `/roles` | sistem ve özel roller; özel rol oluşturma/düzenleme (sabit izin listesi), silme |
@@ -92,7 +101,8 @@ bileşenlerde sabit metin yoktur.
 | `/ledger` | eylem filtresi, yapan rozeti (insan/ajan/sistem), açılır maskeli ayrıntı, `before_id` ile "daha fazla" |
 | `/platform/login`, `/platform/workspaces` | işletmen girişi; tüm çalışma alanları, etkinleştir/askıya al |
 
-Kabuk (`src/layout/Shell.tsx`): üstte çalışma alanı seçici (`me.memberships`), durum rozeti
+Kabuk (`src/layout/Shell.tsx`): üstte çalışma alanı seçici (`me.memberships`; birden çok üyelik varken, ya da
+üyelik olup geçerli çalışma alanı yokken görünür, böylece kullanıcı çıkmazda kalmaz), durum rozeti
 (`pending_payment` → "Ödeme bekleniyor", `active` → "Etkin", `suspended` → "Askıda"), dil seçici, tema
 düğmesi ve çıkış; solda menü (dar ekranda üstte yatay).
 
@@ -129,8 +139,11 @@ kullanılmayan kit bileşenleri pakete girmez.
 ## Testler
 
 - `src/i18n/parity.test.ts`: TR/EN anahtar eşitliği, boş değer yok.
-- `src/api/client.test.ts`: başlık yalnızca değiştiren isteklerde, yapısal hata gövdesi, 401 yönlendirmesi.
+- `src/api/client.test.ts`: başlık yalnızca değiştiren isteklerde, yapısal hata gövdesi, 401 yönlendirmesi,
+  `whoami()`.
 - `src/pages/**/*.test.tsx`: her sayfa için sahte `fetch` ile çizim (başlık + listelerde bir satır);
-  API anahtarı düz metninin bir kez gösterilmesi, davet bağlantısı.
-- `src/layout/Shell.test.tsx`: menü, varsayılan dil, oturumsuz ziyaretçinin giriş sayfasına gönderilmesi.
+  API anahtarı düz metninin bir kez gösterilmesi, davet bağlantısı, ikisinin yalnız "Kapat" ile kapanması;
+  oturum açıkken kabul edilen davetin ardından çalışma alanı geçişi.
+- `src/layout/Shell.test.tsx`: menü, varsayılan dil, oturumsuz ziyaretçinin giriş sayfasına gönderilmesi,
+  geçerli çalışma alanı yokken seçicinin görünmesi.
 - `src/lib/errors.test.ts`: hata kodlarının panel metnine çevrilmesi.

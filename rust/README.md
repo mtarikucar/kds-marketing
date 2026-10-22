@@ -11,9 +11,9 @@ Tasarım belgesi: `docs/superpowers/specs/2026-10-22-jeeta-rust-yeniden-yazim-de
 | `jeeta mcp-stdio` | MCP araçlarını stdin/stdout üzerinden, `JEETA_STDIO_API_KEY` anahtarı adına sunar; HTTP yoktur |
 | `jeeta --help` | Kullanımı yazdırır |
 
-Bilinmeyen bir komut kullanımı yazdırır ve `2` koduyla çıkar. Yapılandırma, veritabanı bağlantısı ya da göç
-hatası tek, okunur bir satır yazdırır (`jeeta: JEETA_SECRET_KEY: must be 64 hexadecimal characters …`) ve
-`1` koduyla çıkar.
+Bilinmeyen bir komut kullanımı yazdırır ve `2` koduyla çıkar. Yapılandırma, veritabanı bağlantısı, veritabanı
+rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
+`jeeta: configuration: JEETA_SECRET_KEY: must be 64 hexadecimal characters …`) ve `1` koduyla çıkar.
 
 ## Önkoşullar
 
@@ -82,7 +82,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_DATABASE_URL` | — (zorunlu) | Uygulamanın PostgreSQL adresi, `postgres://kullanıcı:parola@sunucu:port/veritabanı` |
 | `JEETA_SECRET_KEY` | — (zorunlu) | Tam 64 onaltılık karakter (32 bayt): `openssl rand -hex 32`. Açılışta doğrulanır; M1'de bağlayıcı sırlarını mühürlemek için kullanılacak |
 | `JEETA_BIND` | `127.0.0.1:8080` | Dinlenen `ip:port` |
-| `JEETA_PANEL_DIR` | — | Derlenmiş panelin dizini (`panel/dist`); yoksa yalnızca API ve MCP sunulur. `index.html` bulunmazsa açılış günlüğü bunu söyler |
+| `JEETA_PANEL_DIR` | — | Derlenmiş panelin dizini; göreli bir yol **çalışılan dizine** göredir: `rust/` içinden (`make dev`) `panel/dist`, depo kökünden `rust/panel/dist`. Yoksa yalnızca API ve MCP sunulur. `index.html` bulunmazsa açılış günlüğü bunu söyler |
 | `JEETA_COOKIE_SECURE` | `true` | Oturum çerezlerinde `Secure`. Yalnızca düz `http://localhost` için `false` |
 | `JEETA_ALLOWED_HOSTS` | — | MCP uç noktasının `Host` başlığında kabul ettiği genel adlar, virgülle: `jeeta.example.com,jeeta.example.com:8443`. Döngü (loopback) adları her zaman kabul edilir. `JEETA_BIND` döngü adresi değilse zorunludur |
 | `JEETA_PLATFORM_BOOTSTRAP_EMAIL` | — | İlk platform operatörünün e-postası; parolayla birlikte verilir |
@@ -282,7 +282,8 @@ make check   # fmt + lint + doc + deny + test (JEETA_TEST_DATABASE_URL gerekli)
 CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `feat/**`
 dallarına gönderimde ve her çekme isteğinde çalışır: `rust-checks` (fmt, clippy, doc, cargo-deny),
 `rust-test` (PostgreSQL 16 hizmetiyle `cargo test --workspace`) ve `panel` (`pnpm install --frozen-lockfile`,
-`pnpm test`, `pnpm typecheck`, `pnpm build`).
+`pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu `--locked` çalışır:
+`Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş durur.
 
 ## Sınırlar
 
@@ -291,6 +292,7 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
 - `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`) yalnızca `serde`, `serde_json`,
   `uuid`, `time`, `thiserror` kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca
   `jt_outbound`'da, `sqlx` yalnızca `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da) bulunur.
-- `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları ile yapay zekâ, medya üretimi, ses tanıma ve ses
-  sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans, güvenlik
-  bildirimi ve kaynak denetimleri.
+- `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
+  `isahc`, `surf`, `attohttpc`, `curl`, ağacın hiçbir yerinde bulunmaz) ile yapay zekâ, medya üretimi, ses
+  tanıma ve ses sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans,
+  güvenlik bildirimi ve kaynak denetimleri.
