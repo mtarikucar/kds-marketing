@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 
 use jt_ledger::Actor;
-use jt_tenancy::{AgentConnectionId, OperatorId, Permission, WorkspaceId};
+use jt_tenancy::{
+    ActorAuthority, AgentConnectionId, OperatorId, Permission, SystemRole, WorkspaceId,
+};
 use serde_json::json;
 use time::OffsetDateTime;
 
@@ -16,6 +18,9 @@ pub struct Ctx {
     pub actor: Actor,
     /// What the caller may do in this workspace (for an agent: its key's effective scopes).
     pub permissions: BTreeSet<Permission>,
+    /// The key of the role behind the caller: their own, or for an agent, its issuer's. `None`
+    /// when no role is known, which never counts as the owner role.
+    pub role_key: Option<String>,
     pub now: OffsetDateTime,
     /// Set when the caller is an agent acting through a connection.
     pub agent_connection_id: Option<AgentConnectionId>,
@@ -33,6 +38,15 @@ impl Ctx {
             details: json!({ "permission": p.key() }),
         })
     }
+
+    /// What the caller may hand on, for the role rules of `jt_tenancy`: its permissions, and
+    /// whether its role is `owner`.
+    pub fn authority(&self) -> ActorAuthority {
+        ActorAuthority {
+            permissions: self.permissions.clone(),
+            is_owner: self.role_key.as_deref() == Some(SystemRole::Owner.key()),
+        }
+    }
 }
 
 /// The context of a platform-operator call; not tied to any workspace.
@@ -44,7 +58,7 @@ pub struct PlatformCtx {
 
 #[cfg(test)]
 mod tests {
-    use jt_tenancy::{SystemRole, UserId};
+    use jt_tenancy::UserId;
     use time::macros::datetime;
 
     use super::*;
@@ -57,6 +71,7 @@ mod tests {
                 user_id: UserId::new_v7(),
             },
             permissions: SystemRole::Rep.permissions(),
+            role_key: Some("rep".into()),
             now: datetime!(2026-10-22 09:30:00 UTC),
             agent_connection_id: None,
         };
@@ -64,5 +79,30 @@ mod tests {
         let err = ctx.require(Permission::TeamManage).unwrap_err();
         assert_eq!(err.code, ErrorCode::Forbidden);
         assert_eq!(err.details, json!({ "permission": "team.manage" }));
+    }
+
+    #[test]
+    fn authority_counts_only_the_owner_role_key_as_owner() {
+        let mut ctx = Ctx {
+            workspace_id: WorkspaceId::new_v7(),
+            actor: Actor::Human {
+                user_id: UserId::new_v7(),
+            },
+            permissions: SystemRole::Owner.permissions(),
+            role_key: Some("owner".into()),
+            now: datetime!(2026-10-22 09:30:00 UTC),
+            agent_connection_id: None,
+        };
+        assert_eq!(
+            ctx.authority(),
+            ActorAuthority {
+                permissions: SystemRole::Owner.permissions(),
+                is_owner: true,
+            }
+        );
+        for key in [None, Some("manager".to_owned())] {
+            ctx.role_key = key;
+            assert!(!ctx.authority().is_owner);
+        }
     }
 }

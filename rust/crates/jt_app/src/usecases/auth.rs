@@ -312,7 +312,7 @@ pub async fn switch_workspace(
 }
 
 /// The context of a call the principal makes in workspace `ws` at `now`: a human actor with the
-/// permissions of their role there. `FORBIDDEN` unless they are an active member of `ws`.
+/// role, and the permissions of the role, they hold there. `FORBIDDEN` unless they are an active member of `ws`.
 pub fn ctx_for(
     principal: &Principal,
     ws: WorkspaceId,
@@ -329,6 +329,7 @@ pub fn ctx_for(
             user_id: principal.user_id,
         },
         permissions: membership.permissions.clone(),
+        role_key: Some(membership.role_key.clone()),
         now,
         agent_connection_id: None,
     })

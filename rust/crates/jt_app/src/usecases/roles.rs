@@ -1,16 +1,18 @@
 //! The workspace's roles: `roles.list`, `roles.create`, `roles.update` and `roles.delete`.
 //!
 //! Every workspace has the three system roles (`owner`, `manager`, `rep`), created with it and
-//! immutable. Custom roles add any set of permissions under a key of [`KEY_MIN`] to [`KEY_MAX`]
-//! lowercase letters, digits or underscores that is not a system role's.
+//! immutable. Custom roles carry a set of permissions under a key of [`KEY_MIN`] to [`KEY_MAX`]
+//! lowercase letters, digits or underscores that is not a system role's. A caller may give a
+//! custom role only permissions it holds itself (`can_define_role`: else `FORBIDDEN`,
+//! `details.reason = "exceeds_own_authority"` with the missing keys in `details.missing`).
 
 use std::collections::BTreeSet;
 
-use jt_tenancy::{Permission, RoleDef, RoleId, SystemRole};
+use jt_tenancy::{Permission, RoleDef, RoleId, SystemRole, can_define_role};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Deps, invalid, ledger_entry, required};
+use super::{Deps, invalid, ledger_entry, refusal, required};
 use crate::ctx::Ctx;
 use crate::error::AppError;
 
@@ -44,8 +46,9 @@ pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<RoleDef>, AppError> {
 /// A key outside `[a-z0-9_]{2,32}`, or a system role's key, is `VALIDATION` with
 /// `details.field = "key"`; a name that is empty once trimmed or longer than [`NAME_MAX`]
 /// characters, `VALIDATION` with `details.field = "name"`; unknown permission keys, `VALIDATION`
-/// listing them in `details.unknown`. A key the workspace already has is `CONFLICT`. Writes
-/// `roles.create` (payload `key`, `name`, `permissions`).
+/// listing them in `details.unknown`. Permissions the caller does not hold are `FORBIDDEN` (see
+/// the module docs). A key the workspace already has is `CONFLICT`. Writes `roles.create`
+/// (payload `key`, `name`, `permissions`).
 pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateRole) -> Result<RoleDef, AppError> {
     ctx.require(Permission::TeamManage)?;
     if !is_valid_key(&input.key) {
@@ -67,6 +70,7 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateRole) -> Result<RoleDef
         ));
     }
     let permissions = parse_permissions(&input.permissions)?;
+    can_define_role(&ctx.authority(), &permissions).map_err(|e| refusal(ctx, e))?;
 
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     if repos.roles().find_by_key(&input.key).await?.is_some() {
@@ -100,8 +104,9 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateRole) -> Result<RoleDef
 
 /// Replaces a custom role's permissions and returns the role. Needs `team.manage`.
 ///
-/// Unknown permission keys are `VALIDATION` listing them in `details.unknown`; a role that is
-/// not this workspace's is `NOT_FOUND`; a system role is `FORBIDDEN`. Members holding the role
+/// Unknown permission keys are `VALIDATION` listing them in `details.unknown`; permissions the
+/// caller does not hold are `FORBIDDEN` (see the module docs); a role that is not this
+/// workspace's is `NOT_FOUND`; a system role is `FORBIDDEN`. Members holding the role
 /// get the new permissions from their next request. Writes `roles.update` (payload `key`,
 /// `permissions`).
 pub async fn update(
@@ -112,6 +117,7 @@ pub async fn update(
 ) -> Result<RoleDef, AppError> {
     ctx.require(Permission::TeamManage)?;
     let permissions = parse_permissions(&permissions)?;
+    can_define_role(&ctx.authority(), &permissions).map_err(|e| refusal(ctx, e))?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let role = repos
         .roles()

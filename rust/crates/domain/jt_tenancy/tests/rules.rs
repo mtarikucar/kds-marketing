@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use jt_tenancy::*;
 
 #[test]
@@ -50,6 +52,113 @@ fn last_owner_cannot_be_demoted() {
         can_change_role(&SystemRole::Rep.permissions(), false),
         Err(TenancyError::Forbidden)
     ));
+}
+
+fn owner() -> ActorAuthority {
+    ActorAuthority {
+        permissions: SystemRole::Owner.permissions(),
+        is_owner: true,
+    }
+}
+
+fn manager() -> ActorAuthority {
+    ActorAuthority {
+        permissions: SystemRole::Manager.permissions(),
+        is_owner: false,
+    }
+}
+
+fn grant(role: SystemRole, current_role_is_owner: bool) -> RoleGrant {
+    RoleGrant {
+        role_is_owner: role == SystemRole::Owner,
+        role_permissions: role.permissions(),
+        current_role_is_owner,
+    }
+}
+
+#[test]
+fn granting_a_role_needs_team_manage() {
+    let rep = ActorAuthority {
+        permissions: SystemRole::Rep.permissions(),
+        is_owner: false,
+    };
+    assert_eq!(
+        can_grant_role(&rep, &grant(SystemRole::Rep, false)),
+        Err(TenancyError::Forbidden)
+    );
+    assert_eq!(can_remove_member(&rep, false), Err(TenancyError::Forbidden));
+    assert_eq!(
+        can_define_role(&rep, &BTreeSet::new()),
+        Err(TenancyError::Forbidden)
+    );
+}
+
+#[test]
+fn only_an_owner_grants_changes_or_removes_the_owner_role() {
+    // Granting owner, changing an owner's role, removing an owner.
+    assert_eq!(
+        can_grant_role(&manager(), &grant(SystemRole::Owner, false)),
+        Err(TenancyError::OwnerOnly)
+    );
+    assert_eq!(
+        can_grant_role(&manager(), &grant(SystemRole::Manager, true)),
+        Err(TenancyError::OwnerOnly)
+    );
+    assert_eq!(
+        can_remove_member(&manager(), true),
+        Err(TenancyError::OwnerOnly)
+    );
+    assert_eq!(
+        can_grant_role(&owner(), &grant(SystemRole::Owner, false)),
+        Ok(())
+    );
+    assert_eq!(
+        can_grant_role(&owner(), &grant(SystemRole::Rep, true)),
+        Ok(())
+    );
+    assert_eq!(can_remove_member(&owner(), true), Ok(()));
+
+    // Anything else is open to a manager.
+    assert_eq!(
+        can_grant_role(&manager(), &grant(SystemRole::Manager, false)),
+        Ok(())
+    );
+    assert_eq!(can_remove_member(&manager(), false), Ok(()));
+}
+
+#[test]
+fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
+    let lead = ActorAuthority {
+        permissions: BTreeSet::from([Permission::WorkspaceRead, Permission::TeamManage]),
+        is_owner: false,
+    };
+    let exceeds = Err(TenancyError::ExceedsOwnAuthority {
+        missing: BTreeSet::from([Permission::ApiKeysManage, Permission::LedgerRead]),
+    });
+    assert_eq!(
+        can_grant_role(&lead, &grant(SystemRole::Manager, false)),
+        exceeds
+    );
+    assert_eq!(
+        can_define_role(&lead, &SystemRole::Manager.permissions()),
+        exceeds
+    );
+    assert_eq!(
+        can_grant_role(&lead, &grant(SystemRole::Rep, false)),
+        Ok(())
+    );
+    assert_eq!(
+        can_define_role(
+            &lead,
+            &BTreeSet::from([Permission::WorkspaceRead, Permission::TeamManage])
+        ),
+        Ok(())
+    );
+    // Even an owner is held to its own permissions (all of them, for the owner role).
+    assert_eq!(
+        can_define_role(&owner(), &Permission::all().iter().copied().collect()),
+        Ok(())
+    );
 }
 
 #[test]

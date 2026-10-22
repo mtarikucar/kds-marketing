@@ -343,7 +343,11 @@ async fn invite_stores_only_the_token_hash_with_a_seven_day_expiry_and_ledgers_i
     assert_eq!(e.subject, membership_subject(out.membership_id));
     assert_eq!(
         e.payload,
-        json!({ "invited_email": "carol@example.com", "role_key": "manager" })
+        json!({
+            "invited_email": "carol@example.com",
+            "role_key": "manager",
+            "replaced_membership_ids": [],
+        })
     );
     assert_eq!(e.at, T0);
     let stored = serde_json::to_string(&t.w.uow.snapshot().ledger).unwrap();
@@ -419,6 +423,19 @@ async fn invite_with_an_open_invitation_is_conflict_and_an_expired_one_is_replac
         .map(|m| m.membership_id)
         .collect();
     assert_eq!(listed, vec![t.owner_membership, second.membership_id]);
+
+    // The replacement is recorded with the new invitation.
+    let entries = t.w.entries("team.invite");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].subject, membership_subject(second.membership_id));
+    assert_eq!(
+        entries[1].payload,
+        json!({
+            "invited_email": "carol@example.com",
+            "role_key": "manager",
+            "replaced_membership_ids": [first.membership_id],
+        })
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -871,17 +888,13 @@ async fn removing_the_last_owner_is_conflict_but_a_member_may_remove_themselves(
     assert_eq!(e.code, ErrorCode::Conflict);
     assert_eq!(e.details, json!({ "reason": "last_owner" }));
 
-    // A manager cannot remove the last owner either.
-    let manager = t.join("manager@example.com", "manager").await;
-    let e = err(team::remove(&t.w.deps, &manager.ctx, t.owner_membership).await);
-    assert_eq!(e.code, ErrorCode::Conflict);
-    assert_eq!(e.details, json!({ "reason": "last_owner" }));
     assert_eq!(
         t.w.membership(t.owner_membership).status,
         MembershipStatus::Active
     );
 
     // A manager may leave.
+    let manager = t.join("manager@example.com", "manager").await;
     team::remove(&t.w.deps, &manager.ctx, manager.membership_id)
         .await
         .unwrap();
@@ -936,6 +949,220 @@ async fn remove_of_a_missing_or_removed_membership_is_not_found() {
         assert_eq!(e.code, ErrorCode::NotFound);
     }
     assert_eq!(t.w.entries("team.remove").len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Who may grant what
+// ---------------------------------------------------------------------------------------------
+
+/// Asserts `FORBIDDEN` with `details.reason = "owner_only"`.
+fn assert_owner_only(e: &AppError) {
+    assert_eq!(e.code, ErrorCode::Forbidden, "{e:?}");
+    assert_eq!(e.details, json!({ "reason": "owner_only" }));
+}
+
+/// Asserts `FORBIDDEN` with `details.reason = "exceeds_own_authority"` and these missing keys.
+fn assert_exceeds(e: &AppError, missing: &[&str]) {
+    assert_eq!(e.code, ErrorCode::Forbidden, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "reason": "exceeds_own_authority", "missing": missing })
+    );
+}
+
+#[tokio::test]
+async fn manager_cannot_grant_owner() {
+    let t = team().await;
+    let manager = t.join("manager@example.com", "manager").await;
+    let bob = t.join("bob@example.com", "rep").await;
+
+    let e = err(team::invite(
+        &t.w.deps,
+        &manager.ctx,
+        invite_input("carol@example.com", "owner"),
+    )
+    .await);
+    assert_owner_only(&e);
+    for target in [manager.membership_id, bob.membership_id] {
+        let e = err(team::set_role(&t.w.deps, &manager.ctx, target, "owner").await);
+        assert_owner_only(&e);
+    }
+    assert_eq!(
+        t.w.membership(manager.membership_id).role_id,
+        t.role_id("manager")
+    );
+    assert_eq!(t.w.entries("team.invite").len(), 2, "only the two joins");
+    assert!(t.w.entries("team.set_role").is_empty());
+
+    // Every other role is the manager's to give.
+    team::invite(
+        &t.w.deps,
+        &manager.ctx,
+        invite_input("carol@example.com", "manager"),
+    )
+    .await
+    .unwrap();
+    team::set_role(&t.w.deps, &manager.ctx, bob.membership_id, "manager")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn manager_cannot_change_or_remove_an_owner() {
+    let t = team().await;
+    let manager = t.join("manager@example.com", "manager").await;
+    // Two owners, so the last-owner rule is not what refuses.
+    let second = t.join("second@example.com", "rep").await;
+    team::set_role(&t.w.deps, &t.owner_ctx, second.membership_id, "owner")
+        .await
+        .unwrap();
+    let pending_owner = t.invite("carol@example.com", "owner").await;
+
+    for owner in [t.owner_membership, second.membership_id] {
+        let e = err(team::set_role(&t.w.deps, &manager.ctx, owner, "rep").await);
+        assert_owner_only(&e);
+        let e = err(team::remove(&t.w.deps, &manager.ctx, owner).await);
+        assert_owner_only(&e);
+        assert_eq!(t.w.membership(owner).status, MembershipStatus::Active);
+        assert_eq!(t.w.membership(owner).role_id, t.role_id("owner"));
+    }
+    // An invitation to the owner role is the owners' to cancel.
+    let e = err(team::remove(&t.w.deps, &manager.ctx, pending_owner.membership_id).await);
+    assert_owner_only(&e);
+    assert!(t.w.entries("team.remove").is_empty());
+}
+
+#[tokio::test]
+async fn owner_can_grant_owner() {
+    let t = team().await;
+    let bob = t.join("bob@example.com", "manager").await;
+    let out = team::set_role(&t.w.deps, &t.owner_ctx, bob.membership_id, "owner")
+        .await
+        .unwrap();
+    assert_eq!(out.role_key, "owner");
+
+    let carol = t.invite("carol@example.com", "owner").await;
+    let accepted = team::accept_invite(
+        &t.w.deps,
+        new_user(&carol.invite_token, "carol@example.com"),
+    )
+    .await
+    .unwrap();
+    let session = accepted.session.unwrap();
+    assert_eq!(session.me.memberships[0].role_key, "owner");
+
+    // The new owner, on their next request, may change the founding owner's role.
+    let carol_ctx = t.ctx_of(&session.token).await;
+    assert_eq!(carol_ctx.role_key.as_deref(), Some("owner"));
+    team::set_role(&t.w.deps, &carol_ctx, t.owner_membership, "manager")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn custom_role_cannot_grant_permissions_it_lacks() {
+    let t = team().await;
+    roles::create(
+        &t.w.deps,
+        &t.owner_ctx,
+        create_input("team_lead", &["workspace.read", "team.manage"]),
+    )
+    .await
+    .unwrap();
+    let lead = t.join("lead@example.com", "team_lead").await;
+    let bob = t.join("bob@example.com", "rep").await;
+    let auditor = roles::create(
+        &t.w.deps,
+        &t.owner_ctx,
+        create_input("auditor", &["ledger.read"]),
+    )
+    .await
+    .unwrap();
+    let missing = ["api_keys.manage", "ledger.read"];
+
+    // invite and set_role to a role wider than the lead's own.
+    let e = err(team::invite(
+        &t.w.deps,
+        &lead.ctx,
+        invite_input("carol@example.com", "manager"),
+    )
+    .await);
+    assert_exceeds(&e, &missing);
+    let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "manager").await);
+    assert_exceeds(&e, &missing);
+    let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "auditor").await);
+    assert_exceeds(&e, &["ledger.read"]);
+
+    // roles.create and roles.update with permissions the lead lacks.
+    let e = err(roles::create(
+        &t.w.deps,
+        &lead.ctx,
+        create_input("keys", &["workspace.read", "api_keys.manage"]),
+    )
+    .await);
+    assert_exceeds(&e, &["api_keys.manage"]);
+    let e = err(roles::update(
+        &t.w.deps,
+        &lead.ctx,
+        auditor.id,
+        vec!["ledger.read".into(), "workspace.read".into()],
+    )
+    .await);
+    assert_exceeds(&e, &["ledger.read"]);
+
+    assert!(t.w.entries("team.set_role").is_empty());
+    assert!(t.w.entries("roles.update").is_empty());
+    assert_eq!(t.w.entries("roles.create").len(), 2);
+    assert_eq!(t.w.membership(bob.membership_id).role_id, t.role_id("rep"));
+
+    // Within its own permissions the lead may act.
+    team::invite(
+        &t.w.deps,
+        &lead.ctx,
+        invite_input("carol@example.com", "rep"),
+    )
+    .await
+    .unwrap();
+    team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "team_lead")
+        .await
+        .unwrap();
+    roles::create(
+        &t.w.deps,
+        &lead.ctx,
+        create_input("helper", &["workspace.read"]),
+    )
+    .await
+    .unwrap();
+    roles::update(
+        &t.w.deps,
+        &lead.ctx,
+        auditor.id,
+        vec!["workspace.read".into()],
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn owner_can_create_role_with_any_permissions() {
+    let t = team().await;
+    let all: Vec<&str> = Permission::all().iter().map(Permission::key).collect();
+    let role = roles::create(&t.w.deps, &t.owner_ctx, create_input("deputy", &all))
+        .await
+        .unwrap();
+    assert_eq!(
+        role.permissions,
+        Permission::all().iter().copied().collect()
+    );
+    let updated = roles::update(
+        &t.w.deps,
+        &t.owner_ctx,
+        role.id,
+        all.iter().map(|k| (*k).to_owned()).collect(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.permissions, role.permissions);
 }
 
 // ---------------------------------------------------------------------------------------------

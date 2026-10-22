@@ -94,7 +94,7 @@ pub struct RoleDef {
 }
 
 /// A tenancy rule refused the operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TenancyError {
     /// The actor lacks the permission the operation needs.
     #[error("forbidden")]
@@ -102,6 +102,96 @@ pub enum TenancyError {
     /// The operation would leave the workspace without an owner.
     #[error("the last owner cannot be removed or demoted")]
     LastOwner,
+    /// Only an owner may grant the owner role, or change or remove a membership holding it.
+    #[error("only an owner can grant, change or remove the owner role")]
+    OwnerOnly,
+    /// The role carries permissions the actor does not hold itself.
+    #[error("the role carries permissions the actor does not hold")]
+    ExceedsOwnAuthority {
+        /// The permissions the actor lacks.
+        missing: BTreeSet<Permission>,
+    },
+}
+
+/// What an actor may hand on: its own permissions, and whether its role is `owner`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActorAuthority {
+    pub permissions: BTreeSet<Permission>,
+    pub is_owner: bool,
+}
+
+/// A role about to be given to a membership (by an invitation or a role change).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleGrant {
+    /// Whether the role given is the `owner` system role.
+    pub role_is_owner: bool,
+    /// The permissions of the role given.
+    pub role_permissions: BTreeSet<Permission>,
+    /// Whether the membership holds the `owner` role now; `false` for a new invitation.
+    pub current_role_is_owner: bool,
+}
+
+/// Whether `actor` may give a membership the role of `grant`.
+///
+/// Requires `TeamManage` (`Forbidden`); then only an owner may give the owner role or change the
+/// role of a membership holding it (`OwnerOnly`); and the role given may carry only permissions
+/// the actor holds itself (`ExceedsOwnAuthority`, naming the missing ones). The last-owner rule
+/// is [`can_change_role`]'s.
+pub fn can_grant_role(actor: &ActorAuthority, grant: &RoleGrant) -> Result<(), TenancyError> {
+    if !actor.permissions.contains(&Permission::TeamManage) {
+        return Err(TenancyError::Forbidden);
+    }
+    if (grant.role_is_owner || grant.current_role_is_owner) && !actor.is_owner {
+        return Err(TenancyError::OwnerOnly);
+    }
+    within_own_authority(actor, &grant.role_permissions)
+}
+
+/// Whether `actor` may remove a membership (or cancel an invitation); `member_is_owner` says
+/// whether it holds the owner role.
+///
+/// Requires `TeamManage` (`Forbidden`), and only an owner may remove an owner (`OwnerOnly`). The
+/// last-owner rule is [`can_change_role`]'s.
+pub fn can_remove_member(
+    actor: &ActorAuthority,
+    member_is_owner: bool,
+) -> Result<(), TenancyError> {
+    can_grant_role(
+        actor,
+        &RoleGrant {
+            role_is_owner: false,
+            role_permissions: BTreeSet::new(),
+            current_role_is_owner: member_is_owner,
+        },
+    )
+}
+
+/// Whether `actor` may create a custom role with `permissions`, or set a custom role's
+/// permissions to them: requires `TeamManage` (`Forbidden`) and only permissions the actor holds
+/// itself (`ExceedsOwnAuthority`, naming the missing ones).
+pub fn can_define_role(
+    actor: &ActorAuthority,
+    permissions: &BTreeSet<Permission>,
+) -> Result<(), TenancyError> {
+    if !actor.permissions.contains(&Permission::TeamManage) {
+        return Err(TenancyError::Forbidden);
+    }
+    within_own_authority(actor, permissions)
+}
+
+fn within_own_authority(
+    actor: &ActorAuthority,
+    permissions: &BTreeSet<Permission>,
+) -> Result<(), TenancyError> {
+    let missing: BTreeSet<Permission> = permissions
+        .difference(&actor.permissions)
+        .copied()
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(TenancyError::ExceedsOwnAuthority { missing })
+    }
 }
 
 /// Whether an actor holding `actor` permissions may change (or remove) a member's role.

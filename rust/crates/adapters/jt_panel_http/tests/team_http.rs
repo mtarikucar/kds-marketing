@@ -339,6 +339,68 @@ async fn last_owner_cannot_be_removed_409() {
 }
 
 #[tokio::test]
+async fn manager_promoting_self_to_owner_is_403() {
+    let p = Panel::new().await;
+    let (owner, me) = p.register("owner@alpha.example", "Alpha").await;
+    let own = me["memberships"][0]["membership_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (manager, membership) = p.join(&owner, "manager@alpha.example", "manager").await;
+
+    let resp = p
+        .send(
+            Method::PATCH,
+            &format!("/api/team/{membership}/role"),
+            Some(&manager),
+            Some(json!({ "role_key": "owner" })),
+        )
+        .await;
+    let body = expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
+    assert_eq!(body["details"], json!({ "reason": "owner_only" }));
+
+    // Nor may the manager invite an owner, or demote or remove the owner.
+    let resp = p
+        .send(
+            Method::POST,
+            "/api/team/invites",
+            Some(&manager),
+            Some(json!({ "email": "carol@example.com", "role_key": "owner" })),
+        )
+        .await;
+    let body = expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
+    assert_eq!(body["details"], json!({ "reason": "owner_only" }));
+    let resp = p
+        .send(
+            Method::PATCH,
+            &format!("/api/team/{own}/role"),
+            Some(&manager),
+            Some(json!({ "role_key": "rep" })),
+        )
+        .await;
+    expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
+    let resp = p
+        .send(
+            Method::DELETE,
+            &format!("/api/team/{own}"),
+            Some(&manager),
+            None,
+        )
+        .await;
+    expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
+
+    // Everyone keeps their role.
+    let team = ok_json(p.get("/api/team", &owner).await).await;
+    let roles: Vec<&str> = team
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role_key"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, vec!["owner", "manager"]);
+}
+
+#[tokio::test]
 async fn signed_in_invitee_accepts_with_their_cookie_and_removal_ends_that_session() {
     let p = Panel::new().await;
     let (owner, me) = p.register("owner@alpha.example", "Alpha").await;

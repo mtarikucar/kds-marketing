@@ -517,6 +517,7 @@ async fn ctx_for_builds_the_member_context_and_refuses_strangers() {
                 user_id: a.me.user_id
             },
             permissions: SystemRole::Owner.permissions(),
+            role_key: Some("owner".into()),
             now,
             agent_connection_id: None,
         }

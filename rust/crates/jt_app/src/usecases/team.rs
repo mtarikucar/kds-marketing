@@ -7,6 +7,11 @@
 //! never enters the ledger. An invitation binds to the invited email, not to whoever holds the
 //! token: only a user with that email can accept it, and accepting spends the token.
 //!
+//! Who may give which role is `jt_tenancy`'s: only an owner gives the owner role or changes or
+//! removes a membership holding it (else `FORBIDDEN`, `details.reason = "owner_only"`), and a
+//! role given may carry only permissions the caller holds itself (else `FORBIDDEN`,
+//! `details.reason = "exceeds_own_authority"` with the missing keys in `details.missing`).
+//!
 //! A workspace always keeps an owner: demoting or removing its last active owner is `CONFLICT`
 //! with `details.reason = "last_owner"`. Every role change and removal first counts the active
 //! owners with `count_active_owners`, which locks their memberships until the transaction ends,
@@ -17,15 +22,15 @@ use std::fmt;
 
 use jt_ledger::{Actor, LedgerEntry, Subject};
 use jt_tenancy::{
-    Email, MembershipId, MembershipStatus, Permission, RoleDef, SystemRole, TenancyError, UserId,
-    WorkspaceId, can_change_role,
+    Email, MembershipId, MembershipStatus, Permission, RoleDef, RoleGrant, SystemRole,
+    TenancyError, UserId, WorkspaceId, can_change_role, can_grant_role, can_remove_member,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use super::auth::{self, MIN_PASSWORD_CHARS, MeOut, Principal, SessionOut};
-use super::{Deps, action, hash_token, invalid, ledger_entry, required};
+use super::{Deps, action, hash_token, invalid, ledger_entry, refusal, required};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{MemberOut, MembershipRow, MembershipView, UserRepos, UserRow};
@@ -123,11 +128,12 @@ pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<MemberOut>, AppError> {
 /// Invites `email` into the workspace with the role `role_key`. Needs `team.manage`.
 ///
 /// The email is normalised by `Email::parse` (`VALIDATION` with `details.field = "email"`); a
-/// role key the workspace does not have is `VALIDATION` with `details.role_key`. An email that
-/// already belongs to an active member, or has an invitation that is still open, is `CONFLICT`;
-/// an expired invitation for it is replaced (set `Removed`) by the new one. The invitation, its
-/// `team.invite` ledger entry (payload `invited_email`, `role_key`) and any replacement are
-/// written in one transaction.
+/// role key the workspace does not have is `VALIDATION` with `details.role_key`. The role must
+/// be the caller's to give (`can_grant_role`; see the module docs). An email that already belongs
+/// to an active member, or has an invitation that is still open, is `CONFLICT`; expired
+/// invitations for it are replaced (set `Removed`) by the new one. The invitation, the
+/// replacements and the `team.invite` ledger entry (payload `invited_email`, `role_key`,
+/// `replaced_membership_ids`) are written in one transaction.
 pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<InviteOut, AppError> {
     ctx.require(Permission::TeamManage)?;
     let email = Email::parse(&input.email).map_err(|e| invalid("email", &e.to_string()))?;
@@ -138,6 +144,12 @@ pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<Invite
         .find_by_key(&input.role_key)
         .await?
         .ok_or_else(|| unknown_role(&input.role_key))?;
+    let grant = RoleGrant {
+        role_is_owner: is_owner(&role),
+        role_permissions: role.permissions.clone(),
+        current_role_is_owner: false,
+    };
+    can_grant_role(&ctx.authority(), &grant).map_err(|e| refusal(ctx, e))?;
 
     let mut expired = Vec::new();
     for member in repos.memberships().list().await? {
@@ -162,8 +174,8 @@ pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<Invite
             MembershipStatus::Removed => {}
         }
     }
-    for id in expired {
-        repos.memberships().remove(id).await?;
+    for id in &expired {
+        repos.memberships().remove(*id).await?;
     }
 
     let invite_token = deps.tokens.token(INVITE_TOKEN_BYTES);
@@ -191,7 +203,11 @@ pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<Invite
             "team.invite",
             "membership",
             membership_id,
-            json!({ "invited_email": email.as_str(), "role_key": role.key }),
+            json!({
+                "invited_email": email.as_str(),
+                "role_key": role.key,
+                "replaced_membership_ids": expired,
+            }),
         )?)
         .await?;
     repos.commit().await?;
@@ -248,9 +264,11 @@ pub async fn accept_invite(deps: &Deps, input: AcceptInput<'_>) -> Result<Accept
 /// list shows it. Needs `team.manage`.
 ///
 /// A membership that is not an active one of this workspace is `NOT_FOUND`; an unknown role key
-/// is `VALIDATION` with `details.role_key`. Moving the workspace's last active owner to another
-/// role is `CONFLICT` ("cannot demote the last owner", `details.reason = "last_owner"`). Writes
-/// `team.set_role` (payload `role_key`, `previous_role_key`).
+/// is `VALIDATION` with `details.role_key`. The new role must be the caller's to give, and the
+/// membership's present role too if it is `owner` (`can_grant_role`; see the module docs).
+/// Moving the workspace's last active owner to another role is `CONFLICT` ("cannot demote the
+/// last owner", `details.reason = "last_owner"`). Writes `team.set_role` (payload `role_key`,
+/// `previous_role_key`).
 pub async fn set_role(
     deps: &Deps,
     ctx: &Ctx,
@@ -273,6 +291,12 @@ pub async fn set_role(
         .await?
         .ok_or_else(|| unknown_role(role_key))?;
     let current = role_of(repos.roles().find(target.role_id).await?)?;
+    let grant = RoleGrant {
+        role_is_owner: is_owner(&role),
+        role_permissions: role.permissions.clone(),
+        current_role_is_owner: is_owner(&current),
+    };
+    can_grant_role(&ctx.authority(), &grant).map_err(|e| refusal(ctx, e))?;
 
     let last_owner = is_owner(&current) && !is_owner(&role) && owners <= 1;
     may_change(ctx, last_owner, "cannot demote the last owner")?;
@@ -301,9 +325,10 @@ pub async fn set_role(
 /// Removes the membership `membership_id`: an active member, who may be the caller, or an open
 /// invitation, which is cancelled. Needs `team.manage`.
 ///
-/// A membership that is unknown here or already removed is `NOT_FOUND`; removing the
-/// workspace's last active owner is `CONFLICT` ("cannot remove the last owner",
-/// `details.reason = "last_owner"`). One tenant transaction sets the status `Removed` and writes
+/// A membership that is unknown here or already removed is `NOT_FOUND`; one holding the owner
+/// role (an invitation to it included) is only an owner's to remove (`can_remove_member`;
+/// `FORBIDDEN` with `details.reason = "owner_only"`); removing the workspace's last active owner
+/// is `CONFLICT` ("cannot remove the last owner", `details.reason = "last_owner"`). One tenant transaction sets the status `Removed` and writes
 /// `team.remove` (payload `user_id`, `role_key`, `previous_status`).
 ///
 /// Then a second, user-level transaction revokes the removed user's live sessions whose current
@@ -323,6 +348,7 @@ pub async fn remove(deps: &Deps, ctx: &Ctx, membership_id: MembershipId) -> Resu
         .filter(|m| m.status != MembershipStatus::Removed)
         .ok_or_else(|| AppError::not_found(NO_SUCH_MEMBERSHIP))?;
     let role = role_of(repos.roles().find(target.role_id).await?)?;
+    can_remove_member(&ctx.authority(), is_owner(&role)).map_err(|e| refusal(ctx, e))?;
 
     let last_owner = target.status == MembershipStatus::Active && is_owner(&role) && owners <= 1;
     may_change(ctx, last_owner, "cannot remove the last owner")?;
@@ -505,19 +531,16 @@ fn is_owner(role: &RoleDef) -> bool {
     role.is_system && role.key == SystemRole::Owner.key()
 }
 
-/// `can_change_role` for the caller: `FORBIDDEN` without `team.manage`; `CONFLICT` with
-/// `message` and `details.reason = "last_owner"` when the target is the last owner.
+/// `can_change_role` for the caller, refused as [`refusal`] says, with `message` for the last
+/// owner.
 fn may_change(ctx: &Ctx, target_is_last_owner: bool, message: &str) -> Result<(), AppError> {
-    can_change_role(&ctx.permissions, target_is_last_owner).map_err(|e| match e {
-        TenancyError::Forbidden => ctx
-            .require(Permission::TeamManage)
-            .err()
-            .unwrap_or_else(|| AppError::forbidden(e.to_string())),
-        TenancyError::LastOwner => AppError {
-            code: ErrorCode::Conflict,
-            message: message.to_owned(),
-            details: json!({ "reason": "last_owner" }),
-        },
+    can_change_role(&ctx.permissions, target_is_last_owner).map_err(|e| {
+        let last_owner = e == TenancyError::LastOwner;
+        let mut err = refusal(ctx, e);
+        if last_owner {
+            message.clone_into(&mut err.message);
+        }
+        err
     })
 }
 

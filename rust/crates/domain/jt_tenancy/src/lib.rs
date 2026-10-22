@@ -9,5 +9,8 @@ pub use email::{Email, EmailError};
 pub use ids::{
     AgentConnectionId, ApiKeyId, MembershipId, OperatorId, RoleId, SessionId, UserId, WorkspaceId,
 };
-pub use role::{Permission, RoleDef, SystemRole, TenancyError, can_change_role};
+pub use role::{
+    ActorAuthority, Permission, RoleDef, RoleGrant, SystemRole, TenancyError, can_change_role,
+    can_define_role, can_grant_role, can_remove_member,
+};
 pub use workspace::{MembershipStatus, WorkspaceStatus};

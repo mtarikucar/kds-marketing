@@ -14,11 +14,12 @@ use std::fmt::{Display, Write as _};
 use std::sync::Arc;
 
 use jt_ledger::{Action, LedgerEntry, Subject};
+use jt_tenancy::{Permission, TenancyError};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::ctx::Ctx;
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::ports::{Clock, IdGen, PasswordHasher, TokenGen, UnitOfWork};
 
 /// The ports a use case may call, built once by the binary (or a test) and shared by every
@@ -71,6 +72,38 @@ pub(crate) fn ledger_entry(
         id: id.to_string(),
     });
     Ok(entry)
+}
+
+/// The error for a refusal by a `jt_tenancy` role rule:
+/// - `Forbidden`: `FORBIDDEN` naming `team.manage` in `details.permission`, as `Ctx::require`;
+/// - `OwnerOnly`: `FORBIDDEN` with `details.reason = "owner_only"`;
+/// - `ExceedsOwnAuthority`: `FORBIDDEN` with `details.reason = "exceeds_own_authority"` and the
+///   missing permission keys in `details.missing`;
+/// - `LastOwner`: `CONFLICT` with `details.reason = "last_owner"`.
+pub(crate) fn refusal(ctx: &Ctx, e: TenancyError) -> AppError {
+    let message = e.to_string();
+    let (code, details) = match e {
+        TenancyError::Forbidden => {
+            if let Err(missing) = ctx.require(Permission::TeamManage) {
+                return missing;
+            }
+            (ErrorCode::Forbidden, json!({}))
+        }
+        TenancyError::OwnerOnly => (ErrorCode::Forbidden, json!({ "reason": "owner_only" })),
+        TenancyError::ExceedsOwnAuthority { missing } => {
+            let missing: Vec<&str> = missing.iter().map(Permission::key).collect();
+            (
+                ErrorCode::Forbidden,
+                json!({ "reason": "exceeds_own_authority", "missing": missing }),
+            )
+        }
+        TenancyError::LastOwner => (ErrorCode::Conflict, json!({ "reason": "last_owner" })),
+    };
+    AppError {
+        code,
+        message,
+        details,
+    }
 }
 
 /// `VALIDATION` naming `field` in `details.field`.
