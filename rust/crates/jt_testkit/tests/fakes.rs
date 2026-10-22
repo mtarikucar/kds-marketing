@@ -207,6 +207,83 @@ async fn tenant_bundle_sees_only_its_workspace_and_refuses_foreign_rows() {
 }
 
 #[tokio::test]
+async fn api_keys_revoke_all_for_user_revokes_only_that_users_active_keys_here() {
+    let uow = InMemoryUow::new();
+    let (a, user_a, _) = register(&uow, "a@example.com", "a").await;
+    let (b, user_b, _) = register(&uow, "b@example.com", "b").await;
+    let key =
+        |ws: WorkspaceId, by: UserId, hash: &str, revoked_at: Option<OffsetDateTime>| ApiKeyRow {
+            id: ApiKeyId::new_v7(),
+            workspace_id: ws,
+            name: hash.into(),
+            prefix: "jt_live_x".into(),
+            key_hash: hash.into(),
+            scopes: BTreeSet::from([Permission::WorkspaceRead]),
+            issued_by: by,
+            status: if revoked_at.is_some() {
+                ApiKeyStatus::Revoked
+            } else {
+                ApiKeyStatus::Active
+            },
+            created_at: T0,
+            last_used_at: None,
+            revoked_at,
+        };
+    let (k1, k2) = (key(a, user_a, "h1", None), key(a, user_a, "h2", None));
+    let old = key(a, user_a, "h-old", Some(T0));
+    let others = key(a, user_b, "h-b", None);
+    let elsewhere = key(b, user_a, "h-elsewhere", None);
+    let mut t = uow.tenant(a).await.unwrap();
+    for k in [&k1, &k2, &old, &others] {
+        t.api_keys().insert(k.clone()).await.unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(b).await.unwrap();
+    t.api_keys().insert(elsewhere.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    let at = T0 + Duration::hours(1);
+    let mut t = uow.tenant(a).await.unwrap();
+    let mut expected = vec![k1.id, k2.id];
+    expected.sort();
+    assert_eq!(
+        t.api_keys().revoke_all_for_user(user_a, at).await.unwrap(),
+        expected
+    );
+    assert!(
+        t.api_keys()
+            .revoke_all_for_user(user_a, at)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the working copy already sees them revoked"
+    );
+    // Nothing is shared before commit.
+    assert!(
+        uow.snapshot()
+            .api_keys
+            .iter()
+            .all(|k| k.id == old.id || k.status == ApiKeyStatus::Active)
+    );
+    t.commit().await.unwrap();
+
+    let state = |id: ApiKeyId| {
+        let k = uow
+            .snapshot()
+            .api_keys
+            .into_iter()
+            .find(|k| k.id == id)
+            .unwrap();
+        (k.status, k.revoked_at)
+    };
+    assert_eq!(state(k1.id), (ApiKeyStatus::Revoked, Some(at)));
+    assert_eq!(state(k2.id), (ApiKeyStatus::Revoked, Some(at)));
+    assert_eq!(state(old.id), (ApiKeyStatus::Revoked, Some(T0)));
+    assert_eq!(state(others.id), (ApiKeyStatus::Active, None));
+    assert_eq!(state(elsewhere.id), (ApiKeyStatus::Active, None));
+}
+
+#[tokio::test]
 async fn unique_keys_are_conflicts() {
     let uow = InMemoryUow::new();
     let (ws, _, _) = register(&uow, "taken@example.com", "taken").await;

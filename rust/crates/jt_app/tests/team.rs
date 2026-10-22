@@ -918,7 +918,12 @@ async fn remove_marks_removed_revokes_sessions_in_this_workspace_and_ledgers_it(
     assert_eq!(entries[0].subject, membership_subject(invite.membership_id));
     assert_eq!(
         entries[0].payload,
-        json!({ "user_id": bob.me.user_id, "role_key": "rep", "previous_status": "active" })
+        json!({
+            "user_id": bob.me.user_id,
+            "role_key": "rep",
+            "previous_status": "active",
+            "revoked_api_key_ids": [],
+        })
     );
 }
 
@@ -972,7 +977,12 @@ async fn remove_cancels_an_open_invitation() {
     let entries = t.w.entries("team.remove");
     assert_eq!(
         entries[0].payload,
-        json!({ "user_id": null, "role_key": "rep", "previous_status": "invited" })
+        json!({
+            "user_id": null,
+            "role_key": "rep",
+            "previous_status": "invited",
+            "revoked_api_key_ids": [],
+        })
     );
     // The same email can be invited again.
     t.invite("carol@example.com", "rep").await;
@@ -1167,7 +1177,7 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "team_lead")
         .await
         .unwrap();
-    roles::create(
+    let helper = roles::create(
         &t.w.deps,
         &lead.ctx,
         create_input("helper", &["workspace.read"]),
@@ -1177,11 +1187,164 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     roles::update(
         &t.w.deps,
         &lead.ctx,
-        auditor.id,
+        helper.id,
+        vec!["workspace.read".into(), "team.manage".into()],
+    )
+    .await
+    .unwrap();
+}
+
+/// The workspace with a custom `team_lead` role (`team.manage`, `workspace.read`) held by
+/// `lead`, a `manager` and a `rep`.
+struct LeadTeam {
+    t: Team,
+    lead: Member,
+    manager: Member,
+    rep: Member,
+}
+
+async fn lead_team() -> LeadTeam {
+    let t = team().await;
+    roles::create(
+        &t.w.deps,
+        &t.owner_ctx,
+        create_input("team_lead", &["workspace.read", "team.manage"]),
+    )
+    .await
+    .unwrap();
+    let lead = t.join("lead@example.com", "team_lead").await;
+    let manager = t.join("manager@example.com", "manager").await;
+    let rep = t.join("rep@example.com", "rep").await;
+    LeadTeam {
+        t,
+        lead,
+        manager,
+        rep,
+    }
+}
+
+#[tokio::test]
+async fn custom_role_cannot_demote_or_remove_a_manager() {
+    let LeadTeam {
+        t, lead, manager, ..
+    } = lead_team().await;
+    // Even to a role the lead may give, and even out of the workspace: the manager's present
+    // authority exceeds the lead's own.
+    let missing = ["api_keys.manage", "ledger.read"];
+    for role_key in ["rep", "team_lead"] {
+        let e = err(team::set_role(&t.w.deps, &lead.ctx, manager.membership_id, role_key).await);
+        assert_exceeds(&e, &missing);
+    }
+    let e = err(team::remove(&t.w.deps, &lead.ctx, manager.membership_id).await);
+    assert_exceeds(&e, &missing);
+    // Nor may it cancel an invitation to a role wider than its own.
+    let pending = t.invite("carol@example.com", "manager").await;
+    let e = err(team::remove(&t.w.deps, &lead.ctx, pending.membership_id).await);
+    assert_exceeds(&e, &missing);
+
+    let m = t.w.membership(manager.membership_id);
+    assert_eq!(m.status, MembershipStatus::Active);
+    assert_eq!(m.role_id, t.role_id("manager"));
+    assert_eq!(
+        t.w.membership(pending.membership_id).status,
+        MembershipStatus::Invited
+    );
+    assert!(t.w.entries("team.set_role").is_empty());
+    assert!(t.w.entries("team.remove").is_empty());
+}
+
+#[tokio::test]
+async fn custom_role_cannot_strip_permissions_it_lacks_via_roles_update() {
+    let LeadTeam { t, lead, .. } = lead_team().await;
+    let keys = roles::create(
+        &t.w.deps,
+        &t.owner_ctx,
+        create_input("key_keeper", &["workspace.read", "api_keys.manage"]),
+    )
+    .await
+    .unwrap();
+
+    // Narrowing the role to what the lead holds would strip `api_keys.manage` from its members.
+    let e = err(roles::update(&t.w.deps, &lead.ctx, keys.id, vec!["workspace.read".into()]).await);
+    assert_exceeds(&e, &["api_keys.manage"]);
+    // Emptying it too.
+    let e = err(roles::update(&t.w.deps, &lead.ctx, keys.id, Vec::new()).await);
+    assert_exceeds(&e, &["api_keys.manage"]);
+    let stored = roles::list(&t.w.deps, &t.owner_ctx)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == keys.id)
+        .unwrap();
+    assert_eq!(stored.permissions, keys.permissions);
+    assert!(t.w.entries("roles.update").is_empty());
+}
+
+#[tokio::test]
+async fn owner_can_still_do_all_of_these() {
+    let LeadTeam { t, manager, .. } = lead_team().await;
+    let keys = roles::create(
+        &t.w.deps,
+        &t.owner_ctx,
+        create_input("key_keeper", &["workspace.read", "api_keys.manage"]),
+    )
+    .await
+    .unwrap();
+
+    roles::update(
+        &t.w.deps,
+        &t.owner_ctx,
+        keys.id,
         vec!["workspace.read".into()],
     )
     .await
     .unwrap();
+    let out = team::set_role(&t.w.deps, &t.owner_ctx, manager.membership_id, "rep")
+        .await
+        .unwrap();
+    assert_eq!(out.role_key, "rep");
+    team::set_role(&t.w.deps, &t.owner_ctx, manager.membership_id, "manager")
+        .await
+        .unwrap();
+    let pending = t.invite("carol@example.com", "manager").await;
+    team::remove(&t.w.deps, &t.owner_ctx, pending.membership_id)
+        .await
+        .unwrap();
+    team::remove(&t.w.deps, &t.owner_ctx, manager.membership_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        t.w.membership(manager.membership_id).status,
+        MembershipStatus::Removed
+    );
+}
+
+#[tokio::test]
+async fn manager_can_change_a_rep() {
+    let LeadTeam {
+        t,
+        manager,
+        rep,
+        lead,
+    } = lead_team().await;
+    let out = team::set_role(&t.w.deps, &manager.ctx, rep.membership_id, "team_lead")
+        .await
+        .unwrap();
+    assert_eq!(out.role_key, "team_lead");
+    team::set_role(&t.w.deps, &manager.ctx, rep.membership_id, "rep")
+        .await
+        .unwrap();
+    // A lead may change a rep too, and remove one: a rep's authority is within its own.
+    team::set_role(&t.w.deps, &lead.ctx, rep.membership_id, "team_lead")
+        .await
+        .unwrap();
+    team::set_role(&t.w.deps, &lead.ctx, rep.membership_id, "rep")
+        .await
+        .unwrap();
+    team::remove(&t.w.deps, &manager.ctx, rep.membership_id)
+        .await
+        .unwrap();
+    assert_eq!(t.w.entries("team.set_role").len(), 4);
 }
 
 #[tokio::test]

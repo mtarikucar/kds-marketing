@@ -124,6 +124,26 @@ impl ApiKeyRepo for PgTenantRepos {
         Ok(())
     }
 
+    async fn revoke_all_for_user(
+        &mut self,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<Vec<ApiKeyId>, AppError> {
+        let ws = self.workspace_id();
+        let mut ids: Vec<Uuid> = sqlx::query_scalar(
+            "update api_keys set status = 'revoked', revoked_at = $3 \
+             where workspace_id = $1 and issued_by = $2 and status = 'active' returning id",
+        )
+        .bind(ws.as_uuid())
+        .bind(user_id.as_uuid())
+        .bind(at)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "revoke a user's API keys"))?;
+        ids.sort();
+        Ok(ids.into_iter().map(ApiKeyId).collect())
+    }
+
     async fn touch_last_used(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError> {
         let ws = self.workspace_id();
         sqlx::query("update api_keys set last_used_at = $3 where workspace_id = $1 and id = $2")

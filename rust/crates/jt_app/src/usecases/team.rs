@@ -8,9 +8,15 @@
 //! token: only a user with that email can accept it, and accepting spends the token.
 //!
 //! Who may give which role is `jt_tenancy`'s: only an owner gives the owner role or changes or
-//! removes a membership holding it (else `FORBIDDEN`, `details.reason = "owner_only"`), and a
-//! role given may carry only permissions the caller holds itself (else `FORBIDDEN`,
-//! `details.reason = "exceeds_own_authority"` with the missing keys in `details.missing`).
+//! removes a membership holding it (else `FORBIDDEN`, `details.reason = "owner_only"`); a role
+//! given may carry only permissions the caller holds itself; and, unless the caller is an owner,
+//! the role a member holds now must too before the caller may change it or remove the member
+//! (else `FORBIDDEN`, `details.reason = "exceeds_own_authority"` with the missing keys in
+//! `details.missing`).
+//!
+//! Removing a member revokes every active API key they issued in the workspace, in the same
+//! transaction, so a key never outlives its issuer's membership: not even when the same person
+//! is invited back later.
 //!
 //! A workspace always keeps an owner: demoting or removing its last active owner is `CONFLICT`
 //! with `details.reason = "last_owner"`. Every role change and removal first counts the active
@@ -18,6 +24,7 @@
 //! so two concurrent changes cannot each leave the other's owner as the last one and then remove
 //! it.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use jt_ledger::{Actor, LedgerEntry, Subject};
@@ -149,6 +156,7 @@ pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<Invite
         role_is_owner: is_owner(&role),
         role_permissions: role.permissions.clone(),
         current_role_is_owner: false,
+        current_role_permissions: BTreeSet::new(),
     };
     can_grant_role(&ctx.authority(), &grant).map_err(|e| refusal(ctx, e))?;
 
@@ -283,7 +291,9 @@ pub async fn accept_invite(deps: &Deps, input: AcceptInput<'_>) -> Result<Accept
 ///
 /// A membership that is not an active one of this workspace is `NOT_FOUND`; an unknown role key
 /// is `VALIDATION` with `details.role_key`. The new role must be the caller's to give, and the
-/// membership's present role too if it is `owner` (`can_grant_role`; see the module docs).
+/// membership's present role too: if it is `owner`, the caller must be an owner, and its
+/// permissions must all be the caller's unless the caller is an owner (`can_grant_role`; see the
+/// module docs).
 /// Moving the workspace's last active owner to another role is `CONFLICT` ("cannot demote the
 /// last owner", `details.reason = "last_owner"`). Writes `team.set_role` (payload `role_key`,
 /// `previous_role_key`).
@@ -313,6 +323,7 @@ pub async fn set_role(
         role_is_owner: is_owner(&role),
         role_permissions: role.permissions.clone(),
         current_role_is_owner: is_owner(&current),
+        current_role_permissions: current.permissions.clone(),
     };
     can_grant_role(&ctx.authority(), &grant).map_err(|e| refusal(ctx, e))?;
 
@@ -345,9 +356,14 @@ pub async fn set_role(
 ///
 /// A membership that is unknown here or already removed is `NOT_FOUND`; one holding the owner
 /// role (an invitation to it included) is only an owner's to remove (`can_remove_member`;
-/// `FORBIDDEN` with `details.reason = "owner_only"`); removing the workspace's last active owner
-/// is `CONFLICT` ("cannot remove the last owner", `details.reason = "last_owner"`). One tenant transaction sets the status `Removed` and writes
-/// `team.remove` (payload `user_id`, `role_key`, `previous_status`).
+/// `FORBIDDEN` with `details.reason = "owner_only"`); one whose role carries a permission the
+/// caller lacks is not the caller's to remove unless the caller is an owner (`FORBIDDEN` with
+/// `details.reason = "exceeds_own_authority"`); removing the workspace's last active owner is
+/// `CONFLICT` ("cannot remove the last owner", `details.reason = "last_owner"`).
+///
+/// One tenant transaction sets the status `Removed`, revokes every active API key the removed
+/// user issued in this workspace (an invitation has none), and writes `team.remove` (payload
+/// `user_id`, `role_key`, `previous_status`, and `revoked_api_key_ids` in id order).
 ///
 /// Then a second, user-level transaction revokes the removed user's live sessions whose current
 /// workspace is this one (sessions are user-level data, outside the tenant bundle). The removal
@@ -366,11 +382,21 @@ pub async fn remove(deps: &Deps, ctx: &Ctx, membership_id: MembershipId) -> Resu
         .filter(|m| m.status != MembershipStatus::Removed)
         .ok_or_else(|| AppError::not_found(NO_SUCH_MEMBERSHIP))?;
     let role = role_of(repos.roles().find(target.role_id).await?)?;
-    can_remove_member(&ctx.authority(), is_owner(&role)).map_err(|e| refusal(ctx, e))?;
+    can_remove_member(&ctx.authority(), is_owner(&role), &role.permissions)
+        .map_err(|e| refusal(ctx, e))?;
 
     let last_owner = target.status == MembershipStatus::Active && is_owner(&role) && owners <= 1;
     may_change(ctx, last_owner, "cannot remove the last owner")?;
     repos.memberships().remove(membership_id).await?;
+    let revoked_api_key_ids = match target.user_id {
+        Some(user_id) => {
+            repos
+                .api_keys()
+                .revoke_all_for_user(user_id, ctx.now)
+                .await?
+        }
+        None => Vec::new(),
+    };
     repos
         .ledger()
         .append(ledger_entry(
@@ -382,6 +408,7 @@ pub async fn remove(deps: &Deps, ctx: &Ctx, membership_id: MembershipId) -> Resu
                 "user_id": target.user_id,
                 "role_key": role.key,
                 "previous_status": target.status.key(),
+                "revoked_api_key_ids": revoked_api_key_ids,
             }),
         )?)
         .await?;

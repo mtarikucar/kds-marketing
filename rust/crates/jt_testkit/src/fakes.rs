@@ -812,6 +812,32 @@ impl ApiKeyRepo for MemTenant {
         })
     }
 
+    async fn revoke_all_for_user(
+        &mut self,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<Vec<ApiKeyId>, AppError> {
+        let ws = self.ws;
+        let revocable = move |k: &ApiKeyRow| {
+            k.workspace_id == ws && k.issued_by == user_id && k.status == ApiKeyStatus::Active
+        };
+        let mut ids: Vec<ApiKeyId> = self
+            .state()
+            .api_keys
+            .iter()
+            .filter(|k| revocable(k))
+            .map(|k| k.id)
+            .collect();
+        ids.sort();
+        self.tx.write(move |s| {
+            for k in s.api_keys.iter_mut().filter(|k| revocable(k)) {
+                k.status = ApiKeyStatus::Revoked;
+                k.revoked_at = Some(at);
+            }
+        });
+        Ok(ids)
+    }
+
     async fn touch_last_used(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError> {
         let ws = self.ws;
         self.tx.write(move |s| {

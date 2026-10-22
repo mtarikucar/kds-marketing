@@ -3,10 +3,12 @@
 //! Every workspace has the three system roles (`owner`, `manager`, `rep`), created with it and
 //! immutable. Custom roles carry a set of permissions under a key of [`KEY_MIN`] to [`KEY_MAX`]
 //! lowercase letters, digits or underscores that is not a system role's. A caller may give a
-//! custom role only permissions it holds itself (`can_define_role`: else `FORBIDDEN`,
-//! `details.reason = "exceeds_own_authority"` with the missing keys in `details.missing`).
+//! custom role only permissions it holds itself (`can_define_role`), and, unless it is an owner,
+//! may change only a role whose present permissions it holds too (`can_update_role`), so it
+//! cannot strip from the role's members a permission it does not hold; else `FORBIDDEN`,
+//! `details.reason = "exceeds_own_authority"` with the missing keys in `details.missing`.
 
-use jt_tenancy::{Permission, RoleDef, RoleId, SystemRole, can_define_role};
+use jt_tenancy::{Permission, RoleDef, RoleId, SystemRole, can_define_role, can_update_role};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -102,11 +104,12 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateRole) -> Result<RoleDef
 
 /// Replaces a custom role's permissions and returns the role. Needs `team.manage`.
 ///
-/// Unknown permission keys are `VALIDATION` listing them in `details.unknown`; permissions the
-/// caller does not hold are `FORBIDDEN` (see the module docs); a role that is not this
-/// workspace's is `NOT_FOUND`; a system role is `FORBIDDEN`. Members holding the role
-/// get the new permissions from their next request. Writes `roles.update` (payload `key`,
-/// `permissions`).
+/// Unknown permission keys are `VALIDATION` listing them in `details.unknown`; new permissions
+/// the caller does not hold are `FORBIDDEN` (see the module docs); a role that is not this
+/// workspace's is `NOT_FOUND`; a system role is `FORBIDDEN`; a role whose present permissions
+/// the caller does not all hold is `FORBIDDEN` unless the caller is an owner (see the module
+/// docs). Members holding the role get the new permissions from their next request. Writes
+/// `roles.update` (payload `key`, `permissions`).
 pub async fn update(
     deps: &Deps,
     ctx: &Ctx,
@@ -125,6 +128,8 @@ pub async fn update(
     if role.is_system {
         return Err(AppError::forbidden("a system role cannot be changed"));
     }
+    can_update_role(&ctx.authority(), &role.permissions, &permissions)
+        .map_err(|e| refusal(ctx, e))?;
     repos
         .roles()
         .update_permissions(role_id, permissions.clone())

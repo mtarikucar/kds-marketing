@@ -68,12 +68,41 @@ fn manager() -> ActorAuthority {
     }
 }
 
+/// Giving `role` to a membership that holds the owner role now, or none (a new invitation).
 fn grant(role: SystemRole, current_role_is_owner: bool) -> RoleGrant {
+    let current = if current_role_is_owner {
+        SystemRole::Owner.permissions()
+    } else {
+        BTreeSet::new()
+    };
     RoleGrant {
         role_is_owner: role == SystemRole::Owner,
         role_permissions: role.permissions(),
         current_role_is_owner,
+        current_role_permissions: current,
     }
+}
+
+/// Moving a membership that holds `from` now to `to`.
+fn change(from: SystemRole, to: SystemRole) -> RoleGrant {
+    RoleGrant {
+        role_is_owner: to == SystemRole::Owner,
+        role_permissions: to.permissions(),
+        current_role_is_owner: from == SystemRole::Owner,
+        current_role_permissions: from.permissions(),
+    }
+}
+
+/// A custom role with `team.manage` and `workspace.read` only.
+fn lead() -> ActorAuthority {
+    ActorAuthority {
+        permissions: BTreeSet::from([Permission::WorkspaceRead, Permission::TeamManage]),
+        is_owner: false,
+    }
+}
+
+fn none() -> BTreeSet<Permission> {
+    BTreeSet::new()
 }
 
 #[test]
@@ -86,9 +115,16 @@ fn granting_a_role_needs_team_manage() {
         can_grant_role(&rep, &grant(SystemRole::Rep, false)),
         Err(TenancyError::Forbidden)
     );
-    assert_eq!(can_remove_member(&rep, false), Err(TenancyError::Forbidden));
+    assert_eq!(
+        can_remove_member(&rep, false, &none()),
+        Err(TenancyError::Forbidden)
+    );
     assert_eq!(
         can_define_role(&rep, &BTreeSet::new()),
+        Err(TenancyError::Forbidden)
+    );
+    assert_eq!(
+        can_update_role(&rep, &none(), &none()),
         Err(TenancyError::Forbidden)
     );
 }
@@ -105,7 +141,7 @@ fn only_an_owner_grants_changes_or_removes_the_owner_role() {
         Err(TenancyError::OwnerOnly)
     );
     assert_eq!(
-        can_remove_member(&manager(), true),
+        can_remove_member(&manager(), true, &SystemRole::Owner.permissions()),
         Err(TenancyError::OwnerOnly)
     );
     assert_eq!(
@@ -116,14 +152,119 @@ fn only_an_owner_grants_changes_or_removes_the_owner_role() {
         can_grant_role(&owner(), &grant(SystemRole::Rep, true)),
         Ok(())
     );
-    assert_eq!(can_remove_member(&owner(), true), Ok(()));
+    assert_eq!(
+        can_remove_member(&owner(), true, &SystemRole::Owner.permissions()),
+        Ok(())
+    );
 
     // Anything else is open to a manager.
     assert_eq!(
         can_grant_role(&manager(), &grant(SystemRole::Manager, false)),
         Ok(())
     );
-    assert_eq!(can_remove_member(&manager(), false), Ok(()));
+    assert_eq!(
+        can_remove_member(&manager(), false, &SystemRole::Manager.permissions()),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
+    let exceeds = Err(TenancyError::ExceedsOwnAuthority {
+        missing: BTreeSet::from([Permission::ApiKeysManage, Permission::LedgerRead]),
+    });
+    // A custom lead may neither demote a manager (even to a role it may give) nor remove one.
+    assert_eq!(
+        can_grant_role(&lead(), &change(SystemRole::Manager, SystemRole::Rep)),
+        exceeds
+    );
+    assert_eq!(
+        can_remove_member(&lead(), false, &SystemRole::Manager.permissions()),
+        exceeds
+    );
+    // It may change and remove a rep.
+    assert_eq!(
+        can_grant_role(&lead(), &change(SystemRole::Rep, SystemRole::Rep)),
+        Ok(())
+    );
+    assert_eq!(
+        can_remove_member(&lead(), false, &SystemRole::Rep.permissions()),
+        Ok(())
+    );
+    // Both refusals name every missing permission, of the role given and of the target.
+    let auditor = BTreeSet::from([Permission::LedgerRead]);
+    let to_auditor_from_keys = RoleGrant {
+        role_is_owner: false,
+        role_permissions: auditor.clone(),
+        current_role_is_owner: false,
+        current_role_permissions: BTreeSet::from([Permission::ApiKeysManage]),
+    };
+    assert_eq!(
+        can_grant_role(&lead(), &to_auditor_from_keys),
+        exceeds,
+        "the missing permissions of both sides, together"
+    );
+
+    // A manager may change or remove a rep, or another manager.
+    for from in [SystemRole::Rep, SystemRole::Manager] {
+        assert_eq!(
+            can_grant_role(&manager(), &change(from, SystemRole::Rep)),
+            Ok(())
+        );
+        assert_eq!(
+            can_remove_member(&manager(), false, &from.permissions()),
+            Ok(())
+        );
+    }
+
+    // An owner is never held to the target's authority, even one narrowed to `team.manage`
+    // (an owner's agent key): owner-only powers travel with it.
+    let narrowed_owner = ActorAuthority {
+        permissions: BTreeSet::from([Permission::TeamManage]),
+        is_owner: true,
+    };
+    assert_eq!(
+        can_remove_member(&narrowed_owner, false, &SystemRole::Manager.permissions()),
+        Ok(())
+    );
+    assert_eq!(
+        can_remove_member(&narrowed_owner, true, &SystemRole::Owner.permissions()),
+        Ok(())
+    );
+    // But a role it gives is still held to its own permissions.
+    assert_eq!(
+        can_grant_role(
+            &narrowed_owner,
+            &change(SystemRole::Manager, SystemRole::Rep)
+        ),
+        Err(TenancyError::ExceedsOwnAuthority {
+            missing: BTreeSet::from([Permission::WorkspaceRead]),
+        })
+    );
+}
+
+#[test]
+fn updating_a_role_needs_its_present_permissions_too() {
+    let keys = BTreeSet::from([Permission::ApiKeysManage]);
+    let read = BTreeSet::from([Permission::WorkspaceRead]);
+    // Stripping `api_keys.manage` from a role is not the lead's to do: it does not hold it.
+    assert_eq!(
+        can_update_role(&lead(), &keys, &read),
+        Err(TenancyError::ExceedsOwnAuthority {
+            missing: keys.clone(),
+        })
+    );
+    // Nor is widening a role beyond its own permissions.
+    assert_eq!(
+        can_update_role(&lead(), &read, &keys),
+        Err(TenancyError::ExceedsOwnAuthority {
+            missing: keys.clone(),
+        })
+    );
+    assert_eq!(can_update_role(&lead(), &read, &lead().permissions), Ok(()));
+    // An owner may reshape any role.
+    assert_eq!(can_update_role(&owner(), &keys, &read), Ok(()));
+    assert_eq!(can_update_role(&manager(), &keys, &read), Ok(()));
 }
 
 #[test]

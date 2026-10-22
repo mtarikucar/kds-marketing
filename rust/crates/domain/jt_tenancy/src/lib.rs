@@ -11,6 +11,6 @@ pub use ids::{
 };
 pub use role::{
     ActorAuthority, Permission, RoleDef, RoleGrant, SystemRole, TenancyError, can_change_role,
-    can_define_role, can_grant_role, can_remove_member,
+    can_define_role, can_grant_role, can_remove_member, can_update_role,
 };
 pub use workspace::{MembershipStatus, WorkspaceStatus};

@@ -366,6 +366,14 @@ pub trait ApiKeyRepo: Send + Sync {
     async fn list(&mut self) -> Result<Vec<ApiKeyRow>, AppError>;
     /// Sets the status to `Revoked` and `revoked_at` to `at`. An unknown id is `NOT_FOUND`.
     async fn revoke(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Revokes, with `revoked_at = at`, every `Active` key `user_id` issued in this workspace,
+    /// and returns their ids in id order (none: an empty list). Keys already revoked keep their
+    /// time.
+    async fn revoke_all_for_user(
+        &mut self,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<Vec<ApiKeyId>, AppError>;
     async fn touch_last_used(&mut self, id: ApiKeyId, at: OffsetDateTime) -> Result<(), AppError>;
 }
 

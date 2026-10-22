@@ -142,7 +142,9 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    açan anahtara bağlıdır. Bu bağı olmayan bir oturum kimliği (başka bir anahtarın, silinmiş, hiç
    açılmamış ya da bellekteki 10.000 bağın en eskisi olarak düşmüş bir oturum) her anahtar için
    `404 {"code":"NOT_FOUND","message":"unknown session","details":{}}` alır; istemci yeniden
-   `initialize` eder. Ajan anahtarın çalışma alanında, anahtarın kapsamlarıyla çalışır.
+   `initialize` eder. Ajan anahtarın çalışma alanında, anahtarın kapsamlarıyla çalışır. Anahtarı açan
+   üye ekipten çıkarıldığında açtığı bütün etkin anahtarlar aynı işlemde iptal edilir (`team.remove`
+   kaydı `revoked_api_key_ids` alanında listeler); üye sonra geri davet edilse bile eski anahtarlar çalışmaz.
 
    Claude Code:
 

@@ -396,6 +396,89 @@ async fn rep_cannot_manage_keys_403() {
 }
 
 #[tokio::test]
+async fn removed_members_key_is_unauthenticated_even_after_rejoin() {
+    let p = Panel::new().await;
+    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let email = "manager@alpha.example";
+    let manager = p.join(&owner, email, "manager").await;
+    let key = ok_json(
+        p.create_key(&manager, json!({ "name": "Manager's bot" }))
+            .await,
+    )
+    .await;
+    let plaintext = key["plaintext"].as_str().unwrap();
+    api_keys::authenticate(&p.deps, plaintext).await.unwrap();
+
+    // The owner removes the manager: the key is revoked with the membership.
+    let team = ok_json(p.get("/api/team", &owner).await).await;
+    let membership = team
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["email"] == email)
+        .unwrap()["membership_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let resp = p
+        .send(
+            Method::DELETE,
+            &format!("/api/team/{membership}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let keys = ok_json(p.get("/api/api-keys", &owner).await).await;
+    let listed = keys
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["id"] == key["id"])
+        .unwrap()
+        .clone();
+    assert_eq!(listed["status"], "revoked");
+
+    // Invited back, the same person signs in and accepts: a member again, with the same role.
+    let invite = ok_json(
+        p.send(
+            Method::POST,
+            "/api/team/invites",
+            Some(&owner),
+            Some(json!({ "email": email, "role_key": "manager" })),
+        )
+        .await,
+    )
+    .await;
+    let resp = p
+        .send(
+            Method::POST,
+            "/api/auth/login",
+            None,
+            Some(json!({ "email": email, "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let again = session_pair(&resp);
+    let resp = p
+        .send(
+            Method::POST,
+            "/api/team/invites/accept",
+            Some(&again),
+            Some(json!({ "token": invite["invite_token"] })),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The old key stays dead: it does not come back with its issuer.
+    let e = api_keys::authenticate(&p.deps, plaintext)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Unauthenticated);
+    assert_eq!(e.message, "invalid api key");
+}
+
+#[tokio::test]
 async fn a_key_authenticates_and_its_agent_connections_are_listed() {
     let p = Panel::new().await;
     let owner = p.register("owner@alpha.example", "Alpha").await;

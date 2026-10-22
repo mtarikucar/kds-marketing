@@ -105,7 +105,8 @@ pub enum TenancyError {
     /// Only an owner may grant the owner role, or change or remove a membership holding it.
     #[error("only an owner can grant, change or remove the owner role")]
     OwnerOnly,
-    /// The role carries permissions the actor does not hold itself.
+    /// The role given, or the authority the target holds now, carries permissions the actor
+    /// does not hold itself.
     #[error("the role carries permissions the actor does not hold")]
     ExceedsOwnAuthority {
         /// The permissions the actor lacks.
@@ -129,14 +130,18 @@ pub struct RoleGrant {
     pub role_permissions: BTreeSet<Permission>,
     /// Whether the membership holds the `owner` role now; `false` for a new invitation.
     pub current_role_is_owner: bool,
+    /// The permissions of the role the membership holds now; empty for a new invitation.
+    pub current_role_permissions: BTreeSet<Permission>,
 }
 
 /// Whether `actor` may give a membership the role of `grant`.
 ///
 /// Requires `TeamManage` (`Forbidden`); then only an owner may give the owner role or change the
-/// role of a membership holding it (`OwnerOnly`); and the role given may carry only permissions
-/// the actor holds itself (`ExceedsOwnAuthority`, naming the missing ones). The last-owner rule
-/// is [`can_change_role`]'s.
+/// role of a membership holding it (`OwnerOnly`); then the role given may carry only permissions
+/// the actor holds itself, and, unless the actor is an owner, so may the role the membership
+/// holds now, so no one changes a member whose authority exceeds their own
+/// (`ExceedsOwnAuthority`, naming every missing permission). The last-owner rule is
+/// [`can_change_role`]'s.
 pub fn can_grant_role(actor: &ActorAuthority, grant: &RoleGrant) -> Result<(), TenancyError> {
     if !actor.permissions.contains(&Permission::TeamManage) {
         return Err(TenancyError::Forbidden);
@@ -144,17 +149,26 @@ pub fn can_grant_role(actor: &ActorAuthority, grant: &RoleGrant) -> Result<(), T
     if (grant.role_is_owner || grant.current_role_is_owner) && !actor.is_owner {
         return Err(TenancyError::OwnerOnly);
     }
-    within_own_authority(actor, &grant.role_permissions)
+    within_own_authority(
+        actor,
+        &[
+            &grant.role_permissions,
+            target(actor, &grant.current_role_permissions),
+        ],
+    )
 }
 
 /// Whether `actor` may remove a membership (or cancel an invitation); `member_is_owner` says
-/// whether it holds the owner role.
+/// whether it holds the owner role and `member_permissions` are the permissions of its role.
 ///
-/// Requires `TeamManage` (`Forbidden`), and only an owner may remove an owner (`OwnerOnly`). The
-/// last-owner rule is [`can_change_role`]'s.
+/// Requires `TeamManage` (`Forbidden`); only an owner may remove an owner (`OwnerOnly`); and,
+/// unless the actor is an owner, the member's permissions must all be the actor's own
+/// (`ExceedsOwnAuthority`, naming the missing ones). The last-owner rule is
+/// [`can_change_role`]'s.
 pub fn can_remove_member(
     actor: &ActorAuthority,
     member_is_owner: bool,
+    member_permissions: &BTreeSet<Permission>,
 ) -> Result<(), TenancyError> {
     can_grant_role(
         actor,
@@ -162,13 +176,14 @@ pub fn can_remove_member(
             role_is_owner: false,
             role_permissions: BTreeSet::new(),
             current_role_is_owner: member_is_owner,
+            current_role_permissions: member_permissions.clone(),
         },
     )
 }
 
-/// Whether `actor` may create a custom role with `permissions`, or set a custom role's
-/// permissions to them: requires `TeamManage` (`Forbidden`) and only permissions the actor holds
-/// itself (`ExceedsOwnAuthority`, naming the missing ones).
+/// Whether `actor` may create a custom role with `permissions`: requires `TeamManage`
+/// (`Forbidden`) and only permissions the actor holds itself (`ExceedsOwnAuthority`, naming the
+/// missing ones).
 pub fn can_define_role(
     actor: &ActorAuthority,
     permissions: &BTreeSet<Permission>,
@@ -176,15 +191,43 @@ pub fn can_define_role(
     if !actor.permissions.contains(&Permission::TeamManage) {
         return Err(TenancyError::Forbidden);
     }
-    within_own_authority(actor, permissions)
+    within_own_authority(actor, &[permissions])
 }
 
+/// Whether `actor` may change a custom role's permissions from `current` to `new`: as
+/// [`can_define_role`] for `new`, and, unless the actor is an owner, `current` must hold only
+/// permissions the actor holds too, so no one strips a permission they do not hold themselves
+/// from the members of a role (`ExceedsOwnAuthority`, naming every missing permission).
+pub fn can_update_role(
+    actor: &ActorAuthority,
+    current: &BTreeSet<Permission>,
+    new: &BTreeSet<Permission>,
+) -> Result<(), TenancyError> {
+    if !actor.permissions.contains(&Permission::TeamManage) {
+        return Err(TenancyError::Forbidden);
+    }
+    within_own_authority(actor, &[new, target(actor, current)])
+}
+
+/// The present authority of a target that the actor must cover: none for an owner, else all of
+/// `current`.
+fn target<'a>(
+    actor: &ActorAuthority,
+    current: &'a BTreeSet<Permission>,
+) -> &'a BTreeSet<Permission> {
+    static NONE: BTreeSet<Permission> = BTreeSet::new();
+    if actor.is_owner { &NONE } else { current }
+}
+
+/// `Ok` when every permission of `sets` is the actor's, else `ExceedsOwnAuthority` with all the
+/// missing ones.
 fn within_own_authority(
     actor: &ActorAuthority,
-    permissions: &BTreeSet<Permission>,
+    sets: &[&BTreeSet<Permission>],
 ) -> Result<(), TenancyError> {
-    let missing: BTreeSet<Permission> = permissions
-        .difference(&actor.permissions)
+    let missing: BTreeSet<Permission> = sets
+        .iter()
+        .flat_map(|set| set.difference(&actor.permissions))
         .copied()
         .collect();
     if missing.is_empty() {

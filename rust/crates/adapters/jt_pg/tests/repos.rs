@@ -699,6 +699,69 @@ async fn api_keys_insert_find_by_hash_revoke_touch() {
 }
 
 #[tokio::test]
+async fn api_keys_revoke_all_for_user_revokes_only_that_users_active_keys_here() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, other_owner) = db.seed_workspace("other").await;
+    let uow = uow(&db);
+
+    // In `ws`: two active keys and one revoked key of the owner, one key of another user.
+    let (a, b) = (api_key(ws, owner, "hash-a"), api_key(ws, owner, "hash-b"));
+    let old = ApiKeyRow {
+        status: ApiKeyStatus::Revoked,
+        revoked_at: Some(T0),
+        ..api_key(ws, owner, "hash-old")
+    };
+    let someone_elses = api_key(ws, other_owner, "hash-else");
+    // In `other`: a key the same user issued there.
+    let elsewhere = api_key(other, owner, "hash-elsewhere");
+    let mut t = uow.tenant(ws).await.unwrap();
+    for key in [&a, &b, &old, &someone_elses] {
+        t.api_keys().insert(key.clone()).await.unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut o = uow.tenant(other).await.unwrap();
+    o.api_keys().insert(elsewhere.clone()).await.unwrap();
+    o.commit().await.unwrap();
+
+    let at = T0 + Duration::hours(1);
+    let mut t = uow.tenant(ws).await.unwrap();
+    let mut expected = vec![a.id, b.id];
+    expected.sort();
+    assert_eq!(
+        t.api_keys().revoke_all_for_user(owner, at).await.unwrap(),
+        expected
+    );
+    // Nothing is left to revoke the second time.
+    assert!(
+        t.api_keys()
+            .revoke_all_for_user(owner, at)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    t.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    let stored = t.api_keys().list().await.unwrap();
+    let state = |id: ApiKeyId| {
+        let row = stored.iter().find(|k| k.id == id).unwrap();
+        (row.status, row.revoked_at)
+    };
+    assert_eq!(state(a.id), (ApiKeyStatus::Revoked, Some(at)));
+    assert_eq!(state(b.id), (ApiKeyStatus::Revoked, Some(at)));
+    assert_eq!(state(old.id), (ApiKeyStatus::Revoked, Some(T0)));
+    assert_eq!(state(someone_elses.id), (ApiKeyStatus::Active, None));
+    drop(t);
+    let mut o = uow.tenant(other).await.unwrap();
+    assert_eq!(
+        o.api_keys().list().await.unwrap()[0].status,
+        ApiKeyStatus::Active,
+        "the same user's key in another workspace stays"
+    );
+}
+
+#[tokio::test]
 async fn agent_connections_upsert_increments_on_second_initialize_and_touch_counts_calls() {
     let db = TestDb::new().await;
     let (ws, owner) = db.seed_workspace("acme").await;

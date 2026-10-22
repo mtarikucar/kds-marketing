@@ -539,25 +539,65 @@ async fn effective_scopes_shrink_when_issuer_is_demoted() {
 }
 
 #[tokio::test]
-async fn revoked_issuer_membership_makes_key_unauthenticated() {
+async fn removing_a_member_revokes_their_api_keys_and_ledgers_them() {
     let t = team().await;
     let manager = t.join("manager@acme.example", "manager").await;
-    let key = t.create_key(&manager.ctx, "Manager's bot", &[]).await;
-    api_keys::authenticate(&t.w.deps, &key.plaintext)
+    let first = t.create_key(&manager.ctx, "Manager's bot", &[]).await;
+    let second = t
+        .create_key(&manager.ctx, "Manager's reader", &["workspace.read"])
+        .await;
+    let already = t.create_key(&manager.ctx, "Old bot", &[]).await;
+    api_keys::revoke(&t.w.deps, &manager.ctx, already.id)
+        .await
+        .unwrap();
+    let owners = t.create_key(&t.owner_ctx, "Owner's bot", &[]).await;
+    api_keys::authenticate(&t.w.deps, &first.plaintext)
         .await
         .unwrap();
 
-    team::remove(&t.w.deps, &t.owner_ctx, manager.membership_id)
+    let later = T0 + Duration::hours(1);
+    let owner_later = Ctx {
+        now: later,
+        ..t.owner_ctx.clone()
+    };
+    team::remove(&t.w.deps, &owner_later, manager.membership_id)
         .await
         .unwrap();
-    let e = api_keys::authenticate(&t.w.deps, &key.plaintext)
+
+    // The member's active keys are revoked at the removal's time, in the same transaction.
+    for key in [&first, &second] {
+        let row = t.w.key_row(key.id);
+        assert_eq!(row.status, ApiKeyStatus::Revoked, "{}", key.name);
+        assert_eq!(row.revoked_at, Some(later), "{}", key.name);
+        let e = api_keys::authenticate(&t.w.deps, &key.plaintext)
+            .await
+            .unwrap_err();
+        assert_invalid_key(&e);
+    }
+    // A key revoked before keeps its time; another member's key is untouched.
+    assert_eq!(t.w.key_row(already.id).revoked_at, Some(T0));
+    assert_eq!(t.w.key_row(owners.id).status, ApiKeyStatus::Active);
+    api_keys::authenticate(&t.w.deps, &owners.plaintext)
         .await
-        .unwrap_err();
-    assert_invalid_key(&e);
+        .unwrap();
+
+    // The removal's entry names the keys it revoked, in id order.
+    let mut revoked = vec![first.id, second.id];
+    revoked.sort();
+    let entries = t.w.entries("team.remove");
+    assert_eq!(entries.len(), 1);
     assert_eq!(
-        t.w.key_row(key.id).status,
-        ApiKeyStatus::Active,
-        "the key itself stays; its issuer no longer stands behind it"
+        entries[0].payload,
+        json!({
+            "user_id": manager.user_id,
+            "role_key": "manager",
+            "previous_status": "active",
+            "revoked_api_key_ids": revoked,
+        })
+    );
+    assert!(
+        t.w.entries("api_keys.revoke").len() == 1,
+        "only the manual revocation has an entry of its own"
     );
 }
 
