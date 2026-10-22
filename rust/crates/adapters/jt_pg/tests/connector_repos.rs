@@ -1043,12 +1043,24 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     assert_eq!(routed(&uow, &[], "page-1").await, None);
     assert_eq!(routed(&uow, meta, "page-9").await, None);
 
-    // Once `a`'s connection is unreachable or retired, nobody holds the account: an event for it
-    // is routed nowhere, not to `b`.
+    // An unreachable connection (an expired token) keeps its events, so they are there when the
+    // owner reconnects; once retired, nobody holds the account: an event for it is routed
+    // nowhere, not to `b`.
     set_status(&uow, &victim, StoredStatus::Unreachable).await;
-    assert_eq!(routed(&uow, meta, "page-1").await, None);
+    assert_eq!(routed(&uow, meta, "page-1").await, Some(victim.id));
     set_status(&uow, &victim, StoredStatus::Retired).await;
     assert_eq!(routed(&uow, meta, "page-1").await, None);
+
+    // A verified connection wins over an unreachable one, even an older one; among holders of the
+    // same standing the newest answers.
+    let healthy = capability(a, "facebook_page", "page-4", T0);
+    let expired = capability(b, "facebook_page", "page-4", T0 + Duration::days(1));
+    connect(&uow, &healthy, true).await;
+    connect(&uow, &expired, true).await;
+    set_status(&uow, &expired, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&uow, meta, "page-4").await, Some(healthy.id));
+    set_status(&uow, &healthy, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&uow, meta, "page-4").await, Some(expired.id));
 
     // Two workspaces that both connected the account: the most recently connected one answers.
     let first = capability(a, "facebook_page", "page-3", T0);

@@ -189,12 +189,15 @@ impl PlatformRepos for MemPlatform {
             .iter()
             .filter(|s| {
                 let c = &s.capability;
-                c.status == StoredStatus::Verified
+                matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
                     && s.sealed.is_some()
                     && kind_keys.contains(&c.kind_key.as_str())
                     && c.external_id.as_deref() == Some(external_id)
             })
-            .max_by_key(|s| (s.capability.created_at, s.capability.id))
+            .max_by_key(|s| {
+                let c = &s.capability;
+                (c.status == StoredStatus::Verified, c.created_at, c.id)
+            })
             .map(|s| state.capability_view(s)))
     }
 

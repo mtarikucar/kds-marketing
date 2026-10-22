@@ -642,10 +642,21 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     assert_eq!(routed(&deps, &["x"], "page-1").await, None);
     assert_eq!(routed(&deps, meta, "page-9").await, None);
 
+    // Unreachable keeps its events; retired routes nowhere.
     set_status(&deps, &victim, StoredStatus::Unreachable).await;
-    assert_eq!(routed(&deps, meta, "page-1").await, None);
+    assert_eq!(routed(&deps, meta, "page-1").await, Some(victim.id));
     set_status(&deps, &victim, StoredStatus::Retired).await;
     assert_eq!(routed(&deps, meta, "page-1").await, None);
+
+    // Verified wins over unreachable, even when older; then the newest.
+    let healthy = capability(a, "facebook_page", "page-4", FIXED_NOW);
+    let expired = capability(b, "facebook_page", "page-4", FIXED_NOW + Duration::days(1));
+    connect(&deps, &healthy, true).await;
+    connect(&deps, &expired, true).await;
+    set_status(&deps, &expired, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&deps, meta, "page-4").await, Some(healthy.id));
+    set_status(&deps, &healthy, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&deps, meta, "page-4").await, Some(expired.id));
 
     // Two connected holders: the most recently connected one answers.
     let first = capability(a, "facebook_page", "page-3", FIXED_NOW);

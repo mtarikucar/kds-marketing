@@ -8,10 +8,10 @@
 //! come from `capability_budget_links`, in the same statement. The partial unique index
 //! `capabilities_live_external_account` keeps one live capability per external account.
 //! `declared_by_connection` is written once, by `insert`: `update` leaves it as declared.
-//! [`by_external`] is the one platform-wide read: the connected capability (verified, with sealed
-//! credentials) of any workspace that holds an external account, where an inbound event for that
-//! account is routed; the partial index `capabilities_connected_account_idx` of migration 0005
-//! serves it.
+//! [`by_external`] is the one platform-wide read: the connected capability (sealed credentials,
+//! verified or unreachable) of any workspace that holds an external account, where an inbound
+//! event for that account is routed; the partial index `capabilities_connected_account_idx` of
+//! migration 0005 serves it.
 
 use std::collections::BTreeSet;
 
@@ -123,10 +123,11 @@ fn map_write(err: sqlx::Error, what: &str) -> AppError {
     }
 }
 
-/// The connected capability (stored status `verified`, sealed credentials present) of any
-/// workspace whose kind is one of `kind_keys` and whose external account is `external_id`, the
-/// most recently created first; see `PlatformRepos::capability_by_external`. The predicate is the
-/// one of the partial index `capabilities_connected_account_idx`, so the index serves it.
+/// The connected capability (sealed credentials present, stored status `verified` or
+/// `unreachable`) of any workspace whose kind is one of `kind_keys` and whose external account is
+/// `external_id`, verified ones first, then the most recently created; see
+/// `PlatformRepos::capability_by_external`. The predicate is the one of the partial index
+/// `capabilities_connected_account_idx`, so the index serves it.
 pub(crate) async fn by_external(
     tx: &mut PlatformTx<'_>,
     kind_keys: &[&str],
@@ -135,9 +136,9 @@ pub(crate) async fn by_external(
     let record: Option<CapabilityRecord> = sqlx::query_as(&format!(
         // archtest: platform-wide
         "select {COLUMNS} from capabilities c \
-         where c.kind_key = any($1) and c.external_id = $2 and c.status = 'verified' \
-         and c.connector_sealed is not null \
-         order by c.created_at desc, c.id desc limit 1"
+         where c.kind_key = any($1) and c.external_id = $2 \
+         and c.status in ('verified', 'unreachable') and c.connector_sealed is not null \
+         order by (c.status = 'verified') desc, c.created_at desc, c.id desc limit 1"
     ))
     .bind(kind_keys.to_vec())
     .bind(external_id)

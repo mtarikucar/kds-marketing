@@ -1329,15 +1329,18 @@ pub trait PlatformRepos: Send + Sync {
     ) -> Result<Option<MembershipRow>, AppError>;
     /// The connected capability, in whichever workspace it belongs to, whose kind is one of
     /// `kind_keys` and whose external account id is `external_id`: where an inbound event for
-    /// that account is routed. Connected means proved through the provider: stored status
-    /// `Verified` **and** sealed credentials present (so never retired). A capability that is
-    /// only declared (anyone can type a public page id), verified on an agent's word without
-    /// credentials, or unreachable never receives events, whichever workspace holds it.
+    /// that account is routed. Connected means proved through the provider: sealed credentials
+    /// present **and** stored status `Verified` or `Unreachable` (an expired token keeps its
+    /// events, so they are there when the owner reconnects; both statuses only ever follow a
+    /// sealed credential, which for Meta and X comes only through OAuth). A capability that is
+    /// only declared (anyone can type a public page id), sealed but never verified, verified on
+    /// an agent's word without credentials, or retired never receives events, whichever
+    /// workspace holds it.
     ///
     /// `None` when no workspace holds the account connected (the event is routed nowhere, Review
     /// Focus 1). When several do (the same account connected in two workspaces, or under two
-    /// kinds), the most recently created one answers (`created_at`, then id, both descending).
-    /// Read as [`CapabilityRepo::find`] reads it.
+    /// kinds), a `Verified` one wins over an `Unreachable` one, then the most recently created
+    /// (`created_at`, then id, both descending). Read as [`CapabilityRepo::find`] reads it.
     async fn capability_by_external(
         &mut self,
         kind_keys: &[&str],
