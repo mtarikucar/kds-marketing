@@ -9,13 +9,19 @@ publish.workspace = true
 jt_tenancy.workspace = true
 jt_app.workspace = true
 axum.workspace = true
-tower.workspace = true
+tower = { workspace = true, features = ["util"] }
 tower-http.workspace = true
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-time.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+jt_pg.workspace = true
+jt_testkit.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

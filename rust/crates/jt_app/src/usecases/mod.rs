@@ -2,6 +2,7 @@
 //! it is scoped to a workspace) that adapters call from the panel or the MCP gate.
 
 pub mod auth;
+pub mod workspace;
 
 use std::fmt::Write as _;
 use std::sync::Arc;
