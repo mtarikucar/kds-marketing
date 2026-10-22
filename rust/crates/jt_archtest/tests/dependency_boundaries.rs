@@ -1,6 +1,14 @@
 use jt_archtest::direct_deps;
 
-const DOMAIN_ALLOW: &[&str] = &["serde", "serde_json", "uuid", "time", "thiserror"];
+// `jt_tenancy` is itself a pure domain crate; `jt_ledger` uses its ids.
+const DOMAIN_ALLOW: &[&str] = &[
+    "serde",
+    "serde_json",
+    "uuid",
+    "time",
+    "thiserror",
+    "jt_tenancy",
+];
 
 #[test]
 fn domain_crates_depend_only_on_pure_crates() {

@@ -977,6 +977,7 @@ dependencies = [
 name = "jt_ledger"
 version = "0.1.0"
 dependencies = [
+ "jt_tenancy",
  "serde",
  "serde_json",
  "thiserror",
