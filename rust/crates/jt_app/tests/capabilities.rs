@@ -923,6 +923,44 @@ async fn declare_allows_hosts_after_commit_and_retire_revokes_them() {
     );
 }
 
+/// A registry that accepts every host when checking but fails every change, as a tier that could
+/// not be reached would.
+struct FailingHosts;
+
+impl TenantHostRegistry for FailingHosts {
+    fn check(&self, _host: &str) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn allow(&self, _ws: WorkspaceId, _host: &str) -> Result<(), AppError> {
+        Err(AppError::internal("the tenant tier is unreachable"))
+    }
+
+    fn revoke(&self, _ws: WorkspaceId, _host: &str) -> Result<(), AppError> {
+        Err(AppError::internal("the tenant tier is unreachable"))
+    }
+}
+
+#[tokio::test]
+async fn a_host_change_failing_after_commit_does_not_fail_the_committed_change() {
+    let w = world().await;
+    let mut deps = w.deps.clone();
+    deps.hosts = Arc::new(FailingHosts);
+    let inbox = capabilities::declare(
+        &deps,
+        &w.owner_ctx,
+        mailbox("Destek", "info@acme.example", &["imap.acme.example"]),
+    )
+    .await
+    .expect("the declaration is committed and answered");
+    let retired = capabilities::retire(&deps, &w.owner_ctx, inbox.capability.id, true)
+        .await
+        .expect("the retirement is committed and answered");
+    assert_eq!(retired.capability.status, StoredStatus::Retired);
+    assert_eq!(w.entries("capability.declare").len(), 1);
+    assert_eq!(w.entries("capability.retire").len(), 1);
+}
+
 #[tokio::test]
 async fn declare_refuses_a_non_public_host_and_writes_nothing() {
     let w = world()

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 pub use budget::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, END_OF_TIME,
     MAX_REFERENCE_CHARS, MAX_UNIT_LABEL_CHARS, NewBudgetItem, NewBudgetSpend, Period, SpendSource,
-    Unit, can_link_budget, period_window, remaining, validate_currency, validate_unit,
+    Unit, can_link_budget, period_window, remaining, unit_fits, validate_currency, validate_unit,
 };
 pub use capability::{
     Capability, CapabilityId, Evidence, MAX_EVIDENCE_REF_CHARS, MAX_EVIDENCE_REFS,

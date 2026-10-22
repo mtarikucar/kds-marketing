@@ -1267,3 +1267,28 @@ fn stored_capability_json_without_newer_fields_still_parses() {
         );
     }
 }
+
+#[test]
+fn unit_fits_its_budget_kind() {
+    let currency = Unit::Currency("TRY".into());
+    let count = Unit::Count("makara".into());
+    let minutes = Unit::Minutes;
+    for kind in BudgetKind::all() {
+        let fits: Vec<bool> = [&currency, &count, &minutes]
+            .into_iter()
+            .map(|unit| unit_fits(*kind, unit))
+            .collect();
+        let expected = match kind {
+            BudgetKind::Cash | BudgetKind::AdBudget | BudgetKind::SmsBudget => [true, false, false],
+            BudgetKind::Consumable | BudgetKind::AgentQuota => [false, true, false],
+            BudgetKind::AgentHours => [false, false, true],
+        };
+        assert_eq!(fits, expected, "{kind:?}");
+    }
+    // Only the unit's kind matters, not its label or code.
+    assert!(unit_fits(BudgetKind::Cash, &Unit::Currency("EUR".into())));
+    assert!(unit_fits(
+        BudgetKind::AgentQuota,
+        &Unit::Count("tokens".into())
+    ));
+}

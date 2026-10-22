@@ -20,8 +20,13 @@
 //! `connector_public.hosts` (an array of `host` or `host:port` strings). Declaring one checks
 //! each host with the [`crate::ports::TenantHostRegistry`] before anything is written and allows
 //! them once the capability is committed; retiring one revokes, once committed, the hosts that no
-//! other live connector capability of the workspace names. The hosts of a capability reached
-//! otherwise are only public data: the system never reaches them.
+//! other live connector capability of the workspace names. A change of the tier that fails after
+//! the commit is logged as a warning, not answered as an error: the committed change holds. The
+//! hosts of a capability reached otherwise are only public data: the system never reaches them.
+//!
+//! **Locks.** Every mutation reads the capability through `CapabilityRepo::lock` first, in the
+//! bundle that writes, so concurrent mutations of one capability take turns: none writes back a
+//! row another changed meanwhile, and none attaches a capability retired meanwhile.
 //!
 //! **The record.** Each change writes one ledger entry about the capability
 //! (`subject.kind = "capability"`), carrying in `strategy_version_id` the strategy version in
@@ -210,7 +215,8 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<CapabilityO
 /// holds is `CONFLICT`. Nothing is written on a refusal.
 ///
 /// Writes `capability.declare` (payload `kind_key`, `name` and, when given, `external_id`). Once
-/// committed, each host is allowed; an error from that is returned, though the capability holds.
+/// committed, each host is allowed; a host that cannot be allowed then (every one was checked
+/// first) is logged as a warning and the declaration is answered all the same, since it holds.
 pub async fn declare(
     deps: &Deps,
     ctx: &Ctx,
@@ -272,7 +278,15 @@ pub async fn declare(
     repos.commit().await?;
 
     for host in &hosts {
-        deps.hosts.allow(ctx.workspace_id, host)?;
+        if let Err(e) = deps.hosts.allow(ctx.workspace_id, host) {
+            tracing::warn!(
+                workspace_id = %ctx.workspace_id,
+                capability_id = %capability.id,
+                host,
+                error = %e,
+                "a declared capability's host could not be allowed"
+            );
+        }
     }
     Ok(CapabilityOut::at(capability, ctx.now))
 }
@@ -303,7 +317,7 @@ pub async fn verify(
         return Err(gaps_error("the evidence is not valid", gaps));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let mut capability = find(repos.as_mut(), id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
     if capability.reach == Reach::Connector {
         return Err(AppError::conflict(
             "connector capabilities are verified by their probe",
@@ -350,7 +364,7 @@ pub async fn mark_unreachable(
         ));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let capability = find(repos.as_mut(), id).await?;
+    let capability = locked(repos.as_mut(), id).await?;
     not_retired(&capability)?;
     repos
         .capabilities()
@@ -388,7 +402,7 @@ pub async fn set_policy(
         return Err(gaps_error("the policy is not valid", gaps));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let mut capability = find(repos.as_mut(), id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
     not_retired(&capability)?;
     let in_force = version_in_force(repos.as_mut()).await?;
     let payload = json!({ "policy": policy });
@@ -416,8 +430,8 @@ pub async fn set_policy(
 /// becomes `retired`, is unlinked from every budget item and removed from every group (both
 /// stay), and `capability.retire` is written (payload `budget_links`, `groups`: how many it left,
 /// `hosts_revoked`: how many tenant hosts go). Once committed, each host it named that no other
-/// live connector capability of the workspace names is revoked; an error from that is returned,
-/// though the retirement holds.
+/// live connector capability of the workspace names is revoked; a host that cannot be revoked
+/// then is logged as a warning and the retirement is answered all the same, since it holds.
 pub async fn retire(
     deps: &Deps,
     ctx: &Ctx,
@@ -432,7 +446,7 @@ pub async fn retire(
         ));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let capability = find(repos.as_mut(), id).await?;
+    let capability = locked(repos.as_mut(), id).await?;
     if capability.status == StoredStatus::Retired {
         return Err(AppError::conflict("capability is already retired"));
     }
@@ -484,16 +498,18 @@ pub async fn retire(
     let out = reread(repos.as_mut(), id, ctx.now).await?;
     repos.commit().await?;
 
-    let mut first_error = None;
     for host in &revoked {
         if let Err(e) = deps.hosts.revoke(ctx.workspace_id, host) {
-            first_error.get_or_insert(e);
+            tracing::warn!(
+                workspace_id = %ctx.workspace_id,
+                capability_id = %id,
+                host,
+                error = %e,
+                "a retired capability's host could not be revoked"
+            );
         }
     }
-    match first_error {
-        Some(e) => Err(e),
-        None => Ok(out),
-    }
+    Ok(out)
 }
 
 /// Links capability `id` to budget item `item`, the one it spends from, and returns it; linking
@@ -511,7 +527,7 @@ pub async fn link_budget(
 ) -> Result<CapabilityOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let capability = find(repos.as_mut(), id).await?;
+    let capability = locked(repos.as_mut(), id).await?;
     let budget_item = repos
         .budget()
         .find_item(item)
@@ -558,7 +574,7 @@ pub async fn unlink_budget(
 ) -> Result<CapabilityOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    find(repos.as_mut(), id).await?;
+    locked(repos.as_mut(), id).await?;
     repos.budget().unlink(id, item).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
     record(
@@ -719,6 +735,19 @@ pub(crate) async fn find(
     repos
         .capabilities()
         .find(id)
+        .await?
+        .ok_or_else(|| AppError::not_found(NO_SUCH_CAPABILITY))
+}
+
+/// Capability `id`, locked until the bundle ends (see `CapabilityRepo::lock`: every mutation
+/// reads the capability through it first), or `NOT_FOUND` when it is not this workspace's.
+pub(crate) async fn locked(
+    repos: &mut dyn TenantRepos,
+    id: CapabilityId,
+) -> Result<Capability, AppError> {
+    repos
+        .capabilities()
+        .lock(id)
         .await?
         .ok_or_else(|| AppError::not_found(NO_SUCH_CAPABILITY))
 }

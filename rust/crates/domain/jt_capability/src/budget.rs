@@ -330,6 +330,18 @@ pub fn validate_unit(unit: &Unit) -> Result<(), CapabilityError> {
     }
 }
 
+/// Whether a budget item of `kind` may be counted in `unit`: money (cash, ad and SMS budgets) in
+/// a currency, consumables and agent quotas as a count, agent hours in minutes. Only the unit's
+/// kind matters here; its currency code or label is [`validate_unit`]'s.
+pub fn unit_fits(kind: BudgetKind, unit: &Unit) -> bool {
+    use BudgetKind::*;
+    match unit {
+        Unit::Currency(_) => matches!(kind, Cash | AdBudget | SmsBudget),
+        Unit::Count(_) => matches!(kind, Consumable | AgentQuota),
+        Unit::Minutes => kind == AgentHours,
+    }
+}
+
 /// Whether a capability of `kind` may spend from a budget item of `budget_kind`: ad accounts from
 /// ad budgets or cash; the SMS line from the SMS budget or cash; agent connections from agent
 /// quotas or agent hours (never cash); printers and 3D printers from consumables or cash; every

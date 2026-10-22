@@ -197,6 +197,26 @@ impl CapabilityRepo for PgTenantRepos {
         record.map(CapabilityRecord::into_capability).transpose()
     }
 
+    /// Locks the row, then reads the capability in a statement of its own: after waiting for
+    /// another transaction, a `select .. for update` re-reads the locked row but evaluates the
+    /// rest of the statement (the budget links) on its older snapshot, while a new statement sees
+    /// everything committed meanwhile.
+    async fn lock(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError> {
+        let ws = self.workspace_id();
+        let locked: Option<i32> = sqlx::query_scalar(
+            "select 1 from capabilities where workspace_id = $1 and id = $2 for update",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock capability"))?;
+        if locked.is_none() {
+            return Ok(None);
+        }
+        CapabilityRepo::find(self, id).await
+    }
+
     async fn list(&mut self, filter: CapabilityFilter) -> Result<Vec<Capability>, AppError> {
         let ws = self.workspace_id();
         let group_kinds: Option<Vec<&str>> = filter

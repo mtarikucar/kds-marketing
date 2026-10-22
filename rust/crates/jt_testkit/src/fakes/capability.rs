@@ -177,6 +177,11 @@ impl CapabilityRepo for MemTenant {
             .map(|c| state.capability_view(c)))
     }
 
+    /// The fakes run one bundle at a time in tests, so there is no one to wait for: `find`.
+    async fn lock(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError> {
+        CapabilityRepo::find(self, id).await
+    }
+
     async fn list(&mut self, filter: CapabilityFilter) -> Result<Vec<Capability>, AppError> {
         let (state, ws) = (self.state(), self.ws);
         let in_group = |c: &Capability, g: CapabilityGroupId| {

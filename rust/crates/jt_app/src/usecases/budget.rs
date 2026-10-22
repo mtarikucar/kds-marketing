@@ -13,7 +13,7 @@
 
 use jt_capability::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, NewBudgetItem,
-    NewBudgetSpend, Period, SpendSource, Unit, period_window, remaining,
+    NewBudgetSpend, Period, SpendSource, Unit, period_window, remaining, unit_fits,
 };
 use jt_ledger::Actor;
 use jt_tenancy::Permission;
@@ -67,8 +67,10 @@ pub struct BudgetSpendOut {
 /// Creates a budget item and returns it, nothing spent. Needs `budget.manage`.
 ///
 /// The name is trimmed; a bad name, unit or a negative cap is `VALIDATION` naming `name`, `unit`
-/// or `cap`. The item carries the strategy version in force, if any. Writes `budget.items.create`
-/// (payload `name`, `kind`, `unit`, `cap`, `period`).
+/// or `cap`. The unit must fit the kind (`unit_fits`: money in a currency, consumables and agent
+/// quotas as a count, agent hours in minutes), else `VALIDATION` with
+/// `details.reason = "unit_mismatch"`. The item carries the strategy version in force, if any.
+/// Writes `budget.items.create` (payload `name`, `kind`, `unit`, `cap`, `period`).
 pub async fn create_item(
     deps: &Deps,
     ctx: &Ctx,
@@ -95,6 +97,16 @@ pub async fn create_item(
         ctx.now,
     )
     .map_err(capability_error)?;
+    if !unit_fits(item.kind, &item.unit) {
+        return Err(AppError::validation(
+            format!(
+                "a {} budget item is not counted in {}",
+                item.kind.key(),
+                unit_kind(&item.unit)
+            ),
+            json!({ "reason": "unit_mismatch" }),
+        ));
+    }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
     item.strategy_version_id = in_force.map(|v| v.as_uuid());
@@ -240,6 +252,15 @@ pub async fn spend(
         return Err(AppError::not_found(NO_SUCH_BUDGET_ITEM));
     }
     repos.budget().list_spend(item, limit, before).await
+}
+
+/// What `unit` counts, in words, for a message.
+fn unit_kind(unit: &Unit) -> &'static str {
+    match unit {
+        Unit::Currency(_) => "a currency",
+        Unit::Count(_) => "a count",
+        Unit::Minutes => "minutes",
+    }
 }
 
 /// What was spent from `item` in the window of its period that holds `now`.

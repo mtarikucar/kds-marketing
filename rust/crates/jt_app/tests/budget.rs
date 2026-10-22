@@ -73,6 +73,40 @@ async fn create_item_needs_budget_manage_and_valid_fields() {
 }
 
 #[tokio::test]
+async fn budget_item_unit_must_fit_its_kind() {
+    let w = world().await;
+    let item = |kind: BudgetKind, unit: Unit| BudgetItemInput {
+        kind,
+        unit,
+        ..monthly("Kalem", 100)
+    };
+    let mismatches = [
+        item(BudgetKind::Cash, Unit::Minutes),
+        item(BudgetKind::AdBudget, Unit::Count("tıklama".into())),
+        item(BudgetKind::SmsBudget, Unit::Minutes),
+        item(BudgetKind::Consumable, Unit::Currency("TRY".into())),
+        item(BudgetKind::AgentQuota, Unit::Minutes),
+        item(BudgetKind::AgentHours, Unit::Currency("TRY".into())),
+        item(BudgetKind::AgentHours, Unit::Count("saat".into())),
+    ];
+    for input in mismatches {
+        let e = err(budget::create_item(&w.deps, &w.owner_ctx, input.clone()).await);
+        assert_eq!(e.code, ErrorCode::Validation, "{input:?}");
+        assert_eq!(e.details, json!({ "reason": "unit_mismatch" }), "{input:?}");
+    }
+    assert!(w.uow.snapshot().budget_items.is_empty());
+    for input in [
+        item(BudgetKind::SmsBudget, Unit::Currency("TRY".into())),
+        item(BudgetKind::AgentQuota, Unit::Count("istek".into())),
+        item(BudgetKind::AgentHours, Unit::Minutes),
+    ] {
+        budget::create_item(&w.deps, &w.owner_ctx, input)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn create_item_starts_with_nothing_spent() {
     let w = world().await;
     let version = w.approve_strategy().await;

@@ -137,6 +137,10 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
         Some(b"sealed".to_vec())
     );
     assert_eq!(c.read_sealed(phone.id).await.unwrap(), None);
+    // `lock` reads as `find` does (the fakes run one bundle at a time, so there is no one to wait
+    // for), including nothing for an unknown id.
+    assert_eq!(c.lock(ig.id).await.unwrap(), c.find(ig.id).await.unwrap());
+    assert_eq!(c.lock(CapabilityId::new_v7()).await.unwrap(), None);
     let listed: Vec<CapabilityId> = c
         .list(CapabilityFilter::default())
         .await

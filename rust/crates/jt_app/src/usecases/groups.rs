@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 
 use super::Deps;
 use super::capabilities::{
-    CapabilityOut, append, capability_error, find, not_retired, version_in_force,
+    CapabilityOut, append, capability_error, find, locked, not_retired, version_in_force,
 };
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -169,7 +169,9 @@ pub async fn add_member(
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     find_group(repos.as_mut(), id).await?;
-    let member = find(repos.as_mut(), capability).await?;
+    // The capability is locked so that a concurrent retirement cannot slip in between the check
+    // and the write; the group row needs no lock (a concurrent delete takes the member with it).
+    let member = locked(repos.as_mut(), capability).await?;
     not_retired(&member)?;
     repos.capability_groups().add_member(id, capability).await?;
     member_changed(repos, ctx, "capability.groups.add_member", id, capability).await

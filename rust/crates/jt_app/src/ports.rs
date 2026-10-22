@@ -663,6 +663,13 @@ pub struct CapabilityFilter {
 ///
 /// Values are stored as given: callers build them with `Capability::new` and validate changes
 /// first.
+///
+/// **Every mutation of a capability** (verifying it, marking it unreachable, setting its policy,
+/// retiring it, linking or unlinking a budget item, adding it to a group) **reads the capability
+/// through [`CapabilityRepo::lock`] first, in the bundle that writes**, and decides on what that
+/// returns. The lock is held until the bundle commits or is dropped, so a concurrent mutation of
+/// the same capability waits and then sees the committed result: one cannot write back a row the
+/// other changed (a policy flag, a retirement) or attach a capability retired meanwhile.
 #[async_trait]
 pub trait CapabilityRepo: Send + Sync {
     /// Stores a capability with its sealed credentials, if any. A `capability.workspace_id` other
@@ -673,8 +680,18 @@ pub trait CapabilityRepo: Send + Sync {
         capability: Capability,
         sealed: Option<Vec<u8>>,
     ) -> Result<(), AppError>;
-    /// The capability, with `has_sealed_config` and its budget item ids (in id order).
+    /// The capability, with `has_sealed_config` and its budget item ids (in id order), read
+    /// without a lock: for answering, not for deciding a write.
     async fn find(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError>;
+    /// The capability as [`CapabilityRepo::find`] reads it, its row locked against every other
+    /// `lock` (and every write to it) until this bundle commits or is dropped; `None` when the id
+    /// is not the workspace's.
+    ///
+    /// A call that has to wait for another bundle holding the lock returns what that bundle
+    /// committed, its budget links and groups included. In Postgres it is `select .. for update`
+    /// followed by a fresh read; the in-memory fakes run one bundle at a time in tests, so there
+    /// it is `find`.
+    async fn lock(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError>;
     /// The capabilities `filter` matches, oldest (`created_at`, then id) first.
     async fn list(&mut self, filter: CapabilityFilter) -> Result<Vec<Capability>, AppError>;
     /// Writes every stored field of `capability` but its identity: `kind_key` and `created_at`

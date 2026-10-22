@@ -460,6 +460,79 @@ async fn same_external_account_twice_is_conflict_until_retired() {
     assert_eq!(find(&uow, a, first.id).await.status, StoredStatus::Retired);
 }
 
+/// Waits until another backend of this database waits for a lock; panics after ten seconds.
+async fn wait_for_a_lock_waiter(db: &TestDb) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "select count(*) from pg_stat_activity where datname = current_database() \
+             and wait_event_type = 'Lock' and pid <> pg_backend_pid()",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no backend ever waited for a lock");
+}
+
+#[tokio::test]
+async fn capability_lock_blocks_a_second_locker_until_commit() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let ads = capability(a, "meta_ads", Some("act-1"), T0);
+    insert(&uow, &ads, Some(b"sealed".to_vec())).await;
+    let item = budget_item(a, "Reklam", BudgetKind::AdBudget, T0);
+    {
+        let mut t = uow.tenant(a).await.unwrap();
+        t.budget().insert_item(item.clone()).await.unwrap();
+        t.commit().await.unwrap();
+    }
+
+    // A locks the capability, verifies it and links a budget item; B's lock waits for A and then
+    // reads all of A's work, the link (another table) included.
+    let mut first = uow.tenant(a).await.unwrap();
+    let locked = first.capabilities().lock(ads.id).await.unwrap();
+    assert_eq!(locked, Some(find(&uow, a, ads.id).await));
+    first
+        .capabilities()
+        .set_status(ads.id, StoredStatus::Verified, T0 + Duration::minutes(1))
+        .await
+        .unwrap();
+    first.budget().link(ads.id, item.id).await.unwrap();
+    let second = {
+        let uow = uow.clone();
+        let id = ads.id;
+        tokio::spawn(async move {
+            let mut t = uow.tenant(a).await.unwrap();
+            let seen = t.capabilities().lock(id).await.unwrap();
+            t.commit().await.unwrap();
+            seen
+        })
+    };
+    wait_for_a_lock_waiter(&db).await;
+    assert!(!second.is_finished(), "the second locker did not wait");
+    first.commit().await.unwrap();
+    let seen = second.await.unwrap().expect("the capability");
+    assert_eq!(seen.status, StoredStatus::Verified);
+    assert_eq!(seen.updated_at, T0 + Duration::minutes(1));
+    assert_eq!(seen.budget_item_ids, [item.id]);
+    assert!(seen.has_sealed_config);
+
+    // A lock reads as `find` does: nothing for an unknown id or another workspace's capability.
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.capabilities().lock(CapabilityId::new_v7()).await.unwrap(),
+        None
+    );
+    let mut t = uow.tenant(b).await.unwrap();
+    assert_eq!(t.capabilities().lock(ads.id).await.unwrap(), None);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Groups
 // ---------------------------------------------------------------------------------------------
