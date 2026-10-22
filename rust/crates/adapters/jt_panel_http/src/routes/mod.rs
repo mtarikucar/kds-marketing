@@ -7,6 +7,8 @@
 //! route differs, and hands the resolved [`UseCase`] to the route's requests as a
 //! [`RouteUseCase`] extension, which the strategy gate in `WorkspaceCtx` reads.
 
+pub mod agents;
+pub mod api_keys;
 pub mod auth;
 pub mod roles;
 pub mod team;
@@ -40,6 +42,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/roles"),
     ("PATCH", "/api/roles/{role_id}"),
     ("DELETE", "/api/roles/{role_id}"),
+    ("POST", "/api/api-keys"),
+    ("GET", "/api/api-keys"),
+    ("DELETE", "/api/api-keys/{key_id}"),
+    ("GET", "/api/agents"),
     ("GET", "/healthz"),
 ];
 
@@ -145,6 +151,15 @@ pub fn api_routes() -> Vec<ApiRoute> {
         api_route("POST", "/roles", "roles.create", roles::create),
         api_route("PATCH", "/roles/{role_id}", "roles.update", roles::update),
         api_route("DELETE", "/roles/{role_id}", "roles.delete", roles::delete),
+        api_route("POST", "/api-keys", "api_keys.create", api_keys::create),
+        api_route("GET", "/api-keys", "api_keys.list", api_keys::list),
+        api_route(
+            "DELETE",
+            "/api-keys/{key_id}",
+            "api_keys.revoke",
+            api_keys::revoke,
+        ),
+        api_route("GET", "/agents", "agents.list", agents::list),
     ]
 }
 

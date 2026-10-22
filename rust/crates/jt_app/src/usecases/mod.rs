@@ -5,16 +5,19 @@
 //! authenticated) and reaches workspace data only through tenant bundles of `Ctx::workspace_id`;
 //! the others read the `Clock`.
 
+pub mod agents;
+pub mod api_keys;
 pub mod auth;
 pub mod roles;
 pub mod team;
 pub mod workspace;
 
+use std::collections::BTreeSet;
 use std::fmt::{Display, Write as _};
 use std::sync::Arc;
 
-use jt_ledger::{Action, LedgerEntry, Subject};
-use jt_tenancy::{Permission, TenancyError};
+use jt_ledger::{Action, Actor, LedgerEntry, Subject};
+use jt_tenancy::{Permission, TenancyError, UserId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -116,6 +119,44 @@ pub(crate) fn required(field: &str, raw: &str) -> Result<String, AppError> {
     match raw.trim() {
         "" => Err(invalid(field, &format!("{field} must not be empty"))),
         trimmed => Ok(trimmed.to_owned()),
+    }
+}
+
+/// The permissions named by `raw`; `VALIDATION` listing every unknown key, in input order and
+/// once each, in `details.unknown`.
+pub(crate) fn parse_permissions(raw: &[String]) -> Result<BTreeSet<Permission>, AppError> {
+    let mut permissions = BTreeSet::new();
+    let mut unknown: Vec<&str> = Vec::new();
+    for key in raw {
+        match Permission::parse(key) {
+            Some(p) => {
+                permissions.insert(p);
+            }
+            None if !unknown.contains(&key.as_str()) => unknown.push(key),
+            None => {}
+        }
+    }
+    if unknown.is_empty() {
+        Ok(permissions)
+    } else {
+        Err(AppError::validation(
+            "unknown permissions",
+            json!({ "unknown": unknown }),
+        ))
+    }
+}
+
+/// The keys of a permission set, in the set's order.
+pub(crate) fn permission_keys(permissions: &BTreeSet<Permission>) -> Vec<&'static str> {
+    permissions.iter().map(Permission::key).collect()
+}
+
+/// The user behind an actor: the human, or the user who issued an agent's key. A system
+/// component has none.
+pub(crate) fn acting_user(actor: &Actor) -> Option<UserId> {
+    match actor {
+        Actor::Human { user_id } | Actor::Agent { user_id, .. } => Some(*user_id),
+        Actor::System { .. } => None,
     }
 }
 

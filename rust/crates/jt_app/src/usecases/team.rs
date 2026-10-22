@@ -30,7 +30,7 @@ use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use super::auth::{self, MIN_PASSWORD_CHARS, MeOut, Principal, SessionOut};
-use super::{Deps, action, hash_token, invalid, ledger_entry, refusal, required};
+use super::{Deps, acting_user, action, hash_token, invalid, ledger_entry, refusal, required};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{MemberOut, MembershipRow, MembershipView, UserRepos, UserRow};
@@ -542,14 +542,6 @@ fn may_change(ctx: &Ctx, target_is_last_owner: bool, message: &str) -> Result<()
         }
         err
     })
-}
-
-/// The user behind an actor, whom an invitation records as its inviter.
-fn acting_user(actor: &Actor) -> Option<UserId> {
-    match actor {
-        Actor::Human { user_id } | Actor::Agent { user_id, .. } => Some(*user_id),
-        Actor::System { .. } => None,
-    }
 }
 
 /// The role a membership refers to; a missing one is a broken reference.

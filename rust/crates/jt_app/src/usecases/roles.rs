@@ -6,13 +6,11 @@
 //! custom role only permissions it holds itself (`can_define_role`: else `FORBIDDEN`,
 //! `details.reason = "exceeds_own_authority"` with the missing keys in `details.missing`).
 
-use std::collections::BTreeSet;
-
 use jt_tenancy::{Permission, RoleDef, RoleId, SystemRole, can_define_role};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Deps, invalid, ledger_entry, refusal, required};
+use super::{Deps, invalid, ledger_entry, parse_permissions, permission_keys, refusal, required};
 use crate::ctx::Ctx;
 use crate::error::AppError;
 
@@ -94,7 +92,7 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateRole) -> Result<RoleDef
             json!({
                 "key": role.key,
                 "name": role.name,
-                "permissions": keys(&role.permissions),
+                "permissions": permission_keys(&role.permissions),
             }),
         )?)
         .await?;
@@ -138,7 +136,7 @@ pub async fn update(
             "roles.update",
             "role",
             role_id,
-            json!({ "key": role.key, "permissions": keys(&permissions) }),
+            json!({ "key": role.key, "permissions": permission_keys(&permissions) }),
         )?)
         .await?;
     repos.commit().await?;
@@ -193,35 +191,6 @@ fn is_system_key(key: &str) -> bool {
     [SystemRole::Owner, SystemRole::Manager, SystemRole::Rep]
         .iter()
         .any(|r| r.key() == key)
-}
-
-/// The permissions named by `raw`; `VALIDATION` listing every unknown key, in input order and
-/// once each, in `details.unknown`.
-fn parse_permissions(raw: &[String]) -> Result<BTreeSet<Permission>, AppError> {
-    let mut permissions = BTreeSet::new();
-    let mut unknown: Vec<&str> = Vec::new();
-    for key in raw {
-        match Permission::parse(key) {
-            Some(p) => {
-                permissions.insert(p);
-            }
-            None if !unknown.contains(&key.as_str()) => unknown.push(key),
-            None => {}
-        }
-    }
-    if unknown.is_empty() {
-        Ok(permissions)
-    } else {
-        Err(AppError::validation(
-            "unknown permissions",
-            json!({ "unknown": unknown }),
-        ))
-    }
-}
-
-/// The keys of a permission set, in the set's order.
-fn keys(permissions: &BTreeSet<Permission>) -> Vec<&'static str> {
-    permissions.iter().map(Permission::key).collect()
 }
 
 #[cfg(test)]
