@@ -6,10 +6,11 @@ use jt_app::error::{AppError, ErrorCode};
 use jt_app::gate::StrategyGate;
 use jt_app::ports::UnitOfWork;
 use jt_ledger::Actor;
-use jt_pg::{PgStrategyGate, PgUnitOfWork, TenantTx};
+use jt_pg::{PgStrategyGate, PgUnitOfWork, PlatformTx, TenantTx};
 use jt_strategy::{
-    ConsultationEntry, ConsultationKind, Hypothesis, HypothesisId, HypothesisState, Identity,
-    Sections, Segment, StrategyVersion, StrategyVersionId, VersionStatus,
+    ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
+    HypothesisState, Identity, Sections, Segment, StrategyVersion, StrategyVersionId,
+    VersionStatus,
 };
 use jt_tenancy::{AgentConnectionId, UserId, WorkspaceId};
 use jt_testkit::TestDb;
@@ -803,7 +804,7 @@ async fn consultation_is_append_only_and_lists_newest_first() {
         vec![e3.clone(), e2.clone()]
     );
     assert_eq!(
-        c.list(v1.id, 10, Some(e2.at)).await.unwrap(),
+        c.list(v1.id, 10, Some((e2.at, e2.id))).await.unwrap(),
         vec![e1.clone()]
     );
     // The limit is clamped to at least one.
@@ -858,6 +859,187 @@ async fn consultation_is_append_only_and_lists_newest_first() {
         t.consultation().list(v1.id, 10, None).await.unwrap().len(),
         3
     );
+}
+
+#[tokio::test]
+async fn consultation_pages_by_keyset_through_entries_sharing_an_instant() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, owner) = db.seed_workspace("a").await;
+    let v1 = version(a, 1, VersionStatus::Draft, human(owner));
+    insert(&uow, &v1).await;
+
+    // Five entries at one instant (as under a fixed clock), one earlier.
+    let mut entries: Vec<ConsultationEntry> = (0..5)
+        .map(|i| {
+            entry(
+                v1.id,
+                ConsultationKind::Note,
+                &format!("note {i}"),
+                human(owner),
+                T0 + Duration::minutes(1),
+            )
+        })
+        .collect();
+    entries.push(entry(
+        v1.id,
+        ConsultationKind::Note,
+        "earlier",
+        human(owner),
+        T0,
+    ));
+    let mut t = uow.tenant(a).await.unwrap();
+    for e in &entries {
+        t.consultation().append(e.clone()).await.unwrap();
+    }
+    t.commit().await.unwrap();
+
+    let mut newest_first = entries.clone();
+    newest_first.sort_by_key(|e| std::cmp::Reverse((e.at, e.id)));
+
+    // Pages of two, each starting after the previous page's last (at, id): nothing skipped or
+    // repeated.
+    let mut t = uow.tenant(a).await.unwrap();
+    let mut paged = Vec::new();
+    let mut cursor: Option<(OffsetDateTime, ConsultationEntryId)> = None;
+    loop {
+        let page = t.consultation().list(v1.id, 2, cursor).await.unwrap();
+        let Some(last) = page.last() else { break };
+        cursor = Some((last.at, last.id));
+        paged.extend(page);
+    }
+    assert_eq!(paged, newest_first);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Locking the draft
+// ---------------------------------------------------------------------------------------------
+
+/// Waits until another backend of this database waits for a lock; panics after ten seconds.
+async fn wait_for_a_lock_waiter(db: &TestDb) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "select count(*) from pg_stat_activity where datname = current_database() \
+             and wait_event_type = 'Lock' and pid <> pg_backend_pid()",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no backend ever waited for a lock");
+}
+
+#[tokio::test]
+async fn lock_draft_blocks_a_second_locker_until_commit() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, owner) = db.seed_workspace("a").await;
+    let draft = version(a, 1, VersionStatus::Draft, human(owner));
+    insert(&uow, &draft).await;
+
+    // A locks the draft and edits it; B's lock waits for A and then reads A's edit.
+    let mut first = uow.tenant(a).await.unwrap();
+    let locked = first.strategy().lock_draft().await.unwrap();
+    assert_eq!(locked, Some(draft.clone()));
+    first
+        .strategy()
+        .update_sections(draft.id, sections("Kahve"), T0)
+        .await
+        .unwrap();
+    let second = {
+        let uow = uow.clone();
+        tokio::spawn(async move {
+            let mut t = uow.tenant(a).await.unwrap();
+            let seen = t.strategy().lock_draft().await.unwrap();
+            t.commit().await.unwrap();
+            seen
+        })
+    };
+    wait_for_a_lock_waiter(&db).await;
+    assert!(!second.is_finished(), "the second locker did not wait");
+    first.commit().await.unwrap();
+    let seen = second.await.unwrap().expect("the draft");
+    assert_eq!(seen.sections, sections("Kahve"));
+
+    // A locks the draft and approves it; B's lock waits, then finds no draft at all.
+    let mut first = uow.tenant(a).await.unwrap();
+    assert!(first.strategy().lock_draft().await.unwrap().is_some());
+    first
+        .strategy()
+        .set_status(draft.id, VersionStatus::Approved, T0, Some(owner))
+        .await
+        .unwrap();
+    let second = {
+        let uow = uow.clone();
+        tokio::spawn(async move {
+            let mut t = uow.tenant(a).await.unwrap();
+            t.strategy().lock_draft().await.unwrap()
+        })
+    };
+    wait_for_a_lock_waiter(&db).await;
+    assert!(!second.is_finished(), "the second locker did not wait");
+    first.commit().await.unwrap();
+    assert_eq!(second.await.unwrap(), None);
+
+    // With no draft there is nothing to lock.
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(t.strategy().lock_draft().await.unwrap(), None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The schema on its own
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_schema_ties_hypotheses_and_entries_to_a_version_of_their_own_workspace() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, owner) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let theirs = version(b, 1, VersionStatus::Draft, human(owner));
+    insert(&uow, &theirs).await;
+
+    // Even platform-wide, where row-level security lets any workspace through, a row of `a`
+    // cannot hang off a version of `b`.
+    for statement in [
+        "insert into strategy_hypotheses (version_id, workspace_id, hypothesis_id, title, \
+         segment_key, angle, channel, metric, confidence, state, position) \
+         values ($1, $2, $3, 't', 's', 'a', 'c', 'm', 0.5, 'kept', 0)",
+        "insert into consultation_entries (version_id, workspace_id, id, kind, text, \
+         actor_kind, actor_component, at) values ($1, $2, $3, 'note', 't', 'system', 'x', now())",
+    ] {
+        let mut p = PlatformTx::begin(&db.pool).await.unwrap();
+        let err = sqlx::query(statement)
+            .bind(theirs.id.as_uuid())
+            .bind(a.as_uuid())
+            .bind(Uuid::now_v7())
+            .execute(p.conn())
+            .await
+            .unwrap_err();
+        let db_err = err.as_database_error().expect("a database error");
+        assert_eq!(db_err.code().as_deref(), Some("23503"), "{db_err}");
+        p.rollback().await.unwrap();
+    }
+
+    // An actor kind outside the three is refused.
+    let mut p = PlatformTx::begin(&db.pool).await.unwrap();
+    let err = sqlx::query(
+        "insert into consultation_entries (version_id, workspace_id, id, kind, text, \
+         actor_kind, actor_component, at) values ($1, $2, $3, 'note', 't', 'robot', 'x', now())",
+    )
+    .bind(theirs.id.as_uuid())
+    .bind(b.as_uuid())
+    .bind(Uuid::now_v7())
+    .execute(p.conn())
+    .await
+    .unwrap_err();
+    let db_err = err.as_database_error().expect("a database error");
+    assert_eq!(db_err.code().as_deref(), Some("23514"), "{db_err}");
+    p.rollback().await.unwrap();
 }
 
 // ---------------------------------------------------------------------------------------------

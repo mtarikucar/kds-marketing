@@ -1,8 +1,8 @@
 //! `strategy_hypotheses`: the hypotheses of each strategy version, in order (`position`).
 //!
 //! A hypothesis id is stable across versions, so rows are keyed by (version, hypothesis). Writes
-//! check first that the version is this workspace's: the foreign key to `strategy_versions`
-//! ignores row-level security and would accept another workspace's version.
+//! check first that the version is this workspace's, so a foreign version is `NOT_FOUND` before
+//! the composite foreign key `(version_id, workspace_id)` would refuse it.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;

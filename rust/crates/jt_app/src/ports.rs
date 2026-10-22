@@ -444,6 +444,12 @@ pub const MAX_CONSULTATION_PAGE: u32 = 500;
 /// A workspace has at most one `Draft` and at most one `Approved` version at a time. Postgres
 /// enforces both with partial unique indexes, so of two transactions racing to break either rule
 /// the second one fails with `CONFLICT`; the fakes refuse the same writes.
+///
+/// **Every mutation of the draft** (its sections, its submission, its hypotheses, approving or
+/// archiving it) **reads the draft through [`StrategyRepo::lock_draft`] first, in the same
+/// bundle**, and decides on what that returns. The lock is held until the bundle commits or is
+/// dropped, so a concurrent mutation waits and then sees the committed result: approval cannot
+/// approve sections it did not validate, and two edits cannot lose each other's change.
 #[async_trait]
 pub trait StrategyRepo: Send + Sync {
     /// Stores a version. A `version.workspace_id` other than the bundle's is `INTERNAL`; a taken
@@ -453,12 +459,21 @@ pub trait StrategyRepo: Send + Sync {
     async fn find(&mut self, id: StrategyVersionId) -> Result<Option<StrategyVersion>, AppError>;
     /// The `Approved` version, if any.
     async fn current_approved(&mut self) -> Result<Option<StrategyVersion>, AppError>;
-    /// The `Draft` version, if any.
+    /// The `Draft` version, if any, read without a lock: for answering, not for deciding a write.
     async fn current_draft(&mut self) -> Result<Option<StrategyVersion>, AppError>;
+    /// The `Draft` version, if any, locked against every other `lock_draft` (and every write to
+    /// the row) until this bundle commits or is dropped.
+    ///
+    /// A call that has to wait for another bundle holding the lock returns what that bundle
+    /// committed: the edited draft, or `None` when it approved or archived it. In Postgres it is
+    /// `select .. for update`; the in-memory fakes run one bundle at a time in tests, so there
+    /// it is `current_draft`.
+    async fn lock_draft(&mut self) -> Result<Option<StrategyVersion>, AppError>;
     /// Every version, newest (highest number) first.
     async fn list(&mut self) -> Result<Vec<StrategyVersion>, AppError>;
     /// Replaces the sections of draft `id`. An unknown id is `NOT_FOUND`; a version that is not a
-    /// `Draft` is `CONFLICT` (approved and archived versions keep the sections they had).
+    /// `Draft` is `CONFLICT` (approved and archived versions keep the sections they had). The
+    /// caller holds the draft lock ([`StrategyRepo::lock_draft`]).
     ///
     /// `at` is the time of the edit. The version keeps no edit time of its own (the consultation
     /// log and the ledger record edits), so it is not stored.
@@ -470,13 +485,15 @@ pub trait StrategyRepo: Send + Sync {
     ) -> Result<(), AppError>;
     /// Sets `submitted_at` of draft `id`: `Some(at)` records that it was submitted for approval
     /// at `at`, `None` withdraws the submission. An unknown id is `NOT_FOUND`; a version that is
-    /// not a `Draft` is `CONFLICT`.
+    /// not a `Draft` is `CONFLICT`. The caller holds the draft lock
+    /// ([`StrategyRepo::lock_draft`]).
     async fn set_submitted(
         &mut self,
         id: StrategyVersionId,
         at: Option<OffsetDateTime>,
     ) -> Result<(), AppError>;
-    /// Moves version `id` forward to `status` at `at` and returns how many rows changed.
+    /// Moves version `id` forward to `status` at `at` and returns how many rows changed. A
+    /// caller moving the draft holds the draft lock ([`StrategyRepo::lock_draft`]).
     ///
     /// - `Approved` moves a `Draft` only, setting `approved_at = at` and `approved_by = by`. While
     ///   another version is approved it is `CONFLICT` (the partial unique index; in Postgres the
@@ -504,13 +521,14 @@ pub trait StrategyRepo: Send + Sync {
 /// The hypotheses of the workspace's strategy versions, each version's in its own order.
 ///
 /// A hypothesis id is stable across versions, so the same id appears once per version. Writes
-/// name a version of the bundle's workspace, else `NOT_FOUND` (a foreign key alone would accept
-/// another workspace's version). A confidence outside `0.0..=1.0` (or NaN) breaks a check
-/// constraint and is `INTERNAL`: callers validate first.
+/// name a version of the bundle's workspace, else `NOT_FOUND`. A confidence outside `0.0..=1.0`
+/// (or NaN) breaks a check constraint and is `INTERNAL`: callers validate first. A write to the
+/// draft's hypotheses is a draft mutation: the caller holds the draft lock
+/// ([`StrategyRepo::lock_draft`]).
 #[async_trait]
 pub trait HypothesisRepo: Send + Sync {
     /// Makes `hypotheses`, in this order, the version's whole list. An id listed twice is
-    /// `CONFLICT`.
+    /// `CONFLICT`. The caller holds the draft lock ([`StrategyRepo::lock_draft`]).
     async fn replace_all(
         &mut self,
         version_id: StrategyVersionId,
@@ -542,14 +560,17 @@ pub trait ConsultationRepo: Send + Sync {
     /// Appends `entry` to the log of its version, in the bundle's workspace, and returns its id.
     /// A version that is not this workspace's is `NOT_FOUND`; a taken id is `CONFLICT`.
     async fn append(&mut self, entry: ConsultationEntry) -> Result<ConsultationEntryId, AppError>;
-    /// The version's entries newest first (by `at`, then id), at most `limit` (clamped to
-    /// `1..=MAX_CONSULTATION_PAGE`), only those before `before` when it is given (the previous
-    /// page's last `at`; entries sharing that instant are skipped with it).
+    /// The version's entries newest first, ordered by `(at, id)` descending, at most `limit`
+    /// (clamped to `1..=MAX_CONSULTATION_PAGE`).
+    ///
+    /// `before` is a keyset cursor: the `(at, id)` of the previous page's last entry. Only
+    /// entries ordered after it are returned (`(at, id) < before`), so paging neither skips nor
+    /// repeats entries that share an instant.
     async fn list(
         &mut self,
         version_id: StrategyVersionId,
         limit: u32,
-        before: Option<OffsetDateTime>,
+        before: Option<(OffsetDateTime, ConsultationEntryId)>,
     ) -> Result<Vec<ConsultationEntry>, AppError>;
 }
 

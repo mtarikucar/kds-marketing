@@ -444,7 +444,9 @@ async fn consultation_lists_newest_first_with_limit_and_before() {
     assert_eq!(c.list(v1.id, 2, None).await.unwrap(), newest_first[..2]);
     assert_eq!(c.list(v1.id, 0, None).await.unwrap(), newest_first[..1]);
     assert_eq!(
-        c.list(v1.id, 10, Some(entries[1].at)).await.unwrap(),
+        c.list(v1.id, 10, Some((entries[1].at, entries[1].id)))
+            .await
+            .unwrap(),
         entries[..1]
     );
     assert_eq!(
@@ -465,6 +467,48 @@ async fn consultation_lists_newest_first_with_limit_and_before() {
         t.consultation().list(v1.id, 10, None).await.unwrap(),
         vec![]
     );
+}
+
+#[tokio::test]
+async fn consultation_pages_by_keyset_through_entries_sharing_an_instant() {
+    let (_, deps) = setup();
+    let (ws, user) = workspace(&deps, "a").await;
+    let v1 = version(ws, 1, VersionStatus::Draft, user);
+    insert(&deps, &v1).await;
+    // Every entry at the fixed clock's instant.
+    let entries: Vec<ConsultationEntry> = (0..5).map(|_| note(v1.id, user, FIXED_NOW)).collect();
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    for e in &entries {
+        t.consultation().append(e.clone()).await.unwrap();
+    }
+    t.commit().await.unwrap();
+
+    let mut newest_first = entries.clone();
+    newest_first.sort_by_key(|e| std::cmp::Reverse(e.id));
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    let mut paged = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = t.consultation().list(v1.id, 2, cursor).await.unwrap();
+        let Some(last) = page.last() else { break };
+        cursor = Some((last.at, last.id));
+        paged.extend(page);
+    }
+    assert_eq!(paged, newest_first);
+}
+
+#[tokio::test]
+async fn lock_draft_reads_the_draft() {
+    let (_, deps) = setup();
+    let (ws, user) = workspace(&deps, "a").await;
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(t.strategy().lock_draft().await.unwrap(), None);
+    drop(t);
+    insert(&deps, &version(ws, 1, VersionStatus::Archived, user)).await;
+    let draft = version(ws, 2, VersionStatus::Draft, user);
+    insert(&deps, &draft).await;
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(t.strategy().lock_draft().await.unwrap(), Some(draft));
 }
 
 #[tokio::test]

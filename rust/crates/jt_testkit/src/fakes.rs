@@ -1218,6 +1218,15 @@ impl StrategyRepo for MemTenant {
             .cloned())
     }
 
+    /// `current_draft`: the fakes run one bundle at a time in tests, so there is nothing to wait
+    /// for. Races on the draft are tested against Postgres.
+    async fn lock_draft(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        Ok(self
+            .state()
+            .version_with_status(self.ws, VersionStatus::Draft)
+            .cloned())
+    }
+
     async fn list(&mut self) -> Result<Vec<StrategyVersion>, AppError> {
         let mut versions: Vec<StrategyVersion> = self
             .state()
@@ -1475,14 +1484,14 @@ impl ConsultationRepo for MemTenant {
         &mut self,
         version_id: StrategyVersionId,
         limit: u32,
-        before: Option<OffsetDateTime>,
+        before: Option<(OffsetDateTime, ConsultationEntryId)>,
     ) -> Result<Vec<ConsultationEntry>, AppError> {
         let mut entries: Vec<ConsultationEntry> = self
             .state()
             .consultation
             .iter()
             .filter(|e| e.workspace_id == self.ws && e.entry.version_id == version_id)
-            .filter(|e| before.is_none_or(|before| e.entry.at < before))
+            .filter(|e| before.is_none_or(|before| (e.entry.at, e.entry.id) < before))
             .map(|e| e.entry.clone())
             .collect();
         entries.sort_by_key(|e| std::cmp::Reverse((e.at, e.id)));

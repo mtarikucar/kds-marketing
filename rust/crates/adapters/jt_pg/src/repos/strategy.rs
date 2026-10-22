@@ -107,8 +107,9 @@ async fn find_in(
 }
 
 /// `NOT_FOUND` unless version `id` belongs to workspace `ws`. Writes that hang a row off a
-/// version check it first: foreign keys ignore row-level security, so a foreign key to
-/// `strategy_versions` alone would accept another workspace's version.
+/// version check it first: the composite foreign key `(version_id, workspace_id)` would refuse
+/// another workspace's version too, but as a violation that aborts the transaction and reads as
+/// `INTERNAL`.
 pub(crate) async fn ensure_version(
     conn: &mut PgConnection,
     ws: WorkspaceId,
@@ -217,6 +218,23 @@ impl StrategyRepo for PgTenantRepos {
     async fn current_draft(&mut self) -> Result<Option<StrategyVersion>, AppError> {
         let ws = self.workspace_id();
         find_by_status(self.tx.conn(), ws, VersionStatus::Draft).await
+    }
+
+    /// `for update` holds the row lock until the bundle's transaction ends. A locker that waited
+    /// re-reads the row as committed and drops it if it is no longer a draft.
+    async fn lock_draft(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        let ws = self.workspace_id();
+        let record: Option<VersionRecord> = sqlx::query_as(
+            "select id, workspace_id, number, status, sections, created_at, created_by_user, \
+             created_by_connection, created_by_component, submitted_at, approved_at, \
+             approved_by, archived_at from strategy_versions \
+             where workspace_id = $1 and status = 'draft' for update",
+        )
+        .bind(ws.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock the strategy draft"))?;
+        record.map(VersionRecord::into_version).transpose()
     }
 
     async fn list(&mut self) -> Result<Vec<StrategyVersion>, AppError> {

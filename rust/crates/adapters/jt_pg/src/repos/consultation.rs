@@ -87,20 +87,21 @@ impl ConsultationRepo for PgTenantRepos {
         &mut self,
         version_id: StrategyVersionId,
         limit: u32,
-        before: Option<OffsetDateTime>,
+        before: Option<(OffsetDateTime, ConsultationEntryId)>,
     ) -> Result<Vec<ConsultationEntry>, AppError> {
         let ws = self.workspace_id();
         let records: Vec<EntryRecord> = sqlx::query_as(
             "select id, version_id, kind, section_key, text, actor_kind, actor_user_id, \
              agent_connection_id, actor_component, at from consultation_entries \
              where workspace_id = $1 and version_id = $2 \
-             and ($3::timestamptz is null or at < $3) \
+             and ($3::timestamptz is null or (at, id) < ($3::timestamptz, $4::uuid)) \
              order by at desc, id desc \
-             limit $4",
+             limit $5",
         )
         .bind(ws.as_uuid())
         .bind(version_id.as_uuid())
-        .bind(before)
+        .bind(before.map(|(at, _)| at))
+        .bind(before.map(|(_, id)| id.as_uuid()))
         .bind(i64::from(limit.clamp(1, MAX_CONSULTATION_PAGE)))
         .fetch_all(self.tx.conn())
         .await
