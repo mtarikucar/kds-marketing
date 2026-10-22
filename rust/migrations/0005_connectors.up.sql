@@ -5,10 +5,11 @@
 -- An inbound event is a webhook delivery or a polled record, routed to a workspace. It is stored
 -- once per provider id: `(workspace_id, provider, external_id)` is unique, so a replayed delivery
 -- writes nothing (the repo inserts with `on conflict do nothing`). The raw body is kept beside
--- the parsed payload for 30 days and then removed by a scheduled purge (`raw = null`); apart from
--- that and the time it was handed on (`processed_at`), an event never changes and is never
--- deleted: a trigger refuses any other update, setting `raw` to anything but null, and every
--- delete.
+-- the parsed payload for 30 days and then removed by a scheduled purge (`raw = null`, served by a
+-- partial index over the events that still hold a body); apart from that and the time it was
+-- handed on (`processed_at`), an event never changes and is never deleted: a trigger refuses an
+-- update of any other column (a column a later migration adds included), setting `raw` to
+-- anything but null, and every delete.
 --
 -- A pending OAuth flow is found by the hash of its signed state, which is unique across every
 -- workspace. The PKCE code verifier never travels in the state: it is sealed server-side here
@@ -24,6 +25,11 @@
 -- foreign keys on `capabilities (id, workspace_id)`), so a row can never tie in another
 -- workspace's capability, even where row-level security is off. An event's capability is
 -- optional (null: not routed to one).
+--
+-- An inbound webhook is routed, across workspaces, to the capability that holds the provider's
+-- account and was connected through the provider: verified, with sealed credentials. A partial
+-- index on `capabilities` serves that lookup (a capability only declared, or verified on an
+-- agent's word without credentials, is not in it and never receives events).
 --
 -- Every table is a tenant table with forced row-level security, like those of 0001 to 0003.
 -- Every statement is idempotent: running this file twice leaves the same schema.
@@ -45,6 +51,9 @@ create table if not exists inbound_events (
 );
 create index if not exists inbound_events_pending_idx
     on inbound_events (workspace_id, processed_at, received_at);
+create index if not exists inbound_events_raw_received_idx
+    on inbound_events (received_at)
+    where raw is not null;
 
 create or replace function inbound_events_guard() returns trigger
 language plpgsql as $$
@@ -52,11 +61,11 @@ begin
     if tg_op = 'DELETE' then
         raise exception 'inbound_events rows are never deleted';
     end if;
-    if (new.id, new.workspace_id, new.provider, new.capability_id, new.external_id, new.kind,
-        new.payload, new.received_at)
-       is distinct from
-       (old.id, old.workspace_id, old.provider, old.capability_id, old.external_id, old.kind,
-        old.payload, old.received_at) then
+    -- Every column but `raw` and `processed_at` is frozen, `id` and `workspace_id` included, and
+    -- so is any column a later migration adds: the rows are compared whole, as JSON, without
+    -- those two.
+    if (to_jsonb(new) - 'raw' - 'processed_at') is distinct from
+       (to_jsonb(old) - 'raw' - 'processed_at') then
         raise exception 'inbound_events is append-only: only raw and processed_at may change';
     end if;
     if new.raw is not null and new.raw is distinct from old.raw then
@@ -69,6 +78,10 @@ $$;
 create or replace trigger inbound_events_append_only
     before update or delete on inbound_events
     for each row execute function inbound_events_guard();
+
+create index if not exists capabilities_connected_account_idx
+    on capabilities (kind_key, external_id)
+    where status = 'verified' and connector_sealed is not null;
 
 create table if not exists oauth_pending (
     id uuid primary key,

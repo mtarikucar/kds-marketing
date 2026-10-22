@@ -55,8 +55,10 @@ impl EventRecord {
 #[async_trait]
 impl InboundEventRepo for PgTenantRepos {
     /// `on conflict do nothing` covers both the id and the provider id. When it skipped the row,
-    /// a second statement (which sees whatever committed meanwhile) tells a replay (`None`) from
-    /// a taken id (`CONFLICT`).
+    /// a second statement tells a replay (`None`) from a taken id (`CONFLICT`). That statement
+    /// sees whatever committed meanwhile because tenant transactions run at READ COMMITTED (each
+    /// statement takes a fresh snapshot); under a stricter isolation it would not see a racing
+    /// bundle's row and would answer `CONFLICT` for a replay.
     async fn insert_if_new(
         &mut self,
         event: InboundEvent,

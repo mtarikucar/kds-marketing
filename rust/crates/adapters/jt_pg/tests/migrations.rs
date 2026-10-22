@@ -39,6 +39,13 @@ const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
 /// The trigger functions `0005_connectors` adds.
 const CONNECTOR_FUNCTIONS: [&str; 2] = ["inbound_events_guard", "probe_runs_immutable"];
 
+/// The indexes `0005_connectors` adds on tables of earlier migrations or beside its tables' own:
+/// the connected-account lookup on `capabilities` and the raw-body purge on `inbound_events`.
+const CONNECTOR_INDEXES: [&str; 2] = [
+    "capabilities_connected_account_idx",
+    "inbound_events_raw_received_idx",
+];
+
 /// Migrations recorded as applied.
 async fn applied_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar("select count(*) from _sqlx_migrations")
@@ -66,6 +73,9 @@ async fn up_down_up_round_trip() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert_eq!(applied_count(&db.pool).await, MIGRATIONS);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    for index in CONNECTOR_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
 
     jt_pg::migrate_down_all(&db.pool).await.unwrap();
     assert_eq!(table_count(&db.pool).await, 0);
@@ -78,6 +88,9 @@ async fn up_down_up_round_trip() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert_eq!(applied_count(&db.pool).await, MIGRATIONS);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    for index in CONNECTOR_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
 }
 
 /// Whether a function named `name` exists.
@@ -128,6 +141,9 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     for function in CONNECTOR_FUNCTIONS {
         assert!(function_exists(&db.pool, function).await, "{function}");
     }
+    for index in CONNECTOR_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables and
     // trigger functions; 0004 its index; 0003 its tables and trigger function.
@@ -136,6 +152,10 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
     for function in CONNECTOR_FUNCTIONS {
         assert!(!function_exists(&db.pool, function).await, "{function}");
+    }
+    // Including the index it put on `capabilities`, which stays.
+    for index in CONNECTOR_INDEXES {
+        assert!(!index_exists(&db.pool, index).await, "{index}");
     }
     // 0005 applies again on its own, and reverts again.
     run(connectors_up.clone()).await;

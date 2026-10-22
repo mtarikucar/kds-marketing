@@ -128,12 +128,12 @@ impl SecretBox for PlainSecretBox {
             .ok_or_else(|| AppError::internal("sealed data cannot be opened"))
     }
 
-    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<[u8; 32], AppError> {
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<Zeroizing<[u8; 32]>, AppError> {
         let mut hash = Sha256::new();
         hash.update(ws.as_uuid().as_bytes());
         hash.update([0u8]);
         hash.update(purpose.as_bytes());
-        Ok(hash.finalize().into())
+        Ok(Zeroizing::new(hash.finalize().into()))
     }
 }
 

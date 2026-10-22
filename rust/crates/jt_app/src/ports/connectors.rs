@@ -21,14 +21,7 @@ use serde_json::Value;
 use time::{Date, OffsetDateTime};
 pub use url::Url;
 
-/// Prints `***` in place of a secret in a `Debug` output.
-struct Masked;
-
-impl fmt::Debug for Masked {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("***")
-    }
-}
+use super::Masked;
 
 // ---------------------------------------------------------------------------------------------
 // The platform's provider apps
@@ -230,11 +223,25 @@ pub struct ConsentRow {
 /// Something an OAuth-connected account can reach and the owner may connect as a capability: a
 /// Facebook Page, an Instagram account, an ad account, a WhatsApp number, an X account.
 ///
-/// `credential` is what the capability will be reached with. Like a [`Credential`], an asset
-/// serialises in full (credential included) only so it can be sealed with its pending flow; it is
-/// never returned, logged or written to the ledger, and its `Debug` masks the credential's
-/// secrets. `public` holds the non-secret facts to show and to store in `connector_public`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// `credential` is what the capability will be reached with, so an asset is never returned,
+/// logged or written to the ledger: it is neither `Serialize` nor `Deserialize`, and its `Debug`
+/// prints the credential as `***`. What may be shown or stored in the clear is
+/// [`Asset::public_facts`]; a use case that seals assets with their pending flow does so through
+/// a sealing form of its own. `public` holds the non-secret facts to show and to store in
+/// `connector_public`.
+///
+/// ```compile_fail
+/// fn shown<T: serde::Serialize>(_: &T) {}
+/// fn refused(asset: &jt_app::ports::connectors::Asset) {
+///     shown(asset); // an asset carries a live credential: it cannot be serialised
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn read<T: serde::de::DeserializeOwned>() {}
+/// read::<jt_app::ports::connectors::Asset>(); // nor read back from text
+/// ```
+#[derive(Clone, PartialEq, Eq)]
 pub struct Asset {
     /// The capability kind it becomes, e.g. `"facebook_page"`.
     pub kind_key: String,
@@ -242,6 +249,40 @@ pub struct Asset {
     pub external_id: String,
     pub name: String,
     pub credential: Credential,
+    pub public: Value,
+}
+
+impl Asset {
+    /// What may be shown of the asset: everything but its credential.
+    pub fn public_facts(&self) -> AssetPublic {
+        AssetPublic {
+            kind_key: self.kind_key.clone(),
+            external_id: self.external_id.clone(),
+            name: self.name.clone(),
+            public: self.public.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for Asset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Asset")
+            .field("kind_key", &self.kind_key)
+            .field("external_id", &self.external_id)
+            .field("name", &self.name)
+            .field("credential", &Masked)
+            .field("public", &self.public)
+            .finish()
+    }
+}
+
+/// The public facts of an [`Asset`]: what the owner chooses from and what may be stored in the
+/// clear (`oauth_pending.assets_public`, `connector_public`). Never a credential.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetPublic {
+    pub kind_key: String,
+    pub external_id: String,
+    pub name: String,
     pub public: Value,
 }
 
@@ -481,5 +522,43 @@ mod tests {
         let printed = format!("{asset:?}");
         assert!(!printed.contains("EAAB-page-token"), "{printed}");
         assert!(printed.contains("page-1"), "{printed}");
+        assert!(printed.contains("credential: ***"), "{printed}");
+    }
+
+    #[test]
+    fn an_asset_is_shown_only_through_its_public_facts() {
+        let asset = Asset {
+            kind_key: "facebook_page".into(),
+            external_id: "page-1".into(),
+            name: "Kahve".into(),
+            credential: Credential::PageToken {
+                page_id: "page-1".into(),
+                token: "EAAB-page-token".into(),
+            },
+            public: serde_json::json!({ "category": "Cafe" }),
+        };
+        let public = asset.public_facts();
+        assert_eq!(
+            public,
+            AssetPublic {
+                kind_key: "facebook_page".into(),
+                external_id: "page-1".into(),
+                name: "Kahve".into(),
+                public: serde_json::json!({ "category": "Cafe" }),
+            }
+        );
+        let json = serde_json::to_value(&public).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind_key": "facebook_page",
+                "external_id": "page-1",
+                "name": "Kahve",
+                "public": { "category": "Cafe" },
+            })
+        );
+        assert!(!json.to_string().contains("EAAB"), "{json}");
+        let back: AssetPublic = serde_json::from_value(json).unwrap();
+        assert_eq!(back, public);
     }
 }

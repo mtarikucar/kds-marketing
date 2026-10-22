@@ -408,6 +408,20 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
             ErrorCode::Conflict
         );
     }
+    // A taken state hash is a conflict even when the starter is unknown too, as in Postgres.
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    assert_eq!(
+        code(
+            t.oauth_pending()
+                .insert(OAuthPendingRow {
+                    id: OAuthPendingId::new_v7(),
+                    started_by: UserId::new_v7(),
+                    ..soon.clone()
+                })
+                .await
+        ),
+        ErrorCode::Conflict
+    );
     let mut t = deps.uow.tenant(a).await.unwrap();
     assert_eq!(
         code(
@@ -537,21 +551,56 @@ async fn probe_runs_read_newest_first_and_stay_in_their_workspace() {
         ),
         ErrorCode::NotFound
     );
-    // An error kind off the taxonomy breaks the check constraint.
-    let mut t = deps.uow.tenant(a).await.unwrap();
-    assert_eq!(
-        code(
-            t.probe_runs()
-                .append(ProbeRun {
-                    error_kind: Some("oops".into()),
-                    ..probe_run(&page, FIXED_NOW, false)
-                })
-                .await
-        ),
-        ErrorCode::Internal
-    );
+    // An error kind off the taxonomy breaks the check constraint, which Postgres checks before
+    // it looks for a taken id.
+    for run in [
+        ProbeRun {
+            error_kind: Some("oops".into()),
+            ..probe_run(&page, FIXED_NOW, false)
+        },
+        ProbeRun {
+            error_kind: Some("oops".into()),
+            ..first.clone()
+        },
+    ] {
+        let mut t = deps.uow.tenant(a).await.unwrap();
+        assert_eq!(code(t.probe_runs().append(run).await), ErrorCode::Internal);
+    }
     let mut t = deps.uow.tenant(b).await.unwrap();
     assert_eq!(t.probe_runs().latest(page.id).await.unwrap(), None);
+}
+
+/// Inserts `c` with sealed credentials and, when `verify`, sets its stored status to `Verified`.
+async fn connect(deps: &Deps, c: &Capability, verify: bool) {
+    let mut t = deps.uow.tenant(c.workspace_id).await.unwrap();
+    t.capabilities()
+        .insert(c.clone(), Some(b"sealed".to_vec()))
+        .await
+        .unwrap();
+    if verify {
+        t.capabilities()
+            .set_status(c.id, StoredStatus::Verified, c.created_at)
+            .await
+            .unwrap();
+    }
+    t.commit().await.unwrap();
+}
+
+async fn set_status(deps: &Deps, c: &Capability, status: StoredStatus) {
+    let mut t = deps.uow.tenant(c.workspace_id).await.unwrap();
+    t.capabilities()
+        .set_status(c.id, status, c.created_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+}
+
+async fn routed(deps: &Deps, kinds: &[&str], external_id: &str) -> Option<CapabilityId> {
+    let mut p = deps.uow.platform().await.unwrap();
+    p.capability_by_external(kinds, external_id)
+        .await
+        .unwrap()
+        .map(|c| c.id)
 }
 
 #[tokio::test]
@@ -559,46 +608,46 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     let (_, deps) = setup();
     let (a, _) = workspace(&deps, "a").await;
     let (b, _) = workspace(&deps, "b").await;
-    let meta_kinds: &[&str] = Provider::Meta.kinds();
-    let retired = capability(a, "facebook_page", "page-1", FIXED_NOW);
-    let live = capability(b, "messenger", "page-1", FIXED_NOW + Duration::days(1));
-    let sms = capability(a, "sms_line", "page-1", FIXED_NOW + Duration::days(2));
-    for c in [&retired, &live, &sms] {
-        insert_capability(&deps, c).await;
-    }
-    let mut t = deps.uow.tenant(a).await.unwrap();
-    t.capabilities()
-        .set_status(retired.id, StoredStatus::Retired, FIXED_NOW)
-        .await
-        .unwrap();
-    t.commit().await.unwrap();
+    let meta: &[&str] = Provider::Meta.kinds();
 
+    let victim = capability(a, "facebook_page", "page-1", FIXED_NOW);
+    connect(&deps, &victim, true).await;
     let mut p = deps.uow.platform().await.unwrap();
     let found = p
-        .capability_by_external(meta_kinds, "page-1")
+        .capability_by_external(meta, "page-1")
         .await
         .unwrap()
-        .expect("b's live capability");
-    assert_eq!((found.id, found.workspace_id), (live.id, b));
-    assert_eq!(
-        p.capability_by_external(&["sms_line"], "page-1")
-            .await
-            .unwrap()
-            .map(|c| c.id),
-        Some(sms.id)
-    );
-    assert_eq!(
-        p.capability_by_external(&["x"], "page-1").await.unwrap(),
-        None
-    );
-    assert_eq!(
-        p.capability_by_external(meta_kinds, "page-2")
-            .await
-            .unwrap(),
-        None
-    );
+        .expect("a's connected capability");
+    assert_eq!((found.id, found.workspace_id), (victim.id, a));
+    assert!(found.has_sealed_config);
+    drop(p);
 
-    // Two live holders: the most recently connected one answers.
+    // Newer holders that never proved control take nothing.
+    let declared = capability(b, "facebook_page", "page-1", FIXED_NOW + Duration::days(1));
+    insert_capability(&deps, &declared).await;
+    let unverified = capability(b, "messenger", "page-1", FIXED_NOW + Duration::days(2));
+    connect(&deps, &unverified, false).await;
+    let attested = capability(b, "instagram_dm", "page-1", FIXED_NOW + Duration::days(3));
+    insert_capability(&deps, &attested).await;
+    set_status(&deps, &attested, StoredStatus::Verified).await;
+    assert_eq!(routed(&deps, meta, "page-1").await, Some(victim.id));
+
+    let lonely = capability(b, "facebook_page", "page-2", FIXED_NOW);
+    insert_capability(&deps, &lonely).await;
+    assert_eq!(routed(&deps, meta, "page-2").await, None);
+
+    let sms = capability(a, "sms_line", "page-1", FIXED_NOW + Duration::days(4));
+    connect(&deps, &sms, true).await;
+    assert_eq!(routed(&deps, &["sms_line"], "page-1").await, Some(sms.id));
+    assert_eq!(routed(&deps, &["x"], "page-1").await, None);
+    assert_eq!(routed(&deps, meta, "page-9").await, None);
+
+    set_status(&deps, &victim, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&deps, meta, "page-1").await, None);
+    set_status(&deps, &victim, StoredStatus::Retired).await;
+    assert_eq!(routed(&deps, meta, "page-1").await, None);
+
+    // Two connected holders: the most recently connected one answers.
     let first = capability(a, "facebook_page", "page-3", FIXED_NOW);
     let second = capability(
         b,
@@ -606,16 +655,9 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
         "page-3",
         FIXED_NOW + Duration::minutes(5),
     );
-    insert_capability(&deps, &second).await;
-    insert_capability(&deps, &first).await;
-    let mut p = deps.uow.platform().await.unwrap();
-    assert_eq!(
-        p.capability_by_external(meta_kinds, "page-3")
-            .await
-            .unwrap()
-            .map(|c| c.id),
-        Some(second.id)
-    );
+    connect(&deps, &second, true).await;
+    connect(&deps, &first, true).await;
+    assert_eq!(routed(&deps, meta, "page-3").await, Some(second.id));
 }
 
 // ---------------------------------------------------------------------------------------------

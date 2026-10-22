@@ -178,10 +178,19 @@ pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
 }
 
 /// The public address the ports report until one is configured: plain HTTP on the bound socket
-/// (`http://<bind>/`). Nothing builds a redirect or webhook URL from it yet.
+/// (`http://<bind>/`), or `http://localhost:<port>/` when the server listens on every interface
+/// (`0.0.0.0`, `::`), an address no one can reach and that must never be shown. Nothing builds a
+/// redirect or webhook URL from it yet.
+// TODO(Task 11): replace with the configured `JEETA_PUBLIC_BASE_URL`, required whenever a
+// redirect or hook URL can be shown; this placeholder must not survive as a fallback.
 fn placeholder_public_base_url(bind: SocketAddr) -> Url {
-    // A socket address always forms a valid authority, so this parses.
-    Url::parse(&format!("http://{bind}/")).expect("a socket address forms a valid URL")
+    let text = if bind.ip().is_unspecified() {
+        format!("http://localhost:{}/", bind.port())
+    } else {
+        format!("http://{bind}/")
+    };
+    // A socket address (or localhost with its port) always forms a valid authority.
+    Url::parse(&text).expect("a socket address forms a valid URL")
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
@@ -641,8 +650,8 @@ mod tests {
         assert_eq!(deps.apps.meta_app(), None);
         assert_eq!(deps.apps.x_app(), None);
         assert_eq!(
-            deps.apps.public_base_url().as_str(),
-            format!("http://{}/", config.bind)
+            deps.apps.public_base_url(),
+            placeholder_public_base_url(config.bind)
         );
         assert!(
             deps.connectors
@@ -653,10 +662,15 @@ mod tests {
 
     #[test]
     fn the_placeholder_public_address_is_the_bound_socket() {
+        // An unspecified address (listening on every interface) is never shown: it names no
+        // host anyone can reach.
         for (bind, url) in [
             ("127.0.0.1:8080", "http://127.0.0.1:8080/"),
-            ("0.0.0.0:80", "http://0.0.0.0/"),
+            ("192.0.2.10:8080", "http://192.0.2.10:8080/"),
             ("[::1]:9090", "http://[::1]:9090/"),
+            ("0.0.0.0:8080", "http://localhost:8080/"),
+            ("0.0.0.0:80", "http://localhost/"),
+            ("[::]:9090", "http://localhost:9090/"),
         ] {
             assert_eq!(
                 placeholder_public_base_url(bind.parse().unwrap()).as_str(),

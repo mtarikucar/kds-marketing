@@ -437,17 +437,47 @@ async fn raw_purge_touches_only_raw_column() {
     );
     drop(t);
 
-    // Every other column is guarded, even against its own workspace; the processing time may be
-    // set, and the raw body may only be removed.
-    for statement in [
-        "update inbound_events set payload = '{}' where workspace_id = $1 and id = $2",
-        "update inbound_events set kind = 'status' where workspace_id = $1 and id = $2",
-        "update inbound_events set external_id = 'other' where workspace_id = $1 and id = $2",
-        "update inbound_events set provider = 'x' where workspace_id = $1 and id = $2",
-        "update inbound_events set received_at = now() where workspace_id = $1 and id = $2",
-        "update inbound_events set capability_id = id where workspace_id = $1 and id = $2",
-        "update inbound_events set raw = 'replaced'::bytea where workspace_id = $1 and id = $2",
-        "delete from inbound_events where workspace_id = $1 and id = $2",
+    // Every other column is guarded, even against its own workspace, by the trigger itself (its
+    // own message, not row-level security or a key); the processing time may be set, and the raw
+    // body may only be removed.
+    const FROZEN: &str = "inbound_events is append-only: only raw and processed_at may change";
+    for (statement, message) in [
+        (
+            "update inbound_events set id = gen_random_uuid() where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set payload = '{}' where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set kind = 'status' where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set external_id = 'other' where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set provider = 'x' where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set received_at = now() where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set capability_id = id where workspace_id = $1 and id = $2",
+            FROZEN,
+        ),
+        (
+            "update inbound_events set raw = 'replaced'::bytea where workspace_id = $1 and id = $2",
+            "inbound_events.raw may only be removed",
+        ),
+        (
+            "delete from inbound_events where workspace_id = $1 and id = $2",
+            "inbound_events rows are never deleted",
+        ),
     ] {
         let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
         let err = sqlx::query(statement)
@@ -456,12 +486,23 @@ async fn raw_purge_touches_only_raw_column() {
             .execute(tx.conn())
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("inbound_events"),
-            "{statement}: {err}"
-        );
+        assert!(err.to_string().contains(message), "{statement}: {err}");
         tx.rollback().await.unwrap();
     }
+    // Platform-wide, where row-level security lets any workspace through, the trigger alone keeps
+    // an event in its workspace.
+    let mut p = PlatformTx::begin(&db.pool).await.unwrap();
+    let err = sqlx::query(
+        "update inbound_events set workspace_id = $3 where workspace_id = $1 and id = $2",
+    )
+    .bind(a.as_uuid())
+    .bind(fresh.id.as_uuid())
+    .bind(b.as_uuid())
+    .execute(p.conn())
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains(FROZEN), "{err}");
+    p.rollback().await.unwrap();
     let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
     let done = sqlx::query(
         "update inbound_events set processed_at = now(), raw = null \
@@ -546,6 +587,21 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
             ErrorCode::Conflict
         );
     }
+    // A taken state hash is a conflict even when the starter is unknown too (the clash is found
+    // before the foreign key is checked).
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        code(
+            t.oauth_pending()
+                .insert(OAuthPendingRow {
+                    id: OAuthPendingId::new_v7(),
+                    started_by: UserId::new_v7(),
+                    ..soon.clone()
+                })
+                .await
+        ),
+        ErrorCode::Conflict
+    );
     // A row for another workspace is a programming error; an unknown starter is not found.
     let mut t = uow.tenant(a).await.unwrap();
     assert_eq!(
@@ -713,6 +769,19 @@ async fn probe_runs_append_only() {
                 .await
         ),
         ErrorCode::NotFound
+    );
+    // A bad error kind on a taken id breaks the check constraint first.
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        code(
+            t.probe_runs()
+                .append(ProbeRun {
+                    error_kind: Some("oops".into()),
+                    ..first.clone()
+                })
+                .await
+        ),
+        ErrorCode::Internal
     );
     let mut t = uow.tenant(b).await.unwrap();
     assert_eq!(t.probe_runs().latest(page.id).await.unwrap(), None);
@@ -893,92 +962,98 @@ async fn connector_tables_are_hidden_without_their_workspace_in_scope() {
 // Platform-wide lookup by external account
 // ---------------------------------------------------------------------------------------------
 
+/// Inserts `c` with sealed credentials and, when `verify`, sets its stored status to `Verified`:
+/// a capability connected through the provider (OAuth or a probe).
+async fn connect(uow: &PgUnitOfWork, c: &Capability, verify: bool) {
+    let mut t = uow.tenant(c.workspace_id).await.unwrap();
+    t.capabilities()
+        .insert(c.clone(), Some(b"sealed-credential".to_vec()))
+        .await
+        .unwrap();
+    if verify {
+        t.capabilities()
+            .set_status(c.id, StoredStatus::Verified, c.created_at)
+            .await
+            .unwrap();
+    }
+    t.commit().await.unwrap();
+}
+
+async fn set_status(uow: &PgUnitOfWork, c: &Capability, status: StoredStatus) {
+    let mut t = uow.tenant(c.workspace_id).await.unwrap();
+    t.capabilities()
+        .set_status(c.id, status, c.created_at + Duration::hours(1))
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+}
+
+/// The id of the capability the platform-wide lookup answers.
+async fn routed(uow: &PgUnitOfWork, kinds: &[&str], external_id: &str) -> Option<CapabilityId> {
+    let mut p = uow.platform().await.unwrap();
+    p.capability_by_external(kinds, external_id)
+        .await
+        .unwrap()
+        .map(|c| c.id)
+}
+
 #[tokio::test]
 async fn capability_by_external_finds_live_capability_across_workspaces() {
     let db = TestDb::new().await;
     let uow = uow(&db);
     let (a, _) = db.seed_workspace("a").await;
     let (b, _) = db.seed_workspace("b").await;
-    let meta_kinds: &[&str] = Provider::Meta.kinds();
+    let meta: &[&str] = Provider::Meta.kinds();
 
-    // `a` held page-1 and retired it; `b` connected it later and holds it live.
-    let retired = capability(a, "facebook_page", "page-1", T0);
-    let live = capability(b, "messenger", "page-1", T0 + Duration::days(1));
-    let wa = capability(a, "whatsapp_cloud", "phone-1", T0);
-    let sms = capability(a, "sms_line", "page-1", T0 + Duration::days(2));
-    for c in [&retired, &live, &wa, &sms] {
-        insert_capability(&uow, c).await;
-    }
-    let mut t = uow.tenant(a).await.unwrap();
-    t.capabilities()
-        .set_status(retired.id, StoredStatus::Retired, T0 + Duration::hours(1))
-        .await
-        .unwrap();
-    t.commit().await.unwrap();
-
+    // `a` connected page-1 through the provider: sealed credentials, verified.
+    let victim = capability(a, "facebook_page", "page-1", T0);
+    connect(&uow, &victim, true).await;
     let mut p = uow.platform().await.unwrap();
     let found = p
-        .capability_by_external(meta_kinds, "page-1")
+        .capability_by_external(meta, "page-1")
         .await
         .unwrap()
-        .expect("b's live capability");
-    assert_eq!(found.id, live.id);
-    assert_eq!(found.workspace_id, b);
-    assert_eq!(
-        p.capability_by_external(meta_kinds, "phone-1")
-            .await
-            .unwrap()
-            .map(|c| c.id),
-        Some(wa.id)
-    );
-    // Only the kinds asked for: NetGSM's capability holding the same id is not a Meta one.
-    assert_eq!(
-        p.capability_by_external(&["sms_line"], "page-1")
-            .await
-            .unwrap()
-            .map(|c| c.id),
-        Some(sms.id)
-    );
-    assert_eq!(
-        p.capability_by_external(&["x"], "page-1").await.unwrap(),
-        None
-    );
-    assert_eq!(p.capability_by_external(&[], "page-1").await.unwrap(), None);
-    assert_eq!(
-        p.capability_by_external(meta_kinds, "page-2")
-            .await
-            .unwrap(),
-        None
-    );
+        .expect("a's connected capability");
+    assert_eq!((found.id, found.workspace_id), (victim.id, a));
+    assert!(found.has_sealed_config);
     drop(p);
 
-    // Once `b` retires it too, nobody holds it: an event for it is routed nowhere.
-    let mut t = uow.tenant(b).await.unwrap();
-    t.capabilities()
-        .set_status(live.id, StoredStatus::Retired, T0 + Duration::days(3))
-        .await
-        .unwrap();
-    t.commit().await.unwrap();
-    let mut p = uow.platform().await.unwrap();
-    assert_eq!(
-        p.capability_by_external(meta_kinds, "page-1")
-            .await
-            .unwrap(),
-        None
-    );
-    drop(p);
+    // Newer holders in `b` that never proved control take nothing: one declared only (page ids
+    // are public), one sealed but not verified, one verified on an agent's word alone (no
+    // credentials).
+    let declared = capability(b, "facebook_page", "page-1", T0 + Duration::days(1));
+    insert_capability(&uow, &declared).await;
+    let unverified = capability(b, "messenger", "page-1", T0 + Duration::days(2));
+    connect(&uow, &unverified, false).await;
+    let attested = capability(b, "instagram_dm", "page-1", T0 + Duration::days(3));
+    insert_capability(&uow, &attested).await;
+    set_status(&uow, &attested, StoredStatus::Verified).await;
+    assert_eq!(routed(&uow, meta, "page-1").await, Some(victim.id));
 
-    // Two workspaces holding the same account live: the most recently connected one answers.
+    // A declared-only holder alone is no holder.
+    let lonely = capability(b, "facebook_page", "page-2", T0);
+    insert_capability(&uow, &lonely).await;
+    assert_eq!(routed(&uow, meta, "page-2").await, None);
+
+    // Only the kinds asked for: a connected NetGSM line holding the same id is not a Meta one.
+    let sms = capability(a, "sms_line", "page-1", T0 + Duration::days(4));
+    connect(&uow, &sms, true).await;
+    assert_eq!(routed(&uow, &["sms_line"], "page-1").await, Some(sms.id));
+    assert_eq!(routed(&uow, &["x"], "page-1").await, None);
+    assert_eq!(routed(&uow, &[], "page-1").await, None);
+    assert_eq!(routed(&uow, meta, "page-9").await, None);
+
+    // Once `a`'s connection is unreachable or retired, nobody holds the account: an event for it
+    // is routed nowhere, not to `b`.
+    set_status(&uow, &victim, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&uow, meta, "page-1").await, None);
+    set_status(&uow, &victim, StoredStatus::Retired).await;
+    assert_eq!(routed(&uow, meta, "page-1").await, None);
+
+    // Two workspaces that both connected the account: the most recently connected one answers.
     let first = capability(a, "facebook_page", "page-3", T0);
     let second = capability(b, "facebook_page", "page-3", T0 + Duration::minutes(5));
-    insert_capability(&uow, &second).await;
-    insert_capability(&uow, &first).await;
-    let mut p = uow.platform().await.unwrap();
-    assert_eq!(
-        p.capability_by_external(meta_kinds, "page-3")
-            .await
-            .unwrap()
-            .map(|c| c.id),
-        Some(second.id)
-    );
+    connect(&uow, &second, true).await;
+    connect(&uow, &first, true).await;
+    assert_eq!(routed(&uow, meta, "page-3").await, Some(second.id));
 }

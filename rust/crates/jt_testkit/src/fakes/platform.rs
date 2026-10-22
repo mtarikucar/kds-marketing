@@ -189,7 +189,8 @@ impl PlatformRepos for MemPlatform {
             .iter()
             .filter(|s| {
                 let c = &s.capability;
-                c.status != StoredStatus::Retired
+                c.status == StoredStatus::Verified
+                    && s.sealed.is_some()
                     && kind_keys.contains(&c.kind_key.as_str())
                     && c.external_id.as_deref() == Some(external_id)
             })

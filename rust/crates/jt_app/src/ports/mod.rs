@@ -28,7 +28,7 @@ use jt_capability::{
     BudgetItem, BudgetItemId, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
     CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
 };
-use jt_connector::{InboundEvent, InboundEventId, Provider};
+use jt_connector::{InboundEvent, InboundEventId, ProbeResult, Provider};
 use jt_ledger::LedgerEntry;
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
@@ -95,8 +95,10 @@ pub trait SecretBox: Send + Sync {
     /// A 32-byte key for computing MACs on behalf of workspace `ws` for one `purpose` (e.g.
     /// `"oauth-state"`, `"netgsm-hook"`): the same for the same workspace and purpose (also after
     /// a restart), different for another workspace or another purpose, and independent of the
-    /// sealing key. Like what `open` gives back, it is never returned, logged or stored.
-    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<[u8; 32], AppError>;
+    /// sealing key. Like what `open` gives back, it is never returned, logged or stored, and it
+    /// is wiped from memory when dropped (functions taking `&[u8; 32]` get `&key`, which
+    /// dereferences).
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<Zeroizing<[u8; 32]>, AppError>;
 }
 
 /// The kinds of channel a workspace can use: the kind keys (e.g. `instagram`, `mailbox`) of its
@@ -156,8 +158,8 @@ pub trait StrategyArchivedHook: Send + Sync {
 // `***`, so a log line or a failed assertion does not show it either.
 // ---------------------------------------------------------------------------------------------
 
-/// Prints `***` in place of a secret's hash in a row's `Debug` output.
-struct Masked;
+/// Prints `***` in place of a secret (a hash, a sealed blob, a credential) in a `Debug` output.
+pub(crate) struct Masked;
 
 impl std::fmt::Debug for Masked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1119,7 +1121,8 @@ define_id!(
 
 /// One probe of a connector capability: when, whether it succeeded, why not (the
 /// [`jt_connector::ConnectorError::kind`] key, `None` when it succeeded or the adapter did not
-/// say), how long it took, and the non-secret facts it returned.
+/// say), how long it took, and the non-secret facts it returned. Build it from the probe's result
+/// with [`ProbeRun::from_result`], so the error kind is always one the schema accepts.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ProbeRun {
     pub id: ProbeRunId,
@@ -1133,6 +1136,36 @@ pub struct ProbeRun {
     /// stored, and read back, as `i32::MAX`.
     pub latency_ms: u32,
     pub facts: Value,
+}
+
+impl ProbeRun {
+    /// The run that records `result`: `ok` decides (as in [`jt_connector::status_after_probe`]),
+    /// the error kind is the [`jt_connector::ConnectorError::kind`] of a failure's error (`None`
+    /// for a success, and for a failure the adapter did not explain), and the facts are the
+    /// result's.
+    pub fn from_result(
+        id: ProbeRunId,
+        workspace_id: WorkspaceId,
+        capability_id: CapabilityId,
+        at: OffsetDateTime,
+        result: &ProbeResult,
+    ) -> ProbeRun {
+        let error_kind = if result.ok {
+            None
+        } else {
+            result.error.as_ref().map(|e| e.kind().to_owned())
+        };
+        ProbeRun {
+            id,
+            workspace_id,
+            capability_id,
+            at,
+            ok: result.ok,
+            error_kind,
+            latency_ms: result.latency_ms,
+            facts: result.facts.clone(),
+        }
+    }
 }
 
 /// The most runs one [`ProbeRunRepo::list`] returns.
@@ -1294,12 +1327,17 @@ pub trait PlatformRepos: Send + Sync {
         &mut self,
         token_hash: &str,
     ) -> Result<Option<MembershipRow>, AppError>;
-    /// The live (not retired) capability, in whichever workspace it belongs to, whose kind is one
-    /// of `kind_keys` and whose external account id is `external_id`: where an inbound event for
-    /// that account is routed. `None` when no workspace holds the account live (the event is
-    /// routed nowhere, Review Focus 1). When several do (the same account connected in two
-    /// workspaces, or under two kinds), the most recently created one answers (`created_at`, then
-    /// id, both descending). Read as [`CapabilityRepo::find`] reads it.
+    /// The connected capability, in whichever workspace it belongs to, whose kind is one of
+    /// `kind_keys` and whose external account id is `external_id`: where an inbound event for
+    /// that account is routed. Connected means proved through the provider: stored status
+    /// `Verified` **and** sealed credentials present (so never retired). A capability that is
+    /// only declared (anyone can type a public page id), verified on an agent's word without
+    /// credentials, or unreachable never receives events, whichever workspace holds it.
+    ///
+    /// `None` when no workspace holds the account connected (the event is routed nowhere, Review
+    /// Focus 1). When several do (the same account connected in two workspaces, or under two
+    /// kinds), the most recently created one answers (`created_at`, then id, both descending).
+    /// Read as [`CapabilityRepo::find`] reads it.
     async fn capability_by_external(
         &mut self,
         kind_keys: &[&str],
@@ -1316,4 +1354,82 @@ pub trait UnitOfWork: Send + Sync {
     async fn tenant(&self, ws: WorkspaceId) -> Result<Box<dyn TenantRepos>, AppError>;
     async fn platform(&self) -> Result<Box<dyn PlatformRepos>, AppError>;
     async fn user(&self) -> Result<Box<dyn UserRepos>, AppError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use jt_connector::{ConnectorError, ProbeResult};
+    use serde_json::json;
+    use time::macros::datetime;
+
+    use super::*;
+
+    #[test]
+    fn a_probe_run_records_the_kind_of_its_error_and_only_when_it_failed() {
+        let (id, ws, cap) = (
+            ProbeRunId::new_v7(),
+            WorkspaceId::new_v7(),
+            CapabilityId::new_v7(),
+        );
+        let at = datetime!(2026-10-22 09:00 UTC);
+        let ok = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            &ProbeResult::success(12, json!({ "n": 1 })),
+        );
+        assert_eq!(
+            ok,
+            ProbeRun {
+                id,
+                workspace_id: ws,
+                capability_id: cap,
+                at,
+                ok: true,
+                error_kind: None,
+                latency_ms: 12,
+                facts: json!({ "n": 1 }),
+            }
+        );
+        let failed = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            &ProbeResult::failure(30, ConnectorError::auth("expired")),
+        );
+        assert!(!failed.ok);
+        assert_eq!(failed.error_kind.as_deref(), Some("auth"));
+        assert_eq!(failed.latency_ms, 30);
+        assert_eq!(failed.facts, json!({}));
+        let throttled = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            &ProbeResult::failure(5, ConnectorError::throttle(None)),
+        );
+        assert_eq!(throttled.error_kind.as_deref(), Some("throttle"));
+        // A failure the adapter did not explain has no kind; `ok` decides when the two disagree.
+        let unexplained = ProbeResult {
+            ok: false,
+            latency_ms: 1,
+            error: None,
+            facts: json!({}),
+        };
+        assert_eq!(
+            ProbeRun::from_result(id, ws, cap, at, &unexplained).error_kind,
+            None
+        );
+        let contradictory = ProbeResult {
+            ok: true,
+            latency_ms: 1,
+            error: Some(ConnectorError::transient("late")),
+            facts: json!({}),
+        };
+        let run = ProbeRun::from_result(id, ws, cap, at, &contradictory);
+        assert!(run.ok);
+        assert_eq!(run.error_kind, None);
+    }
 }

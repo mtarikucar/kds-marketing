@@ -149,7 +149,8 @@ fn sealing_key(master: &[u8; 32], w: WorkspaceId) -> [u8; 32] {
 #[test]
 fn hmac_key_is_purpose_and_workspace_bound() {
     let sb = AesSecretBox::new(MASTER);
-    let key = sb.hmac_key(ws(1), "oauth-state").unwrap();
+    // Handed back in a buffer that wipes itself when dropped.
+    let key: zeroize::Zeroizing<[u8; 32]> = sb.hmac_key(ws(1), "oauth-state").unwrap();
     assert_eq!(sb.hmac_key(ws(1), "oauth-state").unwrap(), key);
     assert_eq!(
         AesSecretBox::new(MASTER)
@@ -179,12 +180,12 @@ fn hmac_key_is_purpose_and_workspace_bound() {
     hkdf::Hkdf::<sha2::Sha256>::new(Some(b"jeeta-hmac-v1"), &MASTER)
         .expand(&info, &mut expected)
         .unwrap();
-    assert_eq!(key, expected);
+    assert_eq!(*key, expected);
 
     // Never the sealing key, whatever the purpose.
     for purpose in ["", "oauth-state", "netgsm-hook"] {
         assert_ne!(
-            sb.hmac_key(ws(1), purpose).unwrap(),
+            *sb.hmac_key(ws(1), purpose).unwrap(),
             sealing_key(&MASTER, ws(1)),
             "{purpose:?}"
         );

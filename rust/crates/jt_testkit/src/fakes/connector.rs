@@ -1,5 +1,7 @@
 //! The tenant bundle's connector repos: inbound events, pending OAuth flows and probe runs,
-//! answering as `jt_pg` does over migration 0005.
+//! answering as `jt_pg` does over migration 0005, with the checks in the order Postgres makes
+//! them: the repo's own pre-checks (workspace, capability), then check constraints, then the
+//! unique keys (`on conflict do nothing`), then the foreign keys.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -33,7 +35,6 @@ impl InboundEventRepo for MemTenant {
             if let Some(capability) = event.capability_id {
                 ensure_capability(state, ws, capability)?;
             }
-            exists(state.workspace(ws).is_some(), "inbound_events.workspace_id")?;
             let replay = state.inbound_events.iter().any(|s| {
                 s.event.workspace_id == ws
                     && s.event.provider == event.provider
@@ -46,6 +47,7 @@ impl InboundEventRepo for MemTenant {
                 !state.inbound_events.iter().any(|s| s.event.id == event.id),
                 "the inbound event id is already taken",
             )?;
+            exists(state.workspace(ws).is_some(), "inbound_events.workspace_id")?;
             let id = event.id;
             let stored = StoredInboundEvent { event, raw };
             this.tx
@@ -123,6 +125,13 @@ impl OAuthPendingRepo for MemTenant {
         self.call(|this| {
             same_workspace(this.ws, row.workspace_id)?;
             let state = this.state();
+            unique(
+                !state
+                    .oauth_pending
+                    .iter()
+                    .any(|p| p.id == row.id || p.state_hash == row.state_hash),
+                "the pending oauth flow id or its state is already taken",
+            )?;
             exists(
                 state.workspace(row.workspace_id).is_some(),
                 "oauth_pending.workspace_id",
@@ -130,13 +139,6 @@ impl OAuthPendingRepo for MemTenant {
             exists(
                 state.user(row.started_by).is_some(),
                 "oauth_pending.started_by",
-            )?;
-            unique(
-                !state
-                    .oauth_pending
-                    .iter()
-                    .any(|p| p.id == row.id || p.state_hash == row.state_hash),
-                "the pending oauth flow id or its state is already taken",
             )?;
             this.tx.write(move |s| s.oauth_pending.push(row.clone()));
             Ok(())
@@ -232,10 +234,6 @@ impl ProbeRunRepo for MemTenant {
             same_workspace(this.ws, run.workspace_id)?;
             let state = this.state();
             ensure_capability(state, this.ws, run.capability_id)?;
-            unique(
-                !state.probe_runs.iter().any(|r| r.id == run.id),
-                "the probe run id is already taken",
-            )?;
             if let Some(kind) = &run.error_kind
                 && !ERROR_KINDS.contains(&kind.as_str())
             {
@@ -243,6 +241,10 @@ impl ProbeRunRepo for MemTenant {
                     "probe_runs.error_kind breaks its check constraint",
                 ));
             }
+            unique(
+                !state.probe_runs.iter().any(|r| r.id == run.id),
+                "the probe run id is already taken",
+            )?;
             let id = run.id;
             let run = as_stored(run);
             this.tx.write(move |s| s.probe_runs.push(run.clone()));

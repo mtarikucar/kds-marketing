@@ -52,10 +52,11 @@ impl AesSecretBox {
 }
 
 /// The HKDF info of a MAC key: the workspace id's 16 bytes, a zero byte, then the purpose's UTF-8
-/// bytes. The id has a fixed length, so no two (workspace, purpose) pairs share an info.
-fn hmac_info(ws: WorkspaceId, purpose: &str) -> Zeroizing<Vec<u8>> {
+/// bytes. The id has a fixed length, so no two (workspace, purpose) pairs share an info. Not
+/// secret.
+fn hmac_info(ws: WorkspaceId, purpose: &str) -> Vec<u8> {
     let id = ws.as_uuid();
-    let mut info = Zeroizing::new(Vec::with_capacity(16 + 1 + purpose.len()));
+    let mut info = Vec::with_capacity(16 + 1 + purpose.len());
     info.extend_from_slice(id.as_bytes());
     info.push(0);
     info.extend_from_slice(purpose.as_bytes());
@@ -113,10 +114,10 @@ impl SecretBox for AesSecretBox {
 
     /// HKDF-SHA256 of the master key, salt `jeeta-hmac-v1`, info `workspace id (16 bytes) ||
     /// 0x00 || purpose` (see the crate docs).
-    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<[u8; 32], AppError> {
-        let mut key = [0u8; 32];
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<Zeroizing<[u8; 32]>, AppError> {
+        let mut key = Zeroizing::new([0u8; 32]);
         Hkdf::<Sha256>::new(Some(HMAC_SALT), self.master.as_slice())
-            .expand(&hmac_info(ws, purpose), &mut key)
+            .expand(&hmac_info(ws, purpose), key.as_mut_slice())
             .map_err(|_| AppError::internal("cannot derive the workspace MAC key"))?;
         Ok(key)
     }
