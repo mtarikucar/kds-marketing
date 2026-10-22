@@ -5,90 +5,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::Router;
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
-use jt_app::gate::NoStrategyYet;
-use jt_app::ports::{Clock, PasswordHasher, UnitOfWork};
-use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
-use jt_app::usecases::Deps;
-use jt_panel_http::{AppState, router};
-use jt_pg::PgUnitOfWork;
+use jt_app::ports::{Clock, UnitOfWork};
+use jt_app::std_impls::{Argon2Hasher, SystemClock};
 use jt_tenancy::{MembershipId, UserId, WorkspaceId};
-use jt_testkit::TestDb;
 use jt_testkit::fakes::PlainHasher;
+use jt_testkit::panel::{
+    PASSWORD, Panel, REQUESTED_WITH, body_json, body_text, cookie_pair, expect_error, set_cookie,
+};
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
-const PASSWORD: &str = "correct horse battery";
-/// The request header every mutating `/api` call must carry.
-const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
 const ALL_PERMISSIONS: [&str; 4] = [
     "workspace.read",
     "team.manage",
     "api_keys.manage",
     "ledger.read",
 ];
-
-/// A router over a fresh test database.
-struct Panel {
-    db: TestDb,
-    uow: PgUnitOfWork,
-    app: Router,
-}
-
-impl Panel {
-    /// Plain hashing, no `Secure` cookie, no static panel.
-    async fn new() -> Panel {
-        Panel::with(Arc::new(PlainHasher), false, None).await
-    }
-
-    async fn with(
-        hasher: Arc<dyn PasswordHasher>,
-        cookie_secure: bool,
-        panel_dir: Option<PathBuf>,
-    ) -> Panel {
-        let db = TestDb::new().await;
-        let uow = PgUnitOfWork::new(db.pool.clone());
-        let state = AppState {
-            deps: Deps {
-                uow: Arc::new(uow.clone()),
-                clock: Arc::new(SystemClock),
-                ids: Arc::new(UuidV7Gen),
-                tokens: Arc::new(RandTokenGen),
-                hasher,
-            },
-            gate: Arc::new(NoStrategyYet),
-            cookie_secure,
-            panel_dir,
-        };
-        Panel {
-            db,
-            uow,
-            app: router(state),
-        }
-    }
-
-    async fn send(&self, req: Request<Body>) -> Response {
-        self.app.clone().oneshot(req).await.unwrap()
-    }
-
-    /// Registers `email` with a workspace named `workspace_name`; returns the `jt_session=…`
-    /// cookie pair and the response body.
-    async fn register(&self, email: &str, workspace_name: &str) -> (String, Value) {
-        let resp = self
-            .send(post(
-                "/api/auth/register",
-                None,
-                register_body(email, workspace_name),
-            ))
-            .await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let cookie = cookie_pair(&set_cookie(&resp));
-        (cookie, body_json(resp).await)
-    }
-}
 
 fn register_body(email: &str, workspace_name: &str) -> Value {
     json!({
@@ -134,42 +68,6 @@ fn request(
     builder.body(Body::from(body)).unwrap()
 }
 
-/// The single `Set-Cookie` header of a response.
-fn set_cookie(resp: &Response) -> String {
-    let all: Vec<_> = resp.headers().get_all(header::SET_COOKIE).iter().collect();
-    assert_eq!(all.len(), 1, "exactly one Set-Cookie header");
-    all[0].to_str().unwrap().to_owned()
-}
-
-/// The `name=value` part of a `Set-Cookie` header.
-fn cookie_pair(set_cookie: &str) -> String {
-    set_cookie.split(';').next().unwrap().trim().to_owned()
-}
-
-async fn body_text(resp: Response) -> String {
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
-}
-
-async fn body_json(resp: Response) -> Value {
-    assert_eq!(
-        resp.headers().get(header::CONTENT_TYPE).unwrap(),
-        "application/json"
-    );
-    serde_json::from_str(&body_text(resp).await).unwrap()
-}
-
-/// Asserts a structured error with this status and code, and returns its body.
-async fn expect_error(resp: Response, status: StatusCode, code: &str) -> Value {
-    assert_eq!(resp.status(), status);
-    let body = body_json(resp).await;
-    assert_eq!(body["code"], code, "{body}");
-    assert!(body["message"].is_string(), "{body}");
-    assert!(body["details"].is_object(), "{body}");
-    assert_eq!(body.as_object().unwrap().len(), 3, "{body}");
-    body
-}
-
 fn cache_control(resp: &Response) -> &str {
     resp.headers()
         .get(header::CACHE_CONTROL)
@@ -193,7 +91,7 @@ fn temp_dir(label: &str) -> PathBuf {
 async fn register_sets_httponly_samesite_strict_cookie_and_returns_me() {
     let p = Panel::new().await;
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/register",
             None,
             register_body("Owner@Alpha.example", "Alpha Ajans"),
@@ -229,7 +127,7 @@ async fn register_sets_httponly_samesite_strict_cookie_and_returns_me() {
 
     // The cookie signs the user in.
     let resp = p
-        .send(get("/api/auth/me", Some(&format!("jt_session={token}"))))
+        .call(get("/api/auth/me", Some(&format!("jt_session={token}"))))
         .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await, me);
@@ -237,7 +135,7 @@ async fn register_sets_httponly_samesite_strict_cookie_and_returns_me() {
     // Behind TLS the cookie is also `Secure`.
     let secure = Panel::with(Arc::new(PlainHasher), true, None).await;
     let resp = secure
-        .send(post(
+        .call(post(
             "/api/auth/register",
             None,
             register_body("owner@beta.example", "Beta"),
@@ -258,7 +156,7 @@ async fn register_sets_httponly_samesite_strict_cookie_and_returns_me() {
 async fn login_then_me_round_trip() {
     // The production hasher, so hashing and verification run off the reactor threads.
     let p = Panel::with(Arc::new(Argon2Hasher::default()), false, None).await;
-    let (register_cookie, registered) = p.register("owner@alpha.example", "Alpha").await;
+    let (register_cookie, registered) = p.register_pending("owner@alpha.example", "Alpha").await;
 
     // A wrong password and an unknown email get the same answer.
     for (email, password) in [
@@ -266,7 +164,7 @@ async fn login_then_me_round_trip() {
         ("nobody@alpha.example", PASSWORD),
     ] {
         let resp = p
-            .send(post(
+            .call(post(
                 "/api/auth/login",
                 None,
                 json!({ "email": email, "password": password }),
@@ -278,7 +176,7 @@ async fn login_then_me_round_trip() {
     }
 
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/login",
             None,
             json!({ "email": "OWNER@alpha.example", "password": PASSWORD }),
@@ -298,7 +196,7 @@ async fn login_then_me_round_trip() {
         registered["current_workspace"]
     );
 
-    let resp = p.send(get("/api/auth/me", Some(&login_cookie))).await;
+    let resp = p.call(get("/api/auth/me", Some(&login_cookie))).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await, logged_in);
 }
@@ -306,22 +204,22 @@ async fn login_then_me_round_trip() {
 #[tokio::test]
 async fn logout_revokes_the_session_and_clears_the_cookie() {
     let p = Panel::new().await;
-    let (cookie, _) = p.register("owner@alpha.example", "Alpha").await;
+    let (cookie, _) = p.register_pending("owner@alpha.example", "Alpha").await;
 
     let resp = p
-        .send(post("/api/auth/logout", Some(&cookie), json!({})))
+        .call(post("/api/auth/logout", Some(&cookie), json!({})))
         .await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(
         set_cookie(&resp),
         "jt_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
     );
-    let resp = p.send(get("/api/auth/me", Some(&cookie))).await;
+    let resp = p.call(get("/api/auth/me", Some(&cookie))).await;
     expect_error(resp, StatusCode::UNAUTHORIZED, "UNAUTHENTICATED").await;
 
     // Logging out without a session, or again, still succeeds and clears the cookie.
     for cookie in [None, Some(cookie.as_str())] {
-        let resp = p.send(post("/api/auth/logout", cookie, json!({}))).await;
+        let resp = p.call(post("/api/auth/logout", cookie, json!({}))).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         assert!(set_cookie(&resp).starts_with("jt_session=; "));
     }
@@ -330,7 +228,7 @@ async fn logout_revokes_the_session_and_clears_the_cookie() {
 #[tokio::test]
 async fn post_without_requested_with_header_is_403() {
     let p = Panel::new().await;
-    let (cookie, me) = p.register("owner@alpha.example", "Alpha").await;
+    let (cookie, me) = p.register_pending("owner@alpha.example", "Alpha").await;
     let ws = me["current_workspace"].clone();
     let missing = json!({
         "code": "FORBIDDEN",
@@ -341,7 +239,7 @@ async fn post_without_requested_with_header_is_403() {
     // A valid cookie and a valid body do not make up for the missing or wrong header.
     for requested_with in [None, Some(("x-requested-with", "XMLHttpRequest"))] {
         let resp = p
-            .send(request(
+            .call(request(
                 Method::POST,
                 "/api/auth/switch-workspace",
                 Some(&cookie),
@@ -355,7 +253,7 @@ async fn post_without_requested_with_header_is_403() {
 
     // Logging out is refused too, and the session stays alive.
     let resp = p
-        .send(request(
+        .call(request(
             Method::POST,
             "/api/auth/logout",
             Some(&cookie),
@@ -365,12 +263,12 @@ async fn post_without_requested_with_header_is_403() {
         .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(resp.headers().get(header::SET_COOKIE).is_none());
-    let resp = p.send(get("/api/auth/me", Some(&cookie))).await;
+    let resp = p.call(get("/api/auth/me", Some(&cookie))).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     // The header is checked before the body is parsed and before authentication.
     let resp = p
-        .send(request(
+        .call(request(
             Method::POST,
             "/api/auth/register",
             None,
@@ -383,7 +281,7 @@ async fn post_without_requested_with_header_is_403() {
     for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
         for path in ["/api/workspace", "/api/auth/me", "/api/nothing"] {
             let resp = p
-                .send(request(method.clone(), path, None, None, String::new()))
+                .call(request(method.clone(), path, None, None, String::new()))
                 .await;
             assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{method} {path}");
             assert_eq!(body_json(resp).await, missing);
@@ -392,7 +290,7 @@ async fn post_without_requested_with_header_is_403() {
 
     // A refused registration stores nothing.
     let resp = p
-        .send(request(
+        .call(request(
             Method::POST,
             "/api/auth/register",
             None,
@@ -402,7 +300,7 @@ async fn post_without_requested_with_header_is_403() {
         .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/login",
             None,
             json!({ "email": "refused@alpha.example", "password": PASSWORD }),
@@ -414,7 +312,7 @@ async fn post_without_requested_with_header_is_403() {
 #[tokio::test]
 async fn me_without_cookie_is_401_structured_error() {
     let p = Panel::new().await;
-    let resp = p.send(get("/api/auth/me", None)).await;
+    let resp = p.call(get("/api/auth/me", None)).await;
     let body = expect_error(resp, StatusCode::UNAUTHORIZED, "UNAUTHENTICATED").await;
     assert_eq!(body["details"], json!({}));
 
@@ -423,13 +321,13 @@ async fn me_without_cookie_is_401_structured_error() {
         "jt_session=not-a-session",
         "other=1; jt_session=forged",
     ] {
-        let resp = p.send(get("/api/auth/me", Some(cookie))).await;
+        let resp = p.call(get("/api/auth/me", Some(cookie))).await;
         expect_error(resp, StatusCode::UNAUTHORIZED, "UNAUTHENTICATED").await;
     }
-    let resp = p.send(get("/api/workspace", None)).await;
+    let resp = p.call(get("/api/workspace", None)).await;
     expect_error(resp, StatusCode::UNAUTHORIZED, "UNAUTHENTICATED").await;
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/switch-workspace",
             None,
             json!({ "workspace_id": WorkspaceId::new_v7() }),
@@ -441,7 +339,7 @@ async fn me_without_cookie_is_401_structured_error() {
 #[tokio::test]
 async fn bad_bodies_and_refusals_are_structured_errors() {
     let p = Panel::new().await;
-    p.register("owner@alpha.example", "Alpha").await;
+    p.register_pending("owner@alpha.example", "Alpha").await;
 
     // Malformed JSON, a wrong type, a missing field and a missing content type.
     for (body, content_type) in [
@@ -464,7 +362,7 @@ async fn bad_bodies_and_refusals_are_structured_errors() {
             req.headers_mut().remove(header::CONTENT_TYPE);
         }
         expect_error(
-            p.send(req).await,
+            p.call(req).await,
             StatusCode::UNPROCESSABLE_ENTITY,
             "VALIDATION",
         )
@@ -473,7 +371,7 @@ async fn bad_bodies_and_refusals_are_structured_errors() {
 
     // A rule of the use case.
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/register",
             None,
             json!({
@@ -489,7 +387,7 @@ async fn bad_bodies_and_refusals_are_structured_errors() {
 
     // A taken email.
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/register",
             None,
             register_body("OWNER@alpha.example", "Again"),
@@ -504,17 +402,19 @@ async fn bad_bodies_and_refusals_are_structured_errors() {
         get("/api/auth/register", None),
         post("/api/auth/me", None, json!({})),
     ] {
-        expect_error(p.send(req).await, StatusCode::NOT_FOUND, "NOT_FOUND").await;
+        expect_error(p.call(req).await, StatusCode::NOT_FOUND, "NOT_FOUND").await;
     }
 }
 
 #[tokio::test]
 async fn switch_workspace_moves_the_session_and_workspace_info_follows() {
     let p = Panel::new().await;
-    let (cookie, me) = p.register("owner@alpha.example", "Alpha Ajans").await;
+    let (cookie, me) = p
+        .register_pending("owner@alpha.example", "Alpha Ajans")
+        .await;
     let ws_a = me["current_workspace"].clone();
 
-    let resp = p.send(get("/api/workspace", Some(&cookie))).await;
+    let resp = p.call(get("/api/workspace", Some(&cookie))).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let info = body_json(resp).await;
     assert_eq!(info["id"], ws_a);
@@ -544,7 +444,7 @@ async fn switch_workspace_moves_the_session_and_workspace_info_follows() {
     u.commit().await.unwrap();
 
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/switch-workspace",
             Some(&cookie),
             json!({ "workspace_id": ws_b }),
@@ -555,19 +455,19 @@ async fn switch_workspace_moves_the_session_and_workspace_info_follows() {
     assert_eq!(switched["current_workspace"], json!(ws_b));
     assert_eq!(switched["memberships"].as_array().unwrap().len(), 2);
 
-    let resp = p.send(get("/api/workspace", Some(&cookie))).await;
+    let resp = p.call(get("/api/workspace", Some(&cookie))).await;
     let info = body_json(resp).await;
     assert_eq!(info["id"], json!(ws_b));
     assert_eq!(info["status"], "active");
     assert_eq!(info["my_role"], "rep");
     assert_eq!(info["my_permissions"], json!(["workspace.read"]));
-    let resp = p.send(get("/api/auth/me", Some(&cookie))).await;
+    let resp = p.call(get("/api/auth/me", Some(&cookie))).await;
     assert_eq!(body_json(resp).await["current_workspace"], json!(ws_b));
 
     // A workspace the user does not belong to, and a malformed id.
     let (ws_c, _) = p.db.seed_workspace("gamma").await;
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/switch-workspace",
             Some(&cookie),
             json!({ "workspace_id": ws_c }),
@@ -575,7 +475,7 @@ async fn switch_workspace_moves_the_session_and_workspace_info_follows() {
         .await;
     expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/switch-workspace",
             Some(&cookie),
             json!({ "workspace_id": "not-a-uuid" }),
@@ -587,7 +487,7 @@ async fn switch_workspace_moves_the_session_and_workspace_info_follows() {
 #[tokio::test]
 async fn workspace_routes_need_a_current_workspace() {
     let p = Panel::new().await;
-    let (cookie, me) = p.register("owner@alpha.example", "Alpha").await;
+    let (cookie, me) = p.register_pending("owner@alpha.example", "Alpha").await;
     let ws: WorkspaceId = serde_json::from_value(me["current_workspace"].clone()).unwrap();
     let membership: MembershipId =
         serde_json::from_value(me["memberships"][0]["membership_id"].clone()).unwrap();
@@ -597,10 +497,10 @@ async fn workspace_routes_need_a_current_workspace() {
     t.memberships().remove(membership).await.unwrap();
     t.commit().await.unwrap();
 
-    let resp = p.send(get("/api/auth/me", Some(&cookie))).await;
+    let resp = p.call(get("/api/auth/me", Some(&cookie))).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await["current_workspace"], Value::Null);
-    let resp = p.send(get("/api/workspace", Some(&cookie))).await;
+    let resp = p.call(get("/api/workspace", Some(&cookie))).await;
     let body = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
     assert_eq!(body["message"], "no current workspace");
 }
@@ -608,12 +508,12 @@ async fn workspace_routes_need_a_current_workspace() {
 #[tokio::test]
 async fn head_on_workspace_route_passes_the_gate() {
     let p = Panel::new().await;
-    let (cookie, _) = p.register("owner@alpha.example", "Alpha").await;
+    let (cookie, _) = p.register_pending("owner@alpha.example", "Alpha").await;
 
     // HEAD is answered by the GET handler and passes the same gate, with an empty body.
     for path in ["/api/workspace", "/api/auth/me"] {
         let resp = p
-            .send(request(
+            .call(request(
                 Method::HEAD,
                 path,
                 Some(&cookie),
@@ -625,7 +525,7 @@ async fn head_on_workspace_route_passes_the_gate() {
         assert_eq!(body_text(resp).await, "", "HEAD {path}");
     }
     let resp = p
-        .send(request(
+        .call(request(
             Method::HEAD,
             "/api/workspace",
             None,
@@ -639,7 +539,7 @@ async fn head_on_workspace_route_passes_the_gate() {
 #[tokio::test]
 async fn healthz_ok() {
     let p = Panel::new().await;
-    let resp = p.send(get("/healthz", None)).await;
+    let resp = p.call(get("/healthz", None)).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await, json!({ "ok": true }));
 }
@@ -655,27 +555,27 @@ async fn static_index_served_when_panel_dir_set() {
 
     // Panel pages fall back to `index.html`, which is always revalidated.
     for path in ["/", "/team", "/team/invites", "/index.html"] {
-        let resp = p.send(get(path, None)).await;
+        let resp = p.call(get(path, None)).await;
         assert_eq!(resp.status(), StatusCode::OK, "{path}");
         assert_eq!(cache_control(&resp), "no-cache", "{path}");
         assert_eq!(body_text(resp).await, index, "{path}");
     }
 
     // Hashed assets are cached for good; a missing one is a 404, not the index.
-    let resp = p.send(get("/assets/app.js", None)).await;
+    let resp = p.call(get("/assets/app.js", None)).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(cache_control(&resp), "public, max-age=31536000, immutable");
     assert_eq!(body_text(resp).await, "console.log('jeeta');");
-    let resp = p.send(get("/assets/missing.js", None)).await;
+    let resp = p.call(get("/assets/missing.js", None)).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_eq!(cache_control(&resp), "");
 
     // API, MCP and health paths never fall back to the panel.
     for path in ["/api/nothing", "/api", "/mcp", "/healthz/extra"] {
-        let resp = p.send(get(path, None)).await;
+        let resp = p.call(get(path, None)).await;
         expect_error(resp, StatusCode::NOT_FOUND, "NOT_FOUND").await;
     }
-    let resp = p.send(get("/healthz", None)).await;
+    let resp = p.call(get("/healthz", None)).await;
     assert_eq!(body_json(resp).await, json!({ "ok": true }));
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -698,14 +598,14 @@ async fn every_response_carries_the_security_headers() {
     };
 
     // The panel page and the signed-out `me`, then a signed-in one.
-    let resp = p.send(get("/", None)).await;
+    let resp = p.call(get("/", None)).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_headers(&resp, "/");
-    let resp = p.send(get("/api/auth/me", None)).await;
+    let resp = p.call(get("/api/auth/me", None)).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     assert_headers(&resp, "/api/auth/me signed out");
     let resp = p
-        .send(post(
+        .call(post(
             "/api/auth/register",
             None,
             register_body("owner@alpha.example", "Alpha"),
@@ -713,17 +613,17 @@ async fn every_response_carries_the_security_headers() {
         .await;
     assert_headers(&resp, "/api/auth/register");
     let cookie = cookie_pair(&set_cookie(&resp));
-    let resp = p.send(get("/api/auth/me", Some(&cookie))).await;
+    let resp = p.call(get("/api/auth/me", Some(&cookie))).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_headers(&resp, "/api/auth/me signed in");
 
     // Health, unknown paths, a refused request without the panel header.
     for path in ["/healthz", "/api/nothing", "/assets/missing.js"] {
-        let resp = p.send(get(path, None)).await;
+        let resp = p.call(get(path, None)).await;
         assert_headers(&resp, path);
     }
     let resp = p
-        .send(
+        .call(
             Request::post("/api/auth/logout")
                 .body(Body::empty())
                 .unwrap(),
@@ -739,7 +639,7 @@ async fn every_response_carries_the_security_headers() {
 async fn without_panel_dir_everything_else_is_404_json() {
     let p = Panel::new().await;
     for path in ["/", "/team", "/assets/app.js", "/api/nothing"] {
-        let resp = p.send(get(path, None)).await;
+        let resp = p.call(get(path, None)).await;
         expect_error(resp, StatusCode::NOT_FOUND, "NOT_FOUND").await;
     }
 }

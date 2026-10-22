@@ -80,7 +80,7 @@ hiçbir günlük satırında görünmez.
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `JEETA_DATABASE_URL` | — (zorunlu) | Uygulamanın PostgreSQL adresi, `postgres://kullanıcı:parola@sunucu:port/veritabanı` |
-| `JEETA_SECRET_KEY` | — (zorunlu) | Tam 64 onaltılık karakter (32 bayt): `openssl rand -hex 32`. Açılışta doğrulanır; M1'de bağlayıcı sırlarını mühürlemek için kullanılacak |
+| `JEETA_SECRET_KEY` | — (zorunlu) | Tam 64 onaltılık karakter (32 bayt): `openssl rand -hex 32`. Açılışta doğrulanır. Sır kutusunun (`jt_seal`) ana anahtarıdır: bağlayıcı sırları, her çalışma alanı için bundan türetilen ayrı bir anahtarla mühürlenir (bkz. [Sırların mühürlenmesi](#sırların-mühürlenmesi)). Değiştirilirse önceden mühürlenmiş sırlar açılamaz |
 | `JEETA_BIND` | `127.0.0.1:8080` | Dinlenen `ip:port` |
 | `JEETA_PANEL_DIR` | — | Derlenmiş panelin dizini; göreli bir yol **çalışılan dizine** göredir: `rust/` içinden (`make dev`) `panel/dist`, depo kökünden `rust/panel/dist`. Yoksa yalnızca API ve MCP sunulur. `index.html` bulunmazsa açılış günlüğü bunu söyler |
 | `JEETA_COOKIE_SECURE` | `true` | Oturum çerezlerinde `Secure`. Yalnızca düz `http://localhost` için `false` |
@@ -253,6 +253,24 @@ işlemleri (`select`/`insert`/`update`/`delete`) yetkisi olan ayrı bir **çalı
 göçleri her açılışta `JEETA_DATABASE_URL` ile kendisi uyguladığından bu rol şimdilik şemanın sahibi
 olmalıdır; göçleri ayrı bir adımda göç rolüyle çalıştırmak sonraki bir kilometre taşına kalmıştır.
 
+## Sırların mühürlenmesi
+
+Bağlayıcı sırları (bir hesabın parolası ya da erişim jetonu) veritabanına yalnızca mühürlü olarak yazılır;
+mühürlü baytları ya da açılmış sırrı hiçbir kullanım durumu geri döndürmez. Mühürleme `jt_seal` içindedir
+ve uygulama ona `SecretBox` kapısından (port) ulaşır:
+
+- Her çalışma alanının anahtarı `JEETA_SECRET_KEY`'den HKDF-SHA256 ile türetilir (tuz `jeeta-seal-v1`,
+  bilgi alanı çalışma alanı kimliğinin 16 baytı). Bellekte yalnızca ana anahtar durur; türetilen anahtar
+  tek bir çağrı boyunca yaşar ve ardından silinir.
+- Biçim `v1 || nonce || şifreli metin`: bir sürüm baytı (`0x01`), her mühürde yeniden çekilen rastgele
+  96 bitlik bir nonce, ardından AES-256-GCM şifreli metni ve 128 bitlik etiketi. Çalışma alanı kimliği
+  ayrıca ek doğrulanmış veridir (AAD): bir alanın mühürlü sırrı başka bir alanın satırına kopyalansa
+  bile açılmaz.
+- Başka bir alanın, başka bir anahtarın ya da değiştirilmiş veya kesilmiş bir mührün açılması
+  nedenini söylemeden `INTERNAL` "sealed data cannot be opened" ile reddedilir.
+- `JEETA_SECRET_KEY` değişirse önceden mühürlenmiş bütün sırlar açılamaz olur; anahtar döndürme
+  (yeniden mühürleme) sonraki bir kilometre taşına kalmıştır.
+
 ## Üretim notları
 
 - TLS'i bir ters vekil sonlandırır; `JEETA_COOKIE_SECURE=true` (varsayılan) kalır.
@@ -272,18 +290,19 @@ make check   # fmt + lint + doc + deny + test (JEETA_TEST_DATABASE_URL gerekli)
 | Hedef | Komut |
 |---|---|
 | `make fmt` | `cargo fmt --all -- --check` |
-| `make lint` | `cargo clippy --workspace --all-targets -- -D warnings` |
-| `make doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` |
-| `make deny` | `cargo deny check` |
-| `make test` | `cargo test --workspace` |
+| `make lint` | `cargo clippy --locked --workspace --all-targets -- -D warnings` |
+| `make doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps` |
+| `make deny` | `cargo deny --locked check` |
+| `make test` | `cargo test --locked --workspace` |
 | `make dev` | `cargo run -p jeeta -- serve` |
 | `make panel-install` / `panel-test` / `panel-build` | `panel/` içinde pnpm |
 
 CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `feat/**`
 dallarına gönderimde ve her çekme isteğinde çalışır: `rust-checks` (fmt, clippy, doc, cargo-deny),
 `rust-test` (PostgreSQL 16 hizmetiyle `cargo test --workspace`) ve `panel` (`pnpm install --frozen-lockfile`,
-`pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu `--locked` çalışır:
-`Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş durur.
+`pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de,
+`--locked` çalışır: `Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş durur (bir bağımlılık
+değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip işleyin).
 
 ## Sınırlar
 
@@ -291,7 +310,8 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
 
 - `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`) yalnızca `serde`, `serde_json`,
   `uuid`, `time`, `thiserror` kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca
-  `jt_outbound`'da, `sqlx` yalnızca `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da) bulunur.
+  `jt_outbound`'da, `sqlx` yalnızca `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme
+  ve anahtar türetme kütüphaneleri (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur.
 - `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
   `isahc`, `surf`, `attohttpc`, `curl`, ağacın hiçbir yerinde bulunmaz) ile yapay zekâ, medya üretimi, ses
   tanıma ve ses sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans,

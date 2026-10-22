@@ -8,6 +8,7 @@ members = [
     "crates/adapters/jt_panel_http",
     "crates/adapters/jt_mcp",
     "crates/adapters/jt_outbound",
+    "crates/adapters/jt_seal",
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
@@ -28,6 +29,7 @@ jt_pg = { path = "crates/adapters/jt_pg" }
 jt_panel_http = { path = "crates/adapters/jt_panel_http" }
 jt_mcp = { path = "crates/adapters/jt_mcp" }
 jt_outbound = { path = "crates/adapters/jt_outbound" }
+jt_seal = { path = "crates/adapters/jt_seal" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }
 
@@ -36,7 +38,9 @@ tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "signal", "
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "time", "json"] }
+# No default features: they would add `any` (every driver behind one type); `macros` stays for
+# `sqlx::migrate!` and `#[derive(sqlx::FromRow)]`.
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "time", "json", "macros"] }
 rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "transport-io"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
@@ -60,6 +64,11 @@ toml = "1"
 async-trait = "0.1"
 http = "1"
 tower-service = "0.3"
+# The secret box (`jt_seal`): AES-256-GCM, HKDF-SHA256, and wiping key material from memory.
+# The key comes from HKDF and the nonce from `rand`, so no `getrandom` feature here.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+hkdf = "0.13"
+zeroize = "1.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

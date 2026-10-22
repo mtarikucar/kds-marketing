@@ -58,6 +58,21 @@ pub fn metadata() -> Value {
         .clone()
 }
 
+/// Names of every workspace package.
+pub fn workspace_packages() -> BTreeSet<String> {
+    metadata()["packages"]
+        .as_array()
+        .expect("`cargo metadata` has no `packages` array")
+        .iter()
+        .map(|p| {
+            p["name"]
+                .as_str()
+                .expect("package has no `name`")
+                .to_owned()
+        })
+        .collect()
+}
+
 /// Names of the normal (non-dev, non-build) dependencies of the workspace package `krate`.
 ///
 /// Panics when `krate` is not a workspace package, so a misspelled name cannot pass vacuously.

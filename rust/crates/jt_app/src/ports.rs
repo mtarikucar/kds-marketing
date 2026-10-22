@@ -27,6 +27,7 @@ use jt_tenancy::{
 use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::error::AppError;
 
@@ -61,38 +62,56 @@ pub trait PasswordHasher: Send + Sync {
     async fn verify(&self, pw: &str, hash: &str) -> Result<bool, AppError>;
 }
 
+/// Seals secrets (a connector's token or password) for one workspace, so that only that
+/// workspace can open them again. The sealed bytes are opaque and safe to store; no use case
+/// returns them, nor what `open` gives back.
+///
+/// Sealing is randomised: two seals of the same plaintext differ, and the plaintext never appears
+/// in the output. The work is a few microseconds of CPU, so both methods are synchronous.
+pub trait SecretBox: Send + Sync {
+    /// `plaintext` sealed for `ws`.
+    fn seal(&self, ws: WorkspaceId, plaintext: &[u8]) -> Result<Vec<u8>, AppError>;
+    /// The plaintext that `seal` sealed for `ws`, wiped from memory when dropped.
+    ///
+    /// Bytes sealed for another workspace or under another key, cut short, or changed in any way
+    /// are refused with `INTERNAL` and the message `"sealed data cannot be opened"`, whatever the
+    /// reason, so a refusal tells a caller nothing about the bytes.
+    fn open(&self, ws: WorkspaceId, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError>;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rows and views
+//
+// A row that carries a secret's hash (a password, a session, invite or API-key token) does not
+// implement `Serialize`, so it cannot reach a response or a ledger payload by accident; the use
+// cases answer with views and summaries that leave the hash out.
 // ---------------------------------------------------------------------------------------------
 
-/// A user account.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A user account. Not `Serialize`: it carries the password hash (see the section note).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserRow {
     pub id: UserId,
     pub email: Email,
     pub password_hash: String,
     pub display_name: String,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
-/// A panel login session. Only the hash of its token is stored.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A panel login session. Only the hash of its token is stored. Not `Serialize`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRow {
     pub id: SessionId,
     pub user_id: UserId,
     pub token_hash: String,
     pub current_workspace_id: Option<WorkspaceId>,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
 /// A membership as stored: an invitation (`user_id` unset until accepted) or an active member.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Not `Serialize`: it carries the invite token's hash.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MembershipRow {
     pub id: MembershipId,
     pub workspace_id: WorkspaceId,
@@ -101,10 +120,8 @@ pub struct MembershipRow {
     pub status: MembershipStatus,
     pub invited_email: Option<Email>,
     pub invite_token_hash: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub invite_expires_at: Option<OffsetDateTime>,
     pub invited_by: Option<UserId>,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -162,8 +179,9 @@ impl ApiKeyStatus {
     }
 }
 
-/// An API key as stored. Only the hash of the key is kept; `prefix` is for display.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// An API key as stored. Only the hash of the key is kept; `prefix` is for display. Not
+/// `Serialize`: callers show a `KeySummary`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiKeyRow {
     pub id: ApiKeyId,
     pub workspace_id: WorkspaceId,
@@ -173,11 +191,8 @@ pub struct ApiKeyRow {
     pub scopes: BTreeSet<Permission>,
     pub issued_by: UserId,
     pub status: ApiKeyStatus,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub last_used_at: Option<OffsetDateTime>,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
@@ -208,25 +223,22 @@ pub struct WorkspaceRow {
     pub created_at: OffsetDateTime,
 }
 
-/// A platform operator.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A platform operator. Not `Serialize`: it carries the password hash.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperatorRow {
     pub id: OperatorId,
     pub email: Email,
     pub password_hash: String,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
-/// A platform operator's login session. Only the hash of its token is stored.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A platform operator's login session. Only the hash of its token is stored. Not `Serialize`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatformSessionRow {
     pub id: Uuid,
     pub operator_id: OperatorId,
     pub token_hash: String,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
 }
 
@@ -310,9 +322,11 @@ pub trait RoleRepo: Send + Sync {
         permissions: BTreeSet<Permission>,
     ) -> Result<(), AppError>;
     /// Deletes a custom role. An unknown id is `NOT_FOUND`; a system role is `FORBIDDEN` and
-    /// stays.
+    /// stays; a role a membership that is not `Removed` holds is `CONFLICT` and stays. `Removed`
+    /// memberships that still reference the role are moved to the workspace's system `rep` role
+    /// first, in the same transaction.
     async fn delete_custom(&mut self, id: RoleId) -> Result<(), AppError>;
-    /// How many memberships, in any status, reference the role.
+    /// How many memberships that are not `Removed` (members and open invitations) hold the role.
     async fn count_memberships_using(&mut self, id: RoleId) -> Result<i64, AppError>;
 }
 

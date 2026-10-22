@@ -13,7 +13,9 @@ use jt_ledger::Actor;
 use jt_tenancy::{
     AgentConnectionId, MembershipId, Permission, SystemRole, UserId, WorkspaceStatus,
 };
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+};
 use time::OffsetDateTime;
 use time::macros::datetime;
 
@@ -27,6 +29,7 @@ fn world(tokens: &[&str]) -> (InMemoryUow, Deps) {
         ids: Arc::new(SeqIdGen::new()),
         tokens: Arc::new(FixedTokenGen::new(tokens.iter().copied())),
         hasher: Arc::new(PlainHasher),
+        seal: Arc::new(PlainSecretBox),
     };
     (uow, deps)
 }

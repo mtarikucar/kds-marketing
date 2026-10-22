@@ -91,13 +91,13 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// The 32-byte key of [`SECRET_KEY`]. `Debug` masks it.
+/// The 32-byte key of [`SECRET_KEY`]: the master key from which the secret box derives each
+/// workspace's sealing key. `Debug` masks it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretKey([u8; 32]);
 
 impl SecretKey {
     /// The key's bytes.
-    #[allow(dead_code, reason = "M1 seals connector secrets with it")]
     pub fn bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -143,8 +143,7 @@ pub struct Config {
     pub bind: SocketAddr,
     pub panel_dir: Option<PathBuf>,
     pub cookie_secure: bool,
-    /// Validated at start; unused until M1 seals connector secrets with it.
-    #[allow(dead_code, reason = "M1 seals connector secrets with it")]
+    /// The master key of the secret box (`jt_seal`), which seals connector secrets.
     pub secret_key: SecretKey,
     /// Public `host[:port]` values for the MCP endpoint, on top of the loopback names.
     pub allowed_hosts: Vec<String>,

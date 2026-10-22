@@ -17,7 +17,7 @@ use jt_mcp::McpState;
 use jt_panel_http::AppState;
 use jt_pg::PgUnitOfWork;
 use jt_testkit::TestDb;
-use jt_testkit::fakes::PlainHasher;
+use jt_testkit::fakes::{PlainHasher, PlainSecretBox};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -95,6 +95,7 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(PlainHasher),
+        seal: Arc::new(PlainSecretBox),
     };
     let app = app(&deps);
 

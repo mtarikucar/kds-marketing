@@ -225,7 +225,9 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
     use jt_app::usecases::Deps;
-    use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+    use jt_testkit::fakes::{
+        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+    };
     use time::macros::datetime;
     use tower::ServiceExt;
 
@@ -261,6 +263,7 @@ mod tests {
                 ids: Arc::new(SeqIdGen::new()),
                 tokens: Arc::new(FixedTokenGen::new(["t1", "t2", "t3"])),
                 hasher: Arc::new(PlainHasher),
+                seal: Arc::new(PlainSecretBox),
             },
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,

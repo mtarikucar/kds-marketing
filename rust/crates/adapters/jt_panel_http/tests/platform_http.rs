@@ -2,193 +2,71 @@
 //! `jt_platform` cookie, the workspace list, activating a workspace, and the separation between
 //! operator and tenant sessions.
 
-use std::sync::Arc;
-
-use axum::Router;
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
-use jt_app::gate::NoStrategyYet;
-use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-use jt_app::usecases::Deps;
 use jt_app::usecases::platform;
-use jt_panel_http::{AppState, router};
-use jt_pg::PgUnitOfWork;
 use jt_tenancy::WorkspaceId;
-use jt_testkit::TestDb;
-use jt_testkit::fakes::PlainHasher;
+use jt_testkit::flows::{OPERATOR_EMAIL, OPERATOR_PASSWORD};
+use jt_testkit::panel::{
+    Panel, body_json, cookie_pair, expect_error, ok_json, request, set_cookie, workspace_of,
+};
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
-const TENANT_PASSWORD: &str = "correct horse battery";
-const OPERATOR_EMAIL: &str = "ops@jeeta.test";
-const OPERATOR_PASSWORD: &str = "operator passphrase";
-/// The request header every mutating `/api` call must carry.
-const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
-
-/// A router over a fresh test database, with one bootstrapped operator.
-struct Panel {
-    _db: TestDb,
-    app: Router,
+/// The shared harness with one bootstrapped operator.
+async fn panel() -> Panel {
+    let p = Panel::new().await;
+    assert!(
+        platform::bootstrap(&p.deps, OPERATOR_EMAIL, OPERATOR_PASSWORD)
+            .await
+            .unwrap()
+    );
+    p
 }
 
-impl Panel {
-    async fn new() -> Panel {
-        let db = TestDb::new().await;
-        let deps = Deps {
-            uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-            clock: Arc::new(SystemClock),
-            ids: Arc::new(UuidV7Gen),
-            tokens: Arc::new(RandTokenGen),
-            hasher: Arc::new(PlainHasher),
-        };
-        assert!(
-            platform::bootstrap(&deps, OPERATOR_EMAIL, OPERATOR_PASSWORD)
-                .await
-                .unwrap()
-        );
-        let state = AppState {
-            deps,
-            gate: Arc::new(NoStrategyYet),
-            cookie_secure: false,
-            panel_dir: None,
-        };
-        Panel {
-            _db: db,
-            app: router(state),
-        }
-    }
-
-    async fn send(&self, req: Request<Body>) -> Response {
-        self.app.clone().oneshot(req).await.unwrap()
-    }
-
-    /// Registers a tenant owner with a new workspace; returns the `jt_session=…` pair and the
-    /// workspace.
-    async fn register(&self, email: &str, workspace_name: &str) -> (String, WorkspaceId) {
-        let body = json!({
-            "email": email,
-            "password": TENANT_PASSWORD,
-            "display_name": "Owner",
-            "workspace_name": workspace_name,
-        });
-        let resp = self
-            .send(request(
-                Method::POST,
-                "/api/auth/register",
-                None,
-                true,
-                Some(body),
-            ))
-            .await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let cookie = cookie_pair(&set_cookie(&resp));
-        let me = body_json(resp).await;
-        let ws = serde_json::from_value(me["current_workspace"].clone()).unwrap();
-        (cookie, ws)
-    }
-
+/// The operator console's routes, on the shared harness.
+trait Console {
+    /// Registers a tenant owner with a new workspace, left awaiting payment; returns the
+    /// `jt_session=…` pair and the workspace.
+    async fn register_tenant(&self, email: &str, workspace_name: &str) -> (String, WorkspaceId);
     /// Logs the operator in; returns the full `Set-Cookie` value and the response body.
+    async fn operator_login(&self) -> (String, Value);
+    /// `PATCH /api/platform/workspaces/{ws}/status` as `cookie`.
+    async fn set_status(&self, ws: &str, cookie: &str, body: Value) -> Response;
+}
+
+impl Console for Panel {
+    async fn register_tenant(&self, email: &str, workspace_name: &str) -> (String, WorkspaceId) {
+        let (cookie, me) = self.register_pending(email, workspace_name).await;
+        (cookie, workspace_of(&me))
+    }
+
     async fn operator_login(&self) -> (String, Value) {
         let resp = self
-            .send(request(
+            .send(
                 Method::POST,
                 "/api/platform/login",
                 None,
-                true,
                 Some(json!({ "email": OPERATOR_EMAIL, "password": OPERATOR_PASSWORD })),
-            ))
+            )
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let cookie = set_cookie(&resp);
         (cookie, body_json(resp).await)
     }
 
-    async fn get(&self, path: &str, cookie: &str) -> Response {
-        self.send(request(Method::GET, path, Some(cookie), false, None))
-            .await
-    }
-
     async fn set_status(&self, ws: &str, cookie: &str, body: Value) -> Response {
         let path = format!("/api/platform/workspaces/{ws}/status");
-        self.send(request(
-            Method::PATCH,
-            &path,
-            Some(cookie),
-            true,
-            Some(body),
-        ))
-        .await
+        self.send(Method::PATCH, &path, Some(cookie), Some(body))
+            .await
     }
-}
-
-/// A request with an optional cookie, the request header when `requested_with`, and an optional
-/// JSON body.
-fn request(
-    method: Method,
-    path: &str,
-    cookie: Option<&str>,
-    requested_with: bool,
-    body: Option<Value>,
-) -> Request<Body> {
-    let mut builder = Request::builder().method(method).uri(path);
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, cookie);
-    }
-    if requested_with {
-        builder = builder.header(REQUESTED_WITH.0, REQUESTED_WITH.1);
-    }
-    let body = match body {
-        Some(body) => {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            Body::from(body.to_string())
-        }
-        None => Body::empty(),
-    };
-    builder.body(body).unwrap()
-}
-
-/// The single `Set-Cookie` header of a response.
-fn set_cookie(resp: &Response) -> String {
-    let all: Vec<_> = resp.headers().get_all(header::SET_COOKIE).iter().collect();
-    assert_eq!(all.len(), 1, "exactly one Set-Cookie header");
-    all[0].to_str().unwrap().to_owned()
-}
-
-/// The `name=value` part of a `Set-Cookie` header.
-fn cookie_pair(set_cookie: &str) -> String {
-    set_cookie.split(';').next().unwrap().trim().to_owned()
-}
-
-async fn body_json(resp: Response) -> Value {
-    assert_eq!(
-        resp.headers().get(header::CONTENT_TYPE).unwrap(),
-        "application/json"
-    );
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
-async fn ok_json(resp: Response) -> Value {
-    assert_eq!(resp.status(), StatusCode::OK);
-    body_json(resp).await
-}
-
-/// Asserts a structured error with this status and code, and returns its body.
-async fn expect_error(resp: Response, status: StatusCode, code: &str) -> Value {
-    assert_eq!(resp.status(), status);
-    let body = body_json(resp).await;
-    assert_eq!(body["code"], code, "{body}");
-    assert!(body["message"].is_string(), "{body}");
-    assert!(body["details"].is_object(), "{body}");
-    assert_eq!(body.as_object().unwrap().len(), 3, "{body}");
-    body
 }
 
 #[tokio::test]
 async fn operator_lists_workspaces_and_activates_one() {
-    let p = Panel::new().await;
-    let (tenant, ws) = p.register("Owner@Alpha.example", "Alpha Ajans").await;
+    let p = panel().await;
+    let (tenant, ws) = p
+        .register_tenant("Owner@Alpha.example", "Alpha Ajans")
+        .await;
     let info = ok_json(p.get("/api/workspace", &tenant).await).await;
     assert_eq!(info["status"], "pending_payment");
 
@@ -282,7 +160,7 @@ async fn operator_lists_workspaces_and_activates_one() {
         ("nobody@jeeta.test", OPERATOR_PASSWORD),
     ] {
         let resp = p
-            .send(request(
+            .call(request(
                 Method::POST,
                 "/api/platform/login",
                 None,
@@ -298,8 +176,8 @@ async fn operator_lists_workspaces_and_activates_one() {
 
 #[tokio::test]
 async fn tenant_session_cannot_call_platform_routes_401() {
-    let p = Panel::new().await;
-    let (tenant, ws) = p.register("owner@alpha.example", "Alpha").await;
+    let p = panel().await;
+    let (tenant, ws) = p.register_tenant("owner@alpha.example", "Alpha").await;
     let tenant_token = tenant.strip_prefix("jt_session=").unwrap();
     let ws = ws.to_string();
 
@@ -340,11 +218,11 @@ async fn tenant_session_cannot_call_platform_routes_401() {
 
 #[tokio::test]
 async fn platform_login_requires_header_403() {
-    let p = Panel::new().await;
-    let (tenant, ws) = p.register("owner@alpha.example", "Alpha").await;
+    let p = panel().await;
+    let (tenant, ws) = p.register_tenant("owner@alpha.example", "Alpha").await;
 
     let resp = p
-        .send(request(
+        .call(request(
             Method::POST,
             "/api/platform/login",
             None,
@@ -361,7 +239,7 @@ async fn platform_login_requires_header_403() {
     let operator = cookie_pair(&set);
     let path = format!("/api/platform/workspaces/{ws}/status");
     let resp = p
-        .send(request(
+        .call(request(
             Method::PATCH,
             &path,
             Some(&operator),

@@ -24,7 +24,7 @@ use jt_mcp::{McpState, ToolFuture, ToolSpec, http_service, registry, risk_tag};
 use jt_pg::PgUnitOfWork;
 use jt_tenancy::{SystemRole, UserId, WorkspaceId, WorkspaceStatus};
 use jt_testkit::TestDb;
-use jt_testkit::fakes::PlainHasher;
+use jt_testkit::fakes::{PlainHasher, PlainSecretBox};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
     ProtocolVersion,
@@ -99,6 +99,7 @@ impl World {
             ids: Arc::new(UuidV7Gen),
             tokens: Arc::new(RandTokenGen),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
         };
         let (a, a_owner) = db.seed_workspace("alpha").await;
         let (b, b_owner) = db.seed_workspace("beta").await;

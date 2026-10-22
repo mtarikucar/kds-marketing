@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::RoleRepo;
-use jt_tenancy::{Permission, RoleDef, RoleId, WorkspaceId};
+use jt_tenancy::{Permission, RoleDef, RoleId, SystemRole, WorkspaceId};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
@@ -193,6 +193,28 @@ impl RoleRepo for PgTenantRepos {
         if self.count_memberships_using(id).await? > 0 {
             return Err(AppError::conflict("the role is still in use"));
         }
+        // Removed memberships keep their last role, and the foreign key would refuse the delete
+        // while they do: move them to the system `rep` role first. (`team.remove` recorded the
+        // role they held in its ledger entry.)
+        let rep: Option<Uuid> = sqlx::query_scalar(
+            "select id from roles where workspace_id = $1 and key = $2 and is_system",
+        )
+        .bind(ws.as_uuid())
+        .bind(SystemRole::Rep.key())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find the rep role"))?;
+        let rep = rep.ok_or_else(|| AppError::internal("the workspace has no system rep role"))?;
+        sqlx::query(
+            "update memberships set role_id = $3 \
+             where workspace_id = $1 and role_id = $2 and status = 'removed'",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .bind(rep)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "move removed memberships to the rep role"))?;
         let deleted =
             sqlx::query("delete from roles where workspace_id = $1 and id = $2 and not is_system")
                 .bind(ws.as_uuid())
@@ -215,7 +237,8 @@ impl RoleRepo for PgTenantRepos {
     async fn count_memberships_using(&mut self, id: RoleId) -> Result<i64, AppError> {
         let ws = self.workspace_id();
         sqlx::query_scalar(
-            "select count(*) from memberships where workspace_id = $1 and role_id = $2",
+            "select count(*) from memberships \
+             where workspace_id = $1 and role_id = $2 and status <> 'removed'",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())

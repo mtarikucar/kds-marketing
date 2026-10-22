@@ -14,7 +14,9 @@ use jt_app::usecases::platform::{self, PLATFORM_SESSION_LIFETIME};
 use jt_app::usecases::{Deps, hash_token};
 use jt_ledger::Actor;
 use jt_tenancy::{Email, WorkspaceId, WorkspaceStatus};
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+};
 use serde_json::json;
 use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
@@ -66,6 +68,7 @@ impl World {
             ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(tokens.iter().copied())),
             hasher: hasher.clone(),
+            seal: Arc::new(PlainSecretBox),
         };
         World { uow, hasher, deps }
     }

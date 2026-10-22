@@ -11,6 +11,7 @@ jt_pg.workspace = true
 jt_panel_http.workspace = true
 jt_mcp.workspace = true
 jt_outbound.workspace = true
+jt_seal.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true

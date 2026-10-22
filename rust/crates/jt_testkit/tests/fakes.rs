@@ -4,15 +4,17 @@ use std::collections::BTreeSet;
 
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{
-    ApiKeyRow, ApiKeyStatus, Clock, IdGen, LedgerFilter, MembershipRow, PasswordHasher, SessionRow,
-    TokenGen, UnitOfWork, UserRow,
+    ApiKeyRow, ApiKeyStatus, Clock, IdGen, LedgerFilter, MembershipRow, PasswordHasher, SecretBox,
+    SessionRow, TokenGen, UnitOfWork, UserRow,
 };
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_tenancy::{
     ApiKeyId, Email, MembershipId, MembershipStatus, Permission, RoleDef, RoleId, SessionId,
     SystemRole, UserId, WorkspaceId, WorkspaceStatus,
 };
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -105,6 +107,31 @@ async fn service_fakes_are_deterministic() {
         code(PlainHasher.verify("x", "$argon2id$...").await.unwrap_err()),
         ErrorCode::Internal
     );
+}
+
+/// The plain secret box seals in the clear under its workspace and keeps the port's refusal.
+#[test]
+fn plain_secret_box_opens_only_for_its_workspace() {
+    let ws = WorkspaceId(Uuid::from_u128(1));
+    let other = WorkspaceId(Uuid::from_u128(2));
+    let sealed = PlainSecretBox.seal(ws, b"jt_live_secret").unwrap();
+    assert_eq!(
+        sealed,
+        format!("plain:{ws}:jt_live_secret").into_bytes(),
+        "readable in tests"
+    );
+    assert_eq!(
+        PlainSecretBox.open(ws, &sealed).unwrap().as_slice(),
+        b"jt_live_secret"
+    );
+    for refused in [
+        PlainSecretBox.open(other, &sealed),
+        PlainSecretBox.open(ws, b"jt_live_secret"),
+    ] {
+        let e = refused.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert_eq!(e.message, "sealed data cannot be opened");
+    }
 }
 
 #[test]

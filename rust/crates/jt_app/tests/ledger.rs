@@ -12,7 +12,9 @@ use jt_app::usecases::auth::{self, RegisterInput};
 use jt_app::usecases::ledger::{self, DEFAULT_LIMIT, MAX_LIMIT};
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_tenancy::{AgentConnectionId, Permission, WorkspaceId};
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -28,6 +30,7 @@ async fn owner() -> (InMemoryUow, Deps, Ctx) {
         ids: Arc::new(SeqIdGen::new()),
         tokens: Arc::new(FixedTokenGen::new(["aaaa", "owner-session"])),
         hasher: Arc::new(PlainHasher),
+        seal: Arc::new(PlainSecretBox),
     };
     let out = auth::register(
         &deps,

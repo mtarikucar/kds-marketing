@@ -20,7 +20,9 @@ use jt_tenancy::{
     AgentConnectionId, ApiKeyId, MembershipId, Permission, SystemRole, UserId, WorkspaceId,
     WorkspaceStatus,
 };
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+};
 use serde_json::{Value, json};
 use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
@@ -52,6 +54,7 @@ impl World {
             ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(tokens)),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
         };
         World { uow, deps }
     }

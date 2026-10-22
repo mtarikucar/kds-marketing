@@ -126,7 +126,9 @@ mod tests {
     use jt_app::usecases::Deps;
     use jt_app::usecases::auth::{self, RegisterInput};
     use jt_tenancy::{WorkspaceId, WorkspaceStatus};
-    use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+    use jt_testkit::fakes::{
+        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+    };
     use serde_json::Value;
     use time::macros::datetime;
     use tower::ServiceExt;
@@ -170,6 +172,7 @@ mod tests {
             ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(["aaaa", "session-1"])),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
         }
     }
 

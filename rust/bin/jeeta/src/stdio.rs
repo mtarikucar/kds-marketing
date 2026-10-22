@@ -29,7 +29,7 @@ pub async fn run(config: Config) -> Result<()> {
     };
     let pool = serve::connect(&config).await?;
     serve::check_database_role(&pool, config.allow_superuser).await?;
-    let deps = serve::deps(pool.clone());
+    let deps = serve::deps(pool.clone(), &config.secret_key);
     let principal = match api_keys::authenticate(&deps, key).await {
         Ok(principal) => principal,
         Err(e) if e.code == ErrorCode::Unauthenticated => bail!(

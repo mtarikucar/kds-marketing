@@ -25,13 +25,14 @@ use jt_mcp::{LOOPBACK_HOSTS, McpState};
 use jt_outbound::{Egress, FIXED_HOSTS};
 use jt_panel_http::AppState;
 use jt_pg::PgUnitOfWork;
+use jt_seal::AesSecretBox;
 use sqlx::PgPool;
 use sqlx::migrate::Migrate;
 use sqlx::postgres::PgConnectOptions;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::config::{self, Bootstrap, Config};
+use crate::config::{self, Bootstrap, Config, SecretKey};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,7 +47,7 @@ pub async fn run(config: Config) -> Result<()> {
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
-    let deps = deps(pool.clone());
+    let deps = deps(pool.clone(), &config.secret_key);
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
@@ -138,15 +139,17 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
     Ok(applied.len())
 }
 
-/// The production ports over `pool`. One [`Argon2Hasher`] for the whole process: its
-/// concurrency permits are per instance, and every clone of the returned `Deps` shares it.
-pub(crate) fn deps(pool: PgPool) -> Deps {
+/// The production ports over `pool`, sealing secrets under `secret_key`. One [`Argon2Hasher`]
+/// for the whole process: its concurrency permits are per instance, and every clone of the
+/// returned `Deps` shares it.
+pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
     Deps {
         uow: Arc::new(PgUnitOfWork::new(pool)),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
+        seal: Arc::new(AesSecretBox::new(*secret_key.bytes())),
     }
 }
 
@@ -334,7 +337,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-    use jt_testkit::fakes::{InMemoryUow, PlainHasher};
+    use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -348,6 +351,7 @@ mod tests {
             ids: Arc::new(UuidV7Gen),
             tokens: Arc::new(RandTokenGen),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
         }
     }
 

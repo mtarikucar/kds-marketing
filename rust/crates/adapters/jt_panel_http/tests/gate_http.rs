@@ -20,7 +20,7 @@ use jt_panel_http::gate::{OUTSIDE_CURRENT_WORKSPACE, applies};
 use jt_panel_http::routes::api_route;
 use jt_panel_http::{AppState, Authed, WorkspaceCtx, router, router_with_test_route};
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
-use jt_testkit::fakes::{FixedClock, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{FixedClock, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen};
 use serde_json::{Value, json};
 use time::macros::datetime;
 use tower::ServiceExt;
@@ -84,6 +84,7 @@ impl World {
             ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(jt_app::std_impls::RandTokenGen),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
         };
         let out = auth::register(
             &deps,

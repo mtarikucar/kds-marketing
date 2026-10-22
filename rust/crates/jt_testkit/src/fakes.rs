@@ -1,5 +1,5 @@
 //! Fakes for the application ports: a fixed clock, sequential ids, scripted tokens, a plain-text
-//! "hasher" and an in-memory unit of work.
+//! "hasher", a plain-text "secret box" and an in-memory unit of work.
 //!
 //! [`InMemoryUow`] keeps its tables behind one shared lock. Each bundle it opens works on a copy
 //! taken when it opens (reads see that copy plus the bundle's own writes) and records its writes;
@@ -32,8 +32,8 @@ use jt_app::ports::{
     AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, Clock, IdGen,
     LedgerFilter, LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow, MembershipView,
     OperatorRepo, OperatorRow, PasswordHasher, PlatformRepos, PlatformSessionRepo,
-    PlatformSessionRow, RoleRepo, SessionRepo, SessionRow, TenantRepos, TokenGen, UnitOfWork,
-    UserRepo, UserRepos, UserRow, WorkspaceRepo, WorkspaceRow,
+    PlatformSessionRow, RoleRepo, SecretBox, SessionRepo, SessionRow, TenantRepos, TokenGen,
+    UnitOfWork, UserRepo, UserRepos, UserRow, WorkspaceRepo, WorkspaceRow,
 };
 use jt_ledger::{Actor, LedgerEntry};
 use jt_tenancy::{
@@ -42,6 +42,7 @@ use jt_tenancy::{
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------------------------
 // Service fakes
@@ -120,6 +121,34 @@ impl PasswordHasher for PlainHasher {
         hash.strip_prefix(PLAIN_PREFIX)
             .map(|stored| stored == pw)
             .ok_or_else(|| AppError::internal("not a plain: hash"))
+    }
+}
+
+/// A "secret box" that seals in the clear, as `plain:<workspace id>:<plaintext>`, so tests can
+/// read what was sealed. `open` keeps the port's contract: bytes sealed for another workspace,
+/// or not sealed by this fake at all, are `INTERNAL` "sealed data cannot be opened".
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlainSecretBox;
+
+impl PlainSecretBox {
+    /// What `seal` writes ahead of the plaintext for `ws`.
+    fn prefix(ws: WorkspaceId) -> Vec<u8> {
+        format!("{PLAIN_PREFIX}{ws}:").into_bytes()
+    }
+}
+
+impl SecretBox for PlainSecretBox {
+    fn seal(&self, ws: WorkspaceId, plaintext: &[u8]) -> Result<Vec<u8>, AppError> {
+        let mut sealed = PlainSecretBox::prefix(ws);
+        sealed.extend_from_slice(plaintext);
+        Ok(sealed)
+    }
+
+    fn open(&self, ws: WorkspaceId, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError> {
+        sealed
+            .strip_prefix(PlainSecretBox::prefix(ws).as_slice())
+            .map(|plaintext| Zeroizing::new(plaintext.to_vec()))
+            .ok_or_else(|| AppError::internal("sealed data cannot be opened"))
     }
 }
 
@@ -621,12 +650,31 @@ impl RoleRepo for MemTenant {
             if role.is_system {
                 return Err(AppError::forbidden("a system role cannot be deleted"));
             }
-            // `memberships.role_id` references the role without a cascade.
-            if this.state().memberships.iter().any(|m| m.role_id == id) {
+            let ws = this.ws;
+            let state = this.state();
+            if state
+                .memberships
+                .iter()
+                .any(|m| m.role_id == id && m.status != MembershipStatus::Removed)
+            {
                 return Err(AppError::conflict("the role is still in use"));
             }
-            let ws = this.ws;
+            // `memberships.role_id` references the role without a cascade, so removed
+            // memberships move to the system `rep` role first, as in `jt_pg`.
+            let rep = state
+                .roles
+                .iter()
+                .find(|r| {
+                    r.workspace_id == ws && r.role.is_system && r.role.key == SystemRole::Rep.key()
+                })
+                .map(|r| r.role.id)
+                .ok_or_else(|| AppError::internal("the workspace has no system rep role"))?;
             this.tx.write(move |s| {
+                for m in s.memberships.iter_mut().filter(|m| {
+                    m.workspace_id == ws && m.role_id == id && m.status == MembershipStatus::Removed
+                }) {
+                    m.role_id = rep;
+                }
                 s.roles
                     .retain(|r| !(r.workspace_id == ws && r.role.id == id));
             });
@@ -639,7 +687,11 @@ impl RoleRepo for MemTenant {
             .state()
             .memberships
             .iter()
-            .filter(|m| m.workspace_id == self.ws && m.role_id == id)
+            .filter(|m| {
+                m.workspace_id == self.ws
+                    && m.role_id == id
+                    && m.status != MembershipStatus::Removed
+            })
             .count();
         Ok(n as i64)
     }

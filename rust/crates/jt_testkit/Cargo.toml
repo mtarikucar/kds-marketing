@@ -10,6 +10,11 @@ jt_tenancy.workspace = true
 jt_ledger.workspace = true
 jt_app.workspace = true
 jt_pg.workspace = true
+# For `panel`, the panel router in process. `jt_panel_http` lists this crate only as a
+# dev-dependency, a cycle Cargo allows; its integration tests share one copy of each crate.
+jt_panel_http.workspace = true
+axum.workspace = true
+tower = { workspace = true, features = ["util"] }
 sqlx.workspace = true
 tokio.workspace = true
 uuid.workspace = true
@@ -18,6 +23,7 @@ async-trait.workspace = true
 serde_json.workspace = true
 rand.workspace = true
 hex.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

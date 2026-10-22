@@ -1324,10 +1324,9 @@ async fn deleting_a_role_still_in_use_is_conflict() {
     let mut t = uow.tenant(ws).await.unwrap();
     let custom = custom_role("auditor");
     t.roles().insert(custom.clone()).await.unwrap();
+    // An open invitation holds the role.
     let inv = invite(ws, custom.id, owner, "bob@example.com", "invite-bob");
     t.memberships().insert_invite(inv.clone()).await.unwrap();
-    // Removed memberships still reference the role.
-    t.memberships().remove(inv.id).await.unwrap();
     assert_eq!(
         t.roles().count_memberships_using(custom.id).await.unwrap(),
         1
@@ -1338,6 +1337,64 @@ async fn deleting_a_role_still_in_use_is_conflict() {
     );
     assert!(t.roles().find(custom.id).await.unwrap().is_some());
     t.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn used_then_removed_role_can_be_deleted() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, other_owner) = db.seed_workspace("other").await;
+    let uow = uow(&db);
+    let rep = role(&uow, ws, "rep").await;
+
+    // The other workspace holds a removed membership of its own; it must stay as it is.
+    let mut o = uow.tenant(other).await.unwrap();
+    let other_custom = custom_role("auditor");
+    o.roles().insert(other_custom.clone()).await.unwrap();
+    let other_inv = invite(
+        other,
+        other_custom.id,
+        other_owner,
+        "zed@example.com",
+        "invite-zed",
+    );
+    o.memberships()
+        .insert_invite(other_inv.clone())
+        .await
+        .unwrap();
+    o.memberships().remove(other_inv.id).await.unwrap();
+    o.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    let custom = custom_role("auditor");
+    t.roles().insert(custom.clone()).await.unwrap();
+    let bob = invite(ws, custom.id, owner, "bob@example.com", "invite-bob");
+    let carol = invite(ws, custom.id, owner, "carol@example.com", "invite-carol");
+    for inv in [&bob, &carol] {
+        t.memberships().insert_invite(inv.clone()).await.unwrap();
+        t.memberships().remove(inv.id).await.unwrap();
+    }
+    // Removed memberships still reference the role, but do not hold it.
+    assert_eq!(
+        t.roles().count_memberships_using(custom.id).await.unwrap(),
+        0
+    );
+    t.roles().delete_custom(custom.id).await.unwrap();
+    assert_eq!(t.roles().find(custom.id).await.unwrap(), None);
+    t.commit().await.unwrap();
+
+    // Committed: the removed memberships moved to the system `rep` role and stay removed.
+    let mut t = uow.tenant(ws).await.unwrap();
+    for inv in [&bob, &carol] {
+        let m = t.memberships().find(inv.id).await.unwrap().unwrap();
+        assert_eq!(m.role_id, rep.id);
+        assert_eq!(m.status, MembershipStatus::Removed);
+    }
+    drop(t);
+    let mut o = uow.tenant(other).await.unwrap();
+    let m = o.memberships().find(other_inv.id).await.unwrap().unwrap();
+    assert_eq!(m.role_id, other_custom.id);
+    assert!(o.roles().find(other_custom.id).await.unwrap().is_some());
 }
 
 #[tokio::test]
