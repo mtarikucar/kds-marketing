@@ -21,7 +21,9 @@
 //! (`WorkspacePolicy::agent_checkin_interval_minutes`, a day unless set), and the system only
 //! warns when it is late ([`agents::overdue`]). Every call an agent makes already moves its
 //! connection's `last_seen_at` (the MCP gate counts it); the check-in itself is ledgered at most
-//! once an hour per connection, so a tight loop does not flood the ledger.
+//! once an hour per connection, so a tight loop does not flood the ledger. A check-in answers with
+//! the caller seen at its own time, so an agent that was late is not told it is overdue by the
+//! very call that ends its lateness.
 
 use jt_capability::{CapabilityId, EffectiveStatus, Reach};
 use jt_ledger::Actor;
@@ -135,6 +137,16 @@ pub struct AgentState {
 /// approve the strategy is asked to). Needs `workspace.read`.
 pub async fn pending(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
+    pending_as_seen(deps, ctx, None).await
+}
+
+/// [`pending`], with `seen_now` (the time a checking-in caller is seen at, if any) counted among
+/// the connections' sightings. Opens its bundles one after another, never two at once.
+async fn pending_as_seen(
+    deps: &Deps,
+    ctx: &Ctx,
+    seen_now: Option<OffsetDateTime>,
+) -> Result<PendingOut, AppError> {
     let strategy = strategy::get(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let capabilities: Vec<CapabilityOut> = repos
@@ -144,7 +156,8 @@ pub async fn pending(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
         .into_iter()
         .map(|c| CapabilityOut::at(c, ctx.now))
         .collect();
-    let agent = agent_state(repos.as_mut(), ctx.now).await?;
+    let agent = agent_state(repos.as_mut(), ctx.now, seen_now).await?;
+    drop(repos);
 
     let state = strategy_state(&strategy);
     let mut items = strategy_items(&state, may_approve(ctx));
@@ -157,13 +170,19 @@ pub async fn pending(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
     })
 }
 
-/// An agent's check-in: what is pending ([`pending`]). Only an agent may check in, else
+/// An agent's check-in: what is pending ([`pending`]), with the caller seen at `ctx.now`, so
+/// its `agent.overdue` is `false` (the latest sighting is now). Only an agent may check in, else
 /// `FORBIDDEN` with `details.reason = "agents_only"`; it needs `workspace.read`.
 ///
 /// Writes `work.checkin` about the agent's connection (payload `{}`) unless that connection's
 /// last check-in was ledgered less than [`CHECKIN_LEDGER_RESOLUTION`] before `ctx.now`. The
 /// connection's `last_seen_at` is not touched here: the MCP gate moves it on every call. Two
 /// check-ins racing on one connection may both be ledgered.
+///
+/// The bundle that looks up and writes the check-in ends (committed, or dropped when nothing is
+/// written) before what is pending is read, which opens bundles of its own: holding it meanwhile
+/// would take two pool connections per check-in, and a burst of check-ins could hold every
+/// connection while each waits for another.
 pub async fn checkin(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
     let Actor::Agent { connection_id, .. } = ctx.actor else {
         return Err(AppError {
@@ -173,15 +192,18 @@ pub async fn checkin(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
         });
     };
     ctx.require(Permission::WorkspaceRead)?;
-    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    if !checked_in_lately(repos.as_mut(), connection_id, ctx.now).await? {
-        let in_force = version_in_force(repos.as_mut()).await?;
-        let mut entry = ledger_entry(ctx, CHECKIN, "agent_connection", connection_id, json!({}))?;
-        entry.strategy_version_id = in_force.map(|id| id.as_uuid());
-        repos.ledger().append(entry).await?;
-        repos.commit().await?;
+    {
+        let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+        if !checked_in_lately(repos.as_mut(), connection_id, ctx.now).await? {
+            let in_force = version_in_force(repos.as_mut()).await?;
+            let mut entry =
+                ledger_entry(ctx, CHECKIN, "agent_connection", connection_id, json!({}))?;
+            entry.strategy_version_id = in_force.map(|id| id.as_uuid());
+            repos.ledger().append(entry).await?;
+            repos.commit().await?;
+        }
     }
-    pending(deps, ctx).await
+    pending_as_seen(deps, ctx, Some(ctx.now)).await
 }
 
 /// Sets how often the workspace's agent is expected to check in, and returns the check-in state
@@ -220,7 +242,7 @@ pub async fn set_checkin_interval(
     )?;
     entry.strategy_version_id = in_force.map(|id| id.as_uuid());
     repos.ledger().append(entry).await?;
-    let state = agent_state(repos.as_mut(), ctx.now).await?;
+    let state = agent_state(repos.as_mut(), ctx.now, None).await?;
     repos.commit().await?;
     Ok(state)
 }
@@ -338,11 +360,12 @@ fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
     items
 }
 
-/// The workspace's check-in state at `now`: the latest sight of any of its connections under its
-/// interval.
+/// The workspace's check-in state at `now`: the latest sight of any of its connections, and of
+/// `seen_now` (a caller seen at the time of its call, if any), under its interval.
 async fn agent_state(
     repos: &mut dyn TenantRepos,
     now: OffsetDateTime,
+    seen_now: Option<OffsetDateTime>,
 ) -> Result<AgentState, AppError> {
     let interval_minutes = repos
         .workspace_policy()
@@ -355,6 +378,7 @@ async fn agent_state(
         .await?
         .into_iter()
         .map(|c| c.last_seen_at)
+        .chain(seen_now)
         .max();
     Ok(AgentState {
         last_seen_at,

@@ -541,6 +541,39 @@ async fn checkin_ledgers_the_strategy_version_in_force() {
     assert_eq!(entries[0].payload, json!({}));
 }
 
+#[tokio::test]
+async fn late_agent_checking_in_is_not_overdue() {
+    let w = world().await;
+    let seen = FIXED_NOW - Duration::hours(30);
+    let agent = connected(&w, &["workspace.read"], "late-agent", seen).await;
+
+    // Asked plainly, the agent is overdue: its connection was last seen 30 hours ago.
+    let before = pending(&w, &agent).await;
+    assert_eq!(before.agent.last_seen_at, Some(seen));
+    assert!(before.agent.overdue);
+
+    // Its check-in counts it as seen now, whatever the connection row says yet.
+    let out = work::checkin(&w.deps, &agent).await.unwrap();
+    assert_eq!(
+        out.agent,
+        AgentState {
+            last_seen_at: Some(FIXED_NOW),
+            interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
+            overdue: false,
+        }
+    );
+    assert_eq!(out.items, before.items);
+
+    // A sighting later than the call stays the latest.
+    let later = FIXED_NOW + Duration::minutes(5);
+    agents::touch_tool_call(&w.deps, w.ws, connection(&agent), later)
+        .await
+        .unwrap();
+    let out = work::checkin(&w.deps, &agent).await.unwrap();
+    assert_eq!(out.agent.last_seen_at, Some(later));
+    assert!(!out.agent.overdue);
+}
+
 // ---------------------------------------------------------------------------------------------
 // work.set_checkin_interval
 // ---------------------------------------------------------------------------------------------

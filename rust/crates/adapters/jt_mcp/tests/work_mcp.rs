@@ -8,12 +8,14 @@ use std::sync::Arc;
 use jt_app::ctx::Ctx;
 use jt_app::ports::LedgerFilter;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
+use jt_app::usecases::agents::ClientInfo;
 use jt_app::usecases::api_keys::{self, CreateKey, KeyOut};
+use jt_app::usecases::capabilities::UowChannelCatalog;
 use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_app::usecases::{Deps, agents, work};
 use jt_ledger::{Actor, LedgerEntry};
 use jt_mcp::{McpState, http_service};
-use jt_pg::{PgStrategyGate, PgUnitOfWork};
+use jt_pg::{MAX_CONNECTIONS, PgStrategyGate, PgUnitOfWork};
 use jt_tenancy::{SystemRole, UserId, WorkspaceId};
 use jt_testkit::TestDb;
 use jt_testkit::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
@@ -27,6 +29,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use tokio::time::{Duration, timeout};
 
 type Client = RunningService<RoleClient, ClientConfig>;
 
@@ -261,4 +264,52 @@ async fn an_owner_key_sets_the_checkin_interval() {
     let entries = w.entries("work.set_checkin_interval").await;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].payload, json!({ "minutes": 60 }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_concurrent_checkins_do_not_exhaust_the_pool() {
+    let w = World::new().await;
+    // As the binary serves them: the channel catalog reads the capability registry in a bundle
+    // of its own.
+    let mut deps = w.deps.clone();
+    deps.channels = Arc::new(UowChannelCatalog::new(deps.uow.clone()));
+    let key = w.key(&["workspace.read"]).await;
+    let principal = api_keys::authenticate(&deps, &key.plaintext).await.unwrap();
+    let connection = agents::register_initialize(
+        &deps,
+        &principal,
+        ClientInfo {
+            name: "burst-agent".into(),
+            version: "1.0".into(),
+            protocol_version: "2025-06-18".into(),
+        },
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let ctx = api_keys::ctx_for_agent(&principal, connection, OffsetDateTime::now_utc());
+
+    // The first check-in is ledgered; every later one within the hour is debounced, the path
+    // that once held its bundle while reading what is pending.
+    work::checkin(&deps, &ctx).await.unwrap();
+    let burst = 2 * MAX_CONNECTIONS as usize;
+    let calls: Vec<_> = (0..burst)
+        .map(|_| {
+            let (deps, ctx) = (deps.clone(), ctx.clone());
+            tokio::spawn(async move { work::checkin(&deps, &ctx).await })
+        })
+        .collect();
+    let answered = timeout(Duration::from_secs(10), async {
+        let mut answers = Vec::with_capacity(calls.len());
+        for call in calls {
+            answers.push(call.await.expect("the check-in task completes"));
+        }
+        answers
+    })
+    .await
+    .expect("every check-in answers within 10 s");
+    for answer in answered {
+        assert!(!answer.unwrap().agent.overdue);
+    }
+    assert_eq!(w.entries("work.checkin").await.len(), 1);
 }
