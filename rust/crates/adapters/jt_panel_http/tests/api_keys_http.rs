@@ -1,156 +1,33 @@
 //! The API-key and agent routes end to end through Postgres: issuing a key (its plaintext shown
 //! once), listing and revoking keys, who may manage them, and the agent connections a key makes.
 
-use std::sync::Arc;
-
-use axum::Router;
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
 use jt_app::error::ErrorCode;
-use jt_app::gate::NoStrategyYet;
-use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-use jt_app::usecases::Deps;
 use jt_app::usecases::agents::{self, ClientInfo};
 use jt_app::usecases::api_keys;
-use jt_panel_http::{AppState, router};
-use jt_pg::PgUnitOfWork;
-use jt_tenancy::WorkspaceId;
-use jt_testkit::TestDb;
-use jt_testkit::fakes::PlainHasher;
 use jt_testkit::flows::activate_workspace;
+use jt_testkit::panel::{
+    PASSWORD, Panel, body_text, expect_error, ok_json, session_pair, workspace_of,
+};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
-use tower::ServiceExt;
 
-const PASSWORD: &str = "correct horse battery";
-const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
-
-/// A router over a fresh test database, and the `Deps` behind it.
-struct Panel {
-    _db: TestDb,
-    deps: Deps,
-    app: Router,
+/// The API-key routes, on the shared harness.
+trait KeyRoutes {
+    /// `POST /api/api-keys` as `cookie`.
+    async fn create_key(&self, cookie: &str, body: Value) -> Response;
+    /// `DELETE /api/api-keys/{id}` as `cookie`.
+    async fn revoke(&self, cookie: &str, id: &str) -> Response;
 }
 
-impl Panel {
-    async fn new() -> Panel {
-        let db = TestDb::new().await;
-        let deps = Deps {
-            uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-            clock: Arc::new(SystemClock),
-            ids: Arc::new(UuidV7Gen),
-            tokens: Arc::new(RandTokenGen),
-            hasher: Arc::new(PlainHasher),
-        };
-        let state = AppState {
-            deps: deps.clone(),
-            gate: Arc::new(NoStrategyYet),
-            cookie_secure: false,
-            panel_dir: None,
-        };
-        Panel {
-            _db: db,
-            deps,
-            app: router(state),
-        }
-    }
-
-    async fn send(
-        &self,
-        method: Method,
-        path: &str,
-        cookie: Option<&str>,
-        body: Option<Value>,
-    ) -> Response {
-        let mut builder = Request::builder().method(method.clone()).uri(path);
-        if !method.is_safe() {
-            builder = builder.header(REQUESTED_WITH.0, REQUESTED_WITH.1);
-        }
-        if let Some(cookie) = cookie {
-            builder = builder.header(header::COOKIE, cookie);
-        }
-        let body = match body {
-            Some(body) => {
-                builder = builder.header(header::CONTENT_TYPE, "application/json");
-                Body::from(body.to_string())
-            }
-            None => Body::empty(),
-        };
-        self.app
-            .clone()
-            .oneshot(builder.body(body).unwrap())
-            .await
-            .unwrap()
-    }
-
-    async fn get(&self, path: &str, cookie: &str) -> Response {
-        self.send(Method::GET, path, Some(cookie), None).await
-    }
-
-    /// Registers `email` with a new workspace, which the platform operator then activates;
-    /// returns the `jt_session=…` pair.
-    async fn register(&self, email: &str, workspace_name: &str) -> String {
-        let (cookie, ws) = self.register_pending(email, workspace_name).await;
-        activate_workspace(&self.deps, ws).await;
-        cookie
-    }
-
-    /// Registers `email` with a new workspace, left awaiting payment; returns the
-    /// `jt_session=…` pair and the workspace.
-    async fn register_pending(&self, email: &str, workspace_name: &str) -> (String, WorkspaceId) {
-        let body = json!({
-            "email": email,
-            "password": PASSWORD,
-            "display_name": "Owner",
-            "workspace_name": workspace_name,
-        });
-        let resp = self
-            .send(Method::POST, "/api/auth/register", None, Some(body))
-            .await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let cookie = session_pair(&resp);
-        let me = ok_json(resp).await;
-        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
-        (cookie, ws)
-    }
-
-    /// Invites `email` as `role_key` from `owner_cookie` and accepts as a new user; returns the
-    /// new user's `jt_session=…` pair.
-    async fn join(&self, owner_cookie: &str, email: &str, role_key: &str) -> String {
-        let resp = self
-            .send(
-                Method::POST,
-                "/api/team/invites",
-                Some(owner_cookie),
-                Some(json!({ "email": email, "role_key": role_key })),
-            )
-            .await;
-        let invite = ok_json(resp).await;
-        let resp = self
-            .send(
-                Method::POST,
-                "/api/team/invites/accept",
-                None,
-                Some(json!({
-                    "token": invite["invite_token"],
-                    "password": PASSWORD,
-                    "display_name": email,
-                })),
-            )
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        session_pair(&resp)
-    }
-
-    /// `POST /api/api-keys` as `cookie`.
+impl KeyRoutes for Panel {
     async fn create_key(&self, cookie: &str, body: Value) -> Response {
         self.send(Method::POST, "/api/api-keys", Some(cookie), Some(body))
             .await
     }
 
-    /// `DELETE /api/api-keys/{id}` as `cookie`.
     async fn revoke(&self, cookie: &str, id: &str) -> Response {
         self.send(
             Method::DELETE,
@@ -162,45 +39,16 @@ impl Panel {
     }
 }
 
-/// The `jt_session=…` pair of the response's single `Set-Cookie` header.
-fn session_pair(resp: &Response) -> String {
-    let all: Vec<_> = resp.headers().get_all(header::SET_COOKIE).iter().collect();
-    assert_eq!(all.len(), 1, "exactly one Set-Cookie header");
-    let pair = all[0].to_str().unwrap().split(';').next().unwrap().trim();
-    assert!(pair.starts_with("jt_session="), "{pair}");
-    pair.to_owned()
-}
-
-async fn body_text(resp: Response) -> String {
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
-}
-
-/// The JSON body of a `2xx` response.
-async fn ok_json(resp: Response) -> Value {
-    assert!(resp.status().is_success(), "{}", resp.status());
-    serde_json::from_str(&body_text(resp).await).unwrap()
-}
-
 /// The RFC 3339 timestamp in `value`.
 fn instant(value: &Value) -> OffsetDateTime {
     OffsetDateTime::parse(value.as_str().unwrap(), &Rfc3339).unwrap()
 }
 
-/// Asserts a structured error with this status and code, and returns its body.
-async fn expect_error(resp: Response, status: StatusCode, code: &str) -> Value {
-    assert_eq!(resp.status(), status);
-    let body: Value = serde_json::from_str(&body_text(resp).await).unwrap();
-    assert_eq!(body["code"], code, "{body}");
-    assert!(body["message"].is_string(), "{body}");
-    assert!(body["details"].is_object(), "{body}");
-    body
-}
-
 #[tokio::test]
 async fn a_workspace_awaiting_payment_mints_no_keys_and_invites_no_one_until_activated() {
     let p = Panel::new().await;
-    let (owner, ws) = p.register_pending("owner@alpha.example", "Alpha").await;
+    let (owner, me) = p.register_pending("owner@alpha.example", "Alpha").await;
+    let ws = workspace_of(&me);
 
     let resp = p.create_key(&owner, json!({ "name": "CI bot" })).await;
     let body = expect_error(resp, StatusCode::LOCKED, "WORKSPACE_INACTIVE").await;
@@ -238,7 +86,7 @@ async fn a_workspace_awaiting_payment_mints_no_keys_and_invites_no_one_until_act
 #[tokio::test]
 async fn create_list_revoke_round_trip() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
 
     // Created: the plaintext is in the body, once, and must not be cached.
     let resp = p
@@ -327,7 +175,7 @@ async fn create_list_revoke_round_trip() {
 #[tokio::test]
 async fn create_refuses_bad_input_with_structured_errors() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
 
     let body = expect_error(
         p.create_key(&owner, json!({ "name": "  ", "scopes": [] }))
@@ -360,7 +208,9 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "workspace.read",
             "team.manage",
             "api_keys.manage",
-            "ledger.read"
+            "ledger.read",
+            "capabilities.manage",
+            "budget.manage"
         ])
     );
 }
@@ -368,10 +218,10 @@ async fn create_refuses_bad_input_with_structured_errors() {
 #[tokio::test]
 async fn rep_cannot_manage_keys_403() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
     let key = ok_json(p.create_key(&owner, json!({ "name": "CI bot" })).await).await;
     let id = key["id"].as_str().unwrap().to_owned();
-    let rep = p.join(&owner, "rep@alpha.example", "rep").await;
+    let (rep, _) = p.join(&owner, "rep@alpha.example", "rep").await;
 
     let refused = [
         p.create_key(
@@ -398,9 +248,9 @@ async fn rep_cannot_manage_keys_403() {
 #[tokio::test]
 async fn removed_members_key_is_unauthenticated_even_after_rejoin() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
     let email = "manager@alpha.example";
-    let manager = p.join(&owner, email, "manager").await;
+    let (manager, _) = p.join(&owner, email, "manager").await;
     let key = ok_json(
         p.create_key(&manager, json!({ "name": "Manager's bot" }))
             .await,
@@ -481,7 +331,7 @@ async fn removed_members_key_is_unauthenticated_even_after_rejoin() {
 #[tokio::test]
 async fn a_key_authenticates_and_its_agent_connections_are_listed() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
     let key = ok_json(p.create_key(&owner, json!({ "name": "CI bot" })).await).await;
     let plaintext = key["plaintext"].as_str().unwrap();
 
@@ -508,7 +358,7 @@ async fn a_key_authenticates_and_its_agent_connections_are_listed() {
         .await
         .unwrap();
 
-    let rep = p.join(&owner, "rep@alpha.example", "rep").await;
+    let (rep, _) = p.join(&owner, "rep@alpha.example", "rep").await;
     let listed = ok_json(p.get("/api/agents", &rep).await).await;
     let listed = listed.as_array().unwrap();
     assert_eq!(listed.len(), 1);
@@ -524,7 +374,7 @@ async fn a_key_authenticates_and_its_agent_connections_are_listed() {
     assert!(keys[0]["last_used_at"].is_string(), "{keys}");
 
     // A workspace of its own sees none of them.
-    let other = p.register("owner@beta.example", "Beta").await;
+    let (other, _) = p.register("owner@beta.example", "Beta").await;
     let listed = ok_json(p.get("/api/agents", &other).await).await;
     assert_eq!(listed, json!([]));
     let listed = ok_json(p.get("/api/api-keys", &other).await).await;

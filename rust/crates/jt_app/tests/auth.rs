@@ -15,12 +15,12 @@ use jt_tenancy::{
     Email, MembershipId, MembershipStatus, Permission, SystemRole, UserId, WorkspaceId,
     WorkspaceStatus,
 };
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{FIXED_NOW, FixedClock, FixedTokenGen, InMemoryUow, deps};
 use serde_json::json;
-use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 
-const T0: OffsetDateTime = datetime!(2026-10-22 09:00 UTC);
+/// The instant the clock of `fakes::deps` reads.
+const T0: OffsetDateTime = FIXED_NOW;
 const PASSWORD: &str = "correct horse battery";
 
 /// The fakes behind one `Deps`, with the clock at `T0`.
@@ -34,11 +34,8 @@ impl World {
     fn new(tokens: &[&str]) -> World {
         let uow = InMemoryUow::new();
         let deps = Deps {
-            uow: Arc::new(uow.clone()),
-            clock: Arc::new(FixedClock(T0)),
-            ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(tokens.iter().copied())),
-            hasher: Arc::new(PlainHasher),
+            ..deps(Arc::new(uow.clone()))
         };
         World { uow, deps }
     }
@@ -485,6 +482,7 @@ async fn register_writes_ledger_entry_auth_register() {
         .list(LedgerFilter {
             action_prefix: Some("auth.".into()),
             actor_kind: Some("human".into()),
+            agent_connection_id: None,
             limit: 10,
             before_id: None,
         })

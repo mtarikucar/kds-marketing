@@ -4,15 +4,17 @@ use std::collections::BTreeSet;
 
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{
-    ApiKeyRow, ApiKeyStatus, Clock, IdGen, LedgerFilter, MembershipRow, PasswordHasher, SessionRow,
-    TokenGen, UnitOfWork, UserRow,
+    ApiKeyRow, ApiKeyStatus, Clock, IdGen, LedgerFilter, MembershipRow, PasswordHasher, SecretBox,
+    SessionRow, TokenGen, UnitOfWork, UserRow,
 };
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_tenancy::{
-    ApiKeyId, Email, MembershipId, MembershipStatus, Permission, RoleDef, RoleId, SessionId,
-    SystemRole, UserId, WorkspaceId, WorkspaceStatus,
+    AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, Permission, RoleDef,
+    RoleId, SessionId, SystemRole, UserId, WorkspaceId, WorkspaceStatus,
 };
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
+};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -105,6 +107,31 @@ async fn service_fakes_are_deterministic() {
         code(PlainHasher.verify("x", "$argon2id$...").await.unwrap_err()),
         ErrorCode::Internal
     );
+}
+
+/// The plain secret box seals in the clear under its workspace and keeps the port's refusal.
+#[test]
+fn plain_secret_box_opens_only_for_its_workspace() {
+    let ws = WorkspaceId(Uuid::from_u128(1));
+    let other = WorkspaceId(Uuid::from_u128(2));
+    let sealed = PlainSecretBox.seal(ws, b"jt_live_secret").unwrap();
+    assert_eq!(
+        sealed,
+        format!("plain:{ws}:jt_live_secret").into_bytes(),
+        "readable in tests"
+    );
+    assert_eq!(
+        PlainSecretBox.open(ws, &sealed).unwrap().as_slice(),
+        b"jt_live_secret"
+    );
+    for refused in [
+        PlainSecretBox.open(other, &sealed),
+        PlainSecretBox.open(ws, b"jt_live_secret"),
+    ] {
+        let e = refused.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert_eq!(e.message, "sealed data cannot be opened");
+    }
 }
 
 #[test]
@@ -512,6 +539,7 @@ fn filter(limit: u32) -> LedgerFilter {
     LedgerFilter {
         action_prefix: None,
         actor_kind: None,
+        agent_connection_id: None,
         limit,
         before_id: None,
     }
@@ -570,6 +598,33 @@ async fn ledger_lists_newest_first_with_filters_and_pages() {
         .await
         .unwrap();
     assert!(system.is_empty());
+
+    // Entries by one agent connection: only that agent's, not another's, not a person's.
+    let (mine, theirs) = (AgentConnectionId::new_v7(), AgentConnectionId::new_v7());
+    let agent_entry = |connection_id: AgentConnectionId| {
+        LedgerEntry::new(
+            ws,
+            Actor::Agent {
+                connection_id,
+                user_id: user,
+            },
+            Action::new("work.checkin").unwrap(),
+            json!({}),
+            T0 + Duration::minutes(3),
+        )
+    };
+    let checkin = t.ledger().append(agent_entry(mine)).await.unwrap();
+    t.ledger().append(agent_entry(theirs)).await.unwrap();
+    let by_connection = t
+        .ledger()
+        .list(LedgerFilter {
+            agent_connection_id: Some(mine),
+            ..filter(10)
+        })
+        .await
+        .unwrap();
+    let ids: Vec<i64> = by_connection.iter().map(|r| r.id).collect();
+    assert_eq!(ids, [checkin]);
 }
 
 #[tokio::test]

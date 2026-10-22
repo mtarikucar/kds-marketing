@@ -115,6 +115,16 @@ fn tenant_tables_are_read_from_the_migrations() {
         "api_keys",
         "agent_connections",
         "ledger_entries",
+        "strategy_versions",
+        "strategy_hypotheses",
+        "consultation_entries",
+        "capabilities",
+        "capability_groups",
+        "capability_group_members",
+        "budget_items",
+        "capability_budget_links",
+        "budget_spend_entries",
+        "workspace_policies",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

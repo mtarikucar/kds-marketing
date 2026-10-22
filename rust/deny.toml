@@ -18,15 +18,45 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
+# Two versions of one crate are accepted only where listed here, each with its cause: our crates
+# use the current releases while a dependency still pins the previous one. Any other duplicate
+# still warns. Drop an entry once the dependency catches up (cargo-deny then reports it unused).
+skip = [
+  # sqlx 0.8 (SCRAM authentication in sqlx-postgres) uses the previous RustCrypto generation;
+  # jt_seal (HKDF) and jt_app (token hashing) use the current one.
+  { crate = "hkdf@0.12.4", reason = "sqlx-postgres 0.8 SCRAM; jt_seal uses hkdf 0.13" },
+  { crate = "hmac@0.12.1", reason = "sqlx-postgres 0.8 SCRAM; hkdf 0.13 uses hmac 0.13" },
+  { crate = "sha2@0.10.9", reason = "sqlx 0.8; jt_app and jt_seal use sha2 0.11" },
+  { crate = "digest@0.10.7", reason = "the digest of sha2 0.10 and hmac 0.12 (sqlx 0.8)" },
+  { crate = "block-buffer@0.10.4", reason = "the block buffer of digest 0.10 (sqlx 0.8)" },
+  { crate = "crypto-common@0.1.7", reason = "the common traits of digest 0.10 (sqlx 0.8)" },
+  { crate = "cpufeatures@0.2.17", reason = "CPU detection of sha2 0.10 (sqlx 0.8)" },
+  # sqlx 0.8 and reqwest 0.12 use the previous base64, rand and hashing releases.
+  { crate = "base64@0.22.1", reason = "reqwest 0.12 and sqlx 0.8; jt_app and rmcp use base64 0.23" },
+  { crate = "rand@0.8.8", reason = "sqlx-postgres 0.8; jt_app, jt_seal and rmcp use rand 0.10" },
+  { crate = "rand_core@0.6.4", reason = "the core of rand 0.8 (sqlx-postgres 0.8)" },
+  { crate = "getrandom@0.2.17", reason = "rand_core 0.6 (sqlx 0.8) and ring 0.17" },
+  { crate = "hashbrown@0.15.5", reason = "sqlx-core 0.8 and hashlink 0.10; indexmap uses hashbrown 0.17" },
+  { crate = "webpki-roots@0.26.11", reason = "sqlx-core 0.8; a shim over webpki-roots 1, which reqwest uses" },
+  # Procedural macros: sqlx-macros, tracing-attributes and zerocopy-derive are on syn 2, the
+  # rest on syn 3. Build time only.
+  { crate = "syn@2.0.119", reason = "proc macros of sqlx, tracing and zerocopy; the rest use syn 3" },
+  # Platform crates for targets we do not ship (Redox, Windows), pinned by their dependents.
+  { crate = "redox_syscall@0.5.18", reason = "parking_lot_core on Redox; libredox uses 0.9" },
+]
+skip-tree = [
+  { crate = "windows-sys@0.48.0", reason = "etcetera (sqlx 0.8) on Windows; tokio and the rest use windows-sys 0.61" },
+  { crate = "windows-sys@0.52.0", reason = "ring 0.17 on Windows; tokio and the rest use windows-sys 0.61" },
+]
 # Only jt_outbound may pull an HTTP client, and that client is reqwest: no other HTTP client at
-# all (spec §4.3). Only jt_pg may pull sqlx.
+# all (spec §4.3), so the others are banned outright. Only jt_pg may pull sqlx.
 deny = [
   { crate = "reqwest", wrappers = ["jt_outbound"] },
-  { crate = "ureq", wrappers = ["jt_outbound"] },
-  { crate = "isahc", wrappers = ["jt_outbound"] },
-  { crate = "surf", wrappers = ["jt_outbound"] },
-  { crate = "attohttpc", wrappers = ["jt_outbound"] },
-  { crate = "curl", wrappers = ["jt_outbound"] },
+  { crate = "ureq" },
+  { crate = "isahc" },
+  { crate = "surf" },
+  { crate = "attohttpc" },
+  { crate = "curl" },
   { crate = "sqlx", wrappers = ["jt_pg", "jt_testkit", "jeeta"] },
   # AI / media / speech providers: never, anywhere (spec §4.2).
   { crate = "async-openai" }, { crate = "openai" }, { crate = "openai-api-rs" }, { crate = "openai_api_rust" },

@@ -17,12 +17,12 @@ use jt_ledger::{Actor, LedgerEntry, Subject};
 use jt_tenancy::{
     Email, MembershipId, MembershipStatus, Permission, RoleId, UserId, WorkspaceId, WorkspaceStatus,
 };
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{FIXED_NOW, FixedClock, FixedTokenGen, InMemoryUow, deps};
 use serde_json::json;
-use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 
-const T0: OffsetDateTime = datetime!(2026-10-22 09:00 UTC);
+/// The instant the clock of `fakes::deps` reads.
+const T0: OffsetDateTime = FIXED_NOW;
 const PASSWORD: &str = "correct horse battery";
 const INVALID_INVITE: &str = "invite is not valid";
 
@@ -44,11 +44,8 @@ impl World {
             .chain((3..=80).map(|i| format!("token-{i}")));
         let uow = InMemoryUow::new();
         let deps = Deps {
-            uow: Arc::new(uow.clone()),
-            clock: Arc::new(FixedClock(T0)),
-            ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(tokens)),
-            hasher: Arc::new(PlainHasher),
+            ..deps(Arc::new(uow.clone()))
         };
         World { uow, deps }
     }
@@ -1129,7 +1126,12 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     )
     .await
     .unwrap();
-    let missing = ["api_keys.manage", "ledger.read"];
+    let missing = [
+        "api_keys.manage",
+        "ledger.read",
+        "capabilities.manage",
+        "budget.manage",
+    ];
 
     // invite and set_role to a role wider than the lead's own.
     let e = err(team::invite(
@@ -1230,7 +1232,12 @@ async fn custom_role_cannot_demote_or_remove_a_manager() {
     } = lead_team().await;
     // Even to a role the lead may give, and even out of the workspace: the manager's present
     // authority exceeds the lead's own.
-    let missing = ["api_keys.manage", "ledger.read"];
+    let missing = [
+        "api_keys.manage",
+        "ledger.read",
+        "capabilities.manage",
+        "budget.manage",
+    ];
     for role_key in ["rep", "team_lead"] {
         let e = err(team::set_role(&t.w.deps, &lead.ctx, manager.membership_id, role_key).await);
         assert_exceeds(&e, &missing);
@@ -1622,4 +1629,60 @@ async fn roles_delete_removes_an_unused_custom_role_only() {
     assert_eq!(entries[0].payload, json!({ "key": "analyst" }));
     let e = err(roles::delete(&t.w.deps, &t.owner_ctx, unused.id).await);
     assert_eq!(e.code, ErrorCode::NotFound);
+}
+
+/// A custom role is in use while a member or an open invitation holds it; once both are removed
+/// it can be deleted, and the removed memberships move to the system `rep` role (their last role
+/// stays on record in the `team.remove` ledger entries).
+#[tokio::test]
+async fn used_then_removed_role_can_be_deleted() {
+    let t = team().await;
+    let viewer = roles::create(
+        &t.w.deps,
+        &t.owner_ctx,
+        create_input("viewer", &["workspace.read"]),
+    )
+    .await
+    .unwrap();
+    let bob = t.join("bob@example.com", "viewer").await;
+    let carol = t.invite("carol@example.com", "viewer").await;
+
+    let e = err(roles::delete(&t.w.deps, &t.owner_ctx, viewer.id).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    team::remove(&t.w.deps, &t.owner_ctx, bob.membership_id)
+        .await
+        .unwrap();
+    // The open invitation still holds it.
+    let e = err(roles::delete(&t.w.deps, &t.owner_ctx, viewer.id).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    team::remove(&t.w.deps, &t.owner_ctx, carol.membership_id)
+        .await
+        .unwrap();
+    assert!(t.w.entries("roles.delete").is_empty());
+
+    roles::delete(&t.w.deps, &t.owner_ctx, viewer.id)
+        .await
+        .unwrap();
+    let keys: Vec<String> = roles::list(&t.w.deps, &t.owner_ctx)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.key)
+        .collect();
+    assert_eq!(keys, vec!["owner", "manager", "rep"]);
+    for id in [bob.membership_id, carol.membership_id] {
+        let m = t.w.membership(id);
+        assert_eq!(m.status, MembershipStatus::Removed);
+        assert_eq!(m.role_id, t.role_id("rep"));
+    }
+    let entries = t.w.entries("roles.delete");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].subject, role_subject(viewer.id));
+    assert_eq!(entries[0].payload, json!({ "key": "viewer" }));
+    let removed: Vec<_> =
+        t.w.entries("team.remove")
+            .into_iter()
+            .map(|e| e.payload["role_key"].clone())
+            .collect();
+    assert_eq!(removed, vec![json!("viewer"), json!("viewer")]);
 }

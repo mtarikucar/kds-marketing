@@ -153,9 +153,10 @@ pub async fn update(
 
 /// Deletes a custom role. Needs `team.manage`.
 ///
-/// A role that is not this workspace's is `NOT_FOUND`; a system role is `FORBIDDEN`; a role any
-/// membership refers to, in any status (removed members keep their last role), is `CONFLICT`.
-/// Writes `roles.delete` (payload `key`).
+/// A role that is not this workspace's is `NOT_FOUND`; a system role is `FORBIDDEN`; a role a
+/// member or an open invitation holds is `CONFLICT`. Removed memberships do not hold it: those
+/// that still reference it are moved to the system `rep` role (the role each held stays on
+/// record in its `team.remove` ledger entry). Writes `roles.delete` (payload `key`).
 pub async fn delete(deps: &Deps, ctx: &Ctx, role_id: RoleId) -> Result<(), AppError> {
     ctx.require(Permission::TeamManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;

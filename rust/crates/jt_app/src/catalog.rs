@@ -1,19 +1,21 @@
 //! The use-case catalog: every use case with its gate mode, its two surfaces and its risk.
 //!
-//! The twin rule: a use case has both an MCP tool and a panel route unless it is `panel_only`.
+//! The twin rule: a use case has both an MCP tool and a panel route unless it is `panel_only`
+//! (no MCP tool) or `mcp_only` (no panel route), never both.
 //!
 //! Two independent checks guard a use case ([`crate::gate::check_gate`]): the workspace-status
-//! check (the workspace must be `active`), which every use case meets unless it is
-//! [`UseCase::status_exempt`], and the strategy gate, which only [`GateMode::Gated`] use cases
-//! meet.
+//! check (the workspace must be `active`), which every use case meets unless its
+//! [`UseCase::status_exemption`] lets it run in the workspace's status, and the strategy gate,
+//! which only [`GateMode::Gated`] use cases meet.
 
+use jt_tenancy::WorkspaceStatus;
 use serde::Serialize;
 
 use GateMode::Exempt;
-use Risk::{Destructive, Read, Write};
+use Risk::{Destructive, Read, Spend, Write};
 
 /// Whether the strategy gate applies to a use case. The workspace-status check is separate
-/// ([`UseCase::status_exempt`]).
+/// ([`UseCase::status_exemption`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateMode {
@@ -21,6 +23,36 @@ pub enum GateMode {
     Exempt,
     /// Needs an approved strategy.
     Gated,
+}
+
+/// Which workspace statuses besides `active` a use case runs in: the workspace-status check of
+/// [`crate::gate::check_gate`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusExemption {
+    /// Only while the workspace is `active`: every use case but those below.
+    Never,
+    /// While it is `active` or `pending_payment`, never while it is `suspended`: the strategy
+    /// (`strategy.*`) and the pending work (`work.*`), which may be prepared before payment.
+    PendingPayment,
+    /// Whatever its status: identity, the workspace itself and the platform (`auth.*`,
+    /// `workspace.*`, `platform.*`).
+    Always,
+}
+
+impl StatusExemption {
+    /// Whether a use case with this exemption runs in a workspace whose status is `status`.
+    pub const fn allows(self, status: WorkspaceStatus) -> bool {
+        matches!(
+            (self, status),
+            (_, WorkspaceStatus::Active)
+                | (StatusExemption::Always, _)
+                | (
+                    StatusExemption::PendingPayment,
+                    WorkspaceStatus::PendingPayment
+                )
+        )
+    }
 }
 
 /// How much harm a call can do; shown to agents with every tool.
@@ -45,22 +77,45 @@ pub struct UseCase {
     pub panel_route: Option<(&'static str, &'static str)>,
     /// Reachable from the panel only; then `mcp_tool` is `None`.
     pub panel_only: bool,
-    /// Runs whatever the workspace's status. Only identity, workspace and platform use cases
-    /// (`auth.*`, `workspace.*`, `platform.*`) are; every other one answers `WORKSPACE_INACTIVE`
-    /// while its workspace is `pending_payment` or `suspended`, whatever its [`GateMode`].
-    pub status_exempt: bool,
+    /// Reachable from the MCP gate only, for a call only an agent makes (its check-in); then
+    /// `panel_route` is `None`. Never set together with `panel_only`.
+    pub mcp_only: bool,
+    /// Which statuses besides `active` it runs in. Identity, workspace and platform use cases
+    /// (`auth.*`, `workspace.*`, `platform.*`) run in every status; the strategy and the pending
+    /// work (`strategy.*`, `work.*`) also while the workspace is `pending_payment`, so the
+    /// strategy may be worked out before payment and an agent may ask what is pending meanwhile,
+    /// but not while it is `suspended`. Every other use case answers `WORKSPACE_INACTIVE` unless
+    /// its workspace is `active`, whatever its [`GateMode`].
+    pub status_exemption: StatusExemption,
     pub risk: Risk,
 }
 
-/// The id prefixes whose use cases are [`UseCase::status_exempt`].
+/// The id prefixes whose use cases run whatever the workspace's status
+/// ([`StatusExemption::Always`]).
 pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."];
 
-/// Whether use case `id` runs whatever its workspace's status: whether it starts with one of
-/// [`STATUS_EXEMPT_PREFIXES`].
-pub const fn is_status_exempt(id: &str) -> bool {
+/// The id prefixes whose use cases also run while the workspace is `pending_payment`
+/// ([`StatusExemption::PendingPayment`]), but not while it is `suspended`.
+pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
+
+/// The status exemption of use case `id`, from its prefix: [`StatusExemption::Always`] for one of
+/// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
+/// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
+pub const fn status_exemption(id: &str) -> StatusExemption {
+    if starts_with_any(id, STATUS_EXEMPT_PREFIXES) {
+        StatusExemption::Always
+    } else if starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES) {
+        StatusExemption::PendingPayment
+    } else {
+        StatusExemption::Never
+    }
+}
+
+/// Whether `id` starts with one of `prefixes`, usable in a constant.
+const fn starts_with_any(id: &str, prefixes: &[&str]) -> bool {
     let mut i = 0;
-    while i < STATUS_EXEMPT_PREFIXES.len() {
-        if starts_with(id, STATUS_EXEMPT_PREFIXES[i]) {
+    while i < prefixes.len() {
+        if starts_with(id, prefixes[i]) {
             return true;
         }
         i += 1;
@@ -98,7 +153,8 @@ const fn twin(
         mcp_tool: Some(mcp_tool),
         panel_route: Some(route),
         panel_only: false,
-        status_exempt: is_status_exempt(id),
+        mcp_only: false,
+        status_exemption: status_exemption(id),
         risk,
     }
 }
@@ -116,12 +172,27 @@ const fn panel_only(
         mcp_tool: None,
         panel_route: Some(route),
         panel_only: true,
-        status_exempt: is_status_exempt(id),
+        mcp_only: false,
+        status_exemption: status_exemption(id),
         risk,
     }
 }
 
-/// Every use case of this release. M0 has no `Gated` entry; M1 adds the first.
+/// A use case reachable from the MCP gate only: a call no person makes.
+const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk: Risk) -> UseCase {
+    UseCase {
+        id,
+        gate,
+        mcp_tool: Some(mcp_tool),
+        panel_route: None,
+        panel_only: false,
+        mcp_only: true,
+        status_exemption: status_exemption(id),
+        risk,
+    }
+}
+
+/// Every use case of this release. None is `Gated` yet.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
@@ -145,6 +216,45 @@ pub static CATALOG: &[UseCase] = &[
     twin("agents.list", Exempt, "jeeta.agents.list", ("GET", "/api/agents"), Read),
     twin("agents.whoami", Exempt, "jeeta.agent.whoami", ("GET", "/api/whoami"), Read),
     twin("ledger.list", Exempt, "jeeta.ledger.list", ("GET", "/api/ledger"), Read),
+    twin("strategy.get", Exempt, "jeeta.strategy.get", ("GET", "/api/strategy"), Read),
+    twin("strategy.start_consultation", Exempt, "jeeta.strategy.start_consultation", ("POST", "/api/strategy/consultation"), Write),
+    twin("strategy.record", Exempt, "jeeta.strategy.record", ("POST", "/api/strategy/consultation/entries"), Write),
+    twin("strategy.write_section", Exempt, "jeeta.strategy.write_section", ("PUT", "/api/strategy/draft/sections/{section_key}"), Write),
+    twin("strategy.set_hypotheses", Exempt, "jeeta.strategy.set_hypotheses", ("PUT", "/api/strategy/draft/hypotheses"), Write),
+    twin("strategy.submit", Exempt, "jeeta.strategy.submit", ("POST", "/api/strategy/draft/submit"), Write),
+    twin("strategy.approve", Exempt, "jeeta.strategy.approve", ("POST", "/api/strategy/draft/approve"), Write),
+    // Body and arguments `{ version_id, confirm }`: the call names the approved version it archives.
+    twin("strategy.archive", Exempt, "jeeta.strategy.archive", ("POST", "/api/strategy/archive"), Destructive),
+    twin("strategy.list_versions", Exempt, "jeeta.strategy.list_versions", ("GET", "/api/strategy/versions"), Read),
+    twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),
+    // Capabilities, their groups and the budget are exempt from the strategy gate (the
+    // consultation needs to know what the workspace has), but not from the status check.
+    twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),
+    twin("capability.get", Exempt, "jeeta.capability.get", ("GET", "/api/capabilities/{capability_id}"), Read),
+    twin("capability.declare", Exempt, "jeeta.capability.declare", ("POST", "/api/capabilities"), Write),
+    twin("capability.verify", Exempt, "jeeta.capability.verify", ("POST", "/api/capabilities/{capability_id}/verify"), Write),
+    twin("capability.mark_unreachable", Exempt, "jeeta.capability.mark_unreachable", ("POST", "/api/capabilities/{capability_id}/unreachable"), Write),
+    twin("capability.set_policy", Exempt, "jeeta.capability.set_policy", ("PUT", "/api/capabilities/{capability_id}/policy"), Write),
+    // Body and arguments `{ confirm }`.
+    twin("capability.retire", Exempt, "jeeta.capability.retire", ("POST", "/api/capabilities/{capability_id}/retire"), Destructive),
+    twin("capability.link_budget", Exempt, "jeeta.capability.link_budget", ("POST", "/api/capabilities/{capability_id}/budget-links"), Write),
+    twin("capability.unlink_budget", Exempt, "jeeta.capability.unlink_budget", ("DELETE", "/api/capabilities/{capability_id}/budget-links/{budget_item_id}"), Write),
+    twin("capability.groups.list", Exempt, "jeeta.capability.groups_list", ("GET", "/api/capability-groups"), Read),
+    twin("capability.groups.create", Exempt, "jeeta.capability.groups_create", ("POST", "/api/capability-groups"), Write),
+    twin("capability.groups.rename", Exempt, "jeeta.capability.groups_rename", ("PATCH", "/api/capability-groups/{group_id}"), Write),
+    twin("capability.groups.delete", Exempt, "jeeta.capability.groups_delete", ("DELETE", "/api/capability-groups/{group_id}"), Destructive),
+    twin("capability.groups.add_member", Exempt, "jeeta.capability.groups_add_member", ("POST", "/api/capability-groups/{group_id}/members"), Write),
+    twin("capability.groups.remove_member", Exempt, "jeeta.capability.groups_remove_member", ("DELETE", "/api/capability-groups/{group_id}/members/{capability_id}"), Write),
+    twin("budget.items.list", Exempt, "jeeta.budget.items_list", ("GET", "/api/budget/items"), Read),
+    twin("budget.items.create", Exempt, "jeeta.budget.items_create", ("POST", "/api/budget/items"), Write),
+    twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
+    twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
+    // What is pending (B11): exempt from the strategy gate, and from the status check while the
+    // workspace awaits payment, since an agent asks it before any strategy exists. Checking in is
+    // an agent's call only.
+    twin("work.pending", Exempt, "jeeta.work.pending", ("GET", "/api/work/pending"), Read),
+    mcp_only("work.checkin", Exempt, "jeeta.work.checkin", Write),
+    twin("work.set_checkin_interval", Exempt, "jeeta.work.set_checkin_interval", ("PUT", "/api/work/checkin-interval"), Write),
     panel_only("platform.login", Exempt, ("POST", "/api/platform/login"), Write),
     panel_only("platform.workspaces.list", Exempt, ("GET", "/api/platform/workspaces"), Read),
     panel_only("platform.workspaces.set_status", Exempt, ("PATCH", "/api/platform/workspaces/{workspace_id}/status"), Write),

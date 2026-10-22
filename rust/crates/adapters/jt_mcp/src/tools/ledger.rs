@@ -71,6 +71,7 @@ fn list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
         let filter = LedgerFilter {
             action_prefix,
             actor_kind: actor_kind.map(|k| k.key().to_owned()),
+            agent_connection_id: None,
             limit: limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT),
             before_id,
         };

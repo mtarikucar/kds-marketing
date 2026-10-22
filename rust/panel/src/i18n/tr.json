@@ -45,7 +45,10 @@
     "roles": "Roller",
     "apiKeys": "API anahtarları",
     "agents": "Ajanlar",
-    "ledger": "Günlük"
+    "ledger": "Günlük",
+    "strategy": "Strateji",
+    "capabilities": "Kabiliyetler",
+    "budget": "Bütçe"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -72,6 +75,18 @@
     "key": {
       "active": "Etkin",
       "revoked": "İptal edildi"
+    },
+    "capability": {
+      "declared": "Bildirildi",
+      "verified": "Doğrulandı",
+      "stale": "Doğrulama eskidi",
+      "unreachable": "Ulaşılamıyor",
+      "retired": "Emekli"
+    },
+    "version": {
+      "draft": "Taslak",
+      "approved": "Onaylı",
+      "archived": "Arşivlendi"
     }
   },
   "actor": {
@@ -91,6 +106,12 @@
     },
     "ledger": {
       "read": "Günlüğü okuma"
+    },
+    "capabilities": {
+      "manage": "Kabiliyetleri yönetme"
+    },
+    "budget": {
+      "manage": "Bütçeyi yönetme"
     }
   },
   "roleNames": {
@@ -111,7 +132,34 @@
     "scopes": "Kapsamlar",
     "token": "Davet",
     "status": "Durum",
-    "actor_kind": "Yapan türü"
+    "actor_kind": "Yapan türü",
+    "kind_key": "Tür",
+    "key_detail": "Araç adı",
+    "description": "Açıklama",
+    "external_id": "Dış kimlik",
+    "connector_public": "Bağlayıcı ayarları",
+    "policy": "Politika",
+    "minutes": "Dakika",
+    "unit": "Birim",
+    "cap": "Üst sınır",
+    "amount": "Tutar",
+    "reference": "Referans",
+    "reason": "Neden",
+    "text": "Metin",
+    "section_key": "Bölüm",
+    "version_id": "Sürüm",
+    "evidence": "Kanıt",
+    "purpose": "Amaç",
+    "capability_id": "Kabiliyet",
+    "budget_item_id": "Bütçe kalemi",
+    "kind": "Tür",
+    "period": "Dönem",
+    "limit": "Sayfa boyu",
+    "before_at": "Sayfa imleci",
+    "before_id": "Sayfa imleci",
+    "group": "Tür grubu",
+    "group_id": "Grup",
+    "confirm": "Onay"
   },
   "errors": {
     "UNAUTHENTICATED": "Oturum açmanız gerekiyor.",
@@ -128,7 +176,18 @@
     "invalidField": "Geçersiz alan: {{field}}.",
     "lastOwner": "Çalışma alanının son sahibi çıkarılamaz ya da rolü değiştirilemez.",
     "ownerOnly": "Bu işlemi yalnızca bir sahip yapabilir.",
-    "exceedsAuthority": "Kendinizde olmayan bir izni veremezsiniz."
+    "exceedsAuthority": "Kendinizde olmayan bir izni veremezsiniz.",
+    "ownerOrManager": "Bu işlemi yalnızca bir sahip ya da yönetici yapabilir.",
+    "unitMismatch": "Bu birim, kalemin türüne uymuyor.",
+    "kindMismatch": "Bu bütçe kalemi bu kabiliyete bağlanamaz.",
+    "nameTaken": "Bu ad zaten kullanılıyor.",
+    "notSubmitted": "Taslak henüz onaya sunulmadı.",
+    "anotherApprovalWon": "Başka bir onay önce tamamlandı; sayfayı yenileyin.",
+    "noApprovedVersion": "Yürürlükte onaylı bir strateji yok.",
+    "noDraft": "Açık bir strateji taslağı yok.",
+    "versionMoved": "Sürüm bu arada değişti; sayfayı yenileyin.",
+    "draftChanged": "Taslak size gösterildikten sonra değişti. Onaylamadan önce yeniden gözden geçirin.",
+    "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}."
   },
   "login": {
     "title": "Giriş yap",
@@ -169,12 +228,52 @@
     "myPermissions": "İzinleriniz",
     "strategy": {
       "title": "Strateji bekleniyor",
-      "body": "Çalışma alanınızın stratejisi onaylandığında burada görünecek."
+      "body": "Strateji, ajanınızın MCP üzerinden sizinle yürüttüğü istişareyle oluşur: ajan sorar, yanıtlarınızı ve varsayımlarını kaydeder, taslağı onayınıza sunar.",
+      "start": "İstişareyi başlat",
+      "open": "Stratejiye git",
+      "draftTitle": "Strateji taslağı üzerinde çalışılıyor",
+      "draftBody": "Taslak onaya sunulmadan önce kapanması gereken eksik sayısı: {{count}}.",
+      "noGaps": "Eksik yok; taslak onaya sunulabilir.",
+      "moreGaps": "ve {{count}} eksik daha",
+      "submittedTitle": "Strateji taslağı onay bekliyor",
+      "submittedWait": "Bir sahip ya da yönetici onayladığında yürürlüğe girer.",
+      "approve": "Onayla",
+      "approvedTitle": "Strateji yürürlükte",
+      "approvedBody": "Yürürlükteki sürüm: {{number}}.",
+      "hypotheses": "Hipotez sayısı: {{count}}."
     },
     "inactive": {
       "pending_payment": "Ödeme alındığında çalışma alanınız etkinleşecek.",
       "active": "Çalışma alanınız etkin.",
       "suspended": "Çalışma alanınız askıya alındı. Ayrıntı için bizimle iletişime geçin."
+    },
+    "agent": {
+      "title": "Ajan",
+      "lastSeen": "Son görülme",
+      "never": "Henüz hiçbir ajan bağlanmadı.",
+      "interval": "Beklenen yoklama aralığı",
+      "editInterval": "Aralığı değiştir",
+      "intervalLabel": "Aralık (dakika)",
+      "intervalHint": "15 dakika ile 10 080 dakika (bir hafta) arası.",
+      "intervalSaved": "Yoklama aralığı güncellendi.",
+      "overdueTitle": "Ajan gecikti",
+      "overdueBody": "Ajan beklenen aralık içinde yoklama yapmadı; bekleyen işler bekliyor.",
+      "schedulerNote": "Ajan zamanlayıcısı kiracının sorumluluğudur: Jeeta ajanı uyandırmaz, ajanı düzenli aralıklarla çalıştıracak zamanlamayı siz kurarsınız.",
+      "onTime": "Ajan zamanında yoklama yapıyor.",
+      "hours": "{{count}} sa",
+      "minutes": "{{count}} dk"
+    },
+    "pending": {
+      "title": "Bekleyen işler",
+      "empty": "Bekleyen iş yok.",
+      "consult_strategy": "Stratejiyi istişareyle oluşturun ya da açık taslağa devam edin.",
+      "approve_strategy": "Onaya sunulan strateji taslağını gözden geçirip onaylayın.",
+      "verify_capability": "{{name}} doğrulanmayı bekliyor.",
+      "verify_capability_stale": "{{name}} için doğrulama eskidi; yeniden doğrulanmalı.",
+      "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
+      "connect_connector": "{{name}} bağlanmayı bekliyor.",
+      "open": "Aç",
+      "priority": "Öncelik {{priority}}"
     }
   },
   "team": {
@@ -272,8 +371,11 @@
       "key": "API anahtarı",
       "firstSeen": "İlk görülme",
       "lastSeen": "Son görülme",
-      "toolCalls": "Araç çağrısı"
+      "toolCalls": "Araç çağrısı",
+      "checkin": "Yoklama"
     },
+    "overdue": "Gecikti",
+    "onTime": "Zamanında",
     "empty": "Henüz bağlanan ajan yok.",
     "emptyBody": "Bir API anahtarıyla bağlanan ilk istemci burada görünecek."
   },
@@ -326,5 +428,413 @@
     "title": "Sayfa bulunamadı",
     "body": "Aradığınız sayfa yok ya da taşınmış.",
     "home": "Ana sayfaya dön"
+  },
+  "strategy": {
+    "title": "Strateji",
+    "description": "Çalışma alanının onaylı stratejisi ve üzerinde çalışılan taslak.",
+    "tabs": {
+      "approved": "Onaylı",
+      "draft": "Taslak"
+    },
+    "versions": "Sürümler",
+    "versionsTitle": "Strateji sürümleri",
+    "versionsDescription": "Her sürüm, en yenisi önce.",
+    "versionsEmpty": "Henüz sürüm yok.",
+    "versionLabel": "Sürüm {{number}}",
+    "createdAt": "Oluşturulma",
+    "submittedAt": "Onaya sunulma",
+    "approvedAt": "Onaylanma",
+    "archivedAt": "Arşivlenme",
+    "approvedBy": "Onaylayan",
+    "noApproved": "Onaylı strateji yok.",
+    "noApprovedBody": "Bir taslak onaylandığında burada görünür.",
+    "noDraft": "Açık taslak yok.",
+    "noDraftBody": "İstişareyi ajanınız MCP üzerinden yürütür: sorularını sorar, yanıtlarınızı ve varsayımlarını kaydeder, bölümleri ve hipotezleri yazar, taslağı onayınıza sunar. İstişareyi buradan da başlatabilirsiniz.",
+    "start": "İstişareyi başlat",
+    "started": "İstişare başladı.",
+    "submittedBadge": "Onaya sunuldu",
+    "notSubmittedBadge": "Onaya sunulmadı",
+    "gapsTitle": "Onaydan önce kapanması gereken eksikler",
+    "noGaps": "Eksik yok; taslak onaya sunulabilir.",
+    "submit": "Onaya sun",
+    "submitted": "Taslak onaya sunuldu.",
+    "submitRefused": "Taslak onaya sunulamadı. Eksikler:",
+    "approve": "Onayla",
+    "approved": "Strateji onaylandı ve yürürlüğe girdi.",
+    "approveOwnerOnly": "Yalnızca bir sahip ya da yönetici onaylayabilir.",
+    "approveNeedsSubmit": "Onaylanabilmesi için taslak önce onaya sunulmalı.",
+    "approveTitle": "Sürüm {{number}} onaylansın",
+    "approveBody": "Onaylandığında bu sürüm yürürlükteki strateji olur ve öncekinin yerini alır. Önce neye dayandığını gözden geçirin.",
+    "approveAssumptions": "Cevabınız alınmadan konan varsayımlar",
+    "approveNoAssumptions": "Hiç varsayım kaydedilmedi: her nokta sizin cevaplarınıza dayanıyor.",
+    "approveHypotheses": "Yürürlüğe koyduğu hipotezler: {{count}}.",
+    "approveLoading": "Taslak yükleniyor…",
+    "approveConfirm": "Bu sürümü onayla",
+    "archive": "Arşivle",
+    "archiveTitle": "Onaylı stratejiyi arşivle",
+    "archiveBody": "Sürüm {{number}} arşivlenecek ve yürürlükte bir strateji kalmayacak; stratejiye bağlı işler yeni bir sürüm onaylanana dek durur.",
+    "archiveConfirmLabel": "Onaylamak için sürüm numarasını yazın: {{number}}",
+    "archived": "Strateji arşivlendi.",
+    "sections": {
+      "identity": "Kimlik",
+      "audience": "Kitle",
+      "channels": "Kanallar",
+      "goals": "Hedefler",
+      "budget_frame": "Bütçe çerçevesi",
+      "prohibitions": "Yasaklar",
+      "cadence": "Sıklık",
+      "paid_enabled": "Ücretli kanallar",
+      "hypotheses": "Hipotezler"
+    },
+    "fields": {
+      "product": "Ürün",
+      "voice": "Ses tonu",
+      "positioning": "Konumlanma",
+      "usp": "Farkı",
+      "segmentKey": "Anahtar",
+      "segmentKeyHint": "2–32 karakter: küçük harf, rakam ve alt çizgi.",
+      "segmentName": "Ad",
+      "segmentDescription": "Açıklama",
+      "channel": "Kanal",
+      "rationale": "Gerekçe",
+      "group": "Kabiliyet grubu",
+      "noGroup": "Grup yok",
+      "objective": "Amaç",
+      "kpis": "Ölçütler",
+      "kpiName": "Ölçüt",
+      "kpiTarget": "Hedef",
+      "lane": "Kulvar",
+      "period": "Dönem",
+      "cap": "Üst sınır",
+      "currency": "Para birimi",
+      "prohibition": "Yasak",
+      "perWeek": "Haftada paylaşım",
+      "channelMix": "Kanal dağılımı",
+      "sharePct": "Pay (%)",
+      "mixTotal": "Toplam: %{{total}}",
+      "paidEnabled": "Ücretli kanallar kullanılır"
+    },
+    "lanes": {
+      "organic": "Organik",
+      "paid": "Ücretli"
+    },
+    "periods": {
+      "weekly": "Haftalık",
+      "monthly": "Aylık"
+    },
+    "anyChannel": "Herhangi bir kanal",
+    "channelPlaceholder": "Kanal seçin",
+    "add": "Ekle",
+    "remove": "Kaldır",
+    "empty": "Henüz yazılmadı.",
+    "sectionSaved": "Bölüm kaydedildi.",
+    "on": "Açık",
+    "off": "Kapalı",
+    "hypotheses": {
+      "columns": {
+        "title": "Başlık",
+        "segment": "Kitle",
+        "angle": "Açı",
+        "channel": "Kanal",
+        "metric": "Ölçüt",
+        "confidence": "Güven",
+        "state": "Durum"
+      },
+      "states": {
+        "kept": "Sürüyor",
+        "retired": "Emekli",
+        "added": "Yeni"
+      },
+      "empty": "Henüz hipotez yok.",
+      "edit": "Hipotezleri düzenle",
+      "add": "Hipotez ekle",
+      "retire": "Emekliye ayır",
+      "restore": "Geri al",
+      "saved": "Hipotezler kaydedildi.",
+      "segmentPlaceholder": "Kitle seçin",
+      "confidenceHint": "0 ile 1 arası."
+    },
+    "consultation": {
+      "title": "İstişare kaydı",
+      "description": "Sorular, yanıtlar, varsayımlar ve notlar; en yenisi önce.",
+      "empty": "Kayıt yok.",
+      "loadMore": "Daha fazla yükle",
+      "kinds": {
+        "question": "Soru",
+        "answer": "Yanıt",
+        "assumption": "Varsayım",
+        "section_draft": "Bölüm taslağı",
+        "note": "Not",
+        "submitted": "Onaya sunuldu",
+        "approved": "Onaylandı",
+        "archived": "Arşivlendi"
+      },
+      "add": "Not ekle",
+      "kind": "Tür",
+      "section": "Bölüm",
+      "noSection": "Bölüm yok",
+      "text": "Metin",
+      "recorded": "Kayıt eklendi."
+    }
+  },
+  "capabilities": {
+    "title": "Kabiliyetler",
+    "description": "Çalışma alanının üzerinden iş yapabildiği hesaplar, cihazlar ve araçlar.",
+    "declare": "Kabiliyet bildir",
+    "filterLabel": "Tür grubu",
+    "filterAll": "Tümü",
+    "empty": "Kabiliyet yok.",
+    "emptyBody": "Ajanınız ya da siz bir kabiliyet bildirdiğinde burada görünür.",
+    "groups": {
+      "social_account": "Sosyal hesaplar",
+      "messaging": "Mesajlaşma",
+      "telephony": "Telefon",
+      "community": "Topluluk",
+      "ads": "Reklam",
+      "calendar": "Takvim",
+      "device": "Cihazlar",
+      "agent_connection": "Ajan bağlantıları",
+      "computer_access": "Bilgisayar erişimi",
+      "third_party": "Üçüncü taraf araçlar"
+    },
+    "kinds": {
+      "instagram": "Instagram",
+      "facebook_page": "Facebook sayfası",
+      "x": "X",
+      "linkedin_page": "LinkedIn sayfası",
+      "tiktok": "TikTok",
+      "pinterest": "Pinterest",
+      "youtube": "YouTube",
+      "google_business": "Google İşletme Profili",
+      "whatsapp_cloud": "WhatsApp Business",
+      "instagram_dm": "Instagram mesajları",
+      "messenger": "Messenger",
+      "sms_line": "SMS hattı",
+      "mailbox": "E-posta kutusu",
+      "webchat": "Web sohbeti",
+      "netgsm_pbx": "NetGSM santrali",
+      "discord": "Discord",
+      "reddit": "Reddit",
+      "review_google": "Google yorumları",
+      "review_facebook": "Facebook yorumları",
+      "meta_ads": "Meta reklamları",
+      "tiktok_ads": "TikTok reklamları",
+      "linkedin_ads": "LinkedIn reklamları",
+      "google_ads": "Google reklamları",
+      "google_calendar": "Google Takvim",
+      "outlook_calendar": "Outlook takvimi",
+      "phone": "Telefon",
+      "computer": "Bilgisayar",
+      "printer": "Yazıcı",
+      "printer_3d": "3B yazıcı",
+      "audio_io": "Ses giriş/çıkışı",
+      "camera": "Kamera",
+      "screen": "Ekran",
+      "scanner": "Belge tarayıcı",
+      "usb_storage": "USB bellek",
+      "claude_code": "Komut satırı kod ajanı",
+      "codex": "Kod ajanı",
+      "claude_ai": "Web sohbet asistanı",
+      "other_agent": "Başka bir ajan",
+      "filesystem_root": "Dosya sistemi",
+      "browser_profile": "Tarayıcı profili",
+      "shell": "Kabuk",
+      "adb": "Android hata ayıklama köprüsü",
+      "screen_control": "Ekran denetimi",
+      "notion": "Notion",
+      "slack": "Slack",
+      "gmail": "Gmail",
+      "apify": "Apify",
+      "firecrawl": "Firecrawl",
+      "other": "Başka bir araç"
+    },
+    "reach": {
+      "label": "Ulaşım",
+      "connector": "Bağlayıcı",
+      "agent": "Ajan",
+      "device": "Cihaz"
+    },
+    "lastVerified": "Son doğrulama",
+    "neverVerified": "Hiç doğrulanmadı",
+    "policy": {
+      "label": "Politika",
+      "anytime": "Her saat",
+      "hours": "{{days}}, {{from}}–{{to}} ({{tz}})",
+      "dailyCap": "Günde en çok {{count}} işlem",
+      "spendCap": "Harcama sınırı {{amount}} (küçük birim)",
+      "humanApproval": "Her eylem insan onayı bekler",
+      "verifyAge": "Doğrulama {{days}} gün geçerli",
+      "verifyNever": "Doğrulama süresiz geçerli"
+    },
+    "budgetLinks": "Bütçe kalemleri",
+    "noBudgetLinks": "Bağlı bütçe kalemi yok",
+    "groupsLabel": "Gruplar",
+    "noGroups": "Grupta değil",
+    "keyDetail": "Araç: {{detail}}",
+    "actions": {
+      "verify": "Doğrula",
+      "policy": "Politika",
+      "unreachable": "Ulaşılamıyor işaretle",
+      "linkBudget": "Bütçe bağla",
+      "unlinkBudget": "{{name}} bağını kaldır",
+      "retire": "Emekliye ayır"
+    },
+    "declareDialog": {
+      "title": "Kabiliyet bildir",
+      "description": "Çalışma alanının kullanabileceği bir hesap, cihaz ya da aracı bildirin. Sırlar burada girilmez.",
+      "kindPlaceholder": "Tür seçin",
+      "keyDetailHint": "2–40 karakter: küçük harf, rakam, alt çizgi ve tire.",
+      "externalIdHint": "Sağlayıcının hesap, sayfa ya da hat kimliği.",
+      "connectorPublic": "Bağlayıcı ayarları (gizli olmayan)",
+      "connectorPublicHint": "Yalnızca gizli olmayan ayarlar; parola ya da jeton girmeyin.",
+      "addSetting": "Ayar ekle",
+      "settingKey": "Anahtar",
+      "settingValue": "Değer",
+      "submit": "Bildir",
+      "declared": "Kabiliyet bildirildi."
+    },
+    "verifyDialog": {
+      "title": "{{name}} doğrula",
+      "description": "Kanıt, ajanın (ya da sizin) beyanıdır; sistem kaydeder, denetlemez.",
+      "evidence": "Kanıt",
+      "evidenceHint": "Ne çalıştırıldı ya da ne görüldü?",
+      "refs": "Dayanaklar",
+      "refsHint": "Dosya kimliği, seri numarası, ekran görüntüsü kimliği…",
+      "addRef": "Dayanak ekle",
+      "ref": "Dayanak",
+      "submit": "Doğrula",
+      "verified": "Kabiliyet doğrulandı."
+    },
+    "policyDialog": {
+      "title": "{{name}} politikası",
+      "description": "Kabiliyetin ne zaman ve ne kadar iş yapabileceği.",
+      "hoursEnabled": "Çalışma saatleri sınırlı",
+      "tz": "Saat dilimi",
+      "tzHint": "UTC ya da Europe/Istanbul gibi bir IANA adı.",
+      "from": "Açılış saati",
+      "to": "Kapanış saati",
+      "toHint": "24 = gün sonu (gece yarısı). Gece yarısını aşan bir pencere iki güne bölünür.",
+      "days": "Günler",
+      "dailyOpsCap": "Günlük işlem sınırı",
+      "spendCap": "Harcama sınırı (küçük birim)",
+      "capHint": "Boş bırakılırsa sınır yok.",
+      "humanApproval": "Her eylem insan onayı bekler",
+      "verifyMaxAge": "Doğrulama geçerliliği (gün)",
+      "verifyMaxAgeHint": "0 = süresiz.",
+      "saved": "Politika kaydedildi."
+    },
+    "unreachableDialog": {
+      "title": "{{name}} ulaşılamıyor",
+      "description": "Son deneme neden başarısız oldu?",
+      "submit": "İşaretle",
+      "marked": "Kabiliyet ulaşılamıyor olarak işaretlendi."
+    },
+    "retireDialog": {
+      "title": "Kabiliyeti emekliye ayır",
+      "body": "{{name}} emekliye ayrılacak: kaydı kalır ama bir daha doğrulanamaz, gruplanamaz ya da bütçeye bağlanamaz; gruplarından ve bütçe kalemlerinden çıkarılır.",
+      "retired": "Kabiliyet emekliye ayrıldı."
+    },
+    "linkDialog": {
+      "title": "{{name}} için bütçe kalemi",
+      "description": "Kabiliyetin harcayabileceği bir bütçe kalemi seçin.",
+      "placeholder": "Kalem seçin",
+      "none": "Bu kabiliyete uyan bütçe kalemi yok.",
+      "submit": "Bağla",
+      "linked": "Bütçe kalemi bağlandı.",
+      "unlinked": "Bütçe bağı kaldırıldı."
+    },
+    "groupsPanel": {
+      "title": "Kabiliyet grupları",
+      "description": "Marka, şube, kişilik ya da amaç gibi adlandırılmış kümeler; bir kabiliyet birden çok grupta olabilir.",
+      "create": "Grup oluştur",
+      "name": "Grup adı",
+      "purpose": "Amaç",
+      "empty": "Henüz grup yok.",
+      "noMembers": "Üye yok.",
+      "addMember": "Üye ekle",
+      "addMemberPlaceholder": "Kabiliyet seçin",
+      "removeMember": "{{name}} üyesini çıkar",
+      "rename": "Yeniden adlandır",
+      "deleteTitle": "Grubu sil",
+      "deleteBody": "{{name}} grubu silinecek; üyeleri kabiliyet olarak kalır.",
+      "created": "Grup oluşturuldu.",
+      "renamed": "Grup yeniden adlandırıldı.",
+      "deleted": "Grup silindi.",
+      "memberAdded": "Üye eklendi.",
+      "memberRemoved": "Üye çıkarıldı."
+    }
+  },
+  "budget": {
+    "title": "Bütçe",
+    "description": "Çalışma alanının kendi parası ve sınırları: reklam bütçesi, SMS, ajan kotası, sarf malzemesi.",
+    "create": "Bütçe kalemi oluştur",
+    "columns": {
+      "name": "Ad",
+      "kind": "Tür",
+      "unit": "Birim",
+      "cap": "Üst sınır",
+      "period": "Dönem",
+      "spent": "Bu dönem harcanan",
+      "remaining": "Kalan"
+    },
+    "kinds": {
+      "cash": "Nakit",
+      "ad_budget": "Reklam bütçesi",
+      "sms_budget": "SMS bütçesi",
+      "agent_quota": "Ajan kotası",
+      "agent_hours": "Ajan saati",
+      "consumable": "Sarf malzemesi"
+    },
+    "units": {
+      "currency": "Para birimi",
+      "count": "Adet",
+      "minutes": "Dakika"
+    },
+    "periods": {
+      "daily": "Günlük",
+      "weekly": "Haftalık",
+      "monthly": "Aylık",
+      "total": "Toplam"
+    },
+    "minutesValue": "{{value}} dk",
+    "overCap": "Sınır aşıldı",
+    "spend": "Harcamalar",
+    "empty": "Henüz bütçe kalemi yok.",
+    "emptyBody": "Reklam bütçesi, SMS ya da ajan kotası gibi bir kalem oluşturun; ajan harcadıkça buraya yazar.",
+    "dialog": {
+      "title": "Bütçe kalemi oluştur",
+      "description": "Kalemin türü, hangi birimle sayılacağını belirler.",
+      "unitKind": "Birim",
+      "currency": "Para birimi kodu",
+      "currencyHint": "TRY gibi bir ISO 4217 kodu.",
+      "countLabel": "Birim adı",
+      "countLabelHint": "Örn. makara, mesaj, kredi.",
+      "cap": "Dönem başına üst sınır",
+      "capHintCurrency": "{{currency}} cinsinden; kuruşlu yazılabilir.",
+      "submit": "Oluştur",
+      "created": "Bütçe kalemi oluşturuldu."
+    },
+    "spendSheet": {
+      "title": "{{name}}: harcamalar",
+      "description": "En yenisi önce; bir harcama kaydı silinmez.",
+      "summary": "Bu dönem {{spent}} harcandı, kalan {{remaining}}.",
+      "record": "Harcama kaydet",
+      "amountHint": "{{unit}} cinsinden, sıfırdan büyük.",
+      "referenceHint": "Fatura numarası, kampanya kimliği…",
+      "recorded": "Harcama kaydedildi.",
+      "empty": "Henüz harcama yok.",
+      "loadMore": "Daha fazla yükle",
+      "columns": {
+        "at": "Zaman",
+        "amount": "Tutar",
+        "source": "Kaynak",
+        "reference": "Referans"
+      }
+    },
+    "sources": {
+      "human": "İnsan",
+      "agent": "Ajan",
+      "connector": "Bağlayıcı ({{name}})"
+    }
   }
 }

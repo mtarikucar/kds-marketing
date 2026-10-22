@@ -5,7 +5,11 @@
 //! request's [`EgressScope`]:
 //! - the fixed tier ([`FIXED_HOSTS`]): provider hosts per connector, part of the code;
 //! - the tenant tier: hosts a workspace declared in its capability records, managed at runtime
-//!   with [`Egress::allow_tenant_host`] and [`Egress::revoke_tenant_host`].
+//!   with [`Egress::allow_tenant_host`] and [`Egress::revoke_tenant_host`]. Use cases reach it
+//!   through [`EgressTenantHosts`], `jt_app`'s `TenantHostRegistry`, which lets in only hosts on
+//!   the public internet ([`validate_public_host`]). That check reads the host's text when it is
+//!   declared; the addresses a name resolves to are not checked yet (the resolution-time guard
+//!   comes with the first tenant-tier caller, in M1b).
 //!
 //! Only `https` is accepted. Redirects are never followed.
 //!
@@ -14,9 +18,11 @@
 
 mod allowlist;
 mod client;
+mod public_host;
 
 pub use allowlist::{AllowedHost, FIXED_HOSTS};
 pub use client::{Egress, EgressError, EgressScope};
+pub use public_host::{EgressTenantHosts, HostError, PRIVATE_SUFFIXES, validate_public_host};
 
 pub use reqwest::{Body, Method, Request, Response, StatusCode, Url, header};
 

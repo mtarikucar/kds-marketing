@@ -3,11 +3,14 @@ resolver = "2"
 members = [
     "crates/domain/jt_tenancy",
     "crates/domain/jt_ledger",
+    "crates/domain/jt_strategy",
+    "crates/domain/jt_capability",
     "crates/jt_app",
     "crates/adapters/jt_pg",
     "crates/adapters/jt_panel_http",
     "crates/adapters/jt_mcp",
     "crates/adapters/jt_outbound",
+    "crates/adapters/jt_seal",
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
@@ -23,11 +26,14 @@ publish = false
 # Workspace crates
 jt_tenancy = { path = "crates/domain/jt_tenancy" }
 jt_ledger = { path = "crates/domain/jt_ledger" }
+jt_strategy = { path = "crates/domain/jt_strategy" }
+jt_capability = { path = "crates/domain/jt_capability" }
 jt_app = { path = "crates/jt_app" }
 jt_pg = { path = "crates/adapters/jt_pg" }
 jt_panel_http = { path = "crates/adapters/jt_panel_http" }
 jt_mcp = { path = "crates/adapters/jt_mcp" }
 jt_outbound = { path = "crates/adapters/jt_outbound" }
+jt_seal = { path = "crates/adapters/jt_seal" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }
 
@@ -36,11 +42,16 @@ tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "signal", "
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "time", "json"] }
+# No default features: they would add `any` (every driver behind one type); `macros` stays for
+# `sqlx::migrate!` and `#[derive(sqlx::FromRow)]`.
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "time", "json", "macros"] }
 rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "transport-io"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: a number read back from JSON text is exactly the `f64` that was written (the
+# default parser may be off by one unit in the last place), so MCP outputs, which go through
+# JSON text, carry the same numbers as the panel's.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 thiserror = "2"
@@ -48,7 +59,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 argon2 = "0.6"
-sha2 = "0.11"
+# `zeroize`: every SHA-256 state wipes itself when dropped, which includes the HMAC states HKDF
+# keeps its pseudorandom key in (`jt_seal`).
+sha2 = { version = "0.11", features = ["zeroize"] }
 hex = "0.4"
 rand = "0.10"
 base64 = "0.23"
@@ -60,6 +73,11 @@ toml = "1"
 async-trait = "0.1"
 http = "1"
 tower-service = "0.3"
+# The secret box (`jt_seal`): AES-256-GCM, HKDF-SHA256, and wiping key material from memory.
+# The key comes from HKDF and the nonce from `rand`, so no `getrandom` feature here.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+hkdf = "0.13"
+zeroize = "1.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -170,6 +170,8 @@ fn redaction_masks_every_secret_key_by_exact_name_in_any_case() {
         "invite_token",
         "plaintext",
     ];
+    // The list is public so other crates can refuse such keys where secrets must never appear.
+    assert_eq!(REDACTED_KEYS, secret_keys);
     let mut payload = serde_json::Map::new();
     let mut expected = serde_json::Map::new();
     for key in secret_keys {

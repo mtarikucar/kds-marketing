@@ -8,7 +8,10 @@ use uuid::Uuid;
 
 /// Payload keys whose values `LedgerEntry::redacted` masks. A key matches only by its exact
 /// name, compared case-insensitively: `token` is masked, `token_count` is not.
-const SECRET_KEYS: &[&str] = &[
+///
+/// Public so other crates can refuse such keys where a secret must never be written at all (a
+/// capability's public connector fields, for one).
+pub const REDACTED_KEYS: &[&str] = &[
     "password",
     "token",
     "secret",
@@ -145,7 +148,7 @@ fn redact(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, v) in map.iter_mut() {
-                if SECRET_KEYS.iter().any(|s| key.eq_ignore_ascii_case(s)) {
+                if REDACTED_KEYS.iter().any(|s| key.eq_ignore_ascii_case(s)) {
                     *v = Value::String(MASK.to_owned());
                 } else {
                     redact(v);

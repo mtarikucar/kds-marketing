@@ -7,13 +7,13 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{LedgerFilter, LedgerRepo, LedgerRow};
-use jt_ledger::{Action, Actor, LedgerEntry, Subject};
-use jt_tenancy::{AgentConnectionId, UserId, WorkspaceId};
+use jt_ledger::{Action, LedgerEntry, Subject};
+use jt_tenancy::{AgentConnectionId, WorkspaceId};
 use sqlx::PgConnection;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{map_sqlx, same_workspace};
+use super::{actor_columns, map_sqlx, same_workspace, stored_actor};
 use crate::uow::PgTenantRepos;
 
 /// The most entries one `list` returns.
@@ -37,24 +37,13 @@ struct LedgerRecord {
 
 impl LedgerRecord {
     fn into_row(self) -> Result<LedgerRow, AppError> {
-        let incomplete = || AppError::internal("stored ledger actor is incomplete");
-        let actor = match self.actor_kind.as_str() {
-            "human" => Actor::Human {
-                user_id: UserId(self.actor_user_id.ok_or_else(incomplete)?),
-            },
-            "agent" => Actor::Agent {
-                connection_id: AgentConnectionId(self.agent_connection_id.ok_or_else(incomplete)?),
-                user_id: UserId(self.actor_user_id.ok_or_else(incomplete)?),
-            },
-            "system" => Actor::System {
-                component: self.actor_component.ok_or_else(incomplete)?,
-            },
-            _ => {
-                return Err(AppError::internal(
-                    "stored ledger_entries.actor_kind has an unknown value",
-                ));
-            }
-        };
+        let actor = stored_actor(
+            "ledger_entries",
+            &self.actor_kind,
+            self.actor_user_id,
+            self.agent_connection_id,
+            self.actor_component,
+        )?;
         let action = Action::new(&self.action).map_err(|_| {
             AppError::internal("stored ledger_entries.action is not a valid action")
         })?;
@@ -74,23 +63,6 @@ impl LedgerRecord {
                 strategy_version_id: self.strategy_version_id,
             },
         })
-    }
-}
-
-/// `actor_kind`, `actor_user_id`, `agent_connection_id`, `actor_component` of an actor.
-fn actor_columns(actor: &Actor) -> (&'static str, Option<Uuid>, Option<Uuid>, Option<&str>) {
-    match actor {
-        Actor::Human { user_id } => ("human", Some(user_id.as_uuid()), None, None),
-        Actor::Agent {
-            connection_id,
-            user_id,
-        } => (
-            "agent",
-            Some(user_id.as_uuid()),
-            Some(connection_id.as_uuid()),
-            None,
-        ),
-        Actor::System { component } => ("system", None, None, Some(component.as_str())),
     }
 }
 
@@ -149,7 +121,8 @@ impl LedgerRepo for PgTenantRepos {
     }
 
     /// Newest first. `limit` is clamped to `1..=MAX_LIST_LIMIT`; `action_prefix` matches
-    /// literally (`_` and `%` are not wildcards).
+    /// literally (`_` and `%` are not wildcards); `agent_connection_id` keeps the entries made
+    /// through that agent connection.
     async fn list(&mut self, filter: LedgerFilter) -> Result<Vec<LedgerRow>, AppError> {
         let ws = self.workspace_id();
         let records: Vec<LedgerRecord> = sqlx::query_as(
@@ -160,24 +133,56 @@ impl LedgerRepo for PgTenantRepos {
              and ($2::text is null or action like $2 escape '\\') \
              and ($3::text is null or actor_kind = $3) \
              and ($4::bigint is null or id < $4) \
+             and ($5::uuid is null or agent_connection_id = $5) \
              order by id desc \
-             limit $5",
+             limit $6",
         )
         .bind(ws.as_uuid())
         .bind(filter.action_prefix.as_deref().map(like_prefix))
         .bind(filter.actor_kind)
         .bind(filter.before_id)
+        .bind(filter.agent_connection_id.map(|id| id.as_uuid()))
         .bind(i64::from(filter.limit.clamp(1, MAX_LIST_LIMIT)))
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "list ledger entries"))?;
         records.into_iter().map(LedgerRecord::into_row).collect()
     }
+
+    /// The action is a literal, as in the predicate of `ledger_entries_agent_connection_idx`
+    /// (0004), so the planner proves the partial index applies under any plan, generic plans of
+    /// the prepared statement included, and reads one index entry.
+    async fn last_checkin_at(
+        &mut self,
+        connection_id: AgentConnectionId,
+    ) -> Result<Option<OffsetDateTime>, AppError> {
+        let ws = self.workspace_id();
+        sqlx::query_scalar(
+            "select at from ledger_entries \
+             where workspace_id = $1 and agent_connection_id = $2 \
+             and action = 'work.checkin' \
+             order by id desc \
+             limit 1",
+        )
+        .bind(ws.as_uuid())
+        .bind(connection_id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find the last check-in"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use jt_app::ports::CHECKIN_ACTION;
+
     use super::like_prefix;
+
+    #[test]
+    fn the_check_in_lookup_names_the_check_in_action() {
+        // `last_checkin_at` writes the action as a literal, to match the partial index.
+        assert_eq!(CHECKIN_ACTION, "work.checkin");
+    }
 
     #[test]
     fn like_prefix_escapes_wildcards_and_the_escape_character() {

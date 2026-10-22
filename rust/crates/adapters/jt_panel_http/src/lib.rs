@@ -54,7 +54,7 @@ pub fn router(state: AppState) -> Router {
 }
 
 /// [`router`] with one more API route, `route`, for `use_case`, which need not be in the
-/// catalog. Meant for tests (e.g. a `Gated` use case, which M0's catalog does not have yet, or a
+/// catalog. Meant for tests (e.g. a `Gated` use case, which the catalog does not have yet, or a
 /// handler with unusual extractors); the binary serves [`router`] as it is.
 ///
 /// # Panics
@@ -119,14 +119,18 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode, header};
-    use jt_app::catalog::{GateMode, Risk};
+    use jt_app::catalog::{GateMode, Risk, StatusExemption};
     use jt_app::error::AppError;
     use jt_app::gate::{NoStrategyYet, StrategyGate};
     use jt_app::ports::UnitOfWork;
     use jt_app::usecases::Deps;
     use jt_app::usecases::auth::{self, RegisterInput};
+    use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
     use jt_tenancy::{WorkspaceId, WorkspaceStatus};
-    use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+    use jt_testkit::fakes::{
+        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+        SeqIdGen,
+    };
     use serde_json::Value;
     use time::macros::datetime;
     use tower::ServiceExt;
@@ -140,7 +144,8 @@ mod tests {
         mcp_tool: Some("jeeta.demo.read"),
         panel_route: Some(("GET", "/api/demo")),
         panel_only: false,
-        status_exempt: false,
+        mcp_only: false,
+        status_exemption: StatusExemption::Never,
         risk: Risk::Read,
     };
 
@@ -170,6 +175,10 @@ mod tests {
             ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(FixedTokenGen::new(["aaaa", "session-1"])),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
+            hosts: Arc::new(RecordingTenantHosts::new()),
         }
     }
 

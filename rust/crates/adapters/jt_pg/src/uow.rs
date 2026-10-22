@@ -7,9 +7,10 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, LedgerRepo, MembershipRepo, MembershipRow,
-    MembershipView, OperatorRepo, PlatformRepos, PlatformSessionRepo, RoleRepo, SessionRepo,
-    TenantRepos, UnitOfWork, UserRepo, UserRepos, WorkspaceRepo, WorkspaceRow,
+    AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
+    ConsultationRepo, HypothesisRepo, LedgerRepo, MembershipRepo, MembershipRow, MembershipView,
+    OperatorRepo, PlatformRepos, PlatformSessionRepo, RoleRepo, SessionRepo, StrategyRepo,
+    TenantRepos, UnitOfWork, UserRepo, UserRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
 use jt_ledger::LedgerEntry;
 use jt_tenancy::{Email, MembershipId, RoleDef, RoleId, UserId, WorkspaceId, WorkspaceStatus};
@@ -111,6 +112,34 @@ impl TenantRepos for PgTenantRepos {
     }
 
     fn workspace(&mut self) -> &mut dyn WorkspaceRepo {
+        self
+    }
+
+    fn strategy(&mut self) -> &mut dyn StrategyRepo {
+        self
+    }
+
+    fn hypotheses(&mut self) -> &mut dyn HypothesisRepo {
+        self
+    }
+
+    fn consultation(&mut self) -> &mut dyn ConsultationRepo {
+        self
+    }
+
+    fn capabilities(&mut self) -> &mut dyn CapabilityRepo {
+        self
+    }
+
+    fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo {
+        self
+    }
+
+    fn budget(&mut self) -> &mut dyn BudgetRepo {
+        self
+    }
+
+    fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo {
         self
     }
 

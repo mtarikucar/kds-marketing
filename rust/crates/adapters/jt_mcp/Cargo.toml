@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 jt_tenancy.workspace = true
+jt_strategy.workspace = true
+jt_capability.workspace = true
 jt_app.workspace = true
 rmcp.workspace = true
 axum.workspace = true

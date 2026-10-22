@@ -19,7 +19,15 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
+use jt_capability::{
+    BudgetItem, BudgetItemId, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
+    CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
+};
 use jt_ledger::LedgerEntry;
+use jt_strategy::{
+    ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
+    HypothesisState, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
+};
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, OperatorId, Permission,
     RoleDef, RoleId, SessionId, UserId, WorkspaceId, WorkspaceStatus,
@@ -27,6 +35,7 @@ use jt_tenancy::{
 use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::error::AppError;
 
@@ -61,38 +70,142 @@ pub trait PasswordHasher: Send + Sync {
     async fn verify(&self, pw: &str, hash: &str) -> Result<bool, AppError>;
 }
 
+/// Seals secrets (a connector's token or password) for one workspace, so that only that
+/// workspace can open them again. The sealed bytes are opaque and safe to store; no use case
+/// returns them, nor what `open` gives back.
+///
+/// Sealing is randomised: two seals of the same plaintext differ, and the plaintext never appears
+/// in the output. The work is a few microseconds of CPU, so both methods are synchronous.
+pub trait SecretBox: Send + Sync {
+    /// `plaintext` sealed for `ws`.
+    fn seal(&self, ws: WorkspaceId, plaintext: &[u8]) -> Result<Vec<u8>, AppError>;
+    /// The plaintext that `seal` sealed for `ws`, wiped from memory when dropped.
+    ///
+    /// Bytes sealed for another workspace or under another key, cut short, or changed in any way
+    /// are refused with `INTERNAL` and the message `"sealed data cannot be opened"`, whatever the
+    /// reason, so a refusal tells a caller nothing about the bytes.
+    fn open(&self, ws: WorkspaceId, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError>;
+}
+
+/// The kinds of channel a workspace can use: the kind keys (e.g. `instagram`, `mailbox`) of its
+/// capabilities that are not retired. A strategy may choose only these, or `any`.
+#[async_trait]
+pub trait ChannelCatalog: Send + Sync {
+    /// The kind keys in use in `ws`; none at all is an empty set.
+    async fn kinds_in_use(&self, ws: WorkspaceId) -> Result<BTreeSet<String>, AppError>;
+}
+
+/// The hosts each workspace's connectors may reach: the tenant tier of the egress allowlist
+/// (spec §4.3), filled from the hosts a capability declares and emptied again when it retires.
+///
+/// Only a public host enters it. A host that names this machine or a private network (`localhost`,
+/// a single-label name, a private suffix such as `.local` or `.internal`, an IP literal in a
+/// loopback, private, link-local, shared or other special-purpose range) is refused, so a tenant
+/// cannot point the system at its own network. The check is on the text of the host; what a
+/// public name resolves to is the egress client's concern when it connects.
+///
+/// The tier is one set of hosts per workspace, not counted per capability: a caller revoking a
+/// host first makes sure no other capability of the workspace still needs it. It lives in memory,
+/// so every method is synchronous.
+pub trait TenantHostRegistry: Send + Sync {
+    /// `Ok` when `host` (`host` or `host:port`, an IPv6 literal in brackets) may enter a tenant
+    /// tier, else `VALIDATION` "host is not public" naming it in `details.host`. Changes nothing:
+    /// a use case checks every host before it writes, and allows them once it has committed.
+    fn check(&self, host: &str) -> Result<(), AppError>;
+    /// Lets workspace `ws` reach `host`; refuses what `check` refuses, and then changes nothing.
+    /// Allowing a host twice is allowing it once.
+    fn allow(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError>;
+    /// Workspace `ws` may no longer reach `host`. A host it could not reach is a no-op: revoking
+    /// only takes away, so it refuses nothing.
+    fn revoke(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError>;
+}
+
+/// Told when a workspace's approved strategy version has been archived, after the archive is
+/// committed, so that work planned under it can be called off (spec §5: the gate closes again).
+///
+/// An error does not undo the archive, which already holds; the archive use case passes it on.
+/// Implementations are therefore idempotent, so that telling them twice about one version is
+/// harmless.
+#[async_trait]
+pub trait StrategyArchivedHook: Send + Sync {
+    async fn on_archived(
+        &self,
+        ws: WorkspaceId,
+        version_id: StrategyVersionId,
+    ) -> Result<(), AppError>;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rows and views
+//
+// A row that carries a secret's hash (a password, a session, invite or API-key token) does not
+// implement `Serialize`, so it cannot reach a response or a ledger payload by accident; the use
+// cases answer with views and summaries that leave the hash out. Its `Debug` prints the hash as
+// `***`, so a log line or a failed assertion does not show it either.
 // ---------------------------------------------------------------------------------------------
 
-/// A user account.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Prints `***` in place of a secret's hash in a row's `Debug` output.
+struct Masked;
+
+impl std::fmt::Debug for Masked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
+}
+
+/// A user account. Not `Serialize`, and `Debug` masks it: it carries the password hash (see the
+/// section note).
+#[derive(Clone, PartialEq, Eq)]
 pub struct UserRow {
     pub id: UserId,
     pub email: Email,
     pub password_hash: String,
     pub display_name: String,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
-/// A panel login session. Only the hash of its token is stored.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl std::fmt::Debug for UserRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserRow")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("password_hash", &Masked)
+            .field("display_name", &self.display_name)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+/// A panel login session. Only the hash of its token is stored. Not `Serialize`; `Debug` masks
+/// the hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionRow {
     pub id: SessionId,
     pub user_id: UserId,
     pub token_hash: String,
     pub current_workspace_id: Option<WorkspaceId>,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
+impl std::fmt::Debug for SessionRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionRow")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .field("token_hash", &Masked)
+            .field("current_workspace_id", &self.current_workspace_id)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("revoked_at", &self.revoked_at)
+            .finish()
+    }
+}
+
 /// A membership as stored: an invitation (`user_id` unset until accepted) or an active member.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Not `Serialize`, and `Debug` masks it: it carries the invite token's hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct MembershipRow {
     pub id: MembershipId,
     pub workspace_id: WorkspaceId,
@@ -101,11 +214,29 @@ pub struct MembershipRow {
     pub status: MembershipStatus,
     pub invited_email: Option<Email>,
     pub invite_token_hash: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub invite_expires_at: Option<OffsetDateTime>,
     pub invited_by: Option<UserId>,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for MembershipRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MembershipRow")
+            .field("id", &self.id)
+            .field("workspace_id", &self.workspace_id)
+            .field("user_id", &self.user_id)
+            .field("role_id", &self.role_id)
+            .field("status", &self.status)
+            .field("invited_email", &self.invited_email)
+            .field(
+                "invite_token_hash",
+                &self.invite_token_hash.as_ref().map(|_| Masked),
+            )
+            .field("invite_expires_at", &self.invite_expires_at)
+            .field("invited_by", &self.invited_by)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
 }
 
 /// One of a user's memberships, joined with its workspace and role.
@@ -162,8 +293,9 @@ impl ApiKeyStatus {
     }
 }
 
-/// An API key as stored. Only the hash of the key is kept; `prefix` is for display.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// An API key as stored. Only the hash of the key is kept; `prefix` is for display. Not
+/// `Serialize`: callers show a `KeySummary`; `Debug` masks the hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ApiKeyRow {
     pub id: ApiKeyId,
     pub workspace_id: WorkspaceId,
@@ -173,12 +305,27 @@ pub struct ApiKeyRow {
     pub scopes: BTreeSet<Permission>,
     pub issued_by: UserId,
     pub status: ApiKeyStatus,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub last_used_at: Option<OffsetDateTime>,
-    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
+}
+
+impl std::fmt::Debug for ApiKeyRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyRow")
+            .field("id", &self.id)
+            .field("workspace_id", &self.workspace_id)
+            .field("name", &self.name)
+            .field("prefix", &self.prefix)
+            .field("key_hash", &Masked)
+            .field("scopes", &self.scopes)
+            .field("issued_by", &self.issued_by)
+            .field("status", &self.status)
+            .field("created_at", &self.created_at)
+            .field("last_used_at", &self.last_used_at)
+            .field("revoked_at", &self.revoked_at)
+            .finish()
+    }
 }
 
 /// An agent client seen through an API key, one per (key, client name, client version).
@@ -208,26 +355,47 @@ pub struct WorkspaceRow {
     pub created_at: OffsetDateTime,
 }
 
-/// A platform operator.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A platform operator. Not `Serialize`, and `Debug` masks it: it carries the password hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct OperatorRow {
     pub id: OperatorId,
     pub email: Email,
     pub password_hash: String,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
-/// A platform operator's login session. Only the hash of its token is stored.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl std::fmt::Debug for OperatorRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OperatorRow")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("password_hash", &Masked)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+/// A platform operator's login session. Only the hash of its token is stored. Not `Serialize`;
+/// `Debug` masks the hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PlatformSessionRow {
     pub id: Uuid,
     pub operator_id: OperatorId,
     pub token_hash: String,
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for PlatformSessionRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlatformSessionRow")
+            .field("id", &self.id)
+            .field("operator_id", &self.operator_id)
+            .field("token_hash", &Masked)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Which ledger entries to list: newest first, at most `limit`, optionally older than `before_id`.
@@ -237,6 +405,8 @@ pub struct LedgerFilter {
     pub action_prefix: Option<String>,
     /// Keep only this actor kind: `"human"`, `"agent"` or `"system"`.
     pub actor_kind: Option<String>,
+    /// Keep only entries an agent made through this connection.
+    pub agent_connection_id: Option<AgentConnectionId>,
     pub limit: u32,
     /// Keep only entries with an id below this one (the previous page's last id).
     pub before_id: Option<i64>,
@@ -310,9 +480,11 @@ pub trait RoleRepo: Send + Sync {
         permissions: BTreeSet<Permission>,
     ) -> Result<(), AppError>;
     /// Deletes a custom role. An unknown id is `NOT_FOUND`; a system role is `FORBIDDEN` and
-    /// stays.
+    /// stays; a role a membership that is not `Removed` holds is `CONFLICT` and stays. `Removed`
+    /// memberships that still reference the role are moved to the workspace's system `rep` role
+    /// first, in the same transaction.
     async fn delete_custom(&mut self, id: RoleId) -> Result<(), AppError>;
-    /// How many memberships, in any status, reference the role.
+    /// How many memberships that are not `Removed` (members and open invitations) hold the role.
     async fn count_memberships_using(&mut self, id: RoleId) -> Result<i64, AppError>;
 }
 
@@ -399,6 +571,10 @@ pub trait AgentConnectionRepo: Send + Sync {
     -> Result<Option<AgentConnectionRow>, AppError>;
 }
 
+/// The action of an agent's check-in entry (`work.checkin`), which
+/// [`LedgerRepo::last_checkin_at`] looks up.
+pub const CHECKIN_ACTION: &str = "work.checkin";
+
 /// The workspace's append-only ledger.
 #[async_trait]
 pub trait LedgerRepo: Send + Sync {
@@ -406,12 +582,392 @@ pub trait LedgerRepo: Send + Sync {
     /// bundle's is `INTERNAL`.
     async fn append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn list(&mut self, filter: LedgerFilter) -> Result<Vec<LedgerRow>, AppError>;
+    /// When the latest [`CHECKIN_ACTION`] entry an agent wrote through connection `connection_id`
+    /// was made (the entry with the highest sequence id), or `None` when it has none. In Postgres
+    /// the lookup matches the partial index `ledger_entries_agent_connection_idx` exactly (its
+    /// action is a literal in both), so it never scans the workspace's ledger.
+    async fn last_checkin_at(
+        &mut self,
+        connection_id: AgentConnectionId,
+    ) -> Result<Option<OffsetDateTime>, AppError>;
 }
 
 /// The workspace's own row.
 #[async_trait]
 pub trait WorkspaceRepo: Send + Sync {
     async fn get(&mut self) -> Result<WorkspaceRow, AppError>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Strategy repositories: tenant repositories too, over one workspace's strategy.
+// ---------------------------------------------------------------------------------------------
+
+/// The most entries one `ConsultationRepo::list` returns.
+pub const MAX_CONSULTATION_PAGE: u32 = 500;
+
+/// The workspace's strategy versions.
+///
+/// A workspace has at most one `Draft` and at most one `Approved` version at a time. Postgres
+/// enforces both with partial unique indexes, so of two transactions racing to break either rule
+/// the second one fails with `CONFLICT`; the fakes refuse the same writes.
+///
+/// **Every mutation of the draft** (its sections, its submission, its hypotheses, approving or
+/// archiving it) **reads the draft through [`StrategyRepo::lock_draft`] first, in the same
+/// bundle**, and decides on what that returns. The lock is held until the bundle commits or is
+/// dropped, so a concurrent mutation waits and then sees the committed result: approval cannot
+/// approve sections it did not validate, and two edits cannot lose each other's change.
+#[async_trait]
+pub trait StrategyRepo: Send + Sync {
+    /// Stores a version. A `version.workspace_id` other than the bundle's is `INTERNAL`; a taken
+    /// id or number, or a second `Draft` or `Approved` version in the workspace, is `CONFLICT`;
+    /// an `approved_by` that names no user is `NOT_FOUND`.
+    async fn insert(&mut self, version: StrategyVersion) -> Result<(), AppError>;
+    async fn find(&mut self, id: StrategyVersionId) -> Result<Option<StrategyVersion>, AppError>;
+    /// The `Approved` version, if any.
+    async fn current_approved(&mut self) -> Result<Option<StrategyVersion>, AppError>;
+    /// The `Draft` version, if any, read without a lock: for answering, not for deciding a write.
+    async fn current_draft(&mut self) -> Result<Option<StrategyVersion>, AppError>;
+    /// The `Draft` version, if any, locked against every other `lock_draft` (and every write to
+    /// the row) until this bundle commits or is dropped.
+    ///
+    /// A call that has to wait for another bundle holding the lock returns what that bundle
+    /// committed: the edited draft, or `None` when it approved or archived it. In Postgres it is
+    /// `select .. for update`; the in-memory fakes run one bundle at a time in tests, so there
+    /// it is `current_draft`.
+    async fn lock_draft(&mut self) -> Result<Option<StrategyVersion>, AppError>;
+    /// Every version, newest (highest number) first.
+    async fn list(&mut self) -> Result<Vec<StrategyVersion>, AppError>;
+    /// Replaces the sections of draft `id`. An unknown id is `NOT_FOUND`; a version that is not a
+    /// `Draft` is `CONFLICT` (approved and archived versions keep the sections they had). The
+    /// caller holds the draft lock ([`StrategyRepo::lock_draft`]).
+    ///
+    /// `at` is the time of the edit. The version keeps no edit time of its own (the consultation
+    /// log and the ledger record edits), so it is not stored.
+    async fn update_sections(
+        &mut self,
+        id: StrategyVersionId,
+        sections: Sections,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Sets `submitted_at` of draft `id`: `Some(at)` records that it was submitted for approval
+    /// at `at`, `None` withdraws the submission. An unknown id is `NOT_FOUND`; a version that is
+    /// not a `Draft` is `CONFLICT`. The caller holds the draft lock
+    /// ([`StrategyRepo::lock_draft`]).
+    async fn set_submitted(
+        &mut self,
+        id: StrategyVersionId,
+        at: Option<OffsetDateTime>,
+    ) -> Result<(), AppError>;
+    /// Moves version `id` forward to `status` at `at` and returns how many rows changed. A
+    /// caller moving the draft holds the draft lock ([`StrategyRepo::lock_draft`]).
+    ///
+    /// - `Approved` moves a `Draft` only, setting `approved_at = at` and `approved_by = by`. While
+    ///   another version is approved it is `CONFLICT` (the partial unique index; in Postgres the
+    ///   transaction is then aborted); a `by` that names no user is `NOT_FOUND`.
+    /// - `Archived` moves a `Draft` or an `Approved` version, setting `archived_at = at`; the
+    ///   approval fields stay, and `by` is not stored (the ledger records who archived it).
+    /// - `Draft` is `INTERNAL`: a version never returns to draft.
+    ///
+    /// 0 rows means the id is unknown here, or the version is not in a status the move starts
+    /// from. A caller that has not read the version maps 0 to `NOT_FOUND`; one that read it in the
+    /// same transaction maps 0 to `CONFLICT`, since another transaction moved it first (in
+    /// Postgres the update waits for that transaction and then finds the row moved).
+    async fn set_status(
+        &mut self,
+        id: StrategyVersionId,
+        status: VersionStatus,
+        at: OffsetDateTime,
+        by: Option<UserId>,
+    ) -> Result<u64, AppError>;
+    /// One more than the workspace's highest version number, 1 when it has none. Two transactions
+    /// may both get the same number; the second to insert it gets `CONFLICT`.
+    async fn next_number(&mut self) -> Result<i32, AppError>;
+}
+
+/// The hypotheses of the workspace's strategy versions, each version's in its own order.
+///
+/// A hypothesis id is stable across versions, so the same id appears once per version. Writes
+/// name a version of the bundle's workspace, else `NOT_FOUND`. A confidence outside `0.0..=1.0`
+/// (or NaN) breaks a check constraint and is `INTERNAL`: callers validate first. A write to the
+/// draft's hypotheses is a draft mutation: the caller holds the draft lock
+/// ([`StrategyRepo::lock_draft`]).
+#[async_trait]
+pub trait HypothesisRepo: Send + Sync {
+    /// Makes `hypotheses`, in this order, the version's whole list. An id listed twice is
+    /// `CONFLICT`. The caller holds the draft lock ([`StrategyRepo::lock_draft`]).
+    async fn replace_all(
+        &mut self,
+        version_id: StrategyVersionId,
+        hypotheses: Vec<Hypothesis>,
+    ) -> Result<(), AppError>;
+    /// The version's hypotheses in order; an unknown version has none.
+    async fn list(&mut self, version_id: StrategyVersionId) -> Result<Vec<Hypothesis>, AppError>;
+    /// Replaces the version's hypothesis with this id in place, or appends it when the version
+    /// has none with that id.
+    async fn upsert(
+        &mut self,
+        version_id: StrategyVersionId,
+        hypothesis: Hypothesis,
+    ) -> Result<(), AppError>;
+    /// Sets the state of one hypothesis of the version. An unknown version or hypothesis is
+    /// `NOT_FOUND`.
+    async fn set_state(
+        &mut self,
+        version_id: StrategyVersionId,
+        hypothesis_id: HypothesisId,
+        state: HypothesisState,
+    ) -> Result<(), AppError>;
+}
+
+/// The append-only consultation log of the workspace's strategy versions. Entries are never
+/// changed or deleted (Postgres refuses it with a trigger).
+#[async_trait]
+pub trait ConsultationRepo: Send + Sync {
+    /// Appends `entry` to the log of its version, in the bundle's workspace, and returns its id.
+    /// A version that is not this workspace's is `NOT_FOUND`; a taken id is `CONFLICT`.
+    async fn append(&mut self, entry: ConsultationEntry) -> Result<ConsultationEntryId, AppError>;
+    /// The version's entries newest first, ordered by `(at, id)` descending, at most `limit`
+    /// (clamped to `1..=MAX_CONSULTATION_PAGE`).
+    ///
+    /// `before` is a keyset cursor: the `(at, id)` of the previous page's last entry. Only
+    /// entries ordered after it are returned (`(at, id) < before`), so paging neither skips nor
+    /// repeats entries that share an instant.
+    async fn list(
+        &mut self,
+        version_id: StrategyVersionId,
+        limit: u32,
+        before: Option<(OffsetDateTime, ConsultationEntryId)>,
+    ) -> Result<Vec<ConsultationEntry>, AppError>;
+    /// The version's entries of `kind`, newest first as [`ConsultationRepo::list`] orders them,
+    /// at most `limit` (clamped to `1..=MAX_CONSULTATION_PAGE`); an unknown version has none.
+    async fn list_kind(
+        &mut self,
+        version_id: StrategyVersionId,
+        kind: ConsultationKind,
+        limit: u32,
+    ) -> Result<Vec<ConsultationEntry>, AppError>;
+    /// How many entries the version's log holds; an unknown version has none.
+    async fn count(&mut self, version_id: StrategyVersionId) -> Result<i64, AppError>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Capability repositories: tenant repositories too, over one workspace's capabilities, their
+// groups, budget items and spend, and its workspace-wide policies.
+// ---------------------------------------------------------------------------------------------
+
+/// Which capabilities [`CapabilityRepo::list`] returns: those matching every field that is set
+/// (all of them when none is).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CapabilityFilter {
+    /// Only kinds of this group.
+    pub group: Option<KindGroup>,
+    /// Only this kind key (a [`jt_capability::CapabilityKind::key`]).
+    pub kind: Option<&'static str>,
+    /// Only this stored status.
+    pub status: Option<StoredStatus>,
+    /// Only members of this capability group; a group that is not the workspace's has none.
+    pub group_id: Option<CapabilityGroupId>,
+}
+
+/// The workspace's capabilities.
+///
+/// A kind may have many capabilities (B10), but one external account (the same `kind_key` and
+/// `external_id`) is held by at most one capability that is not `Retired`. Postgres enforces it
+/// with a partial unique index, so of two transactions racing to break it the second one fails
+/// with `CONFLICT`; the fakes refuse the same writes.
+///
+/// The sealed connector credentials are stored beside a capability but never inside the
+/// [`Capability`] value: it only says whether there are any (`has_sealed_config`), and the bytes
+/// come back only from [`CapabilityRepo::read_sealed`]. `has_sealed_config` and
+/// `budget_item_ids` are derived on read (from the sealed column and from the budget links), so
+/// `insert` and `update` ignore them: the blob is written by `insert`'s `sealed` and by
+/// `set_sealed`, the links by [`BudgetRepo::link`] and [`BudgetRepo::unlink`].
+///
+/// Values are stored as given: callers build them with `Capability::new` and validate changes
+/// first.
+///
+/// **Every mutation of a capability** (verifying it, marking it unreachable, setting its policy,
+/// retiring it, linking or unlinking a budget item, adding it to a group) **reads the capability
+/// through [`CapabilityRepo::lock`] first, in the bundle that writes**, and decides on what that
+/// returns. The lock is held until the bundle commits or is dropped, so a concurrent mutation of
+/// the same capability waits and then sees the committed result: one cannot write back a row the
+/// other changed (a policy flag, a retirement) or attach a capability retired meanwhile.
+#[async_trait]
+pub trait CapabilityRepo: Send + Sync {
+    /// Stores a capability with its sealed credentials, if any. A `capability.workspace_id` other
+    /// than the bundle's is `INTERNAL`; a taken id, or an external account already held by a
+    /// capability of the same kind that is not retired, is `CONFLICT`.
+    async fn insert(
+        &mut self,
+        capability: Capability,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError>;
+    /// The capability, with `has_sealed_config` and its budget item ids (in id order), read
+    /// without a lock: for answering, not for deciding a write.
+    async fn find(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError>;
+    /// The capability as [`CapabilityRepo::find`] reads it, its row locked against every other
+    /// `lock` (and every write to it) until this bundle commits or is dropped; `None` when the id
+    /// is not the workspace's.
+    ///
+    /// A call that has to wait for another bundle holding the lock returns what that bundle
+    /// committed, its budget links and groups included. In Postgres it is `select .. for update`
+    /// followed by a fresh read; the in-memory fakes run one bundle at a time in tests, so there
+    /// it is `find`.
+    async fn lock(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError>;
+    /// The capabilities `filter` matches, oldest (`created_at`, then id) first.
+    async fn list(&mut self, filter: CapabilityFilter) -> Result<Vec<Capability>, AppError>;
+    /// Writes every stored field of `capability` but its identity: `kind_key`, `created_at` and
+    /// `declared_by_connection` stay as stored, and the sealed blob and the budget links are not
+    /// touched. A
+    /// `capability.workspace_id` other than the bundle's is `INTERNAL`; an unknown id is
+    /// `NOT_FOUND`; moving it onto an external account another live capability of its kind
+    /// holds is `CONFLICT` (in Postgres the transaction is then aborted).
+    async fn update(&mut self, capability: Capability) -> Result<(), AppError>;
+    /// Replaces the sealed credentials (`None` removes them). An unknown id is `NOT_FOUND`.
+    async fn set_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError>;
+    /// The sealed credentials, `None` when there are none. An unknown id is `NOT_FOUND`.
+    ///
+    /// Only the connector use cases call it, to open the blob with the `SecretBox`; no use case
+    /// returns what it gives back.
+    async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
+    /// Sets the stored status and `updated_at = at`. An unknown id is `NOT_FOUND`; bringing a
+    /// retired capability back while another live one holds its external account is `CONFLICT`
+    /// (in Postgres the transaction is then aborted).
+    async fn set_status(
+        &mut self,
+        id: CapabilityId,
+        status: StoredStatus,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// The kind keys of the capabilities that are not retired; none at all is an empty set. The
+    /// `ChannelCatalog` answers from it.
+    async fn kinds_in_use(&mut self) -> Result<BTreeSet<String>, AppError>;
+}
+
+/// The workspace's capability groups and their members. A group's name is unique within the
+/// workspace (exactly, case included). Member ids come in id order.
+#[async_trait]
+pub trait CapabilityGroupRepo: Send + Sync {
+    /// Stores a group created at `at`. A `group.workspace_id` other than the bundle's is
+    /// `INTERNAL`; a taken id or name is `CONFLICT`.
+    async fn insert(&mut self, group: CapabilityGroup, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Every group with its members, oldest group first.
+    async fn list(&mut self) -> Result<Vec<(CapabilityGroup, Vec<CapabilityId>)>, AppError>;
+    /// The group with its members.
+    async fn find(
+        &mut self,
+        id: CapabilityGroupId,
+    ) -> Result<Option<(CapabilityGroup, Vec<CapabilityId>)>, AppError>;
+    /// Renames the group (callers validate the name). An unknown id is `NOT_FOUND`; a name
+    /// another group of the workspace has is `CONFLICT` (in Postgres the transaction is then
+    /// aborted).
+    async fn rename(&mut self, id: CapabilityGroupId, name: &str) -> Result<(), AppError>;
+    /// Deletes the group; its members are detached, the capabilities stay. An unknown id is
+    /// `NOT_FOUND`.
+    async fn delete(&mut self, id: CapabilityGroupId) -> Result<(), AppError>;
+    /// Adds the capability to the group; adding a member again changes nothing. A group or a
+    /// capability that is not the bundle's workspace's is `NOT_FOUND` (Review Focus 3).
+    async fn add_member(
+        &mut self,
+        group: CapabilityGroupId,
+        capability: CapabilityId,
+    ) -> Result<(), AppError>;
+    /// Removes the capability from the group. A pair that is not a member of a group of the
+    /// workspace is `NOT_FOUND`.
+    async fn remove_member(
+        &mut self,
+        group: CapabilityGroupId,
+        capability: CapabilityId,
+    ) -> Result<(), AppError>;
+}
+
+/// The most entries one [`BudgetRepo::list_spend`] returns.
+pub const MAX_SPEND_PAGE: u32 = 500;
+
+/// The workspace's budget items, the capabilities linked to them, and the append-only ledger of
+/// what was spent from each. Spend entries are never changed or deleted (Postgres refuses it with
+/// a trigger).
+///
+/// Values are stored as given: callers build them with `BudgetItem::new` and `BudgetSpend::new`.
+/// A negative cap or an amount that is not positive breaks a check constraint and is `INTERNAL`.
+#[async_trait]
+pub trait BudgetRepo: Send + Sync {
+    /// Stores a budget item. An `item.workspace_id` other than the bundle's is `INTERNAL`; a
+    /// taken id is `CONFLICT`.
+    async fn insert_item(&mut self, item: BudgetItem) -> Result<(), AppError>;
+    /// Every budget item, oldest (`created_at`, then id) first.
+    async fn list_items(&mut self) -> Result<Vec<BudgetItem>, AppError>;
+    async fn find_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError>;
+    /// Links the capability to the budget item it spends from; linking again changes nothing. A
+    /// capability or an item that is not the bundle's workspace's is `NOT_FOUND` (Review Focus
+    /// 3). Whether the kinds fit (`can_link_budget`) is the caller's rule.
+    async fn link(&mut self, capability: CapabilityId, item: BudgetItemId) -> Result<(), AppError>;
+    /// Removes the link. A pair that is not linked in the workspace is `NOT_FOUND`.
+    async fn unlink(
+        &mut self,
+        capability: CapabilityId,
+        item: BudgetItemId,
+    ) -> Result<(), AppError>;
+    /// Appends a spend to the ledger of its item and returns its id. A `spend.workspace_id`
+    /// other than the bundle's is `INTERNAL`; an item that is not the workspace's is
+    /// `NOT_FOUND`; a taken id is `CONFLICT`.
+    async fn append_spend(&mut self, spend: BudgetSpend) -> Result<BudgetSpendId, AppError>;
+    /// The sum of the item's spend at `from` or later and before `to` (the half-open window of
+    /// `period_window`); 0 for an item with none (or not the workspace's). A sum beyond
+    /// `i64::MAX` reads as `i64::MAX`.
+    async fn spent_between(
+        &mut self,
+        item: BudgetItemId,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<i64, AppError>;
+    /// The item's spend newest first, ordered by `(at, id)` descending, at most `limit` (clamped
+    /// to `1..=MAX_SPEND_PAGE`). `before` is a keyset cursor, the `(at, id)` of the previous
+    /// page's last entry: only entries ordered after it are returned.
+    async fn list_spend(
+        &mut self,
+        item: BudgetItemId,
+        limit: u32,
+        before: Option<(OffsetDateTime, BudgetSpendId)>,
+    ) -> Result<Vec<BudgetSpend>, AppError>;
+}
+
+/// How often an agent checks in unless the workspace says otherwise: once a day.
+pub const DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 1_440;
+/// The shortest check-in interval a workspace may set, in minutes.
+pub const MIN_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 15;
+/// The longest check-in interval a workspace may set, in minutes: a week.
+pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
+
+/// The workspace-wide policies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct WorkspacePolicy {
+    /// How often an agent is expected to check in, in minutes:
+    /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES`.
+    pub agent_checkin_interval_minutes: u32,
+}
+
+impl Default for WorkspacePolicy {
+    fn default() -> Self {
+        WorkspacePolicy {
+            agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
+        }
+    }
+}
+
+/// The workspace's policies.
+#[async_trait]
+pub trait WorkspacePolicyRepo: Send + Sync {
+    /// The stored policies, or [`WorkspacePolicy::default`] while none are stored.
+    async fn get(&mut self) -> Result<WorkspacePolicy, AppError>;
+    /// Stores the policies, updated at `at`, replacing any stored before. An interval outside
+    /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check
+    /// constraint and is `INTERNAL`: callers validate first.
+    async fn set(&mut self, policy: WorkspacePolicy, at: OffsetDateTime) -> Result<(), AppError>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -454,6 +1010,13 @@ pub trait TenantRepos: Send + Sync {
     fn agent_connections(&mut self) -> &mut dyn AgentConnectionRepo;
     fn ledger(&mut self) -> &mut dyn LedgerRepo;
     fn workspace(&mut self) -> &mut dyn WorkspaceRepo;
+    fn strategy(&mut self) -> &mut dyn StrategyRepo;
+    fn hypotheses(&mut self) -> &mut dyn HypothesisRepo;
+    fn consultation(&mut self) -> &mut dyn ConsultationRepo;
+    fn capabilities(&mut self) -> &mut dyn CapabilityRepo;
+    fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo;
+    fn budget(&mut self) -> &mut dyn BudgetRepo;
+    fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 

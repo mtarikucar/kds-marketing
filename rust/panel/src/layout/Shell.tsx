@@ -2,11 +2,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   BookText,
   Bot,
+  Compass,
   Home,
   KeyRound,
   LogOut,
+  Plug,
   ShieldCheck,
   Users,
+  Wallet,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -33,10 +36,22 @@ import { errorMessage } from '@/lib/errors';
 import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
 
-type NavKey = 'home' | 'team' | 'roles' | 'apiKeys' | 'agents' | 'ledger';
+type NavKey =
+  | 'home'
+  | 'strategy'
+  | 'capabilities'
+  | 'budget'
+  | 'team'
+  | 'roles'
+  | 'apiKeys'
+  | 'agents'
+  | 'ledger';
 
 const NAV: { to: string; key: NavKey; Icon: LucideIcon }[] = [
   { to: '/', key: 'home', Icon: Home },
+  { to: '/strategy', key: 'strategy', Icon: Compass },
+  { to: '/capabilities', key: 'capabilities', Icon: Plug },
+  { to: '/budget', key: 'budget', Icon: Wallet },
   { to: '/team', key: 'team', Icon: Users },
   { to: '/roles', key: 'roles', Icon: ShieldCheck },
   { to: '/api-keys', key: 'apiKeys', Icon: KeyRound },
@@ -192,7 +207,9 @@ export function Shell() {
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
             {current ? (
-              <Outlet />
+              // Keyed by workspace: a switch mounts every page afresh, so no local state (an open
+              // editor, a half-typed form) carries over and is saved into the other workspace.
+              <Outlet key={me.current_workspace ?? 'none'} />
             ) : me.memberships.length > 0 ? (
               <EmptyState
                 title={t('shell.chooseWorkspace')}

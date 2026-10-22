@@ -39,6 +39,15 @@ impl Ctx {
         })
     }
 
+    /// Whether the caller's role is `owner` or `manager` (for an agent, its issuer's role). No
+    /// role known never counts.
+    pub fn is_owner_or_manager(&self) -> bool {
+        matches!(
+            self.role_key.as_deref(),
+            Some(key) if key == SystemRole::Owner.key() || key == SystemRole::Manager.key()
+        )
+    }
+
     /// What the caller may hand on, for the role rules of `jt_tenancy`: its permissions, and
     /// whether its role is `owner`.
     pub fn authority(&self) -> ActorAuthority {
@@ -103,6 +112,31 @@ mod tests {
         for key in [None, Some("manager".to_owned())] {
             ctx.role_key = key;
             assert!(!ctx.authority().is_owner);
+        }
+    }
+
+    #[test]
+    fn only_the_owner_and_manager_role_keys_count_as_owner_or_manager() {
+        let mut ctx = Ctx {
+            workspace_id: WorkspaceId::new_v7(),
+            actor: Actor::Human {
+                user_id: UserId::new_v7(),
+            },
+            permissions: SystemRole::Owner.permissions(),
+            role_key: None,
+            now: datetime!(2026-10-22 09:30:00 UTC),
+            agent_connection_id: None,
+        };
+        for (key, expected) in [
+            (None, false),
+            (Some("owner"), true),
+            (Some("manager"), true),
+            (Some("rep"), false),
+            (Some("Owner"), false),
+            (Some("strategist"), false),
+        ] {
+            ctx.role_key = key.map(str::to_owned);
+            assert_eq!(ctx.is_owner_or_manager(), expected, "{key:?}");
         }
     }
 }

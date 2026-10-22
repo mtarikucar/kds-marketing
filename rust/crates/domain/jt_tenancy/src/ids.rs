@@ -1,84 +1,92 @@
 //! Typed identifiers. Each is a UUID newtype so ids of different kinds cannot be mixed up.
 
-use std::fmt;
-use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 /// Declares a UUID newtype id with `new_v7`, `Display`, `FromStr`, `From<Uuid>` and `as_uuid`.
-macro_rules! uuid_id {
+///
+/// Exported so every domain crate declares its ids the same way, e.g.
+/// `jt_tenancy::define_id!(StrategyVersionId);` (doc comments before the name are kept). The
+/// calling crate must depend on `serde` (with `derive`) and `uuid`, as every domain crate does.
+#[macro_export]
+macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
         #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            Hash,
+            PartialOrd,
+            Ord,
+            ::serde::Serialize,
+            ::serde::Deserialize,
         )]
         #[serde(transparent)]
-        pub struct $name(pub Uuid);
+        pub struct $name(pub ::uuid::Uuid);
 
         impl $name {
             /// A fresh, time-ordered (UUIDv7) identifier.
             pub fn new_v7() -> Self {
-                Self(Uuid::now_v7())
+                Self(::uuid::Uuid::now_v7())
             }
 
             /// The underlying UUID.
-            pub fn as_uuid(&self) -> Uuid {
+            pub fn as_uuid(&self) -> ::uuid::Uuid {
                 self.0
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                fmt::Display::fmt(&self.0.hyphenated(), f)
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                ::std::fmt::Display::fmt(&self.0.hyphenated(), f)
             }
         }
 
-        impl FromStr for $name {
-            type Err = uuid::Error;
+        impl ::std::str::FromStr for $name {
+            type Err = ::uuid::Error;
 
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                Uuid::parse_str(s).map(Self)
+            fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
+                ::uuid::Uuid::parse_str(s).map(Self)
             }
         }
 
-        impl From<Uuid> for $name {
-            fn from(id: Uuid) -> Self {
+        impl ::std::convert::From<::uuid::Uuid> for $name {
+            fn from(id: ::uuid::Uuid) -> Self {
                 Self(id)
             }
         }
     };
 }
 
-uuid_id!(
+define_id!(
     /// A workspace (tenant).
     WorkspaceId
 );
-uuid_id!(
+define_id!(
     /// A user account.
     UserId
 );
-uuid_id!(
+define_id!(
     /// A user's membership in a workspace.
     MembershipId
 );
-uuid_id!(
+define_id!(
     /// A role definition within a workspace.
     RoleId
 );
-uuid_id!(
+define_id!(
     /// A panel login session.
     SessionId
 );
-uuid_id!(
+define_id!(
     /// An API key.
     ApiKeyId
 );
-uuid_id!(
+define_id!(
     /// A connection through which an agent acts on a user's behalf.
     AgentConnectionId
 );
-uuid_id!(
+define_id!(
     /// A platform operator.
     OperatorId
 );

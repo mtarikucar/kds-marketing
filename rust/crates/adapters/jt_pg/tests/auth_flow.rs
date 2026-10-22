@@ -9,12 +9,16 @@ use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{LedgerFilter, UnitOfWork};
 use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::auth::{self, LoginInput, RegisterInput};
+use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_app::usecases::{Deps, hash_token};
 use jt_ledger::Actor;
 use jt_pg::PgUnitOfWork;
 use jt_tenancy::{MembershipId, SystemRole, WorkspaceId, WorkspaceStatus};
 use jt_testkit::TestDb;
-use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+    SeqIdGen,
+};
 use serde_json::json;
 use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
@@ -45,6 +49,7 @@ fn ledger_filter() -> LedgerFilter {
     LedgerFilter {
         action_prefix: None,
         actor_kind: None,
+        agent_connection_id: None,
         limit: 10,
         before_id: None,
     }
@@ -60,6 +65,10 @@ async fn register_login_resolve_and_switch_through_postgres() {
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
+        seal: Arc::new(PlainSecretBox),
+        channels: Arc::new(NoChannelsYet),
+        archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(RecordingTenantHosts::new()),
     };
 
     // Registration.
@@ -216,6 +225,10 @@ fn scripted(uow: Arc<dyn UnitOfWork>) -> Deps {
         ids: Arc::new(SeqIdGen::new()),
         tokens: Arc::new(FixedTokenGen::new(["ab12", "s1", "s2"])),
         hasher: Arc::new(PlainHasher),
+        seal: Arc::new(PlainSecretBox),
+        channels: Arc::new(NoChannelsYet),
+        archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(RecordingTenantHosts::new()),
     }
 }
 

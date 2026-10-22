@@ -18,20 +18,23 @@ use axum::extract::{MatchedPath, Request};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use jt_app::error::ErrorCode;
-use jt_app::gate::{NoStrategyYet, StrategyGate};
+use jt_app::gate::StrategyGate;
 use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
+use jt_app::usecases::capabilities::UowChannelCatalog;
+use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
-use jt_outbound::{Egress, FIXED_HOSTS};
+use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
 use jt_panel_http::AppState;
-use jt_pg::PgUnitOfWork;
+use jt_pg::{PgStrategyGate, PgUnitOfWork};
+use jt_seal::AesSecretBox;
 use sqlx::PgPool;
 use sqlx::migrate::Migrate;
 use sqlx::postgres::PgConnectOptions;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::config::{self, Bootstrap, Config};
+use crate::config::{self, Bootstrap, Config, SecretKey};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,15 +49,13 @@ pub async fn run(config: Config) -> Result<()> {
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
-    let deps = deps(pool.clone());
+    let deps = deps(pool.clone(), &config.secret_key);
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
-    // The one egress client, built at start so a bad fixed-tier entry stops it; M1's connectors
-    // take it from here.
-    let egress = Egress::new(FIXED_HOSTS);
+    let gate = strategy_gate(pool.clone());
 
-    let app = app(deps, &config);
+    let app = app(deps, gate, &config);
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -67,7 +68,6 @@ pub async fn run(config: Config) -> Result<()> {
     );
 
     serve(listener, app).await?;
-    drop(egress);
     pool.close().await;
     tracing::info!("stopped");
     Ok(())
@@ -138,16 +138,37 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
     Ok(applied.len())
 }
 
-/// The production ports over `pool`. One [`Argon2Hasher`] for the whole process: its
-/// concurrency permits are per instance, and every clone of the returned `Deps` shares it.
-pub(crate) fn deps(pool: PgPool) -> Deps {
+/// The production ports over `pool`, sealing secrets under `secret_key`. One [`Argon2Hasher`]
+/// for the whole process: its concurrency permits are per instance, and every clone of the
+/// returned `Deps` shares it. Likewise one egress client, built here so that a bad fixed-tier
+/// entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The connectors
+/// M1b adds must share this same client, so that what the registry allows is what they reach;
+/// the tier lives in memory, so it starts empty at every start.
+///
+/// The channel kinds a strategy may name are read from the capability registry, through the same
+/// unit of work: a workspace has a channel kind while it has a capability of that kind that is
+/// not retired.
+pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
+    let egress = Arc::new(Egress::new(FIXED_HOSTS));
+    let uow = Arc::new(PgUnitOfWork::new(pool));
     Deps {
-        uow: Arc::new(PgUnitOfWork::new(pool)),
+        uow: uow.clone(),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
+        seal: Arc::new(AesSecretBox::new(*secret_key.bytes())),
+        channels: Arc::new(UowChannelCatalog::new(uow)),
+        // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
+        archived_hook: Arc::new(NoopArchivedHook),
+        hosts: Arc::new(EgressTenantHosts::new(egress)),
     }
+}
+
+/// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
+/// version. The panel and the MCP endpoint share it.
+pub(crate) fn strategy_gate(pool: PgPool) -> Arc<dyn StrategyGate> {
+    Arc::new(PgStrategyGate::new(pool))
 }
 
 /// Creates the first platform operator unless one exists; a refused email or password names its
@@ -169,9 +190,9 @@ async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
 }
 
 /// The server's single router: the panel's (API, `/healthz`, files) merged with the MCP
-/// endpoint's, with the security headers on every response and a one-line access log.
-pub(crate) fn app(deps: Deps, config: &Config) -> Router {
-    let gate: Arc<dyn StrategyGate> = Arc::new(NoStrategyYet);
+/// endpoint's, both behind the one strategy `gate`, with the security headers on every response
+/// and a one-line access log.
+pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> Router {
     let panel = AppState {
         deps: deps.clone(),
         gate: Arc::clone(&gate),
@@ -333,8 +354,10 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
+    use jt_app::gate::NoStrategyYet;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-    use jt_testkit::fakes::{InMemoryUow, PlainHasher};
+    use jt_app::usecases::strategy::NoChannelsYet;
+    use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -348,6 +371,10 @@ mod tests {
             ids: Arc::new(UuidV7Gen),
             tokens: Arc::new(RandTokenGen),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
+            hosts: Arc::new(RecordingTenantHosts::new()),
         }
     }
 
@@ -442,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_router_serves_health_the_api_and_mcp_with_structured_errors() {
-        let app = app(test_deps(), &test_config(&[]));
+        let app = app(test_deps(), Arc::new(NoStrategyYet), &test_config(&[]));
 
         let health = Request::get("/healthz").body(Body::empty()).unwrap();
         assert_eq!(
@@ -480,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_accepts_loopback_hosts_and_the_configured_public_ones() {
         let deps = test_deps();
-        let loopback_only = app(deps.clone(), &test_config(&[]));
+        let loopback_only = app(deps.clone(), Arc::new(NoStrategyYet), &test_config(&[]));
         let key = api_key(&loopback_only, &deps).await;
         for (host, expected) in [
             ("localhost:8080", StatusCode::OK),
@@ -494,6 +521,7 @@ mod tests {
         let deps = test_deps();
         let public = app(
             deps.clone(),
+            Arc::new(NoStrategyYet),
             &test_config(&[(config::ALLOWED_HOSTS, "jeeta.example.com")]),
         );
         let key = api_key(&public, &deps).await;
@@ -506,6 +534,84 @@ mod tests {
             let (status, _, _) = call(&public, mcp_initialize(host, &key)).await;
             assert_eq!(status, expected, "{host}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_served_ports_read_channels_from_the_capability_registry_and_guard_hosts() {
+        // The production ports over a test database; only the hasher is swapped for speed.
+        let db = jt_testkit::TestDb::new().await;
+        let config = test_config(&[]);
+        let mut deps = deps(db.pool.clone(), &config.secret_key);
+        deps.hasher = Arc::new(PlainHasher);
+        let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
+
+        let (status, cookie, me) = call(
+            &app,
+            panel_post(
+                "/api/auth/register",
+                None,
+                json!({
+                    "email": "owner@example.test",
+                    "password": "correct horse battery",
+                    "display_name": "Owner",
+                    "workspace_name": "Acme"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let ws = jt_testkit::panel::workspace_of(&me);
+        jt_testkit::flows::activate_workspace(&deps, ws).await;
+        let cookie = cookie.unwrap();
+        let session = cookie.split(';').next().unwrap();
+
+        // No capability, no channel kind; a declared phone is one.
+        assert!(deps.channels.kinds_in_use(ws).await.unwrap().is_empty());
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                "/api/capabilities",
+                Some(session),
+                json!({ "kind_key": "phone", "name": "Saha telefonu" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let kinds: Vec<String> = deps
+            .channels
+            .kinds_in_use(ws)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(kinds, ["phone"]);
+
+        // The tenant hosts go through the egress guard: a loopback host is refused, a public one
+        // accepted.
+        let mailbox = |host: &str| {
+            json!({
+                "kind_key": "mailbox",
+                "name": "Destek",
+                "connector_public": { "hosts": [host] },
+            })
+        };
+        let (status, _, body) = call(
+            &app,
+            panel_post("/api/capabilities", Some(session), mailbox("127.0.0.1")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["message"], "host is not public");
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                "/api/capabilities",
+                Some(session),
+                mailbox("imap.example.com"),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
     }
 
     #[tokio::test]

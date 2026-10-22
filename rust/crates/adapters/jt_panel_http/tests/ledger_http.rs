@@ -1,176 +1,21 @@
 //! `GET /api/ledger` end to end through Postgres: newest first, its query filters and paging,
 //! structured errors for a bad query, and who may read it.
 
-use std::sync::Arc;
-
-use axum::Router;
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
-use axum::response::Response;
-use jt_app::gate::NoStrategyYet;
-use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-use jt_app::usecases::Deps;
-use jt_panel_http::{AppState, router};
-use jt_pg::PgUnitOfWork;
-use jt_testkit::TestDb;
-use jt_testkit::fakes::PlainHasher;
-use jt_testkit::flows::activate_workspace;
+use axum::http::{Method, StatusCode};
+use jt_testkit::panel::{Panel, expect_error, ok_json};
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
-const PASSWORD: &str = "correct horse battery";
-const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
-
-/// A router over a fresh test database, and the `Deps` behind it.
-struct Panel {
-    _db: TestDb,
-    deps: Deps,
-    app: Router,
+/// The ledger route, on the shared harness.
+trait LedgerRoute {
+    /// The entries `GET /api/ledger{query}` lists for `cookie`.
+    async fn ledger(&self, query: &str, cookie: &str) -> Vec<Value>;
 }
 
-impl Panel {
-    async fn new() -> Panel {
-        let db = TestDb::new().await;
-        let deps = Deps {
-            uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-            clock: Arc::new(SystemClock),
-            ids: Arc::new(UuidV7Gen),
-            tokens: Arc::new(RandTokenGen),
-            hasher: Arc::new(PlainHasher),
-        };
-        let state = AppState {
-            deps: deps.clone(),
-            gate: Arc::new(NoStrategyYet),
-            cookie_secure: false,
-            panel_dir: None,
-        };
-        Panel {
-            _db: db,
-            deps,
-            app: router(state),
-        }
-    }
-
-    async fn send(
-        &self,
-        method: Method,
-        path: &str,
-        cookie: Option<&str>,
-        body: Option<Value>,
-    ) -> Response {
-        let mut builder = Request::builder().method(method.clone()).uri(path);
-        if !method.is_safe() {
-            builder = builder.header(REQUESTED_WITH.0, REQUESTED_WITH.1);
-        }
-        if let Some(cookie) = cookie {
-            builder = builder.header(header::COOKIE, cookie);
-        }
-        let body = match body {
-            Some(body) => {
-                builder = builder.header(header::CONTENT_TYPE, "application/json");
-                Body::from(body.to_string())
-            }
-            None => Body::empty(),
-        };
-        self.app
-            .clone()
-            .oneshot(builder.body(body).unwrap())
-            .await
-            .unwrap()
-    }
-
-    async fn get(&self, path: &str, cookie: &str) -> Response {
-        self.send(Method::GET, path, Some(cookie), None).await
-    }
-
-    /// Registers `email` with a new workspace, which the platform operator then activates;
-    /// returns the `jt_session=…` pair.
-    async fn register(&self, email: &str, workspace_name: &str) -> String {
-        let body = json!({
-            "email": email,
-            "password": PASSWORD,
-            "display_name": "Owner",
-            "workspace_name": workspace_name,
-        });
-        let resp = self
-            .send(Method::POST, "/api/auth/register", None, Some(body))
-            .await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let cookie = session_pair(&resp);
-        let me = ok_json(resp).await;
-        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
-        activate_workspace(&self.deps, ws).await;
-        cookie
-    }
-
-    /// Invites `email` as `role_key` from `owner_cookie`; returns the invitation.
-    async fn invite(&self, owner_cookie: &str, email: &str, role_key: &str) -> Value {
-        let resp = self
-            .send(
-                Method::POST,
-                "/api/team/invites",
-                Some(owner_cookie),
-                Some(json!({ "email": email, "role_key": role_key })),
-            )
-            .await;
-        ok_json(resp).await
-    }
-
-    /// Invites `email` as `role_key` from `owner_cookie` and accepts as a new user; returns the
-    /// new user's `jt_session=…` pair.
-    async fn join(&self, owner_cookie: &str, email: &str, role_key: &str) -> String {
-        let invite = self.invite(owner_cookie, email, role_key).await;
-        let resp = self
-            .send(
-                Method::POST,
-                "/api/team/invites/accept",
-                None,
-                Some(json!({
-                    "token": invite["invite_token"],
-                    "password": PASSWORD,
-                    "display_name": email,
-                })),
-            )
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        session_pair(&resp)
-    }
-
-    /// The entries `GET /api/ledger{query}` lists for `cookie`.
+impl LedgerRoute for Panel {
     async fn ledger(&self, query: &str, cookie: &str) -> Vec<Value> {
         let body = ok_json(self.get(&format!("/api/ledger{query}"), cookie).await).await;
         body.as_array().expect("the ledger is a JSON array").clone()
     }
-}
-
-/// The `jt_session=…` pair of the response's single `Set-Cookie` header.
-fn session_pair(resp: &Response) -> String {
-    let all: Vec<_> = resp.headers().get_all(header::SET_COOKIE).iter().collect();
-    assert_eq!(all.len(), 1, "exactly one Set-Cookie header");
-    let pair = all[0].to_str().unwrap().split(';').next().unwrap().trim();
-    assert!(pair.starts_with("jt_session="), "{pair}");
-    pair.to_owned()
-}
-
-async fn body_text(resp: Response) -> String {
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
-}
-
-/// The JSON body of a `2xx` response.
-async fn ok_json(resp: Response) -> Value {
-    assert!(resp.status().is_success(), "{}", resp.status());
-    serde_json::from_str(&body_text(resp).await).unwrap()
-}
-
-/// Asserts a structured error with this status and code, and returns its body.
-async fn expect_error(resp: Response, status: StatusCode, code: &str) -> Value {
-    assert_eq!(resp.status(), status);
-    let body: Value = serde_json::from_str(&body_text(resp).await).unwrap();
-    assert_eq!(body["code"], code, "{body}");
-    assert!(body["message"].is_string(), "{body}");
-    assert!(body["details"].is_object(), "{body}");
-    body
 }
 
 /// The action names of listed entries, in order.
@@ -189,7 +34,7 @@ fn ids(entries: &[Value]) -> Vec<i64> {
 #[tokio::test]
 async fn owner_lists_ledger_newest_first_with_filters() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
     let invite = p.invite(&owner, "bob@example.com", "rep").await;
 
     // Registration, the operator's activation, then the invitation: newest first, each with
@@ -258,7 +103,7 @@ async fn owner_lists_ledger_newest_first_with_filters() {
 #[tokio::test]
 async fn bad_ledger_queries_are_structured_422() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
 
     let resp = p.get("/api/ledger?limit=many", &owner).await;
     expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
@@ -267,13 +112,16 @@ async fn bad_ledger_queries_are_structured_422() {
     let resp = p.get("/api/ledger?actor_kind=robot", &owner).await;
     let body = expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
     assert_eq!(body["details"], json!({ "field": "actor_kind" }));
+    // An unknown parameter is refused, not ignored, as on every panel list.
+    let resp = p.get("/api/ledger?action=team.invite", &owner).await;
+    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
 }
 
 #[tokio::test]
 async fn rep_cannot_read_ledger_403() {
     let p = Panel::new().await;
-    let owner = p.register("owner@alpha.example", "Alpha").await;
-    let rep = p.join(&owner, "rep@alpha.example", "rep").await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
+    let (rep, _) = p.join(&owner, "rep@alpha.example", "rep").await;
 
     let resp = p.get("/api/ledger", &rep).await;
     let body = expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;

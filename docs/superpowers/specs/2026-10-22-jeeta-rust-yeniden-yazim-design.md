@@ -140,6 +140,20 @@ flowchart LR
    diye sorar. Sistem bekleyen işleri sırayla sunar, ajanın geliş zamanını kaydeder, gecikmeyi panelde
    gösterir (B11).
 
+**(M1a uygulamasında kesinleşti) B11 mekaniği.** Ajanın giriş noktası `jeeta.work.pending`'dir
+(panelde `GET /api/work/pending`, ana sayfanın verisi): stratejinin durumu (yok, taslak açık ve
+eksikleri, onay bekliyor, onaylı sürüm numarası), en acil olanı başta bekleyen işler (istişare, onay,
+ajan ve cihaz kabiliyetlerinin doğrulanması ya da yeniden doğrulanması, bağlayıcının bağlanması, ilk
+kabiliyetin bildirilmesi; her biri ajan için İngilizce bir ipucuyla) ve ajanın durumu. Ajan kendi
+zamanlayıcısıyla en az yoklama aralığında bir `jeeta.work.checkin` çağırır; yanıtı `pending` ile
+aynıdır. Yoklama yalnız ajanın çağrısıdır (insan çağırırsa `FORBIDDEN`), bağlantı başına saatte en çok
+bir kez günlüğe yazılır; ajanın her çağrısı bağlantısının son görülme zamanını zaten günceller. Aralık
+çalışma alanı başınadır, 15 dakika ile bir hafta arası, varsayılanı bir gündür (`team.manage` ile
+değişir). `overdue`: hiç ajan bağlantısı yok ya da en son görüleni aralıktan eski; panelin ana sayfası
+kırmızı bir uyarı, Ajanlar sayfası her bağlantının satırında bir işaret gösterir. Bekleyen işler ve
+yoklama strateji kapısından da çalışma alanı durumu denetiminden de muaftır: ajan strateji yokken ve
+alan ödeme beklerken de neyin beklediğini sorabilir.
+
 ### 4.3 Hexagonal yerleşim (Rust)
 
 Tek Cargo çalışma alanı, tek süreç, tek ikili. Üç başlık ayrı alan kütüphaneleridir; ileride servis
@@ -210,11 +224,33 @@ MCP araç adları `jeeta.<alan>.<eylem>` biçimindedir. Her araç yapısal hata 
 taşır: OKU, YAZ, HARCA, YIKICI. Yıkıcı araçlar (kişi birleştirme geri alma, strateji arşivleme gibi)
 iki adımlı onay ister; diğerleri K8 gereği istemez.
 
+**(M1a uygulamasında kesinleşti) Onay isteyen yıkıcı araçlar ve anahtar yetkisi.** İki adımlı onay,
+çağrının kendisinde `confirm: true` olarak istenir (yoksa `VALIDATION`) ve M1a'da yalnız geri
+alınamayan iki yıkıcı araçta vardır: `jeeta.strategy.archive` (onaylı sürümü arşivler ve strateji
+kapısını yeniden kapatır) ve `jeeta.capability.retire` (kabiliyeti kesin olarak emekliye ayırır, ona
+kayıtlı dış adreslerin iznini geri alır, gruplarından ve bütçe bağlarından çıkarır). YIKICI etiketli
+öteki araçlar `confirm` istemez, çünkü etkileri onarılabilir ya da yeniden kurulabilir: çıkarılan üye
+yeniden davet edilir (`team.remove`), silinen özel rol yeniden açılır (`roles.delete`), iptal edilen
+anahtarın yerine yenisi çıkarılır (`api_keys.revoke`), silinen kabiliyet grubu yeniden kurulur ve
+üyeleri yerinde kalır (`capability.groups_delete`). Grup silmenin onarılabilir olması, gruba hiçbir şeyin
+başvurmamasına bağlıdır: onaylı sürüm ya da açık taslak bir kanalı o gruba daraltmışsa
+(`ChannelChoice.group_id`) silme `CONFLICT` ("group is referenced by the strategy", `details.version_ids`)
+döner ve hiçbir şey değişmez. Bu eylemlerin yetkisi onaydan değil rolden gelir:
+onaylamak ve arşivlemek gibi role bağlı eylemler, rol anahtarıyla birlikte `team.manage` iznini anahtarın
+kapsamı içinde ister ve ajan bu yetkiyi anahtarı çıkaran insandan devralır (§5).
+
 ### 4.5 Panel ve MCP ikizliği
 
 Panelde yapılabilen her iş bir MCP aracıyla da yapılabilir; tersi de geçerlidir. İkisi aynı uygulama
 servisini çağırır (B8). Panel ayrıca ajanın ne yaptığını gösterir: her alanın bir **günlüğü** vardır ve
 ajanın eylemleri orada insan eylemleriyle aynı biçimde durur.
+
+**(M1a uygulamasında kesinleşti) MCP'ye özgü kullanım durumları.** "Tersi de geçerlidir" kuralının tek
+istisnası insan çağıranı olmayan kullanım durumudur: kataloğun `mcp_only` satırları panel rotası
+taşımaz. M1'de tek böyle satır ajanın yoklamasıdır (`work.checkin`, `jeeta.work.checkin`); panel onun
+sonucunu (son görülme, gecikme) `work.pending` ve `agents.list` ikizleriyle gösterir. Bir satır hem
+panele hem MCP'ye özgü olamaz; ikizlik testi `mcp_only` satırlarını panel rotası olmadan kabul eder ve
+M1a'nın kaydı 47 MCP aracı tutar.
 
 Panelin teknolojisi benim kararımdır: React ve TypeScript, v1'in tasarım sistemi (otuz yedi hazır
 bileşen) yeniden kullanılır, Rust ikilisi statik dosyaları sunar. Diller: Türkçe ve İngilizce; v1'in
@@ -255,6 +291,19 @@ etkinleştirene kadar üye davet edemez ve API anahtarı çıkaramaz; askıdaki 
 davet de kabul edilemez. Panelde bu denetim her rotanın önünde, işleyicinin ne aldığından bağımsız
 çalışır.
 
+**(M1a uygulamasında kesinleşti) Strateji ve bekleyen işler ödemeden önce.** Strateji araçları
+(`strategy.*`) ve bekleyen işler (`work.*`) durum denetiminden **yalnız alan `pending_payment` iken** muaftır:
+strateji, alan ödeme beklerken de hazırlanıp onaylanabilir; ajan da neyin beklediğini sorabilir. Alan
+`suspended` iken onlar da `WORKSPACE_INACTIVE {"status":"suspended"}` döner; askıdaki bir alanda yalnız
+`auth.`, `workspace.` ve `platform.` önekliler çalışır. Her durumda muaf önekler tam olarak `auth.`,
+`workspace.`, `platform.`'dur; ödeme beklerken muaf olanlar tam olarak `strategy.`, `work.`'tür. Ödeme
+bekleyen bir alan stratejiyi hazırlar ama etkinleşene kadar kabiliyet bildiremez. Strateji kapısından muaf
+olanlar ise
+`auth.`, `workspace.`, `team.`, `roles.`, `api_keys.`, `agents.`, `platform.`, `strategy.`,
+`capability.`, `budget.`, `work.` önekleri ile `ledger.list`'tir; kabiliyet ve bütçe araçları stratejiden
+muaftır (istişare alanın neye sahip olduğunu bilmek ister) ama durumdan muaf değildir. M1a hiçbir `Gated`
+kullanım durumu eklemez; B1'in davranış testi gerçek kapıyla (`PgStrategyGate`) çalışır.
+
 **Strateji yokken gelen mesaj.** Kiracı bir hattı bağlamış ve müşteri yazmışsa mesaj düşmez:
 kişi ve konuşma kaydedilir, panelde görünür, yürütücü insandır. Ajan o konuşmaya yazamaz; panel
 "strateji bekleniyor" uyarısı gösterir. Bu benim kararım: müşteriyi kaybetmek kapıdan daha pahalıdır.
@@ -274,11 +323,39 @@ hat ve amaç ayrımı içindir. Bu benim kararım.
 | `jeeta.strateji.onaya_sun` | taslağı sahibin onayına çıkarır; panelde "onay bekliyor" |
 | `jeeta.strateji.onayla` | sahip ya da yönetici rolü; panelden ya da sohbetten, ek kod istemez (K11) |
 
+**(M1a uygulamasında kesinleşti) İstişare araçları.** Kodda araçlar şunlardır: `jeeta.strategy.get`
+(onaylı sürüm, açık taslak ve taslağın eksikleri; açıklaması ajana protokolü söyler),
+`start_consultation` (taslak açar ya da açık olanı döndürür; onaylı sürüm varsa taslak onun kopyasıdır),
+`record` (soru, cevap, varsayım ve not tek araçtır, `kind` ile ayrılır), `write_section`,
+`set_hypotheses`, `submit` (eksik varsa `VALIDATION` ve `details.gaps`), `approve`, `archive`,
+`list_versions`, `consultation` (sürümün kaydı, `(at, id)` imleciyle sayfa sayfa). Okuma `workspace.read`,
+istişareyi yürütmek `team.manage` ister. **Onay ve arşiv yetkisi:** rol anahtarı `owner` ya da `manager`
+**ve** `team.manage` (anahtarın kapsamı dahil): ajan sahibin ya da yöneticinin `team.manage` taşıyan
+anahtarıyla onaylayabilir, kapsamında `team.manage` olmayan bir sahip anahtarı onaylayamaz; ek kod
+istenmez (K11).
+**Arşiv sürümünü adlandırır:** `jeeta.strategy.archive` arşivlenecek onaylı sürümün kimliğini
+(`version_id`) ve `confirm: true` ister; o sürüm artık yürürlükte değilse `CONFLICT` döner, böylece eski
+bir ekrandan gelen arşiv yeni onaylanmış sürümü kapatmaz.
+**Onay da taslağı adlandırır ve varsayımlar onayda listelenir:** bir taslağın yanıtı istişarenin
+`assumption` kayıtlarını (en yenisi başta) `assumptions` alanında taşır; panel onaydan önce bunları ve
+yürürlüğe girecek hipotez sayısını bir onay penceresinde gösterir, `jeeta.strategy.approve` açıklaması da
+ajana varsayımları sahibe okumadan onaylamamasını söyler. `approve`, okunan taslağın `version_id` ve
+`submitted_at` değerlerini ister; kilitler alındıktan sonra taslak başka bir sürümse ya da yeniden
+sunulmuşsa `CONFLICT` ("the draft changed since you read it", taslağın şimdiki `version_id` ve
+`submitted_at` değerleriyle) döner, böylece sahip gözden geçirmediği bir taslağı onaylamaz.
+
 **İçerik.** Strateji şu bölümlerden oluşur: kimlik (ürün, ses, konumlama, fark); kitle ve segmentler;
 kanallar ve her kanalın gerekçesi; **hipotezler** (eski adıyla içerik sütunları: "şu segment, şu
 açıya, şu kanalda tepki verir"; her biri sınanabilir ve bir ölçüte bağlı); hedefler ve ölçütler;
 **bütçe çerçevesi** (şerit başına dönemlik tavan; §9); yasaklar (söylenmeyecekler, girilmeyecek
 konular); tempo (haftalık yayın sayısı, kanal dağılımı); ücretli kanal var mı.
+
+**(M1a uygulamasında kesinleşti) Onay için kanallar.** Stratejinin seçtiği her kanal `any` ya da alanın
+emekliye ayrılmamış bir kabiliyetinin türüdür (kabiliyet kaydından okunur); bir kanal bir kabiliyet
+grubuna daraltılmışsa (`ChannelChoice.group_id`) o grup alanın var olan bir grubudur; her canlı
+hipotezin kanalı stratejinin **kendi seçtiği** kanallardan biri ya da `any`'dir (alanın sahip olduğu ama
+stratejinin seçmediği bir tür yetmez). Aykırı her durum onayı ve onaya sunmayı `VALIDATION` ile durdurur,
+eksik alan yoluyla sayılır.
 
 **Yeni sürüm.** Bütçe çerçevesini büyütmek, kanal eklemek, hipotez eklemek yeni bir sürümdür ve
 istişareden geçer. Küçük düzeltmeler (yazım, ölçüt eşiği) aynı sürümde "not" olarak kaydedilir; bu
@@ -314,6 +391,16 @@ vardır:
 Her türden birden çok örnek olabilir (K6, B10). Kimlik bilgileri çalışma alanı başına ayrı anahtarla
 mühürlenir (AES-256-GCM); anahtar makinede dosyadır, depoya girmez.
 
+**(M1a uygulamasında kesinleşti) İzinler ve örnekler.** İki yeni izin: `capabilities.manage`
+(kabiliyet bildirmek, doğrulamak, ulaşılamaz işaretlemek, politikasını yazmak, emekliye ayırmak,
+gruplamak, bütçeye bağlamak) ve `budget.manage` (bütçe kalemi açmak). Sahip ve yönetici rolleri ikisini
+de taşır, temsilci taşımaz; M1a'dan önce açılmış alanların sistem rollerine bir veri göçü
+(`0004_role_permissions_backfill`, geri alınabilir) ekler. Okumak, harcama bildirmek ve ajanın kendi
+kabiliyetini doğrulaması `workspace.read` ister. Aynı türden örnekler serbesttir; aynı dış hesap (tür ve
+sağlayıcının kimliği) ise emekliye ayrılmamış tek bir kabiliyette durur. Çalışma alanı başına anahtar,
+ana anahtardan (`JEETA_SECRET_KEY`) HKDF-SHA256 ile türetilir; ana anahtar değişirse mühürlü
+yapılandırmalar açılamaz.
+
 ### 6.2 Tür listesi
 
 | Grup | Türler | Ulaşım yolu |
@@ -334,6 +421,17 @@ mühürlenir (AES-256-GCM); anahtar makinede dosyadır, depoya girmez.
 "Bütçe kalemi" kiracının kendi parası ve kendi hesaplarındaki tavanlardır; sistemin kredisi değildir
 (K4).
 
+**(M1a uygulamasında kesinleşti) Türler, bütçe ve emeklilik.** Tür listesi on grupta 49 anahtardır;
+listede olmayan tür `VALIDATION` alır, üçüncü taraf "diğer" türü aracın adını ayrıca ister. Bütçe
+kaleminin birimi türüne uyar (nakit, reklam ve SMS bütçesi para birimiyle; ajan kotası ve sarf malzeme
+sayıyla; ajan çalışma saati dakikayla) ve bir kabiliyet yalnız türüne uyan kaleme bağlanır. Ajanın ya da
+insanın bildirdiği harcama tavanı aşsa da kaydedilir ve günlükte `budget.over_cap` ile işaretlenir; sert
+tavan bağlayıcıların harcamasına M3'te uygulanır. Emekliye ayırma kesindir: kabiliyet aynı işlemde
+gruplarından ve bütçe bağlarından çıkar, kaydı kalır; emekli bir kabiliyet doğrulanamaz, gruplanamaz,
+bütçeye bağlanamaz, politikası değişmez (`CONFLICT`). Politikadaki çalışma saatleri yarı açık
+aralıklardır: `from` 0–23, `to` 1–24 (24 gün sonundaki gece yarısıdır), `from < to`; gece yarısını aşan
+pencere iki günün pencereleriyle yazılır.
+
 ### 6.3 Gruplar
 
 Grup, kabiliyetlerin adlandırılmış kümesidir: marka, şube, persona, amaç. Bir kabiliyet birden çok
@@ -346,6 +444,17 @@ kutusu, hangi hattın hangi markaya ait olduğunu gruptan okur. İç içe grup i
   `ulaşılamıyor` yapar ve günlüğe yazar. OAuth jetonu yenilenemiyorsa panelde "yeniden bağla" görünür.
 - **Ajan ve cihaz:** ajan `jeeta.kabiliyet.dogrula` ile kanıt sunar; doğrulama yaşı panelde görünür;
   eşik aşılınca `bildirildi`ye düşer. Eşik politikadır.
+- **(M1a uygulamasında kesinleşti)** Kabiliyet onu bildiren ajan bağlantısını saklar
+  (`declared_by_connection`; bir insan bildirdiyse boş). Ajan bir ajan ya da cihaz kabiliyetini (ulaşım
+  yolu ajan ya da cihaz) yalnız `workspace.read` ile ancak kendi bağlantısı bildirdiyse doğrular, çünkü
+  kanıt ancak o zaman ajanın kendi elleri hakkındaki beyanıdır; başka bir bağlantının ya da bir insanın
+  bildirdiğini doğrulamak için `capabilities.manage` ister. Panelde bir insan her zaman
+  `capabilities.manage` ister. Kanıt metin ve isteğe bağlı dayanaklardır (seri
+  numarası, dosya ya da ekran görüntüsü kimliği); sistem onu kaydeder, denetlemez. Eşik politikanın
+  `verify_max_age_days` alanıdır (varsayılan 30 gün); eşiği aşan doğrulama her yerde `stale` okunur ve
+  bekleyen işlere yeniden doğrulama olarak düşer. Bağlayıcıyla ulaşılan türler bir beyanla doğrulanamaz
+  (`CONFLICT`); onları kendi yoklamaları doğrular (M1b). Bildirilmiş ama bağlanmamış her bağlayıcı
+  kabiliyeti bekleyen işlerde adıyla "bağlan" işi olarak görünür.
 
 ### 6.5 Araçlar (özet)
 

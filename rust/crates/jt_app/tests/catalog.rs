@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use jt_app::catalog::{CATALOG, GateMode, Risk, by_mcp_tool, find};
+use jt_app::catalog::{CATALOG, GateMode, Risk, StatusExemption, by_mcp_tool, find};
 
 #[test]
 fn ids_are_unique() {
@@ -11,11 +11,45 @@ fn ids_are_unique() {
 }
 
 #[test]
-fn every_non_panel_only_use_case_has_both_surfaces() {
-    for uc in CATALOG.iter().filter(|uc| !uc.panel_only) {
+fn every_use_case_but_the_one_surface_ones_has_both_surfaces() {
+    for uc in CATALOG.iter().filter(|uc| !uc.panel_only && !uc.mcp_only) {
         assert!(uc.mcp_tool.is_some(), "{} has no MCP tool", uc.id);
         assert!(uc.panel_route.is_some(), "{} has no panel route", uc.id);
     }
+}
+
+#[test]
+fn no_use_case_is_both_panel_only_and_mcp_only() {
+    for uc in CATALOG {
+        assert!(
+            !(uc.panel_only && uc.mcp_only),
+            "{} is both panel-only and MCP-only",
+            uc.id
+        );
+    }
+}
+
+#[test]
+fn mcp_only_use_cases_have_no_panel_route() {
+    for uc in CATALOG.iter().filter(|uc| uc.mcp_only) {
+        assert!(
+            uc.panel_route.is_none(),
+            "{} is MCP-only but has a panel route",
+            uc.id
+        );
+        assert!(
+            uc.mcp_tool.is_some(),
+            "{} is MCP-only but has no MCP tool",
+            uc.id
+        );
+    }
+    // An agent-only tool has no human caller: the agent's check-in is the only one.
+    let mcp_only: Vec<&str> = CATALOG
+        .iter()
+        .filter(|uc| uc.mcp_only)
+        .map(|uc| uc.id)
+        .collect();
+    assert_eq!(mcp_only, ["work.checkin"]);
 }
 
 #[test]
@@ -72,7 +106,7 @@ fn panel_routes_are_unique() {
 
 #[test]
 #[rustfmt::skip]
-fn catalog_is_the_m0_table() {
+fn catalog_is_the_release_table() {
     let rows: Vec<_> = CATALOG
         .iter()
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
@@ -99,16 +133,54 @@ fn catalog_is_the_m0_table() {
         ("agents.list", Some("jeeta.agents.list"), Some(("GET", "/api/agents")), false, Risk::Read),
         ("agents.whoami", Some("jeeta.agent.whoami"), Some(("GET", "/api/whoami")), false, Risk::Read),
         ("ledger.list", Some("jeeta.ledger.list"), Some(("GET", "/api/ledger")), false, Risk::Read),
+        ("strategy.get", Some("jeeta.strategy.get"), Some(("GET", "/api/strategy")), false, Risk::Read),
+        ("strategy.start_consultation", Some("jeeta.strategy.start_consultation"), Some(("POST", "/api/strategy/consultation")), false, Risk::Write),
+        ("strategy.record", Some("jeeta.strategy.record"), Some(("POST", "/api/strategy/consultation/entries")), false, Risk::Write),
+        ("strategy.write_section", Some("jeeta.strategy.write_section"), Some(("PUT", "/api/strategy/draft/sections/{section_key}")), false, Risk::Write),
+        ("strategy.set_hypotheses", Some("jeeta.strategy.set_hypotheses"), Some(("PUT", "/api/strategy/draft/hypotheses")), false, Risk::Write),
+        ("strategy.submit", Some("jeeta.strategy.submit"), Some(("POST", "/api/strategy/draft/submit")), false, Risk::Write),
+        ("strategy.approve", Some("jeeta.strategy.approve"), Some(("POST", "/api/strategy/draft/approve")), false, Risk::Write),
+        ("strategy.archive", Some("jeeta.strategy.archive"), Some(("POST", "/api/strategy/archive")), false, Risk::Destructive),
+        ("strategy.list_versions", Some("jeeta.strategy.list_versions"), Some(("GET", "/api/strategy/versions")), false, Risk::Read),
+        ("strategy.consultation", Some("jeeta.strategy.consultation"), Some(("GET", "/api/strategy/versions/{version_id}/consultation")), false, Risk::Read),
+        ("capability.list", Some("jeeta.capability.list"), Some(("GET", "/api/capabilities")), false, Risk::Read),
+        ("capability.get", Some("jeeta.capability.get"), Some(("GET", "/api/capabilities/{capability_id}")), false, Risk::Read),
+        ("capability.declare", Some("jeeta.capability.declare"), Some(("POST", "/api/capabilities")), false, Risk::Write),
+        ("capability.verify", Some("jeeta.capability.verify"), Some(("POST", "/api/capabilities/{capability_id}/verify")), false, Risk::Write),
+        ("capability.mark_unreachable", Some("jeeta.capability.mark_unreachable"), Some(("POST", "/api/capabilities/{capability_id}/unreachable")), false, Risk::Write),
+        ("capability.set_policy", Some("jeeta.capability.set_policy"), Some(("PUT", "/api/capabilities/{capability_id}/policy")), false, Risk::Write),
+        ("capability.retire", Some("jeeta.capability.retire"), Some(("POST", "/api/capabilities/{capability_id}/retire")), false, Risk::Destructive),
+        ("capability.link_budget", Some("jeeta.capability.link_budget"), Some(("POST", "/api/capabilities/{capability_id}/budget-links")), false, Risk::Write),
+        ("capability.unlink_budget", Some("jeeta.capability.unlink_budget"), Some(("DELETE", "/api/capabilities/{capability_id}/budget-links/{budget_item_id}")), false, Risk::Write),
+        ("capability.groups.list", Some("jeeta.capability.groups_list"), Some(("GET", "/api/capability-groups")), false, Risk::Read),
+        ("capability.groups.create", Some("jeeta.capability.groups_create"), Some(("POST", "/api/capability-groups")), false, Risk::Write),
+        ("capability.groups.rename", Some("jeeta.capability.groups_rename"), Some(("PATCH", "/api/capability-groups/{group_id}")), false, Risk::Write),
+        ("capability.groups.delete", Some("jeeta.capability.groups_delete"), Some(("DELETE", "/api/capability-groups/{group_id}")), false, Risk::Destructive),
+        ("capability.groups.add_member", Some("jeeta.capability.groups_add_member"), Some(("POST", "/api/capability-groups/{group_id}/members")), false, Risk::Write),
+        ("capability.groups.remove_member", Some("jeeta.capability.groups_remove_member"), Some(("DELETE", "/api/capability-groups/{group_id}/members/{capability_id}")), false, Risk::Write),
+        ("budget.items.list", Some("jeeta.budget.items_list"), Some(("GET", "/api/budget/items")), false, Risk::Read),
+        ("budget.items.create", Some("jeeta.budget.items_create"), Some(("POST", "/api/budget/items")), false, Risk::Write),
+        ("budget.spend.record", Some("jeeta.budget.spend_record"), Some(("POST", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Spend),
+        ("budget.spend.list", Some("jeeta.budget.spend_list"), Some(("GET", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Read),
+        ("work.pending", Some("jeeta.work.pending"), Some(("GET", "/api/work/pending")), false, Risk::Read),
+        ("work.checkin", Some("jeeta.work.checkin"), None, false, Risk::Write),
+        ("work.set_checkin_interval", Some("jeeta.work.set_checkin_interval"), Some(("PUT", "/api/work/checkin-interval")), false, Risk::Write),
         ("platform.login", None, Some(("POST", "/api/platform/login")), true, Risk::Write),
         ("platform.workspaces.list", None, Some(("GET", "/api/platform/workspaces")), true, Risk::Read),
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "M0 has no gated use case");
-    let status_exempt: Vec<&str> =
-        CATALOG.iter().filter(|uc| uc.status_exempt).map(|uc| uc.id).collect();
+    assert_eq!(CATALOG.len(), 56);
+    assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
+    let exempt = |e: StatusExemption| -> Vec<&str> {
+        CATALOG
+            .iter()
+            .filter(|uc| uc.status_exemption == e)
+            .map(|uc| uc.id)
+            .collect()
+    };
     assert_eq!(
-        status_exempt,
+        exempt(StatusExemption::Always),
         [
             "auth.register",
             "auth.login",
@@ -119,6 +191,24 @@ fn catalog_is_the_m0_table() {
             "platform.login",
             "platform.workspaces.list",
             "platform.workspaces.set_status",
+        ]
+    );
+    assert_eq!(
+        exempt(StatusExemption::PendingPayment),
+        [
+            "strategy.get",
+            "strategy.start_consultation",
+            "strategy.record",
+            "strategy.write_section",
+            "strategy.set_hypotheses",
+            "strategy.submit",
+            "strategy.approve",
+            "strategy.archive",
+            "strategy.list_versions",
+            "strategy.consultation",
+            "work.pending",
+            "work.checkin",
+            "work.set_checkin_interval",
         ]
     );
 }
@@ -136,6 +226,10 @@ fn lookups_by_id_and_mcp_tool() {
     );
     assert!(by_mcp_tool("agents.whoami").is_none());
     assert_eq!(find("auth.me").map(|uc| uc.mcp_tool), Some(None));
+    assert_eq!(
+        by_mcp_tool("jeeta.work.checkin").map(|uc| (uc.id, uc.panel_route)),
+        Some(("work.checkin", None))
+    );
 }
 
 #[test]

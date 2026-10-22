@@ -13,7 +13,17 @@ describe('Shell', () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
     renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
-    for (const label of [tr.nav.home, tr.nav.team, tr.nav.roles, tr.nav.apiKeys, tr.nav.agents, tr.nav.ledger]) {
+    for (const label of [
+      tr.nav.home,
+      tr.nav.strategy,
+      tr.nav.capabilities,
+      tr.nav.budget,
+      tr.nav.team,
+      tr.nav.roles,
+      tr.nav.apiKeys,
+      tr.nav.agents,
+      tr.nav.ledger,
+    ]) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
     }
     expect(screen.getAllByText('Alfa Atölye').length).toBeGreaterThan(0);

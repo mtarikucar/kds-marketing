@@ -1,184 +1,9 @@
 //! The team and roles routes end to end through Postgres: inviting, accepting (as a new user and
 //! while signed in), re-roling and removing members, the last-owner rule, and custom roles.
 
-use std::sync::Arc;
-
-use axum::Router;
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
-use axum::response::Response;
-use jt_app::gate::NoStrategyYet;
-use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
-use jt_app::usecases::Deps;
-use jt_panel_http::{AppState, router};
-use jt_pg::PgUnitOfWork;
-use jt_testkit::TestDb;
-use jt_testkit::fakes::PlainHasher;
-use jt_testkit::flows::activate_workspace;
-use serde_json::{Value, json};
-use tower::ServiceExt;
-
-const PASSWORD: &str = "correct horse battery";
-const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
-
-/// A router over a fresh test database, and the `Deps` behind it.
-struct Panel {
-    _db: TestDb,
-    deps: Deps,
-    app: Router,
-}
-
-impl Panel {
-    async fn new() -> Panel {
-        let db = TestDb::new().await;
-        let deps = Deps {
-            uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-            clock: Arc::new(SystemClock),
-            ids: Arc::new(UuidV7Gen),
-            tokens: Arc::new(RandTokenGen),
-            hasher: Arc::new(PlainHasher),
-        };
-        let state = AppState {
-            deps: deps.clone(),
-            gate: Arc::new(NoStrategyYet),
-            cookie_secure: false,
-            panel_dir: None,
-        };
-        Panel {
-            _db: db,
-            deps,
-            app: router(state),
-        }
-    }
-
-    async fn send(
-        &self,
-        method: Method,
-        path: &str,
-        cookie: Option<&str>,
-        body: Option<Value>,
-    ) -> Response {
-        let mut builder = Request::builder().method(method.clone()).uri(path);
-        if !method.is_safe() {
-            builder = builder.header(REQUESTED_WITH.0, REQUESTED_WITH.1);
-        }
-        if let Some(cookie) = cookie {
-            builder = builder.header(header::COOKIE, cookie);
-        }
-        let body = match body {
-            Some(body) => {
-                builder = builder.header(header::CONTENT_TYPE, "application/json");
-                Body::from(body.to_string())
-            }
-            None => Body::empty(),
-        };
-        self.app
-            .clone()
-            .oneshot(builder.body(body).unwrap())
-            .await
-            .unwrap()
-    }
-
-    async fn get(&self, path: &str, cookie: &str) -> Response {
-        self.send(Method::GET, path, Some(cookie), None).await
-    }
-
-    /// Registers `email` with a new workspace, which the platform operator then activates;
-    /// returns the `jt_session=…` pair and `me` as registration answered it.
-    async fn register(&self, email: &str, workspace_name: &str) -> (String, Value) {
-        let body = json!({
-            "email": email,
-            "password": PASSWORD,
-            "display_name": "Owner",
-            "workspace_name": workspace_name,
-        });
-        let resp = self
-            .send(Method::POST, "/api/auth/register", None, Some(body))
-            .await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let cookie = session_pair(&resp);
-        let me = ok_json(resp).await;
-        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
-        activate_workspace(&self.deps, ws).await;
-        (cookie, me)
-    }
-
-    /// Invites `email` as `role_key` from the session `cookie`; returns the invitation.
-    async fn invite(&self, cookie: &str, email: &str, role_key: &str) -> Value {
-        let resp = self
-            .send(
-                Method::POST,
-                "/api/team/invites",
-                Some(cookie),
-                Some(json!({ "email": email, "role_key": role_key })),
-            )
-            .await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        assert_eq!(
-            resp.headers().get(header::CACHE_CONTROL).unwrap(),
-            "no-store"
-        );
-        ok_json(resp).await
-    }
-
-    /// Accepts `token` as a new user; returns their `jt_session=…` pair and the answer.
-    async fn accept_as_new_user(&self, token: &str, name: &str) -> (String, Value) {
-        let resp = self
-            .send(
-                Method::POST,
-                "/api/team/invites/accept",
-                None,
-                Some(json!({ "token": token, "password": PASSWORD, "display_name": name })),
-            )
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let cookie = session_pair(&resp);
-        (cookie, ok_json(resp).await)
-    }
-
-    /// Invites `email` as `role_key` and accepts as a new user; returns the new user's cookie
-    /// and membership id.
-    async fn join(&self, owner_cookie: &str, email: &str, role_key: &str) -> (String, String) {
-        let invite = self.invite(owner_cookie, email, role_key).await;
-        let (cookie, accepted) = self
-            .accept_as_new_user(invite["invite_token"].as_str().unwrap(), email)
-            .await;
-        (
-            cookie,
-            accepted["membership_id"].as_str().unwrap().to_owned(),
-        )
-    }
-}
-
-/// The `jt_session=…` pair of the response's single `Set-Cookie` header.
-fn session_pair(resp: &Response) -> String {
-    let all: Vec<_> = resp.headers().get_all(header::SET_COOKIE).iter().collect();
-    assert_eq!(all.len(), 1, "exactly one Set-Cookie header");
-    let pair = all[0].to_str().unwrap().split(';').next().unwrap().trim();
-    assert!(pair.starts_with("jt_session="), "{pair}");
-    pair.to_owned()
-}
-
-async fn body_json(resp: Response) -> Value {
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
-/// The JSON body of a `2xx` response.
-async fn ok_json(resp: Response) -> Value {
-    assert!(resp.status().is_success(), "{}", resp.status());
-    body_json(resp).await
-}
-
-/// Asserts a structured error with this status and code, and returns its body.
-async fn expect_error(resp: Response, status: StatusCode, code: &str) -> Value {
-    assert_eq!(resp.status(), status);
-    let body = body_json(resp).await;
-    assert_eq!(body["code"], code, "{body}");
-    assert!(body["message"].is_string(), "{body}");
-    assert!(body["details"].is_object(), "{body}");
-    body
-}
+use axum::http::{Method, StatusCode, header};
+use jt_testkit::panel::{PASSWORD, Panel, expect_error, ok_json, session_pair};
+use serde_json::json;
 
 #[tokio::test]
 async fn owner_invites_and_invitee_accepts_and_appears_in_list() {
@@ -652,4 +477,47 @@ async fn roles_crud_round_trip() {
 /// A well-formed id that names nothing.
 fn uuid_like() -> String {
     "00000000-0000-7000-8000-000000000000".to_owned()
+}
+
+#[tokio::test]
+async fn twin_bodies_refuse_unknown_fields_as_their_tools_do() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
+    let (_, membership) = p.join(&owner, "rep@alpha.example", "rep").await;
+    let some_role = "0192f0c4-0000-7000-8000-000000000000";
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/team/invites".to_owned(),
+            json!({ "email": "x@alpha.example", "role_key": "rep", "role": "rep" }),
+        ),
+        (
+            Method::PATCH,
+            format!("/api/team/{membership}/role"),
+            json!({ "role_key": "manager", "role": "manager" }),
+        ),
+        (
+            Method::POST,
+            "/api/roles".to_owned(),
+            json!({ "key": "editor", "name": "Editor", "permissions": [], "is_system": true }),
+        ),
+        (
+            Method::PATCH,
+            format!("/api/roles/{some_role}"),
+            json!({ "permissions": [], "name": "x" }),
+        ),
+        (
+            Method::POST,
+            "/api/api-keys".to_owned(),
+            json!({ "name": "ajan", "scopes": [], "expires_at": null }),
+        ),
+    ] {
+        let resp = p.send(method, &path, Some(&owner), Some(body)).await;
+        expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+    }
+    // Nothing was written.
+    let team = ok_json(p.get("/api/team", &owner).await).await;
+    assert_eq!(team.as_array().unwrap().len(), 2);
+    let keys = ok_json(p.get("/api/api-keys", &owner).await).await;
+    assert_eq!(keys.as_array().unwrap().len(), 0);
 }

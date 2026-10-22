@@ -1,6 +1,7 @@
 //! The gate as a per-route layer: a `Gated` route is refused before its handler runs, whatever
-//! the handler extracts, and the workspace-status check binds every route that is not
-//! status-exempt. In-memory ports; no database.
+//! the handler extracts, and the workspace-status check binds every route its status exemption
+//! does not cover (the strategy and the pending work only while the workspace awaits payment).
+//! In-memory ports; no database.
 
 use std::sync::Arc;
 
@@ -10,17 +11,20 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::State;
 use axum::http::{Method, Request, StatusCode, header};
-use jt_app::catalog::{CATALOG, GateMode, Risk, UseCase};
+use jt_app::catalog::{CATALOG, GateMode, Risk, StatusExemption, UseCase};
 use jt_app::error::AppError;
 use jt_app::gate::{NoStrategyYet, StrategyGate};
 use jt_app::ports::UnitOfWork;
 use jt_app::usecases::Deps;
 use jt_app::usecases::auth::{self, RegisterInput};
+use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_panel_http::gate::{OUTSIDE_CURRENT_WORKSPACE, applies};
 use jt_panel_http::routes::api_route;
 use jt_panel_http::{AppState, Authed, WorkspaceCtx, router, router_with_test_route};
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
-use jt_testkit::fakes::{FixedClock, InMemoryUow, PlainHasher, SeqIdGen};
+use jt_testkit::fakes::{
+    FixedClock, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen,
+};
 use serde_json::{Value, json};
 use time::macros::datetime;
 use tower::ServiceExt;
@@ -37,7 +41,8 @@ const fn gated(id: &'static str, path: &'static str) -> UseCase {
         mcp_tool: None,
         panel_route: Some(("GET", path)),
         panel_only: true,
-        status_exempt: false,
+        mcp_only: false,
+        status_exemption: StatusExemption::Never,
         risk: Risk::Read,
     }
 }
@@ -84,6 +89,10 @@ impl World {
             ids: Arc::new(SeqIdGen::new()),
             tokens: Arc::new(jt_app::std_impls::RandTokenGen),
             hasher: Arc::new(PlainHasher),
+            seal: Arc::new(PlainSecretBox),
+            channels: Arc::new(NoChannelsYet),
+            archived_hook: Arc::new(NoopArchivedHook),
+            hosts: Arc::new(RecordingTenantHosts::new()),
         };
         let out = auth::register(
             &deps,
@@ -261,18 +270,67 @@ async fn the_status_check_binds_every_route_but_auth_workspace_and_platform() {
     }
 }
 
+/// Routes of the strategy and the pending work that need no path parameter.
+const OPEN_WHILE_PENDING_PAYMENT: [&str; 3] = [
+    "/api/strategy",
+    "/api/strategy/versions",
+    "/api/work/pending",
+];
+
+#[tokio::test]
+async fn suspended_blocks_strategy_and_work_too() {
+    let w = World::new().await;
+    let app = router(w.state(Arc::new(NoStrategyYet)));
+    let cookie = w.cookie.as_str();
+
+    // Awaiting payment, the strategy may be worked out and the pending work read.
+    w.set_status(WorkspaceStatus::PendingPayment).await;
+    for path in OPEN_WHILE_PENDING_PAYMENT {
+        assert_eq!(
+            ask(&app, path, Some(cookie)).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+
+    // Suspended, only identity and the workspace itself answer.
+    w.set_status(WorkspaceStatus::Suspended).await;
+    for path in OPEN_WHILE_PENDING_PAYMENT
+        .into_iter()
+        .chain(CLOSED_WHILE_INACTIVE)
+    {
+        assert_eq!(
+            ask(&app, path, Some(cookie)).await,
+            (StatusCode::LOCKED, "WORKSPACE_INACTIVE".to_owned()),
+            "{path}"
+        );
+    }
+    for path in ["/api/auth/me", "/api/workspace"] {
+        assert_eq!(
+            ask(&app, path, Some(cookie)).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+}
+
 #[test]
 fn the_layer_checks_every_use_case_but_those_exempt_from_both_checks() {
     for uc in CATALOG {
-        let expected = !uc.status_exempt && !OUTSIDE_CURRENT_WORKSPACE.contains(&uc.id);
+        let expected = uc.status_exemption != StatusExemption::Always
+            && !OUTSIDE_CURRENT_WORKSPACE.contains(&uc.id);
         assert_eq!(applies(uc), expected, "{}", uc.id);
+    }
+    // The strategy and the pending work are checked: a suspended workspace closes them.
+    for id in ["strategy.get", "strategy.approve", "work.pending"] {
+        assert!(applies(jt_app::catalog::find(id).unwrap()), "{id}");
     }
     for uc in [&GATED_AUTHED, &GATED_BARE, &GATED_CTX] {
         assert!(applies(uc), "{}", uc.id);
     }
     // A gated use case is checked even when it is status-exempt or outside the workspace.
     let gated_status_exempt = UseCase {
-        status_exempt: true,
+        status_exemption: StatusExemption::Always,
         ..GATED_AUTHED
     };
     assert!(applies(&gated_status_exempt));

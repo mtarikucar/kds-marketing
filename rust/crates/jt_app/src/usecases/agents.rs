@@ -9,6 +9,11 @@
 //!
 //! Every tool call an agent makes is counted on its connection and ledgered as `mcp.tool_call`
 //! ([`record_tool_call`]).
+//!
+//! **Check-in.** The workspace expects its agent to call in at least once per check-in interval
+//! (`WorkspacePolicy::agent_checkin_interval_minutes`, a day unless set). A connection not seen
+//! for longer is [`overdue`]; waking the agent is the tenant's job, never the system's (spec
+//! §4.2 rule 3), so the system only shows the warning.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +21,7 @@ use jt_ledger::Actor;
 use jt_tenancy::{AgentConnectionId, ApiKeyId, Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use super::api_keys::{AgentPrincipal, ctx_for_agent};
 use super::{Deps, ledger_entry, permission_keys};
@@ -54,6 +59,8 @@ pub struct AgentConnectionOut {
     #[serde(with = "time::serde::rfc3339")]
     pub last_seen_at: OffsetDateTime,
     pub tool_calls: i64,
+    /// Not seen for longer than the workspace's check-in interval (see [`overdue`]).
+    pub overdue: bool,
 }
 
 /// Who the caller is, where, and what it may do.
@@ -203,11 +210,28 @@ pub async fn record_tool_call(deps: &Deps, ctx: &Ctx, call: ToolCall<'_>) -> Res
     repos.commit().await
 }
 
-/// The workspace's agent connections, first seen first, with the names of their keys. Needs
+/// Whether an agent last seen at `last_seen_at` (never: `None`) is overdue at `now` under a
+/// check-in interval of `interval_minutes`: never seen, or seen longer than the interval ago.
+/// Exactly one interval after is still in time.
+pub fn overdue(
+    last_seen_at: Option<OffsetDateTime>,
+    interval_minutes: u32,
+    now: OffsetDateTime,
+) -> bool {
+    last_seen_at.is_none_or(|at| now - at > Duration::minutes(i64::from(interval_minutes)))
+}
+
+/// The workspace's agent connections, first seen first, with the names of their keys and
+/// whether each is [`overdue`] at `ctx.now` under the workspace's check-in interval. Needs
 /// `workspace.read`.
 pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<AgentConnectionOut>, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let interval = repos
+        .workspace_policy()
+        .get()
+        .await?
+        .agent_checkin_interval_minutes;
     let names: BTreeMap<ApiKeyId, String> = repos
         .api_keys()
         .list()
@@ -235,6 +259,7 @@ pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<AgentConnectionOut>, App
                 first_seen_at: c.first_seen_at,
                 last_seen_at: c.last_seen_at,
                 tool_calls: c.tool_calls,
+                overdue: overdue(Some(c.last_seen_at), interval, ctx.now),
             })
         })
         .collect()
@@ -270,6 +295,17 @@ fn bounded(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overdue_is_never_seen_or_seen_longer_than_the_interval_ago() {
+        let now = time::macros::datetime!(2026-10-22 09:00 UTC);
+        assert!(overdue(None, 15, now));
+        assert!(!overdue(Some(now), 15, now));
+        assert!(!overdue(Some(now - Duration::minutes(15)), 15, now));
+        assert!(overdue(Some(now - Duration::minutes(16)), 15, now));
+        // A sight in the future (a clock that moved back) is not overdue.
+        assert!(!overdue(Some(now + Duration::minutes(5)), 15, now));
+    }
 
     #[test]
     fn bounded_trims_cuts_and_fills_in_unknown() {

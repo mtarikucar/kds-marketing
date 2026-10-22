@@ -128,6 +128,7 @@ fn filter(limit: u32) -> LedgerFilter {
     LedgerFilter {
         action_prefix: None,
         actor_kind: None,
+        agent_connection_id: None,
         limit,
         before_id: None,
     }
@@ -841,7 +842,7 @@ async fn agent_connections_upsert_increments_on_second_initialize_and_touch_coun
 }
 
 #[tokio::test]
-async fn ledger_append_and_list_newest_first_with_limit_and_action_filter() {
+async fn ledger_append_and_list_newest_first_with_limit_and_filters() {
     let db = TestDb::new().await;
     let (ws, owner) = db.seed_workspace("acme").await;
     let (other, other_owner) = db.seed_workspace("other").await;
@@ -854,12 +855,13 @@ async fn ledger_append_and_list_newest_first_with_limit_and_action_filter() {
     });
     invited.payload = json!({ "email": "bob@example.com", "nested": { "n": [1, 2] } });
     invited.strategy_version_id = Some(Uuid::now_v7());
+    let agent_connection = AgentConnectionId::new_v7();
     let entries = vec![
         invited,
         entry(
             ws,
             Actor::Agent {
-                connection_id: AgentConnectionId::new_v7(),
+                connection_id: agent_connection,
                 user_id: owner,
             },
             "mcp.tool_call",
@@ -950,6 +952,26 @@ async fn ledger_append_and_list_newest_first_with_limit_and_action_filter() {
     assert_eq!(
         action_ids(t.ledger().list(agents).await.unwrap()),
         ["mcp.tool_call"]
+    );
+    let by_connection = |id: AgentConnectionId| LedgerFilter {
+        agent_connection_id: Some(id),
+        ..filter(50)
+    };
+    assert_eq!(
+        action_ids(
+            t.ledger()
+                .list(by_connection(agent_connection))
+                .await
+                .unwrap()
+        ),
+        ["mcp.tool_call"]
+    );
+    assert!(
+        t.ledger()
+            .list(by_connection(AgentConnectionId::new_v7()))
+            .await
+            .unwrap()
+            .is_empty()
     );
     let page = LedgerFilter {
         before_id: Some(ids[2]),
@@ -1324,10 +1346,9 @@ async fn deleting_a_role_still_in_use_is_conflict() {
     let mut t = uow.tenant(ws).await.unwrap();
     let custom = custom_role("auditor");
     t.roles().insert(custom.clone()).await.unwrap();
+    // An open invitation holds the role.
     let inv = invite(ws, custom.id, owner, "bob@example.com", "invite-bob");
     t.memberships().insert_invite(inv.clone()).await.unwrap();
-    // Removed memberships still reference the role.
-    t.memberships().remove(inv.id).await.unwrap();
     assert_eq!(
         t.roles().count_memberships_using(custom.id).await.unwrap(),
         1
@@ -1338,6 +1359,64 @@ async fn deleting_a_role_still_in_use_is_conflict() {
     );
     assert!(t.roles().find(custom.id).await.unwrap().is_some());
     t.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn used_then_removed_role_can_be_deleted() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, other_owner) = db.seed_workspace("other").await;
+    let uow = uow(&db);
+    let rep = role(&uow, ws, "rep").await;
+
+    // The other workspace holds a removed membership of its own; it must stay as it is.
+    let mut o = uow.tenant(other).await.unwrap();
+    let other_custom = custom_role("auditor");
+    o.roles().insert(other_custom.clone()).await.unwrap();
+    let other_inv = invite(
+        other,
+        other_custom.id,
+        other_owner,
+        "zed@example.com",
+        "invite-zed",
+    );
+    o.memberships()
+        .insert_invite(other_inv.clone())
+        .await
+        .unwrap();
+    o.memberships().remove(other_inv.id).await.unwrap();
+    o.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    let custom = custom_role("auditor");
+    t.roles().insert(custom.clone()).await.unwrap();
+    let bob = invite(ws, custom.id, owner, "bob@example.com", "invite-bob");
+    let carol = invite(ws, custom.id, owner, "carol@example.com", "invite-carol");
+    for inv in [&bob, &carol] {
+        t.memberships().insert_invite(inv.clone()).await.unwrap();
+        t.memberships().remove(inv.id).await.unwrap();
+    }
+    // Removed memberships still reference the role, but do not hold it.
+    assert_eq!(
+        t.roles().count_memberships_using(custom.id).await.unwrap(),
+        0
+    );
+    t.roles().delete_custom(custom.id).await.unwrap();
+    assert_eq!(t.roles().find(custom.id).await.unwrap(), None);
+    t.commit().await.unwrap();
+
+    // Committed: the removed memberships moved to the system `rep` role and stay removed.
+    let mut t = uow.tenant(ws).await.unwrap();
+    for inv in [&bob, &carol] {
+        let m = t.memberships().find(inv.id).await.unwrap().unwrap();
+        assert_eq!(m.role_id, rep.id);
+        assert_eq!(m.status, MembershipStatus::Removed);
+    }
+    drop(t);
+    let mut o = uow.tenant(other).await.unwrap();
+    let m = o.memberships().find(other_inv.id).await.unwrap().unwrap();
+    assert_eq!(m.role_id, other_custom.id);
+    assert!(o.roles().find(other_custom.id).await.unwrap().is_some());
 }
 
 #[tokio::test]
@@ -1446,4 +1525,84 @@ async fn count_active_owners_locks_the_owner_rows_until_the_transaction_ends() {
     .await
     .unwrap();
     other.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn last_checkin_at_finds_the_connections_latest_checkin_through_its_index() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, other_owner) = db.seed_workspace("other").await;
+    let uow = uow(&db);
+    let (mine, theirs) = (AgentConnectionId::new_v7(), AgentConnectionId::new_v7());
+    let agent = |connection_id, user_id| Actor::Agent {
+        connection_id,
+        user_id,
+    };
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(t.ledger().last_checkin_at(mine).await.unwrap(), None);
+    for (actor, action, at) in [
+        (agent(mine, owner), "work.checkin", T0),
+        (agent(mine, owner), "work.checkin", T0 + Duration::hours(2)),
+        // Later, but not a check-in, or another connection's.
+        (agent(mine, owner), "work.pending", T0 + Duration::hours(3)),
+        (
+            agent(theirs, owner),
+            "work.checkin",
+            T0 + Duration::hours(4),
+        ),
+    ] {
+        t.ledger()
+            .append(entry(ws, actor, action, at))
+            .await
+            .unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut o = uow.tenant(other).await.unwrap();
+    o.ledger()
+        .append(entry(
+            other,
+            agent(mine, other_owner),
+            "work.checkin",
+            T0 + Duration::hours(5),
+        ))
+        .await
+        .unwrap();
+    o.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.ledger().last_checkin_at(mine).await.unwrap(),
+        Some(T0 + Duration::hours(2))
+    );
+    assert_eq!(
+        t.ledger().last_checkin_at(theirs).await.unwrap(),
+        Some(T0 + Duration::hours(4))
+    );
+    drop(t);
+
+    // The lookup's predicate implies the partial index's (0004), so the planner can take it.
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("set local enable_seqscan = off")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(
+        "explain select at from ledger_entries \
+         where workspace_id = $1 and agent_connection_id = $2 \
+         and action = 'work.checkin' \
+         order by id desc \
+         limit 1",
+    )
+    .bind(ws.as_uuid())
+    .bind(mine.as_uuid())
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("ledger_entries_agent_connection_idx")),
+        "{plan:#?}"
+    );
+    tx.rollback().await.unwrap();
 }

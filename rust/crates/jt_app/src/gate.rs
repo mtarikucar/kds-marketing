@@ -12,7 +12,8 @@ pub trait StrategyGate: Send + Sync {
     async fn has_approved_strategy(&self, ws: WorkspaceId) -> Result<bool, AppError>;
 }
 
-/// The gate until strategies exist: no workspace has an approved strategy.
+/// A gate under which no workspace has an approved strategy, for tests over in-memory ports; the
+/// binary serves the gate answered from the database (`jt_pg::PgStrategyGate`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoStrategyYet;
 
@@ -27,7 +28,9 @@ impl StrategyGate for NoStrategyYet {
 /// already have been authenticated.
 ///
 /// Two independent checks, in this order:
-/// 1. Unless `uc` is `status_exempt`, the workspace must be `Active`, else `WORKSPACE_INACTIVE`
+/// 1. The workspace must be `Active`, unless `uc`'s status exemption lets it run in `ws_status`
+///    (`auth.*`, `workspace.*`, `platform.*` in every status; `strategy.*` and `work.*` while
+///    `PendingPayment` too, never while `Suspended`); else `WORKSPACE_INACTIVE`
 ///    (`details.status`), whatever the strategy.
 /// 2. A `Gated` use case needs an approved strategy, else `STRATEGY_REQUIRED`; `gate` is asked
 ///    only then.
@@ -37,7 +40,7 @@ pub async fn check_gate(
     gate: &dyn StrategyGate,
     ws: WorkspaceId,
 ) -> Result<(), AppError> {
-    if !uc.status_exempt && ws_status != WorkspaceStatus::Active {
+    if !uc.status_exemption.allows(ws_status) {
         return Err(AppError::workspace_inactive(ws_status));
     }
     if uc.gate == GateMode::Gated && !gate.has_approved_strategy(ws).await? {

@@ -7,8 +7,11 @@
 //!
 //! Rules every statement keeps:
 //! - A statement on a tenant table (`roles`, `memberships`, `api_keys`, `agent_connections`,
-//!   `ledger_entries`) names `workspace_id`, and one on `workspaces` names its `id`, even though
-//!   row-level security scopes it too.
+//!   `ledger_entries`, `strategy_versions`, `strategy_hypotheses`, `consultation_entries`,
+//!   `capabilities`, `capability_groups`, `capability_group_members`, `budget_items`,
+//!   `capability_budget_links`, `budget_spend_entries`, `workspace_policies`) names
+//!   `workspace_id`, and one on `workspaces` names its `id`, even though row-level security scopes
+//!   it too.
 //! - A statement that runs with `app.platform = 'on'` (the platform and user bundles) is preceded
 //!   by the line `// archtest: platform-wide`.
 //! - Inserts use `on conflict do nothing` and report a skipped row as `CONFLICT`, so an expected
@@ -18,18 +21,27 @@
 
 mod agent_connections;
 pub(crate) mod api_keys;
+mod budget;
+mod capabilities;
+mod consultation;
+mod groups;
+mod hypotheses;
 pub(crate) mod ledger;
 pub(crate) mod memberships;
 mod operators;
+mod policies;
 pub(crate) mod roles;
 mod sessions;
+mod strategy;
 mod users;
 pub(crate) mod workspaces;
 
 use std::collections::BTreeSet;
 
 use jt_app::error::AppError;
-use jt_tenancy::{Email, Permission, WorkspaceId};
+use jt_ledger::Actor;
+use jt_tenancy::{AgentConnectionId, Email, Permission, UserId, WorkspaceId};
+use uuid::Uuid;
 
 /// SQLSTATE of a unique violation.
 const UNIQUE_VIOLATION: &str = "23505";
@@ -57,8 +69,8 @@ pub fn map_sqlx(err: sqlx::Error, what: &str) -> AppError {
     }
 }
 
-/// What a foreign-key constraint of migration 0001 references, when it is a role, a user or a
-/// workspace (Postgres names them `<table>_<column>_fkey`).
+/// What a foreign-key constraint references, when it is a role, a user or a workspace (Postgres
+/// names them `<table>_<column>_fkey`).
 fn referenced_kind(constraint: Option<&str>) -> Option<&'static str> {
     let c = constraint?;
     if c.ends_with("_role_id_fkey") {
@@ -68,6 +80,7 @@ fn referenced_kind(constraint: Option<&str>) -> Option<&'static str> {
     } else if c.ends_with("_user_id_fkey")
         || c.ends_with("_invited_by_fkey")
         || c.ends_with("_issued_by_fkey")
+        || c.ends_with("_approved_by_fkey")
     {
         Some("user")
     } else {
@@ -90,6 +103,54 @@ pub(crate) fn same_workspace(bundle_ws: WorkspaceId, row_ws: WorkspaceId) -> Res
 /// `INTERNAL` for a reference to a row that does not exist (or not in this workspace).
 pub(crate) fn dangling(reference: &str) -> AppError {
     AppError::internal(format!("{reference} references a row that does not exist"))
+}
+
+/// The columns an `Actor` is stored in: `actor_kind` (`human`, `agent` or `system`), the acting
+/// user (human, and the issuer for an agent), the agent connection (agent) and the system
+/// component (system).
+pub(crate) fn actor_columns(
+    actor: &Actor,
+) -> (&'static str, Option<Uuid>, Option<Uuid>, Option<&str>) {
+    match actor {
+        Actor::Human { user_id } => ("human", Some(user_id.as_uuid()), None, None),
+        Actor::Agent {
+            connection_id,
+            user_id,
+        } => (
+            "agent",
+            Some(user_id.as_uuid()),
+            Some(connection_id.as_uuid()),
+            None,
+        ),
+        Actor::System { component } => ("system", None, None, Some(component.as_str())),
+    }
+}
+
+/// The actor stored in the columns [`actor_columns`] writes, read from `table`; `INTERNAL` when
+/// the kind is unknown or a column the kind needs is null.
+pub(crate) fn stored_actor(
+    table: &str,
+    kind: &str,
+    user_id: Option<Uuid>,
+    connection_id: Option<Uuid>,
+    component: Option<String>,
+) -> Result<Actor, AppError> {
+    let incomplete = || AppError::internal(format!("stored {table} actor is incomplete"));
+    match kind {
+        "human" => Ok(Actor::Human {
+            user_id: UserId(user_id.ok_or_else(incomplete)?),
+        }),
+        "agent" => Ok(Actor::Agent {
+            connection_id: AgentConnectionId(connection_id.ok_or_else(incomplete)?),
+            user_id: UserId(user_id.ok_or_else(incomplete)?),
+        }),
+        "system" => Ok(Actor::System {
+            component: component.ok_or_else(incomplete)?,
+        }),
+        _ => Err(AppError::internal(format!(
+            "stored {table}.actor_kind has an unknown value"
+        ))),
+    }
 }
 
 /// The stored keys of a permission set.

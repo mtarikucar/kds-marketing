@@ -11,6 +11,7 @@ jt_pg.workspace = true
 jt_panel_http.workspace = true
 jt_mcp.workspace = true
 jt_outbound.workspace = true
+jt_seal.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true
@@ -21,7 +22,7 @@ anyhow.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
-jt_testkit.workspace = true
+jt_testkit = { workspace = true, features = ["panel"] }
 serde_json.workspace = true
 tower = { workspace = true, features = ["util"] }
 

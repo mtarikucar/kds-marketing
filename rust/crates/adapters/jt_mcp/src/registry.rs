@@ -65,18 +65,39 @@ pub fn risk_tag(risk: Risk) -> &'static str {
     }
 }
 
-/// One tool per `CATALOG` row with an MCP tool, in catalog order.
+/// Catalog tools not defined here yet: a use case may enter the catalog before its tool, while a
+/// plan lands it in steps. [`registry`] leaves them out. Each entry must still be a catalog tool
+/// without a definition, so defining one stops the server until it is dropped from here. Empty:
+/// every catalog tool is defined.
+pub const NOT_YET_DEFINED: &[&str] = &[];
+
+/// One tool per `CATALOG` row with an MCP tool, in catalog order, but those in
+/// [`NOT_YET_DEFINED`].
 ///
 /// # Panics
 ///
-/// When a catalog row with an MCP tool has no definition in the `tools` module, a definition has
-/// no such catalog row, or a description does not end with the catalog risk's [`risk_tag`]:
-/// the registry and the catalog must agree before the server starts.
+/// When a catalog row with an MCP tool has no definition in the `tools` module (unless it is in
+/// [`NOT_YET_DEFINED`]), a definition has no such catalog row, a description does not end with
+/// the catalog risk's [`risk_tag`], or an entry of [`NOT_YET_DEFINED`] is defined or not in the
+/// catalog: the registry and the catalog must agree before the server starts.
 pub fn registry() -> Vec<ToolSpec> {
     let defs = tools::definitions();
+    for name in NOT_YET_DEFINED {
+        let uc = CATALOG
+            .iter()
+            .find(|uc| uc.mcp_tool == Some(*name))
+            .unwrap_or_else(|| panic!("`{name}` is in NOT_YET_DEFINED but not in the catalog"));
+        assert!(
+            defs.iter().all(|d| d.use_case != uc.id),
+            "`{name}` is defined now; drop it from NOT_YET_DEFINED"
+        );
+    }
     let mut specs = Vec::new();
     for uc in CATALOG {
         let Some(name) = uc.mcp_tool else { continue };
+        if NOT_YET_DEFINED.contains(&name) {
+            continue;
+        }
         let def = defs
             .iter()
             .find(|d| d.use_case == uc.id)

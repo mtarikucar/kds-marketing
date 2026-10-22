@@ -62,7 +62,7 @@ impl McpState {
     }
 
     /// The same state with one more tool, backed by `use_case`, which need not be in the
-    /// catalog. Meant for tests (e.g. a `Gated` use case, which M0's catalog does not have yet);
+    /// catalog. Meant for tests (e.g. a `Gated` use case, which the catalog does not have yet);
     /// the binary serves [`McpState::new`] as it is.
     ///
     /// # Panics

@@ -8,11 +8,8 @@
 //! been migrated by `jeeta serve`. Like `serve`, it refuses a database role that row-level
 //! security does not bind (`serve::check_database_role`).
 
-use std::sync::Arc;
-
 use anyhow::{Context, Result, bail};
 use jt_app::error::ErrorCode;
-use jt_app::gate::NoStrategyYet;
 use jt_app::usecases::api_keys;
 use jt_mcp::McpState;
 
@@ -29,7 +26,7 @@ pub async fn run(config: Config) -> Result<()> {
     };
     let pool = serve::connect(&config).await?;
     serve::check_database_role(&pool, config.allow_superuser).await?;
-    let deps = serve::deps(pool.clone());
+    let deps = serve::deps(pool.clone(), &config.secret_key);
     let principal = match api_keys::authenticate(&deps, key).await {
         Ok(principal) => principal,
         Err(e) if e.code == ErrorCode::Unauthenticated => bail!(
@@ -46,7 +43,7 @@ pub async fn run(config: Config) -> Result<()> {
         "serving MCP over stdio"
     );
 
-    let state = McpState::new(deps, Arc::new(NoStrategyYet));
+    let state = McpState::new(deps, serve::strategy_gate(pool.clone()));
     jt_mcp::run_stdio(state, principal)
         .await
         .context("the MCP stdio stream failed")?;

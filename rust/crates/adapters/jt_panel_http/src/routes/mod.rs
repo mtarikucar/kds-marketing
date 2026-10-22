@@ -10,10 +10,15 @@
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
+pub mod budget;
+pub mod capabilities;
+pub mod groups;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
+pub mod strategy;
 pub mod team;
+pub mod work;
 pub mod workspace;
 
 use axum::Json;
@@ -50,6 +55,43 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/agents"),
     ("GET", "/api/whoami"),
     ("GET", "/api/ledger"),
+    ("GET", "/api/strategy"),
+    ("POST", "/api/strategy/consultation"),
+    ("POST", "/api/strategy/consultation/entries"),
+    ("PUT", "/api/strategy/draft/sections/{section_key}"),
+    ("PUT", "/api/strategy/draft/hypotheses"),
+    ("POST", "/api/strategy/draft/submit"),
+    ("POST", "/api/strategy/draft/approve"),
+    ("POST", "/api/strategy/archive"),
+    ("GET", "/api/strategy/versions"),
+    ("GET", "/api/strategy/versions/{version_id}/consultation"),
+    ("GET", "/api/capabilities"),
+    ("GET", "/api/capabilities/{capability_id}"),
+    ("POST", "/api/capabilities"),
+    ("POST", "/api/capabilities/{capability_id}/verify"),
+    ("POST", "/api/capabilities/{capability_id}/unreachable"),
+    ("PUT", "/api/capabilities/{capability_id}/policy"),
+    ("POST", "/api/capabilities/{capability_id}/retire"),
+    ("POST", "/api/capabilities/{capability_id}/budget-links"),
+    (
+        "DELETE",
+        "/api/capabilities/{capability_id}/budget-links/{budget_item_id}",
+    ),
+    ("GET", "/api/capability-groups"),
+    ("POST", "/api/capability-groups"),
+    ("PATCH", "/api/capability-groups/{group_id}"),
+    ("DELETE", "/api/capability-groups/{group_id}"),
+    ("POST", "/api/capability-groups/{group_id}/members"),
+    (
+        "DELETE",
+        "/api/capability-groups/{group_id}/members/{capability_id}",
+    ),
+    ("GET", "/api/budget/items"),
+    ("POST", "/api/budget/items"),
+    ("POST", "/api/budget/items/{budget_item_id}/spend"),
+    ("GET", "/api/budget/items/{budget_item_id}/spend"),
+    ("GET", "/api/work/pending"),
+    ("PUT", "/api/work/checkin-interval"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
     ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
@@ -165,6 +207,182 @@ pub fn api_routes() -> Vec<ApiRoute> {
         api_route("GET", "/agents", "agents.list", agents::list),
         api_route("GET", "/whoami", "agents.whoami", agents::whoami),
         api_route("GET", "/ledger", "ledger.list", ledger::list),
+        api_route("GET", "/strategy", "strategy.get", strategy::get),
+        api_route(
+            "POST",
+            "/strategy/consultation",
+            "strategy.start_consultation",
+            strategy::start_consultation,
+        ),
+        api_route(
+            "POST",
+            "/strategy/consultation/entries",
+            "strategy.record",
+            strategy::record,
+        ),
+        api_route(
+            "PUT",
+            "/strategy/draft/sections/{section_key}",
+            "strategy.write_section",
+            strategy::write_section,
+        ),
+        api_route(
+            "PUT",
+            "/strategy/draft/hypotheses",
+            "strategy.set_hypotheses",
+            strategy::set_hypotheses,
+        ),
+        api_route(
+            "POST",
+            "/strategy/draft/submit",
+            "strategy.submit",
+            strategy::submit,
+        ),
+        api_route(
+            "POST",
+            "/strategy/draft/approve",
+            "strategy.approve",
+            strategy::approve,
+        ),
+        api_route(
+            "POST",
+            "/strategy/archive",
+            "strategy.archive",
+            strategy::archive,
+        ),
+        api_route(
+            "GET",
+            "/strategy/versions",
+            "strategy.list_versions",
+            strategy::list_versions,
+        ),
+        api_route(
+            "GET",
+            "/strategy/versions/{version_id}/consultation",
+            "strategy.consultation",
+            strategy::consultation,
+        ),
+        api_route(
+            "GET",
+            "/capabilities",
+            "capability.list",
+            capabilities::list,
+        ),
+        api_route(
+            "GET",
+            "/capabilities/{capability_id}",
+            "capability.get",
+            capabilities::get,
+        ),
+        api_route(
+            "POST",
+            "/capabilities",
+            "capability.declare",
+            capabilities::declare,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/verify",
+            "capability.verify",
+            capabilities::verify,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/unreachable",
+            "capability.mark_unreachable",
+            capabilities::mark_unreachable,
+        ),
+        api_route(
+            "PUT",
+            "/capabilities/{capability_id}/policy",
+            "capability.set_policy",
+            capabilities::set_policy,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/retire",
+            "capability.retire",
+            capabilities::retire,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/budget-links",
+            "capability.link_budget",
+            capabilities::link_budget,
+        ),
+        api_route(
+            "DELETE",
+            "/capabilities/{capability_id}/budget-links/{budget_item_id}",
+            "capability.unlink_budget",
+            capabilities::unlink_budget,
+        ),
+        api_route(
+            "GET",
+            "/capability-groups",
+            "capability.groups.list",
+            groups::list,
+        ),
+        api_route(
+            "POST",
+            "/capability-groups",
+            "capability.groups.create",
+            groups::create,
+        ),
+        api_route(
+            "PATCH",
+            "/capability-groups/{group_id}",
+            "capability.groups.rename",
+            groups::rename,
+        ),
+        api_route(
+            "DELETE",
+            "/capability-groups/{group_id}",
+            "capability.groups.delete",
+            groups::delete,
+        ),
+        api_route(
+            "POST",
+            "/capability-groups/{group_id}/members",
+            "capability.groups.add_member",
+            groups::add_member,
+        ),
+        api_route(
+            "DELETE",
+            "/capability-groups/{group_id}/members/{capability_id}",
+            "capability.groups.remove_member",
+            groups::remove_member,
+        ),
+        api_route(
+            "GET",
+            "/budget/items",
+            "budget.items.list",
+            budget::list_items,
+        ),
+        api_route(
+            "POST",
+            "/budget/items",
+            "budget.items.create",
+            budget::create_item,
+        ),
+        api_route(
+            "POST",
+            "/budget/items/{budget_item_id}/spend",
+            "budget.spend.record",
+            budget::record_spend,
+        ),
+        api_route(
+            "GET",
+            "/budget/items/{budget_item_id}/spend",
+            "budget.spend.list",
+            budget::spend,
+        ),
+        api_route("GET", "/work/pending", "work.pending", work::pending),
+        api_route(
+            "PUT",
+            "/work/checkin-interval",
+            "work.set_checkin_interval",
+            work::set_checkin_interval,
+        ),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(
             "GET",
@@ -225,7 +443,11 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
     use jt_app::usecases::Deps;
-    use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+    use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
+    use jt_testkit::fakes::{
+        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+        SeqIdGen,
+    };
     use time::macros::datetime;
     use tower::ServiceExt;
 
@@ -261,6 +483,10 @@ mod tests {
                 ids: Arc::new(SeqIdGen::new()),
                 tokens: Arc::new(FixedTokenGen::new(["t1", "t2", "t3"])),
                 hasher: Arc::new(PlainHasher),
+                seal: Arc::new(PlainSecretBox),
+                channels: Arc::new(NoChannelsYet),
+                archived_hook: Arc::new(NoopArchivedHook),
+                hosts: Arc::new(RecordingTenantHosts::new()),
             },
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,

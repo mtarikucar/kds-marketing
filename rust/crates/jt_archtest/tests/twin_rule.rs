@@ -1,6 +1,7 @@
-//! The twin rule (spec §4.5, B8): every use case in the catalog has a panel route, and an MCP
-//! tool unless it is `panel_only`; the panel's route table and the MCP registry expose exactly
-//! the catalog, no more and no less.
+//! The twin rule (spec §4.5, B8): every use case in the catalog has a panel route unless it is
+//! `mcp_only`, and an MCP tool unless it is `panel_only` (never both: a use case has at least one
+//! surface); the panel's route table and the MCP registry expose exactly the catalog, no more and
+//! no less.
 
 use std::collections::BTreeSet;
 
@@ -9,16 +10,18 @@ use jt_app::catalog::{CATALOG, by_mcp_tool};
 /// Routes the panel serves that are infrastructure, not use cases.
 const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
-/// Catalog panel routes not served yet; none at present. Each entry must still be unserved, so
-/// serving one fails this test until it is dropped from here.
+/// Catalog panel routes not served yet: a use case may enter the catalog before its route, while
+/// a plan lands it in steps. Each entry must still be unserved, so serving one fails this test
+/// until it is dropped from here. Empty: every catalog route is served.
 const NOT_YET_SERVED: &[(&str, &str)] = &[];
 
 #[test]
 fn panel_routes_table_matches_catalog() {
     for uc in CATALOG {
-        assert!(
+        assert_eq!(
             uc.panel_route.is_some(),
-            "use case `{}` has no panel route",
+            !uc.mcp_only,
+            "use case `{}`: a panel route exactly when it is not MCP-only",
             uc.id
         );
     }
@@ -71,12 +74,22 @@ fn mcp_registry_matches_catalog() {
             "use case `{}`: an MCP tool exactly when it is not panel-only",
             uc.id
         );
+        assert!(
+            !(uc.panel_only && uc.mcp_only),
+            "use case `{}` is both panel-only and MCP-only: it has no surface",
+            uc.id
+        );
     }
 
     let specs = jt_mcp::registry();
     let registered: BTreeSet<&str> = specs.iter().map(|s| s.name).collect();
     assert_eq!(registered.len(), specs.len(), "no tool is registered twice");
-    let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
+    // Tools the registry does not define yet; it checks each is still undefined.
+    let catalog: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter_map(|uc| uc.mcp_tool)
+        .filter(|tool| !jt_mcp::NOT_YET_DEFINED.contains(tool))
+        .collect();
     assert_eq!(registered, catalog, "MCP registry and catalog tools differ");
 
     for spec in &specs {
@@ -88,4 +101,46 @@ fn mcp_registry_matches_catalog() {
             spec.name, spec.use_case, uc.id
         );
     }
+}
+
+/// The MCP tools there are after M1a, by domain: 15 from M0 (`agent`, `workspace`, `team`,
+/// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget`, and 3
+/// `work`. Written out, so a tool added or dropped without updating the documentation (the README
+/// lists them) fails here.
+const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
+    ("agent", 1),
+    ("workspace", 1),
+    ("team", 4),
+    ("roles", 4),
+    ("api_keys", 3),
+    ("agents", 1),
+    ("ledger", 1),
+    ("strategy", 10),
+    ("capability", 15),
+    ("budget", 4),
+    ("work", 3),
+];
+
+#[test]
+fn the_registry_holds_47_tools() {
+    let specs = jt_mcp::registry();
+    assert_eq!(specs.len(), 47);
+    let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
+    assert_eq!(total, 47);
+    for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
+        let prefix = format!("jeeta.{domain}.");
+        let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
+        assert_eq!(found, *expected, "tools named {prefix}*");
+    }
+}
+
+/// An MCP-only use case has no human caller: only an agent's check-in is one.
+#[test]
+fn only_the_agent_check_in_is_mcp_only() {
+    let mcp_only: Vec<&str> = CATALOG
+        .iter()
+        .filter(|uc| uc.mcp_only)
+        .map(|uc| uc.id)
+        .collect();
+    assert_eq!(mcp_only, ["work.checkin"]);
 }
