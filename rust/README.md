@@ -213,7 +213,12 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 Sunucu 47 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan iki araç,
-`jeeta.strategy.archive` ve `jeeta.capability.retire`, ayrıca `confirm: true` ister. Hatalar yapısaldır: `{"code": …, "message": …, "details": …}` hem
+`jeeta.strategy.archive` (strateji kapısını kapatır) ve `jeeta.capability.retire` (kabiliyeti kesin olarak
+emekliye ayırır), ayrıca `confirm: true` ister, yoksa `VALIDATION`. Öteki yıkıcı araçlar istemez, çünkü
+etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
+edilen anahtarın yerine yenisi çıkarılır. Yetki onaydan değil rolden gelir: anahtar, çıkaran insanın
+rolünü ve izinlerini kapsamı içinde taşır (onay ve arşiv için sahip ya da yönetici + `team.manage`, bkz.
+[Strateji](#strateji)). Hatalar yapısaldır: `{"code": …, "message": …, "details": …}` hem
 `structuredContent` hem metin olarak döner. Panelde her aracın ikiz bir rotası vardır, yalnızca
 ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta.work.pending`'dir
 (bkz. [Sırada ne var](#sırada-ne-var)).

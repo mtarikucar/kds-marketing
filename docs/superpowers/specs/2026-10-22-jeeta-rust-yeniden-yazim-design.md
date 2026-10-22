@@ -224,6 +224,18 @@ MCP araç adları `jeeta.<alan>.<eylem>` biçimindedir. Her araç yapısal hata 
 taşır: OKU, YAZ, HARCA, YIKICI. Yıkıcı araçlar (kişi birleştirme geri alma, strateji arşivleme gibi)
 iki adımlı onay ister; diğerleri K8 gereği istemez.
 
+**(M1a uygulamasında kesinleşti) Onay isteyen yıkıcı araçlar ve anahtar yetkisi.** İki adımlı onay,
+çağrının kendisinde `confirm: true` olarak istenir (yoksa `VALIDATION`) ve M1a'da yalnız geri
+alınamayan iki yıkıcı araçta vardır: `jeeta.strategy.archive` (onaylı sürümü arşivler ve strateji
+kapısını yeniden kapatır) ve `jeeta.capability.retire` (kabiliyeti kesin olarak emekliye ayırır, ona
+kayıtlı dış adreslerin iznini geri alır, gruplarından ve bütçe bağlarından çıkarır). YIKICI etiketli
+öteki araçlar `confirm` istemez, çünkü etkileri onarılabilir ya da yeniden kurulabilir: çıkarılan üye
+yeniden davet edilir (`team.remove`), silinen özel rol yeniden açılır (`roles.delete`), iptal edilen
+anahtarın yerine yenisi çıkarılır (`api_keys.revoke`), silinen kabiliyet grubu yeniden kurulur ve
+üyeleri yerinde kalır (`capability.groups_delete`). Bu eylemlerin yetkisi onaydan değil rolden gelir:
+onaylamak ve arşivlemek gibi role bağlı eylemler, rol anahtarıyla birlikte `team.manage` iznini anahtarın
+kapsamı içinde ister ve ajan bu yetkiyi anahtarı çıkaran insandan devralır (§5).
+
 ### 4.5 Panel ve MCP ikizliği
 
 Panelde yapılabilen her iş bir MCP aracıyla da yapılabilir; tersi de geçerlidir. İkisi aynı uygulama
