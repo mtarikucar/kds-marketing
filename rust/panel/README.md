@@ -69,9 +69,16 @@ kökende kalır.
   değil; panel dışına işaret edemez).
 - `types.ts`: Rust çıktı yapılarının karşılıkları (`MeOut`, `WorkspaceOut`, `MemberOut`, `InviteOut`,
   `AcceptOut`, `RoleDef`, `KeyOut`, `KeySummary`, `AgentConnectionOut`, `WhoAmI`, `LedgerEntryOut`,
-  `WorkspaceAdminOut`, `PlatformSessionOut`).
+  `WorkspaceAdminOut`, `PlatformSessionOut`; strateji: `StrategyOut`, `VersionOut`, `Sections`, `Hypothesis`,
+  `Gap`, `ConsultationEntry`, `VersionSummary`; kabiliyetler: `CapabilityOut`, `Policy`, `GroupOut`, kapalı tür
+  listesi `KINDS`; bütçe: `BudgetItemOut`, `BudgetSpend`, etiketli `Unit` ve `SpendSource`; bekleyen işler:
+  `PendingOut`, `StrategyState` (`"missing"`, `"submitted"`, `{draft_open: {gaps}}`, `{approved: {number}}`),
+  `kind` ile etiketli `WorkItem`, `AgentState`).
 - Rota başına sarmalayıcılar: `auth.ts`, `workspace.ts`, `team.ts`, `roles.ts`, `apiKeys.ts`, `agents.ts`,
-  `ledger.ts`, `platform.ts`. Oturum çerezleri (`jt_session`, `jt_platform`) `HttpOnly`'dir; panel onları
+  `ledger.ts`, `platform.ts`, `strategy.ts`, `capabilities.ts`, `budget.ts`, `work.ts`. Sunucu bilinmeyen
+  sorgu parametresini `422` ile reddettiği için liste sarmalayıcıları yalnızca bilinen parametreleri gönderir
+  (`group`/`kind`/`status`/`group_id`; sayfalı listelerde `limit` + `before_at`/`before_id`); kabiliyet
+  silme rotaları gövdeli `200` döner (`CapabilityOut`, `GroupOut`, `{group_id, deleted}`). Oturum çerezleri (`jt_session`, `jt_platform`) `HttpOnly`'dir; panel onları
   hiç okumaz.
 - `agents.ts` ayrıca `whoami()` (`GET /api/whoami`) sunar: ajanın `jeeta.agent.whoami` ile aldığı yanıtın
   insan için ikizi; arayüz henüz kullanmıyor.
@@ -93,7 +100,10 @@ bileşenlerde sabit metin yoktur.
 |---|---|
 | `/login`, `/register` | giriş, kayıt (hesap + ilk çalışma alanı) |
 | `/invite/:token` | daveti kabul: oturum varsa tek tık, ardından oturum katılınan çalışma alanına geçer; yoksa ad + parola ile hesap; e-posta zaten kayıtlıysa giriş bağlantısı |
-| `/` | çalışma alanı kartı, durum rozeti, "Strateji bekleniyor" yer tutucusu |
+| `/` | çalışma alanı kartı; `GET /api/work/pending`'den strateji kartı (yok → istişareyi başlat, taslak → eksikler, onayda → yetkiliye onay kısayolu, onaylı → sürüm), ajan kartı (son görülme, yoklama aralığı ve düzenleyici, gecikince kırmızı uyarı ve zamanlayıcının kiracıda olduğu notu), bekleyen işler listesi |
+| `/strategy` | Onaylı / Taslak sekmeleri: bölümler (taslakta `team.manage` ile yerinde düzenleme), hipotez tablosu ve düzenleyicisi, istişare kaydı ("daha fazla", not ekleme), eksikler, onaya sun (reddin eksikleri), onayla (sahip/yönetici), sürüm numarası yazılarak arşivleme, sürümler çekmecesi |
+| `/capabilities` | tür grubu süzgeci, kartlar (tür, ulaşım, beş durumlu rozet, son doğrulama, politika özeti, bütçe bağları, gruplar); bildir, doğrula, politika, ulaşılamıyor, bütçe bağla/çöz, emekliye ayır; gruplar paneli |
+| `/budget` | kalemler (kalan sınırı aşınca kırmızı), oluşturma diyaloğu (birim türe göre), harcama çekmecesi ve harcama kaydı |
 | `/team` | üyeler, rol seçimi, çıkarma (onaylı), davet diyaloğu: tek seferlik `/invite/<token>` bağlantısı + kopyala |
 | `/roles` | sistem ve özel roller; özel rol oluşturma/düzenleme (sabit izin listesi), silme |
 | `/api-keys` | anahtarlar; oluşturma diyaloğu düz metni bir kez gösterir (uyarı + kopyala); iptal |
@@ -141,7 +151,12 @@ kullanılmayan kit bileşenleri pakete girmez.
 - `src/i18n/parity.test.ts`: TR/EN anahtar eşitliği, boş değer yok.
 - `src/api/client.test.ts`: başlık yalnızca değiştiren isteklerde, yapısal hata gövdesi, 401 yönlendirmesi,
   `whoami()`.
-- `src/pages/**/*.test.tsx`: her sayfa için sahte `fetch` ile çizim (başlık + listelerde bir satır);
+- `src/api/wrappers.test.ts`: liste sarmalayıcıları yalnızca bilinen sorgu parametrelerini gönderir; arşiv,
+  emekliye ayırma ve kabiliyet silme rotalarının gövdeleri ve yanıtları.
+- `src/pages/**/*.test.tsx`: her sayfa için sahte `fetch` ile çizim (başlık + listelerde bir satır); ana sayfada
+  gecikme uyarısı ve her bekleyen işin kendi metni; strateji sayfasında eksikler, temsilci için kapalı onay,
+  reddedilen gönderimin eksikleri, yazılı onaylı arşiv; kabiliyetlerde beş durum rozeti ve `group` süzgeci;
+  bütçede sınır aşımı ve küçük birimle harcama kaydı;
   API anahtarı düz metninin bir kez gösterilmesi, davet bağlantısı, ikisinin yalnız "Kapat" ile kapanması;
   oturum açıkken kabul edilen davetin ardından çalışma alanı geçişi.
 - `src/layout/Shell.test.tsx`: menü, varsayılan dil, oturumsuz ziyaretçinin giriş sayfasına gönderilmesi,

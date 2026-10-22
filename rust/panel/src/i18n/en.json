@@ -45,7 +45,10 @@
     "roles": "Roles",
     "apiKeys": "API keys",
     "agents": "Agents",
-    "ledger": "Ledger"
+    "ledger": "Ledger",
+    "strategy": "Strategy",
+    "capabilities": "Capabilities",
+    "budget": "Budget"
   },
   "shell": {
     "workspace": "Workspace",
@@ -72,6 +75,18 @@
     "key": {
       "active": "Active",
       "revoked": "Revoked"
+    },
+    "capability": {
+      "declared": "Declared",
+      "verified": "Verified",
+      "stale": "Verification lapsed",
+      "unreachable": "Unreachable",
+      "retired": "Retired"
+    },
+    "version": {
+      "draft": "Draft",
+      "approved": "Approved",
+      "archived": "Archived"
     }
   },
   "actor": {
@@ -91,6 +106,12 @@
     },
     "ledger": {
       "read": "Read the ledger"
+    },
+    "capabilities": {
+      "manage": "Manage capabilities"
+    },
+    "budget": {
+      "manage": "Manage the budget"
     }
   },
   "roleNames": {
@@ -111,7 +132,34 @@
     "scopes": "Scopes",
     "token": "Invite",
     "status": "Status",
-    "actor_kind": "Actor kind"
+    "actor_kind": "Actor kind",
+    "kind_key": "Kind",
+    "key_detail": "Tool name",
+    "description": "Description",
+    "external_id": "External id",
+    "connector_public": "Connector settings",
+    "policy": "Policy",
+    "minutes": "Minutes",
+    "unit": "Unit",
+    "cap": "Cap",
+    "amount": "Amount",
+    "reference": "Reference",
+    "reason": "Reason",
+    "text": "Text",
+    "section_key": "Section",
+    "version_id": "Version",
+    "evidence": "Evidence",
+    "purpose": "Purpose",
+    "capability_id": "Capability",
+    "budget_item_id": "Budget item",
+    "kind": "Kind",
+    "period": "Period",
+    "limit": "Page size",
+    "before_at": "Page cursor",
+    "before_id": "Page cursor",
+    "group": "Kind group",
+    "group_id": "Group",
+    "confirm": "Confirmation"
   },
   "errors": {
     "UNAUTHENTICATED": "You need to sign in.",
@@ -128,7 +176,17 @@
     "invalidField": "Invalid field: {{field}}.",
     "lastOwner": "The workspace's last owner cannot be removed or given another role.",
     "ownerOnly": "Only an owner can do this.",
-    "exceedsAuthority": "You cannot grant a permission you do not hold yourself."
+    "exceedsAuthority": "You cannot grant a permission you do not hold yourself.",
+    "ownerOrManager": "Only an owner or a manager can do this.",
+    "unitMismatch": "This unit does not fit the item's kind.",
+    "kindMismatch": "This budget item cannot be linked to this capability.",
+    "nameTaken": "This name is already taken.",
+    "notSubmitted": "The draft has not been submitted for approval yet.",
+    "anotherApprovalWon": "Another approval finished first; reload the page.",
+    "noApprovedVersion": "There is no approved strategy in force.",
+    "noDraft": "There is no open strategy draft.",
+    "versionMoved": "The version changed meanwhile; reload the page.",
+    "missingPermission": "This needs the permission: {{permission}}."
   },
   "login": {
     "title": "Sign in",
@@ -169,12 +227,53 @@
     "myPermissions": "Your permissions",
     "strategy": {
       "title": "Waiting for a strategy",
-      "body": "Your workspace's strategy will appear here once it is approved."
+      "body": "The strategy comes out of a consultation your agent runs with you over MCP: it asks, records your answers and its assumptions, and puts the draft up for your approval.",
+      "start": "Start the consultation",
+      "open": "Open the strategy",
+      "draftTitle": "A strategy draft is being worked out",
+      "draftBody": "Gaps to close before the draft can be submitted: {{count}}.",
+      "noGaps": "No gaps: the draft can be submitted.",
+      "moreGaps": "and {{count}} more",
+      "submittedTitle": "A strategy draft awaits approval",
+      "submittedWait": "It takes effect once an owner or a manager approves it.",
+      "approve": "Approve",
+      "approved": "The strategy is approved and in force.",
+      "approvedTitle": "The strategy is in force",
+      "approvedBody": "Version in force: {{number}}.",
+      "hypotheses": "Hypotheses: {{count}}."
     },
     "inactive": {
       "pending_payment": "Your workspace becomes active once payment is received.",
       "active": "Your workspace is active.",
       "suspended": "Your workspace is suspended. Contact us for details."
+    },
+    "agent": {
+      "title": "Agent",
+      "lastSeen": "Last seen",
+      "never": "No agent has connected yet.",
+      "interval": "Expected check-in interval",
+      "editInterval": "Change the interval",
+      "intervalLabel": "Interval (minutes)",
+      "intervalHint": "15 to 10,080 minutes (a week).",
+      "intervalSaved": "Check-in interval updated.",
+      "overdueTitle": "The agent is overdue",
+      "overdueBody": "The agent has not checked in within the expected interval; pending work is waiting.",
+      "schedulerNote": "The agent's scheduler is the tenant's responsibility: Jeeta never wakes the agent; you set up the schedule that runs it at regular intervals.",
+      "onTime": "The agent is checking in on time.",
+      "hours": "{{count}} h",
+      "minutes": "{{count}} min"
+    },
+    "pending": {
+      "title": "Pending work",
+      "empty": "Nothing is pending.",
+      "consult_strategy": "Work out the strategy in the consultation, or continue the open draft.",
+      "approve_strategy": "Review and approve the submitted strategy draft.",
+      "verify_capability": "{{name}} awaits verification.",
+      "verify_capability_stale": "The verification of {{name}} has lapsed; verify it again.",
+      "declare_first_capability": "Declare the first capability the workspace can act through.",
+      "connect_connector": "A declared connector capability awaits its connection.",
+      "open": "Open",
+      "priority": "Priority {{priority}}"
     }
   },
   "team": {
@@ -326,5 +425,406 @@
     "title": "Page not found",
     "body": "The page you are looking for does not exist or has moved.",
     "home": "Back to home"
+  },
+  "strategy": {
+    "title": "Strategy",
+    "description": "The workspace's approved strategy and the draft being worked out.",
+    "tabs": {
+      "approved": "Approved",
+      "draft": "Draft"
+    },
+    "versions": "Versions",
+    "versionsTitle": "Strategy versions",
+    "versionsDescription": "Every version, newest first.",
+    "versionsEmpty": "No versions yet.",
+    "versionLabel": "Version {{number}}",
+    "createdAt": "Created",
+    "submittedAt": "Submitted",
+    "approvedAt": "Approved",
+    "archivedAt": "Archived",
+    "approvedBy": "Approved by",
+    "noApproved": "No approved strategy.",
+    "noApprovedBody": "A draft shows here once it is approved.",
+    "noDraft": "No open draft.",
+    "noDraftBody": "Your agent runs the consultation over MCP: it asks its questions, records your answers and its assumptions, writes the sections and the hypotheses, and submits the draft for your approval. You can also start the consultation here.",
+    "start": "Start the consultation",
+    "started": "The consultation has started.",
+    "submittedBadge": "Submitted",
+    "notSubmittedBadge": "Not submitted",
+    "gapsTitle": "Gaps to close before approval",
+    "noGaps": "No gaps: the draft can be submitted.",
+    "submit": "Submit for approval",
+    "submitted": "The draft is submitted for approval.",
+    "submitRefused": "The draft could not be submitted. Gaps:",
+    "approve": "Approve",
+    "approved": "The strategy is approved and in force.",
+    "approveOwnerOnly": "Only an owner or a manager can approve.",
+    "approveNeedsSubmit": "The draft must be submitted before it can be approved.",
+    "archive": "Archive",
+    "archiveTitle": "Archive the approved strategy",
+    "archiveBody": "Version {{number}} will be archived and no strategy will be in force; work that needs a strategy stops until a new version is approved.",
+    "archiveConfirmLabel": "Type the version number to confirm: {{number}}",
+    "archived": "The strategy is archived.",
+    "sections": {
+      "identity": "Identity",
+      "audience": "Audience",
+      "channels": "Channels",
+      "goals": "Goals",
+      "budget_frame": "Budget frame",
+      "prohibitions": "Prohibitions",
+      "cadence": "Cadence",
+      "paid_enabled": "Paid channels",
+      "hypotheses": "Hypotheses"
+    },
+    "fields": {
+      "product": "Product",
+      "voice": "Voice",
+      "positioning": "Positioning",
+      "usp": "What sets it apart",
+      "segmentKey": "Key",
+      "segmentKeyHint": "2–32 characters: lowercase letters, digits and underscores.",
+      "segmentName": "Name",
+      "segmentDescription": "Description",
+      "channel": "Channel",
+      "rationale": "Rationale",
+      "group": "Capability group",
+      "noGroup": "No group",
+      "objective": "Objective",
+      "kpis": "KPIs",
+      "kpiName": "KPI",
+      "kpiTarget": "Target",
+      "lane": "Lane",
+      "period": "Period",
+      "cap": "Cap",
+      "currency": "Currency",
+      "prohibition": "Prohibition",
+      "perWeek": "Posts per week",
+      "channelMix": "Channel mix",
+      "sharePct": "Share (%)",
+      "mixTotal": "Total: {{total}}%",
+      "paidEnabled": "Paid channels are used"
+    },
+    "lanes": {
+      "organic": "Organic",
+      "paid": "Paid"
+    },
+    "periods": {
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "anyChannel": "Any channel",
+    "channelPlaceholder": "Choose a channel",
+    "add": "Add",
+    "remove": "Remove",
+    "empty": "Not written yet.",
+    "sectionSaved": "Section saved.",
+    "on": "On",
+    "off": "Off",
+    "hypotheses": {
+      "columns": {
+        "title": "Title",
+        "segment": "Segment",
+        "angle": "Angle",
+        "channel": "Channel",
+        "metric": "Metric",
+        "confidence": "Confidence",
+        "state": "State"
+      },
+      "states": {
+        "kept": "Kept",
+        "retired": "Retired",
+        "added": "Added"
+      },
+      "empty": "No hypotheses yet.",
+      "edit": "Edit the hypotheses",
+      "add": "Add a hypothesis",
+      "retire": "Retire",
+      "restore": "Restore",
+      "saved": "Hypotheses saved.",
+      "segmentPlaceholder": "Choose a segment",
+      "confidenceHint": "Between 0 and 1."
+    },
+    "consultation": {
+      "title": "Consultation log",
+      "description": "Questions, answers, assumptions and notes, newest first.",
+      "empty": "No entries.",
+      "loadMore": "Load more",
+      "kinds": {
+        "question": "Question",
+        "answer": "Answer",
+        "assumption": "Assumption",
+        "section_draft": "Section draft",
+        "note": "Note",
+        "submitted": "Submitted",
+        "approved": "Approved",
+        "archived": "Archived"
+      },
+      "add": "Add a note",
+      "kind": "Kind",
+      "section": "Section",
+      "noSection": "No section",
+      "text": "Text",
+      "recorded": "Entry recorded."
+    }
+  },
+  "capabilities": {
+    "title": "Capabilities",
+    "description": "The accounts, devices and tools the workspace can act through.",
+    "declare": "Declare a capability",
+    "filterLabel": "Kind group",
+    "filterAll": "All",
+    "empty": "No capabilities.",
+    "emptyBody": "A capability shows here once your agent or you declare it.",
+    "groups": {
+      "social_account": "Social accounts",
+      "messaging": "Messaging",
+      "telephony": "Telephony",
+      "community": "Community",
+      "ads": "Ads",
+      "calendar": "Calendar",
+      "device": "Devices",
+      "agent_connection": "Agent connections",
+      "computer_access": "Computer access",
+      "third_party": "Third-party tools"
+    },
+    "kinds": {
+      "instagram": "Instagram",
+      "facebook_page": "Facebook page",
+      "x": "X",
+      "linkedin_page": "LinkedIn page",
+      "tiktok": "TikTok",
+      "pinterest": "Pinterest",
+      "youtube": "YouTube",
+      "google_business": "Google Business Profile",
+      "whatsapp_cloud": "WhatsApp Business",
+      "instagram_dm": "Instagram messages",
+      "messenger": "Messenger",
+      "sms_line": "SMS line",
+      "mailbox": "Mailbox",
+      "webchat": "Web chat",
+      "netgsm_pbx": "NetGSM PBX",
+      "discord": "Discord",
+      "reddit": "Reddit",
+      "review_google": "Google reviews",
+      "review_facebook": "Facebook reviews",
+      "meta_ads": "Meta ads",
+      "tiktok_ads": "TikTok ads",
+      "linkedin_ads": "LinkedIn ads",
+      "google_ads": "Google ads",
+      "google_calendar": "Google Calendar",
+      "outlook_calendar": "Outlook calendar",
+      "phone": "Phone",
+      "computer": "Computer",
+      "printer": "Printer",
+      "printer_3d": "3D printer",
+      "audio_io": "Audio in/out",
+      "camera": "Camera",
+      "screen": "Screen",
+      "scanner": "Scanner",
+      "usb_storage": "USB storage",
+      "claude_code": "Command-line coding agent",
+      "codex": "Coding agent",
+      "claude_ai": "Web chat assistant",
+      "other_agent": "Another agent",
+      "filesystem_root": "File system",
+      "browser_profile": "Browser profile",
+      "shell": "Shell",
+      "adb": "Android debug bridge",
+      "screen_control": "Screen control",
+      "notion": "Notion",
+      "slack": "Slack",
+      "gmail": "Gmail",
+      "apify": "Apify",
+      "firecrawl": "Firecrawl",
+      "other": "Another tool"
+    },
+    "reach": {
+      "label": "Reached through",
+      "connector": "Connector",
+      "agent": "Agent",
+      "device": "Device"
+    },
+    "lastVerified": "Last verified",
+    "neverVerified": "Never verified",
+    "policy": {
+      "label": "Policy",
+      "anytime": "At any time",
+      "hours": "{{days}}, {{from}}–{{to}} ({{tz}})",
+      "dailyCap": "At most {{count}} operations a day",
+      "spendCap": "Spend cap {{amount}} (minor units)",
+      "humanApproval": "Every action waits for a human's approval",
+      "verifyAge": "A verification lasts {{days}} days",
+      "verifyNever": "A verification never lapses"
+    },
+    "budgetLinks": "Budget items",
+    "noBudgetLinks": "No budget item linked",
+    "groupsLabel": "Groups",
+    "noGroups": "In no group",
+    "keyDetail": "Tool: {{detail}}",
+    "actions": {
+      "verify": "Verify",
+      "policy": "Policy",
+      "unreachable": "Mark unreachable",
+      "linkBudget": "Link a budget item",
+      "unlinkBudget": "Unlink {{name}}",
+      "retire": "Retire"
+    },
+    "declareDialog": {
+      "title": "Declare a capability",
+      "description": "Declare an account, a device or a tool the workspace can use. No secrets are entered here.",
+      "kindPlaceholder": "Choose a kind",
+      "keyDetailHint": "2–40 characters: lowercase letters, digits, underscores and hyphens.",
+      "externalIdHint": "The provider's id of the account, page or line.",
+      "connectorPublic": "Connector settings (not secret)",
+      "connectorPublicHint": "Only settings that are not secret; never a password or a token.",
+      "addSetting": "Add a setting",
+      "settingKey": "Key",
+      "settingValue": "Value",
+      "submit": "Declare",
+      "declared": "Capability declared."
+    },
+    "verifyDialog": {
+      "title": "Verify {{name}}",
+      "description": "The evidence is the agent's (or your) claim; the system records it and never checks it.",
+      "evidence": "Evidence",
+      "evidenceHint": "What was run, or what was seen?",
+      "refs": "References",
+      "refsHint": "A file id, a serial number, a screenshot id…",
+      "addRef": "Add a reference",
+      "ref": "Reference",
+      "submit": "Verify",
+      "verified": "Capability verified."
+    },
+    "policyDialog": {
+      "title": "Policy of {{name}}",
+      "description": "When and how much the capability may act.",
+      "hoursEnabled": "Limit the working hours",
+      "tz": "Time zone",
+      "tzHint": "UTC or an IANA name such as Europe/Istanbul.",
+      "from": "Opens at",
+      "to": "Closes at",
+      "toHint": "24 = the end of the day (midnight). A window past midnight is split over two days.",
+      "days": "Days",
+      "dailyOpsCap": "Daily operations cap",
+      "spendCap": "Spend cap (minor units)",
+      "capHint": "Leave empty for no cap.",
+      "humanApproval": "Every action waits for a human's approval",
+      "verifyMaxAge": "Verification lasts (days)",
+      "verifyMaxAgeHint": "0 = it never lapses.",
+      "saved": "Policy saved."
+    },
+    "unreachableDialog": {
+      "title": "{{name}} is unreachable",
+      "description": "Why did the last attempt fail?",
+      "submit": "Mark",
+      "marked": "Capability marked unreachable."
+    },
+    "retireDialog": {
+      "title": "Retire the capability",
+      "body": "{{name}} will be retired: its record stays, but it can no longer be verified, grouped or linked to a budget; it leaves its groups and budget items.",
+      "retired": "Capability retired."
+    },
+    "linkDialog": {
+      "title": "Budget item for {{name}}",
+      "description": "Choose a budget item the capability may spend from.",
+      "placeholder": "Choose an item",
+      "none": "No budget item fits this capability.",
+      "submit": "Link",
+      "linked": "Budget item linked.",
+      "unlinked": "Budget item unlinked."
+    },
+    "groupsPanel": {
+      "title": "Capability groups",
+      "description": "Named sets such as a brand, a branch, a persona or a purpose; a capability may be in many groups.",
+      "create": "Create a group",
+      "name": "Group name",
+      "purpose": "Purpose",
+      "empty": "No groups yet.",
+      "noMembers": "No members.",
+      "addMember": "Add a member",
+      "addMemberPlaceholder": "Choose a capability",
+      "removeMember": "Remove {{name}}",
+      "rename": "Rename",
+      "deleteTitle": "Delete the group",
+      "deleteBody": "The group {{name}} will be deleted; its members stay as capabilities.",
+      "created": "Group created.",
+      "renamed": "Group renamed.",
+      "deleted": "Group deleted.",
+      "memberAdded": "Member added.",
+      "memberRemoved": "Member removed."
+    }
+  },
+  "budget": {
+    "title": "Budget",
+    "description": "The workspace's own money and caps: ad budget, SMS, agent quota, consumables.",
+    "create": "Create a budget item",
+    "columns": {
+      "name": "Name",
+      "kind": "Kind",
+      "unit": "Unit",
+      "cap": "Cap",
+      "period": "Period",
+      "spent": "Spent this period",
+      "remaining": "Remaining"
+    },
+    "kinds": {
+      "cash": "Cash",
+      "ad_budget": "Ad budget",
+      "sms_budget": "SMS budget",
+      "agent_quota": "Agent quota",
+      "agent_hours": "Agent hours",
+      "consumable": "Consumable"
+    },
+    "units": {
+      "currency": "Currency",
+      "count": "Count",
+      "minutes": "Minutes"
+    },
+    "periods": {
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "total": "Total"
+    },
+    "minutesValue": "{{value}} min",
+    "overCap": "Over the cap",
+    "spend": "Spend",
+    "empty": "No budget items yet.",
+    "emptyBody": "Create an item such as an ad budget, SMS or an agent quota; the agent records what it spends here.",
+    "dialog": {
+      "title": "Create a budget item",
+      "description": "The item's kind decides the unit it is counted in.",
+      "unitKind": "Unit",
+      "currency": "Currency code",
+      "currencyHint": "An ISO 4217 code such as TRY.",
+      "countLabel": "Unit name",
+      "countLabelHint": "E.g. spools, messages, credits.",
+      "cap": "Cap per period",
+      "capHintCurrency": "In {{currency}}; decimals allowed.",
+      "submit": "Create",
+      "created": "Budget item created."
+    },
+    "spendSheet": {
+      "title": "{{name}}: spend",
+      "description": "Newest first; a spend record is never deleted.",
+      "summary": "{{spent}} spent this period, {{remaining}} remaining.",
+      "record": "Record spend",
+      "amountHint": "In {{unit}}, greater than zero.",
+      "referenceHint": "An invoice number, a campaign id…",
+      "recorded": "Spend recorded.",
+      "empty": "No spend yet.",
+      "loadMore": "Load more",
+      "columns": {
+        "at": "Time",
+        "amount": "Amount",
+        "source": "Source",
+        "reference": "Reference"
+      }
+    },
+    "sources": {
+      "human": "Human",
+      "agent": "Agent",
+      "connector": "Connector ({{name}})"
+    }
   }
 }

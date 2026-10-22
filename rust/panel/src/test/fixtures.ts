@@ -1,10 +1,21 @@
 import type {
   AgentConnectionOut,
+  BudgetItemOut,
+  BudgetSpend,
+  CapabilityOut,
+  ConsultationEntry,
+  GroupOut,
   KeySummary,
   LedgerEntryOut,
   MeOut,
   MemberOut,
+  PendingOut,
+  Policy,
   RoleDef,
+  Sections,
+  StrategyOut,
+  VersionOut,
+  VersionSummary,
   WorkspaceAdminOut,
   WorkspaceOut,
 } from '@/api/types';
@@ -27,9 +38,22 @@ export const me: MeOut = {
       workspace_slug: 'alfa-atolye',
       workspace_status: 'pending_payment',
       role_key: 'owner',
-      permissions: ['api_keys.manage', 'ledger.read', 'team.manage', 'workspace.read'],
+      permissions: [
+        'api_keys.manage',
+        'budget.manage',
+        'capabilities.manage',
+        'ledger.read',
+        'team.manage',
+        'workspace.read',
+      ],
     },
   ],
+};
+
+/** The same user as a rep: reads everything, changes nothing. */
+export const repMe: MeOut = {
+  ...me,
+  memberships: [{ ...me.memberships[0], role_key: 'rep', permissions: ['workspace.read'] }],
 };
 
 export const workspace: WorkspaceOut = {
@@ -106,6 +130,7 @@ export const agents: AgentConnectionOut[] = [
     first_seen_at: '2026-10-22T11:05:00Z',
     last_seen_at: '2026-10-22T12:00:00Z',
     tool_calls: 42,
+    overdue: false,
   },
 ];
 
@@ -135,3 +160,241 @@ export const adminWorkspaces: WorkspaceAdminOut[] = [
     member_count: 2,
   },
 ];
+
+// ---------------------------------------------------------------------------------------------
+// Strategy
+// ---------------------------------------------------------------------------------------------
+
+export const APPROVED_ID = '0190a000-0000-7000-8000-000000000040';
+export const DRAFT_ID = '0190a000-0000-7000-8000-000000000041';
+export const HYPOTHESIS_ID = '0190a000-0000-7000-8000-000000000042';
+export const GROUP_ID = '0190a000-0000-7000-8000-000000000050';
+
+export const sections: Sections = {
+  identity: {
+    product: 'El yapımı seramik',
+    voice: 'sıcak ve sade',
+    positioning: 'mahallenin atölyesi',
+    usp: 'her parça tek',
+  },
+  audience: [{ key: 'students', name: 'Öğrenciler', description: 'kampüs çevresi' }],
+  channels: [{ channel: 'instagram', rationale: 'görsel ürün', group_id: null }],
+  goals: { objective: 'ayda 40 sipariş', kpis: [{ name: 'sipariş', target: '40' }] },
+  budget_frame: { lanes: [{ lane: 'organic', period: 'monthly', cap_minor: 0, currency: 'TRY' }] },
+  prohibitions: ['indirim vaadi yok'],
+  cadence: { per_week: 3, channel_mix: [{ channel: 'instagram', share_pct: 100 }] },
+  paid_enabled: false,
+};
+
+export const approvedVersion: VersionOut = {
+  id: APPROVED_ID,
+  number: 1,
+  status: 'approved',
+  sections,
+  hypotheses: [
+    {
+      id: HYPOTHESIS_ID,
+      title: 'Atölye videoları öğrencileri çeker',
+      segment_key: 'students',
+      angle: 'yapım süreci',
+      channel: 'instagram',
+      metric: 'kaydetme oranı',
+      confidence: 0.6,
+      state: 'kept',
+    },
+  ],
+  created_at: '2026-10-20T09:00:00Z',
+  submitted_at: '2026-10-20T10:00:00Z',
+  approved_at: '2026-10-20T11:00:00Z',
+  approved_by_email: 'owner@alpha.example',
+  consultation_count: 4,
+  gaps: [],
+};
+
+export const draftGaps = [
+  { field: 'identity.product', message: 'the product is required' },
+  { field: 'hypotheses', message: 'at least one hypothesis that is not retired is required' },
+];
+
+export const draftVersion: VersionOut = {
+  id: DRAFT_ID,
+  number: 2,
+  status: 'draft',
+  sections: { ...sections, identity: { ...sections.identity, product: '' } },
+  hypotheses: [],
+  created_at: '2026-10-22T09:00:00Z',
+  submitted_at: '2026-10-22T10:00:00Z',
+  approved_at: null,
+  approved_by_email: null,
+  consultation_count: 2,
+  gaps: draftGaps,
+};
+
+export const strategyWithDraft: StrategyOut = {
+  approved: approvedVersion,
+  draft: draftVersion,
+  gaps: draftGaps,
+};
+
+export const versions: VersionSummary[] = [
+  {
+    id: DRAFT_ID,
+    number: 2,
+    status: 'draft',
+    created_at: '2026-10-22T09:00:00Z',
+    submitted_at: '2026-10-22T10:00:00Z',
+    approved_at: null,
+    archived_at: null,
+  },
+  {
+    id: APPROVED_ID,
+    number: 1,
+    status: 'approved',
+    created_at: '2026-10-20T09:00:00Z',
+    submitted_at: '2026-10-20T10:00:00Z',
+    approved_at: '2026-10-20T11:00:00Z',
+    archived_at: null,
+  },
+];
+
+export const consultation: ConsultationEntry[] = [
+  {
+    id: '0190a000-0000-7000-8000-000000000044',
+    version_id: DRAFT_ID,
+    kind: 'question',
+    section_key: 'identity',
+    text: 'Hangi ürünü öne çıkaralım?',
+    actor: { kind: 'agent', connection_id: '0190a000-0000-7000-8000-000000000030', user_id: USER_ID },
+    at: '2026-10-22T09:30:00Z',
+  },
+  {
+    id: '0190a000-0000-7000-8000-000000000043',
+    version_id: DRAFT_ID,
+    kind: 'note',
+    section_key: null,
+    text: 'consultation started',
+    actor: { kind: 'human', user_id: USER_ID },
+    at: '2026-10-22T09:00:00Z',
+  },
+];
+
+// ---------------------------------------------------------------------------------------------
+// Capabilities and budget
+// ---------------------------------------------------------------------------------------------
+
+export const BUDGET_ITEM_ID = '0190a000-0000-7000-8000-000000000060';
+
+const defaultPolicy: Policy = {
+  active_hours: null,
+  daily_ops_cap: null,
+  spend_cap_minor: null,
+  requires_human_approval: false,
+  verify_max_age_days: 30,
+};
+
+function capability(
+  n: number,
+  name: string,
+  kind_key: string,
+  reach: CapabilityOut['capability']['reach'],
+  status: CapabilityOut['capability']['status'],
+  effective: CapabilityOut['effective_status'],
+): CapabilityOut {
+  return {
+    capability: {
+      id: `0190a000-0000-7000-8000-0000000001${String(n).padStart(2, '0')}`,
+      workspace_id: WS_ID,
+      kind_key,
+      key_detail: null,
+      name,
+      description: '',
+      reach,
+      status,
+      external_id: null,
+      connector_public: {},
+      has_sealed_config: false,
+      last_verified_at: status === 'verified' ? '2026-10-21T08:00:00Z' : null,
+      evidence: null,
+      policy: defaultPolicy,
+      budget_item_ids: [],
+      strategy_version_id: null,
+      created_at: '2026-10-21T08:00:00Z',
+      updated_at: '2026-10-21T08:00:00Z',
+    },
+    effective_status: effective,
+  };
+}
+
+/** One capability in each of the five effective states. */
+export const capabilities: CapabilityOut[] = [
+  capability(1, 'Atölye Instagram', 'instagram', 'connector', 'declared', 'declared'),
+  capability(2, 'Saha telefonu', 'phone', 'device', 'verified', 'verified'),
+  capability(3, 'Ofis yazıcısı', 'printer', 'device', 'verified', 'stale'),
+  capability(4, 'Destek kutusu', 'mailbox', 'connector', 'unreachable', 'unreachable'),
+  capability(5, 'Eski hat', 'sms_line', 'connector', 'retired', 'retired'),
+];
+capabilities[1].capability.budget_item_ids = [BUDGET_ITEM_ID];
+capabilities[1].capability.policy = {
+  active_hours: { tz: 'Europe/Istanbul', from: 9, to: 24, days: [1, 2, 3, 4, 5] },
+  daily_ops_cap: 50,
+  spend_cap_minor: null,
+  requires_human_approval: true,
+  verify_max_age_days: 30,
+};
+
+export const groups: GroupOut[] = [
+  {
+    group: { id: GROUP_ID, workspace_id: WS_ID, name: 'Marka A', purpose: 'ana marka' },
+    members: [capabilities[1]],
+  },
+];
+
+export const budgetItems: BudgetItemOut[] = [
+  {
+    item: {
+      id: BUDGET_ITEM_ID,
+      workspace_id: WS_ID,
+      name: 'Ekim kampanyası',
+      kind: 'ad_budget',
+      unit: { kind: 'currency', value: 'TRY' },
+      cap: 100000,
+      period: 'monthly',
+      strategy_version_id: null,
+      created_at: '2026-10-21T08:00:00Z',
+    },
+    spent_in_period: 125000,
+    remaining: -25000,
+  },
+];
+
+export const spend: BudgetSpend[] = [
+  {
+    id: '0190a000-0000-7000-8000-000000000061',
+    budget_item_id: BUDGET_ITEM_ID,
+    workspace_id: WS_ID,
+    at: '2026-10-22T08:00:00Z',
+    amount: 125000,
+    source: { kind: 'human' },
+    reference: 'FTR-2026-001',
+  },
+];
+
+// ---------------------------------------------------------------------------------------------
+// Pending work
+// ---------------------------------------------------------------------------------------------
+
+export const pendingOverdue: PendingOut = {
+  strategy: 'missing',
+  items: [
+    { kind: 'consult_strategy', priority: 1, hint: 'start the consultation' },
+    {
+      kind: 'verify_capability',
+      capability_id: capabilities[2].capability.id,
+      name: 'Ofis yazıcısı',
+      stale: true,
+      priority: 2,
+      hint: 'verify it again',
+    },
+  ],
+  agent: { last_seen_at: '2026-10-20T08:00:00Z', interval_minutes: 1440, overdue: true },
+};

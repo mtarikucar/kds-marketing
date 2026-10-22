@@ -6,12 +6,15 @@ import { Shell } from '@/layout/Shell';
 import { AcceptInvitePage } from '@/pages/AcceptInvitePage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
+import { BudgetPage } from '@/pages/BudgetPage';
+import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { HomePage } from '@/pages/HomePage';
 import { LedgerPage } from '@/pages/LedgerPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { RegisterPage } from '@/pages/RegisterPage';
 import { RolesPage } from '@/pages/RolesPage';
+import { StrategyPage } from '@/pages/StrategyPage';
 import { TeamPage } from '@/pages/TeamPage';
 import { PlatformLoginPage } from '@/pages/platform/PlatformLoginPage';
 import { WorkspacesPage } from '@/pages/platform/WorkspacesPage';
@@ -55,6 +58,9 @@ export const routes: RouteObject[] = [
         element: <Shell />,
         children: [
           { index: true, element: <HomePage /> },
+          { path: 'strategy', element: <StrategyPage /> },
+          { path: 'capabilities', element: <CapabilitiesPage /> },
+          { path: 'budget', element: <BudgetPage /> },
           { path: 'team', element: <TeamPage /> },
           { path: 'roles', element: <RolesPage /> },
           { path: 'api-keys', element: <ApiKeysPage /> },
