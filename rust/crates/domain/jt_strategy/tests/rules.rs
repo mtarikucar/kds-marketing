@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use jt_ledger::Actor;
 use jt_strategy::*;
 use jt_tenancy::{UserId, WorkspaceId};
+use serde::Serialize;
+use serde_json::{Value, json};
 use time::macros::datetime;
 
 fn segment(key: &str) -> Segment {
@@ -479,10 +481,228 @@ fn sections_serialise_under_their_keys_and_read_back_from_an_empty_object() {
     assert_eq!(empty, Sections::default());
     assert_eq!(empty.cadence.per_week, 0);
     assert!(!empty.paid_enabled);
+}
 
-    // A misspelt field is refused rather than silently dropped.
-    let err = serde_json::from_value::<Identity>(serde_json::json!({ "prodcut": "x" }))
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("prodcut"), "{err}");
+#[test]
+fn old_shaped_json_without_newer_fields_still_parses() {
+    // As an older binary would have stored it: no `group_id`, no `channel_mix`, no `usp`, no
+    // `paid_enabled`, a segment without a description and a lane without a period.
+    let stored = json!({
+        "identity": { "product": "Coffee", "voice": "warm", "positioning": "fresh" },
+        "audience": [{ "key": "students", "name": "Students" }],
+        "channels": [{ "channel": "instagram", "rationale": "they are there" }],
+        "goals": { "objective": "grow", "kpis": [{ "name": "subscribers", "target": "200" }] },
+        "budget_frame": { "lanes": [{ "lane": "paid", "cap_minor": 5000, "currency": "TRY" }] },
+        "prohibitions": [],
+        "cadence": { "per_week": 3 }
+    });
+    let s: Sections = serde_json::from_value(stored).unwrap();
+    assert_eq!(s.identity.usp, "");
+    assert_eq!(s.audience[0].description, "");
+    assert_eq!(s.channels[0].group_id, None);
+    assert_eq!(s.cadence.per_week, 3);
+    assert!(s.cadence.channel_mix.is_empty());
+    assert!(!s.paid_enabled);
+    assert_eq!(
+        s.budget_frame.lanes[0],
+        lane(LaneKind::Paid, Period::Monthly, 5000, "TRY")
+    );
+
+    // A lane missing its kind reads as the organic lane; a hypothesis missing its state reads as
+    // kept, and one missing its confidence as 0.
+    let l: Lane = serde_json::from_value(json!({ "cap_minor": 1, "currency": "TRY" })).unwrap();
+    assert_eq!(l.lane, LaneKind::Organic);
+    let id = HypothesisId::new_v7();
+    let h: Hypothesis = serde_json::from_value(json!({ "id": id, "title": "t" })).unwrap();
+    assert_eq!(
+        (h.id, h.state, h.confidence),
+        (id, HypothesisState::Kept, 0.0)
+    );
+    // Without its identity a hypothesis cannot be read.
+    assert!(serde_json::from_value::<Hypothesis>(json!({ "title": "t" })).is_err());
+}
+
+#[test]
+fn unknown_field_in_stored_json_is_ignored_on_read() {
+    // As a newer binary might have stored it: fields this binary does not know, at every depth.
+    let mut stored = serde_json::to_value(complete_sections()).unwrap();
+    stored["competitors"] = json!(["a", "b"]);
+    stored["identity"]["tagline"] = json!("fresh daily");
+    stored["audience"][0]["size"] = json!(1200);
+    stored["channels"][1]["handle"] = json!("@coffee");
+    stored["goals"]["kpis"][0]["unit"] = json!("people");
+    stored["budget_frame"]["lanes"][1]["note"] = json!("from March");
+    stored["budget_frame"]["reserve_minor"] = json!(10);
+    stored["cadence"]["channel_mix"][0]["weight"] = json!(2);
+    stored["cadence"]["quiet_hours"] = json!({ "from": 22, "to": 7 });
+    let s: Sections = serde_json::from_value(stored).unwrap();
+    assert_eq!(s, complete_sections());
+
+    let h = hypothesis("students", "instagram", HypothesisState::Added);
+    let mut stored = serde_json::to_value(&h).unwrap();
+    stored["arms"] = json!([{ "alpha": 1, "beta": 1 }]);
+    assert_eq!(serde_json::from_value::<Hypothesis>(stored).unwrap(), h);
+}
+
+#[test]
+fn parse_section_strict_rejects_unknown_keys_at_any_depth_and_lists_them() {
+    let mut frame = serde_json::to_value(complete_sections().budget_frame).unwrap();
+    frame["total_minor"] = json!(1);
+    frame["lanes"][0]["note"] = json!("x");
+    frame["lanes"][1]["zeta"] = json!(1);
+    frame["lanes"][1]["alpha"] = json!(2);
+    let gaps = parse_section_strict("budget_frame", &frame).unwrap_err();
+    assert_eq!(
+        fields(&gaps),
+        [
+            "budget_frame.total_minor",
+            "budget_frame.lanes[0].note",
+            "budget_frame.lanes[1].alpha",
+            "budget_frame.lanes[1].zeta",
+        ]
+    );
+    assert!(
+        gaps.iter().all(|g| g.message == "unknown field"),
+        "{gaps:?}"
+    );
+
+    // Lists of objects, objects inside objects, and a type error reported together with them.
+    let gaps = parse_section_strict(
+        "goals",
+        &json!({
+            "objective": "grow",
+            "kpis": [{ "name": "n", "target": "t" }, { "name": "n", "target": "t", "unit": "u" }],
+            "deadline": "2027"
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&gaps), ["goals.deadline", "goals.kpis[1].unit"]);
+    let gaps = parse_section_strict(
+        "cadence",
+        &json!({ "per_week": "often", "channel_mix": [{ "channel": "instagram", "share_pct": 100, "w": 1 }] }),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&gaps), ["cadence.channel_mix[0].w", "cadence"]);
+    assert_eq!(gaps[0].message, "unknown field");
+    assert!(gaps[1].message.contains("invalid type"), "{gaps:?}");
+    let gaps = parse_section_strict(
+        "audience",
+        &json!([{ "key": "students", "name": "S", "description": "d", "colour": "red" }]),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&gaps), ["audience[0].colour"]);
+    let gaps = parse_section_strict(
+        "channels",
+        &json!([{ "channel": "instagram", "rationale": "r", "group": "a" }]),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&gaps), ["channels[0].group"]);
+    let gaps =
+        parse_section_strict("identity", &json!({ "product": "p", "prodcut": "p" })).unwrap_err();
+    assert_eq!(fields(&gaps), ["identity.prodcut"]);
+
+    // Scalars and lists of scalars: only the type can be wrong.
+    assert_eq!(
+        fields(&parse_section_strict("paid_enabled", &json!("yes")).unwrap_err()),
+        ["paid_enabled"]
+    );
+    assert_eq!(
+        fields(&parse_section_strict("prohibitions", &json!([{ "text": "x" }])).unwrap_err()),
+        ["prohibitions"]
+    );
+
+    // An unknown section.
+    let gaps = parse_section_strict("competitors", &json!([])).unwrap_err();
+    assert_eq!(fields(&gaps), ["competitors"]);
+    assert!(gaps[0].message.contains("unknown section"), "{gaps:?}");
+
+    // A missing field is not an error at write time: it reads as empty and is a completeness
+    // gap instead.
+    assert_eq!(
+        parse_section_strict("identity", &json!({ "product": "p" })).unwrap(),
+        SectionValue::Identity(Identity {
+            product: "p".to_owned(),
+            ..Identity::default()
+        })
+    );
+}
+
+#[test]
+fn parse_section_strict_accepts_every_section_key() {
+    let complete = serde_json::to_value(complete_sections()).unwrap();
+    let mut rebuilt = Sections::default();
+    for key in Sections::KEYS {
+        let value = parse_section_strict(key, &complete[*key])
+            .unwrap_or_else(|gaps| panic!("{key}: {gaps:?}"));
+        assert_eq!(value.key(), *key);
+        value.apply(&mut rebuilt);
+    }
+    assert_eq!(rebuilt, complete_sections());
+}
+
+#[test]
+fn parse_hypotheses_strict_rejects_unknown_keys_and_reads_inputs() {
+    let id = HypothesisId::new_v7();
+    let parsed = parse_hypotheses_strict(&json!([
+        { "id": id, "title": "t", "segment_key": "students", "angle": "a", "channel": "instagram",
+          "metric": "m", "confidence": 0.4 },
+        { "title": "new one", "segment_key": "students", "angle": "a", "channel": "any",
+          "metric": "m", "confidence": 0.6 }
+    ]))
+    .unwrap();
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].id, Some(id));
+    assert_eq!(parsed[1].id, None);
+    assert_eq!(parsed[1].title, "new one");
+
+    let gaps = parse_hypotheses_strict(&json!([
+        { "title": "t" },
+        { "title": "t", "state": "kept", "arms": [] }
+    ]))
+    .unwrap_err();
+    assert_eq!(fields(&gaps), ["hypotheses[1].arms", "hypotheses[1].state"]);
+    assert_eq!(
+        fields(&parse_hypotheses_strict(&json!({ "title": "t" })).unwrap_err()),
+        ["hypotheses"]
+    );
+}
+
+/// The keys of `value` serialised, sorted.
+fn serialised_keys(value: impl Serialize) -> Vec<String> {
+    let Value::Object(map) = serde_json::to_value(value).unwrap() else {
+        panic!("not an object")
+    };
+    let mut keys: Vec<String> = map.keys().cloned().collect();
+    keys.sort_unstable();
+    keys
+}
+
+fn sorted(keys: &[&str]) -> Vec<String> {
+    let mut keys: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
+    keys.sort_unstable();
+    keys
+}
+
+#[test]
+fn every_written_struct_lists_exactly_its_serialised_keys() {
+    assert_eq!(serialised_keys(Sections::default()), sorted(Sections::KEYS));
+    assert_eq!(serialised_keys(Identity::default()), sorted(Identity::KEYS));
+    assert_eq!(serialised_keys(Segment::default()), sorted(Segment::KEYS));
+    assert_eq!(
+        serialised_keys(ChannelChoice::default()),
+        sorted(ChannelChoice::KEYS)
+    );
+    assert_eq!(serialised_keys(Goals::default()), sorted(Goals::KEYS));
+    assert_eq!(serialised_keys(Kpi::default()), sorted(Kpi::KEYS));
+    assert_eq!(
+        serialised_keys(BudgetFrame::default()),
+        sorted(BudgetFrame::KEYS)
+    );
+    assert_eq!(serialised_keys(Lane::default()), sorted(Lane::KEYS));
+    assert_eq!(serialised_keys(Cadence::default()), sorted(Cadence::KEYS));
+    assert_eq!(serialised_keys(Mix::default()), sorted(Mix::KEYS));
+    assert_eq!(
+        serialised_keys(HypothesisInput::default()),
+        sorted(HypothesisInput::KEYS)
+    );
 }

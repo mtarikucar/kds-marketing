@@ -3,6 +3,7 @@
 
 mod consultation;
 mod hypothesis;
+mod parse;
 mod rules;
 mod sections;
 mod version;
@@ -10,7 +11,8 @@ mod version;
 pub use consultation::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, MAX_CONSULTATION_TEXT_CHARS,
 };
-pub use hypothesis::{Hypothesis, HypothesisId, HypothesisState};
+pub use hypothesis::{Hypothesis, HypothesisId, HypothesisInput, HypothesisState};
+pub use parse::{SectionValue, parse_hypotheses_strict, parse_section_strict};
 pub use rules::{
     ANY_CHANNEL, Gap, MAX_PER_WEEK, MAX_PROHIBITIONS, budget_cap_for, diff, next_draft_from,
     validate_currency, validate_for_approval, validate_sections, validate_segment_key,

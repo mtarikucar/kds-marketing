@@ -1,17 +1,19 @@
 //! The content of a strategy: identity, audience, channels, goals, budget frame, prohibitions,
 //! cadence and whether paid channels are used (spec §5 "İçerik").
 //!
-//! Every struct refuses unknown fields, so a misspelt field is an error rather than silently
-//! dropped; the sections themselves, and every part that has an empty form, read missing fields
-//! as empty (a fresh draft is stored as `{}`). Whether the content is complete is a rule
-//! ([`crate::validate_sections`]), not a parse error.
+//! These types are stored (an approved version's sections are kept as they were approved), so
+//! reading them is tolerant: a missing field reads as its default and an unknown field is
+//! ignored, and a row written by a newer or an older binary still reads. Strictness belongs to the
+//! write boundary: [`crate::parse_section_strict`] refuses unknown keys at any depth, using each
+//! struct's `KEYS`. Whether the content is complete is a rule ([`crate::validate_sections`]), not
+//! a parse error.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// The whole content of one strategy version.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Sections {
     pub identity: Identity,
     /// The segments of the audience.
@@ -29,7 +31,7 @@ pub struct Sections {
 
 impl Sections {
     /// The key of each section, as serialised; one section is written at a time under its key.
-    pub const KEYS: [&'static str; 8] = [
+    pub const KEYS: &'static [&'static str] = &[
         "identity",
         "audience",
         "channels",
@@ -43,7 +45,7 @@ impl Sections {
 
 /// What is sold, and how the brand speaks and stands apart.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Identity {
     pub product: String,
     pub voice: String,
@@ -52,9 +54,14 @@ pub struct Identity {
     pub usp: String,
 }
 
+impl Identity {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["product", "voice", "positioning", "usp"];
+}
+
 /// One audience segment. Hypotheses name it by `key`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Segment {
     /// `[a-z0-9_]{2,32}`, unique within the strategy.
     pub key: String,
@@ -62,9 +69,14 @@ pub struct Segment {
     pub description: String,
 }
 
+impl Segment {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["key", "name", "description"];
+}
+
 /// A channel the strategy uses and why.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChannelChoice {
     /// A capability kind key (e.g. `instagram`, `mailbox`), or `any`.
     pub channel: String,
@@ -73,32 +85,52 @@ pub struct ChannelChoice {
     pub group_id: Option<Uuid>,
 }
 
+impl ChannelChoice {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["channel", "rationale", "group_id"];
+}
+
 /// The objective and how progress towards it is measured.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Goals {
     pub objective: String,
     pub kpis: Vec<Kpi>,
 }
 
+impl Goals {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["objective", "kpis"];
+}
+
 /// One measure of progress and its target, both in the owner's words.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Kpi {
     pub name: String,
     pub target: String,
 }
 
+impl Kpi {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["name", "target"];
+}
+
 /// The spending caps, one lane per [`LaneKind`] (spec §9).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct BudgetFrame {
     pub lanes: Vec<Lane>,
 }
 
+impl BudgetFrame {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["lanes"];
+}
+
 /// The cap on one lane's spending per period.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Lane {
     pub lane: LaneKind,
     pub period: Period,
@@ -108,11 +140,19 @@ pub struct Lane {
     pub currency: String,
 }
 
-/// A spending lane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+impl Lane {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["lane", "period", "cap_minor", "currency"];
+}
+
+/// A spending lane. A missing lane reads as `Organic`, the one that opens no paid spend.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum LaneKind {
     /// Work that costs no media spend.
+    #[default]
     Organic,
     /// Paid media.
     Paid,
@@ -137,11 +177,15 @@ impl LaneKind {
     }
 }
 
-/// The period a cap applies to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// The period a cap applies to. A missing period reads as `Monthly`: the same cap spread over
+/// the longer period allows less spending.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Period {
     Weekly,
+    #[default]
     Monthly,
 }
 
@@ -166,7 +210,7 @@ impl Period {
 
 /// How often to publish, and how that is split across channels.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Cadence {
     /// Posts per week, `0..=70`.
     pub per_week: u16,
@@ -174,11 +218,21 @@ pub struct Cadence {
     pub channel_mix: Vec<Mix>,
 }
 
+impl Cadence {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["per_week", "channel_mix"];
+}
+
 /// One channel's share of the cadence.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Mix {
     /// One of the strategy's [`ChannelChoice::channel`]s.
     pub channel: String,
     pub share_pct: u8,
+}
+
+impl Mix {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["channel", "share_pct"];
 }
