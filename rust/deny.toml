@@ -1,0 +1,37 @@
+[graph]
+all-features = true
+# Dev-dependencies are outside the ban graph: test-only clients (for example an MCP client used by
+# integration tests) must not trip the production bans. The archtest ignores them for the same reason.
+exclude-dev = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0", "CDLA-Permissive-2.0", "OpenSSL"]
+
+# The workspace crates are `publish = false` and `license = "UNLICENSED"` (not an SPDX id);
+# the allow list above governs third-party crates only.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+# Only jt_outbound may pull an HTTP client; only jt_pg may pull sqlx.
+deny = [
+  { crate = "reqwest", wrappers = ["jt_outbound"] },
+  { crate = "sqlx", wrappers = ["jt_pg", "jt_testkit", "jeeta"] },
+  # AI / media / speech providers: never, anywhere (spec §4.2).
+  { crate = "async-openai" }, { crate = "openai" }, { crate = "openai-api-rs" }, { crate = "openai_api_rust" },
+  { crate = "anthropic" }, { crate = "anthropic-sdk" }, { crate = "anthropic-rs" }, { crate = "misanthropic" }, { crate = "clust" },
+  { crate = "genai" }, { crate = "rig-core" }, { crate = "langchain-rust" }, { crate = "llm" }, { crate = "llm-chain" },
+  { crate = "fal" }, { crate = "fal-rs" }, { crate = "runware" }, { crate = "replicate-rs" }, { crate = "stability-rs" },
+  { crate = "elevenlabs" }, { crate = "elevenlabs-rs" }, { crate = "deepgram" }, { crate = "whisper-rs" }, { crate = "openai-whisper" },
+  { crate = "candle-core" }, { crate = "candle-transformers" }, { crate = "ort" }, { crate = "llama-cpp-2" }, { crate = "llama_cpp" }, { crate = "mistralrs" },
+  { crate = "google-generative-ai-rs" }, { crate = "gemini-rs" }, { crate = "ollama-rs" }, { crate = "aws-sdk-bedrockruntime" }, { crate = "azure_openai" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
