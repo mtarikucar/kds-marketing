@@ -153,6 +153,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("strategy.set_hypotheses", Exempt, "jeeta.strategy.set_hypotheses", ("PUT", "/api/strategy/draft/hypotheses"), Write),
     twin("strategy.submit", Exempt, "jeeta.strategy.submit", ("POST", "/api/strategy/draft/submit"), Write),
     twin("strategy.approve", Exempt, "jeeta.strategy.approve", ("POST", "/api/strategy/draft/approve"), Write),
+    // Body and arguments `{ version_id, confirm }`: the call names the approved version it archives.
     twin("strategy.archive", Exempt, "jeeta.strategy.archive", ("POST", "/api/strategy/archive"), Destructive),
     twin("strategy.list_versions", Exempt, "jeeta.strategy.list_versions", ("GET", "/api/strategy/versions"), Read),
     twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),

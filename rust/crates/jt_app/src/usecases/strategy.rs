@@ -6,13 +6,16 @@
 //! person) opens a draft, records the questions, answers, assumptions and notes, writes the
 //! sections and the hypotheses, and submits the draft; an owner or a manager approves it,
 //! archiving the version it replaces. An owner or a manager may also archive the version in
-//! force without a successor, which closes the strategy gate again.
+//! force without a successor, naming the version they mean, which closes the strategy gate
+//! again.
 //!
-//! **Who may do what.** Reading needs `workspace.read`. Running the consultation (starting it,
-//! recording, writing sections and hypotheses, submitting) needs `team.manage` or the role
-//! `owner` or `manager`, so a custom role with `team.manage` may run it. Approving and archiving
-//! need the role `owner` or `manager` (spec K11; an agent acts with its issuer's role), else
-//! `FORBIDDEN` with `details.reason = "owner_or_manager"`; no one-time code is asked.
+//! **Who may do what.** A key's scopes always narrow its authority: a role alone is never enough.
+//! Reading needs `workspace.read`. Running the consultation (starting it, recording, writing
+//! sections and hypotheses, submitting) needs `team.manage`, so a custom role holding it may run
+//! it, and an agent may only through a key that holds it, whoever issued the key. Approving and
+//! archiving need the role `owner` or `manager` (spec K11; an agent acts with its issuer's role),
+//! else `FORBIDDEN` with `details.reason = "owner_or_manager"`, and then `team.manage` as well
+//! (else `FORBIDDEN` naming it in `details.permission`); no one-time code is asked.
 //!
 //! **The draft lock.** Every use case that changes the draft reads it through
 //! `StrategyRepo::lock_draft` first, in its one tenant bundle, and decides on what that returns;
@@ -152,6 +155,16 @@ impl From<RecordKind> for ConsultationKind {
     }
 }
 
+/// What archiving asks for: the approved version meant, and the confirmation a destructive call
+/// needs. A missing `confirm` reads as `false`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub struct ArchiveInput {
+    /// The approved version to archive; another one in force refuses the call.
+    pub version_id: StrategyVersionId,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
 /// One entry to record in the draft's consultation log.
 #[derive(Clone, Debug, Deserialize)]
 pub struct RecordInput {
@@ -190,7 +203,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
 }
 
 /// Opens the next draft and returns it; while a draft is open, returns that one instead and
-/// changes nothing. Needs `team.manage` or the role `owner` or `manager`.
+/// changes nothing. Needs `team.manage`.
 ///
 /// The new draft is numbered after the workspace's highest version. It starts as a copy of the
 /// approved version, with its hypotheses in force `kept` (`next_draft_from`), or empty when none
@@ -267,7 +280,7 @@ pub async fn start_consultation(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, Ap
 }
 
 /// Appends a question, answer, assumption or note to the draft's consultation log and returns
-/// its id. Needs `team.manage` or the role `owner` or `manager`.
+/// its id. Needs `team.manage`.
 ///
 /// The text is trimmed and must be 1 to [`MAX_CONSULTATION_TEXT_CHARS`] characters, and a
 /// section key one of [`Sections::KEYS`], else `VALIDATION` naming `text` or `section_key`.
@@ -309,7 +322,7 @@ pub async fn record(
 }
 
 /// Writes the draft's section `section_key` (one of [`Sections::KEYS`], else `VALIDATION` naming
-/// `section_key`) and returns the draft. Needs `team.manage` or the role `owner` or `manager`.
+/// `section_key`) and returns the draft. Needs `team.manage`.
 ///
 /// `value` is parsed strictly (`parse_section_strict`): every unknown key and any wrong type is
 /// `VALIDATION` with `details.gaps`, and nothing is written. Gaps of completeness do not stop the
@@ -363,7 +376,7 @@ pub async fn write_section(
 }
 
 /// Makes `hypotheses` (a JSON list of hypotheses as written, without states) the draft's list
-/// and returns the draft. Needs `team.manage` or the role `owner` or `manager`.
+/// and returns the draft. Needs `team.manage`.
 ///
 /// The list is parsed strictly (`parse_hypotheses_strict`). Each entry with an `id` keeps that
 /// hypothesis: it is `kept` when the approved version has it (one it had retired comes back),
@@ -415,8 +428,7 @@ pub async fn set_hypotheses(
     Ok(out)
 }
 
-/// Submits the draft for approval and returns it. Needs `team.manage` or the role `owner` or
-/// `manager`.
+/// Submits the draft for approval and returns it. Needs `team.manage`.
 ///
 /// The draft must have no gap (see [`VersionOut::gaps`]), else `VALIDATION` with `details.gaps`.
 /// Without a draft, `CONFLICT` "no draft". Submitting again records the new time. Logs the
@@ -461,7 +473,8 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
 }
 
 /// Approves the submitted draft, putting it in force, and returns it. Needs the role `owner` or
-/// `manager` (else `FORBIDDEN`, `details.reason = "owner_or_manager"`).
+/// `manager` (else `FORBIDDEN`, `details.reason = "owner_or_manager"`) and `team.manage` (else
+/// `FORBIDDEN` naming it).
 ///
 /// Without a draft, `CONFLICT` "no draft"; a draft not submitted (or edited since) is `CONFLICT`
 /// "not submitted". The draft is validated again: any gap is `VALIDATION` with `details.gaps`. In
@@ -539,30 +552,42 @@ pub async fn approve(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     Ok(out)
 }
 
-/// Archives the approved version, closing the strategy gate until another is approved. Needs
-/// the role `owner` or `manager` (else `FORBIDDEN`, `details.reason = "owner_or_manager"`) and
-/// `confirm` (else `VALIDATION` naming `confirm`).
+/// Archives the approved version `input.version_id`, closing the strategy gate until another is
+/// approved. Needs the role `owner` or `manager` (else `FORBIDDEN`,
+/// `details.reason = "owner_or_manager"`), `team.manage` (else `FORBIDDEN` naming it) and
+/// `input.confirm` (else `VALIDATION` naming `confirm`).
 ///
-/// Without an approved version, `CONFLICT` (`details.reason = "no_approved_version"`). An open
-/// draft stays open. Logs the archive in the version's consultation log and writes
-/// `strategy.archive` (payload `number`). Once committed, `Deps::archived_hook` is told; its
-/// error is returned, though the archive holds.
-pub async fn archive(deps: &Deps, ctx: &Ctx, confirm: bool) -> Result<(), AppError> {
+/// Without an approved version, `CONFLICT` (`details.reason = "no_approved_version"`). When the
+/// approved version is not `input.version_id` (say, an approval committed while this call waited
+/// for the locks), `CONFLICT` "the approved version changed" with the one in force in
+/// `details.approved_version_id`, and nothing changes: an archive never takes down a version its
+/// caller did not name. An open draft stays open. Logs the archive in the version's consultation
+/// log and writes `strategy.archive` (payload `number`, `version_id`). Once committed,
+/// `Deps::archived_hook` is told; its error is returned, though the archive holds.
+pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), AppError> {
     require_owner_or_manager(ctx)?;
-    if !confirm {
+    if !input.confirm {
         return Err(invalid(
             "confirm",
             "confirm must be true to archive the approved strategy",
         ));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    // The draft lock first, as approving takes it, so the two never wait for each other.
+    // The draft lock first, as approving takes it: an archive and an approval may wait for each
+    // other's locks, but never in opposite orders, so they cannot deadlock.
     repos.strategy().lock_draft().await?;
     let approved = repos
         .strategy()
         .current_approved()
         .await?
         .ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
+    if approved.id != input.version_id {
+        return Err(AppError {
+            code: ErrorCode::Conflict,
+            message: "the approved version changed".into(),
+            details: json!({ "approved_version_id": approved.id }),
+        });
+    }
     let moved = repos
         .strategy()
         .set_status(
@@ -589,7 +614,7 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, confirm: bool) -> Result<(), AppErr
         "strategy.archive",
         approved.id,
         Some(approved.id),
-        json!({ "number": approved.number }),
+        json!({ "number": approved.number, "version_id": approved.id }),
     )
     .await?;
     repos.commit().await?;
@@ -660,26 +685,25 @@ impl StrategyArchivedHook for NoopArchivedHook {
 // Rules
 // ---------------------------------------------------------------------------------------------
 
-/// `Ok` for a caller who may run the consultation: one holding `team.manage`, or with the role
-/// `owner` or `manager`; else `FORBIDDEN` naming `team.manage`, as `Ctx::require`.
+/// `Ok` for a caller who may run the consultation: one holding `team.manage` (for an agent, in
+/// its key's scopes, whatever its issuer's role); else `FORBIDDEN` naming `team.manage`, as
+/// `Ctx::require`.
 fn require_consultant(ctx: &Ctx) -> Result<(), AppError> {
-    if ctx.is_owner_or_manager() {
-        return Ok(());
-    }
     ctx.require(Permission::TeamManage)
 }
 
-/// `Ok` for a caller with the role `owner` or `manager`; else `FORBIDDEN` with
-/// `details.reason = "owner_or_manager"`.
+/// `Ok` for a caller with the role `owner` or `manager` who also holds `team.manage`, so a key's
+/// scopes narrow its issuer's role. Without the role, `FORBIDDEN` with
+/// `details.reason = "owner_or_manager"`; without the permission, `FORBIDDEN` naming it.
 fn require_owner_or_manager(ctx: &Ctx) -> Result<(), AppError> {
-    if ctx.is_owner_or_manager() {
-        return Ok(());
+    if !ctx.is_owner_or_manager() {
+        return Err(AppError {
+            code: ErrorCode::Forbidden,
+            message: "only an owner or a manager can approve or archive the strategy".into(),
+            details: json!({ "reason": "owner_or_manager" }),
+        });
     }
-    Err(AppError {
-        code: ErrorCode::Forbidden,
-        message: "only an owner or a manager can approve or archive the strategy".into(),
-        details: json!({ "reason": "owner_or_manager" }),
-    })
+    ctx.require(Permission::TeamManage)
 }
 
 /// `key` as one of [`Sections::KEYS`], or `VALIDATION` naming `section_key`.

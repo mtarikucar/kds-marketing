@@ -22,7 +22,7 @@ use jt_app::usecases::Deps;
 use jt_app::usecases::api_keys::{self, CreateKey};
 use jt_app::usecases::auth::{self, RegisterInput};
 use jt_app::usecases::roles::{self, CreateRole};
-use jt_app::usecases::strategy::{self, RecordInput, RecordKind, VersionOut};
+use jt_app::usecases::strategy::{self, ArchiveInput, RecordInput, RecordKind, VersionOut};
 use jt_ledger::{Actor, LedgerEntry, Subject};
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
@@ -418,11 +418,16 @@ impl World {
 
     /// The context of an agent acting through a new key the owner issues with `scopes`.
     async fn owner_agent(&self, scopes: &[&str]) -> Ctx {
+        self.agent(&self.owner_ctx, scopes).await
+    }
+
+    /// The context of an agent acting through a new key `issuer` issues with `scopes`.
+    async fn agent(&self, issuer: &Ctx, scopes: &[&str]) -> Ctx {
         let key = api_keys::create(
             &self.deps,
-            &self.owner_ctx,
+            issuer,
             CreateKey {
-                name: "strategist".into(),
+                name: format!("agent {}", scopes.join(" ")),
                 scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
             },
         )
@@ -533,6 +538,14 @@ fn one_hypothesis(channel: &str) -> Value {
         "metric": "dm",
         "confidence": 0.6,
     }])
+}
+
+/// Archiving `version_id`, confirmed.
+fn archiving(version_id: StrategyVersionId) -> ArchiveInput {
+    ArchiveInput {
+        version_id,
+        confirm: true,
+    }
 }
 
 fn code<T: std::fmt::Debug>(r: Result<T, AppError>) -> ErrorCode {
@@ -1383,7 +1396,7 @@ async fn second_approval_loses_with_conflict() {
 #[tokio::test]
 async fn a_version_moved_by_another_transaction_is_conflict() {
     let w = world().await;
-    approved(&w).await;
+    let v1 = approved(&w).await;
     strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
@@ -1392,7 +1405,7 @@ async fn a_version_moved_by_another_transaction_is_conflict() {
     let err = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict);
     assert_eq!(err.message, "the version has already moved");
-    let err = strategy::archive(&w.deps, &w.owner_ctx, true)
+    let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict);
@@ -1434,6 +1447,69 @@ async fn manager_can_approve_and_is_named_as_approver() {
 }
 
 #[tokio::test]
+async fn owner_key_without_team_manage_is_refused_everywhere() {
+    let w = world().await;
+    let agent = w.owner_agent(&["workspace.read"]).await;
+    assert_eq!(agent.role_key.as_deref(), Some("owner"));
+    let record = RecordInput {
+        kind: RecordKind::Note,
+        section_key: None,
+        text: "n".into(),
+    };
+    let refusals = [
+        strategy::start_consultation(&w.deps, &agent)
+            .await
+            .map(|_| ()),
+        strategy::record(&w.deps, &agent, record).await.map(|_| ()),
+        strategy::write_section(&w.deps, &agent, "paid_enabled".into(), json!(true))
+            .await
+            .map(|_| ()),
+        strategy::set_hypotheses(&w.deps, &agent, json!([]))
+            .await
+            .map(|_| ()),
+        strategy::submit(&w.deps, &agent).await.map(|_| ()),
+        strategy::approve(&w.deps, &agent).await.map(|_| ()),
+        strategy::archive(&w.deps, &agent, archiving(StrategyVersionId::new_v7())).await,
+    ];
+    for r in refusals {
+        let err = r.unwrap_err();
+        assert_eq!(err.code, ErrorCode::Forbidden);
+        assert_eq!(err.details, json!({ "permission": "team.manage" }));
+    }
+    assert!(w.ledger().is_empty());
+    assert!(w.versions().is_empty());
+    // It may still read.
+    strategy::get(&w.deps, &agent).await.unwrap();
+}
+
+#[tokio::test]
+async fn manager_role_without_team_manage_cannot_approve() {
+    let w = world().await;
+    let v1 = approved(&w).await;
+    strategy::start_consultation(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap();
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let (_, manager) = w.member("manager").await;
+    let agent = w.agent(&manager, &["workspace.read"]).await;
+    assert_eq!(agent.role_key.as_deref(), Some("manager"));
+    for err in [
+        strategy::approve(&w.deps, &agent)
+            .await
+            .map(|_| ())
+            .unwrap_err(),
+        strategy::archive(&w.deps, &agent, archiving(v1.id))
+            .await
+            .unwrap_err(),
+    ] {
+        assert_eq!(err.code, ErrorCode::Forbidden);
+        assert_eq!(err.details, json!({ "permission": "team.manage" }));
+    }
+    assert_eq!(w.version(v1.id).status, VersionStatus::Approved);
+    assert_eq!(w.entries("strategy.approve").len(), 1);
+}
+
+#[tokio::test]
 async fn agent_with_owner_key_can_approve() {
     let w = world().await;
     let agent = w.owner_agent(&["workspace.read", "team.manage"]).await;
@@ -1456,7 +1532,11 @@ async fn agent_with_owner_key_can_approve() {
 async fn archive_requires_confirm() {
     let w = world().await;
     let v1 = approved(&w).await;
-    let err = strategy::archive(&w.deps, &w.owner_ctx, false)
+    let input = ArchiveInput {
+        version_id: v1.id,
+        confirm: false,
+    };
+    let err = strategy::archive(&w.deps, &w.owner_ctx, input)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::Validation);
@@ -1469,7 +1549,7 @@ async fn archive_requires_confirm() {
 async fn archive_closes_the_strategy() {
     let w = world().await;
     let v1 = approved(&w).await;
-    strategy::archive(&w.deps, &w.owner_ctx, true)
+    strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap();
     let stored = w.version(v1.id);
@@ -1477,14 +1557,17 @@ async fn archive_closes_the_strategy() {
     assert_eq!(stored.archived_at, Some(FIXED_NOW));
     assert_eq!(w.log(v1.id).pop().unwrap().kind, ConsultationKind::Archived);
     let entry = &w.entries("strategy.archive")[0];
-    assert_eq!(entry.payload, json!({ "number": 1 }));
+    assert_eq!(
+        entry.payload,
+        json!({ "number": 1, "version_id": v1.id.to_string() })
+    );
     assert_eq!(entry.strategy_version_id, Some(v1.id.as_uuid()));
     assert_eq!(
         strategy::get(&w.deps, &w.owner_ctx).await.unwrap().approved,
         None
     );
     // Nothing is left to archive.
-    let err = strategy::archive(&w.deps, &w.owner_ctx, true)
+    let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap_err();
     assert_eq!(
@@ -1499,26 +1582,59 @@ async fn archive_closes_the_strategy() {
 #[tokio::test]
 async fn archive_leaves_an_open_draft_alone() {
     let w = world().await;
-    approved(&w).await;
+    let v1 = approved(&w).await;
     let draft = strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
-    strategy::archive(&w.deps, &w.owner_ctx, true)
+    strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap();
     assert_eq!(w.version(draft.id).status, VersionStatus::Draft);
 }
 
 #[tokio::test]
+async fn archive_refuses_when_the_approved_version_changed() {
+    let w = world().await;
+    let v1 = approved(&w).await;
+    // Version 2 is approved after the caller looked: an archive naming version 1 must not take
+    // down version 2.
+    strategy::start_consultation(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap();
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    assert_eq!(err.message, "the approved version changed");
+    assert_eq!(
+        err.details,
+        json!({ "approved_version_id": v2.id.to_string() })
+    );
+    assert_eq!(w.version(v2.id).status, VersionStatus::Approved);
+    assert!(w.entries("strategy.archive").is_empty());
+    // Naming the version in force archives it.
+    strategy::archive(&w.deps, &w.owner_ctx, archiving(v2.id))
+        .await
+        .unwrap();
+    assert_eq!(w.version(v2.id).status, VersionStatus::Archived);
+}
+
+#[tokio::test]
 async fn only_owner_or_manager_may_archive() {
     let w = world().await;
-    approved(&w).await;
+    let v1 = approved(&w).await;
     let (_, rep) = w.member("rep").await;
-    let err = strategy::archive(&w.deps, &rep, true).await.unwrap_err();
+    let err = strategy::archive(&w.deps, &rep, archiving(v1.id))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Forbidden);
     assert_eq!(err.details, json!({ "reason": "owner_or_manager" }));
     let (_, manager) = w.member("manager").await;
-    strategy::archive(&w.deps, &manager, true).await.unwrap();
+    strategy::archive(&w.deps, &manager, archiving(v1.id))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1533,13 +1649,15 @@ async fn archive_calls_the_hook_after_commit() {
         archived_hook: Arc::new(hook.clone()),
         ..w.deps.clone()
     };
-    strategy::archive(&deps, &w.owner_ctx, true).await.unwrap();
+    strategy::archive(&deps, &w.owner_ctx, archiving(v1.id))
+        .await
+        .unwrap();
     assert_eq!(
         *hook.seen.lock().unwrap(),
         [(w.ws, v1.id, Some(VersionStatus::Archived))]
     );
     // A refused archive tells nobody.
-    let _ = strategy::archive(&deps, &w.owner_ctx, true).await;
+    let _ = strategy::archive(&deps, &w.owner_ctx, archiving(v1.id)).await;
     assert_eq!(hook.seen.lock().unwrap().len(), 1);
 }
 
@@ -1655,6 +1773,7 @@ async fn every_draft_mutation_locks_the_draft() {
     let w = world().await;
     approved(&w).await;
     type Mutation<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>;
+    let world = &w;
     let deps = &w.deps;
     let ctx = &w.owner_ctx;
     let mutations: Vec<(&str, Mutation<'_>)> = vec![
@@ -1706,7 +1825,15 @@ async fn every_draft_mutation_locks_the_draft() {
         (
             "archive",
             Box::pin(async move {
-                strategy::archive(deps, ctx, true).await.unwrap();
+                // Read past the spy, so that only the archive's own calls are logged.
+                let approved = world
+                    .versions()
+                    .into_iter()
+                    .find(|v| v.status == VersionStatus::Approved)
+                    .unwrap();
+                strategy::archive(deps, ctx, archiving(approved.id))
+                    .await
+                    .unwrap();
             }),
         ),
     ];
