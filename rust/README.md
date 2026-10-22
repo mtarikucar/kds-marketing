@@ -308,10 +308,11 @@ değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip i�
 
 Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalışır:
 
-- `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`) yalnızca `serde`, `serde_json`,
-  `uuid`, `time`, `thiserror` kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca
-  `jt_outbound`'da, `sqlx` yalnızca `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme
-  ve anahtar türetme kütüphaneleri (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur.
+- `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`, `jt_strategy`) yalnızca `serde`,
+  `serde_json`, `uuid`, `time`, `thiserror` ve birbirlerini (`jt_tenancy`, `jt_ledger`) kullanır; `jt_app`
+  hiçbir adaptöre bağlı değildir; `reqwest` yalnızca `jt_outbound`'da, `sqlx` yalnızca `jt_pg`'de (havuz
+  kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme ve anahtar türetme kütüphaneleri (`aes-gcm`, `hkdf`)
+  yalnızca `jt_seal`'de bulunur.
 - `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
   `isahc`, `surf`, `attohttpc`, `curl`, ağacın hiçbir yerinde bulunmaz) ile yapay zekâ, medya üretimi, ses
   tanıma ve ses sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans,

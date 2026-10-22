@@ -1276,6 +1276,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_strategy"
+version = "0.1.0"
+dependencies = [
+ "jt_ledger",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "jt_tenancy"
 version = "0.1.0"
 dependencies = [

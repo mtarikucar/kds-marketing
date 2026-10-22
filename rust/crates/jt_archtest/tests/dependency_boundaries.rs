@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 
 use jt_archtest::{direct_deps, workspace_packages};
 
-// `jt_tenancy` is itself a pure domain crate; `jt_ledger` uses its ids.
+// `jt_tenancy` and `jt_ledger` are themselves pure domain crates: `jt_ledger` uses the ids of
+// `jt_tenancy`, and `jt_strategy` uses both (the ids, and `Actor` for who wrote what).
 const DOMAIN_ALLOW: &[&str] = &[
     "serde",
     "serde_json",
@@ -10,11 +11,12 @@ const DOMAIN_ALLOW: &[&str] = &[
     "time",
     "thiserror",
     "jt_tenancy",
+    "jt_ledger",
 ];
 
 #[test]
 fn domain_crates_depend_only_on_pure_crates() {
-    for c in ["jt_tenancy", "jt_ledger"] {
+    for c in ["jt_tenancy", "jt_ledger", "jt_strategy"] {
         for d in direct_deps(c) {
             assert!(DOMAIN_ALLOW.contains(&d.as_str()), "{c} depends on {d}");
         }
@@ -58,6 +60,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
     for c in [
         "jt_tenancy",
         "jt_ledger",
+        "jt_strategy",
         "jt_app",
         "jt_panel_http",
         "jt_mcp",
