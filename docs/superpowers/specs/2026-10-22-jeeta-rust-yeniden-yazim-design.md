@@ -193,6 +193,18 @@ yapar, temsilcinin anahtarıyla gelen ajan temsilcinin yapabildiğini. Anahtar k
 ama genişletilemez. Her çağrı hem insanı hem ajan bağlantısını günlüğe yazar. Yalnız insana ayrılan
 tek eylem ödemedir (K11, §9).
 
+**(M0 uygulamasında kesinleşti)** Ajan, anahtarı çıkaran insanın rol anahtarını (`role_key`) devralır;
+izinleri, o insanın o anki izinlerinin anahtar kapsamlarıyla daraltılmış hâlidir (insanın rolü
+düşerse anahtarın etkin kapsamı da bir sonraki çağrıda düşer). Sahibe özgü yetkiler (sahip rolü
+vermek, bir sahibin rolünü değiştirmek ya da onu çıkarmak) sahibin `team.manage` kapsamını taşıyan
+bir anahtarıyla ajana geçer.
+
+**(M0 uygulamasında kesinleşti) MCP oturumları.** Akışlı HTTP'de her MCP oturumu (`Mcp-Session-Id`)
+onu açan API anahtarına bağlıdır. Başka bir anahtarın oturum kimliği de, bilinmeyen ya da bağı
+düşmüş (silinmiş, bellek sınırını aşınca en eskisi olarak düşürülmüş) bir oturum kimliği de aynı
+biçimde reddedilir: `404 NOT_FOUND`, "unknown session"; istemci yeniden `initialize` eder. Denetim
+kapalı başarısız olur: bir oturum kimliği yalnız isteğin kendi anahtarına bağlıysa geçer.
+
 MCP araç adları `jeeta.<alan>.<eylem>` biçimindedir. Her araç yapısal hata döner; en önemlileri
 `STRATEJI_GEREKLI`, `KABILIYET_YOK`, `BUTCE_TAVANI`, `FREN_BASILI`, `YETKI_YOK`. Araçlar risk etiketi
 taşır: OKU, YAZ, HARCA, YIKICI. Yıkıcı araçlar (kişi birleştirme geri alma, strateji arşivleme gibi)
@@ -228,6 +240,20 @@ hesapları bilmek ister.
 **Kapıdan muaf olanlar** (B1 testi bu listeyi sabitler): kayıt ve giriş, çalışma alanı ayarları,
 ekip ve davet, API anahtarı çıkarma, ödeme, acil fren, günlük okuma, strateji ve kabiliyet araçları.
 Bunların da panel ve araç ikizi vardır (B8); yalnız kayıt, giriş ve ödeme panele özgüdür.
+
+**(M0 uygulamasında kesinleşti)** Panele özgü kullanım durumlarının gerçek listesi: kayıt, giriş,
+çıkış, oturumun kendi bilgisi (`auth.me`; ajandaki karşılığı `agents.whoami` ikizidir), çalışma alanı
+değiştirme, davet kabulü, platform işlemleri (işletmen girişi, çalışma alanlarını listeleme ve
+durumlarını değiştirme) ve ödeme. Bir ajan bir insanın oturumunu ya da davet jetonunu hiç taşımaz.
+Geri kalan her kullanım durumunun panel ve MCP ikizi vardır.
+
+**(M0 uygulamasında kesinleşti) Çalışma alanı durumu.** Durum denetimi strateji muafiyetinden
+bağımsız ikinci bir denetimdir: çalışma alanı `pending_payment` ya da `suspended` iken `auth.*`,
+`workspace.*` ve `platform.*` dışındaki her kullanım durumu, stratejiden muaf olsa bile, panelden de
+MCP'den de `WORKSPACE_INACTIVE` döner. Bu yüzden ödeme bekleyen bir alan, işletmen onu
+etkinleştirene kadar üye davet edemez ve API anahtarı çıkaramaz; askıdaki bir alana bekleyen bir
+davet de kabul edilemez. Panelde bu denetim her rotanın önünde, işleyicinin ne aldığından bağımsız
+çalışır.
 
 **Strateji yokken gelen mesaj.** Kiracı bir hattı bağlamış ve müşteri yazmışsa mesaj düşmez:
 kişi ve konuşma kaydedilir, panelde görünür, yürütücü insandır. Ajan o konuşmaya yazamaz; panel
@@ -547,6 +573,12 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
 - Saklama: mesaj ve yayın kanıtı sınırsız; webhook ham gövdesi otuz gün; günlük sınırsız.
 - Yedek: günlük tam yedek ve sürekli WAL arşivi; aylık geri yükleme tatbikatı. Ayrıntı işletim
   belgesine bırakılır.
+- **(M0 uygulamasında kesinleşti)** Uygulama PostgreSQL'e süper kullanıcı olmayan ve `BYPASSRLS`
+  taşımayan sıradan bir rolle bağlanır: PostgreSQL bu iki tür role satır düzeyi güvenliği, `FORCE`
+  olsa bile, hiç uygulamaz. `jeeta serve` ve `jeeta mcp-stdio` bağlandıktan hemen sonra, göçlerden
+  önce rolü denetler; süper kullanıcı ya da `BYPASSRLS` ise rolün adını söyleyerek açılmayı reddeder.
+  Yalnız yerel geliştirme için açıkça verilen `JEETA_ALLOW_SUPERUSER=true` bunu geçer ve yalıtımın
+  uygulanmadığını her açılışta uyarı olarak yazar.
 
 ## 11. Ekip, roller, güvenlik
 
@@ -555,7 +587,20 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
   çalışma alanını açar, askıya alır, bağlayıcı sağlık özetini izler. Yalnız paneldedir, MCP aracı
   yoktur, M0'da kurulur. Çalışma alanı süzgeci kuralı onun için de geçerlidir: işletmen sorguları
   açıkça "bütün alanlar" tipiyle yazılır. Bu benim kararım.
-- Ajan ekip üyesi gibi görünür ama rol taşımaz; yetkisi bağlı olduğu API anahtarının kapsamıdır.
+- Ajan ekip üyesi gibi görünür; anahtarı çıkaran insanın rolüyle, anahtarın kapsamlarıyla
+  daraltılmış olarak çalışır. Sahibe özgü yetkiler sahibin `team.manage` taşıyan anahtarıyla ajana
+  geçer (§4.4). (M0 uygulamasında kesinleşti)
+- **(M0 uygulamasında kesinleşti) Rol kuralları.** (a) Sahip rolünü yalnız bir sahip verebilir; bir
+  sahibin rolünü değiştirmek ya da onu çıkarmak (sahip rolüne açılmış bir daveti iptal etmek dahil)
+  da yalnız sahibindir. (b) Verilen bir rolün izinleri ve oluşturulan ya da güncellenen bir özel
+  rolün izinleri aktörün kendi izinlerinin alt kümesi olmalıdır; aktör sahip değilse, rolü
+  değiştirilen ya da çıkarılan üyenin ve güncellenen rolün **şimdiki** izinleri de aktörün
+  izinlerinin alt kümesi olmalıdır. Böylece kimse kendinden geniş yetkili birini düşüremez, çıkaramaz
+  ya da kendinde olmayan bir izni bir rolün üyelerinden alamaz. Aksi `FORBIDDEN`
+  (`exceeds_own_authority`, eksik izinler listelenir). Bir insan sahip bütün izinleri taşıdığından
+  (b) onu hiç durdurmaz; sahibin daraltılmış bir anahtarıyla gelen ajanda verilen ya da tanımlanan
+  rolün izinleri yine anahtarın etkin kapsamına göre denetlenir, hedefin şimdiki izinleri ise
+  denetlenmez.
 - Panel kimliği: e-posta ve parola, isteğe bağlı OIDC. MCP kimliği §4.4.
 - Webhook'lar imza doğrular, tekilleştirir, ham gövdeyi saklar, işlemi kuyruğa atar.
 - Dış çıkış yalnız izin listesindeki alan adlarına (B2). İzin listesi bağlayıcı başına belgelenir.
@@ -567,6 +612,7 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
 |---|---|
 | Alan birim testleri | indirgeyiciler, eşleştirme, Thompson, bütçe tavanı; I/O yok |
 | Mimari testler | §4.3'teki altı sınır; B1, B2, B4, B8 |
+| Veritabanı rolü | testler kendi `NOSUPERUSER NOBYPASSRLS` rolleriyle çalışır; açılış denetimi süper kullanıcıyı ve `BYPASSRLS` rolünü reddeder (§10; M0 uygulamasında kesinleşti) |
 | Adaptör testleri | her bağlayıcı için kayıtlı sağlayıcı yanıtlarıyla; gerçek sağlayıcıya yalnız elle smoke |
 | Uçtan uca | gerçek PostgreSQL ile: webhook → kişi → ajan yanıtı → yayın → ölçüm |
 | İkizlik | her kullanım durumu için MCP ve panel yolu aynı sonucu verir |

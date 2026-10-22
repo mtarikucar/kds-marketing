@@ -17,8 +17,8 @@
 - **Every tenant table carries `workspace_id`, has `ENABLE` + `FORCE ROW LEVEL SECURITY`, and a policy on `current_setting('app.workspace_id', true)`** (spec §4.3, §10). Tenant data is reached only through `TenantTx`; platform-wide reads only through `PlatformTx`.
 - **Migrations are reversible pairs** `migrations/<NNNN>_<name>.up.sql` + `.down.sql`; `down` removes exactly what `up` added and is a no-op when already reverted; the round-trip test (Task 5) must pass after every migration change (repo-wide rule and spec §10).
 - **Naming:** Turkish is the ubiquitous language in docs and panel copy; code, tables, routes and MCP tool names are English per spec Ek B. MCP tools are `jeeta.<domain>.<action>` (spec §4.4, Ek B). Panel copy exists in `tr` and `en` with identical key sets.
-- **Twin rule:** every use case in `UseCaseCatalog` has both an MCP tool and a panel route unless flagged `panel_only` (spec §4.5, B8). Only `auth.register`, `auth.login`, `auth.logout`, `workspace.switch`, `team.accept_invite`, `platform.*` and (later) payment are `panel_only` (an agent never holds a human's session or invite token).
-- **Gate:** every non-exempt use case returns `STRATEGY_REQUIRED` while the workspace has no approved strategy and `WORKSPACE_INACTIVE` while the workspace is not `active` (spec §5 "Kapıdan muaf olanlar", B1). Exempt in M0: `auth.*`, `workspace.*`, `team.*`, `roles.*`, `api_keys.*`, `agents.*`, `ledger.list`, `platform.*` (every M0 use case; the first `Gated` entries arrive in M1).
+- **Twin rule:** every use case in `UseCaseCatalog` has both an MCP tool and a panel route unless flagged `panel_only` (spec §4.5, B8). Only `auth.register`, `auth.login`, `auth.logout`, `auth.me`, `workspace.switch`, `team.accept_invite`, `platform.*` and (later) payment are `panel_only` (an agent never holds a human's session or invite token). The agent's counterpart of `auth.me` is the twin `agents.whoami` (`GET /api/whoami` and `jeeta.agent.whoami`, the same `WhoAmI` answer). (Settled in the M0 implementation.)
+- **Gate:** two independent checks (spec §5, B1). The workspace-status check: every use case except `auth.*`, `workspace.*` and `platform.*` (`UseCase::status_exempt`) returns `WORKSPACE_INACTIVE` while the workspace is not `active`, whether or not it is exempt from the strategy gate; so `team.*`, `roles.*`, `api_keys.*`, `agents.*` and `ledger.*` are closed until the operator activates a workspace. The strategy gate: every `Gated` use case returns `STRATEGY_REQUIRED` while the workspace has no approved strategy. Exempt from the strategy gate in M0: `auth.*`, `workspace.*`, `team.*`, `roles.*`, `api_keys.*`, `agents.*`, `ledger.list`, `platform.*` (every M0 use case; the first `Gated` entries arrive in M1). (Status check settled in the M0 implementation.)
 - **Structured errors** everywhere: `{ "code": "<UPPER_SNAKE>", "message": "<human text>", "details": {} }`. Codes in M0: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `VALIDATION`, `STRATEGY_REQUIRED`, `WORKSPACE_INACTIVE`, `HOST_NOT_ALLOWED`, `INTERNAL`.
 - **Secrets never enter the repo.** Test DB credentials come from `JEETA_TEST_DATABASE_URL`; the local `.env` is gitignored. No real customer data, no screenshots.
 - **Commits:** conventional-commit messages, plain text, **no `Co-Authored-By` trailer, no "Generated with" line, no AI or model name anywhere in commit messages, code comments or docs** (owner's global rule). Author/committer is the repo's configured user.
@@ -276,7 +276,7 @@ use jt_tenancy::*;
     - `UserRepos` (not tenant-scoped): `users`, `sessions`, `memberships_of_user(user_id) -> Vec<MembershipView>`, `workspaces_create(...)`.
     - `PlatformRepos`: `operators`, `platform_sessions`, `workspaces_list()`, `workspace_set_status(ws, status)`.
     - Repo traits with exact methods are defined in this task as the single source of truth; later tasks implement them. Define: `UserRepo { find_by_email, find_by_id, insert }`, `SessionRepo { insert, find_by_token_hash, revoke, set_current_workspace }`, `RoleRepo { list, find_by_key, insert, update_permissions, delete_custom }`, `MembershipRepo { list, find_by_user, find_by_invite_hash, insert_invite, activate, set_role, remove, count_active_owners }`, `ApiKeyRepo { insert, list, find_by_hash, revoke, touch_last_used }`, `AgentConnectionRepo { upsert_on_initialize, touch_tool_call, find }`, `LedgerRepo { append, list(filter) }`, `OperatorRepo { count, insert, find_by_email }`, `PlatformSessionRepo { insert, find_by_token_hash }`.
-  - `pub struct UseCase { pub id: &'static str, pub gate: GateMode, pub mcp_tool: Option<&'static str>, pub panel_route: Option<(&'static str, &'static str)>, pub panel_only: bool, pub risk: Risk }`, `pub enum GateMode { Exempt, Gated }`, `pub enum Risk { Read, Write, Spend, Destructive }`.
+  - `pub struct UseCase { pub id: &'static str, pub gate: GateMode, pub mcp_tool: Option<&'static str>, pub panel_route: Option<(&'static str, &'static str)>, pub panel_only: bool, pub status_exempt: bool, pub risk: Risk }` (`status_exempt` only for `auth.*`, `workspace.*`, `platform.*`; settled in the M0 implementation), `pub enum GateMode { Exempt, Gated }`, `pub enum Risk { Read, Write, Spend, Destructive }`.
   - `pub static CATALOG: &[UseCase]` listing every M0 use case:
 
     | id | gate | mcp_tool | panel_route | panel_only | risk |
@@ -284,7 +284,7 @@ use jt_tenancy::*;
     | `auth.register` | Exempt | — | `POST /api/auth/register` | yes | Write |
     | `auth.login` | Exempt | — | `POST /api/auth/login` | yes | Write |
     | `auth.logout` | Exempt | — | `POST /api/auth/logout` | yes | Write |
-    | `auth.me` | Exempt | `jeeta.agent.whoami` | `GET /api/auth/me` | no | Read |
+    | `auth.me` | Exempt | — | `GET /api/auth/me` | yes | Read |
     | `workspace.info` | Exempt | `jeeta.workspace.info` | `GET /api/workspace` | no | Read |
     | `workspace.switch` | Exempt | — | `POST /api/auth/switch-workspace` | yes | Write |
     | `team.list` | Exempt | `jeeta.team.list` | `GET /api/team` | no | Read |
@@ -300,6 +300,7 @@ use jt_tenancy::*;
     | `api_keys.list` | Exempt | `jeeta.api_keys.list` | `GET /api/api-keys` | no | Read |
     | `api_keys.revoke` | Exempt | `jeeta.api_keys.revoke` | `DELETE /api/api-keys/{key_id}` | no | Destructive |
     | `agents.list` | Exempt | `jeeta.agents.list` | `GET /api/agents` | no | Read |
+    | `agents.whoami` | Exempt | `jeeta.agent.whoami` | `GET /api/whoami` | no | Read |
     | `ledger.list` | Exempt | `jeeta.ledger.list` | `GET /api/ledger` | no | Read |
     | `platform.login` | Exempt | — | `POST /api/platform/login` | yes | Write |
     | `platform.workspaces.list` | Exempt | — | `GET /api/platform/workspaces` | yes | Read |
@@ -307,7 +308,7 @@ use jt_tenancy::*;
 
     (M1 adds the first `Gated` entries. `team.accept_invite` and `workspace.switch` are panel-only because an agent never holds a human's invite token or session.)
   - `pub trait StrategyGate: Send + Sync { async fn has_approved_strategy(&self, ws: WorkspaceId) -> Result<bool, AppError>; }` and `pub struct NoStrategyYet;` implementing it as always `false` (M1 replaces it).
-  - `pub async fn check_gate(uc: &UseCase, ws_status: WorkspaceStatus, gate: &dyn StrategyGate, ws: WorkspaceId) -> Result<(), AppError>`: if `uc.gate == Gated` and status != Active → `WORKSPACE_INACTIVE`; if Gated and no approved strategy → `STRATEGY_REQUIRED`; Exempt → Ok. Note `Exempt` use cases still require the caller to be authenticated; only the workspace/strategy state is skipped.
+  - `pub async fn check_gate(uc: &UseCase, ws_status: WorkspaceStatus, gate: &dyn StrategyGate, ws: WorkspaceId) -> Result<(), AppError>`: if `!uc.status_exempt` and status != Active → `WORKSPACE_INACTIVE`; then if `uc.gate == Gated` and no approved strategy → `STRATEGY_REQUIRED`; else Ok. Every use case still requires the caller to be authenticated. (Settled in the M0 implementation: the status check no longer depends on the strategy exemption.)
 
 - [ ] **Step 1: Failing tests**
 
