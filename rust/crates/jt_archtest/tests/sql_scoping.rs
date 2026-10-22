@@ -5,7 +5,7 @@
 //! - the platform-wide marker only appears where a platform or user transaction is in hand;
 //! - every tenant table has forced row-level security and a policy on `app.workspace_id`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jt_archtest::{
     PLATFORM_WIDE_MARKER, SqlLiteral, mentions_word, rust_sources_in, sql_literals_in,
@@ -24,10 +24,85 @@ fn relative(path: &Path) -> String {
         .to_string()
 }
 
-/// Whether `literal` names the scope of `table`.
+/// Whether `literal` names the scope of `table`: the column `workspace_id` as a whole word
+/// (`m.workspace_id` counts, `current_workspace_id` does not), or, for `workspaces`, its own `id`
+/// compared with a bind parameter.
 fn scoped(literal: &SqlLiteral, table: &str) -> bool {
-    let text = literal.text.to_lowercase();
-    text.contains("workspace_id") || (table == "workspaces" && text.contains("id = $"))
+    mentions_word(&literal.text, "workspace_id")
+        || (table == "workspaces" && compares_id_with_a_parameter(&literal.text))
+}
+
+/// Whether `text` compares a column named exactly `id` (bare or qualified, e.g. `w.id`) with a bind
+/// parameter: `id = $n` in any case and spacing. `workspace_id = $1` does not count.
+fn compares_id_with_a_parameter(text: &str) -> bool {
+    let text = text.to_lowercase();
+    text.match_indices("id").any(|(at, _)| {
+        let starts_a_word = !text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let compared_with_a_parameter = text[at + 2..]
+            .trim_start()
+            .strip_prefix('=')
+            .is_some_and(|rest| rest.trim_start().starts_with('$'));
+        starts_a_word && compared_with_a_parameter
+    })
+}
+
+/// A literal as the scan would report it, for testing [`scoped`].
+fn fixture(text: &str) -> SqlLiteral {
+    SqlLiteral {
+        path: PathBuf::from("fixture.rs"),
+        line: 1,
+        text: text.to_owned(),
+        preceding_line: String::new(),
+    }
+}
+
+#[test]
+fn a_column_ending_in_workspace_id_is_not_the_scope() {
+    // `sessions.current_workspace_id` is not `workspace_id`: `memberships` stays unscoped.
+    let unscoped = fixture(
+        "select m.* from memberships m join sessions s on s.user_id = m.user_id \
+         where s.current_workspace_id = $1",
+    );
+    assert!(!scoped(&unscoped, "memberships"));
+    // A qualified or upper-case `workspace_id` still counts.
+    assert!(scoped(
+        &fixture("select 1 from memberships m where m.workspace_id = $1"),
+        "memberships"
+    ));
+    assert!(scoped(
+        &fixture("delete from roles where WORKSPACE_ID = $1 and id = $2"),
+        "roles"
+    ));
+}
+
+#[test]
+fn workspaces_are_scoped_by_their_own_id_only() {
+    // `<something>_id = $1` is not the `id` of `workspaces`.
+    assert!(!compares_id_with_a_parameter("where workspace_id = $1"));
+    assert!(!compares_id_with_a_parameter(
+        "where current_workspace_id = $1"
+    ));
+    assert!(!compares_id_with_a_parameter("where id = 'x'"));
+    assert!(compares_id_with_a_parameter("where id = $1"));
+    assert!(compares_id_with_a_parameter("where w.id=$1"));
+    assert!(compares_id_with_a_parameter(
+        "where slug = $2 and\n  ID =  $1"
+    ));
+
+    let unscoped = fixture("update workspaces set status = $2 where current_workspace_id = $1");
+    assert!(!scoped(&unscoped, "workspaces"));
+    assert!(scoped(
+        &fixture("select id, name from workspaces where id = $1"),
+        "workspaces"
+    ));
+    // The `id = $` alternative is for `workspaces` only.
+    assert!(!scoped(
+        &fixture("update roles set name = $2 where id = $1"),
+        "roles"
+    ));
 }
 
 #[test]
