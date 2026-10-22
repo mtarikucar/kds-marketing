@@ -171,3 +171,35 @@ async fn ledger_is_append_only() {
     assert_eq!(action, "test.append");
     tx.rollback().await.unwrap();
 }
+
+#[tokio::test]
+async fn tenant_tx_inside_platform_tx_is_still_scoped() {
+    let db = TestDb::new().await;
+    let (a, _) = db.seed_workspace("a").await;
+    db.seed_workspace("b").await;
+
+    let mut p = PlatformTx::begin(&db.pool).await.unwrap();
+    let count_roles = "select count(*) from roles";
+    let n: i64 = sqlx::query_scalar(count_roles)
+        .fetch_one(p.conn())
+        .await
+        .unwrap();
+    assert_eq!(n, 6);
+
+    // Nested (a savepoint on the platform transaction's connection): only a's rows.
+    let mut t = TenantTx::begin(p.conn(), a).await.unwrap();
+    let n: i64 = sqlx::query_scalar(count_roles)
+        .fetch_one(t.conn())
+        .await
+        .unwrap();
+    assert_eq!(n, 3, "a tenant transaction must not inherit app.platform");
+    t.rollback().await.unwrap();
+
+    // Rolling back to the savepoint restores the platform scope.
+    let n: i64 = sqlx::query_scalar(count_roles)
+        .fetch_one(p.conn())
+        .await
+        .unwrap();
+    assert_eq!(n, 6);
+    p.rollback().await.unwrap();
+}

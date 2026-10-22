@@ -15,7 +15,8 @@ use jt_tenancy::WorkspaceId;
 use sqlx::{Acquire, PgConnection, Postgres, Transaction};
 
 /// A transaction scoped to one workspace: tenant tables show and accept only its rows, and
-/// `workspaces` shows only its own row.
+/// `workspaces` shows only its own row. It also clears `app.platform`, so it stays scoped even when
+/// begun on a connection inside a platform transaction.
 pub struct TenantTx<'c> {
     tx: Transaction<'c, Postgres>,
     workspace_id: WorkspaceId,
@@ -28,10 +29,14 @@ impl<'c> TenantTx<'c> {
         A: Acquire<'c, Database = Postgres>,
     {
         let mut tx = conn.begin().await?;
-        sqlx::query("select set_config('app.workspace_id', $1, true)")
-            .bind(ws.to_string())
-            .execute(&mut *tx)
-            .await?;
+        // Clearing `app.platform` matters when `conn` is already inside a platform transaction
+        // (the new transaction is then a savepoint that would otherwise inherit the flag).
+        sqlx::query(
+            "select set_config('app.workspace_id', $1, true), set_config('app.platform', '', true)",
+        )
+        .bind(ws.to_string())
+        .execute(&mut *tx)
+        .await?;
         Ok(TenantTx {
             tx,
             workspace_id: ws,
