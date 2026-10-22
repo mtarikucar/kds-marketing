@@ -121,3 +121,13 @@ fn opens_a_blob_sealed_by_an_independent_implementation() {
     assert_eq!(sb.open(w, &blob).unwrap().as_slice(), b"jt_live_fixture");
     assert_refused(sb.open(ws(1), &blob));
 }
+
+/// HKDF keeps the pseudorandom key as an HMAC-SHA-256 state (two SHA-256 states keyed with it);
+/// SHA-256 is built with its `zeroize` feature, so those states wipe themselves when the HKDF
+/// value is dropped at the end of each call. Checked at compile time: without the feature,
+/// `Sha256` is not `ZeroizeOnDrop` and this does not build.
+#[test]
+fn the_hash_state_behind_the_key_derivation_wipes_itself_on_drop() {
+    fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    wiped_on_drop::<sha2::Sha256>();
+}

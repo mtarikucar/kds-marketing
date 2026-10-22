@@ -22,7 +22,7 @@ anyhow.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
-jt_testkit.workspace = true
+jt_testkit = { workspace = true, features = ["panel"] }
 serde_json.workspace = true
 tower = { workspace = true, features = ["util"] }
 

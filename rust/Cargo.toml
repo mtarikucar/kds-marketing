@@ -48,7 +48,10 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "transport-io"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: a number read back from JSON text is exactly the `f64` that was written (the
+# default parser may be off by one unit in the last place), so MCP outputs, which go through
+# JSON text, carry the same numbers as the panel's.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 thiserror = "2"
@@ -56,7 +59,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 argon2 = "0.6"
-sha2 = "0.11"
+# `zeroize`: every SHA-256 state wipes itself when dropped, which includes the HMAC states HKDF
+# keeps its pseudorandom key in (`jt_seal`).
+sha2 = { version = "0.11", features = ["zeroize"] }
 hex = "0.4"
 rand = "0.10"
 base64 = "0.23"

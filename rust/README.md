@@ -53,7 +53,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
    ```sh
    make panel-install panel-build   # panel/dist
-   make dev                         # cargo run -p jeeta -- serve
+   make dev                         # cargo run --locked -p jeeta -- serve
    ```
 
    İkili önce `rust/.env`'i, yoksa çalışılan dizindeki `.env`'i okur; ortamda zaten tanımlı değişkenler
@@ -427,15 +427,15 @@ make check   # fmt + lint + doc + deny + test (JEETA_TEST_DATABASE_URL gerekli)
 | `make doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps` |
 | `make deny` | `cargo deny --locked check` |
 | `make test` | `cargo test --locked --workspace` |
-| `make dev` | `cargo run -p jeeta -- serve` |
+| `make dev` | `cargo run --locked -p jeeta -- serve` |
 | `make panel-install` / `panel-test` / `panel-build` | `panel/` içinde pnpm |
 
 CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `feat/**`
 dallarına gönderimde ve her çekme isteğinde çalışır: `rust-checks` (fmt, clippy, doc, cargo-deny),
 `rust-test` (PostgreSQL 16 hizmetiyle `cargo test --workspace`) ve `panel` (`pnpm install --frozen-lockfile`,
-`pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de,
-`--locked` çalışır: `Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş durur (bir bağımlılık
-değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip işleyin).
+`pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de
+(`make dev` dahil), `--locked` çalışır: `Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş
+durur (bir bağımlılık değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip işleyin).
 
 ## Sınırlar
 

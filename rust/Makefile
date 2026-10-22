@@ -2,9 +2,9 @@
 
 .PHONY: fmt lint doc deny test check dev panel-install panel-test panel-build
 
-# Like CI, every cargo command but fmt (which takes no such flag) runs `--locked`: Cargo.lock is
-# used as committed, and a manifest change that needs a new lock file fails instead of resolving
-# (run a plain `cargo build` once to update the lock file, then commit it).
+# Every cargo command here, `dev` included, runs `--locked`, as CI's do; fmt alone takes no such
+# flag. Cargo.lock is used as committed, and a manifest change that needs a new lock file fails
+# instead of resolving (run a plain `cargo build` once to update the lock file, then commit it).
 
 fmt:
 	cargo fmt --all -- --check
@@ -26,7 +26,7 @@ check: fmt lint doc deny test
 
 # Reads rust/.env (see .env.example).
 dev:
-	cargo run -p jeeta -- serve
+	cargo run --locked -p jeeta -- serve
 
 panel-install:
 	cd panel && pnpm install

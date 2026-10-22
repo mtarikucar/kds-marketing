@@ -24,7 +24,7 @@ tracing.workspace = true
 # shows the result.
 jt_mcp.workspace = true
 jt_pg.workspace = true
-jt_testkit.workspace = true
+jt_testkit = { workspace = true, features = ["panel"] }
 tokio.workspace = true
 async-trait.workspace = true
 

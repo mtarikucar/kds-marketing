@@ -109,4 +109,22 @@ mod tests {
         assert_eq!(value.to_string(), panel);
         assert_eq!(value, json!({ "confidence": 0.6 }));
     }
+
+    #[test]
+    fn an_f64_reads_back_exactly() {
+        // Without serde_json's `float_roundtrip`, parsing this number's shortest text lands one
+        // unit in the last place away from it.
+        #[derive(Serialize)]
+        struct Out {
+            amount: f64,
+        }
+        let amount = -1.049_882_427_645_354_5e74_f64;
+        let value = to_json(&Out { amount }).unwrap();
+        assert_eq!(
+            value["amount"].as_f64().unwrap().to_bits(),
+            amount.to_bits()
+        );
+        let panel = serde_json::to_string(&Out { amount }).unwrap();
+        assert_eq!(value.to_string(), panel);
+    }
 }

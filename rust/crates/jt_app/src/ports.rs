@@ -140,11 +140,22 @@ pub trait StrategyArchivedHook: Send + Sync {
 //
 // A row that carries a secret's hash (a password, a session, invite or API-key token) does not
 // implement `Serialize`, so it cannot reach a response or a ledger payload by accident; the use
-// cases answer with views and summaries that leave the hash out.
+// cases answer with views and summaries that leave the hash out. Its `Debug` prints the hash as
+// `***`, so a log line or a failed assertion does not show it either.
 // ---------------------------------------------------------------------------------------------
 
-/// A user account. Not `Serialize`: it carries the password hash (see the section note).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Prints `***` in place of a secret's hash in a row's `Debug` output.
+struct Masked;
+
+impl std::fmt::Debug for Masked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
+}
+
+/// A user account. Not `Serialize`, and `Debug` masks it: it carries the password hash (see the
+/// section note).
+#[derive(Clone, PartialEq, Eq)]
 pub struct UserRow {
     pub id: UserId,
     pub email: Email,
@@ -153,8 +164,21 @@ pub struct UserRow {
     pub created_at: OffsetDateTime,
 }
 
-/// A panel login session. Only the hash of its token is stored. Not `Serialize`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl std::fmt::Debug for UserRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserRow")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("password_hash", &Masked)
+            .field("display_name", &self.display_name)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+/// A panel login session. Only the hash of its token is stored. Not `Serialize`; `Debug` masks
+/// the hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionRow {
     pub id: SessionId,
     pub user_id: UserId,
@@ -165,9 +189,23 @@ pub struct SessionRow {
     pub revoked_at: Option<OffsetDateTime>,
 }
 
+impl std::fmt::Debug for SessionRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionRow")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .field("token_hash", &Masked)
+            .field("current_workspace_id", &self.current_workspace_id)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("revoked_at", &self.revoked_at)
+            .finish()
+    }
+}
+
 /// A membership as stored: an invitation (`user_id` unset until accepted) or an active member.
-/// Not `Serialize`: it carries the invite token's hash.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Not `Serialize`, and `Debug` masks it: it carries the invite token's hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct MembershipRow {
     pub id: MembershipId,
     pub workspace_id: WorkspaceId,
@@ -179,6 +217,26 @@ pub struct MembershipRow {
     pub invite_expires_at: Option<OffsetDateTime>,
     pub invited_by: Option<UserId>,
     pub created_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for MembershipRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MembershipRow")
+            .field("id", &self.id)
+            .field("workspace_id", &self.workspace_id)
+            .field("user_id", &self.user_id)
+            .field("role_id", &self.role_id)
+            .field("status", &self.status)
+            .field("invited_email", &self.invited_email)
+            .field(
+                "invite_token_hash",
+                &self.invite_token_hash.as_ref().map(|_| Masked),
+            )
+            .field("invite_expires_at", &self.invite_expires_at)
+            .field("invited_by", &self.invited_by)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
 }
 
 /// One of a user's memberships, joined with its workspace and role.
@@ -236,8 +294,8 @@ impl ApiKeyStatus {
 }
 
 /// An API key as stored. Only the hash of the key is kept; `prefix` is for display. Not
-/// `Serialize`: callers show a `KeySummary`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Serialize`: callers show a `KeySummary`; `Debug` masks the hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ApiKeyRow {
     pub id: ApiKeyId,
     pub workspace_id: WorkspaceId,
@@ -250,6 +308,24 @@ pub struct ApiKeyRow {
     pub created_at: OffsetDateTime,
     pub last_used_at: Option<OffsetDateTime>,
     pub revoked_at: Option<OffsetDateTime>,
+}
+
+impl std::fmt::Debug for ApiKeyRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyRow")
+            .field("id", &self.id)
+            .field("workspace_id", &self.workspace_id)
+            .field("name", &self.name)
+            .field("prefix", &self.prefix)
+            .field("key_hash", &Masked)
+            .field("scopes", &self.scopes)
+            .field("issued_by", &self.issued_by)
+            .field("status", &self.status)
+            .field("created_at", &self.created_at)
+            .field("last_used_at", &self.last_used_at)
+            .field("revoked_at", &self.revoked_at)
+            .finish()
+    }
 }
 
 /// An agent client seen through an API key, one per (key, client name, client version).
@@ -279,8 +355,8 @@ pub struct WorkspaceRow {
     pub created_at: OffsetDateTime,
 }
 
-/// A platform operator. Not `Serialize`: it carries the password hash.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A platform operator. Not `Serialize`, and `Debug` masks it: it carries the password hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct OperatorRow {
     pub id: OperatorId,
     pub email: Email,
@@ -288,14 +364,38 @@ pub struct OperatorRow {
     pub created_at: OffsetDateTime,
 }
 
-/// A platform operator's login session. Only the hash of its token is stored. Not `Serialize`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl std::fmt::Debug for OperatorRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OperatorRow")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("password_hash", &Masked)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+/// A platform operator's login session. Only the hash of its token is stored. Not `Serialize`;
+/// `Debug` masks the hash.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PlatformSessionRow {
     pub id: Uuid,
     pub operator_id: OperatorId,
     pub token_hash: String,
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for PlatformSessionRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlatformSessionRow")
+            .field("id", &self.id)
+            .field("operator_id", &self.operator_id)
+            .field("token_hash", &Masked)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Which ledger entries to list: newest first, at most `limit`, optionally older than `before_id`.
