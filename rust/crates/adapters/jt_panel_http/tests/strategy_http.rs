@@ -566,7 +566,8 @@ async fn pending_payment_workspace_can_call_strategy_routes() {
     let (owner, _) = p.register_pending(OWNER, "Alpha").await;
 
     // The strategy may be worked out before payment: `strategy.*` is exempt from the
-    // workspace-status check, so the whole consultation runs, up to approval.
+    // workspace-status check while the workspace awaits payment, so the whole consultation runs,
+    // up to approval.
     let empty = ok_json(p.get("/api/strategy", &owner).await).await;
     assert!(empty["approved"].is_null(), "{empty}");
     assert!(empty["draft"].is_null(), "{empty}");

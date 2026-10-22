@@ -1,11 +1,11 @@
 //! The gate rule, structural half (spec §5, B1): only the use cases the Global Constraints list
 //! may be `Exempt` from the strategy gate; every other use case is `Gated`. Separately, only
-//! `auth.*`, `workspace.*`, `platform.*`, `strategy.*` and `work.*` use cases are exempt from the
-//! workspace-status check.
+//! `auth.*`, `workspace.*` and `platform.*` use cases run whatever the workspace's status, and
+//! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
 //! lives in the adapters' tests.
 
-use jt_app::catalog::{CATALOG, GateMode};
+use jt_app::catalog::{CATALOG, GateMode, StatusExemption};
 
 /// Id prefixes whose use cases may be exempt: identity, workspace and team administration, keys
 /// and agents, the platform console, the strategy itself (it is what opens the gate), the
@@ -47,28 +47,45 @@ fn only_listed_use_cases_are_exempt() {
 }
 
 /// Id prefixes whose use cases run whatever the workspace's status, as the Global Constraints
-/// list them (the strategy may be worked out before payment, and an agent may ask what is pending
-/// meanwhile); written out here rather than read from `jt_app`, so a change there fails this
-/// test.
-const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform.", "strategy.", "work."];
+/// list them; written out here rather than read from `jt_app`, so a change there fails this test.
+const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."];
+
+/// Id prefixes whose use cases also run while the workspace awaits payment (the strategy may be
+/// worked out before payment, and an agent may ask what is pending meanwhile), but not while it
+/// is suspended.
+const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 
 #[test]
-fn only_auth_workspace_platform_strategy_and_work_use_cases_are_status_exempt() {
-    let wrong: Vec<(&str, bool)> = CATALOG
+fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_while_unpaid() {
+    let expected = |id: &str| {
+        if STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p)) {
+            StatusExemption::Always
+        } else if PENDING_PAYMENT_EXEMPT_PREFIXES
+            .iter()
+            .any(|p| id.starts_with(p))
+        {
+            StatusExemption::PendingPayment
+        } else {
+            StatusExemption::Never
+        }
+    };
+    let wrong: Vec<(&str, StatusExemption)> = CATALOG
         .iter()
-        .filter(|uc| {
-            uc.status_exempt != STATUS_EXEMPT_PREFIXES.iter().any(|p| uc.id.starts_with(p))
-        })
-        .map(|uc| (uc.id, uc.status_exempt))
+        .filter(|uc| uc.status_exemption != expected(uc.id))
+        .map(|uc| (uc.id, uc.status_exemption))
         .collect();
     assert!(
         wrong.is_empty(),
-        "status_exempt must be set exactly for auth.*, workspace.*, platform.*, strategy.* and \
-         work.* use cases: {wrong:?}"
+        "status_exemption must be Always exactly for auth.*, workspace.* and platform.*, \
+         PendingPayment exactly for strategy.* and work.*, else Never: {wrong:?}"
     );
     assert_eq!(
         jt_app::catalog::STATUS_EXEMPT_PREFIXES,
         STATUS_EXEMPT_PREFIXES
+    );
+    assert_eq!(
+        jt_app::catalog::PENDING_PAYMENT_EXEMPT_PREFIXES,
+        PENDING_PAYMENT_EXEMPT_PREFIXES
     );
 }
 

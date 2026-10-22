@@ -4,17 +4,18 @@
 //! (no MCP tool) or `mcp_only` (no panel route), never both.
 //!
 //! Two independent checks guard a use case ([`crate::gate::check_gate`]): the workspace-status
-//! check (the workspace must be `active`), which every use case meets unless it is
-//! [`UseCase::status_exempt`], and the strategy gate, which only [`GateMode::Gated`] use cases
-//! meet.
+//! check (the workspace must be `active`), which every use case meets unless its
+//! [`UseCase::status_exemption`] lets it run in the workspace's status, and the strategy gate,
+//! which only [`GateMode::Gated`] use cases meet.
 
+use jt_tenancy::WorkspaceStatus;
 use serde::Serialize;
 
 use GateMode::Exempt;
 use Risk::{Destructive, Read, Spend, Write};
 
 /// Whether the strategy gate applies to a use case. The workspace-status check is separate
-/// ([`UseCase::status_exempt`]).
+/// ([`UseCase::status_exemption`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateMode {
@@ -22,6 +23,36 @@ pub enum GateMode {
     Exempt,
     /// Needs an approved strategy.
     Gated,
+}
+
+/// Which workspace statuses besides `active` a use case runs in: the workspace-status check of
+/// [`crate::gate::check_gate`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusExemption {
+    /// Only while the workspace is `active`: every use case but those below.
+    Never,
+    /// While it is `active` or `pending_payment`, never while it is `suspended`: the strategy
+    /// (`strategy.*`) and the pending work (`work.*`), which may be prepared before payment.
+    PendingPayment,
+    /// Whatever its status: identity, the workspace itself and the platform (`auth.*`,
+    /// `workspace.*`, `platform.*`).
+    Always,
+}
+
+impl StatusExemption {
+    /// Whether a use case with this exemption runs in a workspace whose status is `status`.
+    pub const fn allows(self, status: WorkspaceStatus) -> bool {
+        matches!(
+            (self, status),
+            (_, WorkspaceStatus::Active)
+                | (StatusExemption::Always, _)
+                | (
+                    StatusExemption::PendingPayment,
+                    WorkspaceStatus::PendingPayment
+                )
+        )
+    }
 }
 
 /// How much harm a call can do; shown to agents with every tool.
@@ -49,25 +80,42 @@ pub struct UseCase {
     /// Reachable from the MCP gate only, for a call only an agent makes (its check-in); then
     /// `panel_route` is `None`. Never set together with `panel_only`.
     pub mcp_only: bool,
-    /// Runs whatever the workspace's status. Only identity, workspace, platform, strategy and
-    /// pending-work use cases (`auth.*`, `workspace.*`, `platform.*`, `strategy.*`, `work.*`)
-    /// are; every other one answers `WORKSPACE_INACTIVE` while its workspace is
-    /// `pending_payment` or `suspended`, whatever its [`GateMode`]. The strategy may be worked
-    /// out before payment, and an agent may ask what is pending meanwhile; nothing else may run.
-    pub status_exempt: bool,
+    /// Which statuses besides `active` it runs in. Identity, workspace and platform use cases
+    /// (`auth.*`, `workspace.*`, `platform.*`) run in every status; the strategy and the pending
+    /// work (`strategy.*`, `work.*`) also while the workspace is `pending_payment`, so the
+    /// strategy may be worked out before payment and an agent may ask what is pending meanwhile,
+    /// but not while it is `suspended`. Every other use case answers `WORKSPACE_INACTIVE` unless
+    /// its workspace is `active`, whatever its [`GateMode`].
+    pub status_exemption: StatusExemption,
     pub risk: Risk,
 }
 
-/// The id prefixes whose use cases are [`UseCase::status_exempt`].
-pub const STATUS_EXEMPT_PREFIXES: &[&str] =
-    &["auth.", "workspace.", "platform.", "strategy.", "work."];
+/// The id prefixes whose use cases run whatever the workspace's status
+/// ([`StatusExemption::Always`]).
+pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."];
 
-/// Whether use case `id` runs whatever its workspace's status: whether it starts with one of
-/// [`STATUS_EXEMPT_PREFIXES`].
-pub const fn is_status_exempt(id: &str) -> bool {
+/// The id prefixes whose use cases also run while the workspace is `pending_payment`
+/// ([`StatusExemption::PendingPayment`]), but not while it is `suspended`.
+pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
+
+/// The status exemption of use case `id`, from its prefix: [`StatusExemption::Always`] for one of
+/// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
+/// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
+pub const fn status_exemption(id: &str) -> StatusExemption {
+    if starts_with_any(id, STATUS_EXEMPT_PREFIXES) {
+        StatusExemption::Always
+    } else if starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES) {
+        StatusExemption::PendingPayment
+    } else {
+        StatusExemption::Never
+    }
+}
+
+/// Whether `id` starts with one of `prefixes`, usable in a constant.
+const fn starts_with_any(id: &str, prefixes: &[&str]) -> bool {
     let mut i = 0;
-    while i < STATUS_EXEMPT_PREFIXES.len() {
-        if starts_with(id, STATUS_EXEMPT_PREFIXES[i]) {
+    while i < prefixes.len() {
+        if starts_with(id, prefixes[i]) {
             return true;
         }
         i += 1;
@@ -106,7 +154,7 @@ const fn twin(
         panel_route: Some(route),
         panel_only: false,
         mcp_only: false,
-        status_exempt: is_status_exempt(id),
+        status_exemption: status_exemption(id),
         risk,
     }
 }
@@ -125,7 +173,7 @@ const fn panel_only(
         panel_route: Some(route),
         panel_only: true,
         mcp_only: false,
-        status_exempt: is_status_exempt(id),
+        status_exemption: status_exemption(id),
         risk,
     }
 }
@@ -139,7 +187,7 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
         panel_route: None,
         panel_only: false,
         mcp_only: true,
-        status_exempt: is_status_exempt(id),
+        status_exemption: status_exemption(id),
         risk,
     }
 }
@@ -201,8 +249,9 @@ pub static CATALOG: &[UseCase] = &[
     twin("budget.items.create", Exempt, "jeeta.budget.items_create", ("POST", "/api/budget/items"), Write),
     twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
     twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
-    // What is pending (B11): exempt from the strategy gate and the status check, since an agent
-    // asks it before any strategy exists. Checking in is an agent's call only.
+    // What is pending (B11): exempt from the strategy gate, and from the status check while the
+    // workspace awaits payment, since an agent asks it before any strategy exists. Checking in is
+    // an agent's call only.
     twin("work.pending", Exempt, "jeeta.work.pending", ("GET", "/api/work/pending"), Read),
     mcp_only("work.checkin", Exempt, "jeeta.work.checkin", Write),
     twin("work.set_checkin_interval", Exempt, "jeeta.work.set_checkin_interval", ("PUT", "/api/work/checkin-interval"), Write),

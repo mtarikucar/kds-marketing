@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use jt_app::catalog::{CATALOG, GateMode, Risk, by_mcp_tool, find};
+use jt_app::catalog::{CATALOG, GateMode, Risk, StatusExemption, by_mcp_tool, find};
 
 #[test]
 fn ids_are_unique() {
@@ -172,10 +172,15 @@ fn catalog_is_the_release_table() {
     assert_eq!(rows, expected);
     assert_eq!(CATALOG.len(), 56);
     assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
-    let status_exempt: Vec<&str> =
-        CATALOG.iter().filter(|uc| uc.status_exempt).map(|uc| uc.id).collect();
+    let exempt = |e: StatusExemption| -> Vec<&str> {
+        CATALOG
+            .iter()
+            .filter(|uc| uc.status_exemption == e)
+            .map(|uc| uc.id)
+            .collect()
+    };
     assert_eq!(
-        status_exempt,
+        exempt(StatusExemption::Always),
         [
             "auth.register",
             "auth.login",
@@ -183,6 +188,14 @@ fn catalog_is_the_release_table() {
             "auth.me",
             "workspace.info",
             "workspace.switch",
+            "platform.login",
+            "platform.workspaces.list",
+            "platform.workspaces.set_status",
+        ]
+    );
+    assert_eq!(
+        exempt(StatusExemption::PendingPayment),
+        [
             "strategy.get",
             "strategy.start_consultation",
             "strategy.record",
@@ -196,9 +209,6 @@ fn catalog_is_the_release_table() {
             "work.pending",
             "work.checkin",
             "work.set_checkin_interval",
-            "platform.login",
-            "platform.workspaces.list",
-            "platform.workspaces.set_status",
         ]
     );
 }

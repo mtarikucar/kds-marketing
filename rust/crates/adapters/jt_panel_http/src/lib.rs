@@ -119,7 +119,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode, header};
-    use jt_app::catalog::{GateMode, Risk};
+    use jt_app::catalog::{GateMode, Risk, StatusExemption};
     use jt_app::error::AppError;
     use jt_app::gate::{NoStrategyYet, StrategyGate};
     use jt_app::ports::UnitOfWork;
@@ -145,7 +145,7 @@ mod tests {
         panel_route: Some(("GET", "/api/demo")),
         panel_only: false,
         mcp_only: false,
-        status_exempt: false,
+        status_exemption: StatusExemption::Never,
         risk: Risk::Read,
     };
 

@@ -2,8 +2,9 @@
 //! `work.checkin` and `work.set_checkin_interval`.
 //!
 //! **Pending work** is the agent's entry point: the strategy's state, the items to act on (most
-//! urgent first) and whether the agent is overdue. It is exempt from the strategy gate and from
-//! the workspace-status check, since an agent asks it before any strategy exists. The items:
+//! urgent first) and whether the agent is overdue. It is exempt from the strategy gate, and from
+//! the workspace-status check while the workspace awaits payment (not while it is suspended),
+//! since an agent asks it before any strategy exists. The items:
 //!
 //! - `ConsultStrategy` (priority 1): no strategy at all, or a draft open (not submitted);
 //! - `ApproveStrategy` (1): a submitted draft, for a caller who may approve it (the role owner or

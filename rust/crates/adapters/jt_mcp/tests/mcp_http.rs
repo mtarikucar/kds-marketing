@@ -11,7 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
-use jt_app::catalog::{GateMode, Risk, UseCase};
+use jt_app::catalog::{GateMode, Risk, StatusExemption, UseCase};
 use jt_app::ctx::Ctx;
 use jt_app::error::AppError;
 use jt_app::gate::{NoStrategyYet, StrategyGate};
@@ -52,7 +52,7 @@ static GATED: UseCase = UseCase {
     panel_route: None,
     panel_only: false,
     mcp_only: true,
-    status_exempt: false,
+    status_exemption: StatusExemption::Never,
     risk: Risk::Read,
 };
 
@@ -861,10 +861,18 @@ async fn call_on_pending_payment_workspace_returns_workspace_inactive() {
     assert_eq!(refused["code"], "WORKSPACE_INACTIVE");
     assert_eq!(refused["details"], json!({ "status": "pending_payment" }));
 
-    // Status-exempt tools keep working while the workspace is inactive; every other tool,
-    // exempt from the strategy gate or not, meets the status check.
+    // Status-exempt tools keep working while the workspace awaits payment, the strategy and the
+    // pending work among them; every other tool, exempt from the strategy gate or not, meets
+    // the status check.
     let info = ok(&call(&client, "jeeta.workspace.info", json!({})).await);
     assert_eq!(info["status"], "pending_payment");
+    for tool in [
+        "jeeta.strategy.get",
+        "jeeta.work.pending",
+        "jeeta.work.checkin",
+    ] {
+        ok(&call(&client, tool, json!({})).await);
+    }
     for tool in [
         "jeeta.team.list",
         "jeeta.api_keys.list",
@@ -938,13 +946,26 @@ async fn gated_tool_passes_after_operator_activates_and_gate_stub_says_strategy_
     let refused = err(&call(&no_strategy, "jeeta.demo.gated", json!({})).await);
     assert_eq!(refused["code"], "STRATEGY_REQUIRED");
 
-    // Suspension closes the gate again; the key itself still works for exempt tools.
+    // Suspension closes the gate again, and the strategy and the pending work with it; the key
+    // itself still works for the tools exempt in every status.
     platform::set_status(&w.deps, &pctx, w.a, WorkspaceStatus::Suspended)
         .await
         .unwrap();
-    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
-    assert_eq!(refused["code"], "WORKSPACE_INACTIVE");
-    assert_eq!(refused["details"], json!({ "status": "suspended" }));
+    for tool in [
+        "jeeta.demo.gated",
+        "jeeta.strategy.get",
+        "jeeta.strategy.start_consultation",
+        "jeeta.work.pending",
+        "jeeta.work.checkin",
+    ] {
+        let refused = err(&call(&client, tool, json!({})).await);
+        assert_eq!(refused["code"], "WORKSPACE_INACTIVE", "{tool}");
+        assert_eq!(
+            refused["details"],
+            json!({ "status": "suspended" }),
+            "{tool}"
+        );
+    }
     let info = ok(&call(&client, "jeeta.workspace.info", json!({})).await);
     assert_eq!(info["status"], "suspended");
     assert_eq!(w.entries(w.a, "platform.workspace_status").await.len(), 2);
