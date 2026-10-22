@@ -8,7 +8,9 @@
 -- credentials are opaque bytes in `capabilities.connector_sealed` that only the workspace's key
 -- opens. Group members, budget links and spend entries reference their rows together with the
 -- workspace, so a row can never tie rows of two workspaces together, even where row-level
--- security is off. Spend entries are never changed or deleted: a trigger refuses it.
+-- security is off; the unique `(workspace_id, id)` pairs they reference lead with the workspace,
+-- so the same indexes serve a workspace's scans. Spend entries are never changed or deleted: a
+-- trigger refuses it.
 --
 -- Every table is a tenant table with forced row-level security, like those of 0001 and 0002.
 -- Every statement is idempotent: running this file twice leaves the same schema.
@@ -31,7 +33,7 @@ create table if not exists capabilities (
     strategy_version_id uuid,
     created_at timestamptz not null,
     updated_at timestamptz not null,
-    unique (id, workspace_id)
+    unique (workspace_id, id)
 );
 create unique index if not exists capabilities_live_external_account
     on capabilities (workspace_id, kind_key, external_id)
@@ -44,7 +46,7 @@ create table if not exists capability_groups (
     purpose text,
     created_at timestamptz not null,
     unique (workspace_id, name),
-    unique (id, workspace_id)
+    unique (workspace_id, id)
 );
 
 create table if not exists capability_group_members (
@@ -71,7 +73,7 @@ create table if not exists budget_items (
     period text not null check (period in ('daily', 'weekly', 'monthly', 'total')),
     strategy_version_id uuid,
     created_at timestamptz not null,
-    unique (id, workspace_id)
+    unique (workspace_id, id)
 );
 
 create table if not exists capability_budget_links (
