@@ -1175,6 +1175,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_capability"
+version = "0.1.0"
+dependencies = [
+ "jt_ledger",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "jt_ledger"
 version = "0.1.0"
 dependencies = [

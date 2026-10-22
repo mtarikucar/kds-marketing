@@ -4,6 +4,7 @@ members = [
     "crates/domain/jt_tenancy",
     "crates/domain/jt_ledger",
     "crates/domain/jt_strategy",
+    "crates/domain/jt_capability",
     "crates/jt_app",
     "crates/adapters/jt_pg",
     "crates/adapters/jt_panel_http",
@@ -26,6 +27,7 @@ publish = false
 jt_tenancy = { path = "crates/domain/jt_tenancy" }
 jt_ledger = { path = "crates/domain/jt_ledger" }
 jt_strategy = { path = "crates/domain/jt_strategy" }
+jt_capability = { path = "crates/domain/jt_capability" }
 jt_app = { path = "crates/jt_app" }
 jt_pg = { path = "crates/adapters/jt_pg" }
 jt_panel_http = { path = "crates/adapters/jt_panel_http" }
