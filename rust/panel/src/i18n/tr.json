@@ -1,0 +1,328 @@
+{
+  "app": {
+    "name": "Jeeta",
+    "tagline": "Çalışma alanı paneli"
+  },
+  "common": {
+    "loading": "Yükleniyor…",
+    "retry": "Yeniden dene",
+    "cancel": "Vazgeç",
+    "close": "Kapat",
+    "save": "Kaydet",
+    "create": "Oluştur",
+    "delete": "Sil",
+    "edit": "Düzenle",
+    "done": "Tamam",
+    "copy": "Kopyala",
+    "copied": "Panoya kopyalandı.",
+    "copyFailed": "Kopyalanamadı; metni elle seçip kopyalayın.",
+    "actions": "İşlemler",
+    "none": "—",
+    "loadError": "Yüklenemedi. Lütfen yeniden deneyin."
+  },
+  "kit": {
+    "close": "Kapat",
+    "loading": "Yükleniyor",
+    "notifications": "Bildirimler",
+    "language": {
+      "change": "Dili değiştir"
+    },
+    "theme": {
+      "label": "Tema",
+      "system": "Sistem",
+      "light": "Açık",
+      "dark": "Koyu"
+    },
+    "disclosure": {
+      "show": "Göster",
+      "hide": "Gizle"
+    }
+  },
+  "nav": {
+    "label": "Ana menü",
+    "home": "Ana sayfa",
+    "team": "Ekip",
+    "roles": "Roller",
+    "apiKeys": "API anahtarları",
+    "agents": "Ajanlar",
+    "ledger": "Günlük"
+  },
+  "shell": {
+    "workspace": "Çalışma alanı",
+    "switchWorkspace": "Çalışma alanını değiştir",
+    "switched": "Çalışma alanı değiştirildi.",
+    "noWorkspace": "Çalışma alanı yok",
+    "noWorkspaceBody": "Henüz bir çalışma alanının etkin üyesi değilsiniz. Bir davet bağlantısıyla katılabilirsiniz.",
+    "logout": "Çıkış yap",
+    "signedInAs": "{{name}} olarak oturum açık"
+  },
+  "status": {
+    "workspace": {
+      "pending_payment": "Ödeme bekleniyor",
+      "active": "Etkin",
+      "suspended": "Askıda"
+    },
+    "member": {
+      "invited": "Davet edildi",
+      "active": "Etkin",
+      "removed": "Çıkarıldı"
+    },
+    "key": {
+      "active": "Etkin",
+      "revoked": "İptal edildi"
+    }
+  },
+  "actor": {
+    "human": "İnsan",
+    "agent": "Ajan",
+    "system": "Sistem"
+  },
+  "permissions": {
+    "workspace": {
+      "read": "Çalışma alanını görüntüleme"
+    },
+    "team": {
+      "manage": "Ekibi yönetme"
+    },
+    "api_keys": {
+      "manage": "API anahtarlarını yönetme"
+    },
+    "ledger": {
+      "read": "Günlüğü okuma"
+    }
+  },
+  "roleNames": {
+    "owner": "Sahip",
+    "manager": "Yönetici",
+    "rep": "Temsilci"
+  },
+  "fields": {
+    "email": "E-posta",
+    "password": "Parola",
+    "passwordHint": "En az {{min}} karakter.",
+    "display_name": "Adınız",
+    "workspace_name": "Çalışma alanı adı",
+    "key": "Anahtar",
+    "name": "Ad",
+    "role_key": "Rol",
+    "permissions": "İzinler",
+    "scopes": "Kapsamlar",
+    "token": "Davet",
+    "status": "Durum",
+    "actor_kind": "Yapan türü"
+  },
+  "errors": {
+    "UNAUTHENTICATED": "Oturum açmanız gerekiyor.",
+    "FORBIDDEN": "Bu işlem için yetkiniz yok.",
+    "NOT_FOUND": "Aradığınız kayıt bulunamadı.",
+    "CONFLICT": "Bu işlem mevcut durumla çakışıyor.",
+    "VALIDATION": "Girilen bilgiler geçersiz.",
+    "STRATEGY_REQUIRED": "Bu işlem için önce onaylı bir strateji gerekiyor.",
+    "WORKSPACE_INACTIVE": "Çalışma alanı etkin değil.",
+    "HOST_NOT_ALLOWED": "Bu adrese erişime izin verilmiyor.",
+    "INTERNAL": "Beklenmeyen bir hata oluştu. Lütfen biraz sonra yeniden deneyin.",
+    "NETWORK": "Sunucuya ulaşılamadı. Bağlantınızı denetleyin.",
+    "unknown": "Bir şeyler ters gitti.",
+    "invalidField": "Geçersiz alan: {{field}}.",
+    "lastOwner": "Çalışma alanının son sahibi çıkarılamaz ya da rolü değiştirilemez.",
+    "ownerOnly": "Bu işlemi yalnızca bir sahip yapabilir.",
+    "exceedsAuthority": "Kendinizde olmayan bir izni veremezsiniz."
+  },
+  "login": {
+    "title": "Giriş yap",
+    "description": "Çalışma alanınıza e-posta ve parolanızla girin.",
+    "submit": "Giriş yap",
+    "invalid": "E-posta ya da parola hatalı.",
+    "noAccount": "Hesabınız yok mu?",
+    "registerLink": "Kayıt olun"
+  },
+  "register": {
+    "title": "Kayıt ol",
+    "description": "Hesabınızı ve ilk çalışma alanınızı oluşturun.",
+    "submit": "Hesap oluştur",
+    "haveAccount": "Zaten hesabınız var mı?",
+    "loginLink": "Giriş yapın"
+  },
+  "invite": {
+    "title": "Daveti kabul et",
+    "description": "Bir çalışma alanına davet edildiniz.",
+    "signedInAs": "{{email}} olarak oturum açtınız. Daveti bu hesapla kabul edebilirsiniz.",
+    "accept": "Daveti kabul et",
+    "newUser": "Hesabınız yoksa adınızı ve bir parola girerek katılın.",
+    "submitNew": "Hesap oluştur ve katıl",
+    "haveAccount": "Bu e-posta adresiyle zaten bir hesabınız var mı?",
+    "loginLink": "Giriş yapın",
+    "signInRequired": "Bu e-posta adresiyle bir hesap zaten var. Daveti kabul etmek için önce giriş yapın.",
+    "forbidden": "Bu davet geçerli değil: süresi dolmuş, kullanılmış ya da başka bir e-posta adresine gönderilmiş olabilir.",
+    "alreadyMember": "Bu çalışma alanının zaten üyesisiniz.",
+    "accepted": "Davet kabul edildi. Çalışma alanına katıldınız.",
+    "goHome": "Panele git"
+  },
+  "home": {
+    "title": "Ana sayfa",
+    "description": "Çalışma alanınızın özeti.",
+    "slug": "Kısa ad",
+    "status": "Durum",
+    "myRole": "Rolünüz",
+    "myPermissions": "İzinleriniz",
+    "strategy": {
+      "title": "Strateji bekleniyor",
+      "body": "Çalışma alanınızın stratejisi onaylandığında burada görünecek."
+    },
+    "inactive": {
+      "pending_payment": "Ödeme alındığında çalışma alanınız etkinleşecek.",
+      "active": "Çalışma alanınız etkin.",
+      "suspended": "Çalışma alanınız askıya alındı. Ayrıntı için bizimle iletişime geçin."
+    }
+  },
+  "team": {
+    "title": "Ekip",
+    "description": "Çalışma alanının üyeleri ve bekleyen davetler.",
+    "invite": "Üye davet et",
+    "columns": {
+      "member": "Üye",
+      "role": "Rol",
+      "status": "Durum",
+      "since": "Eklenme"
+    },
+    "changeRole": "{{email}} için rol",
+    "roleChanged": "Rol güncellendi.",
+    "remove": "Çıkar",
+    "cancelInvite": "Daveti iptal et",
+    "removeTitle": "Üyeyi çıkar",
+    "removeBody": "{{email}} bu çalışma alanından çıkarılacak.",
+    "cancelInviteTitle": "Daveti iptal et",
+    "cancelInviteBody": "{{email}} için gönderilen davet geçersiz olacak.",
+    "removed": "Üye çıkarıldı.",
+    "empty": "Henüz üye yok.",
+    "emptyBody": "İlk ekip arkadaşınızı davet edin.",
+    "dialog": {
+      "title": "Üye davet et",
+      "description": "Davet bağlantısı oluşturulur; onu davet ettiğiniz kişiye siz iletirsiniz.",
+      "submit": "Davet bağlantısı oluştur",
+      "linkTitle": "Davet bağlantısı",
+      "linkWarning": "Bu bağlantı yalnızca şimdi gösterilir. Kopyalayıp davet ettiğiniz kişiye iletin; kapatınca bir daha göremezsiniz.",
+      "expiresAt": "Son geçerlilik: {{date}}"
+    }
+  },
+  "roles": {
+    "title": "Roller",
+    "description": "Sistem rolleri sabittir; özel roller kendi izinlerini taşır.",
+    "create": "Rol oluştur",
+    "columns": {
+      "name": "Ad",
+      "key": "Anahtar",
+      "permissions": "İzinler",
+      "type": "Tür"
+    },
+    "system": "Sistem",
+    "custom": "Özel",
+    "edit": "Düzenle",
+    "delete": "Sil",
+    "deleteTitle": "Rolü sil",
+    "deleteBody": "{{name}} rolü silinecek.",
+    "saved": "Rol kaydedildi.",
+    "deleted": "Rol silindi.",
+    "noPermissions": "İzin yok",
+    "empty": "Henüz rol yok.",
+    "dialog": {
+      "createTitle": "Rol oluştur",
+      "editTitle": "{{name}} rolünü düzenle",
+      "description": "Role verilecek izinleri seçin.",
+      "keyHint": "2–32 karakter: küçük harf, rakam ve alt çizgi."
+    }
+  },
+  "apiKeys": {
+    "title": "API anahtarları",
+    "description": "Ajanlar bu çalışma alanına bu anahtarlarla bağlanır.",
+    "create": "Anahtar oluştur",
+    "columns": {
+      "name": "Ad",
+      "prefix": "Önek",
+      "scopes": "Kapsamlar",
+      "status": "Durum",
+      "created": "Oluşturulma",
+      "lastUsed": "Son kullanım"
+    },
+    "neverUsed": "Hiç kullanılmadı",
+    "revoke": "İptal et",
+    "revokeTitle": "Anahtarı iptal et",
+    "revokeBody": "{{name}} anahtarı iptal edilecek; onu kullanan ajanlar artık bağlanamayacak.",
+    "revoked": "Anahtar iptal edildi.",
+    "empty": "Henüz API anahtarı yok.",
+    "emptyBody": "Bir ajanı bağlamak için anahtar oluşturun.",
+    "dialog": {
+      "title": "API anahtarı oluştur",
+      "description": "Anahtara bir ad verin ve isterseniz kapsamını daraltın.",
+      "scopesHint": "Hiçbirini seçmezseniz anahtar sizin tüm izinlerinizi taşır.",
+      "submit": "Anahtar oluştur",
+      "plaintextTitle": "Yeni anahtarınız",
+      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz."
+    }
+  },
+  "agents": {
+    "title": "Ajanlar",
+    "description": "Bu çalışma alanına API anahtarlarıyla bağlanan istemciler.",
+    "columns": {
+      "client": "İstemci",
+      "version": "Sürüm",
+      "protocol": "Protokol",
+      "key": "API anahtarı",
+      "firstSeen": "İlk görülme",
+      "lastSeen": "Son görülme",
+      "toolCalls": "Araç çağrısı"
+    },
+    "empty": "Henüz bağlanan ajan yok.",
+    "emptyBody": "Bir API anahtarıyla bağlanan ilk istemci burada görünecek."
+  },
+  "ledger": {
+    "title": "Günlük",
+    "description": "Çalışma alanında olan her şey; ajan ve insan eylemleri aynı biçimde durur.",
+    "filter": "Eylem filtresi",
+    "filterPlaceholder": "örn. team.",
+    "apply": "Filtrele",
+    "clear": "Temizle",
+    "columns": {
+      "at": "Zaman",
+      "actor": "Yapan",
+      "action": "Eylem",
+      "subject": "Konu",
+      "payload": "Ayrıntılar"
+    },
+    "payload": "Ayrıntılar",
+    "redactedNote": "Gizli değerler maskelenmiştir.",
+    "loadMore": "Daha fazla yükle",
+    "empty": "Günlükte kayıt yok.",
+    "emptyBody": "Çalışma alanında bir şey olduğunda burada görünecek."
+  },
+  "platform": {
+    "console": "Platform konsolu",
+    "login": {
+      "title": "Platform girişi",
+      "description": "Platform işletmeni olarak girin.",
+      "submit": "Giriş yap",
+      "invalid": "E-posta ya da parola hatalı."
+    },
+    "workspaces": {
+      "title": "Çalışma alanları",
+      "description": "Tüm çalışma alanları, en yenisi önce.",
+      "columns": {
+        "name": "Ad",
+        "slug": "Kısa ad",
+        "owner": "Sahip",
+        "members": "Üye",
+        "status": "Durum",
+        "created": "Oluşturulma"
+      },
+      "activate": "Etkinleştir",
+      "suspend": "Askıya al",
+      "changed": "Durum güncellendi.",
+      "empty": "Henüz çalışma alanı yok."
+    }
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "body": "Aradığınız sayfa yok ya da taşınmış.",
+    "home": "Ana sayfaya dön"
+  }
+}
