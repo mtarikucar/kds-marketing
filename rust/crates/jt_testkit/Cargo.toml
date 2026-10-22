@@ -16,6 +16,8 @@ uuid.workspace = true
 time.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+rand.workspace = true
+hex.workspace = true
 
 [lints]
 workspace = true

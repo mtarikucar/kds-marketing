@@ -1037,9 +1037,11 @@ dependencies = [
  "jt_app",
  "jt_ledger",
  "jt_tenancy",
+ "jt_testkit",
  "serde_json",
  "sqlx",
  "time",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -1060,10 +1062,12 @@ name = "jt_testkit"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
  "jt_app",
  "jt_ledger",
  "jt_pg",
  "jt_tenancy",
+ "rand 0.10.3",
  "serde_json",
  "sqlx",
  "time",

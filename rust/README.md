@@ -30,6 +30,25 @@ export JEETA_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postg
 
 Testler bu değeri `.env` dosyasından değil, ortam değişkeninden okur.
 
+Bu adresin rolü süper kullanıcı olmalıdır, ama testler bu rolle çalışmaz: her test
+`jt_test_<12 onaltılık>` adlı bir veritabanı ve aynı adlı, rastgele parolalı, sıradan bir oturum rolü
+(`NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`) açar, veritabanını o role verir, göçleri ve sorguları o
+rolle çalıştırır; test bitince ikisini de siler. Yönetici bağlantısı yalnızca açma ve silme içindir. Yeni
+veritabanı `template0`'dan kopyalanır; bu yüzden adres `template1` dahil herhangi bir mevcut veritabanını
+gösterebilir.
+
+## Satır düzeyi güvenlik (RLS) ve veritabanı rolü
+
+Kiracı tabloları (`roles`, `memberships`, `api_keys`, `agent_connections`, `ledger_entries`) ve `workspaces`,
+`ENABLE` + `FORCE ROW LEVEL SECURITY` ile korunur: bir satır yalnızca işlem içinde `app.workspace_id` o
+çalışma alanını gösterdiğinde ya da `app.platform = 'on'` olduğunda görünür ve yazılabilir. Bu ayarları
+yalnızca `jt_pg`'nin `TenantTx`, `PlatformTx` ve `UserTx` işlemleri koyar.
+
+PostgreSQL, `FORCE` olsa bile süper kullanıcılara ve `BYPASSRLS` rollerine RLS uygulamaz. **Üretimde
+uygulama, `JEETA_DATABASE_URL` içinde süper kullanıcı olmayan ve `BYPASSRLS` taşımayan sıradan bir rolle
+bağlanmalıdır**; aksi halde çalışma alanları arasındaki yalıtım sessizce ortadan kalkar. Tabloların sahibi
+bu rol olabilir (`FORCE` sahibi de bağlar).
+
 ## Denetimler
 
 ```sh
