@@ -15,6 +15,7 @@ jt_tenancy.workspace = true
 jt_app.workspace = true
 reqwest.workspace = true
 url.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -25,6 +26,10 @@ tokio = { workspace = true, features = ["net", "time"] }
 [[test]]
 name = "production_build"
 path = "tests/production_build.rs"
+
+[[test]]
+name = "public_host"
+path = "tests/public_host.rs"
 
 [lints]
 workspace = true

@@ -104,6 +104,12 @@ impl Egress {
         self.allowlist.revoke_tenant(ws, host);
     }
 
+    /// Whether `url` passes the allowlist for `scope`, without sending anything.
+    #[cfg(test)]
+    pub(crate) fn permits(&self, scope: EgressScope, url: &reqwest::Url) -> bool {
+        self.allowlist.check(scope, url).is_ok()
+    }
+
     /// Sends `req` if its URL is allowed for `scope`; otherwise returns `HostNotAllowed` without
     /// resolving or connecting anything.
     pub async fn send(

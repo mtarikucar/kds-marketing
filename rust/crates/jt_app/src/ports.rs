@@ -95,6 +95,31 @@ pub trait ChannelCatalog: Send + Sync {
     async fn kinds_in_use(&self, ws: WorkspaceId) -> Result<BTreeSet<String>, AppError>;
 }
 
+/// The hosts each workspace's connectors may reach: the tenant tier of the egress allowlist
+/// (spec §4.3), filled from the hosts a capability declares and emptied again when it retires.
+///
+/// Only a public host enters it. A host that names this machine or a private network (`localhost`,
+/// a single-label name, a private suffix such as `.local` or `.internal`, an IP literal in a
+/// loopback, private, link-local, shared or other special-purpose range) is refused, so a tenant
+/// cannot point the system at its own network. The check is on the text of the host; what a
+/// public name resolves to is the egress client's concern when it connects.
+///
+/// The tier is one set of hosts per workspace, not counted per capability: a caller revoking a
+/// host first makes sure no other capability of the workspace still needs it. It lives in memory,
+/// so every method is synchronous.
+pub trait TenantHostRegistry: Send + Sync {
+    /// `Ok` when `host` (`host` or `host:port`, an IPv6 literal in brackets) may enter a tenant
+    /// tier, else `VALIDATION` "host is not public" naming it in `details.host`. Changes nothing:
+    /// a use case checks every host before it writes, and allows them once it has committed.
+    fn check(&self, host: &str) -> Result<(), AppError>;
+    /// Lets workspace `ws` reach `host`; refuses what `check` refuses, and then changes nothing.
+    /// Allowing a host twice is allowing it once.
+    fn allow(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError>;
+    /// Workspace `ws` may no longer reach `host`. A host it could not reach is a no-op: revoking
+    /// only takes away, so it refuses nothing.
+    fn revoke(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError>;
+}
+
 /// Told when a workspace's approved strategy version has been archived, after the archive is
 /// committed, so that work planned under it can be called off (spec §5: the gate closes again).
 ///

@@ -40,7 +40,7 @@ pub(crate) fn canonical_entry(raw: &str) -> Option<String> {
 }
 
 /// Splits an optional `:<port>` suffix off an entry. IPv6 literals must be bracketed.
-fn split_port(raw: &str) -> Option<(&str, Option<u16>)> {
+pub(crate) fn split_port(raw: &str) -> Option<(&str, Option<u16>)> {
     if raw.starts_with('[') {
         let end = raw.find(']')? + 1;
         let (host, rest) = raw.split_at(end);
