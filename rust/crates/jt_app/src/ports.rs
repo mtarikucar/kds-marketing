@@ -328,9 +328,20 @@ pub trait MembershipRepo: Send + Sync {
     /// the bundle's is `INTERNAL`; a role that is not this workspace's (or does not exist) is
     /// `NOT_FOUND`.
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError>;
-    /// Binds an invitation to `user_id` and makes it `Active`. Only `Invited` → `Active` is
-    /// allowed: an unknown id is `NOT_FOUND`, a membership in any other status is `CONFLICT`.
-    async fn activate(&mut self, id: MembershipId, user_id: UserId) -> Result<(), AppError>;
+    /// Binds an open invitation to `user_id` and makes it `Active`, clearing `invite_token_hash`
+    /// and `invite_expires_at` so the token can never be found or used again (`invited_email` and
+    /// `invited_by` stay as the record of the invitation).
+    ///
+    /// The row is locked first, so two concurrent activations of one invitation cannot both
+    /// succeed. An unknown id is `NOT_FOUND`; a membership that is not `Invited`, or whose
+    /// invitation has expired at `at` (`invite_expires_at` not after `at`), is `CONFLICT`, as is
+    /// a user who already holds a membership here that is not `Removed`.
+    async fn activate(
+        &mut self,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
     /// Moves the membership to `role_id`. An unknown id, or a role that is not this workspace's,
     /// is `NOT_FOUND`. Callers that may demote an owner call `count_active_owners` first, in the
     /// same transaction.
@@ -477,8 +488,18 @@ pub trait UserRepos: Send + Sync {
         role_id: RoleId,
         created_at: OffsetDateTime,
     ) -> Result<(), AppError>;
-    /// Writes into the workspace named by the entry; used by registration in the same
-    /// transaction. Returns the entry's sequence id.
+    /// `MembershipRepo::activate` for membership `id` of `workspace_id`, with the same contract
+    /// (an `id` that is not `workspace_id`'s is `NOT_FOUND`). Accepting an invitation uses it to
+    /// create the user, activate the membership and open a session in one transaction.
+    async fn memberships_activate(
+        &mut self,
+        workspace_id: WorkspaceId,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Writes into the workspace named by the entry; used by registration and by accepting an
+    /// invitation, in the same transaction. Returns the entry's sequence id.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }

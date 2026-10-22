@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use jt_ledger::{Action, Actor, LedgerEntry};
+use jt_ledger::{Actor, LedgerEntry};
 use jt_tenancy::{
     Email, MembershipId, RoleDef, RoleId, SessionId, SystemRole, UserId, WorkspaceId,
     WorkspaceStatus,
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
-use super::{Deps, hash_token};
+use super::{Deps, action, hash_token, invalid, required};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{MembershipView, SessionRow, UserRepos, UserRow};
@@ -534,23 +534,6 @@ fn slug_suffix(deps: &Deps) -> String {
         .chain(std::iter::repeat('0'))
         .take(SLUG_SUFFIX_LEN)
         .collect()
-}
-
-fn action(name: &str) -> Result<Action, AppError> {
-    Action::new(name).map_err(|e| AppError::internal(e.to_string()))
-}
-
-/// `VALIDATION` naming `field` in `details.field`.
-fn invalid(field: &str, message: &str) -> AppError {
-    AppError::validation(message, json!({ "field": field }))
-}
-
-/// `raw` trimmed, or `VALIDATION` when nothing is left.
-fn required(field: &str, raw: &str) -> Result<String, AppError> {
-    match raw.trim() {
-        "" => Err(invalid(field, &format!("{field} must not be empty"))),
-        trimmed => Ok(trimmed.to_owned()),
-    }
 }
 
 fn invalid_credentials() -> AppError {

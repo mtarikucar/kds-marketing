@@ -457,11 +457,15 @@ async fn memberships_invite_activate_set_role_remove_and_count_owners() {
         }
     );
 
-    // Activate: Invited -> Active only.
-    t.memberships().activate(inv.id, bob.id).await.unwrap();
+    // Activate: an open invitation -> Active only, and the token is spent.
+    t.memberships().activate(inv.id, bob.id, T0).await.unwrap();
     let active = t.memberships().find(inv.id).await.unwrap().unwrap();
     assert_eq!(active.status, MembershipStatus::Active);
     assert_eq!(active.user_id, Some(bob.id));
+    assert_eq!(active.invite_token_hash, None);
+    assert_eq!(active.invite_expires_at, None);
+    assert_eq!(active.invited_email, inv.invited_email);
+    assert_eq!(active.invited_by, inv.invited_by);
     assert_eq!(
         t.memberships()
             .find_by_user(bob.id)
@@ -471,7 +475,7 @@ async fn memberships_invite_activate_set_role_remove_and_count_owners() {
         Some(inv.id)
     );
     assert_eq!(
-        code(t.memberships().activate(inv.id, bob.id).await),
+        code(t.memberships().activate(inv.id, bob.id, T0).await),
         ErrorCode::Conflict
     );
     let list = t.memberships().list().await.unwrap();
@@ -482,7 +486,7 @@ async fn memberships_invite_activate_set_role_remove_and_count_owners() {
     let again = invite(ws, rep.id, owner, "bob@example.com", "invite-bob-2");
     t.memberships().insert_invite(again.clone()).await.unwrap();
     assert_eq!(
-        code(t.memberships().activate(again.id, bob.id).await),
+        code(t.memberships().activate(again.id, bob.id, T0).await),
         ErrorCode::Conflict
     );
     t.memberships().remove(again.id).await.unwrap();
@@ -505,7 +509,7 @@ async fn memberships_invite_activate_set_role_remove_and_count_owners() {
     // Unknown ids are NOT_FOUND.
     let missing = MembershipId::new_v7();
     assert_eq!(
-        code(t.memberships().activate(missing, bob.id).await),
+        code(t.memberships().activate(missing, bob.id, T0).await),
         ErrorCode::NotFound
     );
     assert_eq!(
@@ -523,18 +527,104 @@ async fn memberships_invite_activate_set_role_remove_and_count_owners() {
     assert_eq!(t.memberships().find(missing).await.unwrap(), None);
     t.commit().await.unwrap();
 
-    // The platform finds an invitation by its token hash, whatever the workspace.
+    // The platform finds an invitation by its token hash, whatever the workspace; an activated
+    // invitation's token is gone.
     let mut p = uow.platform().await.unwrap();
     let found = p
-        .membership_find_by_invite_hash("invite-bob")
+        .membership_find_by_invite_hash("invite-bob-2")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(found.id, inv.id);
+    assert_eq!(found.id, again.id);
     assert_eq!(found.workspace_id, ws);
+    for gone in ["invite-bob", "nope"] {
+        assert_eq!(p.membership_find_by_invite_hash(gone).await.unwrap(), None);
+    }
+}
+
+#[tokio::test]
+async fn activating_an_expired_invitation_is_conflict() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let uow = uow(&db);
+    let bob = new_user(&uow, "bob@example.com").await;
+    let rep = role(&uow, ws, "rep").await;
+    let inv = invite(ws, rep.id, owner, "bob@example.com", "invite-bob");
+    let expires_at = inv.invite_expires_at.unwrap();
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.memberships().insert_invite(inv.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // At the expiry instant the invitation is no longer open.
+    let mut t = uow.tenant(ws).await.unwrap();
     assert_eq!(
-        p.membership_find_by_invite_hash("nope").await.unwrap(),
-        None
+        code(t.memberships().activate(inv.id, bob.id, expires_at).await),
+        ErrorCode::Conflict
+    );
+    drop(t);
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.memberships()
+        .activate(inv.id, bob.id, expires_at - Duration::seconds(1))
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn user_bundle_activates_an_invitation_with_the_user_it_creates() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, _) = db.seed_workspace("other").await;
+    let uow = uow(&db);
+    let rep = role(&uow, ws, "rep").await;
+    let inv = invite(ws, rep.id, owner, "bob@example.com", "invite-bob");
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.memberships().insert_invite(inv.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // The membership is another workspace's: NOT_FOUND, and nothing is kept.
+    let bob = user_row("bob@example.com");
+    let mut u = uow.user().await.unwrap();
+    u.users().insert(bob.clone()).await.unwrap();
+    assert_eq!(
+        code(u.memberships_activate(other, inv.id, bob.id, T0).await),
+        ErrorCode::NotFound
+    );
+    drop(u);
+
+    // One transaction creates the user, activates the invitation and opens a session.
+    let mut u = uow.user().await.unwrap();
+    u.users().insert(bob.clone()).await.unwrap();
+    u.memberships_activate(ws, inv.id, bob.id, T0)
+        .await
+        .unwrap();
+    u.sessions()
+        .insert(session(
+            bob.id,
+            Some(ws),
+            "bob-session",
+            T0 + Duration::days(30),
+        ))
+        .await
+        .unwrap();
+    let views = u.memberships_of_user(bob.id).await.unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].membership_id, inv.id);
+    assert_eq!(views[0].role_key, "rep");
+    u.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    let active = t.memberships().find(inv.id).await.unwrap().unwrap();
+    assert_eq!(active.status, MembershipStatus::Active);
+    assert_eq!(active.user_id, Some(bob.id));
+    assert_eq!(active.invite_token_hash, None);
+    drop(t);
+
+    // Used once, it is no open invitation any more.
+    let mut u = uow.user().await.unwrap();
+    assert_eq!(
+        code(u.memberships_activate(ws, inv.id, bob.id, T0).await),
+        ErrorCode::Conflict
     );
 }
 

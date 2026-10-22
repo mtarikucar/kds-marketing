@@ -178,6 +178,16 @@ impl UserRepos for PgUserRepos {
             .await
     }
 
+    async fn memberships_activate(
+        &mut self,
+        workspace_id: WorkspaceId,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        memberships::activate(self.tx.conn(), workspace_id, id, user_id, at).await
+    }
+
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         ledger::insert(self.tx.conn(), &entry).await
     }

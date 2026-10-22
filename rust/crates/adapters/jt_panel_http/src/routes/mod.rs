@@ -8,6 +8,8 @@
 //! [`RouteUseCase`] extension, which the strategy gate in `WorkspaceCtx` reads.
 
 pub mod auth;
+pub mod roles;
+pub mod team;
 pub mod workspace;
 
 use axum::Json;
@@ -29,6 +31,15 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/switch-workspace"),
     ("GET", "/api/workspace"),
+    ("GET", "/api/team"),
+    ("POST", "/api/team/invites"),
+    ("POST", "/api/team/invites/accept"),
+    ("PATCH", "/api/team/{membership_id}/role"),
+    ("DELETE", "/api/team/{membership_id}"),
+    ("GET", "/api/roles"),
+    ("POST", "/api/roles"),
+    ("PATCH", "/api/roles/{role_id}"),
+    ("DELETE", "/api/roles/{role_id}"),
     ("GET", "/healthz"),
 ];
 
@@ -110,6 +121,30 @@ pub fn api_routes() -> Vec<ApiRoute> {
             auth::switch_workspace,
         ),
         api_route("GET", "/workspace", "workspace.info", workspace::info),
+        api_route("GET", "/team", "team.list", team::list),
+        api_route("POST", "/team/invites", "team.invite", team::invite),
+        api_route(
+            "POST",
+            "/team/invites/accept",
+            "team.accept_invite",
+            team::accept,
+        ),
+        api_route(
+            "PATCH",
+            "/team/{membership_id}/role",
+            "team.set_role",
+            team::set_role,
+        ),
+        api_route(
+            "DELETE",
+            "/team/{membership_id}",
+            "team.remove",
+            team::remove,
+        ),
+        api_route("GET", "/roles", "roles.list", roles::list),
+        api_route("POST", "/roles", "roles.create", roles::create),
+        api_route("PATCH", "/roles/{role_id}", "roles.update", roles::update),
+        api_route("DELETE", "/roles/{role_id}", "roles.delete", roles::delete),
     ]
 }
 

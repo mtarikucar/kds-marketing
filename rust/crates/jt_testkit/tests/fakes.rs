@@ -302,7 +302,11 @@ async fn roles_and_memberships_keep_their_contracts() {
     assert_eq!(members[1].email, email("invitee@example.com"));
     assert_eq!(members[1].status, MembershipStatus::Invited);
 
-    t.memberships().activate(invite, invitee).await.unwrap();
+    t.memberships().activate(invite, invitee, T0).await.unwrap();
+    let activated = t.memberships().find(invite).await.unwrap().unwrap();
+    assert_eq!(activated.invite_token_hash, None);
+    assert_eq!(activated.invite_expires_at, None);
+    assert_eq!(activated.invited_email, Some(email("invitee@example.com")));
     assert_eq!(
         t.memberships()
             .find_by_user(invitee)
@@ -326,18 +330,105 @@ async fn roles_and_memberships_keep_their_contracts() {
     // Only an open invitation can be activated.
     let mut t = uow.tenant(ws).await.unwrap();
     assert_eq!(
-        code(t.memberships().activate(invite, invitee).await.unwrap_err()),
+        code(
+            t.memberships()
+                .activate(invite, invitee, T0)
+                .await
+                .unwrap_err()
+        ),
         ErrorCode::Conflict
     );
     drop(t);
 
+    // The spent token is found no more.
     let mut p = uow.platform().await.unwrap();
-    let found = p
-        .membership_find_by_invite_hash("invite-hash")
+    assert_eq!(
+        p.membership_find_by_invite_hash("invite-hash")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(p.workspace_member_count(ws).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn invitations_activate_only_while_open_and_also_from_the_user_bundle() {
+    let uow = InMemoryUow::new();
+    let (ws, owner, _) = register(&uow, "owner@example.com", "acme").await;
+    let (other, _, _) = register(&uow, "other@example.com", "other").await;
+    let rep = {
+        let mut t = uow.tenant(ws).await.unwrap();
+        t.roles().find_by_key("rep").await.unwrap().unwrap()
+    };
+    let invite = MembershipId::new_v7();
+    let expires_at = T0 + Duration::days(7);
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.memberships()
+        .insert_invite(MembershipRow {
+            id: invite,
+            workspace_id: ws,
+            user_id: None,
+            role_id: rep.id,
+            status: MembershipStatus::Invited,
+            invited_email: Some(email("bob@example.com")),
+            invite_token_hash: Some("invite-hash".into()),
+            invite_expires_at: Some(expires_at),
+            invited_by: Some(owner),
+            created_at: T0,
+        })
         .await
         .unwrap();
-    assert_eq!(found.unwrap().status, MembershipStatus::Removed);
-    assert_eq!(p.workspace_member_count(ws).await.unwrap(), 1);
+    t.commit().await.unwrap();
+    let bob = UserRow {
+        id: UserId::new_v7(),
+        email: email("bob@example.com"),
+        password_hash: "plain:pw".into(),
+        display_name: "Bob".into(),
+        created_at: T0,
+    };
+
+    // Expired at the expiry instant; another workspace's id is unknown.
+    let mut u = uow.user().await.unwrap();
+    u.users().insert(bob.clone()).await.unwrap();
+    assert_eq!(
+        code(
+            u.memberships_activate(ws, invite, bob.id, expires_at)
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::Conflict
+    );
+    drop(u);
+    let mut u = uow.user().await.unwrap();
+    u.users().insert(bob.clone()).await.unwrap();
+    assert_eq!(
+        code(
+            u.memberships_activate(other, invite, bob.id, T0)
+                .await
+                .unwrap_err()
+        ),
+        ErrorCode::NotFound
+    );
+    drop(u);
+
+    // One user-level transaction creates the user and activates the invitation.
+    let mut u = uow.user().await.unwrap();
+    u.users().insert(bob.clone()).await.unwrap();
+    u.memberships_activate(ws, invite, bob.id, expires_at - Duration::seconds(1))
+        .await
+        .unwrap();
+    assert_eq!(u.memberships_of_user(bob.id).await.unwrap().len(), 1);
+    u.commit().await.unwrap();
+    let m = uow
+        .snapshot()
+        .memberships
+        .into_iter()
+        .find(|m| m.id == invite)
+        .unwrap();
+    assert_eq!(m.status, MembershipStatus::Active);
+    assert_eq!(m.user_id, Some(bob.id));
+    assert_eq!(m.invite_token_hash, None);
+    assert_eq!(m.invite_expires_at, None);
 }
 
 fn filter(limit: u32) -> LedgerFilter {
@@ -667,7 +758,7 @@ async fn a_missing_user_or_workspace_is_not_found() {
     assert_eq!(
         code(
             t.memberships()
-                .activate(invite, UserId::new_v7())
+                .activate(invite, UserId::new_v7(), T0)
                 .await
                 .unwrap_err()
         ),

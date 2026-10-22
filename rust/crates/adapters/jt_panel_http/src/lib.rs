@@ -3,8 +3,8 @@
 //! [`router`] serves:
 //! - `/api/*`: the JSON API of [`ROUTES`]. Every mutating request must carry
 //!   `X-Requested-With: jeeta-panel` ([`csrf`]), checked before authentication and body
-//!   parsing. Errors, including bad bodies and unknown paths, are structured:
-//!   `{ "code", "message", "details" }`.
+//!   parsing. Errors, including bad bodies, malformed path parameters and unknown paths, are
+//!   structured: `{ "code", "message", "details" }`.
 //! - `/healthz`: `200 {"ok":true}`.
 //! - Everything else: the built panel from [`AppState::panel_dir`] ([`static_files`]), or a
 //!   structured `404` when there is none.
@@ -21,7 +21,7 @@ use axum::{Extension, Router, middleware};
 use jt_app::catalog::{CATALOG, UseCase};
 use routes::{ApiRoute, RouteUseCase};
 
-pub use error::{ApiError, ApiJson};
+pub use error::{ApiError, ApiJson, ApiPath};
 pub use routes::ROUTES;
 pub use session::{Authed, WorkspaceCtx};
 pub use state::AppState;

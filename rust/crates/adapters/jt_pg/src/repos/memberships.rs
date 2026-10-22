@@ -1,5 +1,5 @@
 //! `memberships`: invitations and members of a workspace, plus the platform-wide lookup by invite
-//! token and the user-level reads and writes of registration.
+//! token and the user-level reads and writes of registration and of accepting an invitation.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -7,6 +7,7 @@ use jt_app::ports::{MemberOut, MembershipRepo, MembershipRow, MembershipView};
 use jt_tenancy::{
     MembershipId, MembershipStatus, RoleId, SystemRole, UserId, WorkspaceId, WorkspaceStatus,
 };
+use sqlx::PgConnection;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -198,6 +199,67 @@ pub(crate) async fn insert_active(
     Ok(())
 }
 
+/// Binds the open invitation `id` of workspace `ws` to `user_id` and makes it active, clearing
+/// its token hash and expiry; see `MembershipRepo::activate` for the contract.
+///
+/// Shared by the tenant bundle and the user bundle (accepting an invitation); every statement
+/// names the workspace, so it stays scoped under either.
+pub(crate) async fn activate(
+    conn: &mut PgConnection,
+    ws: WorkspaceId,
+    id: MembershipId,
+    user_id: UserId,
+    at: OffsetDateTime,
+) -> Result<(), AppError> {
+    let invitation: Option<(String, Option<OffsetDateTime>)> = sqlx::query_as(
+        // archtest: platform-wide
+        "select status, invite_expires_at from memberships \
+         where workspace_id = $1 and id = $2 for update",
+    )
+    .bind(ws.as_uuid())
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| map_sqlx(e, "find membership"))?;
+    let Some((status, expires_at)) = invitation else {
+        return Err(AppError::not_found("no such membership"));
+    };
+    let open = status == MembershipStatus::Invited.key() && expires_at.is_some_and(|e| e > at);
+    if !open {
+        return Err(AppError::conflict(
+            "the membership is not an open invitation",
+        ));
+    }
+    let live: Option<i32> = sqlx::query_scalar(
+        // archtest: platform-wide
+        "select 1 from memberships where workspace_id = $1 and user_id = $2 \
+         and status <> 'removed' and id <> $3",
+    )
+    .bind(ws.as_uuid())
+    .bind(user_id.as_uuid())
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| map_sqlx(e, "find membership by user"))?;
+    if live.is_some() {
+        return Err(AppError::conflict(
+            "the user is already a member of this workspace",
+        ));
+    }
+    sqlx::query(
+        // archtest: platform-wide
+        "update memberships set user_id = $3, status = 'active', invite_token_hash = null, \
+         invite_expires_at = null where workspace_id = $1 and id = $2",
+    )
+    .bind(ws.as_uuid())
+    .bind(id.as_uuid())
+    .bind(user_id.as_uuid())
+    .execute(&mut *conn)
+    .await
+    .map_err(|e| map_sqlx(e, "activate membership"))?;
+    Ok(())
+}
+
 #[async_trait]
 impl MembershipRepo for PgTenantRepos {
     async fn list(&mut self) -> Result<Vec<MemberOut>, AppError> {
@@ -278,50 +340,14 @@ impl MembershipRepo for PgTenantRepos {
         Ok(())
     }
 
-    async fn activate(&mut self, id: MembershipId, user_id: UserId) -> Result<(), AppError> {
+    async fn activate(
+        &mut self,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
         let ws = self.workspace_id();
-        let status: Option<String> = sqlx::query_scalar(
-            "select status from memberships where workspace_id = $1 and id = $2 for update",
-        )
-        .bind(ws.as_uuid())
-        .bind(id.as_uuid())
-        .fetch_optional(self.tx.conn())
-        .await
-        .map_err(|e| map_sqlx(e, "find membership"))?;
-        let Some(status) = status else {
-            return Err(AppError::not_found("no such membership"));
-        };
-        if status != MembershipStatus::Invited.key() {
-            return Err(AppError::conflict(
-                "the membership is not an open invitation",
-            ));
-        }
-        let live: Option<i32> = sqlx::query_scalar(
-            "select 1 from memberships where workspace_id = $1 and user_id = $2 \
-             and status <> 'removed' and id <> $3",
-        )
-        .bind(ws.as_uuid())
-        .bind(user_id.as_uuid())
-        .bind(id.as_uuid())
-        .fetch_optional(self.tx.conn())
-        .await
-        .map_err(|e| map_sqlx(e, "find membership by user"))?;
-        if live.is_some() {
-            return Err(AppError::conflict(
-                "the user is already a member of this workspace",
-            ));
-        }
-        sqlx::query(
-            "update memberships set user_id = $3, status = 'active' \
-             where workspace_id = $1 and id = $2",
-        )
-        .bind(ws.as_uuid())
-        .bind(id.as_uuid())
-        .bind(user_id.as_uuid())
-        .execute(self.tx.conn())
-        .await
-        .map_err(|e| map_sqlx(e, "activate membership"))?;
-        Ok(())
+        activate(self.tx.conn(), ws, id, user_id, at).await
     }
 
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError> {

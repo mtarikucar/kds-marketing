@@ -1,10 +1,12 @@
 //! Structured errors over HTTP: every failure is `{ "code", "message", "details" }` with the
-//! status [`status_of`] its code, including rejected JSON bodies and unknown API routes.
+//! status [`status_of`] its code, including rejected JSON bodies, malformed path parameters and
+//! unknown API routes.
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Request};
+use axum::extract::{FromRequest, FromRequestParts, Path, Request};
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use jt_app::error::{AppError, ErrorCode};
 use serde::de::DeserializeOwned;
@@ -74,6 +76,29 @@ where
         match Json::<T>::from_request(req, state).await {
             Ok(Json(value)) => Ok(ApiJson(value)),
             Err(rejection) => Err(ApiError(json_rejection(&rejection))),
+        }
+    }
+}
+
+/// Path parameters. Unlike `axum::extract::Path`, a parameter that does not parse (e.g. an id
+/// that is not a UUID) is a structured `422 VALIDATION` error.
+#[derive(Debug)]
+pub struct ApiPath<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for ApiPath<T>
+where
+    T: DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match Path::<T>::from_request_parts(parts, state).await {
+            Ok(Path(value)) => Ok(ApiPath(value)),
+            Err(rejection) => Err(ApiError(AppError::validation(
+                rejection.body_text(),
+                json!({}),
+            ))),
         }
     }
 }

@@ -411,6 +411,41 @@ impl MemTx {
         Ok(())
     }
 
+    /// `MembershipRepo::activate` for membership `id` of `ws`.
+    fn activate(
+        &mut self,
+        ws: WorkspaceId,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        let m = self
+            .work
+            .membership_in(ws, id)
+            .ok_or_else(|| AppError::not_found("no such membership"))?;
+        let open = m.status == MembershipStatus::Invited
+            && m.invite_expires_at.is_some_and(|expires| expires > at);
+        if !open {
+            return Err(AppError::conflict(
+                "the membership is not an open invitation",
+            ));
+        }
+        exists(self.work.user(user_id).is_some(), "memberships.user_id")?;
+        unique(
+            !self.work.has_live_membership(ws, user_id, id),
+            "the user is already a member of this workspace",
+        )?;
+        self.write(move |s| {
+            if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
+                m.user_id = Some(user_id);
+                m.status = MembershipStatus::Active;
+                m.invite_token_hash = None;
+                m.invite_expires_at = None;
+            }
+        });
+        Ok(())
+    }
+
     fn append_ledger(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         self.work.check_new_ledger_entry(&entry)?;
         let id = self.ledger_seq.fetch_add(1, Ordering::SeqCst) + 1;
@@ -677,30 +712,14 @@ impl MembershipRepo for MemTenant {
         })
     }
 
-    async fn activate(&mut self, id: MembershipId, user_id: UserId) -> Result<(), AppError> {
-        self.call(|this| {
-            let m = this
-                .state()
-                .membership_in(this.ws, id)
-                .ok_or_else(|| AppError::not_found("no such membership"))?;
-            if m.status != MembershipStatus::Invited {
-                return Err(AppError::conflict(
-                    "the membership is not an open invitation",
-                ));
-            }
-            exists(this.state().user(user_id).is_some(), "memberships.user_id")?;
-            unique(
-                !this.state().has_live_membership(this.ws, user_id, id),
-                "the user is already a member of this workspace",
-            )?;
-            this.tx.write(move |s| {
-                if let Some(m) = s.memberships.iter_mut().find(|m| m.id == id) {
-                    m.user_id = Some(user_id);
-                    m.status = MembershipStatus::Active;
-                }
-            });
-            Ok(())
-        })
+    async fn activate(
+        &mut self,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        let ws = self.ws;
+        self.call(|this| this.tx.activate(ws, id, user_id, at))
     }
 
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError> {
@@ -1193,6 +1212,16 @@ impl UserRepos for MemUser {
             this.tx.write(move |s| s.memberships.push(row.clone()));
             Ok(())
         })
+    }
+
+    async fn memberships_activate(
+        &mut self,
+        workspace_id: WorkspaceId,
+        id: MembershipId,
+        user_id: UserId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.call(|this| this.tx.activate(workspace_id, id, user_id, at))
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
