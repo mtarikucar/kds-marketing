@@ -358,7 +358,7 @@ async fn a_key_authenticates_and_its_agent_connections_are_listed() {
     assert_eq!(principal.issuer_role_key, "owner");
     let now = OffsetDateTime::now_utc();
     let client = ClientInfo {
-        name: "claude-code".into(),
+        name: "acme-agent".into(),
         version: "2.1.0".into(),
         protocol_version: "2025-06-18".into(),
     };
@@ -380,7 +380,7 @@ async fn a_key_authenticates_and_its_agent_connections_are_listed() {
     assert_eq!(listed[0]["id"], json!(connection.to_string()));
     assert_eq!(listed[0]["api_key_id"], key["id"]);
     assert_eq!(listed[0]["api_key_name"], "CI bot");
-    assert_eq!(listed[0]["client_name"], "claude-code");
+    assert_eq!(listed[0]["client_name"], "acme-agent");
     assert_eq!(listed[0]["client_version"], "2.1.0");
     assert_eq!(listed[0]["protocol_version"], "2025-06-18");
     assert_eq!(listed[0]["tool_calls"], 1);

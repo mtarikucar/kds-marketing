@@ -21,7 +21,7 @@ use jt_tenancy::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use super::{
     Deps, acting_user, hash_token, invalid, ledger_entry, parse_permissions, permission_keys,
@@ -39,6 +39,9 @@ pub const KEY_TOKEN_BYTES: usize = 32;
 pub const DISPLAY_PREFIX_CHARS: usize = 12;
 /// The longest key name, in characters.
 pub const NAME_MAX: usize = 64;
+/// How long after a key's `last_used_at` authenticating it again leaves that unchanged, so a
+/// busy agent does not write to its key on every request.
+pub const LAST_USED_RESOLUTION: Duration = Duration::seconds(60);
 
 /// The single answer to every bearer key that cannot be used, so it never tells why.
 const INVALID_KEY: &str = "invalid api key";
@@ -249,7 +252,8 @@ pub async fn revoke(deps: &Deps, ctx: &Ctx, key_id: ApiKeyId) -> Result<(), AppE
 /// The key must start with [`KEY_PREFIX`], be known by its hash, be active, and have been issued
 /// by a user who is still an active member of its workspace; otherwise `UNAUTHENTICATED`, always
 /// with the same message. The principal acts with the key's scopes that the issuer's current
-/// role still grants, and under that role's key. The key's `last_used_at` is set to now.
+/// role still grants, and under that role's key. The key's `last_used_at` is set to now unless
+/// it is already less than [`LAST_USED_RESOLUTION`] old.
 pub async fn authenticate(deps: &Deps, bearer: &str) -> Result<AgentPrincipal, AppError> {
     if !bearer.starts_with(KEY_PREFIX) {
         return Err(invalid_key());
@@ -281,7 +285,12 @@ pub async fn authenticate(deps: &Deps, bearer: &str) -> Result<AgentPrincipal, A
         .intersection(&role.permissions)
         .copied()
         .collect();
-    repos.api_keys().touch_last_used(key.id, now).await?;
+    if key
+        .last_used_at
+        .is_none_or(|last| now - last >= LAST_USED_RESOLUTION)
+    {
+        repos.api_keys().touch_last_used(key.id, now).await?;
+    }
     repos.commit().await?;
     Ok(AgentPrincipal {
         workspace_id: key.workspace_id,

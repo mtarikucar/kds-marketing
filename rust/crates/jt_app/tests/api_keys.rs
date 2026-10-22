@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use jt_app::catalog::Risk;
 use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{AgentConnectionRow, ApiKeyRow, ApiKeyStatus};
@@ -597,7 +598,7 @@ async fn register_initialize_is_idempotent_per_client_and_ledgers_once() {
     let first = agents::register_initialize(
         &t.w.deps,
         &principal,
-        client("claude-code", "2.1.0", "2025-03-26"),
+        client("acme-agent", "2.1.0", "2025-03-26"),
         T0,
     )
     .await
@@ -606,7 +607,7 @@ async fn register_initialize_is_idempotent_per_client_and_ledgers_once() {
     let again = agents::register_initialize(
         &t.w.deps,
         &principal,
-        client("claude-code", "2.1.0", "2025-06-18"),
+        client("acme-agent", "2.1.0", "2025-06-18"),
         later,
     )
     .await
@@ -622,7 +623,7 @@ async fn register_initialize_is_idempotent_per_client_and_ledgers_once() {
     assert_eq!(row.id, first);
     assert_eq!(row.workspace_id, t.ws);
     assert_eq!(row.api_key_id, key.id);
-    assert_eq!(row.client_name, "claude-code");
+    assert_eq!(row.client_name, "acme-agent");
     assert_eq!(row.client_version, "2.1.0");
     assert_eq!(row.protocol_version, "2025-06-18");
     assert_eq!(row.first_seen_at, T0);
@@ -651,7 +652,7 @@ async fn register_initialize_is_idempotent_per_client_and_ledgers_once() {
     assert_eq!(
         entry.payload,
         json!({
-            "client_name": "claude-code",
+            "client_name": "acme-agent",
             "client_version": "2.1.0",
             "protocol_version": "2025-03-26",
             "api_key_prefix": "jt_live_t03x",
@@ -662,7 +663,7 @@ async fn register_initialize_is_idempotent_per_client_and_ledgers_once() {
     let newer = agents::register_initialize(
         &t.w.deps,
         &principal,
-        client("claude-code", "2.2.0", "2025-06-18"),
+        client("acme-agent", "2.2.0", "2025-06-18"),
         later,
     )
     .await
@@ -682,7 +683,7 @@ async fn agents_list_joins_key_names_and_counts_tool_calls() {
     let connection = agents::register_initialize(
         &t.w.deps,
         &principal,
-        client("cursor", "1.4", "2025-06-18"),
+        client("beta-agent", "1.4", "2025-06-18"),
         T0,
     )
     .await
@@ -701,7 +702,7 @@ async fn agents_list_joins_key_names_and_counts_tool_calls() {
     assert_eq!(out.id, connection);
     assert_eq!(out.api_key_id, key.id);
     assert_eq!(out.api_key_name, "CI bot");
-    assert_eq!(out.client_name, "cursor");
+    assert_eq!(out.client_name, "beta-agent");
     assert_eq!(out.client_version, "1.4");
     assert_eq!(out.protocol_version, "2025-06-18");
     assert_eq!(out.first_seen_at, T0);
@@ -764,7 +765,7 @@ async fn ledger_payloads_never_contain_plaintext_or_hash() {
     let connection = agents::register_initialize(
         &t.w.deps,
         &principal,
-        client("claude-code", "2.1.0", "2025-06-18"),
+        client("acme-agent", "2.1.0", "2025-06-18"),
         T0,
     )
     .await
@@ -792,4 +793,159 @@ async fn ledger_payloads_never_contain_plaintext_or_hash() {
         !wire.contains("plaintext") && !wire.contains("key_hash"),
         "{wire}"
     );
+}
+
+#[tokio::test]
+async fn authenticate_touches_last_used_at_most_once_a_minute() {
+    let t = team().await;
+    let key = t.create_key(&t.owner_ctx, "CI bot", &[]).await;
+    let first = T0 + Duration::minutes(1);
+    api_keys::authenticate(&t.w.at(first), &key.plaintext)
+        .await
+        .unwrap();
+    assert_eq!(t.w.key_row(key.id).last_used_at, Some(first));
+
+    // Within a minute of the last touch the key authenticates without being written to.
+    let soon = first + Duration::seconds(59);
+    api_keys::authenticate(&t.w.at(soon), &key.plaintext)
+        .await
+        .unwrap();
+    assert_eq!(t.w.key_row(key.id).last_used_at, Some(first));
+
+    // A full minute later it is touched again.
+    let minute = first + Duration::seconds(60);
+    api_keys::authenticate(&t.w.at(minute), &key.plaintext)
+        .await
+        .unwrap();
+    assert_eq!(t.w.key_row(key.id).last_used_at, Some(minute));
+}
+
+#[tokio::test]
+async fn register_initialize_bounds_client_strings() {
+    let t = team().await;
+    let key = t.create_key(&t.owner_ctx, "CI bot", &[]).await;
+    let principal = api_keys::authenticate(&t.w.deps, &key.plaintext)
+        .await
+        .unwrap();
+    let long = "ğ".repeat(200);
+    agents::register_initialize(
+        &t.w.deps,
+        &principal,
+        client(&format!("  {long}  "), " \t ", "2025-06-18\n"),
+        T0,
+    )
+    .await
+    .unwrap();
+    let row = &t.w.connections()[0];
+    assert_eq!(row.client_name, "ğ".repeat(agents::CLIENT_FIELD_MAX));
+    assert_eq!(agents::CLIENT_FIELD_MAX, 128);
+    assert_eq!(row.client_version, "unknown", "blank becomes unknown");
+    assert_eq!(row.protocol_version, "2025-06-18", "control characters go");
+    let entry = &t.w.entries("agent.connected")[0];
+    assert_eq!(entry.payload["client_version"], "unknown");
+    assert_eq!(
+        entry.payload["client_name"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        128
+    );
+}
+
+#[tokio::test]
+async fn record_tool_call_counts_the_call_and_ledgers_it() {
+    let t = team().await;
+    let key = t.create_key(&t.owner_ctx, "CI bot", &[]).await;
+    let principal = api_keys::authenticate(&t.w.deps, &key.plaintext)
+        .await
+        .unwrap();
+    let connection = agents::register_initialize(
+        &t.w.deps,
+        &principal,
+        client("acme-agent", "1.0", "2025-06-18"),
+        T0,
+    )
+    .await
+    .unwrap();
+    let at = T0 + Duration::minutes(2);
+    let ctx = api_keys::ctx_for_agent(&principal, connection, at);
+
+    agents::record_tool_call(
+        &t.w.deps,
+        &ctx,
+        agents::ToolCall {
+            tool: "jeeta.team.list",
+            risk: Some(Risk::Read),
+            ok: true,
+            duration_ms: 12,
+            error_code: None,
+        },
+    )
+    .await
+    .unwrap();
+    agents::record_tool_call(
+        &t.w.deps,
+        &ctx,
+        agents::ToolCall {
+            tool: &"x".repeat(300),
+            risk: None,
+            ok: false,
+            duration_ms: 1,
+            error_code: Some(ErrorCode::NotFound),
+        },
+    )
+    .await
+    .unwrap();
+
+    let row = &t.w.connections()[0];
+    assert_eq!(row.tool_calls, 2);
+    assert_eq!(row.last_seen_at, at);
+    let calls = t.w.entries("mcp.tool_call");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0].actor,
+        Actor::Agent {
+            connection_id: connection,
+            user_id: t.owner,
+        }
+    );
+    assert_eq!(calls[0].at, at);
+    assert_eq!(
+        calls[0].subject,
+        Some(Subject {
+            kind: "agent_connection".into(),
+            id: connection.to_string(),
+        })
+    );
+    assert_eq!(
+        calls[0].payload,
+        json!({ "tool": "jeeta.team.list", "risk": "read", "ok": true, "duration_ms": 12 })
+    );
+    assert_eq!(
+        calls[1].payload,
+        json!({
+            "tool": "x".repeat(128),
+            "risk": null,
+            "ok": false,
+            "duration_ms": 1,
+            "error_code": "NOT_FOUND",
+        })
+    );
+
+    // Only an agent's call can be recorded.
+    let e = agents::record_tool_call(
+        &t.w.deps,
+        &t.owner_ctx,
+        agents::ToolCall {
+            tool: "jeeta.team.list",
+            risk: Some(Risk::Read),
+            ok: true,
+            duration_ms: 0,
+            error_code: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Internal);
 }
