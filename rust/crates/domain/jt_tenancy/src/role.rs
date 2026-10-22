@@ -21,6 +21,13 @@ pub enum Permission {
     /// Read the workspace ledger.
     #[serde(rename = "ledger.read")]
     LedgerRead,
+    /// Declare, verify, retire and group capabilities, set their policies and link them to
+    /// budget items.
+    #[serde(rename = "capabilities.manage")]
+    CapabilitiesManage,
+    /// Create budget items.
+    #[serde(rename = "budget.manage")]
+    BudgetManage,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -28,6 +35,8 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::TeamManage,
     Permission::ApiKeysManage,
     Permission::LedgerRead,
+    Permission::CapabilitiesManage,
+    Permission::BudgetManage,
 ];
 
 impl Permission {
@@ -38,6 +47,8 @@ impl Permission {
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",
             Permission::LedgerRead => "ledger.read",
+            Permission::CapabilitiesManage => "capabilities.manage",
+            Permission::BudgetManage => "budget.manage",
         }
     }
 

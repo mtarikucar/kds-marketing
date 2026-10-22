@@ -1126,7 +1126,12 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     )
     .await
     .unwrap();
-    let missing = ["api_keys.manage", "ledger.read"];
+    let missing = [
+        "api_keys.manage",
+        "ledger.read",
+        "capabilities.manage",
+        "budget.manage",
+    ];
 
     // invite and set_role to a role wider than the lead's own.
     let e = err(team::invite(
@@ -1227,7 +1232,12 @@ async fn custom_role_cannot_demote_or_remove_a_manager() {
     } = lead_team().await;
     // Even to a role the lead may give, and even out of the workspace: the manager's present
     // authority exceeds the lead's own.
-    let missing = ["api_keys.manage", "ledger.read"];
+    let missing = [
+        "api_keys.manage",
+        "ledger.read",
+        "capabilities.manage",
+        "budget.manage",
+    ];
     for role_key in ["rep", "team_lead"] {
         let e = err(team::set_role(&t.w.deps, &lead.ctx, manager.membership_id, role_key).await);
         assert_exceeds(&e, &missing);

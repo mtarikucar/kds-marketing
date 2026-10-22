@@ -208,7 +208,9 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "workspace.read",
             "team.manage",
             "api_keys.manage",
-            "ledger.read"
+            "ledger.read",
+            "capabilities.manage",
+            "budget.manage"
         ])
     );
 }

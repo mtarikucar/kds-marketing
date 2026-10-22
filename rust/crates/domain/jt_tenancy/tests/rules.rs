@@ -41,6 +41,35 @@ fn permission_keys_round_trip() {
 }
 
 #[test]
+fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
+    for (p, key) in [
+        (Permission::CapabilitiesManage, "capabilities.manage"),
+        (Permission::BudgetManage, "budget.manage"),
+    ] {
+        assert_eq!(p.key(), key);
+        assert_eq!(Permission::parse(key), Some(p));
+        assert_eq!(serde_json::to_value(p).unwrap(), key);
+        assert!(Permission::all().contains(&p), "{key}");
+        assert!(SystemRole::Owner.permissions().contains(&p), "{key}");
+        assert!(SystemRole::Manager.permissions().contains(&p), "{key}");
+        assert!(!SystemRole::Rep.permissions().contains(&p), "{key}");
+    }
+    // The permissions that came before keep their order; the new ones follow.
+    let keys: Vec<&str> = Permission::all().iter().map(Permission::key).collect();
+    assert_eq!(
+        keys,
+        [
+            "workspace.read",
+            "team.manage",
+            "api_keys.manage",
+            "ledger.read",
+            "capabilities.manage",
+            "budget.manage",
+        ]
+    );
+}
+
+#[test]
 fn last_owner_cannot_be_demoted() {
     let actor = SystemRole::Owner.permissions();
     assert!(matches!(
@@ -171,7 +200,12 @@ fn only_an_owner_grants_changes_or_removes_the_owner_role() {
 #[test]
 fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
     let exceeds = Err(TenancyError::ExceedsOwnAuthority {
-        missing: BTreeSet::from([Permission::ApiKeysManage, Permission::LedgerRead]),
+        missing: BTreeSet::from([
+            Permission::ApiKeysManage,
+            Permission::LedgerRead,
+            Permission::CapabilitiesManage,
+            Permission::BudgetManage,
+        ]),
     });
     // A custom lead may neither demote a manager (even to a role it may give) nor remove one.
     assert_eq!(
@@ -201,7 +235,9 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
     };
     assert_eq!(
         can_grant_role(&lead(), &to_auditor_from_keys),
-        exceeds,
+        Err(TenancyError::ExceedsOwnAuthority {
+            missing: BTreeSet::from([Permission::ApiKeysManage, Permission::LedgerRead]),
+        }),
         "the missing permissions of both sides, together"
     );
 
@@ -274,7 +310,12 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
         is_owner: false,
     };
     let exceeds = Err(TenancyError::ExceedsOwnAuthority {
-        missing: BTreeSet::from([Permission::ApiKeysManage, Permission::LedgerRead]),
+        missing: BTreeSet::from([
+            Permission::ApiKeysManage,
+            Permission::LedgerRead,
+            Permission::CapabilitiesManage,
+            Permission::BudgetManage,
+        ]),
     });
     assert_eq!(
         can_grant_role(&lead, &grant(SystemRole::Manager, false)),

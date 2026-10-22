@@ -276,7 +276,9 @@ async fn create_returns_plaintext_once_and_list_hides_it() {
             "workspace.read",
             "team.manage",
             "api_keys.manage",
-            "ledger.read"
+            "ledger.read",
+            "capabilities.manage",
+            "budget.manage"
         ])
     );
     assert!(created.get("key_hash").is_none());
