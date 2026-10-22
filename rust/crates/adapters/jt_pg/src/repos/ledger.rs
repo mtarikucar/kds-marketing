@@ -7,13 +7,13 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{LedgerFilter, LedgerRepo, LedgerRow};
-use jt_ledger::{Action, Actor, LedgerEntry, Subject};
-use jt_tenancy::{AgentConnectionId, UserId, WorkspaceId};
+use jt_ledger::{Action, LedgerEntry, Subject};
+use jt_tenancy::WorkspaceId;
 use sqlx::PgConnection;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{map_sqlx, same_workspace};
+use super::{actor_columns, map_sqlx, same_workspace, stored_actor};
 use crate::uow::PgTenantRepos;
 
 /// The most entries one `list` returns.
@@ -37,24 +37,13 @@ struct LedgerRecord {
 
 impl LedgerRecord {
     fn into_row(self) -> Result<LedgerRow, AppError> {
-        let incomplete = || AppError::internal("stored ledger actor is incomplete");
-        let actor = match self.actor_kind.as_str() {
-            "human" => Actor::Human {
-                user_id: UserId(self.actor_user_id.ok_or_else(incomplete)?),
-            },
-            "agent" => Actor::Agent {
-                connection_id: AgentConnectionId(self.agent_connection_id.ok_or_else(incomplete)?),
-                user_id: UserId(self.actor_user_id.ok_or_else(incomplete)?),
-            },
-            "system" => Actor::System {
-                component: self.actor_component.ok_or_else(incomplete)?,
-            },
-            _ => {
-                return Err(AppError::internal(
-                    "stored ledger_entries.actor_kind has an unknown value",
-                ));
-            }
-        };
+        let actor = stored_actor(
+            "ledger_entries",
+            &self.actor_kind,
+            self.actor_user_id,
+            self.agent_connection_id,
+            self.actor_component,
+        )?;
         let action = Action::new(&self.action).map_err(|_| {
             AppError::internal("stored ledger_entries.action is not a valid action")
         })?;
@@ -74,23 +63,6 @@ impl LedgerRecord {
                 strategy_version_id: self.strategy_version_id,
             },
         })
-    }
-}
-
-/// `actor_kind`, `actor_user_id`, `agent_connection_id`, `actor_component` of an actor.
-fn actor_columns(actor: &Actor) -> (&'static str, Option<Uuid>, Option<Uuid>, Option<&str>) {
-    match actor {
-        Actor::Human { user_id } => ("human", Some(user_id.as_uuid()), None, None),
-        Actor::Agent {
-            connection_id,
-            user_id,
-        } => (
-            "agent",
-            Some(user_id.as_uuid()),
-            Some(connection_id.as_uuid()),
-            None,
-        ),
-        Actor::System { component } => ("system", None, None, Some(component.as_str())),
     }
 }
 

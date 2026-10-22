@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 jt_tenancy.workspace = true
 jt_ledger.workspace = true
+jt_strategy.workspace = true
 jt_app.workspace = true
 jt_pg.workspace = true
 # For `panel`, the panel router in process. `jt_panel_http` lists this crate only as a

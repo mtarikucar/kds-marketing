@@ -115,6 +115,9 @@ fn tenant_tables_are_read_from_the_migrations() {
         "api_keys",
         "agent_connections",
         "ledger_entries",
+        "strategy_versions",
+        "strategy_hypotheses",
+        "consultation_entries",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

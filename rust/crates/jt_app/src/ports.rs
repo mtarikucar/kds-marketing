@@ -20,6 +20,10 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_ledger::LedgerEntry;
+use jt_strategy::{
+    ConsultationEntry, ConsultationEntryId, Hypothesis, HypothesisId, HypothesisState, Sections,
+    StrategyVersion, StrategyVersionId, VersionStatus,
+};
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, OperatorId, Permission,
     RoleDef, RoleId, SessionId, UserId, WorkspaceId, WorkspaceStatus,
@@ -429,6 +433,127 @@ pub trait WorkspaceRepo: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Strategy repositories: tenant repositories too, over one workspace's strategy.
+// ---------------------------------------------------------------------------------------------
+
+/// The most entries one `ConsultationRepo::list` returns.
+pub const MAX_CONSULTATION_PAGE: u32 = 500;
+
+/// The workspace's strategy versions.
+///
+/// A workspace has at most one `Draft` and at most one `Approved` version at a time. Postgres
+/// enforces both with partial unique indexes, so of two transactions racing to break either rule
+/// the second one fails with `CONFLICT`; the fakes refuse the same writes.
+#[async_trait]
+pub trait StrategyRepo: Send + Sync {
+    /// Stores a version. A `version.workspace_id` other than the bundle's is `INTERNAL`; a taken
+    /// id or number, or a second `Draft` or `Approved` version in the workspace, is `CONFLICT`;
+    /// an `approved_by` that names no user is `NOT_FOUND`.
+    async fn insert(&mut self, version: StrategyVersion) -> Result<(), AppError>;
+    async fn find(&mut self, id: StrategyVersionId) -> Result<Option<StrategyVersion>, AppError>;
+    /// The `Approved` version, if any.
+    async fn current_approved(&mut self) -> Result<Option<StrategyVersion>, AppError>;
+    /// The `Draft` version, if any.
+    async fn current_draft(&mut self) -> Result<Option<StrategyVersion>, AppError>;
+    /// Every version, newest (highest number) first.
+    async fn list(&mut self) -> Result<Vec<StrategyVersion>, AppError>;
+    /// Replaces the sections of draft `id`. An unknown id is `NOT_FOUND`; a version that is not a
+    /// `Draft` is `CONFLICT` (approved and archived versions keep the sections they had).
+    ///
+    /// `at` is the time of the edit. The version keeps no edit time of its own (the consultation
+    /// log and the ledger record edits), so it is not stored.
+    async fn update_sections(
+        &mut self,
+        id: StrategyVersionId,
+        sections: Sections,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Sets `submitted_at` of draft `id`: `Some(at)` records that it was submitted for approval
+    /// at `at`, `None` withdraws the submission. An unknown id is `NOT_FOUND`; a version that is
+    /// not a `Draft` is `CONFLICT`.
+    async fn set_submitted(
+        &mut self,
+        id: StrategyVersionId,
+        at: Option<OffsetDateTime>,
+    ) -> Result<(), AppError>;
+    /// Moves version `id` forward to `status` at `at` and returns how many rows changed.
+    ///
+    /// - `Approved` moves a `Draft` only, setting `approved_at = at` and `approved_by = by`. While
+    ///   another version is approved it is `CONFLICT` (the partial unique index; in Postgres the
+    ///   transaction is then aborted); a `by` that names no user is `NOT_FOUND`.
+    /// - `Archived` moves a `Draft` or an `Approved` version, setting `archived_at = at`; the
+    ///   approval fields stay, and `by` is not stored (the ledger records who archived it).
+    /// - `Draft` is `INTERNAL`: a version never returns to draft.
+    ///
+    /// 0 rows means the id is unknown here, or the version is not in a status the move starts
+    /// from. A caller that has not read the version maps 0 to `NOT_FOUND`; one that read it in the
+    /// same transaction maps 0 to `CONFLICT`, since another transaction moved it first (in
+    /// Postgres the update waits for that transaction and then finds the row moved).
+    async fn set_status(
+        &mut self,
+        id: StrategyVersionId,
+        status: VersionStatus,
+        at: OffsetDateTime,
+        by: Option<UserId>,
+    ) -> Result<u64, AppError>;
+    /// One more than the workspace's highest version number, 1 when it has none. Two transactions
+    /// may both get the same number; the second to insert it gets `CONFLICT`.
+    async fn next_number(&mut self) -> Result<i32, AppError>;
+}
+
+/// The hypotheses of the workspace's strategy versions, each version's in its own order.
+///
+/// A hypothesis id is stable across versions, so the same id appears once per version. Writes
+/// name a version of the bundle's workspace, else `NOT_FOUND` (a foreign key alone would accept
+/// another workspace's version). A confidence outside `0.0..=1.0` (or NaN) breaks a check
+/// constraint and is `INTERNAL`: callers validate first.
+#[async_trait]
+pub trait HypothesisRepo: Send + Sync {
+    /// Makes `hypotheses`, in this order, the version's whole list. An id listed twice is
+    /// `CONFLICT`.
+    async fn replace_all(
+        &mut self,
+        version_id: StrategyVersionId,
+        hypotheses: Vec<Hypothesis>,
+    ) -> Result<(), AppError>;
+    /// The version's hypotheses in order; an unknown version has none.
+    async fn list(&mut self, version_id: StrategyVersionId) -> Result<Vec<Hypothesis>, AppError>;
+    /// Replaces the version's hypothesis with this id in place, or appends it when the version
+    /// has none with that id.
+    async fn upsert(
+        &mut self,
+        version_id: StrategyVersionId,
+        hypothesis: Hypothesis,
+    ) -> Result<(), AppError>;
+    /// Sets the state of one hypothesis of the version. An unknown version or hypothesis is
+    /// `NOT_FOUND`.
+    async fn set_state(
+        &mut self,
+        version_id: StrategyVersionId,
+        hypothesis_id: HypothesisId,
+        state: HypothesisState,
+    ) -> Result<(), AppError>;
+}
+
+/// The append-only consultation log of the workspace's strategy versions. Entries are never
+/// changed or deleted (Postgres refuses it with a trigger).
+#[async_trait]
+pub trait ConsultationRepo: Send + Sync {
+    /// Appends `entry` to the log of its version, in the bundle's workspace, and returns its id.
+    /// A version that is not this workspace's is `NOT_FOUND`; a taken id is `CONFLICT`.
+    async fn append(&mut self, entry: ConsultationEntry) -> Result<ConsultationEntryId, AppError>;
+    /// The version's entries newest first (by `at`, then id), at most `limit` (clamped to
+    /// `1..=MAX_CONSULTATION_PAGE`), only those before `before` when it is given (the previous
+    /// page's last `at`; entries sharing that instant are skipped with it).
+    async fn list(
+        &mut self,
+        version_id: StrategyVersionId,
+        limit: u32,
+        before: Option<OffsetDateTime>,
+    ) -> Result<Vec<ConsultationEntry>, AppError>;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Platform repositories
 // ---------------------------------------------------------------------------------------------
 
@@ -468,6 +593,9 @@ pub trait TenantRepos: Send + Sync {
     fn agent_connections(&mut self) -> &mut dyn AgentConnectionRepo;
     fn ledger(&mut self) -> &mut dyn LedgerRepo;
     fn workspace(&mut self) -> &mut dyn WorkspaceRepo;
+    fn strategy(&mut self) -> &mut dyn StrategyRepo;
+    fn hypotheses(&mut self) -> &mut dyn HypothesisRepo;
+    fn consultation(&mut self) -> &mut dyn ConsultationRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 

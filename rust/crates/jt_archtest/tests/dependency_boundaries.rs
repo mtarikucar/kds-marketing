@@ -30,6 +30,7 @@ fn domain_crates_depend_only_on_pure_crates() {
 const APP_ALLOW: &[&str] = &[
     "jt_tenancy",
     "jt_ledger",
+    "jt_strategy",
     "serde",
     "serde_json",
     "uuid",
