@@ -53,6 +53,8 @@
     "switched": "Workspace switched.",
     "noWorkspace": "No workspace",
     "noWorkspaceBody": "You are not an active member of any workspace yet. You can join one with an invite link.",
+    "chooseWorkspace": "Choose a workspace",
+    "chooseWorkspaceBody": "Pick the workspace you want to work in from the list above.",
     "logout": "Sign out",
     "signedInAs": "Signed in as {{name}}"
   },

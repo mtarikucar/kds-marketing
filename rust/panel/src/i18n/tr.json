@@ -53,6 +53,8 @@
     "switched": "Çalışma alanı değiştirildi.",
     "noWorkspace": "Çalışma alanı yok",
     "noWorkspaceBody": "Henüz bir çalışma alanının etkin üyesi değilsiniz. Bir davet bağlantısıyla katılabilirsiniz.",
+    "chooseWorkspace": "Bir çalışma alanı seçin",
+    "chooseWorkspaceBody": "Üstteki listeden çalışmak istediğiniz çalışma alanını seçin.",
     "logout": "Çıkış yap",
     "signedInAs": "{{name}} olarak oturum açık"
   },

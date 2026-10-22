@@ -86,8 +86,12 @@ function WorkspaceSwitcher({ me }: { me: MeOut }) {
     onError: (err) => toast.error(errorMessage(t, err)),
   });
   const current = currentMembership(me);
+  // A choice is offered whenever there is one to make: several workspaces, or memberships but no
+  // current workspace (e.g. after accepting an invitation while signed in elsewhere), which would
+  // otherwise leave the user with nothing to open.
+  const canChoose = me.memberships.length > 1 || (current == null && me.memberships.length > 0);
 
-  if (me.memberships.length <= 1) {
+  if (!canChoose) {
     return (
       <span className="truncate text-sm font-medium text-foreground">
         {current?.workspace_name ?? t('shell.noWorkspace')}
@@ -189,6 +193,11 @@ export function Shell() {
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
             {current ? (
               <Outlet />
+            ) : me.memberships.length > 0 ? (
+              <EmptyState
+                title={t('shell.chooseWorkspace')}
+                description={t('shell.chooseWorkspaceBody')}
+              />
             ) : (
               <EmptyState title={t('shell.noWorkspace')} description={t('shell.noWorkspaceBody')} />
             )}

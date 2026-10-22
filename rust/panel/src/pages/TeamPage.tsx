@@ -119,8 +119,9 @@ function InviteDialog({
   };
 
   return (
+    // While the one-time link is shown, only the explicit Close button closes the dialog.
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent>
+      <DialogContent dismissible={created == null}>
         <DialogHeader>
           <DialogTitle>{t('team.dialog.title')}</DialogTitle>
           <DialogDescription>{t('team.dialog.description')}</DialogDescription>
@@ -135,7 +136,7 @@ function InviteDialog({
               {t('team.dialog.expiresAt', { date: formatDateTime(created.expires_at, i18n.language) })}
             </p>
             <DialogFooter>
-              <Button onClick={() => close(false)}>{t('common.done')}</Button>
+              <Button onClick={() => close(false)}>{t('common.close')}</Button>
             </DialogFooter>
           </div>
         ) : (

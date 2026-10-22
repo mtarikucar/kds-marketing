@@ -3,8 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
+import { switchWorkspace } from '@/api/auth';
 import { isApiError } from '@/api/client';
 import { acceptInvite } from '@/api/team';
+import type { AcceptOut, MeOut } from '@/api/types';
 import { SESSION_KEY, useOptionalSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -13,9 +15,10 @@ import { MIN_PASSWORD_CHARS } from './RegisterPage';
 
 /**
  * `/invite/:token`. A signed-in user accepts with one click (the invite must be for their
- * email); a visitor creates their account here. When the visitor's email already has an
- * account, the server answers that they must sign in first, and the page links to sign-in,
- * which comes back here.
+ * email), and the session then moves to the workspace just joined; a visitor creates their
+ * account here and is signed in there. When the visitor's email already has an account, the
+ * server answers that they must sign in first, and the page links to sign-in, which comes back
+ * here.
  */
 export function AcceptInvitePage() {
   const { t } = useTranslation();
@@ -26,10 +29,18 @@ export function AcceptInvitePage() {
   const [password, setPassword] = useState('');
 
   const accept = useMutation({
-    mutationFn: acceptInvite,
+    mutationFn: async (input: Parameters<typeof acceptInvite>[0]): Promise<AcceptOut & { session?: MeOut }> => {
+      const out = await acceptInvite(input);
+      if (out.me) return { ...out, session: out.me };
+      // Signed in: the session goes on in its current workspace (or none), so it moves to the
+      // one just joined before the user goes home. The membership stands even if this fails.
+      const session = await switchWorkspace(out.workspace_id).catch(() => undefined);
+      return { ...out, session };
+    },
     onSuccess: async (out) => {
-      if (out.me) queryClient.setQueryData(SESSION_KEY, out.me);
-      await queryClient.invalidateQueries({ queryKey: SESSION_KEY });
+      if (out.session) queryClient.setQueryData(SESSION_KEY, out.session);
+      // Whatever was loaded belonged to the previous workspace, and `me` gained a membership.
+      await queryClient.invalidateQueries();
     },
   });
 

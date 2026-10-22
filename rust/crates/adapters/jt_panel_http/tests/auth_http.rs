@@ -682,6 +682,60 @@ async fn static_index_served_when_panel_dir_set() {
 }
 
 #[tokio::test]
+async fn every_response_carries_the_security_headers() {
+    let dir = temp_dir("panel-headers");
+    std::fs::write(
+        dir.join("index.html"),
+        "<!doctype html><title>Jeeta</title>",
+    )
+    .unwrap();
+    let p = Panel::with(Arc::new(PlainHasher), false, Some(dir.clone())).await;
+    let assert_headers = |resp: &Response, what: &str| {
+        for (name, value) in jt_panel_http::headers::SECURITY_HEADERS {
+            let all: Vec<_> = resp.headers().get_all(*name).iter().collect();
+            assert_eq!(all, [*value], "{name} on {what}");
+        }
+    };
+
+    // The panel page and the signed-out `me`, then a signed-in one.
+    let resp = p.send(get("/", None)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_headers(&resp, "/");
+    let resp = p.send(get("/api/auth/me", None)).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_headers(&resp, "/api/auth/me signed out");
+    let resp = p
+        .send(post(
+            "/api/auth/register",
+            None,
+            register_body("owner@alpha.example", "Alpha"),
+        ))
+        .await;
+    assert_headers(&resp, "/api/auth/register");
+    let cookie = cookie_pair(&set_cookie(&resp));
+    let resp = p.send(get("/api/auth/me", Some(&cookie))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_headers(&resp, "/api/auth/me signed in");
+
+    // Health, unknown paths, a refused request without the panel header.
+    for path in ["/healthz", "/api/nothing", "/assets/missing.js"] {
+        let resp = p.send(get(path, None)).await;
+        assert_headers(&resp, path);
+    }
+    let resp = p
+        .send(
+            Request::post("/api/auth/logout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_headers(&resp, "a refused POST");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
 async fn without_panel_dir_everything_else_is_404_json() {
     let p = Panel::new().await;
     for path in ["/", "/team", "/assets/app.js", "/api/nothing"] {

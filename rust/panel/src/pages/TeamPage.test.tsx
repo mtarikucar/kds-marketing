@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { me, members, roles } from '@/test/fixtures';
@@ -42,5 +42,13 @@ describe('TeamPage invite dialog', () => {
     const post = calls.find((c) => c.method === 'POST');
     // The fixture roles have no "rep", so the default is the first role the server listed.
     expect(post?.body).toEqual({ email: 'new@alpha.example', role_key: 'owner' });
+
+    // While the link is shown, only the explicit Close button closes the dialog.
+    await user.keyboard('{Escape}');
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: tr.common.close })).toHaveLength(1);
+    await user.click(within(dialog).getByRole('button', { name: tr.common.close }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 });

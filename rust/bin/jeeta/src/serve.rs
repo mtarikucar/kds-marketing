@@ -169,7 +169,7 @@ async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
 }
 
 /// The server's single router: the panel's (API, `/healthz`, files) merged with the MCP
-/// endpoint's, behind a one-line access log.
+/// endpoint's, with the security headers on every response and a one-line access log.
 pub(crate) fn app(deps: Deps, config: &Config) -> Router {
     let gate: Arc<dyn StrategyGate> = Arc::new(NoStrategyYet);
     let panel = AppState {
@@ -181,6 +181,9 @@ pub(crate) fn app(deps: Deps, config: &Config) -> Router {
     let mcp = McpState::new(deps, gate).with_allowed_hosts(mcp_hosts(&config.allowed_hosts));
     jt_panel_http::router(panel)
         .merge(jt_mcp::http_service(mcp))
+        // The panel's router sets them on its own responses already (idempotently); this
+        // covers the MCP endpoint too.
+        .layer(middleware::from_fn(jt_panel_http::security_headers))
         .layer(middleware::from_fn(access_log))
 }
 
@@ -450,6 +453,20 @@ mod tests {
         let (status, _, body) = call(&app, mcp_initialize("localhost:8080", "bad")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body["code"], "UNAUTHENTICATED");
+
+        // Every response of the one router carries the security headers once: the MCP
+        // endpoint's as well as the panel's.
+        for req in [
+            mcp_initialize("localhost:8080", "bad"),
+            Request::get("/healthz").body(Body::empty()).unwrap(),
+            Request::get("/api/auth/me").body(Body::empty()).unwrap(),
+        ] {
+            let resp = app.clone().oneshot(req).await.unwrap();
+            for (name, value) in jt_panel_http::headers::SECURITY_HEADERS {
+                let all: Vec<_> = resp.headers().get_all(*name).iter().collect();
+                assert_eq!(all, [*value], "{name}");
+            }
+        }
 
         // No panel directory: pages, unknown API paths and paths under `/mcp` are structured 404s.
         for path in ["/", "/team", "/api/nope", "/mcp/x"] {

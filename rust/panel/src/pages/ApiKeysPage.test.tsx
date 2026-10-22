@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { keys, me } from '@/test/fixtures';
@@ -45,11 +45,22 @@ describe('ApiKeysPage create dialog', () => {
     expect(post?.body).toEqual({ name: 'Yeni anahtar', scopes: ['ledger.read'] });
     expect(post?.headers.get('x-requested-with')).toBe('jeeta-panel');
 
-    await user.click(within(dialog).getByRole('button', { name: tr.common.done }));
+    // Neither Escape nor a click outside dismisses it while the key is shown, and there is no
+    // close icon: only the explicit Close button.
+    await user.keyboard('{Escape}');
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('jt_cd34_ornek_duz_metin')).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: tr.common.close })).toHaveLength(1);
+
+    await user.click(within(dialog).getByRole('button', { name: tr.common.close }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: tr.apiKeys.create }));
     const again = await screen.findByRole('dialog');
     expect(within(again).queryByDisplayValue('jt_cd34_ornek_duz_metin')).not.toBeInTheDocument();
     expect(within(again).getByRole('button', { name: tr.apiKeys.dialog.submit })).toBeInTheDocument();
+    // Before anything secret is shown, Escape still dismisses the form.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 });

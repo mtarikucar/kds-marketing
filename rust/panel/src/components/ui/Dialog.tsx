@@ -33,10 +33,20 @@ export const DialogOverlay = forwardRef<
 ));
 DialogOverlay.displayName = 'DialogOverlay';
 
+export interface DialogContentProps
+  extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
+  /**
+   * When `false`, the dialog cannot be dismissed: no close (X) button, and neither Escape nor a
+   * click outside closes it; only an explicit button the caller renders does. For dialogs that
+   * show a one-time secret, so it is not lost by a stray click.
+   */
+  dismissible?: boolean;
+}
+
 export const DialogContent = forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => {
+  DialogContentProps
+>(({ className, children, dismissible = true, onEscapeKeyDown, onInteractOutside, ...props }, ref) => {
   const { t } = useTranslation();
   return (
     <DialogPortal>
@@ -54,19 +64,29 @@ export const DialogContent = forwardRef<
           'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
           className,
         )}
+        onEscapeKeyDown={(event) => {
+          if (!dismissible) event.preventDefault();
+          onEscapeKeyDown?.(event);
+        }}
+        onInteractOutside={(event) => {
+          if (!dismissible) event.preventDefault();
+          onInteractOutside?.(event);
+        }}
         {...props}
       >
         {children}
-        <DialogPrimitive.Close asChild>
-          <IconButton
-            aria-label={t('kit.close')}
-            variant="ghost"
-            size="sm"
-            className="absolute end-4 top-4"
-          >
-            <X className="h-4 w-4" />
-          </IconButton>
-        </DialogPrimitive.Close>
+        {dismissible && (
+          <DialogPrimitive.Close asChild>
+            <IconButton
+              aria-label={t('kit.close')}
+              variant="ghost"
+              size="sm"
+              className="absolute end-4 top-4"
+            >
+              <X className="h-4 w-4" />
+            </IconButton>
+          </DialogPrimitive.Close>
+        )}
       </DialogPrimitive.Content>
     </DialogPortal>
   );

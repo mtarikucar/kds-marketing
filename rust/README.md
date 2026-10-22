@@ -256,6 +256,8 @@ olmalıdır; göçleri ayrı bir adımda göç rolüyle çalıştırmak sonraki 
 ## Üretim notları
 
 - TLS'i bir ters vekil sonlandırır; `JEETA_COOKIE_SECURE=true` (varsayılan) kalır.
+- Her yanıt (panel, API, `/healthz`, MCP) `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
+  ve `Content-Security-Policy: frame-ancestors 'none'` taşır; ters vekil bunları silmemeli.
 - Sunucuya ulaşılan genel ad `JEETA_ALLOWED_HOSTS` içinde olmalıdır; `JEETA_BIND` döngü adresi değilse
   (ör. `0.0.0.0:8080`) bu değişken boşken açılış durur.
 - `JEETA_LOG_FORMAT=json` her olayı tek satırlık JSON olarak stderr'e yazar.

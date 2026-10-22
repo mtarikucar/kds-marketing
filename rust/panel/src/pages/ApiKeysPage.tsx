@@ -38,6 +38,8 @@ const KEYS_KEY = ['api-keys'] as const;
 /**
  * Issues a key and shows its plaintext exactly once. The plaintext is held only in this
  * dialog's state (the mutation keeps no cached result) and is dropped when the dialog closes.
+ * While it is shown, only the explicit Close button closes the dialog: not Escape, not a click
+ * outside, so the key is not lost by accident.
  */
 function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
@@ -72,7 +74,7 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent>
+      <DialogContent dismissible={created == null}>
         <DialogHeader>
           <DialogTitle>{created ? t('apiKeys.dialog.plaintextTitle') : t('apiKeys.dialog.title')}</DialogTitle>
           <DialogDescription>{t('apiKeys.dialog.description')}</DialogDescription>
@@ -84,7 +86,7 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
             </Callout>
             <CopyField label={t('apiKeys.dialog.plaintextTitle')} value={created.plaintext} />
             <DialogFooter>
-              <Button onClick={() => close(false)}>{t('common.done')}</Button>
+              <Button onClick={() => close(false)}>{t('common.close')}</Button>
             </DialogFooter>
           </div>
         ) : (

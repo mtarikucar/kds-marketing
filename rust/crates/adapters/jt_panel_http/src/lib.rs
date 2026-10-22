@@ -13,10 +13,14 @@
 //! - `/healthz`: `200 {"ok":true}`.
 //! - Everything else: the built panel from [`AppState::panel_dir`] ([`static_files`]), or a
 //!   structured `404` when there is none.
+//!
+//! Every response carries the security headers of [`headers`] (`nosniff`, `no-referrer`,
+//! `frame-ancestors 'none'`).
 
 pub mod csrf;
 pub mod error;
 pub mod gate;
+pub mod headers;
 pub mod platform_session;
 pub mod routes;
 pub mod session;
@@ -29,6 +33,7 @@ use jt_app::catalog::{CATALOG, UseCase};
 use routes::ApiRoute;
 
 pub use error::{ApiError, ApiJson, ApiPath, ApiQuery};
+pub use headers::security_headers;
 pub use platform_session::PlatformAuthed;
 pub use routes::ROUTES;
 pub use session::{Authed, WorkspaceCtx};
@@ -102,6 +107,8 @@ fn build(state: AppState, api_routes: Vec<ApiRoute>, catalog: &[UseCase]) -> Rou
     app.method_not_allowed_fallback(error::not_found)
         .nest(API_PREFIX, api)
         .fallback(move |req: Request| static_files::serve(panel.clone(), req))
+        // Outermost, so every response gets them: routes, fallbacks and early refusals alike.
+        .layer(middleware::from_fn(headers::security_headers))
         .with_state(state)
 }
 
