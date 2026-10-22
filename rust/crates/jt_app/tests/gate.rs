@@ -24,6 +24,7 @@ const fn use_case(gate: GateMode, status_exempt: bool) -> UseCase {
         mcp_tool: Some("jeeta.test.use_case"),
         panel_route: Some(("POST", "/api/test")),
         panel_only: false,
+        mcp_only: false,
         status_exempt,
         risk: Risk::Write,
     }

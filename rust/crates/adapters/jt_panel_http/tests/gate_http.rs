@@ -40,6 +40,7 @@ const fn gated(id: &'static str, path: &'static str) -> UseCase {
         mcp_tool: None,
         panel_route: Some(("GET", path)),
         panel_only: true,
+        mcp_only: false,
         status_exempt: false,
         risk: Risk::Read,
     }

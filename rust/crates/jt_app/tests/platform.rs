@@ -111,6 +111,7 @@ impl World {
             .list(LedgerFilter {
                 action_prefix: Some(action.into()),
                 actor_kind: None,
+                agent_connection_id: None,
                 limit: 100,
                 before_id: None,
             })

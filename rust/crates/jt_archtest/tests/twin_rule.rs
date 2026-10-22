@@ -1,6 +1,7 @@
-//! The twin rule (spec §4.5, B8): every use case in the catalog has a panel route, and an MCP
-//! tool unless it is `panel_only`; the panel's route table and the MCP registry expose exactly
-//! the catalog, no more and no less.
+//! The twin rule (spec §4.5, B8): every use case in the catalog has a panel route unless it is
+//! `mcp_only`, and an MCP tool unless it is `panel_only` (never both: a use case has at least one
+//! surface); the panel's route table and the MCP registry expose exactly the catalog, no more and
+//! no less.
 
 use std::collections::BTreeSet;
 
@@ -17,9 +18,10 @@ const NOT_YET_SERVED: &[(&str, &str)] = &[];
 #[test]
 fn panel_routes_table_matches_catalog() {
     for uc in CATALOG {
-        assert!(
+        assert_eq!(
             uc.panel_route.is_some(),
-            "use case `{}` has no panel route",
+            !uc.mcp_only,
+            "use case `{}`: a panel route exactly when it is not MCP-only",
             uc.id
         );
     }
@@ -70,6 +72,11 @@ fn mcp_registry_matches_catalog() {
             uc.mcp_tool.is_some(),
             !uc.panel_only,
             "use case `{}`: an MCP tool exactly when it is not panel-only",
+            uc.id
+        );
+        assert!(
+            !(uc.panel_only && uc.mcp_only),
+            "use case `{}` is both panel-only and MCP-only: it has no surface",
             uc.id
         );
     }

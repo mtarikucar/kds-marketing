@@ -32,6 +32,7 @@ pub async fn list(
     let filter = LedgerFilter {
         action_prefix: query.action_prefix,
         actor_kind: query.actor_kind,
+        agent_connection_id: None,
         limit: query.limit.unwrap_or(DEFAULT_LIMIT),
         before_id: query.before_id,
     };

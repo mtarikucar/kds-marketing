@@ -1,6 +1,7 @@
 //! The use-case catalog: every use case with its gate mode, its two surfaces and its risk.
 //!
-//! The twin rule: a use case has both an MCP tool and a panel route unless it is `panel_only`.
+//! The twin rule: a use case has both an MCP tool and a panel route unless it is `panel_only`
+//! (no MCP tool) or `mcp_only` (no panel route), never both.
 //!
 //! Two independent checks guard a use case ([`crate::gate::check_gate`]): the workspace-status
 //! check (the workspace must be `active`), which every use case meets unless it is
@@ -45,16 +46,21 @@ pub struct UseCase {
     pub panel_route: Option<(&'static str, &'static str)>,
     /// Reachable from the panel only; then `mcp_tool` is `None`.
     pub panel_only: bool,
-    /// Runs whatever the workspace's status. Only identity, workspace, platform and strategy use
-    /// cases (`auth.*`, `workspace.*`, `platform.*`, `strategy.*`) are; every other one answers
-    /// `WORKSPACE_INACTIVE` while its workspace is `pending_payment` or `suspended`, whatever its
-    /// [`GateMode`]. The strategy may be worked out before payment, nothing else may.
+    /// Reachable from the MCP gate only, for a call only an agent makes (its check-in); then
+    /// `panel_route` is `None`. Never set together with `panel_only`.
+    pub mcp_only: bool,
+    /// Runs whatever the workspace's status. Only identity, workspace, platform, strategy and
+    /// pending-work use cases (`auth.*`, `workspace.*`, `platform.*`, `strategy.*`, `work.*`)
+    /// are; every other one answers `WORKSPACE_INACTIVE` while its workspace is
+    /// `pending_payment` or `suspended`, whatever its [`GateMode`]. The strategy may be worked
+    /// out before payment, and an agent may ask what is pending meanwhile; nothing else may run.
     pub status_exempt: bool,
     pub risk: Risk,
 }
 
 /// The id prefixes whose use cases are [`UseCase::status_exempt`].
-pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform.", "strategy."];
+pub const STATUS_EXEMPT_PREFIXES: &[&str] =
+    &["auth.", "workspace.", "platform.", "strategy.", "work."];
 
 /// Whether use case `id` runs whatever its workspace's status: whether it starts with one of
 /// [`STATUS_EXEMPT_PREFIXES`].
@@ -99,6 +105,7 @@ const fn twin(
         mcp_tool: Some(mcp_tool),
         panel_route: Some(route),
         panel_only: false,
+        mcp_only: false,
         status_exempt: is_status_exempt(id),
         risk,
     }
@@ -117,6 +124,21 @@ const fn panel_only(
         mcp_tool: None,
         panel_route: Some(route),
         panel_only: true,
+        mcp_only: false,
+        status_exempt: is_status_exempt(id),
+        risk,
+    }
+}
+
+/// A use case reachable from the MCP gate only: a call no person makes.
+const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk: Risk) -> UseCase {
+    UseCase {
+        id,
+        gate,
+        mcp_tool: Some(mcp_tool),
+        panel_route: None,
+        panel_only: false,
+        mcp_only: true,
         status_exempt: is_status_exempt(id),
         risk,
     }
@@ -179,6 +201,11 @@ pub static CATALOG: &[UseCase] = &[
     twin("budget.items.create", Exempt, "jeeta.budget.items_create", ("POST", "/api/budget/items"), Write),
     twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
     twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
+    // What is pending (B11): exempt from the strategy gate and the status check, since an agent
+    // asks it before any strategy exists. Checking in is an agent's call only.
+    twin("work.pending", Exempt, "jeeta.work.pending", ("GET", "/api/work/pending"), Read),
+    mcp_only("work.checkin", Exempt, "jeeta.work.checkin", Write),
+    twin("work.set_checkin_interval", Exempt, "jeeta.work.set_checkin_interval", ("PUT", "/api/work/checkin-interval"), Write),
     panel_only("platform.login", Exempt, ("POST", "/api/platform/login"), Write),
     panel_only("platform.workspaces.list", Exempt, ("GET", "/api/platform/workspaces"), Read),
     panel_only("platform.workspaces.set_status", Exempt, ("PATCH", "/api/platform/workspaces/{workspace_id}/status"), Write),

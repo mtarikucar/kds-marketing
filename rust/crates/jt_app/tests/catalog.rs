@@ -11,11 +11,45 @@ fn ids_are_unique() {
 }
 
 #[test]
-fn every_non_panel_only_use_case_has_both_surfaces() {
-    for uc in CATALOG.iter().filter(|uc| !uc.panel_only) {
+fn every_use_case_but_the_one_surface_ones_has_both_surfaces() {
+    for uc in CATALOG.iter().filter(|uc| !uc.panel_only && !uc.mcp_only) {
         assert!(uc.mcp_tool.is_some(), "{} has no MCP tool", uc.id);
         assert!(uc.panel_route.is_some(), "{} has no panel route", uc.id);
     }
+}
+
+#[test]
+fn no_use_case_is_both_panel_only_and_mcp_only() {
+    for uc in CATALOG {
+        assert!(
+            !(uc.panel_only && uc.mcp_only),
+            "{} is both panel-only and MCP-only",
+            uc.id
+        );
+    }
+}
+
+#[test]
+fn mcp_only_use_cases_have_no_panel_route() {
+    for uc in CATALOG.iter().filter(|uc| uc.mcp_only) {
+        assert!(
+            uc.panel_route.is_none(),
+            "{} is MCP-only but has a panel route",
+            uc.id
+        );
+        assert!(
+            uc.mcp_tool.is_some(),
+            "{} is MCP-only but has no MCP tool",
+            uc.id
+        );
+    }
+    // An agent-only tool has no human caller: the agent's check-in is the only one.
+    let mcp_only: Vec<&str> = CATALOG
+        .iter()
+        .filter(|uc| uc.mcp_only)
+        .map(|uc| uc.id)
+        .collect();
+    assert_eq!(mcp_only, ["work.checkin"]);
 }
 
 #[test]
@@ -128,12 +162,15 @@ fn catalog_is_the_release_table() {
         ("budget.items.create", Some("jeeta.budget.items_create"), Some(("POST", "/api/budget/items")), false, Risk::Write),
         ("budget.spend.record", Some("jeeta.budget.spend_record"), Some(("POST", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Spend),
         ("budget.spend.list", Some("jeeta.budget.spend_list"), Some(("GET", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Read),
+        ("work.pending", Some("jeeta.work.pending"), Some(("GET", "/api/work/pending")), false, Risk::Read),
+        ("work.checkin", Some("jeeta.work.checkin"), None, false, Risk::Write),
+        ("work.set_checkin_interval", Some("jeeta.work.set_checkin_interval"), Some(("PUT", "/api/work/checkin-interval")), false, Risk::Write),
         ("platform.login", None, Some(("POST", "/api/platform/login")), true, Risk::Write),
         ("platform.workspaces.list", None, Some(("GET", "/api/platform/workspaces")), true, Risk::Read),
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 53);
+    assert_eq!(CATALOG.len(), 56);
     assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
     let status_exempt: Vec<&str> =
         CATALOG.iter().filter(|uc| uc.status_exempt).map(|uc| uc.id).collect();
@@ -156,6 +193,9 @@ fn catalog_is_the_release_table() {
             "strategy.archive",
             "strategy.list_versions",
             "strategy.consultation",
+            "work.pending",
+            "work.checkin",
+            "work.set_checkin_interval",
             "platform.login",
             "platform.workspaces.list",
             "platform.workspaces.set_status",
@@ -176,6 +216,10 @@ fn lookups_by_id_and_mcp_tool() {
     );
     assert!(by_mcp_tool("agents.whoami").is_none());
     assert_eq!(find("auth.me").map(|uc| uc.mcp_tool), Some(None));
+    assert_eq!(
+        by_mcp_tool("jeeta.work.checkin").map(|uc| (uc.id, uc.panel_route)),
+        Some(("work.checkin", None))
+    );
 }
 
 #[test]

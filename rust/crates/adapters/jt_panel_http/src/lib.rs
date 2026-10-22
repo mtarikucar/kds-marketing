@@ -144,6 +144,7 @@ mod tests {
         mcp_tool: Some("jeeta.demo.read"),
         panel_route: Some(("GET", "/api/demo")),
         panel_only: false,
+        mcp_only: false,
         status_exempt: false,
         risk: Risk::Read,
     };

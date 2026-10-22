@@ -16,6 +16,7 @@ pub mod platform;
 pub mod roles;
 pub mod strategy;
 pub mod team;
+pub mod work;
 pub mod workspace;
 
 use std::collections::BTreeSet;

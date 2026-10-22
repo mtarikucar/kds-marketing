@@ -9,8 +9,8 @@ use jt_app::ports::{
 };
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_tenancy::{
-    ApiKeyId, Email, MembershipId, MembershipStatus, Permission, RoleDef, RoleId, SessionId,
-    SystemRole, UserId, WorkspaceId, WorkspaceStatus,
+    AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, Permission, RoleDef,
+    RoleId, SessionId, SystemRole, UserId, WorkspaceId, WorkspaceStatus,
 };
 use jt_testkit::fakes::{
     FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, SeqIdGen,
@@ -539,6 +539,7 @@ fn filter(limit: u32) -> LedgerFilter {
     LedgerFilter {
         action_prefix: None,
         actor_kind: None,
+        agent_connection_id: None,
         limit,
         before_id: None,
     }
@@ -597,6 +598,33 @@ async fn ledger_lists_newest_first_with_filters_and_pages() {
         .await
         .unwrap();
     assert!(system.is_empty());
+
+    // Entries by one agent connection: only that agent's, not another's, not a person's.
+    let (mine, theirs) = (AgentConnectionId::new_v7(), AgentConnectionId::new_v7());
+    let agent_entry = |connection_id: AgentConnectionId| {
+        LedgerEntry::new(
+            ws,
+            Actor::Agent {
+                connection_id,
+                user_id: user,
+            },
+            Action::new("work.checkin").unwrap(),
+            json!({}),
+            T0 + Duration::minutes(3),
+        )
+    };
+    let checkin = t.ledger().append(agent_entry(mine)).await.unwrap();
+    t.ledger().append(agent_entry(theirs)).await.unwrap();
+    let by_connection = t
+        .ledger()
+        .list(LedgerFilter {
+            agent_connection_id: Some(mine),
+            ..filter(10)
+        })
+        .await
+        .unwrap();
+    let ids: Vec<i64> = by_connection.iter().map(|r| r.id).collect();
+    assert_eq!(ids, [checkin]);
 }
 
 #[tokio::test]

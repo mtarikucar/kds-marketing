@@ -121,7 +121,8 @@ impl LedgerRepo for PgTenantRepos {
     }
 
     /// Newest first. `limit` is clamped to `1..=MAX_LIST_LIMIT`; `action_prefix` matches
-    /// literally (`_` and `%` are not wildcards).
+    /// literally (`_` and `%` are not wildcards); `agent_connection_id` keeps the entries made
+    /// through that agent connection.
     async fn list(&mut self, filter: LedgerFilter) -> Result<Vec<LedgerRow>, AppError> {
         let ws = self.workspace_id();
         let records: Vec<LedgerRecord> = sqlx::query_as(
@@ -132,13 +133,15 @@ impl LedgerRepo for PgTenantRepos {
              and ($2::text is null or action like $2 escape '\\') \
              and ($3::text is null or actor_kind = $3) \
              and ($4::bigint is null or id < $4) \
+             and ($5::uuid is null or agent_connection_id = $5) \
              order by id desc \
-             limit $5",
+             limit $6",
         )
         .bind(ws.as_uuid())
         .bind(filter.action_prefix.as_deref().map(like_prefix))
         .bind(filter.actor_kind)
         .bind(filter.before_id)
+        .bind(filter.agent_connection_id.map(|id| id.as_uuid()))
         .bind(i64::from(filter.limit.clamp(1, MAX_LIST_LIMIT)))
         .fetch_all(self.tx.conn())
         .await

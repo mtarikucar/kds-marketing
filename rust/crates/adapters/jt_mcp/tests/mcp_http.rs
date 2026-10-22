@@ -51,6 +51,7 @@ static GATED: UseCase = UseCase {
     mcp_tool: Some("jeeta.demo.gated"),
     panel_route: None,
     panel_only: false,
+    mcp_only: true,
     status_exempt: false,
     risk: Risk::Read,
 };
@@ -182,6 +183,7 @@ impl World {
             .list(LedgerFilter {
                 action_prefix: Some(action.into()),
                 actor_kind: None,
+                agent_connection_id: None,
                 limit: 500,
                 before_id: None,
             })
@@ -676,6 +678,8 @@ async fn tools_list_hides_tools_the_key_cannot_use() {
         "jeeta.budget.items_list",
         "jeeta.budget.spend_record",
         "jeeta.budget.spend_list",
+        "jeeta.work.pending",
+        "jeeta.work.checkin",
         "jeeta.demo.gated",
     ]
     .into_iter()
@@ -1620,7 +1624,7 @@ async fn stdio_transport_serves_the_same_handler_for_a_fixed_principal() {
         .expect("the client initialises over the pipe");
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 15, "only the workspace.read tools");
+    assert_eq!(tools.len(), 17, "only the workspace.read tools");
     let me = ok(&call(&client, "jeeta.agent.whoami", json!({})).await);
     assert_eq!(me["permissions"], json!(["workspace.read"]));
     let listed = agents::list(&w.deps, &w.owner_ctx(w.a)).await.unwrap();

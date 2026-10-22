@@ -13,6 +13,7 @@ mod ledger;
 mod roles;
 mod strategy;
 mod team;
+mod work;
 mod workspace;
 
 use jt_app::error::AppError;
@@ -45,6 +46,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         strategy::definitions(),
         capabilities::definitions(),
         budget::definitions(),
+        work::definitions(),
     ]
     .into_iter()
     .flatten()

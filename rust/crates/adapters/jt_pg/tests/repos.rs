@@ -128,6 +128,7 @@ fn filter(limit: u32) -> LedgerFilter {
     LedgerFilter {
         action_prefix: None,
         actor_kind: None,
+        agent_connection_id: None,
         limit,
         before_id: None,
     }
@@ -841,7 +842,7 @@ async fn agent_connections_upsert_increments_on_second_initialize_and_touch_coun
 }
 
 #[tokio::test]
-async fn ledger_append_and_list_newest_first_with_limit_and_action_filter() {
+async fn ledger_append_and_list_newest_first_with_limit_and_filters() {
     let db = TestDb::new().await;
     let (ws, owner) = db.seed_workspace("acme").await;
     let (other, other_owner) = db.seed_workspace("other").await;
@@ -854,12 +855,13 @@ async fn ledger_append_and_list_newest_first_with_limit_and_action_filter() {
     });
     invited.payload = json!({ "email": "bob@example.com", "nested": { "n": [1, 2] } });
     invited.strategy_version_id = Some(Uuid::now_v7());
+    let agent_connection = AgentConnectionId::new_v7();
     let entries = vec![
         invited,
         entry(
             ws,
             Actor::Agent {
-                connection_id: AgentConnectionId::new_v7(),
+                connection_id: agent_connection,
                 user_id: owner,
             },
             "mcp.tool_call",
@@ -950,6 +952,26 @@ async fn ledger_append_and_list_newest_first_with_limit_and_action_filter() {
     assert_eq!(
         action_ids(t.ledger().list(agents).await.unwrap()),
         ["mcp.tool_call"]
+    );
+    let by_connection = |id: AgentConnectionId| LedgerFilter {
+        agent_connection_id: Some(id),
+        ..filter(50)
+    };
+    assert_eq!(
+        action_ids(
+            t.ledger()
+                .list(by_connection(agent_connection))
+                .await
+                .unwrap()
+        ),
+        ["mcp.tool_call"]
+    );
+    assert!(
+        t.ledger()
+            .list(by_connection(AgentConnectionId::new_v7()))
+            .await
+            .unwrap()
+            .is_empty()
     );
     let page = LedgerFilter {
         before_id: Some(ids[2]),

@@ -120,11 +120,12 @@ Panelde `http://127.0.0.1:8080/register`. Kayıt, kullanıcıyı ve onun sahibi 
 açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/platform/workspaces`) etkinleştirilir.
 
 **Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
-`workspace.*`, `platform.*` ve `strategy.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`,
+`workspace.*`, `platform.*`, `strategy.*` ve `work.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`,
 `agents.*`, `ledger.*`, `capability.*`, `budget.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
 `423 {"code":"WORKSPACE_INACTIVE","details":{"status":"pending_payment"}}` alır. Yani ödeme bekleyen bir alan
 operatör onu etkinleştirene kadar üye davet edemez ve API anahtarı açamaz; giriş, çıkış, `GET /api/auth/me`,
-`GET /api/workspace`, alan değiştirme ve strateji istişaresi (bkz. [Strateji](#strateji)) çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
+`GET /api/workspace`, alan değiştirme, strateji istişaresi (bkz. [Strateji](#strateji)) ve bekleyen işler
+(bkz. [Sırada ne var](#sırada-ne-var)) çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
 alana bekleyen bir davet de kabul edilemez. API'den (değişiklik yapan her istek
 `X-Requested-With: jeeta-panel` başlığını taşımalıdır, yoksa `403`):
 
@@ -172,7 +173,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (44 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (47 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -273,6 +274,43 @@ Sistem rollerinin izinleri:
 
 Bir API anahtarının kapsamları sahibinin izinlerini daraltır: yalnızca `workspace.read` taşıyan bir anahtarla
 ajan okur, kendi kabiliyetini doğrular ve harcama bildirir, ama bildiremez, gruplayamaz ve kalem açamaz.
+
+## Sırada ne var
+
+Ajanın giriş noktası `jeeta.work.pending`'dir (panelde `GET /api/work/pending`, ana sayfanın verisi): stratejinin
+durumu, en acil olanı başta bekleyen işler ve ajanın son görülme uyarısı. Strateji kapısından da çalışma alanı
+durumu denetiminden de muaftır: ajan, strateji yokken ve alan ödeme beklerken de neyin beklediğini sorabilir.
+
+- **`strategy`**: `"missing"` (ne onaylı sürüm ne taslak), `{"draft_open": {"gaps": […]}}` (taslak üzerinde
+  çalışılıyor), `"submitted"` (taslak onay bekliyor) ya da `{"approved": {"number": 2}}`. Açık ya da sunulmuş bir
+  taslak, yürürlükte onaylı bir sürüm olsa bile gösterilir: bekleyen iş odur.
+- **`items`**: her biri `kind`, `priority` (1 en acil) ve ajan için İngilizce bir `hint` taşır; panel kendi
+  metnini gösterir.
+
+| `kind` | Öncelik | Ne zaman |
+|---|---|---|
+| `consult_strategy` | 1 | strateji hiç yok ya da açık (sunulmamış) bir taslak var |
+| `approve_strategy` | 1 | sunulmuş bir taslak var ve soran onaylayabilir (sahip ya da yönetici + `team.manage`) |
+| `verify_capability` (`capability_id`, `name`, `stale`) | 2 | ajan ya da cihazla ulaşılan, `declared` ya da `stale` okunan her kabiliyet |
+| `connect_connector` (`capability_id`) | 2 | bağlayıcıyla ulaşılan, `declared` okunan her kabiliyet (bağlayıcılar M1b ile gelir) |
+| `declare_first_capability` | 3 | emekliye ayrılmamış hiçbir kabiliyet yok |
+
+- **`agent`**: `last_seen_at` (alanın ajan bağlantılarından en son görüleni, hiç yoksa `null`),
+  `interval_minutes` (yoklama aralığı) ve `overdue` (hiç bağlantı yok ya da en son görülen aralıktan eski).
+  `GET /api/agents` ve `jeeta.agents.list` her bağlantı için aynı `overdue` bayrağını verir.
+
+**Ajanın yoklaması.** Ajanı uyandırmak sistemin değil kiracının işidir: ajan kendi zamanlayıcısıyla en az
+yoklama aralığında bir `jeeta.work.checkin` çağırır (yanıtı `jeeta.work.pending` ile aynıdır); geç kaldığında
+sistem yalnızca uyarır. Yoklama yalnızca bir ajanın çağrısıdır, panelde rotası yoktur (`mcp_only`); bir kişi
+çağıramaz (`403 FORBIDDEN`, `details.reason = "agents_only"`). Ajanın her çağrısı bağlantısının
+`last_seen_at` alanını zaten günceller; yoklama ise bağlantı başına en çok saatte bir `work.checkin` olarak
+kaydedilir.
+
+| Adım | Panel | MCP aracı | İzin |
+|---|---|---|---|
+| Bekleyen işler | `GET /api/work/pending` | `jeeta.work.pending` | `workspace.read` |
+| Yoklama (yalnızca ajan) | — | `jeeta.work.checkin` | `workspace.read` |
+| Yoklama aralığı (gövde `{"minutes": 15…10080}`, varsayılan 1440) | `PUT /api/work/checkin-interval` | `jeeta.work.set_checkin_interval` | `team.manage` |
 
 ## stdio kipi
 

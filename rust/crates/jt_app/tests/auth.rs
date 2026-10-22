@@ -482,6 +482,7 @@ async fn register_writes_ledger_entry_auth_register() {
         .list(LedgerFilter {
             action_prefix: Some("auth.".into()),
             actor_kind: Some("human".into()),
+            agent_connection_id: None,
             limit: 10,
             before_id: None,
         })

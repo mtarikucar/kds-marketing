@@ -53,11 +53,15 @@ const TOOLS: &[&str] = &[
     "jeeta.budget.items_create",
     "jeeta.budget.spend_record",
     "jeeta.budget.spend_list",
+    "jeeta.work.pending",
+    "jeeta.work.checkin",
+    "jeeta.work.set_checkin_interval",
 ];
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     assert!(NOT_YET_DEFINED.is_empty(), "{NOT_YET_DEFINED:?}");
+    assert_eq!(TOOLS.len(), 47);
     let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
     let registered: BTreeSet<&str> = registry().iter().map(|t| t.name).collect();
     assert_eq!(registered, catalog);
@@ -278,4 +282,43 @@ fn required(schema: &Value) -> BTreeSet<&str> {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect()
+}
+
+#[test]
+fn work_tools_read_and_check_in_with_workspace_read_and_set_the_interval_with_team_manage() {
+    let specs: Vec<ToolSpec> = registry()
+        .into_iter()
+        .filter(|s| s.use_case.starts_with("work."))
+        .collect();
+    let permissions: Vec<(&str, Permission, Risk)> = specs
+        .iter()
+        .map(|s| (s.name, s.permission, s.risk))
+        .collect();
+    assert_eq!(
+        permissions,
+        [
+            ("jeeta.work.pending", Permission::WorkspaceRead, Risk::Read),
+            ("jeeta.work.checkin", Permission::WorkspaceRead, Risk::Write),
+            (
+                "jeeta.work.set_checkin_interval",
+                Permission::TeamManage,
+                Risk::Write
+            ),
+        ]
+    );
+    let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
+    // The check-in tells the agent that waking up is its own job (spec §4.2 rule 3).
+    let checkin = find("jeeta.work.checkin");
+    assert!(
+        checkin.description.contains("on your own schedule"),
+        "{}",
+        checkin.description
+    );
+    let interval = find("jeeta.work.set_checkin_interval")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(required(&interval), BTreeSet::from(["minutes"]));
+    assert_eq!(interval["properties"]["minutes"]["minimum"], 15);
+    assert_eq!(interval["properties"]["minutes"]["maximum"], 10_080);
 }

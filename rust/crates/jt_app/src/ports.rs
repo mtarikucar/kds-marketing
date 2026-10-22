@@ -305,6 +305,8 @@ pub struct LedgerFilter {
     pub action_prefix: Option<String>,
     /// Keep only this actor kind: `"human"`, `"agent"` or `"system"`.
     pub actor_kind: Option<String>,
+    /// Keep only entries an agent made through this connection.
+    pub agent_connection_id: Option<AgentConnectionId>,
     pub limit: u32,
     /// Keep only entries with an id below this one (the previous page's last id).
     pub before_id: Option<i64>,

@@ -11,7 +11,7 @@ use jt_app::ports::{
     LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow, RoleRepo, StrategyRepo,
     TenantRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
-use jt_ledger::LedgerEntry;
+use jt_ledger::{Actor, LedgerEntry};
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, MembershipId, MembershipStatus, Permission, RoleDef, RoleId,
     SystemRole, UserId, WorkspaceId,
@@ -551,6 +551,11 @@ impl LedgerRepo for MemTenant {
                     .actor_kind
                     .as_deref()
                     .is_none_or(|k| actor_kind(&r.entry.actor) == k)
+            })
+            .filter(|r| {
+                filter.agent_connection_id.is_none_or(|id| {
+                    matches!(r.entry.actor, Actor::Agent { connection_id, .. } if connection_id == id)
+                })
             })
             .cloned()
             .collect();

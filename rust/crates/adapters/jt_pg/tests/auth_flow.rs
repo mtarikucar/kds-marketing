@@ -49,6 +49,7 @@ fn ledger_filter() -> LedgerFilter {
     LedgerFilter {
         action_prefix: None,
         actor_kind: None,
+        agent_connection_id: None,
         limit: 10,
         before_id: None,
     }

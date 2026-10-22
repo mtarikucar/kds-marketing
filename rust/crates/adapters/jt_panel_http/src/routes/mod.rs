@@ -18,6 +18,7 @@ pub mod platform;
 pub mod roles;
 pub mod strategy;
 pub mod team;
+pub mod work;
 pub mod workspace;
 
 use axum::Json;
@@ -89,6 +90,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/budget/items"),
     ("POST", "/api/budget/items/{budget_item_id}/spend"),
     ("GET", "/api/budget/items/{budget_item_id}/spend"),
+    ("GET", "/api/work/pending"),
+    ("PUT", "/api/work/checkin-interval"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
     ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
@@ -372,6 +375,13 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/budget/items/{budget_item_id}/spend",
             "budget.spend.list",
             budget::spend,
+        ),
+        api_route("GET", "/work/pending", "work.pending", work::pending),
+        api_route(
+            "PUT",
+            "/work/checkin-interval",
+            "work.set_checkin_interval",
+            work::set_checkin_interval,
         ),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(
