@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use jt_archtest::{direct_deps, workspace_packages};
 
-// `jt_tenancy` and `jt_ledger` are themselves pure domain crates: `jt_ledger` uses the ids of
-// `jt_tenancy`, `jt_strategy` uses both (the ids, and `Actor` for who wrote what),
-// `jt_capability` uses both (the ids, and the ledger's list of secret key names), and
-// `jt_connector` uses `jt_capability` (capability ids, kinds and statuses).
+// What every domain crate may depend on: serialisation, ids, time, error derives, and the two
+// foundational domain crates. `jt_ledger` uses the ids of `jt_tenancy`, `jt_strategy` uses both
+// (the ids, and `Actor` for who wrote what), and `jt_capability` uses both (the ids, and the
+// ledger's list of secret key names).
 const DOMAIN_ALLOW: &[&str] = &[
     "serde",
     "serde_json",
@@ -14,49 +14,51 @@ const DOMAIN_ALLOW: &[&str] = &[
     "thiserror",
     "jt_tenancy",
     "jt_ledger",
-    "jt_capability",
 ];
 
-// The connector domain computes webhook signatures, the OAuth state's MAC and the PKCE challenge
-// itself (pure functions over bytes, no I/O), so it alone may also use the HMAC, SHA-256, base64
-// and constant-time comparison crates. No cipher: sealing stays behind the `SecretBox` port.
-const CONNECTOR_EXTRA_ALLOW: &[&str] = &["hmac", "sha2", "base64", "subtle"];
+// The connector domain also uses `jt_capability` (capability ids, kinds, statuses and the
+// secret-key predicate), and it computes webhook signatures, the OAuth state's MAC and the PKCE
+// challenge itself (pure functions over bytes, no I/O), so it alone may use the HMAC, SHA-256,
+// base64 and constant-time comparison crates. No cipher: sealing stays behind the `SecretBox`
+// port.
+const CONNECTOR_EXTRA_ALLOW: &[&str] = &["jt_capability", "hmac", "sha2", "base64", "subtle"];
 
-/// What the domain crate `krate` may depend on.
-fn domain_allow(krate: &str) -> Vec<&'static str> {
-    let mut allow = DOMAIN_ALLOW.to_vec();
-    if krate == "jt_connector" {
-        allow.extend_from_slice(CONNECTOR_EXTRA_ALLOW);
-    }
-    allow
-}
+/// Every domain crate, with what it may depend on beyond [`DOMAIN_ALLOW`].
+const DOMAIN_CRATES: &[(&str, &[&str])] = &[
+    ("jt_tenancy", &[]),
+    ("jt_ledger", &[]),
+    ("jt_strategy", &[]),
+    ("jt_capability", &[]),
+    ("jt_connector", CONNECTOR_EXTRA_ALLOW),
+];
 
 #[test]
 fn domain_crates_depend_only_on_pure_crates() {
-    for c in [
-        "jt_tenancy",
-        "jt_ledger",
-        "jt_strategy",
-        "jt_capability",
-        "jt_connector",
-    ] {
-        let allow = domain_allow(c);
+    for (c, extra) in DOMAIN_CRATES {
         for d in direct_deps(c) {
-            assert!(allow.contains(&d.as_str()), "{c} depends on {d}");
+            assert!(
+                DOMAIN_ALLOW.contains(&d.as_str()) || extra.contains(&d.as_str()),
+                "{c} depends on {d}, which is not on its allowlist"
+            );
         }
     }
 }
 
-/// The crypto crates of the connector domain stay there: no other domain crate lists them.
+/// Read from each domain crate's manifest: among the domain crates, exactly `jt_connector` lists
+/// `jt_capability` and each of the crypto crates (so the rule is not vacuous either).
 #[test]
-fn connector_crypto_crates_are_not_open_to_other_domain_crates() {
-    for c in ["jt_tenancy", "jt_ledger", "jt_strategy", "jt_capability"] {
-        for krate in CONNECTOR_EXTRA_ALLOW {
-            assert!(
-                !domain_allow(c).contains(krate),
-                "{c} must not be allowed {krate}"
-            );
-        }
+fn only_the_connector_domain_uses_its_extra_crates() {
+    for krate in CONNECTOR_EXTRA_ALLOW {
+        let users: BTreeSet<&str> = DOMAIN_CRATES
+            .iter()
+            .map(|(c, _)| *c)
+            .filter(|c| direct_deps(c).contains(*krate))
+            .collect();
+        assert_eq!(
+            users,
+            BTreeSet::from(["jt_connector"]),
+            "the domain crates depending on {krate}"
+        );
     }
 }
 

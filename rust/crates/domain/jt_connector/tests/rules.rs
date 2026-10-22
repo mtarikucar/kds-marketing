@@ -162,14 +162,13 @@ fn unsupported_connector_kinds_are_listed_explicitly() {
 // OAuth state and PKCE
 // ---------------------------------------------------------------------------------------------
 
-fn x_state(pkce_verifier: Option<&str>) -> OAuthState {
+fn x_state() -> OAuthState {
     OAuthState {
         workspace_id: ws(),
         provider: Provider::X,
         kind_key: "x".to_owned(),
         issued_at: NOW,
         nonce: [0xA5; 16],
-        pkce_verifier: pkce_verifier.map(str::to_owned),
     }
 }
 
@@ -187,7 +186,7 @@ fn is_base64url(s: &str) -> bool {
 fn state_round_trip_and_expiry_and_tamper() {
     assert_eq!(STATE_TTL, Duration::minutes(10));
 
-    let state = x_state(Some("pkce-verifier-SECRET-VALUE"));
+    let state = x_state();
     let token = state.sign(&STATE_KEY);
 
     // Shape: base64url(JSON payload) "." 64 lowercase hex digits of HMAC-SHA256 over the payload.
@@ -202,13 +201,24 @@ fn state_round_trip_and_expiry_and_tamper() {
     assert_eq!(parsed["workspace_id"], json!(ws().to_string()));
     assert_eq!(parsed["provider"], json!("x"));
     assert_eq!(parsed["kind_key"], json!("x"));
+    // Exactly these fields: no PKCE verifier rides the redirect beside the code.
+    let fields: BTreeSet<&str> = parsed
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        fields,
+        BTreeSet::from(["workspace_id", "provider", "kind_key", "issued_at", "nonce"])
+    );
     assert_eq!(
         sig,
         hmac_hex(&STATE_KEY, &payload),
         "MAC over the payload bytes"
     );
 
-    // Deterministic, and it round trips: with PKCE, without, with a sub-second time.
+    // Deterministic, and it round trips, also with a sub-second time.
     assert_eq!(state.sign(&STATE_KEY), token);
     assert_eq!(
         OAuthState::verify(&token, &STATE_KEY, NOW),
@@ -218,7 +228,7 @@ fn state_round_trip_and_expiry_and_tamper() {
         issued_at: NOW + Duration::nanoseconds(123_456_789),
         kind_key: "instagram".to_owned(),
         provider: Provider::Meta,
-        ..x_state(None)
+        ..x_state()
     };
     assert_eq!(
         OAuthState::verify(&precise.sign(&STATE_KEY), &STATE_KEY, precise.issued_at),
@@ -332,11 +342,6 @@ fn state_round_trip_and_expiry_and_tamper() {
             "{bad:?}"
         );
     }
-
-    // The PKCE verifier is a secret: `Debug` masks it.
-    let debug = format!("{state:?}");
-    assert!(!debug.contains("pkce-verifier-SECRET-VALUE"), "{debug}");
-    assert!(debug.contains("***"), "{debug}");
 }
 
 /// RFC 7636 Appendix B: the octets, the verifier they encode to, and its S256 challenge.
@@ -448,7 +453,7 @@ fn netgsm_token_matches_reference_vector() {
         "713251065b1571ae646f1feea6e61a9157517dbe67c9ec6a08f1020e416ea975"
     );
     assert_eq!(
-        netgsm_hook_token(&key, ws(), "events"),
+        netgsm_hook_token(&key, ws(), NetgsmPurpose::Events.key()),
         "70b44c5836b3dc8ce6047c2c83fc78d34be76ca1ccc6dbc97ae7c977d994c018"
     );
     assert_eq!(
@@ -475,18 +480,27 @@ fn netgsm_token_matches_reference_vector() {
     let keys: Vec<&str> = NetgsmPurpose::all().iter().map(|p| p.key()).collect();
     assert_eq!(
         keys,
-        ["mo", "events", "iys", "voice_report", "autocall_report"]
+        ["mo", "events", "iys", "voice-report", "autocall-report"]
     );
     for p in NetgsmPurpose::all() {
         assert_eq!(NetgsmPurpose::parse(p.key()), Some(*p));
     }
-    for unknown in ["", "MO", "dlr", "voice-report"] {
+    for unknown in [
+        "",
+        "MO",
+        "dlr",
+        "voice_report",
+        "autocall_report",
+        "Voice-Report",
+        "voice-report/",
+    ] {
         assert_eq!(NetgsmPurpose::parse(unknown), None, "{unknown:?}");
     }
 
     // The comparison: exact, constant-time, and an empty expectation matches nothing.
     assert!(netgsm_token_ok(&mo, &mo));
-    assert!(netgsm_token_ok(&mo, &mo.clone()));
+    let events = netgsm_hook_token(&key, ws(), NetgsmPurpose::Events.key());
+    assert!(!netgsm_token_ok(&mo, &events), "another purpose's token");
     assert!(!netgsm_token_ok(&mo, &mo.to_ascii_uppercase()));
     assert!(!netgsm_token_ok(&mo, &mo[..63]));
     assert!(!netgsm_token_ok(&mo, &format!("{mo}0")));
@@ -846,7 +860,7 @@ fn error_reason_is_redacted() {
         ),
         (
             "client_id=abc&client_secret=SECRET-11&code=xyz&refresh_token=SECRET-12",
-            "client_id=abc&client_secret=***&code=xyz&refresh_token=***",
+            "client_id=abc&client_secret=***&code=***&refresh_token=***",
         ),
         // Nothing secret: unchanged, byte for byte.
         (
@@ -867,6 +881,13 @@ fn error_reason_is_redacted() {
         assert_eq!(redact_reason(input), *expected, "{input}");
         // Redacting twice changes nothing more.
         assert_eq!(redact_reason(expected), *expected, "{expected}");
+    }
+
+    // Built only through the constructors (the reason-carrying variants are non-exhaustive), and
+    // still matched from outside the crate.
+    match ConnectorError::permanent(r#"{"password":"S"}"#) {
+        ConnectorError::Permanent { reason, .. } => assert_eq!(reason, r#"{"password":"***"}"#),
+        other => panic!("{other:?}"),
     }
 
     // Kinds and retry.
@@ -911,6 +932,7 @@ fn bearer_and_basic_are_masked_in_reasons() {
             "sent bearer *** then failed",
         ),
         ("Basic dXNlcjpwYXNzLVNFQ1JFVA==", "Basic ***"),
+        ("BEARER abc-SECRET", "BEARER ***"),
         (
             "BASIC\tdXNlcjpwYXNzLVNFQ1JFVA== (rejected)",
             "BASIC\t*** (rejected)",
@@ -937,6 +959,99 @@ fn bearer_and_basic_are_masked_in_reasons() {
     }
     let e = ConnectorError::transient("retry with Bearer abc.def-SECRET");
     assert_eq!(e.reason(), Some("retry with Bearer ***"));
+}
+
+#[test]
+fn containers_oauth_names_and_bare_pairs_are_masked() {
+    // (input, expected)
+    let cases: &[(&str, &str)] = &[
+        // (a) An array or object under a secret-looking key goes whole.
+        (
+            r#"{"tokens":["EAAB-S1","EAAB-S2"],"id":"7"}"#,
+            r#"{"tokens":***,"id":"7"}"#,
+        ),
+        (
+            r#"{"access_token": {"value":"S3","exp":1}, "page_id":"9"}"#,
+            r#"{"access_token": ***, "page_id":"9"}"#,
+        ),
+        (
+            r#"{"secret":["a]b}","c",{"d":[1]}],"ok":1}"#,
+            r#"{"secret":***,"ok":1}"#,
+        ),
+        (
+            r#"{"error":"{\"tokens\":[\"S4\"],\"id\":1}"}"#,
+            r#"{"error":"{\"tokens\":***,\"id\":1}"}"#,
+        ),
+        (
+            r#"{"credentials":{"password":"S5""#,
+            r#"{"credentials":***"#,
+        ),
+        // Junk clinging to a masked container goes with it (so a second pass changes nothing).
+        (r#"{"token":["x"]junk, "id":1}"#, r#"{"token":***, "id":1}"#),
+        // A container under a key that is not secret is looked into, not masked.
+        (
+            r#"{"data":[{"id":"1","access_token":"S6"}]}"#,
+            r#"{"data":[{"id":"1","access_token":"***"}]}"#,
+        ),
+        // (b) OAuth names: the authorization code, the PKCE verifier, client and app secrets.
+        (
+            "grant_type=authorization_code&code=AUTHCODE-S7&redirect_uri=https%3A%2F%2Fx&code_verifier=VERIFIER-S8&client_id=abc",
+            "grant_type=authorization_code&code=***&redirect_uri=https%3A%2F%2Fx&code_verifier=***&client_id=abc",
+        ),
+        (
+            r#"{"code":"AQBx-S9","codeVerifier":"S10","app_secret":"S11","client_secret":"S12","refresh_token":"S13","access_token":"S14"}"#,
+            r#"{"code":"***","codeVerifier":"***","app_secret":"***","client_secret":"***","refresh_token":"***","access_token":"***"}"#,
+        ),
+        (
+            "app_secret=S15&client_secret=S16&access_token=S17&refresh_token=S18",
+            "app_secret=***&client_secret=***&access_token=***&refresh_token=***",
+        ),
+        // A short numeric `code` is a provider's status or error code, not an OAuth code: kept.
+        (
+            r#"{"error":{"message":"Session expired","code":190,"error_subcode":463}}"#,
+            r#"{"error":{"message":"Session expired","code":190,"error_subcode":463}}"#,
+        ),
+        (
+            r#"{"code":"30","description":"invalid credentials"}"#,
+            r#"{"code":"30","description":"invalid credentials"}"#,
+        ),
+        ("code=00&jobid=123", "code=00&jobid=123"),
+        // (c) Rust `Debug` style `key: "value"`, and `key="value"` / `key='value'`.
+        (
+            r#"SmsBody { usercode: "8503001122", password: "S19", msgheader: "KAHVECI" }"#,
+            r#"SmsBody { usercode: "8503001122", password: "***", msgheader: "KAHVECI" }"#,
+        ),
+        (
+            r#"Token { access_token: "S20", refresh_token: Some("S21"), scopes: ["a"] }"#,
+            r#"Token { access_token: "***", refresh_token: Some("***"), scopes: ["a"] }"#,
+        ),
+        (
+            r#"password="S22" user="u" oauth_token='S23' name='Kahve'"#,
+            r#"password="***" user="u" oauth_token='***' name='Kahve'"#,
+        ),
+        (r#"password = "S24";"#, r#"password = "***";"#),
+        (
+            r#"{'access_token': 'S25', 'id': '3'}"#,
+            r#"{'access_token': '***', 'id': '3'}"#,
+        ),
+        (r#"password="ab\"c-S26" next"#, r#"password="***" next"#),
+        (r#"api_key='S27"#, r#"api_key='***"#),
+        (
+            r#"{"msg":"sent password=\"S28\" to the API"}"#,
+            r#"{"msg":"sent password=\"***\" to the API"}"#,
+        ),
+        // Nothing secret in these shapes: unchanged.
+        (
+            r#"Page { page_id: "1029384756", name: "Kahve" }"#,
+            r#"Page { page_id: "1029384756", name: "Kahve" }"#,
+        ),
+        ("token: expired, retry", "token: expired, retry"),
+    ];
+    for (input, expected) in cases {
+        let once = redact_reason(input);
+        assert_eq!(once, *expected, "{input}");
+        assert_eq!(redact_reason(&once), once, "idempotent: {input}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1041,7 +1156,7 @@ fn redaction_survives_odd_text() {
     // Every string of up to four pieces over an alphabet of delimiters, keys and multibyte
     // characters: never a panic, and a second pass changes nothing more.
     const PIECES: &[&str] = &[
-        "\"", "\\", ":", "=", "&", " ", "token", "Bearer ", "ğ", "x1", "{",
+        "\"", "\\", "'", ":", "=", "&", " ", "token", "code", "Bearer ", "ğ", "x1", "{", "[",
     ];
     let mut checked = 0;
     let mut stack: Vec<(String, usize)> = vec![(String::new(), 0)];
@@ -1055,5 +1170,6 @@ fn redaction_survives_odd_text() {
             }
         }
     }
-    assert_eq!(checked, 1 + 11 + 11 * 11 + 11 * 11 * 11 + 11 * 11 * 11 * 11);
+    let n = PIECES.len();
+    assert_eq!(checked, 1 + n + n * n + n * n * n + n * n * n * n);
 }

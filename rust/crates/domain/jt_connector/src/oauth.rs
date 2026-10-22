@@ -1,7 +1,5 @@
 //! The signed OAuth `state` and PKCE (RFC 7636, S256).
 
-use std::fmt;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jt_tenancy::WorkspaceId;
@@ -9,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 
-use crate::Masked;
 use crate::crypto::{ct_eq, from_hex, hmac_sha256, to_hex};
 use crate::provider::Provider;
 
@@ -25,8 +22,10 @@ pub const STATE_CLOCK_SKEW: Duration = Duration::minutes(1);
 /// [`OAuthState::verify`]).
 ///
 /// The payload is signed, not encrypted: anyone who sees the authorize URL or the callback URL
-/// can read it. `Debug` masks `pkce_verifier`.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// can read it, so it holds nothing secret. In particular it never holds a PKCE code verifier: a
+/// verifier there would ride the browser redirect beside the authorization code and defeat PKCE.
+/// The verifier ([`pkce_pair`]) stays server-side, sealed with the pending flow.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthState {
     pub workspace_id: WorkspaceId,
     pub provider: Provider,
@@ -37,13 +36,6 @@ pub struct OAuthState {
     /// Random bytes that make every state unique.
     #[serde(with = "crate::crypto::hex16")]
     pub nonce: [u8; 16],
-    /// The PKCE code verifier, for providers that use PKCE (X). Missing reads as `None`.
-    ///
-    /// Readable by whoever sees the authorize or callback URL, like the rest of the payload: a
-    /// caller that wants the verifier kept from the redirect leaves it `None` here and keeps it
-    /// server-side (with the pending flow) instead.
-    #[serde(default)]
-    pub pkce_verifier: Option<String>,
 }
 
 /// Why a state token was refused.
@@ -101,23 +93,6 @@ impl OAuthState {
             return Err(OAuthError::Expired);
         }
         Ok(state)
-    }
-}
-
-/// `pkce_verifier` prints as `***` when present.
-impl fmt::Debug for OAuthState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OAuthState")
-            .field("workspace_id", &self.workspace_id)
-            .field("provider", &self.provider)
-            .field("kind_key", &self.kind_key)
-            .field("issued_at", &self.issued_at)
-            .field("nonce", &to_hex(&self.nonce))
-            .field(
-                "pkce_verifier",
-                &self.pkce_verifier.as_ref().map(|_| Masked),
-            )
-            .finish()
     }
 }
 

@@ -46,14 +46,16 @@ const ALL_PURPOSES: &[NetgsmPurpose] = &[
 ];
 
 impl NetgsmPurpose {
-    /// The stable key, e.g. `"voice_report"`; it is also the last segment of the callback URL.
+    /// The stable key, e.g. `"voice-report"`: the last segment of the callback URL
+    /// (`mo`, `events`, `iys`, `voice-report`, `autocall-report`) and the `<purpose>` of the
+    /// token's HMAC input ([`netgsm_hook_token`]).
     pub fn key(&self) -> &'static str {
         match self {
             NetgsmPurpose::Mo => "mo",
             NetgsmPurpose::Events => "events",
             NetgsmPurpose::Iys => "iys",
-            NetgsmPurpose::VoiceReport => "voice_report",
-            NetgsmPurpose::AutocallReport => "autocall_report",
+            NetgsmPurpose::VoiceReport => "voice-report",
+            NetgsmPurpose::AutocallReport => "autocall-report",
         }
     }
 
@@ -70,8 +72,9 @@ impl NetgsmPurpose {
 
 /// The token in the URL of a workspace's NetGSM callback for `purpose`: the 64 lowercase hex
 /// digits of HMAC-SHA256 under the workspace's hook key `seal_key` over
-/// `"netgsm-hook:<workspace uuid>:<purpose>"` (the uuid hyphenated, lowercase). Deterministic, so
-/// it is computed again to check a request, never stored.
+/// `"netgsm-hook:<workspace uuid>:<purpose>"` (the uuid hyphenated, lowercase), `purpose` being a
+/// [`NetgsmPurpose::key`]. Deterministic, so it is computed again to check a request, never
+/// stored.
 pub fn netgsm_hook_token(seal_key: &[u8; 32], workspace: WorkspaceId, purpose: &str) -> String {
     let message = format!("netgsm-hook:{workspace}:{purpose}");
     to_hex(&hmac_sha256(seal_key, message.as_bytes()))
