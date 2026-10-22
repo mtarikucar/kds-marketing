@@ -1,15 +1,16 @@
 //! `/api/capability-groups`: the capability groups of the session's current workspace (spec
 //! §6.3), each with its members.
 //!
-//! Creating answers `201`; deleting a group or removing a member `204`; renaming and adding a
-//! member answer the group as it now stands (`200`).
+//! Creating answers `201`; renaming, adding and removing a member answer the group as it now
+//! stands (`200`), and deleting answers `200` with the confirmation `{group_id, deleted: true}`:
+//! each the same JSON its MCP tool answers.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use jt_app::usecases::groups::{self, GroupOut};
 use jt_capability::{CapabilityGroupId, CapabilityId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{ApiError, ApiJson, ApiPath};
 use crate::session::WorkspaceCtx;
@@ -36,6 +37,14 @@ pub struct RenameBody {
 #[serde(deny_unknown_fields)]
 pub struct AddMemberBody {
     pub capability_id: CapabilityId,
+}
+
+/// The answer to deleting a group, as `jeeta.capability.groups_delete` answers it.
+#[derive(Serialize)]
+pub struct DeletedBody {
+    pub group_id: CapabilityGroupId,
+    /// Always `true`.
+    pub deleted: bool,
 }
 
 /// `200` with every group and its members, oldest group first.
@@ -68,14 +77,17 @@ pub async fn rename(
     ))
 }
 
-/// `204`: the group is deleted; its members stay.
+/// `200` with `{group_id, deleted: true}`: the group is deleted; its members stay.
 pub async fn delete(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiPath(id): ApiPath<CapabilityGroupId>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<DeletedBody>, ApiError> {
     groups::delete(&state.deps, &ctx, id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(DeletedBody {
+        group_id: id,
+        deleted: true,
+    }))
 }
 
 /// `200` with the group and its new member.
@@ -90,12 +102,13 @@ pub async fn add_member(
     ))
 }
 
-/// `204`: the capability is no longer a member of the group.
+/// `200` with the group, without the capability among its members.
 pub async fn remove_member(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiPath((id, capability)): ApiPath<(CapabilityGroupId, CapabilityId)>,
-) -> Result<StatusCode, ApiError> {
-    groups::remove_member(&state.deps, &ctx, id, capability).await?;
-    Ok(StatusCode::NO_CONTENT)
+) -> Result<Json<GroupOut>, ApiError> {
+    Ok(Json(
+        groups::remove_member(&state.deps, &ctx, id, capability).await?,
+    ))
 }

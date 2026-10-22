@@ -3,9 +3,10 @@
 //! from.
 //!
 //! Reading answers the capability with its status at the time of the call
-//! (`{capability, effective_status}`). Declaring answers `201`, unlinking a budget item `204`;
-//! every other write answers the capability as it now stands (`200`). A policy, in a declaration
-//! or on its own, is read strictly: an unknown field is `422 VALIDATION` naming `policy`.
+//! (`{capability, effective_status}`). Declaring answers `201`; every other write, unlinking a
+//! budget item included, answers the capability as it now stands (`200`), the same JSON its MCP
+//! tool answers. A policy, in a declaration or on its own, is read strictly: an unknown field is
+//! `422 VALIDATION` naming `policy`.
 
 use axum::Json;
 use axum::extract::State;
@@ -201,12 +202,13 @@ pub async fn link_budget(
     ))
 }
 
-/// `204`: the capability no longer spends from the budget item.
+/// `200` with the capability, which no longer spends from the budget item.
 pub async fn unlink_budget(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiPath((id, item)): ApiPath<(CapabilityId, BudgetItemId)>,
-) -> Result<StatusCode, ApiError> {
-    capabilities::unlink_budget(&state.deps, &ctx, id, item).await?;
-    Ok(StatusCode::NO_CONTENT)
+) -> Result<Json<CapabilityOut>, ApiError> {
+    Ok(Json(
+        capabilities::unlink_budget(&state.deps, &ctx, id, item).await?,
+    ))
 }

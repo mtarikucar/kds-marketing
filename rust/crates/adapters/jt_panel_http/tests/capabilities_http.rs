@@ -172,6 +172,19 @@ async fn owner_declares_groups_and_links_a_budget_on_the_panel() {
     )
     .await;
     assert_eq!(refused["details"]["field"], "before_at");
+    // Like the capability list, the page refuses a parameter it does not know.
+    expect_error(
+        p.get(&format!("{spend_path}?limt=10"), &owner).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
+    expect_error(
+        p.get("/api/capabilities?knd=phone", &owner).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
     let items = ok_json(p.get("/api/budget/items", &owner).await).await;
     assert_eq!(items[0]["spent_in_period"], 2_500);
 
@@ -274,24 +287,31 @@ async fn owner_declares_groups_and_links_a_budget_on_the_panel() {
     )
     .await;
 
-    // Unlinking, removing a member and deleting the group leave nothing to show.
+    // Unlinking, removing a member and deleting the group answer as their MCP twins do: the
+    // capability, the group, and the deletion confirmed.
     let unlink = format!("/api/capabilities/{phone}/budget-links/{item_id}");
-    let resp = send(&p, Method::DELETE, &unlink, &owner, None).await;
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let unlinked = ok_json(send(&p, Method::DELETE, &unlink, &owner, None).await).await;
+    assert_eq!(unlinked["capability"]["id"], json!(phone));
+    assert_eq!(unlinked["capability"]["budget_item_ids"], json!([]));
     let got = ok_json(p.get(&format!("/api/capabilities/{phone}"), &owner).await).await;
-    assert_eq!(got["capability"]["budget_item_ids"], json!([]));
+    assert_eq!(got, unlinked);
     let remove = format!("/api/capability-groups/{group_id}/members/{phone}");
-    let resp = send(&p, Method::DELETE, &remove, &owner, None).await;
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    let resp = send(
-        &p,
-        Method::DELETE,
-        &format!("/api/capability-groups/{group_id}"),
-        &owner,
-        None,
+    let left = ok_json(send(&p, Method::DELETE, &remove, &owner, None).await).await;
+    assert_eq!(left["group"]["id"], json!(group_id));
+    assert_eq!(left["group"]["name"], "Marka B");
+    assert_eq!(left["members"], json!([]));
+    let deleted = ok_json(
+        send(
+            &p,
+            Method::DELETE,
+            &format!("/api/capability-groups/{group_id}"),
+            &owner,
+            None,
+        )
+        .await,
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(deleted, json!({ "group_id": group_id, "deleted": true }));
     assert_eq!(
         ok_json(p.get("/api/capability-groups", &owner).await).await,
         json!([])

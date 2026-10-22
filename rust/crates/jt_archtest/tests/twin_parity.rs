@@ -9,8 +9,12 @@
 //!   same JSON, field for field.
 //! - `capability.list`: after declarations, `GET /api/capabilities` answers the very list
 //!   `jeeta.capability.list` answers under `capabilities`.
+//! - `capability.unlink_budget`, `capability.groups.remove_member`, `capability.groups.delete`:
+//!   the panel's `DELETE` routes answer the JSON their MCP tools answer for the same ids (the
+//!   capability, the group, the deletion confirmed), and the same error once the group is gone.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -168,15 +172,29 @@ async fn mcp_session(app: &Router, key: &str) -> String {
     session
 }
 
-/// The structured output of tool `name` called with `arguments` in `session`, which must succeed.
-async fn call_tool(app: &Router, key: &str, session: &str, name: &str, arguments: Value) -> Value {
+/// The `result` of tool `name` called with `arguments` in `session`, failed or not. Each call
+/// has a JSON-RPC id of its own.
+async fn tool_result(
+    app: &Router,
+    key: &str,
+    session: &str,
+    name: &str,
+    arguments: Value,
+) -> Value {
+    static NEXT_ID: AtomicI64 = AtomicI64::new(2);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let call = json!({
-        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
         "params": { "name": name, "arguments": arguments },
     });
     let resp = send(app, mcp(key, Some(session), &call)).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let result = sse_message(resp, 2).await["result"].clone();
+    sse_message(resp, id).await["result"].clone()
+}
+
+/// The structured output of tool `name` called with `arguments` in `session`, which must succeed.
+async fn call_tool(app: &Router, key: &str, session: &str, name: &str, arguments: Value) -> Value {
+    let result = tool_result(app, key, session, name, arguments).await;
     assert_ne!(result["isError"], json!(true), "{result}");
     result["structuredContent"].clone()
 }
@@ -435,4 +453,135 @@ async fn capability_list_answers_the_same_over_the_panel_and_mcp() {
     .await;
     assert_eq!(agent, json!({ "capabilities": human }));
     assert_eq!(human.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn capability_mutations_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    let post = |path: String, body: Value| {
+        send(&app, panel(Method::POST, &path, Some(&cookie), Some(body)))
+    };
+    let delete = |path: String| send(&app, panel(Method::DELETE, &path, Some(&cookie), None));
+
+    // A phone in two groups, spending from a cash item.
+    let phone = ok(post(
+        "/api/capabilities".into(),
+        json!({ "kind_key": "phone", "name": "Saha telefonu" }),
+    )
+    .await)
+    .await;
+    let phone_id = phone["capability"]["id"].as_str().unwrap().to_owned();
+    let mut group_ids = Vec::new();
+    for name in ["Saha", "Kampanya"] {
+        let group = ok(post("/api/capability-groups".into(), json!({ "name": name })).await).await;
+        let group_id = group["group"]["id"].as_str().unwrap().to_owned();
+        ok(post(
+            format!("/api/capability-groups/{group_id}/members"),
+            json!({ "capability_id": phone_id }),
+        )
+        .await)
+        .await;
+        group_ids.push(group_id);
+    }
+    let item = ok(post(
+        "/api/budget/items".into(),
+        json!({
+            "name": "Nakit",
+            "kind": "cash",
+            "unit": { "kind": "currency", "value": "TRY" },
+            "cap": 100000,
+            "period": "monthly",
+        }),
+    )
+    .await)
+    .await;
+    let item_id = item["item"]["id"].as_str().unwrap().to_owned();
+    let link = || {
+        post(
+            format!("/api/capabilities/{phone_id}/budget-links"),
+            json!({ "budget_item_id": item_id }),
+        )
+    };
+    ok(link().await).await;
+
+    // Unlinking: the panel, then (linked again) the agent, for the same pair.
+    let human = ok(delete(format!(
+        "/api/capabilities/{phone_id}/budget-links/{item_id}"
+    ))
+    .await)
+    .await;
+    ok(link().await).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.unlink_budget",
+        json!({ "capability_id": phone_id, "budget_item_id": item_id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["capability"]["budget_item_ids"], json!([]));
+
+    // Removing a member: the same group and capability on both gates.
+    let group_id = &group_ids[0];
+    let member = json!({ "capability_id": phone_id });
+    let human = ok(delete(format!(
+        "/api/capability-groups/{group_id}/members/{phone_id}"
+    ))
+    .await)
+    .await;
+    ok(post(format!("/api/capability-groups/{group_id}/members"), member).await).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.groups_remove_member",
+        json!({ "group_id": group_id, "capability_id": phone_id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["group"]["id"], json!(group_id));
+    assert_eq!(human["members"], json!([]));
+
+    // Deleting: each gate confirms its own group the same way, and the same group once gone is
+    // the same error on both.
+    let human = ok(delete(format!("/api/capability-groups/{group_id}")).await).await;
+    assert_eq!(human, json!({ "group_id": group_id, "deleted": true }));
+    let other = &group_ids[1];
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.groups_delete",
+        json!({ "group_id": other }),
+    )
+    .await;
+    assert_eq!(agent, json!({ "group_id": other, "deleted": true }));
+    let resp = delete(format!("/api/capability-groups/{group_id}")).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.groups_delete",
+        json!({ "group_id": group_id }),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["code"], "NOT_FOUND");
 }

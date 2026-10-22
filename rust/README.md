@@ -241,14 +241,20 @@ gelir. Bir bağlayıcının ulaşacağı adresler `connector_public.hosts` alan�
 | Politika (gövde politikanın kendisi) | `PUT /api/capabilities/{capability_id}/policy` | `jeeta.capability.set_policy` | `capabilities.manage` |
 | Emekliye ayırma (`{"confirm": true}`) | `POST /api/capabilities/{capability_id}/retire` | `jeeta.capability.retire` | `capabilities.manage` |
 | Bütçe kalemine bağlama | `POST /api/capabilities/{capability_id}/budget-links` | `jeeta.capability.link_budget` | `capabilities.manage` |
-| Bağı kaldırma | `DELETE /api/capabilities/{capability_id}/budget-links/{budget_item_id}` | `jeeta.capability.unlink_budget` | `capabilities.manage` |
+| Bağı kaldırma (yanıt: kabiliyetin kendisi) | `DELETE /api/capabilities/{capability_id}/budget-links/{budget_item_id}` | `jeeta.capability.unlink_budget` | `capabilities.manage` |
 | Gruplar | `GET /api/capability-groups` | `jeeta.capability.groups_list` | `workspace.read` |
-| Grup açma, adlandırma, silme | `POST /api/capability-groups`, `PATCH`/`DELETE /api/capability-groups/{group_id}` | `jeeta.capability.groups_create`, `groups_rename`, `groups_delete` | `capabilities.manage` |
-| Grup üyeliği | `POST /api/capability-groups/{group_id}/members`, `DELETE …/members/{capability_id}` | `jeeta.capability.groups_add_member`, `groups_remove_member` | `capabilities.manage` |
+| Grup açma, adlandırma | `POST /api/capability-groups`, `PATCH /api/capability-groups/{group_id}` | `jeeta.capability.groups_create`, `groups_rename` | `capabilities.manage` |
+| Grup silme (yanıt: `{"group_id": …, "deleted": true}`) | `DELETE /api/capability-groups/{group_id}` | `jeeta.capability.groups_delete` | `capabilities.manage` |
+| Grup üyeliği (yanıt: grubun kendisi) | `POST /api/capability-groups/{group_id}/members`, `DELETE …/members/{capability_id}` | `jeeta.capability.groups_add_member`, `groups_remove_member` | `capabilities.manage` |
 | Bütçe kalemleri | `GET /api/budget/items` | `jeeta.budget.items_list` | `workspace.read` |
 | Bütçe kalemi açma | `POST /api/budget/items` | `jeeta.budget.items_create` | `budget.manage` |
 | Harcama bildirme (`{"amount": …, "reference": …}`) | `POST /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_record` | `workspace.read` |
 | Harcamalar (`limit`, `before_at` + `before_id`) | `GET /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_list` | `workspace.read` |
+
+Her değişiklik iki kapıda da aynı yanıtı verir: panel rotası, `DELETE` rotaları dahil, ikiz MCP aracının
+döndürdüğü JSON'u döndürür (açma `201`, gerisi `200`). Paneldeki liste ve sayfa uçları
+(`GET /api/capabilities`, `GET /api/budget/items/{budget_item_id}/spend`) tanımadıkları bir sorgu
+parametresini `422 VALIDATION` ile reddeder.
 
 Bütçe kalemleri alanın kendi parası ve tavanlarıdır (sistemin kredisi değil); harcama tavanı aşsa da kaydedilir
 ve `budget.over_cap` kaydıyla işaretlenir. Emekliye ayırma kesindir: kabiliyet gruplarından ve bütçe

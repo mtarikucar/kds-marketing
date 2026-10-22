@@ -30,7 +30,9 @@ pub struct SpendBody {
 
 /// `GET /api/budget/items/{budget_item_id}/spend?limit=&before_at=&before_id=`; every parameter
 /// is optional, but `before_at` and `before_id` (the previous page's last entry) come together.
+/// Any other parameter is `422 VALIDATION`, as on the capability list.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpendQuery {
     /// At most this many entries: default 50, at most 500 (a larger value is capped).
     pub limit: Option<u32>,
