@@ -6,14 +6,17 @@
 //!   ([`session`]); the platform console's `/api/platform/*` routes take the operator's separate
 //!   `jt_platform` cookie ([`platform_session`]). Every mutating request must carry
 //!   `X-Requested-With: jeeta-panel` ([`csrf`]), checked before authentication and body
-//!   parsing. Errors, including bad bodies, malformed path parameters and unknown paths, are
-//!   structured: `{ "code", "message", "details" }`.
+//!   parsing. Each route is then wrapped in the gate of its catalog use case ([`gate`]), which
+//!   runs before the handler whatever the handler extracts. Errors, including bad bodies,
+//!   malformed path parameters and unknown paths, are structured:
+//!   `{ "code", "message", "details" }`.
 //! - `/healthz`: `200 {"ok":true}`.
 //! - Everything else: the built panel from [`AppState::panel_dir`] ([`static_files`]), or a
 //!   structured `404` when there is none.
 
 pub mod csrf;
 pub mod error;
+pub mod gate;
 pub mod platform_session;
 pub mod routes;
 pub mod session;
@@ -21,9 +24,9 @@ pub mod state;
 pub mod static_files;
 
 use axum::extract::Request;
-use axum::{Extension, Router, middleware};
+use axum::{Router, middleware};
 use jt_app::catalog::{CATALOG, UseCase};
-use routes::{ApiRoute, RouteUseCase};
+use routes::ApiRoute;
 
 pub use error::{ApiError, ApiJson, ApiPath, ApiQuery};
 pub use platform_session::PlatformAuthed;
@@ -45,12 +48,44 @@ pub fn router(state: AppState) -> Router {
     build(state, routes::api_routes(), CATALOG)
 }
 
+/// [`router`] with one more API route, `route`, for `use_case`, which need not be in the
+/// catalog. Meant for tests (e.g. a `Gated` use case, which M0's catalog does not have yet, or a
+/// handler with unusual extractors); the binary serves [`router`] as it is.
+///
+/// # Panics
+///
+/// As [`router`]; when `use_case` is not `route`'s (its id and panel route must match); and when
+/// the catalog already has a use case with its id.
+pub fn router_with_test_route(
+    state: AppState,
+    route: ApiRoute,
+    use_case: &'static UseCase,
+) -> Router {
+    assert!(
+        jt_app::catalog::find(use_case.id).is_none(),
+        "use case `{}` is already in the catalog",
+        use_case.id
+    );
+    let mut api_routes = routes::api_routes();
+    api_routes.push(route);
+    let mut catalog: Vec<UseCase> = CATALOG.to_vec();
+    catalog.push(*use_case);
+    build(state, api_routes, &catalog)
+}
+
 /// [`router`] over the given API routes, resolved in `catalog`.
 fn build(state: AppState, api_routes: Vec<ApiRoute>, catalog: &[UseCase]) -> Router {
     let mut api = Router::new();
     for route in api_routes {
-        let use_case = RouteUseCase(routes::resolve(&route, catalog));
-        api = api.route(route.path, route.handler.layer(Extension(use_case)));
+        let use_case = routes::resolve(&route, catalog);
+        let gate = gate::RouteGate {
+            state: state.clone(),
+            use_case,
+        };
+        let handler = route
+            .handler
+            .route_layer(middleware::from_fn_with_state(gate, gate::require_gate));
+        api = api.route(route.path, handler);
     }
     let api = api
         .fallback(error::not_found)
@@ -98,6 +133,7 @@ mod tests {
         mcp_tool: Some("jeeta.demo.read"),
         panel_route: Some(("GET", "/api/demo")),
         panel_only: false,
+        status_exempt: false,
         risk: Risk::Read,
     };
 

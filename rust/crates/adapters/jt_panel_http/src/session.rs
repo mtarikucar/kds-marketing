@@ -9,11 +9,10 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, header};
 use jt_app::ctx::Ctx;
 use jt_app::error::AppError;
-use jt_app::gate::check_gate;
 use jt_app::usecases::auth::{self, Principal, SESSION_LIFETIME};
 
 use crate::error::ApiError;
-use crate::routes::RouteUseCase;
+use crate::gate::current_workspace;
 use crate::state::AppState;
 
 /// The name of the panel session cookie.
@@ -95,12 +94,11 @@ impl FromRequestParts<AppState> for Authed {
     }
 }
 
-/// The context of a call in the signed-in user's current workspace, admitted by the gate.
+/// The context of a call in the signed-in user's current workspace.
 ///
 /// `401` without a valid session; `409 CONFLICT` ("no current workspace") when the session has
-/// none. The route's use case, resolved from the catalog when the router was built and attached
-/// to the request as a [`RouteUseCase`], must pass [`check_gate`] with the workspace's status
-/// and [`AppState::gate`]. The request method plays no part, so `HEAD` passes exactly as `GET`.
+/// none. The gate is not this extractor's: the per-route layer of [`crate::gate`] has already
+/// admitted the request by the time a handler runs, whatever it extracts.
 #[derive(Clone, Debug)]
 pub struct WorkspaceCtx(pub Ctx);
 
@@ -109,22 +107,12 @@ impl FromRequestParts<AppState> for WorkspaceCtx {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let Authed(principal) = Authed::from_request_parts(parts, state).await?;
-        // `resolve_session` keeps a current workspace only while it is one of the memberships.
-        let (ws, status) = principal
-            .current_workspace
-            .and_then(|ws| principal.memberships.iter().find(|m| m.workspace_id == ws))
-            .map(|m| (m.workspace_id, m.workspace_status))
-            .ok_or_else(|| AppError::conflict("no current workspace"))?;
-        let ctx = auth::ctx_for(&principal, ws, state.deps.clock.now())?;
-        // Every API route carries its use case; only a misuse of this extractor outside the API
-        // could miss it.
-        let RouteUseCase(use_case) = parts
-            .extensions
-            .get::<RouteUseCase>()
-            .copied()
-            .ok_or_else(|| AppError::internal("WorkspaceCtx used on a route without a use case"))?;
-        check_gate(&use_case, status, state.gate.as_ref(), ws).await?;
-        Ok(WorkspaceCtx(ctx))
+        let (ws, _status) = current_workspace(&principal)?;
+        Ok(WorkspaceCtx(auth::ctx_for(
+            &principal,
+            ws,
+            state.deps.clock.now(),
+        )?))
     }
 }
 

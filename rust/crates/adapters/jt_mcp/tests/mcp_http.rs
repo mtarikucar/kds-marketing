@@ -48,6 +48,7 @@ static GATED: UseCase = UseCase {
     mcp_tool: Some("jeeta.demo.gated"),
     panel_route: None,
     panel_only: false,
+    status_exempt: false,
     risk: Risk::Read,
 };
 
@@ -831,9 +832,19 @@ async fn call_on_pending_payment_workspace_returns_workspace_inactive() {
     assert_eq!(refused["code"], "WORKSPACE_INACTIVE");
     assert_eq!(refused["details"], json!({ "status": "pending_payment" }));
 
-    // Exempt tools keep working while the workspace is inactive.
+    // Status-exempt tools keep working while the workspace is inactive; every other tool,
+    // exempt from the strategy gate or not, meets the status check.
     let info = ok(&call(&client, "jeeta.workspace.info", json!({})).await);
     assert_eq!(info["status"], "pending_payment");
+    for tool in [
+        "jeeta.team.list",
+        "jeeta.api_keys.list",
+        "jeeta.ledger.list",
+    ] {
+        let refused = err(&call(&client, tool, json!({})).await);
+        assert_eq!(refused["code"], "WORKSPACE_INACTIVE", "{tool}");
+        assert_eq!(refused["details"], json!({ "status": "pending_payment" }));
+    }
 }
 
 #[tokio::test]

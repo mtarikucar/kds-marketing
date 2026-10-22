@@ -15,8 +15,10 @@ use jt_app::usecases::agents::{self, ClientInfo};
 use jt_app::usecases::api_keys;
 use jt_panel_http::{AppState, router};
 use jt_pg::PgUnitOfWork;
+use jt_tenancy::WorkspaceId;
 use jt_testkit::TestDb;
 use jt_testkit::fakes::PlainHasher;
+use jt_testkit::flows::activate_workspace;
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
@@ -87,8 +89,17 @@ impl Panel {
         self.send(Method::GET, path, Some(cookie), None).await
     }
 
-    /// Registers `email` with a new workspace; returns the `jt_session=…` pair.
+    /// Registers `email` with a new workspace, which the platform operator then activates;
+    /// returns the `jt_session=…` pair.
     async fn register(&self, email: &str, workspace_name: &str) -> String {
+        let (cookie, ws) = self.register_pending(email, workspace_name).await;
+        activate_workspace(&self.deps, ws).await;
+        cookie
+    }
+
+    /// Registers `email` with a new workspace, left awaiting payment; returns the
+    /// `jt_session=…` pair and the workspace.
+    async fn register_pending(&self, email: &str, workspace_name: &str) -> (String, WorkspaceId) {
         let body = json!({
             "email": email,
             "password": PASSWORD,
@@ -99,7 +110,10 @@ impl Panel {
             .send(Method::POST, "/api/auth/register", None, Some(body))
             .await;
         assert_eq!(resp.status(), StatusCode::CREATED);
-        session_pair(&resp)
+        let cookie = session_pair(&resp);
+        let me = ok_json(resp).await;
+        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
+        (cookie, ws)
     }
 
     /// Invites `email` as `role_key` from `owner_cookie` and accepts as a new user; returns the
@@ -181,6 +195,44 @@ async fn expect_error(resp: Response, status: StatusCode, code: &str) -> Value {
     assert!(body["message"].is_string(), "{body}");
     assert!(body["details"].is_object(), "{body}");
     body
+}
+
+#[tokio::test]
+async fn a_workspace_awaiting_payment_mints_no_keys_and_invites_no_one_until_activated() {
+    let p = Panel::new().await;
+    let (owner, ws) = p.register_pending("owner@alpha.example", "Alpha").await;
+
+    let resp = p.create_key(&owner, json!({ "name": "CI bot" })).await;
+    let body = expect_error(resp, StatusCode::LOCKED, "WORKSPACE_INACTIVE").await;
+    assert_eq!(body["details"], json!({ "status": "pending_payment" }));
+    let invite = json!({ "email": "bob@example.com", "role_key": "rep" });
+    let resp = p
+        .send(
+            Method::POST,
+            "/api/team/invites",
+            Some(&owner),
+            Some(invite.clone()),
+        )
+        .await;
+    expect_error(resp, StatusCode::LOCKED, "WORKSPACE_INACTIVE").await;
+    // The workspace itself, and who is signed in, can still be read.
+    let info = ok_json(p.get("/api/workspace", &owner).await).await;
+    assert_eq!(info["status"], "pending_payment");
+    assert_eq!(p.get("/api/auth/me", &owner).await.status(), StatusCode::OK);
+
+    // The operator activates it; the same session now may do both.
+    activate_workspace(&p.deps, ws).await;
+    let resp = p.create_key(&owner, json!({ "name": "CI bot" })).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let resp = p
+        .send(
+            Method::POST,
+            "/api/team/invites",
+            Some(&owner),
+            Some(invite),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
 }
 
 #[tokio::test]

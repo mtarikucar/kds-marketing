@@ -23,7 +23,8 @@ use std::fmt;
 use jt_ledger::{Actor, LedgerEntry, Subject};
 use jt_tenancy::{
     Email, MembershipId, MembershipStatus, Permission, RoleDef, RoleGrant, SystemRole,
-    TenancyError, UserId, WorkspaceId, can_change_role, can_grant_role, can_remove_member,
+    TenancyError, UserId, WorkspaceId, WorkspaceStatus, can_change_role, can_grant_role,
+    can_remove_member,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -221,7 +222,10 @@ pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<Invite
 /// Accepts the invitation behind `input.token`, at the clock's time.
 ///
 /// An unknown token, one whose invitation has expired (`invite_expires_at` not after now), and
-/// one already spent or cancelled are all `FORBIDDEN` with the same message.
+/// one already spent or cancelled are all `FORBIDDEN` with the same message. A valid invitation
+/// into a workspace that is not `active` is `WORKSPACE_INACTIVE` (`details.status`):
+/// `team.accept_invite` is not status-exempt, and since it acts in the invitation's workspace
+/// rather than the session's current one, it checks that workspace's status itself.
 ///
 /// - Signed in (`principal` set): the principal's email must equal the invited email, else
 ///   `FORBIDDEN`; a principal already in the workspace is `CONFLICT`. The membership becomes
@@ -236,15 +240,29 @@ pub async fn invite(deps: &Deps, ctx: &Ctx, input: InviteInput) -> Result<Invite
 /// (payload `invited_email`, `role_key`).
 pub async fn accept_invite(deps: &Deps, input: AcceptInput<'_>) -> Result<AcceptOut, AppError> {
     let now = deps.clock.now();
-    let found = {
+    let (found, status) = {
         let mut platform = deps.uow.platform().await?;
-        platform
+        let found = platform
             .membership_find_by_invite_hash(&hash_token(&input.token))
-            .await?
+            .await?;
+        let status = match &found {
+            Some(m) => platform
+                .workspace_get(m.workspace_id)
+                .await?
+                .map(|w| w.status),
+            None => None,
+        };
+        (found, status)
     };
     let invitation = found
         .filter(|m| is_open(m, now))
         .ok_or_else(invalid_invite)?;
+    // Only after the token proved valid, so the answer to a bad token never tells more.
+    match status {
+        Some(WorkspaceStatus::Active) => {}
+        Some(other) => return Err(AppError::workspace_inactive(other)),
+        None => return Err(AppError::internal("the invitation's workspace is missing")),
+    }
     let invited_email = invitation
         .invited_email
         .clone()

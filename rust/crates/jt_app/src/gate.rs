@@ -1,4 +1,4 @@
-//! The strategy gate: gated use cases need an active workspace with an approved strategy.
+//! The gate in front of every use case: the workspace-status check, then the strategy gate.
 
 use async_trait::async_trait;
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
@@ -23,24 +23,24 @@ impl StrategyGate for NoStrategyYet {
     }
 }
 
-/// Lets `uc` run in workspace `ws` (whose status is `ws_status`) or refuses it.
+/// Lets `uc` run in workspace `ws` (whose status is `ws_status`) or refuses it. The caller must
+/// already have been authenticated.
 ///
-/// `Exempt` use cases always pass; the caller must still have been authenticated. A `Gated` use
-/// case needs an `Active` workspace (else `WORKSPACE_INACTIVE`, checked first) and an approved
-/// strategy (else `STRATEGY_REQUIRED`).
+/// Two independent checks, in this order:
+/// 1. Unless `uc` is `status_exempt`, the workspace must be `Active`, else `WORKSPACE_INACTIVE`
+///    (`details.status`), whatever the strategy.
+/// 2. A `Gated` use case needs an approved strategy, else `STRATEGY_REQUIRED`; `gate` is asked
+///    only then.
 pub async fn check_gate(
     uc: &UseCase,
     ws_status: WorkspaceStatus,
     gate: &dyn StrategyGate,
     ws: WorkspaceId,
 ) -> Result<(), AppError> {
-    if uc.gate == GateMode::Exempt {
-        return Ok(());
-    }
-    if ws_status != WorkspaceStatus::Active {
+    if !uc.status_exempt && ws_status != WorkspaceStatus::Active {
         return Err(AppError::workspace_inactive(ws_status));
     }
-    if !gate.has_approved_strategy(ws).await? {
+    if uc.gate == GateMode::Gated && !gate.has_approved_strategy(ws).await? {
         return Err(AppError::strategy_required());
     }
     Ok(())

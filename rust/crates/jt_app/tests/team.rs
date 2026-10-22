@@ -7,13 +7,16 @@ use std::sync::Arc;
 
 use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
+use jt_app::ports::UnitOfWork;
 use jt_app::ports::{MembershipRow, SessionRow};
 use jt_app::usecases::auth::{self, LoginInput, Principal, RegisterInput};
 use jt_app::usecases::roles::{self, CreateRole};
 use jt_app::usecases::team::{self, AcceptInput, InviteInput, InviteOut};
 use jt_app::usecases::{Deps, hash_token};
 use jt_ledger::{Actor, LedgerEntry, Subject};
-use jt_tenancy::{Email, MembershipId, MembershipStatus, Permission, RoleId, UserId, WorkspaceId};
+use jt_tenancy::{
+    Email, MembershipId, MembershipStatus, Permission, RoleId, UserId, WorkspaceId, WorkspaceStatus,
+};
 use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
 use serde_json::json;
 use time::macros::datetime;
@@ -119,6 +122,8 @@ async fn team() -> Team {
     .await
     .unwrap();
     let ws = out.me.current_workspace.unwrap();
+    // The operator activates the new workspace: invitations open only an active one.
+    set_status(&w.uow, ws, WorkspaceStatus::Active).await;
     let owner_principal = auth::resolve_session(&w.deps, &out.token).await.unwrap();
     let owner_ctx = auth::ctx_for(&owner_principal, ws, T0).unwrap();
     Team {
@@ -171,6 +176,12 @@ impl Team {
             .role
             .id
     }
+}
+
+async fn set_status(uow: &InMemoryUow, ws: WorkspaceId, status: WorkspaceStatus) {
+    let mut platform = uow.platform().await.unwrap();
+    platform.workspace_set_status(ws, status).await.unwrap();
+    platform.commit().await.unwrap();
 }
 
 fn invite_input(email: &str, role_key: &str) -> InviteInput {
@@ -682,6 +693,36 @@ async fn accept_with_an_unknown_or_cancelled_token_is_forbidden() {
     );
     assert_eq!(e.code, ErrorCode::Forbidden);
     assert_eq!(e.message, INVALID_INVITE);
+}
+
+#[tokio::test]
+async fn accept_into_an_inactive_workspace_is_workspace_inactive() {
+    let t = team().await;
+    let invite = t.invite("bob@example.com", "rep").await;
+    for status in [WorkspaceStatus::Suspended, WorkspaceStatus::PendingPayment] {
+        set_status(&t.w.uow, t.ws, status).await;
+        let e = err(team::accept_invite(
+            &t.w.deps,
+            new_user(&invite.invite_token, "bob@example.com"),
+        )
+        .await);
+        assert_eq!(e.code, ErrorCode::WorkspaceInactive, "{status:?}");
+        assert_eq!(e.details, json!({ "status": status.key() }));
+        assert_eq!(t.w.uow.snapshot().users.len(), 1, "no user was created");
+        assert_eq!(
+            t.w.membership(invite.membership_id).status,
+            MembershipStatus::Invited
+        );
+    }
+    // A bad token still gets the one answer for bad tokens, whatever the workspace's status.
+    let e = err(team::accept_invite(&t.w.deps, new_user("no-such-token", "bob@example.com")).await);
+    assert_eq!(e.code, ErrorCode::Forbidden);
+
+    // Once the workspace is active again the same invitation opens it.
+    set_status(&t.w.uow, t.ws, WorkspaceStatus::Active).await;
+    team::accept_invite(&t.w.deps, new_user(&invite.invite_token, "bob@example.com"))
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------------------------

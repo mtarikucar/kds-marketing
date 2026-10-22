@@ -115,8 +115,15 @@ yalnızca açılışta oluşturulur:
 
 Panelde `http://127.0.0.1:8080/register`. Kayıt, kullanıcıyı ve onun sahibi olduğu yeni bir çalışma alanını
 açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/platform/workspaces`) etkinleştirilir.
-M0'daki her kullanım durumu kapıdan muaf olduğundan alan etkinleşmeden de kullanılabilir. API'den (değişiklik
-yapan her istek `X-Requested-With: jeeta-panel` başlığını taşımalıdır, yoksa `403`):
+
+**Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
+`workspace.*` ve `platform.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`, `agents.*`,
+`ledger.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
+`423 {"code":"WORKSPACE_INACTIVE","details":{"status":"pending_payment"}}` alır. Yani ödeme bekleyen bir alan
+operatör onu etkinleştirene kadar üye davet edemez ve API anahtarı açamaz; giriş, çıkış, `GET /api/auth/me`,
+`GET /api/workspace` ve alan değiştirme çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
+alana bekleyen bir davet de kabul edilemez. API'den (değişiklik yapan her istek
+`X-Requested-With: jeeta-panel` başlığını taşımalıdır, yoksa `403`):
 
 ```sh
 curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
@@ -127,8 +134,9 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
 
 ## Bir ajanı MCP'ye bağlama
 
-1. Panelde **API anahtarları** sayfasından (`/api-keys`) bir anahtar açın. Düz metni (`jt_live_…`) yalnızca
-   bir kez gösterilir. API'den: `POST /api/api-keys` gövdesi `{"name":"ajan"}`, oturum çereziyle.
+1. Panelde **API anahtarları** sayfasından (`/api-keys`) bir anahtar açın; çalışma alanı etkin olmalıdır
+   (bkz. [Kayıt](#kayıt)). Düz metni (`jt_live_…`) yalnızca bir kez gösterilir. API'den: `POST /api/api-keys`
+   gövdesi `{"name":"ajan"}`, oturum çereziyle.
 2. Uç nokta `http://127.0.0.1:8080/mcp`, taşıma **streamable HTTP**, kimlik
    `Authorization: Bearer jt_live_…`. Anahtar her istekte doğrulanır; bir MCP oturumu (`Mcp-Session-Id`) onu
    açan anahtara bağlıdır. Bu bağı olmayan bir oturum kimliği (başka bir anahtarın, silinmiş, hiç

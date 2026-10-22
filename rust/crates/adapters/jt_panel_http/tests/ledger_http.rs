@@ -14,35 +14,39 @@ use jt_panel_http::{AppState, router};
 use jt_pg::PgUnitOfWork;
 use jt_testkit::TestDb;
 use jt_testkit::fakes::PlainHasher;
+use jt_testkit::flows::activate_workspace;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const PASSWORD: &str = "correct horse battery";
 const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
 
-/// A router over a fresh test database.
+/// A router over a fresh test database, and the `Deps` behind it.
 struct Panel {
     _db: TestDb,
+    deps: Deps,
     app: Router,
 }
 
 impl Panel {
     async fn new() -> Panel {
         let db = TestDb::new().await;
+        let deps = Deps {
+            uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
+            clock: Arc::new(SystemClock),
+            ids: Arc::new(UuidV7Gen),
+            tokens: Arc::new(RandTokenGen),
+            hasher: Arc::new(PlainHasher),
+        };
         let state = AppState {
-            deps: Deps {
-                uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-                clock: Arc::new(SystemClock),
-                ids: Arc::new(UuidV7Gen),
-                tokens: Arc::new(RandTokenGen),
-                hasher: Arc::new(PlainHasher),
-            },
+            deps: deps.clone(),
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,
             panel_dir: None,
         };
         Panel {
             _db: db,
+            deps,
             app: router(state),
         }
     }
@@ -79,7 +83,8 @@ impl Panel {
         self.send(Method::GET, path, Some(cookie), None).await
     }
 
-    /// Registers `email` with a new workspace; returns the `jt_session=…` pair.
+    /// Registers `email` with a new workspace, which the platform operator then activates;
+    /// returns the `jt_session=…` pair.
     async fn register(&self, email: &str, workspace_name: &str) -> String {
         let body = json!({
             "email": email,
@@ -91,7 +96,11 @@ impl Panel {
             .send(Method::POST, "/api/auth/register", None, Some(body))
             .await;
         assert_eq!(resp.status(), StatusCode::CREATED);
-        session_pair(&resp)
+        let cookie = session_pair(&resp);
+        let me = ok_json(resp).await;
+        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
+        activate_workspace(&self.deps, ws).await;
+        cookie
     }
 
     /// Invites `email` as `role_key` from `owner_cookie`; returns the invitation.
@@ -183,11 +192,23 @@ async fn owner_lists_ledger_newest_first_with_filters() {
     let owner = p.register("owner@alpha.example", "Alpha").await;
     let invite = p.invite(&owner, "bob@example.com", "rep").await;
 
-    // Registration, then the invitation: newest first, each with its id and its entry.
+    // Registration, the operator's activation, then the invitation: newest first, each with
+    // its id and its entry.
     let all = p.ledger("", &owner).await;
-    assert_eq!(actions(&all), ["team.invite", "auth.register"]);
+    assert_eq!(
+        actions(&all),
+        ["team.invite", "platform.workspace_status", "auth.register"]
+    );
     let all_ids = ids(&all);
-    assert!(all_ids[0] > all_ids[1], "newest first: {all_ids:?}");
+    assert!(
+        all_ids[0] > all_ids[1] && all_ids[1] > all_ids[2],
+        "newest first: {all_ids:?}"
+    );
+    assert_eq!(all[1]["entry"]["actor"]["kind"], "system");
+    assert_eq!(
+        all[1]["entry"]["payload"],
+        json!({ "from": "pending_payment", "to": "active" })
+    );
     assert_eq!(all[0]["entry"]["actor"]["kind"], "human");
     assert_eq!(
         all[0]["entry"]["subject"],
@@ -208,23 +229,30 @@ async fn owner_lists_ledger_newest_first_with_filters() {
     let auth = p.ledger("?action_prefix=auth.", &owner).await;
     assert_eq!(actions(&auth), ["auth.register"]);
     assert_eq!(p.ledger("?actor_kind=human", &owner).await.len(), 2);
+    assert_eq!(
+        actions(&p.ledger("?actor_kind=system", &owner).await),
+        ["platform.workspace_status"]
+    );
     assert!(p.ledger("?actor_kind=agent", &owner).await.is_empty());
 
     // `limit` pages; `before_id` with the last id of a page gives the next one.
     let first = p.ledger("?limit=1", &owner).await;
     assert_eq!(actions(&first), ["team.invite"]);
     let next = p
-        .ledger(&format!("?limit=1&before_id={}", all_ids[0]), &owner)
+        .ledger(&format!("?limit=2&before_id={}", all_ids[0]), &owner)
         .await;
-    assert_eq!(actions(&next), ["auth.register"]);
-    assert_eq!(ids(&next), [all_ids[1]]);
+    assert_eq!(
+        actions(&next),
+        ["platform.workspace_status", "auth.register"]
+    );
+    assert_eq!(ids(&next), [all_ids[1], all_ids[2]]);
     let past_the_end = p
-        .ledger(&format!("?limit=1&before_id={}", all_ids[1]), &owner)
+        .ledger(&format!("?limit=1&before_id={}", all_ids[2]), &owner)
         .await;
     assert!(past_the_end.is_empty());
 
     // A limit above the maximum is capped, not refused.
-    assert_eq!(p.ledger("?limit=100000", &owner).await.len(), 2);
+    assert_eq!(p.ledger("?limit=100000", &owner).await.len(), 3);
 }
 
 #[tokio::test]

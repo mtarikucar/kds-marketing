@@ -1,7 +1,8 @@
 //! The gate rule, structural half (spec §5, B1): only the use cases the Global Constraints list
-//! may be `Exempt` from the strategy gate; every other use case is `Gated`. The behavioural half
-//! (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`) lives in the adapters'
-//! tests.
+//! may be `Exempt` from the strategy gate; every other use case is `Gated`. Separately, only
+//! `auth.*`, `workspace.*` and `platform.*` use cases are exempt from the workspace-status check.
+//! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
+//! lives in the adapters' tests.
 
 use jt_app::catalog::{CATALOG, GateMode};
 
@@ -35,6 +36,30 @@ fn only_listed_use_cases_are_exempt() {
         offenders.is_empty(),
         "use cases exempt from the gate without being on the exempt list (make them Gated): \
          {offenders:?}"
+    );
+}
+
+/// Id prefixes whose use cases run whatever the workspace's status, as the Global Constraints
+/// list them; written out here rather than read from `jt_app`, so a change there fails this test.
+const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."];
+
+#[test]
+fn only_auth_workspace_and_platform_use_cases_are_status_exempt() {
+    let wrong: Vec<(&str, bool)> = CATALOG
+        .iter()
+        .filter(|uc| {
+            uc.status_exempt != STATUS_EXEMPT_PREFIXES.iter().any(|p| uc.id.starts_with(p))
+        })
+        .map(|uc| (uc.id, uc.status_exempt))
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "status_exempt must be set exactly for auth.*, workspace.* and platform.* use cases: \
+         {wrong:?}"
+    );
+    assert_eq!(
+        jt_app::catalog::STATUS_EXEMPT_PREFIXES,
+        STATUS_EXEMPT_PREFIXES
     );
 }
 

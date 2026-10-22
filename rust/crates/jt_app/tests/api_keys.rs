@@ -8,7 +8,7 @@ use std::sync::Arc;
 use jt_app::catalog::Risk;
 use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
-use jt_app::ports::{AgentConnectionRow, ApiKeyRow, ApiKeyStatus};
+use jt_app::ports::{AgentConnectionRow, ApiKeyRow, ApiKeyStatus, UnitOfWork};
 use jt_app::usecases::agents::{self, ClientInfo, WhoAmI};
 use jt_app::usecases::api_keys::{self, CreateKey, KeyOut};
 use jt_app::usecases::auth::{self, RegisterInput};
@@ -18,6 +18,7 @@ use jt_app::usecases::{Deps, hash_token};
 use jt_ledger::{Actor, LedgerEntry, Subject};
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, MembershipId, Permission, SystemRole, UserId, WorkspaceId,
+    WorkspaceStatus,
 };
 use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
 use serde_json::{Value, json};
@@ -125,6 +126,13 @@ async fn team() -> Team {
     .await
     .unwrap();
     let ws = out.me.current_workspace.unwrap();
+    // The operator activates the new workspace: invitations open only an active one.
+    let mut platform = w.uow.platform().await.unwrap();
+    platform
+        .workspace_set_status(ws, WorkspaceStatus::Active)
+        .await
+        .unwrap();
+    platform.commit().await.unwrap();
     let principal = auth::resolve_session(&w.deps, &out.token).await.unwrap();
     let owner_ctx = auth::ctx_for(&principal, ws, T0).unwrap();
     Team {

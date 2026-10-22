@@ -377,9 +377,10 @@ mod tests {
             .unwrap()
     }
 
-    /// Registers an owner through the panel API and issues an API key with the session.
-    async fn api_key(app: &Router) -> String {
-        let (status, cookie, _) = call(
+    /// Registers an owner through the panel API, has the platform operator activate the new
+    /// workspace, and issues an API key with the owner's session.
+    async fn api_key(app: &Router, deps: &Deps) -> String {
+        let (status, cookie, me) = call(
             app,
             panel_post(
                 "/api/auth/register",
@@ -394,6 +395,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
+        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
+        jt_testkit::flows::activate_workspace(deps, ws).await;
         let cookie = cookie.unwrap();
         let session = cookie.split(';').next().unwrap();
         let (status, _, key) = call(
@@ -430,8 +433,9 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_accepts_loopback_hosts_and_the_configured_public_ones() {
-        let loopback_only = app(test_deps(), &test_config(&[]));
-        let key = api_key(&loopback_only).await;
+        let deps = test_deps();
+        let loopback_only = app(deps.clone(), &test_config(&[]));
+        let key = api_key(&loopback_only, &deps).await;
         for (host, expected) in [
             ("localhost:8080", StatusCode::OK),
             ("127.0.0.1:8080", StatusCode::OK),
@@ -441,11 +445,12 @@ mod tests {
             assert_eq!(status, expected, "{host}");
         }
 
+        let deps = test_deps();
         let public = app(
-            test_deps(),
+            deps.clone(),
             &test_config(&[(config::ALLOWED_HOSTS, "jeeta.example.com")]),
         );
-        let key = api_key(&public).await;
+        let key = api_key(&public, &deps).await;
         for (host, expected) in [
             ("jeeta.example.com", StatusCode::OK),
             ("jeeta.example.com:443", StatusCode::OK),

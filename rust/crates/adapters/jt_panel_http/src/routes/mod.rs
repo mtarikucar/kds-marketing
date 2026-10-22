@@ -4,8 +4,8 @@
 //!
 //! Every API route names the catalog use case behind it. The router resolves each name in the
 //! catalog when it is built, panicking on a name the catalog does not know or whose catalog
-//! route differs, and hands the resolved [`UseCase`] to the route's requests as a
-//! [`RouteUseCase`] extension, which the strategy gate in `WorkspaceCtx` reads.
+//! route differs, and wraps the route in the gate layer of the resolved [`UseCase`]
+//! ([`crate::gate`]).
 
 pub mod agents;
 pub mod api_keys;
@@ -70,10 +70,6 @@ pub struct RootRoute {
     pub path: &'static str,
     pub handler: MethodRouter<AppState>,
 }
-
-/// The use case of the route a request matched, attached when the router is built.
-#[derive(Clone, Copy, Debug)]
-pub struct RouteUseCase(pub UseCase);
 
 /// A method router answering only `method` (a standard method name; `GET` includes `HEAD`).
 fn only<H, T>(method: &'static str, handler: H) -> MethodRouter<AppState>

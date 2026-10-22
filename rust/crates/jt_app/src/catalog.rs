@@ -1,19 +1,25 @@
 //! The use-case catalog: every use case with its gate mode, its two surfaces and its risk.
 //!
 //! The twin rule: a use case has both an MCP tool and a panel route unless it is `panel_only`.
+//!
+//! Two independent checks guard a use case ([`crate::gate::check_gate`]): the workspace-status
+//! check (the workspace must be `active`), which every use case meets unless it is
+//! [`UseCase::status_exempt`], and the strategy gate, which only [`GateMode::Gated`] use cases
+//! meet.
 
 use serde::Serialize;
 
 use GateMode::Exempt;
 use Risk::{Destructive, Read, Write};
 
-/// Whether the strategy gate applies to a use case.
+/// Whether the strategy gate applies to a use case. The workspace-status check is separate
+/// ([`UseCase::status_exempt`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateMode {
-    /// Runs regardless of workspace status and strategy; the caller must still be authenticated.
+    /// Runs without an approved strategy; the caller must still be authenticated.
     Exempt,
-    /// Needs an active workspace with an approved strategy.
+    /// Needs an approved strategy.
     Gated,
 }
 
@@ -39,7 +45,43 @@ pub struct UseCase {
     pub panel_route: Option<(&'static str, &'static str)>,
     /// Reachable from the panel only; then `mcp_tool` is `None`.
     pub panel_only: bool,
+    /// Runs whatever the workspace's status. Only identity, workspace and platform use cases
+    /// (`auth.*`, `workspace.*`, `platform.*`) are; every other one answers `WORKSPACE_INACTIVE`
+    /// while its workspace is `pending_payment` or `suspended`, whatever its [`GateMode`].
+    pub status_exempt: bool,
     pub risk: Risk,
+}
+
+/// The id prefixes whose use cases are [`UseCase::status_exempt`].
+pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."];
+
+/// Whether use case `id` runs whatever its workspace's status: whether it starts with one of
+/// [`STATUS_EXEMPT_PREFIXES`].
+pub const fn is_status_exempt(id: &str) -> bool {
+    let mut i = 0;
+    while i < STATUS_EXEMPT_PREFIXES.len() {
+        if starts_with(id, STATUS_EXEMPT_PREFIXES[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `str::starts_with`, usable in a constant.
+const fn starts_with(text: &str, prefix: &str) -> bool {
+    let (text, prefix) = (text.as_bytes(), prefix.as_bytes());
+    if text.len() < prefix.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < prefix.len() {
+        if text[i] != prefix[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// A use case reachable from both the MCP gate and the panel.
@@ -56,6 +98,7 @@ const fn twin(
         mcp_tool: Some(mcp_tool),
         panel_route: Some(route),
         panel_only: false,
+        status_exempt: is_status_exempt(id),
         risk,
     }
 }
@@ -73,6 +116,7 @@ const fn panel_only(
         mcp_tool: None,
         panel_route: Some(route),
         panel_only: true,
+        status_exempt: is_status_exempt(id),
         risk,
     }
 }

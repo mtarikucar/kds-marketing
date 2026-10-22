@@ -14,35 +14,39 @@ use jt_panel_http::{AppState, router};
 use jt_pg::PgUnitOfWork;
 use jt_testkit::TestDb;
 use jt_testkit::fakes::PlainHasher;
+use jt_testkit::flows::activate_workspace;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const PASSWORD: &str = "correct horse battery";
 const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
 
-/// A router over a fresh test database.
+/// A router over a fresh test database, and the `Deps` behind it.
 struct Panel {
     _db: TestDb,
+    deps: Deps,
     app: Router,
 }
 
 impl Panel {
     async fn new() -> Panel {
         let db = TestDb::new().await;
+        let deps = Deps {
+            uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
+            clock: Arc::new(SystemClock),
+            ids: Arc::new(UuidV7Gen),
+            tokens: Arc::new(RandTokenGen),
+            hasher: Arc::new(PlainHasher),
+        };
         let state = AppState {
-            deps: Deps {
-                uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-                clock: Arc::new(SystemClock),
-                ids: Arc::new(UuidV7Gen),
-                tokens: Arc::new(RandTokenGen),
-                hasher: Arc::new(PlainHasher),
-            },
+            deps: deps.clone(),
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,
             panel_dir: None,
         };
         Panel {
             _db: db,
+            deps,
             app: router(state),
         }
     }
@@ -79,7 +83,8 @@ impl Panel {
         self.send(Method::GET, path, Some(cookie), None).await
     }
 
-    /// Registers `email` with a new workspace; returns the `jt_session=…` pair and `me`.
+    /// Registers `email` with a new workspace, which the platform operator then activates;
+    /// returns the `jt_session=…` pair and `me` as registration answered it.
     async fn register(&self, email: &str, workspace_name: &str) -> (String, Value) {
         let body = json!({
             "email": email,
@@ -92,7 +97,10 @@ impl Panel {
             .await;
         assert_eq!(resp.status(), StatusCode::CREATED);
         let cookie = session_pair(&resp);
-        (cookie, ok_json(resp).await)
+        let me = ok_json(resp).await;
+        let ws = me["current_workspace"].as_str().unwrap().parse().unwrap();
+        activate_workspace(&self.deps, ws).await;
+        (cookie, me)
     }
 
     /// Invites `email` as `role_key` from the session `cookie`; returns the invitation.

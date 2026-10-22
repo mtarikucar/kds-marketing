@@ -2,5 +2,6 @@
 
 pub mod db;
 pub mod fakes;
+pub mod flows;
 
 pub use db::TestDb;
