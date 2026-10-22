@@ -13,6 +13,7 @@ pub mod auth;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
+pub mod strategy;
 pub mod team;
 pub mod workspace;
 
@@ -50,6 +51,16 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/agents"),
     ("GET", "/api/whoami"),
     ("GET", "/api/ledger"),
+    ("GET", "/api/strategy"),
+    ("POST", "/api/strategy/consultation"),
+    ("POST", "/api/strategy/consultation/entries"),
+    ("PUT", "/api/strategy/draft/sections/{section_key}"),
+    ("PUT", "/api/strategy/draft/hypotheses"),
+    ("POST", "/api/strategy/draft/submit"),
+    ("POST", "/api/strategy/draft/approve"),
+    ("POST", "/api/strategy/archive"),
+    ("GET", "/api/strategy/versions"),
+    ("GET", "/api/strategy/versions/{version_id}/consultation"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
     ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
@@ -165,6 +176,61 @@ pub fn api_routes() -> Vec<ApiRoute> {
         api_route("GET", "/agents", "agents.list", agents::list),
         api_route("GET", "/whoami", "agents.whoami", agents::whoami),
         api_route("GET", "/ledger", "ledger.list", ledger::list),
+        api_route("GET", "/strategy", "strategy.get", strategy::get),
+        api_route(
+            "POST",
+            "/strategy/consultation",
+            "strategy.start_consultation",
+            strategy::start_consultation,
+        ),
+        api_route(
+            "POST",
+            "/strategy/consultation/entries",
+            "strategy.record",
+            strategy::record,
+        ),
+        api_route(
+            "PUT",
+            "/strategy/draft/sections/{section_key}",
+            "strategy.write_section",
+            strategy::write_section,
+        ),
+        api_route(
+            "PUT",
+            "/strategy/draft/hypotheses",
+            "strategy.set_hypotheses",
+            strategy::set_hypotheses,
+        ),
+        api_route(
+            "POST",
+            "/strategy/draft/submit",
+            "strategy.submit",
+            strategy::submit,
+        ),
+        api_route(
+            "POST",
+            "/strategy/draft/approve",
+            "strategy.approve",
+            strategy::approve,
+        ),
+        api_route(
+            "POST",
+            "/strategy/archive",
+            "strategy.archive",
+            strategy::archive,
+        ),
+        api_route(
+            "GET",
+            "/strategy/versions",
+            "strategy.list_versions",
+            strategy::list_versions,
+        ),
+        api_route(
+            "GET",
+            "/strategy/versions/{version_id}/consultation",
+            "strategy.consultation",
+            strategy::consultation,
+        ),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(
             "GET",

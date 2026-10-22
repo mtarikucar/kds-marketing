@@ -1,7 +1,8 @@
 //! The MCP gate end to end: an rmcp client over streamable HTTP against the router on an
 //! ephemeral port, backed by a fresh Postgres database. Bearer-key authentication, the
 //! connection an `initialize` records, tool listing by permission, workspace isolation, the
-//! ledger entry of every call, the strategy gate and the workspace-status gate.
+//! ledger entry of every call, the strategy gate (behind a stub and the real one, opened by a
+//! consultation run over MCP) and the workspace-status gate.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use jt_app::usecases::team::{self, InviteInput};
 use jt_app::usecases::{Deps, agents, platform};
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_mcp::{McpState, ToolFuture, ToolSpec, http_service, registry, risk_tag};
-use jt_pg::PgUnitOfWork;
+use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_tenancy::{SystemRole, UserId, WorkspaceId, WorkspaceStatus};
 use jt_testkit::TestDb;
 use jt_testkit::fakes::{PlainHasher, PlainSecretBox};
@@ -42,7 +43,7 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use tower::ServiceExt as _;
 
-/// A gated use case that is not in the catalog (M0 has none), exposed as a test-only tool.
+/// A gated use case that is not in the catalog (it has none yet), exposed as a test-only tool.
 static GATED: UseCase = UseCase {
     id: "demo.gated",
     gate: GateMode::Gated,
@@ -83,7 +84,7 @@ impl StrategyGate for Approved {
 
 /// A fresh database with two seeded, active workspaces.
 struct World {
-    _db: TestDb,
+    db: TestDb,
     deps: Deps,
     a: WorkspaceId,
     a_owner: UserId,
@@ -107,7 +108,7 @@ impl World {
         let (a, a_owner) = db.seed_workspace("alpha").await;
         let (b, b_owner) = db.seed_workspace("beta").await;
         World {
-            _db: db,
+            db,
             deps,
             a,
             a_owner,
@@ -118,6 +119,14 @@ impl World {
 
     fn state(&self) -> McpState {
         McpState::new(self.deps.clone(), Arc::new(NoStrategyYet))
+    }
+
+    /// The state as the binary builds it: the strategy gate answered from the database.
+    fn served_state(&self) -> McpState {
+        McpState::new(
+            self.deps.clone(),
+            Arc::new(PgStrategyGate::new(self.db.pool.clone())),
+        )
     }
 
     /// The owner of `ws` acting in the panel.
@@ -655,6 +664,9 @@ async fn tools_list_hides_tools_the_key_cannot_use() {
         "jeeta.team.list",
         "jeeta.roles.list",
         "jeeta.agents.list",
+        "jeeta.strategy.get",
+        "jeeta.strategy.list_versions",
+        "jeeta.strategy.consultation",
         "jeeta.demo.gated",
     ]
     .into_iter()
@@ -922,6 +934,228 @@ async fn gated_tool_passes_after_operator_activates_and_gate_stub_says_strategy_
     assert_eq!(w.entries(w.a, "platform.workspace_status").await.len(), 2);
 }
 
+/// The sections of a minimal approvable strategy, on the `any` channel (no workspace has a
+/// channel kind yet).
+fn strategy_sections() -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "identity",
+            json!({ "product": "Kahve", "voice": "sıcak", "positioning": "mahalle", "usp": "taze" }),
+        ),
+        (
+            "audience",
+            json!([{ "key": "students", "name": "Öğrenciler", "description": "kampüs" }]),
+        ),
+        (
+            "channels",
+            json!([{ "channel": "any", "rationale": "her yerde" }]),
+        ),
+        (
+            "goals",
+            json!({ "objective": "ayda 50 DM", "kpis": [{ "name": "dm", "target": "50" }] }),
+        ),
+        (
+            "cadence",
+            json!({ "per_week": 3, "channel_mix": [{ "channel": "any", "share_pct": 100 }] }),
+        ),
+    ]
+}
+
+/// The tools of a strategy that change it.
+const STRATEGY_MUTATIONS: &[&str] = &[
+    "jeeta.strategy.start_consultation",
+    "jeeta.strategy.record",
+    "jeeta.strategy.write_section",
+    "jeeta.strategy.set_hypotheses",
+    "jeeta.strategy.submit",
+    "jeeta.strategy.approve",
+    "jeeta.strategy.archive",
+];
+
+#[tokio::test]
+async fn gated_test_tool_passes_only_after_a_real_approval() {
+    let w = World::new().await;
+    let key = w.key(w.a, &[]).await;
+    let url = serve(w.served_state().with_test_tool(gated_spec(), &GATED)).await;
+    let client = connect(&url, &key.plaintext, "acme-agent").await;
+
+    // No strategy yet: the real gate is closed.
+    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "STRATEGY_REQUIRED");
+    let strategy = ok(&call(&client, "jeeta.strategy.get", json!({})).await);
+    assert_eq!(
+        strategy,
+        json!({ "approved": null, "draft": null, "gaps": [] })
+    );
+
+    // The agent runs the consultation with the owner's key.
+    let draft = ok(&call(&client, "jeeta.strategy.start_consultation", json!({})).await);
+    assert_eq!(draft["status"], "draft");
+    for (kind, text) in [("question", "Ne satıyorsunuz?"), ("answer", "Kahve")] {
+        let entry = ok(&call(
+            &client,
+            "jeeta.strategy.record",
+            json!({ "kind": kind, "section_key": "identity", "text": text }),
+        )
+        .await);
+        assert!(entry["id"].is_string(), "{entry}");
+    }
+    for (section_key, value) in strategy_sections() {
+        ok(&call(
+            &client,
+            "jeeta.strategy.write_section",
+            json!({ "section_key": section_key, "value": value }),
+        )
+        .await);
+    }
+    let hypotheses = json!([{
+        "title": "Sınav haftası",
+        "segment_key": "students",
+        "angle": "gece açık",
+        "channel": "any",
+        "metric": "dm",
+        "confidence": 0.6,
+    }]);
+    let written = ok(&call(
+        &client,
+        "jeeta.strategy.set_hypotheses",
+        json!({ "hypotheses": hypotheses }),
+    )
+    .await);
+    assert_eq!(written["gaps"], json!([]));
+    ok(&call(&client, "jeeta.strategy.submit", json!({})).await);
+
+    // Submitted is not approved: the gate stays closed until the approval commits.
+    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "STRATEGY_REQUIRED");
+    let approved = ok(&call(&client, "jeeta.strategy.approve", json!({})).await);
+    assert_eq!(approved["status"], "approved");
+    assert_eq!(
+        approved["approved_by_email"],
+        json!(format!("owner+{}@test.local", w.a_owner))
+    );
+    assert_eq!(
+        ok(&call(&client, "jeeta.demo.gated", json!({})).await),
+        json!({ "ran": true })
+    );
+    // Only this workspace's gate opened.
+    let b_key = w.key(w.b, &[]).await;
+    let b_client = connect(&url, &b_key.plaintext, "beta-agent").await;
+    let refused = err(&call(&b_client, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "STRATEGY_REQUIRED");
+
+    // The agent reads the version in force and archives it by name, confirmed.
+    let strategy = ok(&call(&client, "jeeta.strategy.get", json!({})).await);
+    let version_id = strategy["approved"]["id"].clone();
+    assert_eq!(version_id, approved["id"]);
+    let refused = err(&call(
+        &client,
+        "jeeta.strategy.archive",
+        json!({ "version_id": version_id }),
+    )
+    .await);
+    assert_eq!(refused["code"], "VALIDATION");
+    assert_eq!(refused["details"], json!({ "field": "confirm" }));
+    let archived = ok(&call(
+        &client,
+        "jeeta.strategy.archive",
+        json!({ "version_id": version_id, "confirm": true }),
+    )
+    .await);
+    assert_eq!(
+        archived,
+        json!({ "version_id": version_id, "archived": true })
+    );
+    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
+    assert_eq!(refused["code"], "STRATEGY_REQUIRED");
+
+    // The record: the versions and the log over MCP, and every strategy call ledgered.
+    let versions = ok(&call(&client, "jeeta.strategy.list_versions", json!({})).await);
+    assert_eq!(versions["versions"][0]["status"], "archived");
+    let log = ok(&call(
+        &client,
+        "jeeta.strategy.consultation",
+        json!({ "version_id": version_id, "limit": 2 }),
+    )
+    .await);
+    let kinds: Vec<&str> = log["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["archived", "approved"]);
+    assert_eq!(log["entries"][0]["actor"]["kind"], "agent");
+    assert_eq!(w.entries(w.a, "strategy.approve").await.len(), 1);
+    assert_eq!(w.entries(w.a, "strategy.archive").await.len(), 1);
+}
+
+#[tokio::test]
+async fn narrowed_owner_key_cannot_see_or_call_strategy_mutations() {
+    let w = World::new().await;
+    let reader = w.key(w.a, &["workspace.read"]).await;
+    let full = w.key(w.a, &[]).await;
+    let url = serve(w.served_state()).await;
+
+    // The owner's full key sees every strategy tool; a key narrowed to reading sees the reads.
+    let client = connect(&url, &full.plaintext, "acme-agent").await;
+    let names: BTreeSet<String> = client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    for tool in STRATEGY_MUTATIONS {
+        assert!(names.contains(*tool), "{tool}");
+    }
+    ok(&call(&client, "jeeta.strategy.start_consultation", json!({})).await);
+
+    let narrowed = connect(&url, &reader.plaintext, "acme-agent").await;
+    let names: BTreeSet<String> = narrowed
+        .list_all_tools()
+        .await
+        .unwrap()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    for tool in [
+        "jeeta.strategy.get",
+        "jeeta.strategy.list_versions",
+        "jeeta.strategy.consultation",
+    ] {
+        assert!(names.contains(tool), "{tool}");
+    }
+    for tool in STRATEGY_MUTATIONS {
+        assert!(!names.contains(*tool), "{tool} is hidden");
+    }
+
+    // Called by name anyway, every mutation is refused, approval and archive included: a key's
+    // scopes narrow its issuer's role.
+    let id = ok(&call(&narrowed, "jeeta.strategy.get", json!({})).await)["draft"]["id"].clone();
+    for tool in STRATEGY_MUTATIONS {
+        let args = match *tool {
+            "jeeta.strategy.record" => json!({ "kind": "note", "text": "x" }),
+            "jeeta.strategy.write_section" => {
+                json!({ "section_key": "prohibitions", "value": [] })
+            }
+            "jeeta.strategy.set_hypotheses" => json!({ "hypotheses": [] }),
+            "jeeta.strategy.archive" => json!({ "version_id": id, "confirm": true }),
+            _ => json!({}),
+        };
+        let refused = err(&call(&narrowed, tool, args).await);
+        assert_eq!(refused["code"], "FORBIDDEN", "{tool}");
+        assert_eq!(
+            refused["details"],
+            json!({ "permission": "team.manage" }),
+            "{tool}"
+        );
+    }
+    // The draft is as the full key left it.
+    let draft = ok(&call(&narrowed, "jeeta.strategy.get", json!({})).await)["draft"].clone();
+    assert_eq!(draft["consultation_count"], 1);
+}
+
 #[tokio::test]
 async fn call_ledger_list_returns_redacted_entries() {
     let w = World::new().await;
@@ -1073,7 +1307,7 @@ async fn stdio_transport_serves_the_same_handler_for_a_fixed_principal() {
         .expect("the client initialises over the pipe");
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 5, "only the workspace.read tools");
+    assert_eq!(tools.len(), 8, "only the workspace.read tools");
     let me = ok(&call(&client, "jeeta.agent.whoami", json!({})).await);
     assert_eq!(me["permissions"], json!(["workspace.read"]));
     let listed = agents::list(&w.deps, &w.owner_ctx(w.a)).await.unwrap();

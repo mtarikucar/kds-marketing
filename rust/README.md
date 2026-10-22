@@ -120,11 +120,11 @@ Panelde `http://127.0.0.1:8080/register`. Kayıt, kullanıcıyı ve onun sahibi 
 açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/platform/workspaces`) etkinleştirilir.
 
 **Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
-`workspace.*` ve `platform.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`, `agents.*`,
-`ledger.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
+`workspace.*`, `platform.*` ve `strategy.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`,
+`agents.*`, `ledger.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
 `423 {"code":"WORKSPACE_INACTIVE","details":{"status":"pending_payment"}}` alır. Yani ödeme bekleyen bir alan
 operatör onu etkinleştirene kadar üye davet edemez ve API anahtarı açamaz; giriş, çıkış, `GET /api/auth/me`,
-`GET /api/workspace` ve alan değiştirme çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
+`GET /api/workspace`, alan değiştirme ve strateji istişaresi (bkz. [Strateji](#strateji)) çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
 alana bekleyen bir davet de kabul edilemez. API'den (değişiklik yapan her istek
 `X-Requested-With: jeeta-panel` başlığını taşımalıdır, yoksa `403`):
 
@@ -172,7 +172,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (M0'da 15 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (25 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -181,6 +181,32 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
 denetler: varsayılan olarak yalnızca `localhost`, `127.0.0.1` ve `::1` kabul edilir, başka her ad `403` alır.
 Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (reverse proxy) arkasında bile)
 `JEETA_ALLOWED_HOSTS` o adı içermelidir. Port yazılmayan bir ad her portta kabul edilir.
+
+## Strateji
+
+Stratejisi onaylanmamış bir alanda stratejiye bağlı (`Gated`) her araç ve rota (bu sürümde henüz yoktur)
+`409 {"code":"STRATEGY_REQUIRED"}` alır; kapı, alanın onaylı bir strateji sürümü olup olmadığını her çağrıda
+veritabanından okur (`jt_pg::PgStrategyGate`, panel ve MCP için aynı kapı). Strateji kayıtlı bir istişareyle
+kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get` açıklaması ajana bu sırayı söyler):
+
+| Adım | Panel | MCP aracı | İzin |
+|---|---|---|---|
+| Okuma (onaylı sürüm, taslak, eksikler) | `GET /api/strategy` | `jeeta.strategy.get` | `workspace.read` |
+| İstişareyi açma | `POST /api/strategy/consultation` | `jeeta.strategy.start_consultation` | `team.manage` |
+| Soru, cevap, varsayım, not | `POST /api/strategy/consultation/entries` | `jeeta.strategy.record` | `team.manage` |
+| Bölüm yazma | `PUT /api/strategy/draft/sections/{section_key}` | `jeeta.strategy.write_section` | `team.manage` |
+| Hipotezler | `PUT /api/strategy/draft/hypotheses` | `jeeta.strategy.set_hypotheses` | `team.manage` |
+| Onaya sunma | `POST /api/strategy/draft/submit` | `jeeta.strategy.submit` | `team.manage` |
+| Onaylama | `POST /api/strategy/draft/approve` | `jeeta.strategy.approve` | sahip ya da yönetici + `team.manage` |
+| Arşivleme (gövde `{"version_id": …, "confirm": true}`) | `POST /api/strategy/archive` | `jeeta.strategy.archive` | sahip ya da yönetici + `team.manage` |
+| Sürümler | `GET /api/strategy/versions` | `jeeta.strategy.list_versions` | `workspace.read` |
+| İstişare kaydı (`limit`, `before_at` + `before_id`) | `GET /api/strategy/versions/{version_id}/consultation` | `jeeta.strategy.consultation` | `workspace.read` |
+
+Eksikleri olan bir taslak onaya sunulamaz: `422 VALIDATION`, `details.gaps` her eksiği alan yoluyla sayar.
+Arşivleme yalnızca adı verilen onaylı sürümü arşivler (başka bir sürüm yürürlükteyse `409`) ve kapıyı
+yeniden kapatır. Bir anahtarın kapsamları her zaman daraltır: `team.manage` taşımayan bir sahip anahtarı
+istişareyi yürütemez, onaylayamaz ve arşivleyemez. Kanal türleri kabiliyet kaydıyla gelene kadar
+strateji yalnızca `any` kanalıyla onaylanabilir.
 
 ## stdio kipi
 

@@ -12,7 +12,8 @@ pub trait StrategyGate: Send + Sync {
     async fn has_approved_strategy(&self, ws: WorkspaceId) -> Result<bool, AppError>;
 }
 
-/// The gate until strategies exist: no workspace has an approved strategy.
+/// A gate under which no workspace has an approved strategy, for tests over in-memory ports; the
+/// binary serves the gate answered from the database (`jt_pg::PgStrategyGate`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoStrategyYet;
 

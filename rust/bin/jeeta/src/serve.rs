@@ -18,14 +18,14 @@ use axum::extract::{MatchedPath, Request};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use jt_app::error::ErrorCode;
-use jt_app::gate::{NoStrategyYet, StrategyGate};
+use jt_app::gate::StrategyGate;
 use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
 use jt_outbound::{Egress, FIXED_HOSTS};
 use jt_panel_http::AppState;
-use jt_pg::PgUnitOfWork;
+use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_seal::AesSecretBox;
 use sqlx::PgPool;
 use sqlx::migrate::Migrate;
@@ -52,11 +52,12 @@ pub async fn run(config: Config) -> Result<()> {
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
+    let gate = strategy_gate(pool.clone());
     // The one egress client, built at start so a bad fixed-tier entry stops it; M1's connectors
     // take it from here.
     let egress = Egress::new(FIXED_HOSTS);
 
-    let app = app(deps, &config);
+    let app = app(deps, gate, &config);
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -159,6 +160,12 @@ pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
     }
 }
 
+/// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
+/// version. The panel and the MCP endpoint share it.
+pub(crate) fn strategy_gate(pool: PgPool) -> Arc<dyn StrategyGate> {
+    Arc::new(PgStrategyGate::new(pool))
+}
+
 /// Creates the first platform operator unless one exists; a refused email or password names its
 /// variable (the password itself is never shown).
 async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
@@ -178,9 +185,9 @@ async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
 }
 
 /// The server's single router: the panel's (API, `/healthz`, files) merged with the MCP
-/// endpoint's, with the security headers on every response and a one-line access log.
-pub(crate) fn app(deps: Deps, config: &Config) -> Router {
-    let gate: Arc<dyn StrategyGate> = Arc::new(NoStrategyYet);
+/// endpoint's, both behind the one strategy `gate`, with the security headers on every response
+/// and a one-line access log.
+pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> Router {
     let panel = AppState {
         deps: deps.clone(),
         gate: Arc::clone(&gate),
@@ -342,6 +349,7 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
+    use jt_app::gate::NoStrategyYet;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
     use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox};
     use serde_json::{Value, json};
@@ -454,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_router_serves_health_the_api_and_mcp_with_structured_errors() {
-        let app = app(test_deps(), &test_config(&[]));
+        let app = app(test_deps(), Arc::new(NoStrategyYet), &test_config(&[]));
 
         let health = Request::get("/healthz").body(Body::empty()).unwrap();
         assert_eq!(
@@ -492,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_accepts_loopback_hosts_and_the_configured_public_ones() {
         let deps = test_deps();
-        let loopback_only = app(deps.clone(), &test_config(&[]));
+        let loopback_only = app(deps.clone(), Arc::new(NoStrategyYet), &test_config(&[]));
         let key = api_key(&loopback_only, &deps).await;
         for (host, expected) in [
             ("localhost:8080", StatusCode::OK),
@@ -506,6 +514,7 @@ mod tests {
         let deps = test_deps();
         let public = app(
             deps.clone(),
+            Arc::new(NoStrategyYet),
             &test_config(&[(config::ALLOWED_HOSTS, "jeeta.example.com")]),
         );
         let key = api_key(&public, &deps).await;

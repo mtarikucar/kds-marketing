@@ -53,6 +53,7 @@ use jt_tenancy::{Email, MembershipStatus, Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::{Deps, acting_user, invalid, ledger_entry};
 use crate::ctx::Ctx;
@@ -650,6 +651,33 @@ pub async fn consultation(
     repos.consultation().list(version_id, limit, before).await
 }
 
+/// How many consultation entries a page holds when the caller names no limit.
+pub const DEFAULT_CONSULTATION_PAGE: u32 = 50;
+
+/// The `before` cursor of [`consultation`] from the two halves a caller sends: `before_at`, an
+/// RFC 3339 time as an entry's `at` reads, and `before_id`, that entry's id. Both or neither,
+/// else `VALIDATION` naming the missing one; a `before_at` that does not parse is `VALIDATION`
+/// naming it. The panel and the MCP tool read their parameters through it alike.
+pub fn consultation_cursor(
+    before_at: Option<&str>,
+    before_id: Option<ConsultationEntryId>,
+) -> Result<Option<(OffsetDateTime, ConsultationEntryId)>, AppError> {
+    match (before_at, before_id) {
+        (None, None) => Ok(None),
+        (Some(at), Some(id)) => {
+            let at = OffsetDateTime::parse(at, &Rfc3339).map_err(|_| {
+                invalid(
+                    "before_at",
+                    "before_at must be an RFC 3339 time, as an entry's `at` reads",
+                )
+            })?;
+            Ok(Some((at, id)))
+        }
+        (Some(_), None) => Err(invalid("before_id", "before_id must come with before_at")),
+        (None, Some(_)) => Err(invalid("before_at", "before_at must come with before_id")),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Defaults for the ports this module adds
 // ---------------------------------------------------------------------------------------------
@@ -1003,6 +1031,30 @@ fn not_ready(gaps: Vec<Gap>) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_consultation_cursor_is_both_halves_or_neither() {
+        let id = ConsultationEntryId(uuid::Uuid::from_u128(7));
+        assert_eq!(consultation_cursor(None, None).unwrap(), None);
+        let (at, got) = consultation_cursor(Some("2026-10-22T09:00:00.000123Z"), Some(id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, id);
+        assert_eq!(at.microsecond(), 123);
+        let field = |e: AppError| (e.code, e.details["field"].as_str().unwrap().to_owned());
+        assert_eq!(
+            field(consultation_cursor(Some("2026-10-22T09:00:00Z"), None).unwrap_err()),
+            (ErrorCode::Validation, "before_id".to_owned())
+        );
+        assert_eq!(
+            field(consultation_cursor(None, Some(id)).unwrap_err()),
+            (ErrorCode::Validation, "before_at".to_owned())
+        );
+        assert_eq!(
+            field(consultation_cursor(Some("yesterday"), Some(id)).unwrap_err()),
+            (ErrorCode::Validation, "before_at".to_owned())
+        );
+    }
 
     fn h(id: u128, state: HypothesisState) -> Hypothesis {
         Hypothesis {

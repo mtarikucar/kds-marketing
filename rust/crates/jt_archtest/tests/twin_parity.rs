@@ -1,8 +1,12 @@
-//! The twin rule, behavioural half for `agents.whoami`: one use case behind two surfaces gives
-//! one answer. The same seeded user asks `GET /api/whoami` with their panel session and
-//! `jeeta.agent.whoami` with an API key they issued, through the one router the binary serves.
-//! Workspace, role and permissions are identical; only the actor differs, by design: the human
-//! in the panel, the agent on the human's authority over MCP.
+//! The twin rule, behavioural half: one use case behind two surfaces gives one answer, through
+//! the one router the binary serves.
+//!
+//! - `agents.whoami`: the same seeded user asks `GET /api/whoami` with their panel session and
+//!   `jeeta.agent.whoami` with an API key they issued. Workspace, role and permissions are
+//!   identical; only the actor differs, by design: the human in the panel, the agent on the
+//!   human's authority over MCP.
+//! - `strategy.get`: after an approval, `GET /api/strategy` and `jeeta.strategy.get` answer the
+//!   same JSON, field for field.
 
 use std::sync::Arc;
 
@@ -10,28 +14,43 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
-use jt_app::gate::NoStrategyYet;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
 use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_mcp::McpState;
 use jt_panel_http::AppState;
-use jt_pg::PgUnitOfWork;
+use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_testkit::TestDb;
 use jt_testkit::fakes::{PlainHasher, PlainSecretBox};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-/// The panel's router merged with the MCP endpoint's, as `jeeta serve` builds them.
-fn app(deps: &Deps) -> Router {
+/// The panel's router merged with the MCP endpoint's over `db`, as `jeeta serve` builds them:
+/// the strategy gate answered from the database.
+fn app(db: &TestDb, deps: &Deps) -> Router {
+    let gate = Arc::new(PgStrategyGate::new(db.pool.clone()));
     let panel = AppState {
         deps: deps.clone(),
-        gate: Arc::new(NoStrategyYet),
+        gate: gate.clone(),
         cookie_secure: false,
         panel_dir: None,
     };
-    let mcp = McpState::new(deps.clone(), Arc::new(NoStrategyYet));
+    let mcp = McpState::new(deps.clone(), gate);
     jt_panel_http::router(panel).merge(jt_mcp::http_service(mcp))
+}
+
+/// The ports over `db`'s pool, with a plain-text hasher and secret box.
+fn deps(db: &TestDb) -> Deps {
+    Deps {
+        uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
+        clock: Arc::new(SystemClock),
+        ids: Arc::new(UuidV7Gen),
+        tokens: Arc::new(RandTokenGen),
+        hasher: Arc::new(PlainHasher),
+        seal: Arc::new(PlainSecretBox),
+        channels: Arc::new(NoChannelsYet),
+        archived_hook: Arc::new(NoopArchivedHook),
+    }
 }
 
 async fn send(app: &Router, req: Request<Body>) -> Response {
@@ -86,57 +105,42 @@ async fn sse_message(resp: Response, id: i64) -> Value {
         .expect("the response message")
 }
 
-#[tokio::test]
-async fn whoami_answers_the_same_over_the_panel_and_mcp() {
-    let db = TestDb::new().await;
-    let (ws, user) = db.seed_workspace("alpha").await;
-    let deps = Deps {
-        uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
-        clock: Arc::new(SystemClock),
-        ids: Arc::new(UuidV7Gen),
-        tokens: Arc::new(RandTokenGen),
-        hasher: Arc::new(PlainHasher),
-        seal: Arc::new(PlainSecretBox),
-        channels: Arc::new(NoChannelsYet),
-        archived_hook: Arc::new(NoopArchivedHook),
-    };
-    let app = app(&deps);
-
-    // The seeded owner signs in to the panel (`fakes::PlainHasher` stored "test").
+/// The seeded owner `user` signs in to the panel (`fakes::PlainHasher` stored "test"); returns
+/// the `jt_session=…` pair.
+async fn sign_in(app: &Router, user: impl std::fmt::Display) -> String {
     let login = json!({ "email": format!("owner+{user}@test.local"), "password": "test" });
     let resp = send(
-        &app,
+        app,
         panel(Method::POST, "/api/auth/login", None, Some(login)),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let cookie = resp.headers()[header::SET_COOKIE]
+    resp.headers()[header::SET_COOKIE]
         .to_str()
         .unwrap()
         .split(';')
         .next()
         .unwrap()
-        .to_owned();
+        .to_owned()
+}
 
-    // The panel surface.
-    let resp = send(&app, panel(Method::GET, "/api/whoami", Some(&cookie), None)).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let human = json_body(resp).await;
-
-    // The same user issues a key (no scopes: all of their permissions) ...
+/// A key the signed-in user issues on the panel (no scopes: all of their permissions).
+async fn issue_key(app: &Router, cookie: &str) -> String {
     let body = json!({ "name": "parity" });
     let resp = send(
-        &app,
-        panel(Method::POST, "/api/api-keys", Some(&cookie), Some(body)),
+        app,
+        panel(Method::POST, "/api/api-keys", Some(cookie), Some(body)),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
-    let key = json_body(resp).await["plaintext"]
+    json_body(resp).await["plaintext"]
         .as_str()
         .unwrap()
-        .to_owned();
+        .to_owned()
+}
 
-    // ... and asks the MCP surface.
+/// Opens an MCP session with `key` (initialize, then initialized); returns its id.
+async fn mcp_session(app: &Router, key: &str) -> String {
     let initialize = json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -145,7 +149,7 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "clientInfo": { "name": "parity-agent", "version": "1.0" },
         },
     });
-    let resp = send(&app, mcp(&key, None, &initialize)).await;
+    let resp = send(app, mcp(key, None, &initialize)).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let session = resp.headers()["mcp-session-id"]
         .to_str()
@@ -153,17 +157,41 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
         .to_owned();
     assert!(sse_message(resp, 1).await["result"].is_object());
     let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    let resp = send(&app, mcp(&key, Some(&session), &initialized)).await;
+    let resp = send(app, mcp(key, Some(&session), &initialized)).await;
     assert!(resp.status().is_success(), "{}", resp.status());
+    session
+}
+
+/// The structured output of tool `name` called with `arguments` in `session`, which must succeed.
+async fn call_tool(app: &Router, key: &str, session: &str, name: &str, arguments: Value) -> Value {
     let call = json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": { "name": "jeeta.agent.whoami", "arguments": {} },
+        "params": { "name": name, "arguments": arguments },
     });
-    let resp = send(&app, mcp(&key, Some(&session), &call)).await;
+    let resp = send(app, mcp(key, Some(session), &call)).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let result = sse_message(resp, 2).await["result"].clone();
     assert_ne!(result["isError"], json!(true), "{result}");
-    let agent = result["structuredContent"].clone();
+    result["structuredContent"].clone()
+}
+
+#[tokio::test]
+async fn whoami_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+
+    // The panel surface.
+    let resp = send(&app, panel(Method::GET, "/api/whoami", Some(&cookie), None)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+
+    // The same user issues a key and asks the MCP surface.
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.agent.whoami", json!({})).await;
 
     // One answer: the same fields, the same workspace, role and permissions.
     let fields = |v: &Value| {
@@ -199,4 +227,91 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
     assert_eq!(agent["actor"]["kind"], "agent");
     assert_eq!(agent["actor"]["user_id"], json!(user.to_string()));
     assert!(agent["actor"]["connection_id"].is_string());
+}
+
+#[tokio::test]
+async fn strategy_get_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+
+    // The owner works out a strategy on the panel and approves it, then opens the next draft so
+    // both halves of the answer are filled.
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    let post = |path: &str, body: Option<Value>| {
+        send(&app, panel(Method::POST, path, Some(&cookie), body))
+    };
+    let put = |path: String, body: Value| {
+        send(&app, panel(Method::PUT, &path, Some(&cookie), Some(body)))
+    };
+    ok(post("/api/strategy/consultation", None).await).await;
+    for (key, value) in [
+        ("identity", json!({ "product": "Kahve" })),
+        (
+            "audience",
+            json!([{ "key": "students", "name": "Öğrenciler", "description": "kampüs" }]),
+        ),
+        (
+            "channels",
+            json!([{ "channel": "any", "rationale": "her yerde" }]),
+        ),
+        ("cadence", json!({ "per_week": 3 })),
+    ] {
+        ok(put(format!("/api/strategy/draft/sections/{key}"), value).await).await;
+    }
+    let hypotheses = json!([{
+        "title": "Sınav haftası",
+        "segment_key": "students",
+        "angle": "gece açık",
+        "channel": "any",
+        "metric": "dm",
+        "confidence": 0.6,
+    }]);
+    ok(put("/api/strategy/draft/hypotheses".to_owned(), hypotheses).await).await;
+    ok(post("/api/strategy/draft/submit", None).await).await;
+    ok(post("/api/strategy/draft/approve", None).await).await;
+    ok(post("/api/strategy/consultation", None).await).await;
+    ok(put(
+        "/api/strategy/draft/sections/prohibitions".to_owned(),
+        json!(["rakip adı"]),
+    )
+    .await)
+    .await;
+
+    // The panel surface, then the MCP surface with a key the same owner issued.
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/strategy", Some(&cookie), None),
+    )
+    .await;
+    let human = ok(resp).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.strategy.get", json!({})).await;
+
+    assert_eq!(human, agent);
+    assert_eq!(human["approved"]["status"], "approved");
+    assert_eq!(human["approved"]["number"], 1);
+    assert_eq!(
+        human["approved"]["approved_by_email"],
+        json!(format!("owner+{user}@test.local"))
+    );
+    assert_eq!(human["draft"]["number"], 2);
+    assert_eq!(
+        human["draft"]["sections"]["prohibitions"],
+        json!(["rakip adı"])
+    );
+    assert_eq!(
+        human["draft"]["hypotheses"][0]["id"], human["approved"]["hypotheses"][0]["id"],
+        "a hypothesis keeps its identity across versions"
+    );
+    assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
+    assert!(human["approved"]["id"].is_string());
 }

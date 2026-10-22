@@ -12,13 +12,12 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
-use jt_app::gate::NoStrategyYet;
 use jt_app::ports::PasswordHasher;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
 use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
 use jt_panel_http::{AppState, router};
-use jt_pg::PgUnitOfWork;
+use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_tenancy::WorkspaceId;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -33,8 +32,9 @@ pub const PASSWORD: &str = "correct horse battery";
 pub const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
 
 /// The panel router over a fresh test database, and the ports behind it: the real Postgres unit
-/// of work, clock, ids and tokens, with a plain-text hasher and secret box unless asked
-/// otherwise, and no strategy approved anywhere.
+/// of work, clock, ids, tokens and strategy gate (as the binary serves them), with a plain-text
+/// hasher and secret box unless asked otherwise. No strategy is approved anywhere until a test
+/// approves one.
 pub struct Panel {
     pub app: Router,
     pub deps: Deps,
@@ -70,7 +70,7 @@ impl Panel {
         };
         let state = AppState {
             deps: deps.clone(),
-            gate: Arc::new(NoStrategyYet),
+            gate: Arc::new(PgStrategyGate::new(db.pool.clone())),
             cookie_secure,
             panel_dir,
         };

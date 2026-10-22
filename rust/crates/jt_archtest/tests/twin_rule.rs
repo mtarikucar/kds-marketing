@@ -9,21 +9,11 @@ use jt_app::catalog::{CATALOG, by_mcp_tool};
 /// Routes the panel serves that are infrastructure, not use cases.
 const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
-/// Catalog panel routes not served yet: the strategy's, whose use cases exist and whose routes
-/// come next. Each entry must still be unserved, so serving one fails this test until it is
-/// dropped from here.
-const NOT_YET_SERVED: &[(&str, &str)] = &[
-    ("GET", "/api/strategy"),
-    ("POST", "/api/strategy/consultation"),
-    ("POST", "/api/strategy/consultation/entries"),
-    ("PUT", "/api/strategy/draft/sections/{section_key}"),
-    ("PUT", "/api/strategy/draft/hypotheses"),
-    ("POST", "/api/strategy/draft/submit"),
-    ("POST", "/api/strategy/draft/approve"),
-    ("POST", "/api/strategy/archive"),
-    ("GET", "/api/strategy/versions"),
-    ("GET", "/api/strategy/versions/{version_id}/consultation"),
-];
+/// Catalog panel routes not served yet: a use case may enter the catalog before its route, while
+/// a plan lands it in steps. Empty while every catalog route is served (the strategy's are since
+/// its routes landed); each entry must still be unserved, so serving one fails this test until it
+/// is dropped from here.
+const NOT_YET_SERVED: &[(&str, &str)] = &[];
 
 #[test]
 fn panel_routes_table_matches_catalog() {

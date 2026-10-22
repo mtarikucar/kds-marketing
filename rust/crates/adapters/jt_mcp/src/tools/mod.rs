@@ -1,4 +1,4 @@
-//! The M0 tool definitions: per use case, its description, the permission it needs, the schema
+//! The tool definitions: per use case, its description, the permission it needs, the schema
 //! of its arguments and how to run it. [`crate::registry`] joins them with the catalog.
 //!
 //! Every tool takes a JSON object of arguments (unknown fields are `VALIDATION`) and answers with
@@ -9,6 +9,7 @@ mod agents;
 mod api_keys;
 mod ledger;
 mod roles;
+mod strategy;
 mod team;
 mod workspace;
 
@@ -39,6 +40,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         roles::definitions(),
         api_keys::definitions(),
         ledger::definitions(),
+        strategy::definitions(),
     ]
     .into_iter()
     .flatten()
@@ -55,10 +57,14 @@ pub(crate) fn args<T: DeserializeOwned>(raw: Value) -> Result<T, AppError> {
     Ok(serde_json::from_value(raw)?)
 }
 
-/// `value` as JSON.
+/// `value` as JSON, as the panel writes it: through JSON text, so every number is the one the
+/// panel's answer carries. (Converting straight to a `Value` widens an `f32`, such as a
+/// hypothesis's confidence 0.6, to 0.6000000238418579.)
 pub(crate) fn to_json<T: Serialize>(value: &T) -> Result<Value, AppError> {
-    serde_json::to_value(value)
-        .map_err(|e| AppError::internal(format!("cannot serialise a tool output: {e}")))
+    let failed =
+        |e: serde_json::Error| AppError::internal(format!("cannot serialise a tool output: {e}"));
+    let text = serde_json::to_vec(value).map_err(failed)?;
+    serde_json::from_slice(&text).map_err(failed)
 }
 
 /// `{ key: items }`, for a tool whose output is a list.
@@ -73,4 +79,23 @@ pub(crate) fn permission_keys_schema(_: &mut schemars::SchemaGenerator) -> Schem
         "type": "array",
         "items": { "type": "string", "enum": keys },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outputs_read_as_the_panel_writes_them() {
+        // The panel writes an `f32` 0.6 as `0.6`; a direct conversion to `Value` widens it to
+        // 0.6000000238418579.
+        #[derive(Serialize)]
+        struct Out {
+            confidence: f32,
+        }
+        let value = to_json(&Out { confidence: 0.6 }).unwrap();
+        let panel = serde_json::to_string(&Out { confidence: 0.6 }).unwrap();
+        assert_eq!(value.to_string(), panel);
+        assert_eq!(value, json!({ "confidence": 0.6 }));
+    }
 }

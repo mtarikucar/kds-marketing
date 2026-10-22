@@ -54,7 +54,7 @@ pub fn router(state: AppState) -> Router {
 }
 
 /// [`router`] with one more API route, `route`, for `use_case`, which need not be in the
-/// catalog. Meant for tests (e.g. a `Gated` use case, which M0's catalog does not have yet, or a
+/// catalog. Meant for tests (e.g. a `Gated` use case, which the catalog does not have yet, or a
 /// handler with unusual extractors); the binary serves [`router`] as it is.
 ///
 /// # Panics

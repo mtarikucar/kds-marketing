@@ -5,9 +5,10 @@ use std::collections::BTreeSet;
 
 use jt_app::catalog::{CATALOG, Risk};
 use jt_mcp::{NOT_YET_DEFINED, ToolSpec, registry, registry_with, risk_tag};
+use jt_tenancy::Permission;
 use serde_json::Value;
 
-const M0_TOOLS: &[&str] = &[
+const TOOLS: &[&str] = &[
     "jeeta.agent.whoami",
     "jeeta.workspace.info",
     "jeeta.team.list",
@@ -23,6 +24,16 @@ const M0_TOOLS: &[&str] = &[
     "jeeta.api_keys.revoke",
     "jeeta.agents.list",
     "jeeta.ledger.list",
+    "jeeta.strategy.get",
+    "jeeta.strategy.start_consultation",
+    "jeeta.strategy.record",
+    "jeeta.strategy.write_section",
+    "jeeta.strategy.set_hypotheses",
+    "jeeta.strategy.submit",
+    "jeeta.strategy.approve",
+    "jeeta.strategy.archive",
+    "jeeta.strategy.list_versions",
+    "jeeta.strategy.consultation",
 ];
 
 #[test]
@@ -34,7 +45,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
         .collect();
     let registered: BTreeSet<&str> = registry().iter().map(|t| t.name).collect();
     assert_eq!(registered, catalog);
-    assert_eq!(registered, M0_TOOLS.iter().copied().collect());
+    assert_eq!(registered, TOOLS.iter().copied().collect());
 
     for spec in registry() {
         let uc = CATALOG
@@ -117,9 +128,46 @@ fn registry_with_appends_extra_tools_and_refuses_a_taken_name() {
         ..whoami.clone()
     };
     let all = registry_with(vec![extra]);
-    assert_eq!(all.len(), M0_TOOLS.len() + 1);
+    assert_eq!(all.len(), TOOLS.len() + 1);
     assert_eq!(all.last().unwrap().name, "jeeta.demo.read");
 
     let taken = std::panic::catch_unwind(|| registry_with(vec![whoami]));
     assert!(taken.is_err(), "a duplicate tool name must be refused");
+}
+
+#[test]
+fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
+    for spec in registry()
+        .iter()
+        .filter(|s| s.use_case.starts_with("strategy."))
+    {
+        let expected = match spec.name {
+            "jeeta.strategy.get"
+            | "jeeta.strategy.list_versions"
+            | "jeeta.strategy.consultation" => Permission::WorkspaceRead,
+            _ => Permission::TeamManage,
+        };
+        assert_eq!(spec.permission, expected, "{}", spec.name);
+    }
+    let get = registry()
+        .into_iter()
+        .find(|t| t.name == "jeeta.strategy.get")
+        .unwrap();
+    // The entry point tells the agent the consultation protocol.
+    assert!(
+        get.description.contains(
+            "Ask the owner the open questions, record each answer, write sections, set \
+             hypotheses, submit; the owner or a manager approves."
+        ),
+        "{}",
+        get.description
+    );
+    let archive = registry()
+        .into_iter()
+        .find(|t| t.name == "jeeta.strategy.archive")
+        .unwrap();
+    assert_eq!(archive.risk, Risk::Destructive);
+    let schema = archive.input_schema.to_value();
+    assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
+    assert_eq!(schema["required"], serde_json::json!(["version_id"]));
 }
