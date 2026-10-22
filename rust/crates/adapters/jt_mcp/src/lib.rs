@@ -2,6 +2,8 @@
 //! stdio ([`run_stdio`]), authenticated by bearer API keys ([`auth`]), exposing one tool per
 //! use case of the catalog that has an MCP tool ([`registry`]).
 //!
+//! Each HTTP session is bound to the key that created it ([`sessions`]).
+//!
 //! Every tool call goes through the same path ([`handler`]): the strategy gate and the
 //! workspace's status (`check_gate`), the tool's permission, the use case, and a ledger entry
 //! `mcp.tool_call`. Every error is structured: `{ "code", "message", "details" }` ([`errors`]).
@@ -13,6 +15,7 @@ pub mod errors;
 pub mod handler;
 pub mod http;
 pub mod registry;
+pub mod sessions;
 mod state;
 pub mod stdio;
 mod tools;

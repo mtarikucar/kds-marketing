@@ -40,19 +40,20 @@ pub fn tool_error(err: AppError) -> CallToolResult {
 }
 
 /// An HTTP answer for an error met before the MCP layer: `401` with `WWW-Authenticate: Bearer`
-/// for `UNAUTHENTICATED`, `500` otherwise; the body is the structured error.
+/// for `UNAUTHENTICATED`, `404` for `NOT_FOUND`, `500` otherwise; the body is the structured
+/// error.
 pub fn http_error(err: AppError) -> Response {
-    let unauthenticated = err.code == ErrorCode::Unauthenticated;
+    let code = err.code;
     let body = Json(error_json(err));
-    if unauthenticated {
-        (
+    match code {
+        ErrorCode::Unauthenticated => (
             StatusCode::UNAUTHORIZED,
             [(header::WWW_AUTHENTICATE, "Bearer")],
             body,
         )
-            .into_response()
-    } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+            .into_response(),
+        ErrorCode::NotFound => (StatusCode::NOT_FOUND, body).into_response(),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, body).into_response(),
     }
 }
 
@@ -75,6 +76,23 @@ mod tests {
             error_json(not_found.clone()),
             serde_json::to_value(&not_found).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn http_errors_map_their_code_to_a_status() {
+        let table = [
+            (AppError::unauthenticated("invalid api key"), 401),
+            (AppError::not_found("unknown session"), 404),
+            (AppError::internal("db down"), 500),
+        ];
+        for (err, status) in table {
+            let resp = http_error(err);
+            assert_eq!(resp.status().as_u16(), status);
+            assert_eq!(
+                resp.headers().contains_key(header::WWW_AUTHENTICATE),
+                status == 401
+            );
+        }
     }
 
     #[test]

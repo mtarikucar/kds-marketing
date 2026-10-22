@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, header};
+use axum::http::{Method, Request, StatusCode, header};
 use jt_app::catalog::{GateMode, Risk, UseCase};
 use jt_app::ctx::Ctx;
 use jt_app::error::AppError;
@@ -30,8 +30,12 @@ use rmcp::model::{
 };
 use rmcp::service::RunningService;
 use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::{ClientLifecycleMode, RoleClient, ServiceExt, serve_client_with_lifecycle};
+use rmcp::transport::streamable_http_client::{
+    AuthRequiredError, StreamableHttpClientTransportConfig,
+};
+use rmcp::{
+    ClientLifecycleMode, RoleClient, ServiceError, ServiceExt, serve_client_with_lifecycle,
+};
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use tower::ServiceExt as _;
@@ -344,7 +348,147 @@ async fn a_revoked_key_is_refused_on_its_next_request() {
         .await
         .unwrap();
     let params = CallToolRequestParams::new("jeeta.agent.whoami");
-    assert!(client.call_tool(params).await.is_err());
+    let refused = client.call_tool(params).await.unwrap_err();
+    let ServiceError::TransportSend(transport) = &refused else {
+        panic!("expected a transport error, got {refused:?}");
+    };
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(transport.error.as_ref());
+    let mut challenge = None;
+    while let Some(current) = source {
+        if let Some(auth) = current.downcast_ref::<AuthRequiredError>() {
+            challenge = Some(auth.www_authenticate_header.clone());
+        }
+        source = current.source();
+    }
+    assert_eq!(
+        challenge.as_deref(),
+        Some("Bearer"),
+        "the server asks for authorization again: {refused:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------------------------------
+
+const SESSION_HEADER: &str = "mcp-session-id";
+
+/// A raw MCP request to `app` with `key` as the bearer and, optionally, a session id.
+async fn raw(
+    app: &axum::Router,
+    method: Method,
+    key: &str,
+    session: Option<&str>,
+    body: Option<Value>,
+) -> axum::response::Response {
+    let accept = if method == Method::GET {
+        "text/event-stream"
+    } else {
+        "application/json, text/event-stream"
+    };
+    let mut req = Request::builder()
+        .method(method)
+        .uri("/mcp")
+        .header(header::HOST, "127.0.0.1")
+        .header(header::ACCEPT, accept)
+        .header(header::AUTHORIZATION, format!("Bearer {key}"));
+    if let Some(session) = session {
+        req = req.header(SESSION_HEADER, session);
+    }
+    let body = match body {
+        Some(body) => {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(body.to_string())
+        }
+        None => Body::empty(),
+    };
+    app.clone().oneshot(req.body(body).unwrap()).await.unwrap()
+}
+
+/// The JSON-RPC message with this id in an SSE response body.
+async fn sse_message(resp: axum::response::Response, id: i64) -> Value {
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        to_bytes(resp.into_body(), usize::MAX),
+    )
+    .await
+    .expect("the response stream ends")
+    .unwrap();
+    String::from_utf8(bytes.to_vec())
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+        .find(|message| message["id"] == id)
+        .expect("the response message")
+}
+
+async fn assert_unknown_session(resp: axum::response::Response) {
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({ "code": "NOT_FOUND", "message": "unknown session", "details": {} })
+    );
+}
+
+#[tokio::test]
+async fn session_bound_to_other_key_is_unknown() {
+    let w = World::new().await;
+    let a = w.key(w.a, &[]).await.plaintext;
+    let b = w.key(w.b, &[]).await.plaintext;
+    let app = http_service(w.state());
+
+    // Key A initialises and gets a session.
+    let init = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "acme-agent", "version": "1.0" },
+        },
+    });
+    let resp = raw(&app, Method::POST, &a, None, Some(init)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let session = resp.headers()[SESSION_HEADER].to_str().unwrap().to_owned();
+    assert!(sse_message(resp, 1).await["result"].is_object());
+    let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+    let resp = raw(&app, Method::POST, &a, Some(&session), Some(initialized)).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    // Key B, valid in its own workspace, cannot reach it in any way.
+    let list = |id: i64| json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list" });
+    assert_unknown_session(raw(&app, Method::POST, &b, Some(&session), Some(list(2))).await).await;
+    assert_unknown_session(raw(&app, Method::GET, &b, Some(&session), None).await).await;
+    assert_unknown_session(raw(&app, Method::DELETE, &b, Some(&session), None).await).await;
+
+    // Key A still uses its session.
+    let resp = raw(&app, Method::POST, &a, Some(&session), Some(list(3))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let tools = sse_message(resp, 3).await;
+    assert_eq!(
+        tools["result"]["tools"].as_array().unwrap().len(),
+        registry().len()
+    );
+
+    // Only A's client was ever recorded, and only in A's workspace.
+    let a_connections = agents::list(&w.deps, &w.owner_ctx(w.a)).await.unwrap();
+    assert_eq!(a_connections.len(), 1);
+    assert_eq!(a_connections[0].client_name, "acme-agent");
+    assert!(
+        agents::list(&w.deps, &w.owner_ctx(w.b))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Once A ends the session it is gone for everyone (rmcp's own 404).
+    let resp = raw(&app, Method::DELETE, &a, Some(&session), None).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+    let resp = raw(&app, Method::POST, &a, Some(&session), Some(list(4))).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 // ---------------------------------------------------------------------------------------------

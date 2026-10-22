@@ -8,6 +8,7 @@ use jt_app::usecases::Deps;
 use rmcp::model::Tool;
 
 use crate::registry::{ToolSpec, registry};
+use crate::sessions::SessionKeys;
 
 /// The hosts accepted in the `Host` header by default: loopback only (rmcp's DNS-rebinding
 /// guard). A public deployment names its own with [`McpState::with_allowed_hosts`].
@@ -30,6 +31,8 @@ pub struct McpState {
     pub gate: Arc<dyn StrategyGate>,
     tools: Arc<Vec<Registered>>,
     allowed_hosts: Arc<Vec<String>>,
+    /// The API key each HTTP session belongs to, shared by every clone of this state.
+    sessions: Arc<SessionKeys>,
 }
 
 impl McpState {
@@ -54,6 +57,7 @@ impl McpState {
             gate,
             tools: Arc::new(tools),
             allowed_hosts: Arc::new(LOOPBACK_HOSTS.iter().map(|h| (*h).to_owned()).collect()),
+            sessions: Arc::default(),
         }
     }
 
@@ -91,6 +95,11 @@ impl McpState {
     /// The hosts the HTTP endpoint accepts.
     pub fn allowed_hosts(&self) -> &[String] {
         &self.allowed_hosts
+    }
+
+    /// Which API key each HTTP session belongs to.
+    pub fn sessions(&self) -> &SessionKeys {
+        &self.sessions
     }
 
     /// The tool called `name`.

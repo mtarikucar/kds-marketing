@@ -6,9 +6,14 @@
 //! `{"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` and nothing else
 //! happens. On success the [`AgentPrincipal`] is put into the request's extensions, where the
 //! MCP handler finds it (rmcp hands the handler the request's `http::request::Parts`).
+//!
+//! The same check binds sessions to keys ([`crate::sessions`]): a response that carries a new
+//! `Mcp-Session-Id` binds that session to the request's key, a `DELETE` drops the binding, and a
+//! request naming a session bound to another key is answered `404` "unknown session" before
+//! rmcp sees it.
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, header};
+use axum::http::{HeaderMap, Method, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use jt_app::error::AppError;
@@ -20,8 +25,14 @@ use crate::errors::http_error;
 /// The answer to every bearer that cannot be used, so it never tells why.
 pub const INVALID_KEY: &str = "invalid api key";
 
-/// Authenticates the request's bearer key and stores the principal in its extensions, or
-/// answers `401` (`500` when the key cannot be checked at all).
+/// The header naming an MCP session.
+pub const SESSION_HEADER: &str = "mcp-session-id";
+/// The answer to a request naming a session of another key, as to an unknown one.
+pub const UNKNOWN_SESSION: &str = "unknown session";
+
+/// Authenticates the request's bearer key, keeps sessions to their own key, and stores the
+/// principal in the request's extensions; or answers `401` (`500` when the key cannot be
+/// checked at all), or `404` for a session bound to another key.
 pub async fn require_api_key(
     State(state): State<McpState>,
     mut req: Request,
@@ -30,13 +41,36 @@ pub async fn require_api_key(
     let Some(bearer) = bearer_token(req.headers()) else {
         return http_error(AppError::unauthenticated(INVALID_KEY));
     };
-    match api_keys::authenticate(&state.deps, bearer).await {
-        Ok(principal) => {
-            req.extensions_mut().insert::<AgentPrincipal>(principal);
-            next.run(req).await
-        }
-        Err(err) => http_error(err),
+    let principal = match api_keys::authenticate(&state.deps, bearer).await {
+        Ok(principal) => principal,
+        Err(err) => return http_error(err),
+    };
+    let key = principal.api_key_id;
+    let session = session_id(req.headers()).map(str::to_owned);
+    if let Some(id) = &session
+        && state.sessions().owner(id).is_some_and(|owner| owner != key)
+    {
+        return http_error(AppError::not_found(UNKNOWN_SESSION));
     }
+    let deleting = req.method() == Method::DELETE;
+    req.extensions_mut().insert::<AgentPrincipal>(principal);
+
+    let resp = next.run(req).await;
+    if let Some(created) = session_id(resp.headers()) {
+        state.sessions().bind(created, key);
+    }
+    if deleting && let Some(id) = &session {
+        state.sessions().forget(id);
+    }
+    resp
+}
+
+/// The `Mcp-Session-Id` of a request or response, if it names one.
+fn session_id(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|id| !id.is_empty())
 }
 
 /// The token of an `Authorization: Bearer <token>` header (scheme in any case), if there is a

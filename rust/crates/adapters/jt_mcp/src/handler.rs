@@ -6,9 +6,10 @@
 //! **Connections.** `initialize` records the client as an agent connection
 //! (`agents::register_initialize`) and keeps its id in the session: rmcp builds one handler per
 //! HTTP session (and one for the whole stdio stream), so the handler's own state is the
-//! session's. A tool call from a key that has no connection in this handler yet (a stateless
-//! client that never initialises, or another key reusing the session) is registered first,
-//! with the client info the request carries in its `_meta`, else `"unknown"`.
+//! session's (and [`crate::sessions`] keeps every other key out of it). A tool call from a key
+//! that has no connection in this handler yet (a stateless client that never initialises) is
+//! registered first, with the client info the request itself carries in its `_meta`, else
+//! `"unknown"`: never with the session's handshake info, which belongs to the key that made it.
 //!
 //! **Tool calls** run: tool lookup (unknown: `NOT_FOUND`) → its catalog use case → the
 //! workspace's current status → `check_gate` → the tool's permission → arguments → the use
@@ -103,7 +104,9 @@ impl McpHandler {
         if let Some(id) = self.known_connection(principal.api_key_id) {
             return Ok(id);
         }
-        let client = ctx.client_info();
+        // The request's own metadata only: `ctx.client_info()` would fall back to the session's
+        // handshake, made by the key that created the session.
+        let client = ctx.meta.client_info();
         let info = ClientInfo {
             name: client
                 .as_ref()
@@ -114,6 +117,7 @@ impl McpHandler {
                 .map_or(UNKNOWN, |c| c.version.as_str())
                 .to_owned(),
             protocol_version: ctx
+                .meta
                 .protocol_version()
                 .map_or_else(|| UNKNOWN.to_owned(), |v| v.to_string()),
         };
