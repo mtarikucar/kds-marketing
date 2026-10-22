@@ -16,8 +16,9 @@ use crate::session::WorkspaceCtx;
 use crate::state::AppState;
 
 /// `POST /api/api-keys`. Without `scopes` (or with none) the key gets every permission of its
-/// issuer.
+/// issuer. An unknown field is refused, as `jeeta.api_keys.create` refuses it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateKeyBody {
     pub name: String,
     #[serde(default)]

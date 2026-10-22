@@ -232,7 +232,10 @@ kayıtlı dış adreslerin iznini geri alır, gruplarından ve bütçe bağları
 öteki araçlar `confirm` istemez, çünkü etkileri onarılabilir ya da yeniden kurulabilir: çıkarılan üye
 yeniden davet edilir (`team.remove`), silinen özel rol yeniden açılır (`roles.delete`), iptal edilen
 anahtarın yerine yenisi çıkarılır (`api_keys.revoke`), silinen kabiliyet grubu yeniden kurulur ve
-üyeleri yerinde kalır (`capability.groups_delete`). Bu eylemlerin yetkisi onaydan değil rolden gelir:
+üyeleri yerinde kalır (`capability.groups_delete`). Grup silmenin onarılabilir olması, gruba hiçbir şeyin
+başvurmamasına bağlıdır: onaylı sürüm ya da açık taslak bir kanalı o gruba daraltmışsa
+(`ChannelChoice.group_id`) silme `CONFLICT` ("group is referenced by the strategy", `details.version_ids`)
+döner ve hiçbir şey değişmez. Bu eylemlerin yetkisi onaydan değil rolden gelir:
 onaylamak ve arşivlemek gibi role bağlı eylemler, rol anahtarıyla birlikte `team.manage` iznini anahtarın
 kapsamı içinde ister ve ajan bu yetkiyi anahtarı çıkaran insandan devralır (§5).
 
@@ -288,10 +291,14 @@ etkinleştirene kadar üye davet edemez ve API anahtarı çıkaramaz; askıdaki 
 davet de kabul edilemez. Panelde bu denetim her rotanın önünde, işleyicinin ne aldığından bağımsız
 çalışır.
 
-**(M1a uygulamasında kesinleşti) Strateji ve bekleyen işler ödemeden önce.** Durum denetiminden muaf
-olanlara strateji araçları (`strategy.*`) ve bekleyen işler (`work.*`) eklenir: strateji, alan ödeme
-beklerken de hazırlanıp onaylanabilir; ajan da neyin beklediğini sorabilir. Durumdan muaf önekler tam
-olarak `auth.`, `workspace.`, `platform.`, `strategy.`, `work.`'tür. Strateji kapısından muaf olanlar ise
+**(M1a uygulamasında kesinleşti) Strateji ve bekleyen işler ödemeden önce.** Strateji araçları
+(`strategy.*`) ve bekleyen işler (`work.*`) durum denetiminden **yalnız alan `pending_payment` iken** muaftır:
+strateji, alan ödeme beklerken de hazırlanıp onaylanabilir; ajan da neyin beklediğini sorabilir. Alan
+`suspended` iken onlar da `WORKSPACE_INACTIVE {"status":"suspended"}` döner; askıdaki bir alanda yalnız
+`auth.`, `workspace.` ve `platform.` önekliler çalışır. Her durumda muaf önekler tam olarak `auth.`,
+`workspace.`, `platform.`'dur; ödeme beklerken muaf olanlar tam olarak `strategy.`, `work.`'tür. Ödeme
+bekleyen bir alan stratejiyi hazırlar ama etkinleşene kadar kabiliyet bildiremez. Strateji kapısından muaf
+olanlar ise
 `auth.`, `workspace.`, `team.`, `roles.`, `api_keys.`, `agents.`, `platform.`, `strategy.`,
 `capability.`, `budget.`, `work.` önekleri ile `ledger.list`'tir; kabiliyet ve bütçe araçları stratejiden
 muaftır (istişare alanın neye sahip olduğunu bilmek ister) ama durumdan muaf değildir. M1a hiçbir `Gated`
@@ -329,6 +336,13 @@ istenmez (K11).
 **Arşiv sürümünü adlandırır:** `jeeta.strategy.archive` arşivlenecek onaylı sürümün kimliğini
 (`version_id`) ve `confirm: true` ister; o sürüm artık yürürlükte değilse `CONFLICT` döner, böylece eski
 bir ekrandan gelen arşiv yeni onaylanmış sürümü kapatmaz.
+**Onay da taslağı adlandırır ve varsayımlar onayda listelenir:** bir taslağın yanıtı istişarenin
+`assumption` kayıtlarını (en yenisi başta) `assumptions` alanında taşır; panel onaydan önce bunları ve
+yürürlüğe girecek hipotez sayısını bir onay penceresinde gösterir, `jeeta.strategy.approve` açıklaması da
+ajana varsayımları sahibe okumadan onaylamamasını söyler. `approve`, okunan taslağın `version_id` ve
+`submitted_at` değerlerini ister; kilitler alındıktan sonra taslak başka bir sürümse ya da yeniden
+sunulmuşsa `CONFLICT` ("the draft changed since you read it", taslağın şimdiki `version_id` ve
+`submitted_at` değerleriyle) döner, böylece sahip gözden geçirmediği bir taslağı onaylamaz.
 
 **İçerik.** Strateji şu bölümlerden oluşur: kimlik (ürün, ses, konumlama, fark); kitle ve segmentler;
 kanallar ve her kanalın gerekçesi; **hipotezler** (eski adıyla içerik sütunları: "şu segment, şu
@@ -430,9 +444,12 @@ kutusu, hangi hattın hangi markaya ait olduğunu gruptan okur. İç içe grup i
   `ulaşılamıyor` yapar ve günlüğe yazar. OAuth jetonu yenilenemiyorsa panelde "yeniden bağla" görünür.
 - **Ajan ve cihaz:** ajan `jeeta.kabiliyet.dogrula` ile kanıt sunar; doğrulama yaşı panelde görünür;
   eşik aşılınca `bildirildi`ye düşer. Eşik politikadır.
-- **(M1a uygulamasında kesinleşti)** Ajan kendi ajan ve cihaz kabiliyetlerini (ulaşım yolu ajan ya da
-  cihaz) yalnız `workspace.read` ile doğrular, çünkü kanıt ajanın kendi elleri hakkındaki beyanıdır;
-  panelde bir insan `capabilities.manage` ister. Kanıt metin ve isteğe bağlı dayanaklardır (seri
+- **(M1a uygulamasında kesinleşti)** Kabiliyet onu bildiren ajan bağlantısını saklar
+  (`declared_by_connection`; bir insan bildirdiyse boş). Ajan bir ajan ya da cihaz kabiliyetini (ulaşım
+  yolu ajan ya da cihaz) yalnız `workspace.read` ile ancak kendi bağlantısı bildirdiyse doğrular, çünkü
+  kanıt ancak o zaman ajanın kendi elleri hakkındaki beyanıdır; başka bir bağlantının ya da bir insanın
+  bildirdiğini doğrulamak için `capabilities.manage` ister. Panelde bir insan her zaman
+  `capabilities.manage` ister. Kanıt metin ve isteğe bağlı dayanaklardır (seri
   numarası, dosya ya da ekran görüntüsü kimliği); sistem onu kaydeder, denetlemez. Eşik politikanın
   `verify_max_age_days` alanıdır (varsayılan 30 gün); eşiği aşan doğrulama her yerde `stale` okunur ve
   bekleyen işlere yeniden doğrulama olarak düşer. Bağlayıcıyla ulaşılan türler bir beyanla doğrulanamaz

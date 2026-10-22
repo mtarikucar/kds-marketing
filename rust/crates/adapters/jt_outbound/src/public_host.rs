@@ -6,8 +6,15 @@
 //! that it is on the public internet: never this machine, a private network or a special-purpose
 //! block, which a tenant could otherwise reach through the system (server-side request forgery).
 //!
-//! The check reads the text of the host only, with no DNS lookup: a public name that resolves to
-//! a private address is not caught here, but by the egress client when it connects.
+//! **What is checked, and what is not yet.** The check runs when a host is declared, on the
+//! text of the host alone, with no DNS lookup: IP literals in every non-public block, and the
+//! name patterns that only a private network resolves (`localhost`, single labels,
+//! [`PRIVATE_SUFFIXES`]). Nothing yet checks the addresses a name resolves to when the egress
+//! client connects: [`Egress::new`] builds a plain `reqwest` client, so a public name whose DNS
+//! answer is (or later becomes, by rebinding) a private address would be reached. That
+//! resolution-time guard (a resolver that refuses non-public answers for the tenant tier) comes
+//! with the first caller that sends to a tenant-tier host, in M1b; until then no code path sends
+//! to one.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;

@@ -65,10 +65,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           \"any\"); goals {objective, kpis: [{name, target}]}; budget_frame \
                           {lanes: [{lane: organic|paid, period: weekly|monthly, cap_minor, \
                           currency}]}; prohibitions [text]; cadence {per_week, channel_mix: \
-                          [{channel, share_pct}]}; paid_enabled true|false. An unknown field is \
-                          refused with details.gaps; missing content is allowed and listed in the \
-                          returned draft's gaps. Editing withdraws a submission. \
-                          [risk: WRITE]",
+                          [{channel, share_pct}]}; paid_enabled true|false. An unknown field, a \
+                          lane without lane or period, and a text over its cap (identity fields, \
+                          rationale, description and objective 2000 characters; names, keys, \
+                          channels and KPI targets 200; each prohibition 500) are refused with \
+                          details.gaps; other missing content is allowed and listed in the \
+                          returned draft's gaps. Editing withdraws a submission. [risk: WRITE]",
             permission: Permission::TeamManage,
             schema: schema_for::<WriteSectionArgs>,
             run: write_section,

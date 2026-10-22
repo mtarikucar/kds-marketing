@@ -12,7 +12,8 @@
 --
 -- The index serves the agent check-in's lookup of its connection's latest ledgered check-in
 -- (`work.checkin`, at most one entry an hour per connection), which would otherwise scan the
--- workspace's whole ledger.
+-- workspace's whole ledger. It holds check-in entries only; the lookup names the action as the
+-- same literal, so the planner can always use it.
 --
 -- Every statement is idempotent: running this file twice leaves the same data and schema.
 
@@ -32,4 +33,4 @@ update roles
 
 create index if not exists ledger_entries_agent_connection_idx
     on ledger_entries (workspace_id, agent_connection_id, id desc)
-    where agent_connection_id is not null;
+    where agent_connection_id is not null and action = 'work.checkin';

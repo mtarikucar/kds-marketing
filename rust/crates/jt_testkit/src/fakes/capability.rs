@@ -330,7 +330,8 @@ impl CapabilityGroupRepo for MemTenant {
             unique(
                 !state.capability_groups.iter().any(|g| {
                     g.group.id == group.id
-                        || (g.group.workspace_id == ws && g.group.name == group.name)
+                        || (g.group.workspace_id == ws
+                            && g.group.name.to_lowercase() == group.name.to_lowercase())
                 }),
                 "the capability group id or name is already taken",
             )?;
@@ -374,7 +375,9 @@ impl CapabilityGroupRepo for MemTenant {
             ensure_group(state, ws, id)?;
             unique(
                 !state.capability_groups.iter().any(|g| {
-                    g.group.workspace_id == ws && g.group.id != id && g.group.name == name
+                    g.group.workspace_id == ws
+                        && g.group.id != id
+                        && g.group.name.to_lowercase() == name.to_lowercase()
                 }),
                 "the capability group name is already taken",
             )?;

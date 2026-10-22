@@ -1298,3 +1298,63 @@ async fn capability_tables_are_hidden_without_their_workspace_in_scope() {
         tx.rollback().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn group_names_are_unique_ignoring_case_in_the_database() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+
+    let mut t = uow.tenant(a).await.unwrap();
+    t.capability_groups()
+        .insert(group(a, "Marka A"), T0)
+        .await
+        .unwrap();
+    let other = group(a, "Şube");
+    t.capability_groups()
+        .insert(other.clone(), T0)
+        .await
+        .unwrap();
+    // The same name in another case inserts nothing, and the transaction stays usable.
+    assert_eq!(
+        code(t.capability_groups().insert(group(a, "marka a"), T0).await),
+        ErrorCode::Conflict
+    );
+    assert_eq!(t.capability_groups().list().await.unwrap().len(), 2);
+    t.commit().await.unwrap();
+
+    // Renaming onto it in another case is CONFLICT too.
+    let mut t = uow.tenant(a).await.unwrap();
+    let e = t
+        .capability_groups()
+        .rename(other.id, "MARKA A")
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    drop(t);
+
+    // Written past the repos, the database itself refuses it (23505).
+    let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
+    let err = sqlx::query(
+        "insert into capability_groups (id, workspace_id, name, created_at) \
+         values ($1, $2, 'MARKA a', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(a.as_uuid())
+    .execute(tx.conn())
+    .await
+    .unwrap_err();
+    let db_err = err.as_database_error().unwrap();
+    assert_eq!(db_err.code().as_deref(), Some("23505"));
+    assert_eq!(db_err.constraint(), Some("capability_groups_name_ci"));
+    drop(tx);
+
+    // Another workspace may use the name.
+    let mut t = uow.tenant(b).await.unwrap();
+    t.capability_groups()
+        .insert(group(b, "marka a"), T0)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+}

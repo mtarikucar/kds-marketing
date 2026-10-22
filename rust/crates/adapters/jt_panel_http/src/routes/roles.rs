@@ -14,16 +14,19 @@ use crate::error::{ApiError, ApiJson, ApiPath};
 use crate::session::WorkspaceCtx;
 use crate::state::AppState;
 
-/// `POST /api/roles`.
+/// `POST /api/roles`. An unknown field is refused, as `jeeta.roles.create` refuses it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateRoleBody {
     pub key: String,
     pub name: String,
     pub permissions: Vec<String>,
 }
 
-/// `PATCH /api/roles/{role_id}`.
+/// `PATCH /api/roles/{role_id}`. An unknown field is refused, as `jeeta.roles.update` refuses
+/// it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateRoleBody {
     pub permissions: Vec<String>,
 }

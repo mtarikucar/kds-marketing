@@ -29,8 +29,8 @@ pub use budget::{
 };
 pub use capability::{
     Capability, CapabilityId, Evidence, MAX_EVIDENCE_REF_CHARS, MAX_EVIDENCE_REFS,
-    MAX_EVIDENCE_TEXT_CHARS, MAX_EXTERNAL_ID_CHARS, NewCapability, validate_connector_public,
-    validate_evidence, validate_key_detail,
+    MAX_EVIDENCE_TEXT_CHARS, MAX_EXTERNAL_ID_CHARS, NewCapability, SECRET_KEY_FRAGMENTS,
+    is_secret_looking_key, validate_connector_public, validate_evidence, validate_key_detail,
 };
 pub use group::{CapabilityGroup, CapabilityGroupId};
 /// The key names that must never appear in public fields: the ledger's redaction list.

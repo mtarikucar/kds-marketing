@@ -1526,3 +1526,83 @@ async fn count_active_owners_locks_the_owner_rows_until_the_transaction_ends() {
     .unwrap();
     other.rollback().await.unwrap();
 }
+
+#[tokio::test]
+async fn last_checkin_at_finds_the_connections_latest_checkin_through_its_index() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, other_owner) = db.seed_workspace("other").await;
+    let uow = uow(&db);
+    let (mine, theirs) = (AgentConnectionId::new_v7(), AgentConnectionId::new_v7());
+    let agent = |connection_id, user_id| Actor::Agent {
+        connection_id,
+        user_id,
+    };
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(t.ledger().last_checkin_at(mine).await.unwrap(), None);
+    for (actor, action, at) in [
+        (agent(mine, owner), "work.checkin", T0),
+        (agent(mine, owner), "work.checkin", T0 + Duration::hours(2)),
+        // Later, but not a check-in, or another connection's.
+        (agent(mine, owner), "work.pending", T0 + Duration::hours(3)),
+        (
+            agent(theirs, owner),
+            "work.checkin",
+            T0 + Duration::hours(4),
+        ),
+    ] {
+        t.ledger()
+            .append(entry(ws, actor, action, at))
+            .await
+            .unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut o = uow.tenant(other).await.unwrap();
+    o.ledger()
+        .append(entry(
+            other,
+            agent(mine, other_owner),
+            "work.checkin",
+            T0 + Duration::hours(5),
+        ))
+        .await
+        .unwrap();
+    o.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.ledger().last_checkin_at(mine).await.unwrap(),
+        Some(T0 + Duration::hours(2))
+    );
+    assert_eq!(
+        t.ledger().last_checkin_at(theirs).await.unwrap(),
+        Some(T0 + Duration::hours(4))
+    );
+    drop(t);
+
+    // The lookup's predicate implies the partial index's (0004), so the planner can take it.
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("set local enable_seqscan = off")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(
+        "explain select at from ledger_entries \
+         where workspace_id = $1 and agent_connection_id = $2 \
+         and action = 'work.checkin' \
+         order by id desc \
+         limit 1",
+    )
+    .bind(ws.as_uuid())
+    .bind(mine.as_uuid())
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("ledger_entries_agent_connection_idx")),
+        "{plan:#?}"
+    );
+    tx.rollback().await.unwrap();
+}

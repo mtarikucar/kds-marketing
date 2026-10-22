@@ -478,3 +478,46 @@ async fn roles_crud_round_trip() {
 fn uuid_like() -> String {
     "00000000-0000-7000-8000-000000000000".to_owned()
 }
+
+#[tokio::test]
+async fn twin_bodies_refuse_unknown_fields_as_their_tools_do() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register("owner@alpha.example", "Alpha").await;
+    let (_, membership) = p.join(&owner, "rep@alpha.example", "rep").await;
+    let some_role = "0192f0c4-0000-7000-8000-000000000000";
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/team/invites".to_owned(),
+            json!({ "email": "x@alpha.example", "role_key": "rep", "role": "rep" }),
+        ),
+        (
+            Method::PATCH,
+            format!("/api/team/{membership}/role"),
+            json!({ "role_key": "manager", "role": "manager" }),
+        ),
+        (
+            Method::POST,
+            "/api/roles".to_owned(),
+            json!({ "key": "editor", "name": "Editor", "permissions": [], "is_system": true }),
+        ),
+        (
+            Method::PATCH,
+            format!("/api/roles/{some_role}"),
+            json!({ "permissions": [], "name": "x" }),
+        ),
+        (
+            Method::POST,
+            "/api/api-keys".to_owned(),
+            json!({ "name": "ajan", "scopes": [], "expires_at": null }),
+        ),
+    ] {
+        let resp = p.send(method, &path, Some(&owner), Some(body)).await;
+        expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+    }
+    // Nothing was written.
+    let team = ok_json(p.get("/api/team", &owner).await).await;
+    assert_eq!(team.as_array().unwrap().len(), 2);
+    let keys = ok_json(p.get("/api/api-keys", &owner).await).await;
+    assert_eq!(keys.as_array().unwrap().len(), 0);
+}

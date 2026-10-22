@@ -571,6 +571,10 @@ pub trait AgentConnectionRepo: Send + Sync {
     -> Result<Option<AgentConnectionRow>, AppError>;
 }
 
+/// The action of an agent's check-in entry (`work.checkin`), which
+/// [`LedgerRepo::last_checkin_at`] looks up.
+pub const CHECKIN_ACTION: &str = "work.checkin";
+
 /// The workspace's append-only ledger.
 #[async_trait]
 pub trait LedgerRepo: Send + Sync {
@@ -578,6 +582,14 @@ pub trait LedgerRepo: Send + Sync {
     /// bundle's is `INTERNAL`.
     async fn append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn list(&mut self, filter: LedgerFilter) -> Result<Vec<LedgerRow>, AppError>;
+    /// When the latest [`CHECKIN_ACTION`] entry an agent wrote through connection `connection_id`
+    /// was made (the entry with the highest sequence id), or `None` when it has none. In Postgres
+    /// the lookup matches the partial index `ledger_entries_agent_connection_idx` exactly (its
+    /// action is a literal in both), so it never scans the workspace's ledger.
+    async fn last_checkin_at(
+        &mut self,
+        connection_id: AgentConnectionId,
+    ) -> Result<Option<OffsetDateTime>, AppError>;
 }
 
 /// The workspace's own row.

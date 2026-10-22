@@ -238,10 +238,25 @@ pub fn validate_key_detail(
     }
 }
 
+/// Parts of a key name that make it secret-looking wherever they appear in it, in any case: a
+/// public field named `page_token`, `api_key_id`, `Authorization` or `credentials_file` is
+/// refused (so are `token_count` and `author`, a price paid for never storing a secret in the
+/// clear).
+pub const SECRET_KEY_FRAGMENTS: &[&str] = &["pass", "secret", "token", "key", "auth", "credential"];
+
+/// Whether `key` looks like the name of a secret: one of [`REDACTED_KEYS`] by its exact name, or
+/// containing one of [`SECRET_KEY_FRAGMENTS`], in any case.
+pub fn is_secret_looking_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    REDACTED_KEYS.iter().any(|s| lower == *s)
+        || SECRET_KEY_FRAGMENTS.iter().any(|f| lower.contains(f))
+}
+
 /// Every gap in public connector fields, under `connector_public`: the value is an object, and no
-/// object key at any depth (inside arrays too) is one of [`REDACTED_KEYS`] by its exact name in
-/// any case (`token` and `Token` are refused, `token_count` is not). A refused key's value is not
-/// looked into. Keys are visited in sorted order, so the gaps come in a stable order.
+/// object key at any depth (inside arrays too) looks like the name of a secret
+/// ([`is_secret_looking_key`]: one of [`REDACTED_KEYS`], or containing one of
+/// [`SECRET_KEY_FRAGMENTS`], in any case). A refused key's value is not looked into. Keys are
+/// visited in sorted order, so the gaps come in a stable order.
 pub fn validate_connector_public(value: &Value) -> Vec<Gap> {
     let mut gaps = Gaps::default();
     if value.is_object() {
@@ -262,7 +277,7 @@ fn find_secret_keys(value: &Value, path: &str, gaps: &mut Gaps) {
             keys.sort();
             for key in keys {
                 let field = format!("{path}.{key}");
-                if REDACTED_KEYS.iter().any(|s| key.eq_ignore_ascii_case(s)) {
+                if is_secret_looking_key(key) {
                     gaps.add(
                         field,
                         "a secret-looking key: secrets belong in the sealed configuration, \

@@ -2,9 +2,12 @@
 //!
 //! The stored types read tolerantly (unknown fields ignored, missing ones defaulted), so a value
 //! an owner or an agent writes is checked here first: every key the target struct does not have
-//! is reported, at any depth, together with any type error, as [`Gap`]s with dotted paths. A
-//! missing field is not an error here; it reads as empty and [`crate::validate_sections`] reports
-//! it as a completeness gap.
+//! is reported, at any depth, together with any type error, as [`Gap`]s with dotted paths; so is
+//! a budget lane without its `lane` or `period` (a default would silently pick one), and a text
+//! longer than its cap ([`MAX_SECTION_TEXT_CHARS`], [`MAX_SECTION_NAME_CHARS`],
+//! [`MAX_PROHIBITION_CHARS`]). Any other missing field is not an error here; it reads as empty
+//! and [`crate::validate_sections`] reports it as a completeness gap. Reading what is stored
+//! stays tolerant: none of these checks applies to it.
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -58,64 +61,104 @@ impl SectionValue {
     }
 }
 
-/// The JSON shape of a written value, for finding unknown keys.
+/// The longest identity field (`product`, `voice`, `positioning`, `usp`), channel rationale,
+/// segment description or goal objective a write takes, in characters.
+pub const MAX_SECTION_TEXT_CHARS: usize = 2_000;
+
+/// The longest name a write takes, in characters: a segment's key and name, a KPI's name and
+/// target, a channel (chosen or in the mix) and a lane's currency.
+pub const MAX_SECTION_NAME_CHARS: usize = 200;
+
+/// The longest prohibition a write takes, in characters.
+pub const MAX_PROHIBITION_CHARS: usize = 500;
+
+/// The JSON shape of a written value, for finding unknown and missing keys and over-long texts.
 enum Shape {
     /// A scalar; only its type can be wrong, which the deserialiser reports.
     Leaf,
-    /// An object with exactly `keys`; `nested` names the keys whose values are walked further.
+    /// A string of at most this many characters (a value of another type is the deserialiser's
+    /// to report).
+    Text(usize),
+    /// An object with exactly `keys`, of which `required` must be present; `fields` names the
+    /// keys whose values are checked further.
     Object {
         keys: &'static [&'static str],
-        nested: &'static [(&'static str, Shape)],
+        required: &'static [&'static str],
+        fields: &'static [(&'static str, Shape)],
     },
     /// An array whose items all have one shape.
     List(&'static Shape),
 }
 
+const TEXT: Shape = Shape::Text(MAX_SECTION_TEXT_CHARS);
+const NAME: Shape = Shape::Text(MAX_SECTION_NAME_CHARS);
+
 const IDENTITY: Shape = Shape::Object {
     keys: Identity::KEYS,
-    nested: &[],
+    required: &[],
+    fields: &[
+        ("product", TEXT),
+        ("voice", TEXT),
+        ("positioning", TEXT),
+        ("usp", TEXT),
+    ],
 };
 const SEGMENT: Shape = Shape::Object {
     keys: Segment::KEYS,
-    nested: &[],
+    required: &[],
+    fields: &[("key", NAME), ("name", NAME), ("description", TEXT)],
 };
 const CHANNEL_CHOICE: Shape = Shape::Object {
     keys: ChannelChoice::KEYS,
-    nested: &[],
+    required: &[],
+    fields: &[("channel", NAME), ("rationale", TEXT)],
 };
 const KPI: Shape = Shape::Object {
     keys: Kpi::KEYS,
-    nested: &[],
+    required: &[],
+    fields: &[("name", NAME), ("target", NAME)],
 };
 const GOALS: Shape = Shape::Object {
     keys: Goals::KEYS,
-    nested: &[("kpis", Shape::List(&KPI))],
+    required: &[],
+    fields: &[("objective", TEXT), ("kpis", Shape::List(&KPI))],
 };
 const LANE: Shape = Shape::Object {
     keys: Lane::KEYS,
-    nested: &[],
+    // Read tolerantly, a missing lane is organic and a missing period monthly; written, the
+    // owner says which.
+    required: &["lane", "period"],
+    fields: &[("currency", NAME)],
 };
 const BUDGET_FRAME: Shape = Shape::Object {
     keys: BudgetFrame::KEYS,
-    nested: &[("lanes", Shape::List(&LANE))],
+    required: &[],
+    fields: &[("lanes", Shape::List(&LANE))],
 };
 const MIX: Shape = Shape::Object {
     keys: Mix::KEYS,
-    nested: &[],
+    required: &[],
+    fields: &[("channel", NAME)],
 };
 const CADENCE: Shape = Shape::Object {
     keys: Cadence::KEYS,
-    nested: &[("channel_mix", Shape::List(&MIX))],
+    required: &[],
+    fields: &[("channel_mix", Shape::List(&MIX))],
 };
+const PROHIBITION: Shape = Shape::Text(MAX_PROHIBITION_CHARS);
 const HYPOTHESIS_INPUT: Shape = Shape::Object {
     keys: HypothesisInput::KEYS,
-    nested: &[],
+    required: &[],
+    fields: &[],
 };
 
 /// Parses the value written for the section `key` (one of [`Sections::KEYS`]), refusing every
-/// unknown key at any depth. On refusal the gaps name each unknown key by its dotted path
-/// (`budget_frame.lanes[1].note`, message `unknown field`), then any type error under the
-/// section's key; an unknown section is one gap under `key`.
+/// unknown key at any depth, a budget lane without its `lane` or `period`, and a text over its
+/// cap. On refusal the gaps name each problem by its dotted path: an unknown key
+/// (`budget_frame.lanes[1].note`, message `unknown field`), a missing one
+/// (`budget_frame.lanes[0].period`, `required field`), an over-long text (`identity.product`,
+/// `prohibitions[2]`: `at most N characters, got M`); then any type error under the section's
+/// key. An unknown section is one gap under `key`.
 pub fn parse_section_strict(key: &str, value: &Value) -> Result<SectionValue, Vec<Gap>> {
     match key {
         "identity" => strict(value, &IDENTITY, key).map(SectionValue::Identity),
@@ -124,7 +167,7 @@ pub fn parse_section_strict(key: &str, value: &Value) -> Result<SectionValue, Ve
         "goals" => strict(value, &GOALS, key).map(SectionValue::Goals),
         "budget_frame" => strict(value, &BUDGET_FRAME, key).map(SectionValue::BudgetFrame),
         "prohibitions" => {
-            strict(value, &Shape::List(&Shape::Leaf), key).map(SectionValue::Prohibitions)
+            strict(value, &Shape::List(&PROHIBITION), key).map(SectionValue::Prohibitions)
         }
         "cadence" => strict(value, &CADENCE, key).map(SectionValue::Cadence),
         "paid_enabled" => strict(value, &Shape::Leaf, key).map(SectionValue::PaidEnabled),
@@ -145,10 +188,10 @@ pub fn parse_hypotheses_strict(value: &Value) -> Result<Vec<HypothesisInput>, Ve
     strict(value, &Shape::List(&HYPOTHESIS_INPUT), "hypotheses")
 }
 
-/// Deserialises `value` as `T`, failing with every unknown key under `path` and any type error.
+/// Deserialises `value` as `T`, failing with every shape gap under `path` and any type error.
 fn strict<T: DeserializeOwned>(value: &Value, shape: &Shape, path: &str) -> Result<T, Vec<Gap>> {
     let mut gaps = Vec::new();
-    unknown_keys(value, shape, path, &mut gaps);
+    shape_gaps(value, shape, path, &mut gaps);
     match T::deserialize(value) {
         Ok(parsed) if gaps.is_empty() => Ok(parsed),
         Ok(_) => Err(gaps),
@@ -162,12 +205,20 @@ fn strict<T: DeserializeOwned>(value: &Value, shape: &Shape, path: &str) -> Resu
     }
 }
 
-/// Adds a gap for every key of `value` that `shape` does not have: an object's own unknown keys
-/// first (sorted, whatever the map's order), then those of its walked keys in `nested` order. A
-/// value of the wrong type is skipped here; the deserialiser reports it.
-fn unknown_keys(value: &Value, shape: &Shape, path: &str, gaps: &mut Vec<Gap>) {
+/// Adds a gap for every way `value` departs from `shape`: an object's own unknown keys first
+/// (sorted, whatever the map's order), then its missing required keys (in `required` order),
+/// then those of its checked keys in `fields` order; a text over its cap. A value of the wrong
+/// type is skipped here; the deserialiser reports it.
+fn shape_gaps(value: &Value, shape: &Shape, path: &str, gaps: &mut Vec<Gap>) {
     match (shape, value) {
-        (Shape::Object { keys, nested }, Value::Object(map)) => {
+        (
+            Shape::Object {
+                keys,
+                required,
+                fields,
+            },
+            Value::Object(map),
+        ) => {
             let mut unknown: Vec<&str> = map
                 .keys()
                 .map(String::as_str)
@@ -180,15 +231,30 @@ fn unknown_keys(value: &Value, shape: &Shape, path: &str, gaps: &mut Vec<Gap>) {
                     message: "unknown field".to_owned(),
                 });
             }
-            for (key, inner) in *nested {
+            for key in required.iter().filter(|k| !map.contains_key(**k)) {
+                gaps.push(Gap {
+                    field: format!("{path}.{key}"),
+                    message: "required field".to_owned(),
+                });
+            }
+            for (key, inner) in *fields {
                 if let Some(v) = map.get(*key) {
-                    unknown_keys(v, inner, &format!("{path}.{key}"), gaps);
+                    shape_gaps(v, inner, &format!("{path}.{key}"), gaps);
                 }
             }
         }
         (Shape::List(item), Value::Array(items)) => {
             for (i, v) in items.iter().enumerate() {
-                unknown_keys(v, item, &format!("{path}[{i}]"), gaps);
+                shape_gaps(v, item, &format!("{path}[{i}]"), gaps);
+            }
+        }
+        (Shape::Text(max), Value::String(text)) => {
+            let len = text.chars().count();
+            if len > *max {
+                gaps.push(Gap {
+                    field: path.to_owned(),
+                    message: format!("at most {max} characters, got {len}"),
+                });
             }
         }
         _ => {}

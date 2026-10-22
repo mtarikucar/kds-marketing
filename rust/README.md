@@ -80,11 +80,13 @@ döndürür. Dört göç vardır:
 |---|---|
 | `0001_foundation` | çalışma alanları, kullanıcılar, oturumlar, roller, üyelikler, API anahtarları, ajan bağlantıları, günlük, platform operatörleri |
 | `0002_strategy` | strateji sürümleri, hipotezler, istişare kaydı |
-| `0003_capabilities` | kabiliyetler, gruplar, bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
-| `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan dizini (`ledger_entries_agent_connection_idx`) açar |
+| `0003_capabilities` | kabiliyetler (bildiren ajan bağlantısı `declared_by_connection` dahil), gruplar (adı alan içinde büyük/küçük harf ayırmadan tek: `capability_groups_name_ci`, `lower(name)` üzerinde), bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
+| `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
 
-**Geliştirme veritabanını yeniden açın.** `0002` ve `0003` M1a sırasında, yayımlanmadan önce
-değiştirildi (en son `0003`'ün benzersiz çiftleri `(workspace_id, id)` sırasına geçti). Bu göçlerin eski
+**Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
+değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
+harf ayırmayan benzersiz dizini eklendi, `0004`'ün yoklama dizini yalnız `work.checkin` satırlarını
+tutar oldu). Bu göçlerin eski
 bir hâlini uygulamış bir veritabanında `jeeta serve` sağlama toplamı (checksum) uyuşmazlığıyla durur
 (`migration 3 was previously applied but has been modified`). Veritabanını yönetici olarak silip
 yeniden açın, `jeeta serve` göçleri baştan uygular:
@@ -145,13 +147,17 @@ Panelde `http://127.0.0.1:8080/register`. Kayıt, kullanıcıyı ve onun sahibi 
 açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/platform/workspaces`) etkinleştirilir.
 
 **Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
-`workspace.*`, `platform.*`, `strategy.*` ve `work.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`,
-`agents.*`, `ledger.*`, `capability.*`, `budget.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
-`423 {"code":"WORKSPACE_INACTIVE","details":{"status":"pending_payment"}}` alır. Yani ödeme bekleyen bir alan
-operatör onu etkinleştirene kadar üye davet edemez ve API anahtarı açamaz; giriş, çıkış, `GET /api/auth/me`,
-`GET /api/workspace`, alan değiştirme, strateji istişaresi (bkz. [Strateji](#strateji)) ve bekleyen işler
-(bkz. [Sırada ne var](#sırada-ne-var)) çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
-alana bekleyen bir davet de kabul edilemez. API'den (değişiklik yapan her istek
+`workspace.*` ve `platform.*` her durumda çalışır; `strategy.*` ve `work.*` alan `active` ya da
+`pending_payment` iken çalışır, `suspended` iken çalışmaz; geri kalan her kullanım durumu (`team.*`, `roles.*`,
+`api_keys.*`, `agents.*`, `ledger.*`, `capability.*`, `budget.*`) yalnız alan `active` iken çalışır. Çalışmayan
+bir çağrı, panelden de MCP'den de, `423 {"code":"WORKSPACE_INACTIVE","details":{"status":"pending_payment"}}`
+(ya da `"suspended"`) alır. Yani ödeme bekleyen bir alan operatör onu etkinleştirene kadar üye davet edemez ve
+API anahtarı açamaz; giriş, çıkış, `GET /api/auth/me`, `GET /api/workspace`, alan değiştirme, strateji
+istişaresi (bkz. [Strateji](#strateji)) ve bekleyen işler (bkz. [Sırada ne var](#sırada-ne-var)) çalışır.
+Ödeme bekleyen bir alan stratejiyi hazırlayıp onaylayabilir ama alan etkinleşene kadar kabiliyet
+bildiremez (`capability.*` ve `budget.*` yalnız `active` alanda çalışır). Askıya alınan bir alanda yalnız
+giriş, çıkış, oturum ve alan bilgisi çalışır: strateji ve bekleyen işler de kapanır, askıdaki bir alana
+bekleyen bir davet de kabul edilemez. API'den (değişiklik yapan her istek
 `X-Requested-With: jeeta-panel` başlığını taşımalıdır, yoksa `403`):
 
 ```sh
@@ -203,6 +209,11 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
 
+**M1a'dan önce açılmış anahtarlar yeni kapsamları taşımaz.** Kapsamsız açılan bir anahtar, açıldığı an
+sahibinin taşıdığı izinleri kapsam olarak saklar; M1a'dan önce açılmış bir anahtarda bu yüzden
+`capabilities.manage` ve `budget.manage` yoktur (sahibinin rolü onları göçle almış olsa bile). Ajanın
+kabiliyet bildirmesi ya da bütçe kalemi açması için M1a'dan sonra yeni bir anahtar açın.
+
 **Döngü dışı adlar.** MCP uç noktası DNS yeniden bağlama (rebinding) saldırılarına karşı `Host` başlığını
 denetler: varsayılan olarak yalnızca `localhost`, `127.0.0.1` ve `::1` kabul edilir, başka her ad `403` alır.
 Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (reverse proxy) arkasında bile)
@@ -216,7 +227,8 @@ risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri d�
 `jeeta.strategy.archive` (strateji kapısını kapatır) ve `jeeta.capability.retire` (kabiliyeti kesin olarak
 emekliye ayırır), ayrıca `confirm: true` ister, yoksa `VALIDATION`. Öteki yıkıcı araçlar istemez, çünkü
 etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
-edilen anahtarın yerine yenisi çıkarılır. Yetki onaydan değil rolden gelir: anahtar, çıkaran insanın
+edilen anahtarın yerine yenisi çıkarılır; bir grup ancak strateji ona başvurmuyorsa silinir (başvuruyorsa
+`CONFLICT`), bu yüzden silinen grup yeniden kurulabilir. Yetki onaydan değil rolden gelir: anahtar, çıkaran insanın
 rolünü ve izinlerini kapsamı içinde taşır (onay ve arşiv için sahip ya da yönetici + `team.manage`, bkz.
 [Strateji](#strateji)). Hatalar yapısaldır: `{"code": …, "message": …, "details": …}` hem
 `structuredContent` hem metin olarak döner. Panelde her aracın ikiz bir rotası vardır, yalnızca
@@ -246,14 +258,14 @@ ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta
 | | `jeeta.strategy.write_section` | Taslağın bir bölümünü bütünüyle yazar | WRITE |
 | | `jeeta.strategy.set_hypotheses` | Taslağın hipotezlerini yazar (kimliğiyle tutar, kimliksiz ekler, eksik olanı emekliye ayırır) | WRITE |
 | | `jeeta.strategy.submit` | Taslağı onaya sunar; eksik varsa `VALIDATION` ve `details.gaps` | WRITE |
-| | `jeeta.strategy.approve` | Sunulmuş taslağı onaylar, önceki onaylı sürümü arşivler | WRITE |
+| | `jeeta.strategy.approve` | Sunulmuş taslağı okunduğu gibi (`version_id`, `submitted_at`) onaylar, önceki onaylı sürümü arşivler; okunduktan sonra değişmiş bir taslak `CONFLICT` | WRITE |
 | | `jeeta.strategy.archive` | Adı verilen onaylı sürümü arşivler, strateji kapısını kapatır | DESTRUCTIVE |
 | | `jeeta.strategy.list_versions` | Bütün sürümler, en yenisi başta | READ |
 | | `jeeta.strategy.consultation` | Bir sürümün istişare kaydı, sayfa sayfa | READ |
 | kabiliyet | `jeeta.capability.list` | Kabiliyetler, etkin durumlarıyla; grup, tür, durum ve kabiliyet grubu süzgeçleri | READ |
 | | `jeeta.capability.get` | Tek bir kabiliyet | READ |
 | | `jeeta.capability.declare` | Bir kabiliyet bildirir (`declared` başlar) | WRITE |
-| | `jeeta.capability.verify` | Ajan ya da cihaz kabiliyetini kanıtıyla doğrular | WRITE |
+| | `jeeta.capability.verify` | Ajan ya da cihaz kabiliyetini kanıtıyla doğrular (ajan, kendi bağlantısının bildirdiğini `workspace.read` ile) | WRITE |
 | | `jeeta.capability.mark_unreachable` | Kabiliyeti nedeniyle ulaşılamaz işaretler | WRITE |
 | | `jeeta.capability.set_policy` | Çalışma saatleri, günlük işlem ve harcama tavanı, insan onayı, doğrulama yaşı | WRITE |
 | | `jeeta.capability.retire` | Kabiliyeti kesin olarak emekliye ayırır, gruplardan ve bütçe kalemlerinden çıkarır | DESTRUCTIVE |
@@ -262,7 +274,7 @@ ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta
 | | `jeeta.capability.groups_list` | Kabiliyet grupları, üyeleriyle | READ |
 | | `jeeta.capability.groups_create` | Grup açar (marka, şube, amaç …) | WRITE |
 | | `jeeta.capability.groups_rename` | Grubu yeniden adlandırır | WRITE |
-| | `jeeta.capability.groups_delete` | Grubu siler; üyeler kalır | DESTRUCTIVE |
+| | `jeeta.capability.groups_delete` | Grubu siler; üyeler kalır. Stratejinin daralttığı bir grup silinemez (`CONFLICT`) | DESTRUCTIVE |
 | | `jeeta.capability.groups_add_member` | Gruba bir kabiliyet ekler | WRITE |
 | | `jeeta.capability.groups_remove_member` | Gruptan bir kabiliyeti çıkarır | WRITE |
 | bütçe | `jeeta.budget.items_list` | Bütçe kalemleri, dönemdeki harcama ve kalanla | READ |
@@ -288,20 +300,35 @@ kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get` açıklam
 | Bölüm yazma | `PUT /api/strategy/draft/sections/{section_key}` | `jeeta.strategy.write_section` | `team.manage` |
 | Hipotezler | `PUT /api/strategy/draft/hypotheses` | `jeeta.strategy.set_hypotheses` | `team.manage` |
 | Onaya sunma | `POST /api/strategy/draft/submit` | `jeeta.strategy.submit` | `team.manage` |
-| Onaylama | `POST /api/strategy/draft/approve` | `jeeta.strategy.approve` | sahip ya da yönetici + `team.manage` |
+| Onaylama (gövde `{"version_id": …, "submitted_at": …}`: taslak okunduğu gibi) | `POST /api/strategy/draft/approve` | `jeeta.strategy.approve` | sahip ya da yönetici + `team.manage` |
 | Arşivleme (gövde `{"version_id": …, "confirm": true}`; yanıt iki kapıda da `200 {"version_id": …, "archived": true}`) | `POST /api/strategy/archive` | `jeeta.strategy.archive` | sahip ya da yönetici + `team.manage` |
 | Sürümler | `GET /api/strategy/versions` | `jeeta.strategy.list_versions` | `workspace.read` |
 | İstişare kaydı (`limit`, `before_at` + `before_id`) | `GET /api/strategy/versions/{version_id}/consultation` | `jeeta.strategy.consultation` | `workspace.read` |
 
 Eksikleri olan bir taslak onaya sunulamaz: `422 VALIDATION`, `details.gaps` her eksiği alan yoluyla sayar.
+Bir bölüm yazılırken bilinmeyen bir alan, `lane` ya da `period`'u olmayan bir bütçe şeridi ve sınırını aşan
+bir metin de `422 VALIDATION` ile reddedilir: kimlik alanları, kanal gerekçesi, segment açıklaması ve hedef en
+çok 2.000; adlar, anahtarlar, kanallar, KPI hedefleri ve para birimi en çok 200; her yasak en çok 500
+karakter. Saklanmış bir sürüm okunurken bunların hiçbiri uygulanmaz (eksik şerit `organic`, eksik dönem
+`monthly` okunur).
+
+**Onayda varsayımlar listelenir ve onay taslağı adlandırır.** Bir taslağın yanıtı (`VersionOut`), istişarede
+cevap alınmadan konan varsayımları (`assumptions`: `assumption` türündeki kayıtlar, en yenisi başta) taşır;
+onaylı ve arşivlenmiş sürümlerde bu liste boştur. Panel onaylamadan önce bir onay penceresi açar: varsayımları
+ve yürürlüğe girecek hipotez sayısını gösterir, istek ancak orada onaylanınca gider. Onay, taslağı okunduğu
+gibi adlandırır (`version_id` ve `submitted_at`, `GET /api/strategy`'nin ya da `jeeta.work.pending`'in
+verdiği hâliyle); kilitler alındıktan sonra taslak başka bir sürümse ya da o arada yeniden sunulmuşsa
+`409 {"code":"CONFLICT","message":"the draft changed since you read it","details":{"version_id": …,
+"submitted_at": …}}` döner (ayrıntılar taslağın şimdiki hâlidir) ve hiçbir şey değişmez.
 Arşivleme yalnızca adı verilen onaylı sürümü arşivler (başka bir sürüm yürürlükteyse `409`) ve kapıyı
 yeniden kapatır. Bir anahtarın kapsamları her zaman daraltır: `team.manage` taşımayan bir sahip anahtarı
 istişareyi yürütemez, onaylayamaz ve arşivleyemez. Stratejinin kanalları kabiliyet kaydından okunur
 (bkz. [Kabiliyetler](#kabiliyetler)): bir kanal `any` ya da alanın emekliye ayrılmamış bir kabiliyetinin
 türüyse (`phone`, `mailbox`, `instagram` …) onaylanabilir; bir kanalın daraltıldığı grup (`group_id`) alanın
 bir kabiliyet grubu olmalıdır; bir hipotezin kanalı stratejinin seçtiği kanallardan biri ya da `any`
-olmalıdır. Strateji, alan ödeme beklerken de hazırlanıp onaylanabilir (`strategy.*` çalışma alanı durumu
-denetiminden muaftır, bkz. [Kayıt](#kayıt)).
+olmalıdır. Strateji, alan ödeme beklerken de hazırlanıp onaylanabilir (`strategy.*` alan `pending_payment`
+iken durum denetiminden muaftır); askıya alınmış bir alanda strateji araçları da `WORKSPACE_INACTIVE` alır
+(bkz. [Kayıt](#kayıt)).
 
 **Ajan için istişare protokolü.** İstişare sohbette ajanla sahip arasında geçer; sistem onu yapılandırır
 ve kaydeder. Ajan şu sırayı izler:
@@ -320,9 +347,11 @@ ve kaydeder. Ajan şu sırayı izler:
    kimliksiz (ya da `id: null`); onaylı sürümde olup listede olmayan emekliye ayrılır.
 7. `jeeta.strategy.submit`: eksik kalmadıysa taslak onaya sunulur; kalmışsa `VALIDATION` ve
    `details.gaps` döner, ajan 4–6'ya döner.
-8. Onay sahibin ya da yöneticinin işidir: panelde onaylar ya da sohbette onayladığını söyler ve ajan,
-   sahibin ya da yöneticinin `team.manage` taşıyan anahtarıyla `jeeta.strategy.approve` çağırır (ek kod
-   istenmez). `jeeta.work.pending` artık `{"approved": {"number": …}}` okur.
+8. Onay sahibin ya da yöneticinin işidir. Ajan önce taslağın varsayımlarını (`jeeta.strategy.get` →
+   `draft.assumptions`) sahibe okur; sahip panelde onaylar ya da sohbette onayladığını söyler ve ajan,
+   sahibin ya da yöneticinin `team.manage` taşıyan anahtarıyla, okuduğu taslağın `version_id` ve
+   `submitted_at` değerleriyle `jeeta.strategy.approve` çağırır (ek kod istenmez; taslak o arada değiştiyse
+   `CONFLICT` döner ve ajan yeniden okur). `jeeta.work.pending` artık `{"approved": {"number": …}}` okur.
 
 ## Kabiliyetler
 
@@ -352,19 +381,31 @@ erişimi (`shell`, `adb`, `browser_profile` …) `jeeta.capability.declare` ile 
 `declared` durumunda başlar. Sonra `jeeta.capability.verify` ile kanıtını verir: ne çalıştırdığı ya da
 ne gördüğü (`evidence.text`) ve isteğe bağlı dayanaklar (`evidence.refs`: seri numarası, dosya ya da ekran
 görüntüsü kimliği). Kanıt ajanın beyanı olarak kaydedilir, sistem onu denetlemez; doğrulama, politikanın
-`verify_max_age_days` süresi (varsayılan 30 gün) dolunca `stale` okunur ve ajan yeniden doğrular. Bir ajan
-kendi ajan ya da cihaz kabiliyetini yalnızca `workspace.read` ile doğrulayabilir; panelde bir kişi
-`capabilities.manage` ister. Bağlayıcıyla (connector) ulaşılan hesaplar (`mailbox`, `instagram`, reklam
+`verify_max_age_days` süresi (varsayılan 30 gün) dolunca `stale` okunur ve ajan yeniden doğrular.
+Bildirilen kabiliyet onu bildiren ajan bağlantısını saklar (`declared_by_connection`; bir kişi bildirdiyse
+`null`). Bir ajan bir ajan ya da cihaz kabiliyetini yalnızca `workspace.read` ile ancak **kendi bağlantısı
+bildirdiyse** doğrulayabilir; başka bir bağlantının ya da bir kişinin bildirdiğini doğrulamak için
+`capabilities.manage` ister (yoksa `403`, `details.permission = "capabilities.manage"`). Panelde bir kişi her
+zaman `capabilities.manage` ister. Bağlantı, anahtar ve istemci adı ile sürümüne bağlıdır: istemcinin sürümü
+değişince yeni bir bağlantı açılır. Bağlayıcıyla (connector) ulaşılan hesaplar (`mailbox`, `instagram`, reklam
 hesapları …) bir beyanla doğrulanamaz (`409`), kendi yoklamalarıyla (probe) doğrulanır; bağlayıcılar M1b ile
 gelir. Bir bağlayıcının ulaşacağı adresler `connector_public.hosts` alanında bildirilir ve yalnızca genel
-(public) adresler kabul edilir.
+(public) adresler kabul edilir. `connector_public` hiçbir sır taşımaz: sır gibi görünen bir anahtar adı,
+her derinlikte, `422 VALIDATION` alır; bu, günlüğün maskeleme listesindeki adlar (`password`, `token`,
+`api_key`, `plaintext` …) ile adında büyük/küçük harf ayırmadan `pass`, `secret`, `token`, `key`, `auth` ya
+da `credential` geçen her addır (`token_count`, `author` da reddedilir).
+
+**Çıkış (egress) denetimi.** Bir adres bildirildiği an yalnızca metniyle denetlenir (IP adresi yazımları ve
+yalnız özel ağların çözdüğü ad kalıpları); bir genel adın bağlanırken özel bir adrese çözülüp çözülmediğine
+(DNS yeniden bağlama) henüz bakılmaz. Bu çözümleme anı denetimi, kiracı adreslerine istek gönderen ilk
+kullanım durumuyla (M1b) gelir; o zamana dek hiçbir kod yolu kiracı adreslerine istek göndermez.
 
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
 | Liste (`group`, `kind`, `status`, `group_id` süzgeçleri) | `GET /api/capabilities` | `jeeta.capability.list` | `workspace.read` |
 | Okuma | `GET /api/capabilities/{capability_id}` | `jeeta.capability.get` | `workspace.read` |
 | Bildirme | `POST /api/capabilities` | `jeeta.capability.declare` | `capabilities.manage` |
-| Doğrulama (gövde `{"evidence": {"text": …, "refs": […]}}`) | `POST /api/capabilities/{capability_id}/verify` | `jeeta.capability.verify` | ajan: `workspace.read`; kişi: `capabilities.manage` |
+| Doğrulama (gövde `{"evidence": {"text": …, "refs": […]}}`) | `POST /api/capabilities/{capability_id}/verify` | `jeeta.capability.verify` | ajan: kendi bağlantısının bildirdiğine `workspace.read`, başkasınınkine `capabilities.manage`; kişi: `capabilities.manage` |
 | Ulaşılamaz işaretleme (`{"reason": …}`) | `POST /api/capabilities/{capability_id}/unreachable` | `jeeta.capability.mark_unreachable` | `capabilities.manage` |
 | Politika (gövde politikanın kendisi) | `PUT /api/capabilities/{capability_id}/policy` | `jeeta.capability.set_policy` | `capabilities.manage` |
 | Emekliye ayırma (`{"confirm": true}`) | `POST /api/capabilities/{capability_id}/retire` | `jeeta.capability.retire` | `capabilities.manage` |
@@ -372,7 +413,7 @@ gelir. Bir bağlayıcının ulaşacağı adresler `connector_public.hosts` alan�
 | Bağı kaldırma (yanıt: kabiliyetin kendisi) | `DELETE /api/capabilities/{capability_id}/budget-links/{budget_item_id}` | `jeeta.capability.unlink_budget` | `capabilities.manage` |
 | Gruplar | `GET /api/capability-groups` | `jeeta.capability.groups_list` | `workspace.read` |
 | Grup açma, adlandırma | `POST /api/capability-groups`, `PATCH /api/capability-groups/{group_id}` | `jeeta.capability.groups_create`, `groups_rename` | `capabilities.manage` |
-| Grup silme (yanıt: `{"group_id": …, "deleted": true}`) | `DELETE /api/capability-groups/{group_id}` | `jeeta.capability.groups_delete` | `capabilities.manage` |
+| Grup silme (yanıt: `{"group_id": …, "deleted": true}`; onaylı sürüm ya da açık taslak bir kanalı ona daraltmışsa `409`, `details.version_ids`) | `DELETE /api/capability-groups/{group_id}` | `jeeta.capability.groups_delete` | `capabilities.manage` |
 | Grup üyeliği (yanıt: grubun kendisi) | `POST /api/capability-groups/{group_id}/members`, `DELETE …/members/{capability_id}` | `jeeta.capability.groups_add_member`, `groups_remove_member` | `capabilities.manage` |
 | Bütçe kalemleri | `GET /api/budget/items` | `jeeta.budget.items_list` | `workspace.read` |
 | Bütçe kalemi açma | `POST /api/budget/items` | `jeeta.budget.items_create` | `budget.manage` |
@@ -416,17 +457,24 @@ açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissi
 [Göçler](#göçler)). Özel rollere kendiliğinden eklenmezler: bir özel role sahibi ya da yöneticisi verir.
 
 Bir API anahtarının kapsamları sahibinin izinlerini daraltır: yalnızca `workspace.read` taşıyan bir anahtarla
-ajan okur, kendi kabiliyetini doğrular ve harcama bildirir, ama bildiremez, gruplayamaz ve kalem açamaz.
+ajan okur, kendi bağlantısının bildirdiği kabiliyeti doğrular ve harcama bildirir, ama bildiremez,
+gruplayamaz, başkasının bildirdiğini doğrulayamaz ve kalem açamaz.
+
+Grup adları alan içinde büyük/küçük harf ayırmadan tektir ("Marka A" ile "marka a" aynı addır); kullanım
+durumu bunu yazmadan önce denetler, veritabanı da `capability_groups_name_ci` dizini ile (`lower(name)`)
+zorlar: dizine takılan bir yazma da `409 CONFLICT` alır.
 
 ## Sırada ne var
 
 Ajanın giriş noktası `jeeta.work.pending`'dir (panelde `GET /api/work/pending`, ana sayfanın verisi): stratejinin
-durumu, en acil olanı başta bekleyen işler ve ajanın son görülme uyarısı. Strateji kapısından da çalışma alanı
-durumu denetiminden de muaftır: ajan, strateji yokken ve alan ödeme beklerken de neyin beklediğini sorabilir.
+durumu, en acil olanı başta bekleyen işler ve ajanın son görülme uyarısı. Strateji kapısından muaftır, çalışma
+alanı durumu denetiminden ise alan ödeme beklerken muaftır: ajan, strateji yokken ve alan ödeme beklerken de
+neyin beklediğini sorabilir; askıya alınmış bir alanda `work.*` de `WORKSPACE_INACTIVE` alır.
 
 - **`strategy`**: `"missing"` (ne onaylı sürüm ne taslak), `{"draft_open": {"gaps": […]}}` (taslak üzerinde
-  çalışılıyor), `"submitted"` (taslak onay bekliyor) ya da `{"approved": {"number": 2}}`. Açık ya da sunulmuş bir
-  taslak, yürürlükte onaylı bir sürüm olsa bile gösterilir: bekleyen iş odur.
+  çalışılıyor), `{"submitted": {"version_id": …, "submitted_at": …}}` (taslak onay bekliyor; onay bu iki
+  değeri geri gönderir) ya da `{"approved": {"number": 2}}`. Açık ya da sunulmuş bir taslak, yürürlükte onaylı
+  bir sürüm olsa bile gösterilir: bekleyen iş odur.
 - **`items`**: her biri `kind`, `priority` (1 en acil) ve ajan için İngilizce bir `hint` taşır; panel kendi
   metnini gösterir.
 
@@ -445,11 +493,15 @@ durumu denetiminden de muaftır: ajan, strateji yokken ve alan ödeme beklerken 
   "Gecikti" ya da "Zamanında" olarak gösterir.
 
 **Ajanın yoklaması.** Ajanı uyandırmak sistemin değil kiracının işidir: ajan kendi zamanlayıcısıyla en az
-yoklama aralığında bir `jeeta.work.checkin` çağırır (yanıtı `jeeta.work.pending` ile aynıdır); geç kaldığında
+yoklama aralığında bir `jeeta.work.checkin` çağırır (yanıtı `jeeta.work.pending` ile aynıdır, ama yoklayan
+bağlantı o an görülmüş sayılır: geç kalmış bir ajan yokladığında `agent.overdue` `false` okur); geç kaldığında
 sistem yalnızca uyarır. Yoklama yalnızca bir ajanın çağrısıdır, panelde rotası yoktur (`mcp_only`); bir kişi
 çağıramaz (`403 FORBIDDEN`, `details.reason = "agents_only"`). Ajanın her çağrısı bağlantısının
 `last_seen_at` alanını zaten günceller; yoklama ise bağlantı başına en çok saatte bir `work.checkin` olarak
-kaydedilir (bağlantının son yoklama kaydı `ledger_entries_agent_connection_idx` dizininden okunur). Aralık
+kaydedilir (bağlantının son yoklama kaydı, yalnız `work.checkin` satırlarını tutan kısmi
+`ledger_entries_agent_connection_idx` dizininden okunur; sorgu eylemi dizinle aynı sabitle adlandırır).
+Yoklamanın kayıt işlemi, bekleyen işler okunmadan önce biter: eşzamanlı yoklamalar havuzdaki bağlantıları
+birbirini bekleyerek tüketmez. Aralık
 çalışma alanı başınadır (`workspace_policies`), 15 dakika ile bir hafta arasıdır; varsayılanı bir gündür.
 
 | Adım | Panel | MCP aracı | İzin |
@@ -604,9 +656,10 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
   (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur. Aynı crate kapı kurallarını da sabitler: strateji
   kapısından yalnızca `auth.`, `workspace.`, `team.`, `roles.`, `api_keys.`, `agents.`, `platform.`,
   `strategy.`, `capability.`, `budget.`, `work.` önekli kullanım durumları ve `ledger.list` muaf olabilir;
-  çalışma alanı durumu denetiminden tam olarak `auth.`, `workspace.`, `platform.`, `strategy.`, `work.`
-  önekliler muaftır; panel rotaları ve MCP araçları kataloğun tam karşılığıdır, MCP'ye özgü tek kullanım
-  durumu `work.checkin`'dir ve kayıt 47 araç tutar.
+  çalışma alanı durumu denetiminden her durumda tam olarak `auth.`, `workspace.`, `platform.` önekliler,
+  yalnız `pending_payment` iken de tam olarak `strategy.`, `work.` önekliler muaftır; panel rotaları ve
+  MCP araçları kataloğun tam karşılığıdır, MCP'ye özgü tek kullanım durumu `work.checkin`'dir ve kayıt
+  47 araç tutar.
 - `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
   `isahc`, `surf`, `attohttpc`, `curl`, ağacın hiçbir yerinde bulunmaz) ile yapay zekâ, medya üretimi, ses
   tanıma ve ses sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans,

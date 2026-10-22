@@ -19,8 +19,9 @@ use crate::error::{ApiError, ApiJson, ApiPath};
 use crate::session::{self, SESSION_COOKIE, WorkspaceCtx};
 use crate::state::AppState;
 
-/// `POST /api/team/invites`.
+/// `POST /api/team/invites`. An unknown field is refused, as `jeeta.team.invite` refuses it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InviteBody {
     pub email: String,
     pub role_key: String,
@@ -37,8 +38,10 @@ pub struct AcceptBody {
     pub display_name: Option<String>,
 }
 
-/// `PATCH /api/team/{membership_id}/role`.
+/// `PATCH /api/team/{membership_id}/role`. An unknown field is refused, as
+/// `jeeta.team.set_role` refuses it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetRoleBody {
     pub role_key: String,
 }

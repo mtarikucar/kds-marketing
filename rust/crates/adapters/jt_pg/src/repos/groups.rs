@@ -4,7 +4,10 @@
 //! A member row references its group and its capability together with the workspace (composite
 //! foreign keys), and member writes check first that both are this workspace's, so another
 //! workspace's group or capability is `NOT_FOUND` (Review Focus 3) before a foreign key would
-//! refuse it. Deleting a group deletes its member rows with it.
+//! refuse it. Deleting a group deletes its member rows with it. A group's name is unique within
+//! its workspace whatever its case (the expression index `capability_groups_name_ci` on
+//! `lower(name)`): an insert that meets it inserts nothing and is `CONFLICT`, a rename that meets
+//! it is `CONFLICT` too (and aborts the transaction, so the use cases check the name first).
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -49,6 +52,20 @@ impl GroupRecord {
     }
 }
 
+/// The unique index that keeps a group's name unique within its workspace whatever its case.
+const NAME_TAKEN: &str = "capability_groups_name_ci";
+
+/// `CONFLICT` naming the name for a write the case-insensitive name index refused (a unique
+/// violation, 23505), else as [`map_sqlx`].
+fn map_write(err: sqlx::Error, what: &str) -> AppError {
+    let constraint = err.as_database_error().and_then(|d| d.constraint());
+    if constraint == Some(NAME_TAKEN) {
+        AppError::conflict("a capability group of this name already exists, in some case")
+    } else {
+        map_sqlx(err, what)
+    }
+}
+
 /// `NOT_FOUND` unless group `id` belongs to workspace `ws`.
 async fn ensure_group(
     conn: &mut PgConnection,
@@ -69,8 +86,8 @@ async fn ensure_group(
 
 #[async_trait]
 impl CapabilityGroupRepo for PgTenantRepos {
-    /// `on conflict do nothing` covers the id and the name, so a refused group leaves the
-    /// transaction usable.
+    /// `on conflict do nothing` covers the id and the name in any case (every unique index), so
+    /// a refused group leaves the transaction usable.
     async fn insert(&mut self, group: CapabilityGroup, at: OffsetDateTime) -> Result<(), AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, group.workspace_id)?;
@@ -133,7 +150,7 @@ impl CapabilityGroupRepo for PgTenantRepos {
         .bind(name)
         .execute(self.tx.conn())
         .await
-        .map_err(|e| map_sqlx(e, "rename capability group"))?;
+        .map_err(|e| map_write(e, "rename capability group"))?;
         if done.rows_affected() == 0 {
             return Err(AppError::not_found("no such capability group"));
         }

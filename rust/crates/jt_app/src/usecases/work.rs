@@ -40,7 +40,7 @@ use super::{Deps, agents, invalid, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{
-    CapabilityFilter, LedgerFilter, MAX_AGENT_CHECKIN_INTERVAL_MINUTES,
+    CHECKIN_ACTION, CapabilityFilter, MAX_AGENT_CHECKIN_INTERVAL_MINUTES,
     MIN_AGENT_CHECKIN_INTERVAL_MINUTES, TenantRepos, WorkspacePolicy,
 };
 
@@ -48,7 +48,7 @@ use crate::ports::{
 /// entry.
 pub const CHECKIN_LEDGER_RESOLUTION: Duration = Duration::hours(1);
 
-const CHECKIN: &str = "work.checkin";
+const CHECKIN: &str = CHECKIN_ACTION;
 
 // ---------------------------------------------------------------------------------------------
 // Outputs
@@ -406,19 +406,8 @@ async fn checked_in_lately(
     connection_id: AgentConnectionId,
     now: OffsetDateTime,
 ) -> Result<bool, AppError> {
-    let last = repos
-        .ledger()
-        .list(LedgerFilter {
-            action_prefix: Some(CHECKIN.to_owned()),
-            actor_kind: Some("agent".to_owned()),
-            agent_connection_id: Some(connection_id),
-            limit: 1,
-            before_id: None,
-        })
-        .await?;
-    Ok(last.first().is_some_and(|row| {
-        row.entry.action.as_str() == CHECKIN && now - row.entry.at < CHECKIN_LEDGER_RESOLUTION
-    }))
+    let last = repos.ledger().last_checkin_at(connection_id).await?;
+    Ok(last.is_some_and(|at| now - at < CHECKIN_LEDGER_RESOLUTION))
 }
 
 /// The id of the approved version in force, if any.

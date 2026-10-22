@@ -4,13 +4,16 @@
 --
 -- A kind may have many capabilities (B10), but one external account (a kind and the provider's
 -- id) is held by at most one capability that is not retired: a partial unique index enforces it,
--- so of two transactions racing to declare it the second one fails. The sealed connector
--- credentials are opaque bytes in `capabilities.connector_sealed` that only the workspace's key
--- opens. Group members, budget links and spend entries reference their rows together with the
--- workspace, so a row can never tie rows of two workspaces together, even where row-level
--- security is off; the unique `(workspace_id, id)` pairs they reference lead with the workspace,
--- so the same indexes serve a workspace's scans. Spend entries are never changed or deleted: a
--- trigger refuses it.
+-- so of two transactions racing to declare it the second one fails. `declared_by_connection` is
+-- the agent connection that declared a capability (null when a person did): an agent verifies on
+-- its own evidence with `workspace.read` alone only what its connection declared. The sealed
+-- connector credentials are opaque bytes in `capabilities.connector_sealed` that only the
+-- workspace's key opens. A group's name is unique within its workspace whatever its case (an
+-- expression index on `lower(name)`). Group members, budget links and spend entries reference
+-- their rows together with the workspace, so a row can never tie rows of two workspaces together,
+-- even where row-level security is off; the unique `(workspace_id, id)` pairs they reference lead
+-- with the workspace, so the same indexes serve a workspace's scans. Spend entries are never
+-- changed or deleted: a trigger refuses it.
 --
 -- Every table is a tenant table with forced row-level security, like those of 0001 and 0002.
 -- Every statement is idempotent: running this file twice leaves the same schema.
@@ -46,9 +49,10 @@ create table if not exists capability_groups (
     name text not null,
     purpose text,
     created_at timestamptz not null,
-    unique (workspace_id, name),
     unique (workspace_id, id)
 );
+create unique index if not exists capability_groups_name_ci
+    on capability_groups (workspace_id, lower(name));
 
 create table if not exists capability_group_members (
     workspace_id uuid not null,

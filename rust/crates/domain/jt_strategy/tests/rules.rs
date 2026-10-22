@@ -628,6 +628,102 @@ fn parse_section_strict_rejects_unknown_keys_at_any_depth_and_lists_them() {
 }
 
 #[test]
+fn parse_section_strict_requires_a_lanes_kind_and_period_and_caps_texts() {
+    // A lane must say which lane and which period; read back, a stored one without them still
+    // defaults.
+    let gaps = parse_section_strict(
+        "budget_frame",
+        &json!({ "lanes": [
+            { "cap_minor": 100, "currency": "TRY" },
+            { "lane": "paid", "cap_minor": 100, "currency": "TRY", "note": "x" },
+        ] }),
+    )
+    .unwrap_err();
+    assert_eq!(
+        fields(&gaps),
+        [
+            "budget_frame.lanes[0].lane",
+            "budget_frame.lanes[0].period",
+            "budget_frame.lanes[1].note",
+            "budget_frame.lanes[1].period",
+        ]
+    );
+    assert_eq!(gaps[0].message, "required field");
+    let stored: BudgetFrame =
+        serde_json::from_value(json!({ "lanes": [{ "cap_minor": 100, "currency": "TRY" }] }))
+            .unwrap();
+    assert_eq!(stored.lanes[0].lane, LaneKind::Organic);
+    assert_eq!(stored.lanes[0].period, Period::Monthly);
+
+    // Texts are capped by kind: at the cap they pass, one character over they are refused.
+    let text = |n: usize| "ş".repeat(n);
+    let cases = [
+        (
+            "identity",
+            json!({ "product": text(MAX_SECTION_TEXT_CHARS + 1) }),
+            "identity.product",
+        ),
+        (
+            "identity",
+            json!({ "usp": text(MAX_SECTION_TEXT_CHARS + 1) }),
+            "identity.usp",
+        ),
+        (
+            "audience",
+            json!([{ "key": "k1", "name": text(MAX_SECTION_NAME_CHARS + 1), "description": "d" }]),
+            "audience[0].name",
+        ),
+        (
+            "audience",
+            json!([{ "key": "k1", "name": "n", "description": text(MAX_SECTION_TEXT_CHARS + 1) }]),
+            "audience[0].description",
+        ),
+        (
+            "channels",
+            json!([{ "channel": "any", "rationale": text(MAX_SECTION_TEXT_CHARS + 1) }]),
+            "channels[0].rationale",
+        ),
+        (
+            "goals",
+            json!({ "objective": "o", "kpis": [{ "name": text(MAX_SECTION_NAME_CHARS + 1), "target": "t" }] }),
+            "goals.kpis[0].name",
+        ),
+        (
+            "prohibitions",
+            json!(["ok", text(MAX_PROHIBITION_CHARS + 1)]),
+            "prohibitions[1]",
+        ),
+    ];
+    for (key, value, field) in cases {
+        let gaps = parse_section_strict(key, &value).unwrap_err();
+        assert_eq!(fields(&gaps), [field], "{key}");
+        assert!(gaps[0].message.starts_with("at most "), "{gaps:?}");
+    }
+    let at_the_cap = [
+        (
+            "identity",
+            json!({ "product": text(MAX_SECTION_TEXT_CHARS) }),
+        ),
+        (
+            "audience",
+            json!([{ "key": "k1", "name": text(MAX_SECTION_NAME_CHARS), "description": text(MAX_SECTION_TEXT_CHARS) }]),
+        ),
+        ("prohibitions", json!([text(MAX_PROHIBITION_CHARS)])),
+    ];
+    for (key, value) in at_the_cap {
+        parse_section_strict(key, &value).unwrap_or_else(|gaps| panic!("{key}: {gaps:?}"));
+    }
+    assert_eq!(
+        (
+            MAX_SECTION_TEXT_CHARS,
+            MAX_SECTION_NAME_CHARS,
+            MAX_PROHIBITION_CHARS
+        ),
+        (2_000, 200, 500)
+    );
+}
+
+#[test]
 fn parse_section_strict_accepts_every_section_key() {
     let complete = serde_json::to_value(complete_sections()).unwrap();
     let mut rebuilt = Sections::default();

@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, BudgetRepo,
-    CapabilityGroupRepo, CapabilityRepo, ConsultationRepo, HypothesisRepo, LedgerFilter,
-    LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow, RoleRepo, StrategyRepo,
-    TenantRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
+    CHECKIN_ACTION, CapabilityGroupRepo, CapabilityRepo, ConsultationRepo, HypothesisRepo,
+    LedgerFilter, LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow, RoleRepo,
+    StrategyRepo, TenantRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
 use jt_ledger::{Actor, LedgerEntry};
 use jt_tenancy::{
@@ -562,6 +562,23 @@ impl LedgerRepo for MemTenant {
         rows.sort_by_key(|r| std::cmp::Reverse(r.id));
         rows.truncate(filter.limit as usize);
         Ok(rows)
+    }
+
+    async fn last_checkin_at(
+        &mut self,
+        connection_id: AgentConnectionId,
+    ) -> Result<Option<OffsetDateTime>, AppError> {
+        Ok(self
+            .state()
+            .ledger
+            .iter()
+            .filter(|r| r.entry.workspace_id == self.ws)
+            .filter(|r| r.entry.action.as_str() == CHECKIN_ACTION)
+            .filter(|r| {
+                matches!(r.entry.actor, Actor::Agent { connection_id: c, .. } if c == connection_id)
+            })
+            .max_by_key(|r| r.id)
+            .map(|r| r.entry.at))
     }
 }
 

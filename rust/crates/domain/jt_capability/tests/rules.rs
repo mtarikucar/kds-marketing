@@ -854,13 +854,54 @@ fn connector_public_rejects_secret_looking_keys_at_any_depth() {
         validate_connector_public(&json!({
             "page_name": "Brand A",
             "handle": "@brand_a",
-            "token_count": 3,
             "scopes": ["pages_read_engagement"],
-            "account": {"id": "1784", "key": "public-key-id", "hash": "abc"},
-            "access_token_expires_at": "2026-12-01T00:00:00Z",
+            "hosts": ["mail.example.com:993"],
+            "account": {"id": "1784", "hash": "abc", "page_id": "p-1"},
+            "expires_at": "2026-12-01T00:00:00Z",
         }))
         .is_empty()
     );
+
+    // A key containing a secret-looking fragment is refused wherever the fragment stands, in
+    // any case (the price: `token_count` and `author` are refused too).
+    for key in [
+        "token_count",
+        "access_token_expires_at",
+        "public_key",
+        "Key",
+        "PassPhrase",
+        "user_password",
+        "app_secret_id",
+        "x-auth-header",
+        "author",
+        "oauth_state",
+        "Credentials",
+        "service_credential_file",
+    ] {
+        let gaps = validate_connector_public(&json!({ "page": { key: "x" } }));
+        assert_eq!(
+            fields(&gaps),
+            [format!("connector_public.page.{key}").as_str()],
+            "{key}"
+        );
+        assert!(is_secret_looking_key(key), "{key}");
+    }
+    for key in [
+        "page_name",
+        "handle",
+        "scopes",
+        "hosts",
+        "hash",
+        "monkey_business",
+    ] {
+        assert_eq!(is_secret_looking_key(key), key.contains("key"), "{key}");
+    }
+    assert_eq!(
+        SECRET_KEY_FRAGMENTS,
+        ["pass", "secret", "token", "key", "auth", "credential"]
+    );
+    // The exact list still counts where no fragment does.
+    assert!(is_secret_looking_key("PlainText"));
 
     let value = json!({
         "page_name": "Brand A",
