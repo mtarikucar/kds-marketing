@@ -118,6 +118,10 @@ export function errorMessage(t: TFunction, err: unknown): string {
     default:
       break;
   }
+  // `strategy.approve` names the draft as it now stands when it changed since it was shown.
+  if (err.code === 'CONFLICT' && 'submitted_at' in err.details && 'version_id' in err.details) {
+    return t('errors.draftChanged');
+  }
   if (err.code === 'FORBIDDEN' && isPermission(err.details.permission)) {
     return t('errors.missingPermission', { permission: t(`permissions.${err.details.permission}`) });
   }

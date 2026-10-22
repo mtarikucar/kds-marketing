@@ -1,6 +1,9 @@
 //! `/api/strategy`: the strategy of the session's current workspace and the consultation that
 //! works it out (spec §5).
 //!
+//! Approving names the draft as the page displayed it (`{version_id, submitted_at}`), so a draft
+//! that changed since the page read it is refused (`409 CONFLICT`) rather than approved unseen.
+//!
 //! Reading answers the approved version and the draft with its gaps; the consultation opens a
 //! draft, records questions, answers, assumptions and notes, writes sections and hypotheses and
 //! submits; an owner or a manager approves, or archives the version in force by naming it. Every
@@ -14,8 +17,8 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use jt_app::usecases::strategy::{
-    self, ArchiveInput, DEFAULT_CONSULTATION_PAGE, RecordInput, RecordKind, StrategyOut,
-    VersionOut, VersionSummary,
+    self, ApproveInput, ArchiveInput, DEFAULT_CONSULTATION_PAGE, RecordInput, RecordKind,
+    StrategyOut, VersionOut, VersionSummary,
 };
 use jt_strategy::{ConsultationEntry, ConsultationEntryId, StrategyVersionId};
 use serde::{Deserialize, Serialize};
@@ -25,8 +28,10 @@ use crate::error::{ApiError, ApiJson, ApiPath, ApiQuery};
 use crate::session::WorkspaceCtx;
 use crate::state::AppState;
 
-/// `POST /api/strategy/consultation/entries`.
+/// `POST /api/strategy/consultation/entries`. An unknown field is refused, as the MCP tool's
+/// arguments refuse it.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecordBody {
     pub kind: RecordKind,
     /// The section the entry is about, if any.
@@ -49,9 +54,22 @@ pub struct ArchivedBody {
     pub archived: bool,
 }
 
-/// `POST /api/strategy/archive`: the approved version meant, and the confirmation (missing reads
-/// as `false`, which is refused).
+/// `POST /api/strategy/draft/approve`: the draft as the page displayed it, its id and its
+/// `submitted_at` exactly as `GET /api/strategy` answered them; a draft that changed since is
+/// refused.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApproveBody {
+    pub version_id: StrategyVersionId,
+    /// An RFC 3339 time.
+    pub submitted_at: String,
+}
+
+/// `POST /api/strategy/archive`: the approved version meant, and the confirmation (missing reads
+/// as `false`, which is refused). An unknown field is refused, as the MCP tool's arguments
+/// refuse it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArchiveBody {
     pub version_id: StrategyVersionId,
     #[serde(default)]
@@ -140,8 +158,10 @@ pub async fn submit(
 pub async fn approve(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<ApproveBody>,
 ) -> Result<Json<VersionOut>, ApiError> {
-    Ok(Json(strategy::approve(&state.deps, &ctx).await?))
+    let input = ApproveInput::parse(body.version_id, &body.submitted_at)?;
+    Ok(Json(strategy::approve(&state.deps, &ctx, input).await?))
 }
 
 /// `200` with `{version_id, archived: true}`: the named version is archived and the workspace has

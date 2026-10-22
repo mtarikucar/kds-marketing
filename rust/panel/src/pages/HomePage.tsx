@@ -4,7 +4,7 @@ import { Bot, CheckCircle2, Compass, ListTodo, Pencil, Play } from 'lucide-react
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
-import { approveDraft, getStrategy, startConsultation } from '@/api/strategy';
+import { getStrategy, startConsultation } from '@/api/strategy';
 import {
   MAX_CHECKIN_INTERVAL_MINUTES,
   MIN_CHECKIN_INTERVAL_MINUTES,
@@ -16,6 +16,7 @@ import {
 import { getPending, setCheckinInterval } from '@/api/work';
 import { getWorkspace } from '@/api/workspace';
 import { useSession } from '@/auth/useSession';
+import { ApproveDialog } from '@/components/ApproveDialog';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { GapList } from '@/components/GapList';
 import { PermissionList } from '@/components/PermissionList';
@@ -70,8 +71,15 @@ function StrategyCard({ state }: { state: StrategyState }) {
   const canConsult = can(session.data, 'team.manage');
   const canApprove = canApproveStrategy(session.data);
   const approvedNumber = typeof state === 'object' && 'approved' in state ? state.approved.number : null;
-  // Only to count the hypotheses in force.
-  const strategy = useQuery({ queryKey: STRATEGY_KEY, queryFn: getStrategy, enabled: approvedNumber !== null });
+  const submitted = typeof state === 'object' && 'submitted' in state ? state.submitted : null;
+  const [approving, setApproving] = useState(false);
+  // To count the hypotheses in force, and to list what a submitted draft rests on before it is
+  // approved.
+  const strategy = useQuery({
+    queryKey: STRATEGY_KEY,
+    queryFn: getStrategy,
+    enabled: approvedNumber !== null || approving,
+  });
 
   const start = useMutation({
     mutationFn: startConsultation,
@@ -79,13 +87,6 @@ function StrategyCard({ state }: { state: StrategyState }) {
       toast.success(t('strategy.started'));
       await invalidateStrategy(queryClient);
       navigate('/strategy');
-    },
-  });
-  const approve = useMutation({
-    mutationFn: approveDraft,
-    onSuccess: async () => {
-      toast.success(t('home.strategy.approved'));
-      await invalidateStrategy(queryClient);
     },
   });
 
@@ -103,13 +104,13 @@ function StrategyCard({ state }: { state: StrategyState }) {
     ) : (
       <OpenStrategy />
     );
-  } else if (state === 'submitted') {
+  } else if ('submitted' in state) {
     title = t('home.strategy.submittedTitle');
     body = canApprove ? null : <p>{t('home.strategy.submittedWait')}</p>;
     actions = (
       <>
         {canApprove && (
-          <Button size="sm" onClick={() => approve.mutate()} loading={approve.isPending}>
+          <Button size="sm" onClick={() => setApproving(true)}>
             <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
             {t('home.strategy.approve')}
           </Button>
@@ -155,9 +156,18 @@ function StrategyCard({ state }: { state: StrategyState }) {
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3 text-sm text-foreground">
         {body}
-        <ErrorCallout error={start.error ?? approve.error} />
+        <ErrorCallout error={start.error} />
         <div className="mt-auto flex flex-wrap gap-2">{actions}</div>
       </CardContent>
+      {submitted && canApprove && (
+        // The shortcut approves the draft the pending work names; the dialog lists what it rests on.
+        <ApproveDialog
+          open={approving}
+          onOpenChange={setApproving}
+          draft={strategy.data ? strategy.data.draft : undefined}
+          stamp={submitted}
+        />
+      )}
     </Card>
   );
 }

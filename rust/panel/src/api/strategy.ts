@@ -1,5 +1,6 @@
 import { request, seg } from './client';
 import type {
+  ApproveStamp,
   ArchivedOut,
   ConsultationEntry,
   HypothesisInput,
@@ -54,9 +55,14 @@ export function submitDraft(): Promise<VersionOut> {
   return request('POST', '/api/strategy/draft/submit');
 }
 
-/** `POST /api/strategy/draft/approve`: owner or manager only; answers the version now in force. */
-export function approveDraft(): Promise<VersionOut> {
-  return request('POST', '/api/strategy/draft/approve');
+/**
+ * `POST /api/strategy/draft/approve`: owner or manager only; names the draft as it was shown and
+ * answers the version now in force (`409 CONFLICT` when the draft changed since).
+ */
+export function approveDraft(stamp: ApproveStamp): Promise<VersionOut> {
+  return request('POST', '/api/strategy/draft/approve', {
+    body: { version_id: stamp.version_id, submitted_at: stamp.submitted_at },
+  });
 }
 
 /**

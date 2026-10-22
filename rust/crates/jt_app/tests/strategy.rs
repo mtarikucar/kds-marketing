@@ -24,7 +24,9 @@ use jt_app::usecases::api_keys::{self, CreateKey};
 use jt_app::usecases::auth::{self, RegisterInput};
 use jt_app::usecases::groups;
 use jt_app::usecases::roles::{self, CreateRole};
-use jt_app::usecases::strategy::{self, ArchiveInput, RecordInput, RecordKind, VersionOut};
+use jt_app::usecases::strategy::{
+    self, ApproveInput, ArchiveInput, RecordInput, RecordKind, VersionOut,
+};
 use jt_ledger::{Actor, LedgerEntry, Subject};
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
@@ -36,6 +38,7 @@ use jt_tenancy::{
 use jt_testkit::fakes::{FIXED_NOW, FixedChannelCatalog, InMemoryUow, deps};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 // ---------------------------------------------------------------------------------------------
 // The spy
@@ -310,6 +313,19 @@ impl ConsultationRepo for SpyTenant {
         self.inner
             .consultation()
             .list(version_id, limit, before)
+            .await
+    }
+
+    async fn list_kind(
+        &mut self,
+        version_id: StrategyVersionId,
+        kind: ConsultationKind,
+        limit: u32,
+    ) -> Result<Vec<ConsultationEntry>, AppError> {
+        self.spy.push("consultation.list_kind");
+        self.inner
+            .consultation()
+            .list_kind(version_id, kind, limit)
             .await
     }
 
@@ -596,7 +612,28 @@ async fn complete_draft(w: &World, ctx: &Ctx) -> VersionOut {
 async fn approved(w: &World) -> VersionOut {
     complete_draft(w, &w.owner_ctx).await;
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
-    strategy::approve(&w.deps, &w.owner_ctx).await.unwrap()
+    strategy::approve(&w.deps, &w.owner_ctx, as_read(w))
+        .await
+        .unwrap()
+}
+
+/// What approving the draft as it now stands takes: its id and its submission time, as a caller
+/// that has just read it sends them (read past the spy). Without a draft, a made-up one.
+fn as_read(w: &World) -> ApproveInput {
+    match w
+        .versions()
+        .into_iter()
+        .find(|v| v.status == VersionStatus::Draft)
+    {
+        Some(draft) => ApproveInput {
+            version_id: draft.id,
+            submitted_at: draft.submitted_at.unwrap_or(FIXED_NOW),
+        },
+        None => ApproveInput {
+            version_id: StrategyVersionId::new_v7(),
+            submitted_at: FIXED_NOW,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -610,6 +647,79 @@ async fn get_needs_workspace_read() {
     let err = strategy::get(&w.deps, &ctx).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Forbidden);
     assert_eq!(err.details, json!({ "permission": "workspace.read" }));
+}
+
+#[tokio::test]
+async fn draft_version_out_lists_assumptions_newest_first() {
+    let w = world().await;
+    strategy::start_consultation(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap();
+    let record = |kind, text: &str, minutes: i64| {
+        let ctx = Ctx {
+            now: FIXED_NOW + time::Duration::minutes(minutes),
+            ..w.owner_ctx.clone()
+        };
+        let input = RecordInput {
+            kind,
+            section_key: Some("audience".into()),
+            text: text.into(),
+        };
+        let deps = w.deps.clone();
+        async move { strategy::record(&deps, &ctx, input).await.unwrap() }
+    };
+    let first = record(RecordKind::Assumption, "öğrenciler gece çalışır", 1).await;
+    record(RecordKind::Question, "kitle kim?", 2).await;
+    let second = record(RecordKind::Assumption, "fiyat sabit", 3).await;
+    record(RecordKind::Note, "not", 4).await;
+
+    let draft = strategy::get(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap()
+        .draft
+        .unwrap();
+    let listed: Vec<_> = draft
+        .assumptions
+        .iter()
+        .map(|e| (e.id, e.kind, e.text.as_str()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (second, ConsultationKind::Assumption, "fiyat sabit"),
+            (
+                first,
+                ConsultationKind::Assumption,
+                "öğrenciler gece çalışır"
+            ),
+        ]
+    );
+    assert_eq!(
+        draft.assumptions[0].section_key.as_deref(),
+        Some("audience")
+    );
+    let wire = serde_json::to_value(&draft).unwrap();
+    assert_eq!(wire["assumptions"][0]["kind"], "assumption");
+    assert_eq!(wire["assumptions"][0]["text"], "fiyat sabit");
+
+    // Every answer about the draft lists them; an approved version lists none.
+    for (key, value) in complete_sections() {
+        let out = strategy::write_section(&w.deps, &w.owner_ctx, key.to_owned(), value)
+            .await
+            .unwrap();
+        assert_eq!(out.assumptions.len(), 2);
+    }
+    strategy::set_hypotheses(&w.deps, &w.owner_ctx, one_hypothesis("instagram"))
+        .await
+        .unwrap();
+    let submitted = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(submitted.assumptions, draft.assumptions);
+    let out = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    assert!(out.assumptions.is_empty());
+    let got = strategy::get(&w.deps, &w.owner_ctx).await.unwrap();
+    assert!(got.approved.unwrap().assumptions.is_empty());
 }
 
 #[tokio::test]
@@ -762,7 +872,9 @@ async fn a_custom_role_with_team_manage_may_run_the_consultation_but_not_approve
     let (_, strategist) = w.member("strategist").await;
     complete_draft(&w, &strategist).await;
     strategy::submit(&w.deps, &strategist).await.unwrap();
-    let err = strategy::approve(&w.deps, &strategist).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &strategist, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Forbidden);
     assert_eq!(err.details, json!({ "reason": "owner_or_manager" }));
 }
@@ -992,7 +1104,7 @@ async fn editing_a_submitted_draft_withdraws_the_submission() {
         .unwrap();
     assert_eq!(out.submitted_at, None);
     assert_eq!(w.version(out.id).submitted_at, None);
-    let r = strategy::approve(&w.deps, &w.owner_ctx).await;
+    let r = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w)).await;
     assert_eq!(code(r), ErrorCode::Conflict);
 
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
@@ -1068,7 +1180,9 @@ async fn set_hypotheses_keeps_retires_and_adds_against_the_approved_version() {
         .await
         .unwrap();
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
-    let v2 = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
     let retired_id = v2.hypotheses[1].id;
 
     // Version 3 keeps (and edits) the first, leaves the second out and adds a third.
@@ -1220,7 +1334,9 @@ async fn a_channel_narrowed_to_a_capability_group_needs_the_group() {
     .unwrap();
     assert!(out.gaps.is_empty(), "{:?}", out.gaps);
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
-    strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1299,16 +1415,83 @@ async fn hypothesis_channel_must_be_a_chosen_channel_or_any() {
 #[tokio::test]
 async fn approve_needs_a_submitted_draft() {
     let w = world().await;
-    let err = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(
         (err.code, err.details),
         (ErrorCode::Conflict, json!({ "reason": "no_draft" }))
     );
     complete_draft(&w, &w.owner_ctx).await;
-    let err = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict);
     assert_eq!(err.message, "not submitted");
     assert_eq!(err.details, json!({ "reason": "not_submitted" }));
+}
+
+#[tokio::test]
+async fn approve_refuses_a_changed_draft() {
+    let w = world().await;
+    let draft = complete_draft(&w, &w.owner_ctx).await;
+    let read = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let seen = ApproveInput {
+        version_id: read.id,
+        submitted_at: read.submitted_at.unwrap(),
+    };
+    let stands = |submitted_at: OffsetDateTime| {
+        json!({
+            "version_id": draft.id,
+            "submitted_at": submitted_at.format(&Rfc3339).unwrap(),
+        })
+    };
+
+    // Another draft than the one read.
+    let other = ApproveInput {
+        version_id: StrategyVersionId::new_v7(),
+        ..seen
+    };
+    let err = strategy::approve(&w.deps, &w.owner_ctx, other)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    assert_eq!(err.message, "the draft changed since you read it");
+    assert_eq!(err.details, stands(FIXED_NOW));
+
+    // The same draft, submitted again since it was read.
+    let later = FIXED_NOW + time::Duration::minutes(5);
+    let resubmitter = Ctx {
+        now: later,
+        ..w.owner_ctx.clone()
+    };
+    strategy::submit(&w.deps, &resubmitter).await.unwrap();
+    let err = strategy::approve(&w.deps, &w.owner_ctx, seen)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    assert_eq!(err.details, stands(later));
+    assert_eq!(w.version(draft.id).status, VersionStatus::Draft);
+    assert!(w.entries("strategy.approve").is_empty());
+
+    // The draft as it now stands is approved.
+    let now = ApproveInput {
+        submitted_at: later,
+        ..seen
+    };
+    let out = strategy::approve(&w.deps, &w.owner_ctx, now).await.unwrap();
+    assert_eq!(out.status, VersionStatus::Approved);
+}
+
+#[tokio::test]
+async fn approve_input_reads_the_submission_time_as_rfc_3339() {
+    let id = StrategyVersionId::new_v7();
+    let input = ApproveInput::parse(id, "2026-10-22T09:30:00.123456Z").unwrap();
+    assert_eq!(input.version_id, id);
+    assert_eq!(input.submitted_at.microsecond(), 123_456);
+    let err = ApproveInput::parse(id, "yesterday").unwrap_err();
+    assert_eq!(err.code, ErrorCode::Validation);
+    assert_eq!(err.details["field"], "submitted_at");
 }
 
 #[tokio::test]
@@ -1327,7 +1510,9 @@ async fn approve_refuses_gaps_with_validation_listing_them() {
         t.hypotheses().replace_all(draft.id, vec![]).await.unwrap();
         t.commit().await.unwrap();
     }
-    let err = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Validation);
     assert_eq!(gap_fields(&err), ["hypotheses"]);
 
@@ -1342,7 +1527,9 @@ async fn approve_refuses_gaps_with_validation_listing_them() {
         t.commit().await.unwrap();
     }
     let deps = w.with_channels(&["mailbox"]);
-    let err = strategy::approve(&deps, &w.owner_ctx).await.unwrap_err();
+    let err = strategy::approve(&deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Validation);
     assert_eq!(
         gap_fields(&err),
@@ -1357,7 +1544,9 @@ async fn approve_makes_the_draft_the_strategy_in_force() {
     let w = world().await;
     let draft = complete_draft(&w, &w.owner_ctx).await;
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
-    let out = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    let out = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
     assert_eq!(out.id, draft.id);
     assert_eq!(out.status, VersionStatus::Approved);
     assert_eq!(out.approved_at, Some(FIXED_NOW));
@@ -1390,7 +1579,9 @@ async fn approve_archives_the_previous_version_in_the_same_transaction() {
         .unwrap();
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     w.spy.take();
-    let v2 = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
     let calls = w.spy.take();
     // One bundle, one commit, both moves inside it.
     assert_eq!(
@@ -1423,7 +1614,9 @@ async fn approve_locks_the_draft_before_archiving() {
         .unwrap();
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     w.spy.take();
-    strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
     let calls = w.spy.take();
     let at = |call: &str| {
         calls
@@ -1441,7 +1634,9 @@ async fn second_approval_loses_with_conflict() {
     complete_draft(&w, &w.owner_ctx).await;
     let draft = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     w.spy.approval_loses.store(true, Ordering::SeqCst);
-    let err = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict);
     assert_eq!(err.message, "another approval won");
     assert_eq!(err.details, json!({ "reason": "another_approval_won" }));
@@ -1458,7 +1653,9 @@ async fn a_version_moved_by_another_transaction_is_conflict() {
         .unwrap();
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     w.spy.already_moved.store(true, Ordering::SeqCst);
-    let err = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict);
     assert_eq!(err.message, "the version has already moved");
     let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
@@ -1474,7 +1671,9 @@ async fn rep_cannot_approve() {
     complete_draft(&w, &w.owner_ctx).await;
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     let (_, rep) = w.member("rep").await;
-    let err = strategy::approve(&w.deps, &rep).await.unwrap_err();
+    let err = strategy::approve(&w.deps, &rep, as_read(&w))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, ErrorCode::Forbidden);
     assert_eq!(err.details, json!({ "reason": "owner_or_manager" }));
     // No role known never counts.
@@ -1483,7 +1682,7 @@ async fn rep_cannot_approve() {
         ..w.owner_ctx.clone()
     };
     assert_eq!(
-        code(strategy::approve(&w.deps, &nobody).await),
+        code(strategy::approve(&w.deps, &nobody, as_read(&w)).await),
         ErrorCode::Forbidden
     );
 }
@@ -1494,7 +1693,7 @@ async fn manager_can_approve_and_is_named_as_approver() {
     complete_draft(&w, &w.owner_ctx).await;
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     let (manager, ctx) = w.member("manager").await;
-    let out = strategy::approve(&w.deps, &ctx).await.unwrap();
+    let out = strategy::approve(&w.deps, &ctx, as_read(&w)).await.unwrap();
     assert_eq!(w.version(out.id).approved_by, Some(manager));
     assert_eq!(
         out.approved_by_email.as_ref().map(Email::as_str),
@@ -1524,7 +1723,9 @@ async fn owner_key_without_team_manage_is_refused_everywhere() {
             .await
             .map(|_| ()),
         strategy::submit(&w.deps, &agent).await.map(|_| ()),
-        strategy::approve(&w.deps, &agent).await.map(|_| ()),
+        strategy::approve(&w.deps, &agent, as_read(&w))
+            .await
+            .map(|_| ()),
         strategy::archive(&w.deps, &agent, archiving(StrategyVersionId::new_v7())).await,
     ];
     for r in refusals {
@@ -1550,7 +1751,7 @@ async fn manager_role_without_team_manage_cannot_approve() {
     let agent = w.agent(&manager, &["workspace.read"]).await;
     assert_eq!(agent.role_key.as_deref(), Some("manager"));
     for err in [
-        strategy::approve(&w.deps, &agent)
+        strategy::approve(&w.deps, &agent, as_read(&w))
             .await
             .map(|_| ())
             .unwrap_err(),
@@ -1571,7 +1772,9 @@ async fn agent_with_owner_key_can_approve() {
     let agent = w.owner_agent(&["workspace.read", "team.manage"]).await;
     complete_draft(&w, &agent).await;
     strategy::submit(&w.deps, &agent).await.unwrap();
-    let out = strategy::approve(&w.deps, &agent).await.unwrap();
+    let out = strategy::approve(&w.deps, &agent, as_read(&w))
+        .await
+        .unwrap();
     assert_eq!(out.status, VersionStatus::Approved);
     // On the issuer's authority: the owner is the approver.
     assert_eq!(w.version(out.id).approved_by, Some(w.owner));
@@ -1658,7 +1861,9 @@ async fn archive_refuses_when_the_approved_version_changed() {
         .await
         .unwrap();
     strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
-    let v2 = strategy::approve(&w.deps, &w.owner_ctx).await.unwrap();
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
     let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap_err();
@@ -1875,7 +2080,8 @@ async fn every_draft_mutation_locks_the_draft() {
         (
             "approve",
             Box::pin(async move {
-                strategy::approve(deps, ctx).await.unwrap();
+                // Read past the spy, so that only the approval's own calls are logged.
+                strategy::approve(deps, ctx, as_read(world)).await.unwrap();
             }),
         ),
         (

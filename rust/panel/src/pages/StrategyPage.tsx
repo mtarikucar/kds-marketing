@@ -3,16 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, CheckCircle2, Compass, History, Play, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { listGroups } from '@/api/capabilities';
-import {
-  approveDraft,
-  archiveVersion,
-  getStrategy,
-  listVersions,
-  startConsultation,
-  submitDraft,
-} from '@/api/strategy';
+import { archiveVersion, getStrategy, listVersions, startConsultation, submitDraft } from '@/api/strategy';
 import type { Gap, GroupOut, VersionOut } from '@/api/types';
 import { useSession } from '@/auth/useSession';
+import { ApproveDialog } from '@/components/ApproveDialog';
 import { ConsultationLog } from '@/components/ConsultationLog';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { GapList } from '@/components/GapList';
@@ -267,14 +261,7 @@ function DraftTab({
       await invalidateStrategy(queryClient);
     },
   });
-  const approve = useMutation({
-    mutationFn: approveDraft,
-    onSuccess: async () => {
-      toast.success(t('strategy.approved'));
-      onApproved();
-      await invalidateStrategy(queryClient);
-    },
-  });
+  const [approving, setApproving] = useState(false);
 
   if (!draft) {
     return (
@@ -322,8 +309,7 @@ function DraftTab({
               </Button>
             )}
             <Button
-              onClick={() => approve.mutate()}
-              loading={approve.isPending}
+              onClick={() => setApproving(true)}
               disabled={!canApprove || !submitted}
               aria-describedby={approveHint ? 'strategy-approve-hint' : undefined}
             >
@@ -343,9 +329,18 @@ function DraftTab({
             <Meta label={t('strategy.submittedAt')} value={draft.submitted_at && formatDateTime(draft.submitted_at, i18n.language)} />
           </dl>
           <RefusalCallout error={submit.error} title={t('strategy.submitRefused')} />
-          <RefusalCallout error={approve.error} title={t('strategy.gapsTitle')} />
         </CardContent>
       </Card>
+      {canApprove && draft.submitted_at !== null && (
+        // The page approves what it shows: the draft's id and its submission time as displayed.
+        <ApproveDialog
+          open={approving}
+          onOpenChange={setApproving}
+          draft={draft}
+          stamp={{ version_id: draft.id, submitted_at: draft.submitted_at }}
+          onApproved={onApproved}
+        />
+      )}
 
       {gaps.length > 0 ? (
         <Callout tone="warning" title={t('strategy.gapsTitle')}>

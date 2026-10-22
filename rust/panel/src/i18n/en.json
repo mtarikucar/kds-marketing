@@ -186,6 +186,7 @@
     "noApprovedVersion": "There is no approved strategy in force.",
     "noDraft": "There is no open strategy draft.",
     "versionMoved": "The version changed meanwhile; reload the page.",
+    "draftChanged": "The draft changed after it was shown to you. Go through it again before approving.",
     "missingPermission": "This needs the permission: {{permission}}."
   },
   "login": {
@@ -237,7 +238,6 @@
       "submittedTitle": "A strategy draft awaits approval",
       "submittedWait": "It takes effect once an owner or a manager approves it.",
       "approve": "Approve",
-      "approved": "The strategy is approved and in force.",
       "approvedTitle": "The strategy is in force",
       "approvedBody": "Version in force: {{number}}.",
       "hypotheses": "Hypotheses: {{count}}."
@@ -463,6 +463,13 @@
     "approved": "The strategy is approved and in force.",
     "approveOwnerOnly": "Only an owner or a manager can approve.",
     "approveNeedsSubmit": "The draft must be submitted before it can be approved.",
+    "approveTitle": "Approve version {{number}}",
+    "approveBody": "Once approved, this version is the strategy in force and replaces the one before it. Go through what it rests on first.",
+    "approveAssumptions": "Assumptions made without your answer",
+    "approveNoAssumptions": "No assumption was recorded: every point rests on your answers.",
+    "approveHypotheses": "Hypotheses it puts in force: {{count}}.",
+    "approveLoading": "Loading the draft…",
+    "approveConfirm": "Approve this version",
     "archive": "Archive",
     "archiveTitle": "Archive the approved strategy",
     "archiveBody": "Version {{number}} will be archived and no strategy will be in force; work that needs a strategy stops until a new version is approved.",

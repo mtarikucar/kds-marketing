@@ -24,5 +24,16 @@ describe('errorMessage', () => {
     expect(errorMessage(t, new ApiError('FORBIDDEN', 'x', { reason: 'exceeds_own_authority' }, 403))).toBe(
       tr.errors.exceedsAuthority,
     );
+    expect(
+      errorMessage(
+        t,
+        new ApiError(
+          'CONFLICT',
+          'the draft changed since you read it',
+          { version_id: 'v', submitted_at: '2026-10-22T10:00:00Z' },
+          409,
+        ),
+      ),
+    ).toBe(tr.errors.draftChanged);
   });
 });

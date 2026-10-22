@@ -186,6 +186,7 @@
     "noApprovedVersion": "Yürürlükte onaylı bir strateji yok.",
     "noDraft": "Açık bir strateji taslağı yok.",
     "versionMoved": "Sürüm bu arada değişti; sayfayı yenileyin.",
+    "draftChanged": "Taslak size gösterildikten sonra değişti. Onaylamadan önce yeniden gözden geçirin.",
     "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}."
   },
   "login": {
@@ -237,7 +238,6 @@
       "submittedTitle": "Strateji taslağı onay bekliyor",
       "submittedWait": "Bir sahip ya da yönetici onayladığında yürürlüğe girer.",
       "approve": "Onayla",
-      "approved": "Strateji onaylandı ve yürürlüğe girdi.",
       "approvedTitle": "Strateji yürürlükte",
       "approvedBody": "Yürürlükteki sürüm: {{number}}.",
       "hypotheses": "Hipotez sayısı: {{count}}."
@@ -463,6 +463,13 @@
     "approved": "Strateji onaylandı ve yürürlüğe girdi.",
     "approveOwnerOnly": "Yalnızca bir sahip ya da yönetici onaylayabilir.",
     "approveNeedsSubmit": "Onaylanabilmesi için taslak önce onaya sunulmalı.",
+    "approveTitle": "Sürüm {{number}} onaylansın",
+    "approveBody": "Onaylandığında bu sürüm yürürlükteki strateji olur ve öncekinin yerini alır. Önce neye dayandığını gözden geçirin.",
+    "approveAssumptions": "Cevabınız alınmadan konan varsayımlar",
+    "approveNoAssumptions": "Hiç varsayım kaydedilmedi: her nokta sizin cevaplarınıza dayanıyor.",
+    "approveHypotheses": "Yürürlüğe koyduğu hipotezler: {{count}}.",
+    "approveLoading": "Taslak yükleniyor…",
+    "approveConfirm": "Bu sürümü onayla",
     "archive": "Arşivle",
     "archiveTitle": "Onaylı stratejiyi arşivle",
     "archiveBody": "Sürüm {{number}} arşivlenecek ve yürürlükte bir strateji kalmayacak; stratejiye bağlı işler yeni bir sürüm onaylanana dek durur.",

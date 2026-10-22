@@ -57,20 +57,60 @@ describe('StrategyPage', () => {
     expect(screen.getAllByText(tr.actor.agent).length).toBeGreaterThan(0);
   });
 
-  it('lets an owner approve a submitted draft', async () => {
+  it('lists the assumptions before approving, and approves only once confirmed', async () => {
     const user = userEvent.setup();
+    const ready = { ...draftVersion, gaps: [], hypotheses: approvedVersion.hypotheses };
     const calls = mockFetch({
       'GET /api/auth/me': me,
-      'GET /api/strategy': { ...strategyWithDraft, gaps: [], draft: { ...draftVersion, gaps: [] } },
+      'GET /api/strategy': { ...strategyWithDraft, gaps: [], draft: ready },
       [`GET /api/strategy/versions/${DRAFT_ID}/consultation`]: [],
       'GET /api/capability-groups': [],
-      'POST /api/strategy/draft/approve': { ...draftVersion, status: 'approved', gaps: [] },
+      'POST /api/strategy/draft/approve': { ...ready, status: 'approved', assumptions: [] },
     });
+    const approvals = () => calls.filter((c) => c.method === 'POST' && c.path === '/api/strategy/draft/approve');
     renderAt('/strategy');
     const approve = await screen.findByRole('button', { name: tr.strategy.approve });
     expect(approve).toBeEnabled();
     await user.click(approve);
-    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/api/strategy/draft/approve')).toBe(true));
+
+    // The dialog lists what the draft rests on; nothing is sent yet.
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(tr.strategy.approveAssumptions)).toBeInTheDocument();
+    expect(within(dialog).getByText('Öğrenciler akşamları sipariş verir')).toBeInTheDocument();
+    expect(within(dialog).getByText(i18n.t('strategy.approveHypotheses', { count: 1 }))).toBeInTheDocument();
+    expect(approvals()).toHaveLength(0);
+
+    // Cancelling sends nothing; confirming sends the draft as it was shown.
+    await user.click(within(dialog).getByRole('button', { name: tr.common.cancel }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(approvals()).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: tr.strategy.approve }));
+    const again = await screen.findByRole('dialog');
+    await user.click(within(again).getByRole('button', { name: tr.strategy.approveConfirm }));
+    await waitFor(() => expect(approvals()).toHaveLength(1));
+    expect(approvals()[0].body).toEqual({ version_id: DRAFT_ID, submitted_at: draftVersion.submitted_at });
+  });
+
+  it('says so when the draft changed since it was shown', async () => {
+    const user = userEvent.setup();
+    const ready = { ...draftVersion, gaps: [], assumptions: [] };
+    mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/strategy': { ...strategyWithDraft, gaps: [], draft: ready },
+      [`GET /api/strategy/versions/${DRAFT_ID}/consultation`]: [],
+      'GET /api/capability-groups': [],
+      'POST /api/strategy/draft/approve': withStatus(409, {
+        code: 'CONFLICT',
+        message: 'the draft changed since you read it',
+        details: { version_id: DRAFT_ID, submitted_at: '2026-10-22T11:00:00Z' },
+      }),
+    });
+    renderAt('/strategy');
+    await user.click(await screen.findByRole('button', { name: tr.strategy.approve }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(tr.strategy.approveNoAssumptions)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm }));
+    expect(await within(dialog).findByText(tr.errors.draftChanged)).toBeInTheDocument();
   });
 
   it('shows the gaps a refused submission names', async () => {

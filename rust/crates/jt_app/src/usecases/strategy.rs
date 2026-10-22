@@ -53,12 +53,13 @@ use jt_tenancy::{Email, MembershipStatus, Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::{Deps, acting_user, invalid, keyset_cursor, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
-use crate::ports::{ChannelCatalog, StrategyArchivedHook, TenantRepos};
+use crate::ports::{ChannelCatalog, MAX_CONSULTATION_PAGE, StrategyArchivedHook, TenantRepos};
 
 const NO_SUCH_VERSION: &str = "no such strategy version";
 
@@ -90,7 +91,15 @@ pub struct VersionOut {
     /// workspace's channels and the capability groups they are narrowed to, the hypotheses);
     /// empty for any other version.
     pub gaps: Vec<Gap>,
+    /// For a draft, the assumptions its consultation recorded (made without the owner's answer),
+    /// newest first, at most [`MAX_CONSULTATION_PAGE`]: listed to whoever approves it (spec §5).
+    /// Empty for any other version.
+    pub assumptions: Vec<ConsultationEntryOut>,
 }
+
+/// A consultation log entry as the strategy page and the agent read it: the same shape
+/// `strategy.consultation` answers.
+pub type ConsultationEntryOut = ConsultationEntry;
 
 /// The strategy in force and the draft being worked out, either of which may be missing.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -165,6 +174,36 @@ pub struct ArchiveInput {
     pub version_id: StrategyVersionId,
     #[serde(default)]
     pub confirm: bool,
+}
+
+/// What approving asks for: the draft the caller read, as it read it. Should the draft have
+/// changed since (another draft, or the same one submitted again), the approval is refused, so an
+/// owner never approves a draft other than the one they went through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApproveInput {
+    /// The draft's id.
+    pub version_id: StrategyVersionId,
+    /// The draft's `submitted_at`, as read.
+    pub submitted_at: OffsetDateTime,
+}
+
+impl ApproveInput {
+    /// The input from the two values a caller sends: the draft's id and its `submitted_at` as an
+    /// RFC 3339 time, exactly as `strategy.get` answered it. A time that does not parse is
+    /// `VALIDATION` naming `submitted_at`. The panel and the MCP tool read their arguments through
+    /// it alike.
+    pub fn parse(version_id: StrategyVersionId, submitted_at: &str) -> Result<Self, AppError> {
+        let submitted_at = OffsetDateTime::parse(submitted_at, &Rfc3339).map_err(|_| {
+            invalid(
+                "submitted_at",
+                "submitted_at must be the draft's submitted_at, an RFC 3339 time",
+            )
+        })?;
+        Ok(ApproveInput {
+            version_id,
+            submitted_at,
+        })
+    }
 }
 
 /// One entry to record in the draft's consultation log.
@@ -475,18 +514,22 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     Ok(out)
 }
 
-/// Approves the submitted draft, putting it in force, and returns it. Needs the role `owner` or
-/// `manager` (else `FORBIDDEN`, `details.reason = "owner_or_manager"`) and `team.manage` (else
-/// `FORBIDDEN` naming it).
+/// Approves the submitted draft `input.version_id`, as submitted at `input.submitted_at`, putting
+/// it in force, and returns it. Needs the role `owner` or `manager` (else `FORBIDDEN`,
+/// `details.reason = "owner_or_manager"`) and `team.manage` (else `FORBIDDEN` naming it).
 ///
 /// Without a draft, `CONFLICT` "no draft"; a draft not submitted (or edited since) is `CONFLICT`
-/// "not submitted". The draft is validated again: any gap is `VALIDATION` with `details.gaps`. In
+/// "not submitted". Once the locks are taken, a draft other than `input.version_id`, or one
+/// submitted at another time than `input.submitted_at` (submitted again since it was read), is
+/// `CONFLICT` "the draft changed since you read it" with the draft as it stands in
+/// `details.version_id` and `details.submitted_at`, and nothing changes. The draft is validated
+/// again: any gap is `VALIDATION` with `details.gaps`. In
 /// one transaction the approved version, if any, is archived (its log notes it was superseded),
 /// the draft becomes the approved version with `approved_by` the user behind the caller (for an
 /// agent, the user who issued its key), its log records the approval, and `strategy.approve` is
 /// written (payload `number`, `hypotheses`: how many are in force). Should another approval have
 /// committed first, `CONFLICT` "another approval won", and nothing changes.
-pub async fn approve(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
+pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<VersionOut, AppError> {
     require_owner_or_manager(ctx)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
@@ -494,6 +537,9 @@ pub async fn approve(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     let draft = locked_draft(repos.as_mut()).await?;
     if draft.submitted_at.is_none() {
         return Err(conflict("not submitted", "not_submitted"));
+    }
+    if draft.id != input.version_id || draft.submitted_at != Some(input.submitted_at) {
+        return Err(draft_changed(&draft));
     }
     let hypotheses = repos.hypotheses().list(draft.id).await?;
     let groups = group_ids(repos.as_mut()).await?;
@@ -995,12 +1041,23 @@ async fn version_out(
             .map(|m| m.email),
         None => None,
     };
-    let gaps = match version.status {
+    let (gaps, assumptions) = match version.status {
         VersionStatus::Draft => {
             let groups = group_ids(repos).await?;
-            approval_gaps(&version.sections, &hypotheses, known, &groups)
+            let assumptions = repos
+                .consultation()
+                .list_kind(
+                    version.id,
+                    ConsultationKind::Assumption,
+                    MAX_CONSULTATION_PAGE,
+                )
+                .await?;
+            (
+                approval_gaps(&version.sections, &hypotheses, known, &groups),
+                assumptions,
+            )
         }
-        VersionStatus::Approved | VersionStatus::Archived => Vec::new(),
+        VersionStatus::Approved | VersionStatus::Archived => (Vec::new(), Vec::new()),
     };
     Ok(VersionOut {
         id: version.id,
@@ -1014,6 +1071,7 @@ async fn version_out(
         approved_by_email,
         consultation_count,
         gaps,
+        assumptions,
     })
 }
 
@@ -1023,6 +1081,26 @@ fn conflict(message: &str, reason: &str) -> AppError {
         code: ErrorCode::Conflict,
         message: message.to_owned(),
         details: json!({ "reason": reason }),
+    }
+}
+
+/// `CONFLICT` "the draft changed since you read it", naming the draft as it now stands.
+fn draft_changed(draft: &StrategyVersion) -> AppError {
+    #[derive(Serialize)]
+    struct Stands {
+        version_id: StrategyVersionId,
+        #[serde(with = "time::serde::rfc3339::option")]
+        submitted_at: Option<OffsetDateTime>,
+    }
+    let details = serde_json::to_value(Stands {
+        version_id: draft.id,
+        submitted_at: draft.submitted_at,
+    })
+    .unwrap_or_else(|_| json!({ "version_id": draft.id }));
+    AppError {
+        code: ErrorCode::Conflict,
+        message: "the draft changed since you read it".to_owned(),
+        details,
     }
 }
 

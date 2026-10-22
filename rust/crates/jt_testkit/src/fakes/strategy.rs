@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{ConsultationRepo, HypothesisRepo, MAX_CONSULTATION_PAGE, StrategyRepo};
 use jt_strategy::{
-    ConsultationEntry, ConsultationEntryId, Hypothesis, HypothesisId, HypothesisState, Sections,
-    StrategyVersion, StrategyVersionId, VersionStatus,
+    ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
+    HypothesisState, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
 };
 use jt_tenancy::{UserId, WorkspaceId};
 use time::OffsetDateTime;
@@ -368,6 +368,25 @@ impl ConsultationRepo for MemTenant {
             .iter()
             .filter(|e| e.workspace_id == self.ws && e.entry.version_id == version_id)
             .filter(|e| before.is_none_or(|before| (e.entry.at, e.entry.id) < before))
+            .map(|e| e.entry.clone())
+            .collect();
+        entries.sort_by_key(|e| std::cmp::Reverse((e.at, e.id)));
+        entries.truncate(limit.clamp(1, MAX_CONSULTATION_PAGE) as usize);
+        Ok(entries)
+    }
+
+    async fn list_kind(
+        &mut self,
+        version_id: StrategyVersionId,
+        kind: ConsultationKind,
+        limit: u32,
+    ) -> Result<Vec<ConsultationEntry>, AppError> {
+        let mut entries: Vec<ConsultationEntry> = self
+            .state()
+            .consultation
+            .iter()
+            .filter(|e| e.workspace_id == self.ws && e.entry.version_id == version_id)
+            .filter(|e| e.entry.kind == kind)
             .map(|e| e.entry.clone())
             .collect();
         entries.sort_by_key(|e| std::cmp::Reverse((e.at, e.id)));

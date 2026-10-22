@@ -25,8 +25,8 @@ use jt_capability::{
 };
 use jt_ledger::LedgerEntry;
 use jt_strategy::{
-    ConsultationEntry, ConsultationEntryId, Hypothesis, HypothesisId, HypothesisState, Sections,
-    StrategyVersion, StrategyVersionId, VersionStatus,
+    ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
+    HypothesisState, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
 };
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, OperatorId, Permission,
@@ -725,6 +725,14 @@ pub trait ConsultationRepo: Send + Sync {
         version_id: StrategyVersionId,
         limit: u32,
         before: Option<(OffsetDateTime, ConsultationEntryId)>,
+    ) -> Result<Vec<ConsultationEntry>, AppError>;
+    /// The version's entries of `kind`, newest first as [`ConsultationRepo::list`] orders them,
+    /// at most `limit` (clamped to `1..=MAX_CONSULTATION_PAGE`); an unknown version has none.
+    async fn list_kind(
+        &mut self,
+        version_id: StrategyVersionId,
+        kind: ConsultationKind,
+        limit: u32,
     ) -> Result<Vec<ConsultationEntry>, AppError>;
     /// How many entries the version's log holds; an unknown version has none.
     async fn count(&mut self, version_id: StrategyVersionId) -> Result<i64, AppError>;

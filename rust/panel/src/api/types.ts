@@ -349,6 +349,11 @@ export interface VersionOut {
   consultation_count: number;
   /** For a draft, everything that stops its approval today; empty otherwise. */
   gaps: Gap[];
+  /**
+   * For a draft, the assumptions its consultation recorded without the owner's answer, newest
+   * first: listed to whoever approves it. Empty for any other version.
+   */
+  assumptions: ConsultationEntry[];
 }
 
 /** `jt_app::usecases::strategy::StrategyOut`. */
@@ -394,6 +399,16 @@ export interface ConsultationEntry {
   text: string;
   actor: Actor;
   at: Rfc3339;
+}
+
+/**
+ * What approving names (`jt_panel_http::routes::strategy::ApproveBody`): the draft as it was
+ * shown, its id and its `submitted_at` exactly as the server answered them. A draft that changed
+ * since is refused with `409 CONFLICT`.
+ */
+export interface ApproveStamp {
+  version_id: Uuid;
+  submitted_at: Rfc3339;
 }
 
 /** `jt_panel_http::routes::strategy::RecordedBody`. */
@@ -671,8 +686,8 @@ export interface BudgetSpendOut {
  */
 export type StrategyState =
   | 'missing'
-  | 'submitted'
   | { draft_open: { gaps: Gap[] } }
+  | { submitted: ApproveStamp }
   | { approved: { number: number } };
 
 /** `jt_app::usecases::work::WorkKind`, tagged by `kind`. */

@@ -209,6 +209,7 @@ export const approvedVersion: VersionOut = {
   approved_by_email: 'owner@alpha.example',
   consultation_count: 4,
   gaps: [],
+  assumptions: [],
 };
 
 export const draftGaps = [
@@ -226,8 +227,19 @@ export const draftVersion: VersionOut = {
   submitted_at: '2026-10-22T10:00:00Z',
   approved_at: null,
   approved_by_email: null,
-  consultation_count: 2,
+  consultation_count: 3,
   gaps: draftGaps,
+  assumptions: [
+    {
+      id: '0190a000-0000-7000-8000-000000000045',
+      version_id: DRAFT_ID,
+      kind: 'assumption',
+      section_key: 'audience',
+      text: 'Öğrenciler akşamları sipariş verir',
+      actor: { kind: 'agent', connection_id: '0190a000-0000-7000-8000-000000000030', user_id: USER_ID },
+      at: '2026-10-22T09:40:00Z',
+    },
+  ],
 };
 
 export const strategyWithDraft: StrategyOut = {

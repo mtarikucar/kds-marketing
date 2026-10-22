@@ -1007,7 +1007,11 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
     // The agent runs the consultation with the owner's key.
     let draft = ok(&call(&client, "jeeta.strategy.start_consultation", json!({})).await);
     assert_eq!(draft["status"], "draft");
-    for (kind, text) in [("question", "Ne satıyorsunuz?"), ("answer", "Kahve")] {
+    for (kind, text) in [
+        ("question", "Ne satıyorsunuz?"),
+        ("answer", "Kahve"),
+        ("assumption", "Fiyatlar sabit kalır"),
+    ] {
         let entry = ok(&call(
             &client,
             "jeeta.strategy.record",
@@ -1039,13 +1043,33 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
     )
     .await);
     assert_eq!(written["gaps"], json!([]));
-    ok(&call(&client, "jeeta.strategy.submit", json!({})).await);
+    let read = ok(&call(&client, "jeeta.strategy.submit", json!({})).await);
 
     // Submitted is not approved: the gate stays closed until the approval commits.
     let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
     assert_eq!(refused["code"], "STRATEGY_REQUIRED");
-    let approved = ok(&call(&client, "jeeta.strategy.approve", json!({})).await);
+
+    // Before approving, the agent reads the draft's assumptions to the owner.
+    let shown = ok(&call(&client, "jeeta.strategy.get", json!({})).await);
+    let assumptions = shown["draft"]["assumptions"].as_array().unwrap();
+    assert_eq!(assumptions.len(), 1);
+    assert_eq!(assumptions[0]["text"], "Fiyatlar sabit kalır");
+
+    // Approval names the draft as read; one submitted again since is refused.
+    let as_read =
+        |draft: &Value| json!({ "version_id": draft["id"], "submitted_at": draft["submitted_at"] });
+    let again = ok(&call(&client, "jeeta.strategy.submit", json!({})).await);
+    let refused = err(&call(&client, "jeeta.strategy.approve", as_read(&read)).await);
+    assert_eq!(refused["code"], "CONFLICT");
+    assert_eq!(
+        refused["details"],
+        json!({ "version_id": again["id"], "submitted_at": again["submitted_at"] })
+    );
+    let refused = err(&call(&client, "jeeta.strategy.approve", json!({})).await);
+    assert_eq!(refused["code"], "VALIDATION");
+    let approved = ok(&call(&client, "jeeta.strategy.approve", as_read(&again)).await);
     assert_eq!(approved["status"], "approved");
+    assert_eq!(approved["assumptions"], json!([]));
     assert_eq!(
         approved["approved_by_email"],
         json!(format!("owner+{}@test.local", w.a_owner))

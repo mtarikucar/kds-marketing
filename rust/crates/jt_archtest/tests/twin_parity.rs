@@ -10,6 +10,8 @@
 //! - `strategy.archive`: archiving the version in force answers `{version_id, archived: true}` on
 //!   both surfaces (each archives a version of its own: one can be archived only once), and the
 //!   same error once nothing is left to archive.
+//! - `strategy.approve`: approving a draft submitted again since it was read answers the same
+//!   `CONFLICT` on both surfaces, naming the draft as it now stands.
 //! - `capability.list`: after declarations, `GET /api/capabilities` answers the very list
 //!   `jeeta.capability.list` answers under `capabilities`.
 //! - `capability.unlink_budget`, `capability.groups.remove_member`, `capability.groups.delete`:
@@ -304,8 +306,11 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
         "confidence": 0.6,
     }]);
     ok(put("/api/strategy/draft/hypotheses".to_owned(), hypotheses).await).await;
-    ok(post("/api/strategy/draft/submit", None).await).await;
-    ok(post("/api/strategy/draft/approve", None).await).await;
+    let as_read = |draft: &Value| {
+        Some(json!({ "version_id": draft["id"], "submitted_at": draft["submitted_at"] }))
+    };
+    let submitted = ok(post("/api/strategy/draft/submit", None).await).await;
+    ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await;
     ok(post("/api/strategy/consultation", None).await).await;
     ok(put(
         "/api/strategy/draft/sections/prohibitions".to_owned(),
@@ -356,8 +361,31 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     )
     .await;
     assert_eq!(agent, json!({ "version_id": first, "archived": true }));
-    ok(post("/api/strategy/draft/submit", None).await).await;
-    let second = ok(post("/api/strategy/draft/approve", None).await).await["id"].clone();
+    let read = ok(post("/api/strategy/draft/submit", None).await).await;
+
+    // Approving a draft that changed since it was read: the same refusal on both surfaces.
+    let submitted = ok(post("/api/strategy/draft/submit", None).await).await;
+    let resp = post("/api/strategy/draft/approve", as_read(&read)).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.approve",
+        as_read(&read).unwrap(),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["message"], "the draft changed since you read it");
+    assert_eq!(
+        human["details"],
+        json!({ "version_id": submitted["id"], "submitted_at": submitted["submitted_at"] })
+    );
+
+    let second =
+        ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await["id"].clone();
     let resp = post(
         "/api/strategy/archive",
         Some(json!({ "version_id": second, "confirm": true })),

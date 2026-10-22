@@ -11,7 +11,7 @@
 use jt_app::ctx::Ctx;
 use jt_app::usecases::Deps;
 use jt_app::usecases::strategy::{
-    self, ArchiveInput, DEFAULT_CONSULTATION_PAGE, RecordInput, RecordKind,
+    self, ApproveInput, ArchiveInput, DEFAULT_CONSULTATION_PAGE, RecordInput, RecordKind,
 };
 use jt_strategy::{ConsultationEntryId, Sections, StrategyVersionId};
 use jt_tenancy::Permission;
@@ -99,9 +99,15 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Approve the submitted draft, putting it in force and archiving the \
                           version it replaces; this opens the strategy gate. Only for a key of \
                           an owner or a manager; call it only once the owner has said to \
-                          approve. Returns the approved version. [risk: WRITE]",
+                          approve. Before approving, read the draft's assumptions \
+                          (strategy.get -> draft.assumptions) to the owner and approve only after \
+                          they confirm. Name the draft as you read it: version_id and \
+                          submitted_at from jeeta.strategy.get (draft.id, draft.submitted_at) or \
+                          jeeta.work.pending; a draft that changed since is refused with \
+                          CONFLICT, so read it again. Returns the approved version. \
+                          [risk: WRITE]",
             permission: Permission::TeamManage,
-            schema: schema_for::<NoArgs>,
+            schema: schema_for::<ApproveArgs>,
             run: approve,
         },
         ToolDef {
@@ -192,6 +198,22 @@ struct SetHypothesesArgs {
     /// Every hypothesis of the draft, in order.
     #[schemars(schema_with = "hypotheses_schema")]
     hypotheses: Value,
+}
+
+/// The draft to approve, as it was read.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ApproveArgs {
+    /// The draft's id (draft.id from jeeta.strategy.get).
+    version_id: Uuid,
+    /// The draft's submitted_at, exactly as jeeta.strategy.get answered it.
+    #[schemars(schema_with = "date_time_schema")]
+    submitted_at: String,
+}
+
+/// The JSON Schema of an RFC 3339 time.
+fn date_time_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({ "type": "string", "format": "date-time" })
 }
 
 /// The version to archive.
@@ -324,8 +346,12 @@ fn submit<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
 
 fn approve<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
-        let NoArgs {} = args(raw)?;
-        to_json(&strategy::approve(deps, ctx).await?)
+        let ApproveArgs {
+            version_id,
+            submitted_at,
+        } = args(raw)?;
+        let input = ApproveInput::parse(StrategyVersionId(version_id), &submitted_at)?;
+        to_json(&strategy::approve(deps, ctx, input).await?)
     })
 }
 

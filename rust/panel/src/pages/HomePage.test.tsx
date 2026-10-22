@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
-import { me, pendingOverdue, repMe, workspace } from '@/test/fixtures';
+import {
+  DRAFT_ID,
+  approvedVersion,
+  draftVersion,
+  me,
+  pendingOverdue,
+  repMe,
+  strategyWithDraft,
+  workspace,
+} from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
+
+/** The pending work of a workspace whose draft awaits approval. */
+const submitted = {
+  ...pendingOverdue,
+  strategy: { submitted: { version_id: DRAFT_ID, submitted_at: '2026-10-22T10:00:00Z' } },
+};
 
 describe('HomePage', () => {
   it('shows the workspace, its status and the missing strategy with its call to action', async () => {
@@ -52,12 +68,36 @@ describe('HomePage', () => {
   });
 
   it('offers the approval shortcut only to someone who may approve', async () => {
-    const submitted = { ...pendingOverdue, strategy: 'submitted' as const };
     mockFetch({ 'GET /api/auth/me': repMe, 'GET /api/workspace': workspace, 'GET /api/work/pending': submitted });
     renderAt('/');
     expect(await screen.findByText(tr.home.strategy.submittedTitle)).toBeInTheDocument();
     expect(screen.getByText(tr.home.strategy.submittedWait)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: tr.home.strategy.approve })).not.toBeInTheDocument();
+  });
+
+  it('opens the assumptions before the shortcut approves, and sends the pending draft only once confirmed', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/workspace': workspace,
+      'GET /api/work/pending': submitted,
+      'GET /api/strategy': {
+        ...strategyWithDraft,
+        draft: { ...draftVersion, gaps: [], hypotheses: approvedVersion.hypotheses },
+      },
+      'POST /api/strategy/draft/approve': { ...draftVersion, status: 'approved', assumptions: [] },
+    });
+    const approvals = () => calls.filter((c) => c.method === 'POST' && c.path === '/api/strategy/draft/approve');
+    renderAt('/');
+    await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Öğrenciler akşamları sipariş verir')).toBeInTheDocument();
+    expect(within(dialog).getByText(i18n.t('strategy.approveHypotheses', { count: 1 }))).toBeInTheDocument();
+    expect(approvals()).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm }));
+    await waitFor(() => expect(approvals()).toHaveLength(1));
+    // The shortcut names the draft as the pending work showed it.
+    expect(approvals()[0].body).toEqual(submitted.strategy.submitted);
   });
 
   it('shows the draft gaps and the version in force', async () => {

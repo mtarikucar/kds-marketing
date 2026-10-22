@@ -109,6 +109,30 @@ impl ConsultationRepo for PgTenantRepos {
         records.into_iter().map(EntryRecord::into_entry).collect()
     }
 
+    async fn list_kind(
+        &mut self,
+        version_id: StrategyVersionId,
+        kind: ConsultationKind,
+        limit: u32,
+    ) -> Result<Vec<ConsultationEntry>, AppError> {
+        let ws = self.workspace_id();
+        let records: Vec<EntryRecord> = sqlx::query_as(
+            "select id, version_id, kind, section_key, text, actor_kind, actor_user_id, \
+             agent_connection_id, actor_component, at from consultation_entries \
+             where workspace_id = $1 and version_id = $2 and kind = $3 \
+             order by at desc, id desc \
+             limit $4",
+        )
+        .bind(ws.as_uuid())
+        .bind(version_id.as_uuid())
+        .bind(kind.key())
+        .bind(i64::from(limit.clamp(1, MAX_CONSULTATION_PAGE)))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list consultation entries of a kind"))?;
+        records.into_iter().map(EntryRecord::into_entry).collect()
+    }
+
     async fn count(&mut self, version_id: StrategyVersionId) -> Result<i64, AppError> {
         let ws = self.workspace_id();
         sqlx::query_scalar(

@@ -19,6 +19,7 @@ use jt_tenancy::AgentConnectionId;
 use jt_testkit::fakes::FIXED_NOW;
 use serde_json::json;
 use support::*;
+use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 // ---------------------------------------------------------------------------------------------
@@ -61,12 +62,14 @@ fn connection(ctx: &Ctx) -> AgentConnectionId {
     ctx.agent_connection_id.unwrap()
 }
 
-/// Writes a draft version numbered `number`, submitted when `submitted`, straight to the repos.
-async fn draft(w: &World, number: i32, submitted: bool) {
+/// Writes a draft version numbered `number`, submitted when `submitted`, straight to the repos;
+/// returns its id.
+async fn draft(w: &World, number: i32, submitted: bool) -> StrategyVersionId {
+    let id = StrategyVersionId::new_v7();
     let mut t = w.uow.tenant(w.ws).await.unwrap();
     t.strategy()
         .insert(StrategyVersion {
-            id: StrategyVersionId::new_v7(),
+            id,
             workspace_id: w.ws,
             number,
             status: VersionStatus::Draft,
@@ -81,6 +84,7 @@ async fn draft(w: &World, number: i32, submitted: bool) {
         .await
         .unwrap();
     t.commit().await.unwrap();
+    id
 }
 
 fn evidence(text: &str) -> Evidence {
@@ -188,13 +192,17 @@ async fn an_open_draft_asks_to_continue_the_consultation_with_its_gaps() {
 #[tokio::test]
 async fn a_submitted_draft_is_listed_for_approval_only_to_who_may_approve() {
     let w = world().await;
-    draft(&w, 1, true).await;
+    let id = draft(&w, 1, true).await;
+    let submitted = StrategyState::Submitted {
+        version_id: id,
+        submitted_at: FIXED_NOW,
+    };
 
     // An owner and a manager may approve: the approval is their top item.
     let manager = w.member("manager").await;
     for ctx in [&w.owner_ctx, &manager] {
         let out = pending(&w, ctx).await;
-        assert_eq!(out.strategy, StrategyState::Submitted);
+        assert_eq!(out.strategy, submitted);
         let approve = item(&out, &WorkKind::ApproveStrategy);
         assert_eq!(approve.priority, 1);
         assert!(
@@ -210,12 +218,16 @@ async fn a_submitted_draft_is_listed_for_approval_only_to_who_may_approve() {
     let narrowed = w.agent(&["workspace.read"]).await;
     for ctx in [&rep, &narrowed] {
         let out = pending(&w, ctx).await;
-        assert_eq!(out.strategy, StrategyState::Submitted);
+        assert_eq!(out.strategy, submitted);
         assert_eq!(kinds(&out), [WorkKind::DeclareFirstCapability]);
     }
+    // On the wire, the draft as approving it names it.
     assert_eq!(
         serde_json::to_value(pending(&w, &rep).await).unwrap()["strategy"],
-        "submitted"
+        json!({ "submitted": {
+            "version_id": id,
+            "submitted_at": FIXED_NOW.format(&Rfc3339).unwrap(),
+        } })
     );
 }
 

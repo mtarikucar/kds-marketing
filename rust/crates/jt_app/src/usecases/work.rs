@@ -65,9 +65,9 @@ pub struct PendingOut {
 /// Where the workspace's strategy stands. An open or submitted draft is what is pending, so it
 /// is shown even while an approved version is in force.
 ///
-/// On the wire, a state without fields is its name (`"missing"`, `"submitted"`) and one with
-/// fields an object under its name (`{"draft_open": {"gaps": [...]}}`,
-/// `{"approved": {"number": 2}}`).
+/// On the wire, a state without fields is its name (`"missing"`) and one with fields an object
+/// under its name (`{"draft_open": {"gaps": [...]}}`,
+/// `{"submitted": {"version_id": "…", "submitted_at": "…"}}`, `{"approved": {"number": 2}}`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StrategyState {
@@ -75,8 +75,13 @@ pub enum StrategyState {
     Missing,
     /// A draft is being worked out; `gaps` is everything that stops it from being approved today.
     DraftOpen { gaps: Vec<Gap> },
-    /// A draft awaits approval.
-    Submitted,
+    /// A draft awaits approval: the draft and when it was submitted, which approving it sends
+    /// back (`strategy.approve` refuses a draft that changed since).
+    Submitted {
+        version_id: StrategyVersionId,
+        #[serde(with = "time::serde::rfc3339")]
+        submitted_at: OffsetDateTime,
+    },
     /// Version `number` is in force and no draft is open.
     Approved { number: i32 },
 }
@@ -255,7 +260,12 @@ pub async fn set_checkin_interval(
 /// missing.
 fn strategy_state(strategy: &StrategyOut) -> StrategyState {
     match (&strategy.draft, &strategy.approved) {
-        (Some(draft), _) if draft.submitted_at.is_some() => StrategyState::Submitted,
+        (Some(draft), _) if let Some(submitted_at) = draft.submitted_at => {
+            StrategyState::Submitted {
+                version_id: draft.id,
+                submitted_at,
+            }
+        }
         (Some(draft), _) => StrategyState::DraftOpen {
             gaps: draft.gaps.clone(),
         },
@@ -286,12 +296,13 @@ fn strategy_items(state: &StrategyState, may_approve: bool) -> Vec<WorkItem> {
             "A strategy draft is open: continue the consultation with the owner, close its gaps \
              (jeeta.strategy.get lists them) and submit it with jeeta.strategy.submit.",
         )),
-        StrategyState::Submitted if may_approve => Some((
+        StrategyState::Submitted { .. } if may_approve => Some((
             WorkKind::ApproveStrategy,
-            "A strategy draft awaits approval: go through it with the owner and approve it with \
-             jeeta.strategy.approve.",
+            "A strategy draft awaits approval: go through it with the owner, read its assumptions \
+             to them (jeeta.strategy.get, draft.assumptions) and, once they confirm, approve it \
+             with jeeta.strategy.approve.",
         )),
-        StrategyState::Submitted | StrategyState::Approved { .. } => None,
+        StrategyState::Submitted { .. } | StrategyState::Approved { .. } => None,
     };
     item.map(|(kind, hint)| WorkItem {
         kind,

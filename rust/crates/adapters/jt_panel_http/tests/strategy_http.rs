@@ -101,10 +101,25 @@ async fn submit_a_draft(p: &Panel, cookie: &str) -> Value {
     ok_json(post(p, "/api/strategy/draft/submit", cookie, None).await).await
 }
 
+/// The body approving `draft` (a draft as the panel answered it) sends: its id and its
+/// `submitted_at`, as read.
+fn as_read(draft: &Value) -> Option<Value> {
+    Some(json!({ "version_id": draft["id"], "submitted_at": draft["submitted_at"] }))
+}
+
 /// [`submit_a_draft`], then approves it as the same caller; returns the approved version.
 async fn approve_a_strategy(p: &Panel, cookie: &str) -> Value {
-    submit_a_draft(p, cookie).await;
-    ok_json(post(p, "/api/strategy/draft/approve", cookie, None).await).await
+    let submitted = submit_a_draft(p, cookie).await;
+    ok_json(
+        post(
+            p,
+            "/api/strategy/draft/approve",
+            cookie,
+            as_read(&submitted),
+        )
+        .await,
+    )
+    .await
 }
 
 /// The consultation entries of `version_id` on one page, with `query` (e.g. `?limit=2`).
@@ -197,7 +212,8 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     let resp = post(&p, "/api/strategy/draft/submit", &owner, None).await;
     let refused = expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
     assert_eq!(gap_fields(&refused["details"]), missing);
-    let resp = post(&p, "/api/strategy/draft/approve", &owner, None).await;
+    let never = json!({ "version_id": id, "submitted_at": "2026-10-22T09:00:00Z" });
+    let resp = post(&p, "/api/strategy/draft/approve", &owner, Some(never)).await;
     let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
     assert_eq!(refused["details"]["reason"], "not_submitted");
 
@@ -207,7 +223,16 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     assert_eq!(fixed["gaps"], json!([]));
     let submitted = ok_json(post(&p, "/api/strategy/draft/submit", &owner, None).await).await;
     assert!(submitted["submitted_at"].is_string());
-    let approved = ok_json(post(&p, "/api/strategy/draft/approve", &owner, None).await).await;
+    let approved = ok_json(
+        post(
+            &p,
+            "/api/strategy/draft/approve",
+            &owner,
+            as_read(&submitted),
+        )
+        .await,
+    )
+    .await;
     assert_eq!(approved["id"], json!(id));
     assert_eq!(approved["status"], "approved");
     assert_eq!(approved["approved_by_email"], OWNER);
@@ -309,7 +334,8 @@ async fn rep_cannot_write_sections_403() {
     expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
 
     // Approving and archiving need an owner or a manager.
-    let resp = post(&p, "/api/strategy/draft/approve", &rep, None).await;
+    let stamp = json!({ "version_id": id, "submitted_at": "2026-10-22T09:00:00Z" });
+    let resp = post(&p, "/api/strategy/draft/approve", &rep, Some(stamp)).await;
     let refused = expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;
     assert_eq!(refused["details"]["reason"], "owner_or_manager");
     let resp = post(
@@ -333,9 +359,91 @@ async fn a_manager_approves_what_the_owner_submitted() {
     let submitted = submit_a_draft(&p, &owner).await;
     let (manager, _) = p.join(&owner, "manager@alpha.example", "manager").await;
 
-    let approved = ok_json(post(&p, "/api/strategy/draft/approve", &manager, None).await).await;
+    let approved = ok_json(
+        post(
+            &p,
+            "/api/strategy/draft/approve",
+            &manager,
+            as_read(&submitted),
+        )
+        .await,
+    )
+    .await;
     assert_eq!(approved["id"], submitted["id"]);
     assert_eq!(approved["approved_by_email"], "manager@alpha.example");
+}
+
+#[tokio::test]
+async fn approve_refuses_a_changed_draft() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register(OWNER, "Alpha").await;
+    let read = submit_a_draft(&p, &owner).await;
+
+    // Submitted again after the page read it: the page's approval is refused, naming the draft
+    // as it now stands, and nothing is approved.
+    let again = ok_json(post(&p, "/api/strategy/draft/submit", &owner, None).await).await;
+    assert_ne!(again["submitted_at"], read["submitted_at"]);
+    let resp = post(&p, "/api/strategy/draft/approve", &owner, as_read(&read)).await;
+    let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
+    assert_eq!(refused["message"], "the draft changed since you read it");
+    assert_eq!(
+        refused["details"],
+        json!({ "version_id": again["id"], "submitted_at": again["submitted_at"] })
+    );
+    let shown = ok_json(p.get("/api/strategy", &owner).await).await;
+    assert_eq!(shown["approved"], Value::Null);
+
+    // A body that is not the draft's stamp: refused before anything is read.
+    for body in [
+        json!({ "version_id": again["id"] }),
+        json!({ "version_id": again["id"], "submitted_at": "yesterday" }),
+        json!({ "version_id": again["id"], "submitted_at": again["submitted_at"], "x": 1 }),
+    ] {
+        let resp = post(&p, "/api/strategy/draft/approve", &owner, Some(body)).await;
+        expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+    }
+
+    // The draft as it now stands is approved.
+    let approved =
+        ok_json(post(&p, "/api/strategy/draft/approve", &owner, as_read(&again)).await).await;
+    assert_eq!(approved["status"], "approved");
+}
+
+#[tokio::test]
+async fn the_draft_lists_its_assumptions_and_strict_bodies_refuse_unknown_fields() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register(OWNER, "Alpha").await;
+    ok_json(post(&p, "/api/strategy/consultation", &owner, None).await).await;
+    for (kind, text) in [("assumption", "fiyat sabit"), ("question", "kitle kim?")] {
+        let body = json!({ "kind": kind, "section_key": "audience", "text": text });
+        let resp = post(&p, "/api/strategy/consultation/entries", &owner, Some(body)).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+    let shown = ok_json(p.get("/api/strategy", &owner).await).await;
+    let assumptions = shown["draft"]["assumptions"].as_array().unwrap();
+    assert_eq!(assumptions.len(), 1);
+    assert_eq!(assumptions[0]["kind"], "assumption");
+    assert_eq!(assumptions[0]["text"], "fiyat sabit");
+    assert_eq!(assumptions[0]["section_key"], "audience");
+
+    // An unknown field is refused, as the MCP tools' arguments refuse it.
+    let resp = post(
+        &p,
+        "/api/strategy/consultation/entries",
+        &owner,
+        Some(json!({ "kind": "note", "text": "x", "txet": "y" })),
+    )
+    .await;
+    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+    let draft_id = shown["draft"]["id"].clone();
+    let resp = post(
+        &p,
+        "/api/strategy/archive",
+        &owner,
+        Some(json!({ "version_id": draft_id, "confirm": true, "force": true })),
+    )
+    .await;
+    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
 }
 
 #[tokio::test]
