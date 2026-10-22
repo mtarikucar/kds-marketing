@@ -1,6 +1,7 @@
 //! Fakes for the application ports: a fixed clock, sequential ids, scripted tokens, a plain-text
-//! "hasher", a plain-text "secret box", a fixed channel catalog, a recording tenant host registry
-//! and an in-memory unit of work, plus [`deps`], which wires them all into a `Deps`.
+//! "hasher", a plain-text "secret box", a fixed channel catalog, a recording tenant host registry,
+//! a configurable platform app configuration, scripted provider adapters and an in-memory unit of
+//! work, plus [`deps`], which wires them all into a `Deps`.
 //!
 //! [`InMemoryUow`] keeps its tables behind one shared lock. Each bundle it opens works on a copy
 //! taken when it opens (reads see that copy plus the bundle's own writes) and records its writes;
@@ -23,6 +24,12 @@
 //!   budget links and spend hang only off rows of the bundle's own workspace (`NOT_FOUND`); a
 //!   negative budget cap, a spend amount that is not positive and a check-in interval outside
 //!   `15..=10080` break check constraints (`INTERNAL`); spend is never changed or removed;
+//! - an inbound event is stored once per (workspace, provider, provider id): a replay is skipped
+//!   (`None`) without spoiling the bundle; an event only gains a processing time and loses its
+//!   raw body; a pending OAuth flow's state hash is unique across workspaces (`CONFLICT`); events
+//!   and probe runs hang only off capabilities of the bundle's own workspace (`NOT_FOUND`); a
+//!   probe run's error kind off the taxonomy breaks a check constraint (`INTERNAL`), and runs are
+//!   never changed or removed (migration 0005);
 //! - once any call on a bundle has failed, the bundle is spoiled: its `commit` returns
 //!   `INTERNAL` and writes nothing, as a Postgres transaction aborted by a failed statement does.
 //!
@@ -33,24 +40,31 @@
 //! would refuse one (a unique key, a row lock). Tests of races and concurrent transactions must
 //! run against Postgres (`TestDb`), not these fakes.
 //!
-//! Layout: `services` holds the service fakes and [`deps`]; `state` the tables, the shared checks
-//! and the unit of work; `tenant`, `strategy`, `capability`, `user` and `platform` the bundles'
-//! repos.
+//! Layout: `services` holds the service fakes and [`deps`]; `providers` the platform app
+//! configuration and the scripted provider adapters; `state` the tables, the shared checks and the
+//! unit of work; `tenant`, `strategy`, `capability`, `connector`, `user` and `platform` the
+//! bundles' repos.
 
 mod capability;
+mod connector;
 mod platform;
+mod providers;
 mod services;
 mod state;
 mod strategy;
 mod tenant;
 mod user;
 
+pub use providers::{
+    ConnectorCall, FakeAppConfig, OAuthCall, ScriptedConnector, ScriptedOAuth, ScriptedRegistry,
+    TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL,
+};
 pub use services::{
     DEPS_TOKENS, FIXED_NOW, FixedChannelCatalog, FixedClock, FixedTokenGen, HostCall, PLAIN_PREFIX,
     PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen, deps,
 };
 pub use state::{
     InMemoryUow, MemState, StoredBudgetLink, StoredCapability, StoredCapabilityGroup,
-    StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredRole,
+    StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredInboundEvent, StoredRole,
     StoredWorkspacePolicy,
 };

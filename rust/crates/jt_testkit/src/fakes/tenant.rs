@@ -8,8 +8,9 @@ use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, BudgetRepo,
     CHECKIN_ACTION, CapabilityGroupRepo, CapabilityRepo, ConsultationRepo, HypothesisRepo,
-    LedgerFilter, LedgerRepo, LedgerRow, MemberOut, MembershipRepo, MembershipRow, RoleRepo,
-    StrategyRepo, TenantRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
+    InboundEventRepo, LedgerFilter, LedgerRepo, LedgerRow, MemberOut, MembershipRepo,
+    MembershipRow, OAuthPendingRepo, ProbeRunRepo, RoleRepo, StrategyRepo, TenantRepos,
+    WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
 use jt_ledger::{Actor, LedgerEntry};
 use jt_tenancy::{
@@ -92,6 +93,18 @@ impl TenantRepos for MemTenant {
     }
 
     fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo {
+        self
+    }
+
+    fn inbound_events(&mut self) -> &mut dyn InboundEventRepo {
+        self
+    }
+
+    fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo {
+        self
+    }
+
+    fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
         self
     }
 

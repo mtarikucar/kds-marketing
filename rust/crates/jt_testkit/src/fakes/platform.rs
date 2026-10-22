@@ -7,6 +7,7 @@ use jt_app::ports::{
     ApiKeyRow, MembershipRow, OperatorRepo, OperatorRow, PlatformRepos, PlatformSessionRepo,
     PlatformSessionRow, WorkspaceRow,
 };
+use jt_capability::{Capability, StoredStatus};
 use jt_ledger::LedgerEntry;
 use jt_tenancy::{Email, MembershipStatus, WorkspaceId, WorkspaceStatus};
 
@@ -175,6 +176,25 @@ impl PlatformRepos for MemPlatform {
             .iter()
             .find(|m| m.invite_token_hash.as_deref() == Some(token_hash))
             .cloned())
+    }
+
+    async fn capability_by_external(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Option<Capability>, AppError> {
+        let state = self.state();
+        Ok(state
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                c.status != StoredStatus::Retired
+                    && kind_keys.contains(&c.kind_key.as_str())
+                    && c.external_id.as_deref() == Some(external_id)
+            })
+            .max_by_key(|s| (s.capability.created_at, s.capability.id))
+            .map(|s| state.capability_view(s)))
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

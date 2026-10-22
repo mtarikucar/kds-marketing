@@ -128,8 +128,8 @@ mod tests {
     use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
     use jt_tenancy::{WorkspaceId, WorkspaceStatus};
     use jt_testkit::fakes::{
-        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
-        SeqIdGen,
+        FakeAppConfig, FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox,
+        RecordingTenantHosts, ScriptedRegistry, SeqIdGen,
     };
     use serde_json::Value;
     use time::macros::datetime;
@@ -179,6 +179,8 @@ mod tests {
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps: Arc::new(FakeAppConfig::default()),
+            connectors: Arc::new(ScriptedRegistry::new()),
         }
     }
 

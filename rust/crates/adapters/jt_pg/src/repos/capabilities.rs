@@ -8,6 +8,8 @@
 //! come from `capability_budget_links`, in the same statement. The partial unique index
 //! `capabilities_live_external_account` keeps one live capability per external account.
 //! `declared_by_connection` is written once, by `insert`: `update` leaves it as declared.
+//! [`by_external`] is the one platform-wide read: the live capability of any workspace that holds
+//! an external account, where an inbound event for that account is routed.
 
 use std::collections::BTreeSet;
 
@@ -23,6 +25,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{map_sqlx, same_workspace, stored};
+use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
 
 /// The partial unique index that keeps one live capability per external account.
@@ -116,6 +119,28 @@ fn map_write(err: sqlx::Error, what: &str) -> AppError {
     } else {
         map_sqlx(err, what)
     }
+}
+
+/// The live capability of any workspace whose kind is one of `kind_keys` and whose external
+/// account is `external_id`, the most recently created first; see
+/// `PlatformRepos::capability_by_external`.
+pub(crate) async fn by_external(
+    tx: &mut PlatformTx<'_>,
+    kind_keys: &[&str],
+    external_id: &str,
+) -> Result<Option<Capability>, AppError> {
+    let record: Option<CapabilityRecord> = sqlx::query_as(&format!(
+        // archtest: platform-wide
+        "select {COLUMNS} from capabilities c \
+         where c.kind_key = any($1) and c.external_id = $2 and c.status <> 'retired' \
+         order by c.created_at desc, c.id desc limit 1"
+    ))
+    .bind(kind_keys.to_vec())
+    .bind(external_id)
+    .fetch_optional(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "find capability by external account"))?;
+    record.map(CapabilityRecord::into_capability).transpose()
 }
 
 /// `NOT_FOUND` unless capability `id` belongs to workspace `ws`. Writes that hang a row off a

@@ -1,6 +1,6 @@
 //! The service fakes: a fixed clock, sequential ids, scripted tokens, a plain-text "hasher", a
 //! plain-text "secret box", a fixed channel catalog, a recording tenant host registry, and
-//! [`deps`], which wires them all into a `Deps`.
+//! [`deps`], which wires them all (and the connector fakes of `providers`) into a `Deps`.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,10 +16,12 @@ use jt_app::usecases::Deps;
 use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_tenancy::WorkspaceId;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::providers::{FakeAppConfig, ScriptedRegistry};
 use super::state::lock;
 
 /// A clock that always reads the same instant.
@@ -100,7 +102,8 @@ impl PasswordHasher for PlainHasher {
 
 /// A "secret box" that seals in the clear, as `plain:<workspace id>:<plaintext>`, so tests can
 /// read what was sealed. `open` keeps the port's contract: bytes sealed for another workspace,
-/// or not sealed by this fake at all, are `INTERNAL` "sealed data cannot be opened".
+/// or not sealed by this fake at all, are `INTERNAL` "sealed data cannot be opened". Its MAC keys
+/// are deterministic: SHA-256 of `workspace id (16 bytes) || 0x00 || purpose`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlainSecretBox;
 
@@ -123,6 +126,14 @@ impl SecretBox for PlainSecretBox {
             .strip_prefix(PlainSecretBox::prefix(ws).as_slice())
             .map(|plaintext| Zeroizing::new(plaintext.to_vec()))
             .ok_or_else(|| AppError::internal("sealed data cannot be opened"))
+    }
+
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<[u8; 32], AppError> {
+        let mut hash = Sha256::new();
+        hash.update(ws.as_uuid().as_bytes());
+        hash.update([0u8]);
+        hash.update(purpose.as_bytes());
+        Ok(hash.finalize().into())
     }
 }
 
@@ -205,9 +216,11 @@ pub const DEPS_TOKENS: usize = 256;
 /// The use-case dependencies over `uow`, with every other port a fake: a [`FixedClock`] at
 /// [`FIXED_NOW`], a [`SeqIdGen`], a [`FixedTokenGen`] scripted with [`DEPS_TOKENS`] distinct
 /// tokens (`token-001`, `token-002`, …), [`PlainHasher`], [`PlainSecretBox`], a
-/// [`FixedChannelCatalog`] with no kinds, a [`NoopArchivedHook`] and a [`RecordingTenantHosts`]
-/// that accepts every host. A test that needs particular tokens, channels, hosts or another time
-/// builds `Deps` itself or replaces the field.
+/// [`FixedChannelCatalog`] with no kinds, a [`NoopArchivedHook`], a [`RecordingTenantHosts`]
+/// that accepts every host, a default [`FakeAppConfig`] (no provider app, the public address
+/// `https://panel.test`) and an empty [`ScriptedRegistry`] (no provider adapter). A test that
+/// needs particular tokens, channels, hosts, apps, adapters or another time builds `Deps` itself
+/// or replaces the field.
 pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
     Deps {
         uow,
@@ -221,5 +234,7 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         channels: Arc::new(FixedChannelCatalog::default()),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(RecordingTenantHosts::new()),
+        apps: Arc::new(FakeAppConfig::default()),
+        connectors: Arc::new(ScriptedRegistry::new()),
     }
 }

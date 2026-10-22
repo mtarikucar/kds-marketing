@@ -24,7 +24,9 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::db::TestDb;
-use crate::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
+use crate::fakes::{
+    FakeAppConfig, PlainHasher, PlainSecretBox, RecordingTenantHosts, ScriptedRegistry,
+};
 use crate::flows::activate_workspace;
 
 /// The password every account the harness opens uses.
@@ -70,6 +72,8 @@ impl Panel {
             channels: Arc::new(UowChannelCatalog::new(shared)),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps: Arc::new(FakeAppConfig::default()),
+            connectors: Arc::new(ScriptedRegistry::new()),
         };
         let state = AppState {
             deps: deps.clone(),

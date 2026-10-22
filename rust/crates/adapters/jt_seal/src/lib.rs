@@ -19,6 +19,11 @@
 //!
 //! Random 96-bit nonces stay far below the GCM collision bound for the number of secrets one
 //! workspace key will ever seal (connector credentials, not a message stream).
+//!
+//! The box also derives per-workspace MAC keys (`SecretBox::hmac_key`, for the signed OAuth state
+//! and the NetGSM hook tokens), with HKDF-SHA256 from the same master key but under salt
+//! `jeeta-hmac-v1`, info the workspace id's 16 bytes, a zero byte and the purpose's UTF-8 bytes.
+//! The distinct salt keeps every MAC key independent of every sealing key.
 
 mod aes;
 

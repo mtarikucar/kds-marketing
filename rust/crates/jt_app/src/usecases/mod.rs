@@ -32,6 +32,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
+use crate::ports::connectors::{ConnectorRegistry, PlatformAppConfig};
 use crate::ports::{
     ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, StrategyArchivedHook,
     TenantHostRegistry, TokenGen, UnitOfWork,
@@ -54,6 +55,10 @@ pub struct Deps {
     pub archived_hook: Arc<dyn StrategyArchivedHook>,
     /// The hosts each workspace's connectors may reach: the egress allowlist's tenant tier.
     pub hosts: Arc<dyn TenantHostRegistry>,
+    /// The platform's provider apps and public address.
+    pub apps: Arc<dyn PlatformAppConfig>,
+    /// The provider adapters.
+    pub connectors: Arc<dyn ConnectorRegistry>,
 }
 
 /// The stored form of a secret token (a session, invite or API-key token): the lowercase hex

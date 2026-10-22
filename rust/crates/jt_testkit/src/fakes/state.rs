@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    AgentConnectionRow, ApiKeyRow, LedgerRow, MembershipRow, MembershipView, OperatorRow,
-    PlatformRepos, PlatformSessionRow, SessionRow, TenantRepos, UnitOfWork, UserRepos, UserRow,
-    WorkspacePolicy, WorkspaceRow,
+    AgentConnectionRow, ApiKeyRow, LedgerRow, MembershipRow, MembershipView, OAuthPendingRow,
+    OperatorRow, PlatformRepos, PlatformSessionRow, ProbeRun, SessionRow, TenantRepos, UnitOfWork,
+    UserRepos, UserRow, WorkspacePolicy, WorkspaceRow,
 };
 use jt_capability::{
     BudgetItem, BudgetItemId, BudgetSpend, Capability, CapabilityGroup, CapabilityGroupId,
     CapabilityId,
 };
+use jt_connector::InboundEvent;
 use jt_ledger::{Actor, LedgerEntry};
 use jt_strategy::{
     ConsultationEntry, Hypothesis, StrategyVersion, StrategyVersionId, VersionStatus,
@@ -84,6 +85,13 @@ pub struct StoredBudgetLink {
     pub budget_item_id: BudgetItemId,
 }
 
+/// An inbound event together with its raw body, as received (`None` once purged).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredInboundEvent {
+    pub event: InboundEvent,
+    pub raw: Option<Vec<u8>>,
+}
+
 /// A workspace's policies together with when they were last set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoredWorkspacePolicy {
@@ -115,6 +123,9 @@ pub struct MemState {
     pub capability_budget_links: Vec<StoredBudgetLink>,
     pub budget_spend: Vec<BudgetSpend>,
     pub workspace_policies: Vec<StoredWorkspacePolicy>,
+    pub inbound_events: Vec<StoredInboundEvent>,
+    pub oauth_pending: Vec<OAuthPendingRow>,
+    pub probe_runs: Vec<ProbeRun>,
 }
 
 impl MemState {
@@ -307,7 +318,7 @@ pub(super) fn exists(found: bool, reference: &str) -> Result<(), AppError> {
         Some("workspace")
     } else if matches!(
         column,
-        "user_id" | "invited_by" | "issued_by" | "approved_by"
+        "user_id" | "invited_by" | "issued_by" | "approved_by" | "started_by"
     ) {
         Some("user")
     } else {

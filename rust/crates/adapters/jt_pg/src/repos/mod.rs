@@ -9,9 +9,9 @@
 //! - A statement on a tenant table (`roles`, `memberships`, `api_keys`, `agent_connections`,
 //!   `ledger_entries`, `strategy_versions`, `strategy_hypotheses`, `consultation_entries`,
 //!   `capabilities`, `capability_groups`, `capability_group_members`, `budget_items`,
-//!   `capability_budget_links`, `budget_spend_entries`, `workspace_policies`) names
-//!   `workspace_id`, and one on `workspaces` names its `id`, even though row-level security scopes
-//!   it too.
+//!   `capability_budget_links`, `budget_spend_entries`, `workspace_policies`, `inbound_events`,
+//!   `oauth_pending`, `probe_runs`) names `workspace_id`, and one on `workspaces` names its `id`,
+//!   even though row-level security scopes it too.
 //! - A statement that runs with `app.platform = 'on'` (the platform and user bundles) is preceded
 //!   by the line `// archtest: platform-wide`.
 //! - Inserts use `on conflict do nothing` and report a skipped row as `CONFLICT`, so an expected
@@ -22,14 +22,17 @@
 mod agent_connections;
 pub(crate) mod api_keys;
 mod budget;
-mod capabilities;
+pub(crate) mod capabilities;
 mod consultation;
+mod events;
 mod groups;
 mod hypotheses;
 pub(crate) mod ledger;
 pub(crate) mod memberships;
+mod oauth_pending;
 mod operators;
 mod policies;
+mod probe_runs;
 pub(crate) mod roles;
 mod sessions;
 mod strategy;
@@ -81,6 +84,7 @@ fn referenced_kind(constraint: Option<&str>) -> Option<&'static str> {
         || c.ends_with("_invited_by_fkey")
         || c.ends_with("_issued_by_fkey")
         || c.ends_with("_approved_by_fkey")
+        || c.ends_with("_started_by_fkey")
     {
         Some("user")
     } else {

@@ -1,5 +1,7 @@
 //! The production implementations of the service ports: the system clock, UUIDv7 ids, random
-//! tokens and Argon2id password hashing. Tests use the deterministic fakes of `jt_testkit`.
+//! tokens and Argon2id password hashing, plus the stand-ins for a process without provider apps
+//! or adapters ([`NoPlatformApps`], [`EmptyConnectorRegistry`]). Tests use the deterministic fakes
+//! of `jt_testkit`.
 
 use std::sync::Arc;
 
@@ -12,7 +14,14 @@ use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use jt_connector::Provider;
+
 use crate::error::AppError;
+use crate::ports::connectors::{
+    AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, InsightsReader, InstagramApp,
+    LeadGenFetcher, MessagingSender, MetaApp, OAuthProvider, PlatformAppConfig, Publisher,
+    SmsSender, Telephony, Url, XApp,
+};
 use crate::ports::{Clock, IdGen, PasswordHasher, TokenGen};
 
 /// The operating system's clock, in UTC, truncated to whole microseconds: the precision
@@ -143,6 +152,83 @@ impl PasswordHasher for Argon2Hasher {
     }
 }
 
+/// No provider app configured: every app is `None`, so no kind can be connected by OAuth; the
+/// public address is the one given.
+#[derive(Clone, Debug)]
+pub struct NoPlatformApps {
+    public_base_url: Url,
+}
+
+impl NoPlatformApps {
+    pub fn new(public_base_url: Url) -> Self {
+        NoPlatformApps { public_base_url }
+    }
+}
+
+impl PlatformAppConfig for NoPlatformApps {
+    fn meta_app(&self) -> Option<MetaApp> {
+        None
+    }
+
+    fn instagram_app(&self) -> Option<InstagramApp> {
+        None
+    }
+
+    fn x_app(&self) -> Option<XApp> {
+        None
+    }
+
+    fn public_base_url(&self) -> Url {
+        self.public_base_url.clone()
+    }
+}
+
+/// No provider adapter: every getter answers `None`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EmptyConnectorRegistry;
+
+impl ConnectorRegistry for EmptyConnectorRegistry {
+    fn connector(&self, _provider: Provider) -> Option<Arc<dyn Connector>> {
+        None
+    }
+
+    fn oauth(&self, _provider: Provider) -> Option<Arc<dyn OAuthProvider>> {
+        None
+    }
+
+    fn sms(&self, _provider: Provider) -> Option<Arc<dyn SmsSender>> {
+        None
+    }
+
+    fn publisher(&self, _provider: Provider) -> Option<Arc<dyn Publisher>> {
+        None
+    }
+
+    fn insights(&self, _provider: Provider) -> Option<Arc<dyn InsightsReader>> {
+        None
+    }
+
+    fn messaging(&self, _provider: Provider) -> Option<Arc<dyn MessagingSender>> {
+        None
+    }
+
+    fn ads(&self, _provider: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
+        None
+    }
+
+    fn leadgen(&self, _provider: Provider) -> Option<Arc<dyn LeadGenFetcher>> {
+        None
+    }
+
+    fn telephony(&self, _provider: Provider) -> Option<Arc<dyn Telephony>> {
+        None
+    }
+
+    fn consent(&self, _provider: Provider) -> Option<Arc<dyn ConsentSync>> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -243,6 +329,32 @@ mod tests {
                 0,
                 "{now} has sub-microsecond digits"
             );
+        }
+    }
+
+    #[test]
+    fn no_platform_apps_has_no_app_and_the_given_address() {
+        let apps = NoPlatformApps::new(Url::parse("https://jeeta.example/").unwrap());
+        assert_eq!(apps.meta_app(), None);
+        assert_eq!(apps.instagram_app(), None);
+        assert_eq!(apps.x_app(), None);
+        assert_eq!(apps.public_base_url().as_str(), "https://jeeta.example/");
+    }
+
+    #[test]
+    fn the_empty_registry_has_nothing_for_any_provider() {
+        let registry = EmptyConnectorRegistry;
+        for provider in Provider::all().iter().copied() {
+            assert!(registry.connector(provider).is_none());
+            assert!(registry.oauth(provider).is_none());
+            assert!(registry.sms(provider).is_none());
+            assert!(registry.publisher(provider).is_none());
+            assert!(registry.insights(provider).is_none());
+            assert!(registry.messaging(provider).is_none());
+            assert!(registry.ads(provider).is_none());
+            assert!(registry.leadgen(provider).is_none());
+            assert!(registry.telephony(provider).is_none());
+            assert!(registry.consent(provider).is_none());
         }
     }
 

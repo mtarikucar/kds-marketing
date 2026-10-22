@@ -15,6 +15,9 @@ use zeroize::Zeroizing;
 pub const FORMAT_VERSION: u8 = 0x01;
 /// The HKDF salt; part of the format, like the version byte.
 const SALT: &[u8] = b"jeeta-seal-v1";
+/// The HKDF salt of the MAC keys ([`SecretBox::hmac_key`]): another salt than the sealing key's,
+/// so the two derivations are independent whatever the info.
+const HMAC_SALT: &[u8] = b"jeeta-hmac-v1";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 /// The version byte and the nonce.
@@ -46,6 +49,17 @@ impl AesSecretBox {
         Aes256Gcm::new_from_slice(key.as_slice())
             .map_err(|_| AppError::internal("cannot derive the workspace sealing key"))
     }
+}
+
+/// The HKDF info of a MAC key: the workspace id's 16 bytes, a zero byte, then the purpose's UTF-8
+/// bytes. The id has a fixed length, so no two (workspace, purpose) pairs share an info.
+fn hmac_info(ws: WorkspaceId, purpose: &str) -> Zeroizing<Vec<u8>> {
+    let id = ws.as_uuid();
+    let mut info = Zeroizing::new(Vec::with_capacity(16 + 1 + purpose.len()));
+    info.extend_from_slice(id.as_bytes());
+    info.push(0);
+    info.extend_from_slice(purpose.as_bytes());
+    info
 }
 
 impl fmt::Debug for AesSecretBox {
@@ -95,5 +109,15 @@ impl SecretBox for AesSecretBox {
             )
             .map_err(|_| refused())?;
         Ok(buffer)
+    }
+
+    /// HKDF-SHA256 of the master key, salt `jeeta-hmac-v1`, info `workspace id (16 bytes) ||
+    /// 0x00 || purpose` (see the crate docs).
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<[u8; 32], AppError> {
+        let mut key = [0u8; 32];
+        Hkdf::<Sha256>::new(Some(HMAC_SALT), self.master.as_slice())
+            .expand(&hmac_info(ws, purpose), &mut key)
+            .map_err(|_| AppError::internal("cannot derive the workspace MAC key"))?;
+        Ok(key)
     }
 }

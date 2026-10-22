@@ -72,7 +72,8 @@ rand = "0.10"
 base64 = "0.23"
 subtle = "2"
 schemars = "1"
-url = "2"
+# `serde`: the connector ports carry URLs in their plain serde structs (`jt_app::ports::connectors`).
+url = { version = "2", features = ["serde"] }
 dotenvy = "0.15"
 toml = "1"
 async-trait = "0.1"

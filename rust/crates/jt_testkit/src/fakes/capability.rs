@@ -32,7 +32,7 @@ impl MemState {
 
     /// The capability as a read returns it: `has_sealed_config` from the sealed blob and the
     /// budget item ids, in id order, from the links.
-    fn capability_view(&self, stored: &StoredCapability) -> Capability {
+    pub(super) fn capability_view(&self, stored: &StoredCapability) -> Capability {
         let c = &stored.capability;
         let mut budget_item_ids: Vec<BudgetItemId> = self
             .capability_budget_links
@@ -101,7 +101,11 @@ impl MemState {
 
 /// `NOT_FOUND` unless capability `id` belongs to `ws`, as `jt_pg` checks before hanging a member
 /// or a link off it.
-fn ensure_capability(state: &MemState, ws: WorkspaceId, id: CapabilityId) -> Result<(), AppError> {
+pub(super) fn ensure_capability(
+    state: &MemState,
+    ws: WorkspaceId,
+    id: CapabilityId,
+) -> Result<(), AppError> {
     state
         .capability_in(ws, id)
         .map(|_| ())

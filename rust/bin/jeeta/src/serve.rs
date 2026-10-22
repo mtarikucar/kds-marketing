@@ -7,6 +7,7 @@
 //! connections for at most [`DRAIN_TIMEOUT`].
 
 use std::future::IntoFuture;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,7 +20,10 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use jt_app::error::ErrorCode;
 use jt_app::gate::StrategyGate;
-use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
+use jt_app::ports::connectors::Url;
+use jt_app::std_impls::{
+    Argon2Hasher, EmptyConnectorRegistry, NoPlatformApps, RandTokenGen, SystemClock, UuidV7Gen,
+};
 use jt_app::usecases::capabilities::UowChannelCatalog;
 use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_app::usecases::{Deps, platform};
@@ -34,7 +38,7 @@ use sqlx::postgres::PgConnectOptions;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::config::{self, Bootstrap, Config, SecretKey};
+use crate::config::{self, Bootstrap, Config};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -49,7 +53,7 @@ pub async fn run(config: Config) -> Result<()> {
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
-    let deps = deps(pool.clone(), &config.secret_key);
+    let deps = deps(pool.clone(), &config);
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
@@ -138,17 +142,21 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
     Ok(applied.len())
 }
 
-/// The production ports over `pool`, sealing secrets under `secret_key`. One [`Argon2Hasher`]
-/// for the whole process: its concurrency permits are per instance, and every clone of the
-/// returned `Deps` shares it. Likewise one egress client, built here so that a bad fixed-tier
-/// entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The connectors
-/// M1b adds must share this same client, so that what the registry allows is what they reach;
-/// the tier lives in memory, so it starts empty at every start.
+/// The production ports over `pool`, sealing secrets under the configured secret key. One
+/// [`Argon2Hasher`] for the whole process: its concurrency permits are per instance, and every
+/// clone of the returned `Deps` shares it. Likewise one egress client, built here so that a bad
+/// fixed-tier entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The
+/// connectors M1b adds must share this same client, so that what the registry allows is what they
+/// reach; the tier lives in memory, so it starts empty at every start.
 ///
 /// The channel kinds a strategy may name are read from the capability registry, through the same
 /// unit of work: a workspace has a channel kind while it has a capability of that kind that is
 /// not retired.
-pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
+///
+/// No provider app or adapter is wired yet: [`NoPlatformApps`] (public address
+/// [`placeholder_public_base_url`]) and [`EmptyConnectorRegistry`] stand in until the provider
+/// configuration and the real registry land (M1b Task 11).
+pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     Deps {
@@ -157,12 +165,23 @@ pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
-        seal: Arc::new(AesSecretBox::new(*secret_key.bytes())),
+        seal: Arc::new(AesSecretBox::new(*config.secret_key.bytes())),
         channels: Arc::new(UowChannelCatalog::new(uow)),
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(egress)),
+        apps: Arc::new(NoPlatformApps::new(placeholder_public_base_url(
+            config.bind,
+        ))),
+        connectors: Arc::new(EmptyConnectorRegistry),
     }
+}
+
+/// The public address the ports report until one is configured: plain HTTP on the bound socket
+/// (`http://<bind>/`). Nothing builds a redirect or webhook URL from it yet.
+fn placeholder_public_base_url(bind: SocketAddr) -> Url {
+    // A socket address always forms a valid authority, so this parses.
+    Url::parse(&format!("http://{bind}/")).expect("a socket address forms a valid URL")
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
@@ -357,7 +376,10 @@ mod tests {
     use jt_app::gate::NoStrategyYet;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
     use jt_app::usecases::strategy::NoChannelsYet;
-    use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts};
+    use jt_testkit::fakes::{
+        FakeAppConfig, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+        ScriptedRegistry,
+    };
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -375,6 +397,8 @@ mod tests {
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps: Arc::new(FakeAppConfig::default()),
+            connectors: Arc::new(ScriptedRegistry::new()),
         }
     }
 
@@ -541,7 +565,7 @@ mod tests {
         // The production ports over a test database; only the hasher is swapped for speed.
         let db = jt_testkit::TestDb::new().await;
         let config = test_config(&[]);
-        let mut deps = deps(db.pool.clone(), &config.secret_key);
+        let mut deps = deps(db.pool.clone(), &config);
         deps.hasher = Arc::new(PlainHasher);
         let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
 
@@ -612,6 +636,33 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
+
+        // No provider app or adapter yet; the public address is the bound socket.
+        assert_eq!(deps.apps.meta_app(), None);
+        assert_eq!(deps.apps.x_app(), None);
+        assert_eq!(
+            deps.apps.public_base_url().as_str(),
+            format!("http://{}/", config.bind)
+        );
+        assert!(
+            deps.connectors
+                .connector(jt_connector::Provider::Meta)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_placeholder_public_address_is_the_bound_socket() {
+        for (bind, url) in [
+            ("127.0.0.1:8080", "http://127.0.0.1:8080/"),
+            ("0.0.0.0:80", "http://0.0.0.0/"),
+            ("[::1]:9090", "http://[::1]:9090/"),
+        ] {
+            assert_eq!(
+                placeholder_public_base_url(bind.parse().unwrap()).as_str(),
+                url
+            );
+        }
     }
 
     #[tokio::test]

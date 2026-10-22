@@ -15,6 +15,11 @@
 //! - A row or entry whose `workspace_id` differs from the tenant bundle's workspace is refused
 //!   with `INTERNAL` (it is a programming error) and nothing is written.
 //! - Mutations documented as such return `NOT_FOUND` when the id does not exist in scope.
+//!
+//! The provider adapters and the platform's provider apps have their own module,
+//! [`connectors`].
+
+pub mod connectors;
 
 use std::collections::BTreeSet;
 
@@ -23,6 +28,7 @@ use jt_capability::{
     BudgetItem, BudgetItemId, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
     CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
 };
+use jt_connector::{InboundEvent, InboundEventId, Provider};
 use jt_ledger::LedgerEntry;
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
@@ -30,9 +36,10 @@ use jt_strategy::{
 };
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, OperatorId, Permission,
-    RoleDef, RoleId, SessionId, UserId, WorkspaceId, WorkspaceStatus,
+    RoleDef, RoleId, SessionId, UserId, WorkspaceId, WorkspaceStatus, define_id,
 };
 use serde::Serialize;
+use serde_json::Value;
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -85,6 +92,11 @@ pub trait SecretBox: Send + Sync {
     /// are refused with `INTERNAL` and the message `"sealed data cannot be opened"`, whatever the
     /// reason, so a refusal tells a caller nothing about the bytes.
     fn open(&self, ws: WorkspaceId, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError>;
+    /// A 32-byte key for computing MACs on behalf of workspace `ws` for one `purpose` (e.g.
+    /// `"oauth-state"`, `"netgsm-hook"`): the same for the same workspace and purpose (also after
+    /// a restart), different for another workspace or another purpose, and independent of the
+    /// sealing key. Like what `open` gives back, it is never returned, logged or stored.
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<[u8; 32], AppError>;
 }
 
 /// The kinds of channel a workspace can use: the kind keys (e.g. `instagram`, `mailbox`) of its
@@ -971,6 +983,182 @@ pub trait WorkspacePolicyRepo: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Connector repositories: tenant repositories too, over one workspace's inbound events, pending
+// OAuth flows and probe runs.
+// ---------------------------------------------------------------------------------------------
+
+/// The most events one [`InboundEventRepo::list_pending`] returns.
+pub const MAX_EVENT_PAGE: u32 = 500;
+
+/// The workspace's inbound events: what webhooks and polls brought in, each stored once per
+/// provider id (`(provider, external_id)` is unique within a workspace), with its raw body for a
+/// while.
+///
+/// An event never changes but for its processing time and the removal of its raw body, and is
+/// never deleted: Postgres refuses anything else with a trigger, and the fakes offer no other
+/// write.
+#[async_trait]
+pub trait InboundEventRepo: Send + Sync {
+    /// Stores `event` with its raw body and returns its id, unless the workspace already holds
+    /// an event with the same provider and provider id: then nothing is written and the answer is
+    /// `None` (a replayed delivery, Review Focus 2), and the bundle stays usable. Of two bundles
+    /// racing to store the same event, the second waits for the first and then gets `None` (or
+    /// stores it, if the first rolled back).
+    ///
+    /// An `event.workspace_id` other than the bundle's is `INTERNAL`; a `capability_id` that is
+    /// not the workspace's is `NOT_FOUND`; a taken id (for another event) is `CONFLICT`.
+    async fn insert_if_new(
+        &mut self,
+        event: InboundEvent,
+        raw: Option<Vec<u8>>,
+    ) -> Result<Option<InboundEventId>, AppError>;
+    /// The events not yet processed, oldest (`received_at`, then id) first, at most `limit`
+    /// (clamped to `1..=MAX_EVENT_PAGE`).
+    async fn list_pending(&mut self, limit: u32) -> Result<Vec<InboundEvent>, AppError>;
+    /// Marks the event processed at `at` and answers `true`; an event already processed keeps
+    /// its time and answers `false`. An unknown id is `NOT_FOUND`.
+    async fn mark_processed(
+        &mut self,
+        id: InboundEventId,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
+    /// Removes the raw body of every event received before `cutoff` (the rest of each event
+    /// stays) and returns how many bodies were removed.
+    async fn purge_raw_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError>;
+}
+
+define_id!(
+    /// A pending OAuth flow.
+    OAuthPendingId
+);
+
+/// An OAuth flow between its start and the owner's choice of assets. Found by the hash of its
+/// signed state ([`jt_connector::OAuthState`]); the PKCE code verifier, when the flow uses one, is
+/// sealed here and never travels in the state.
+///
+/// Not `Serialize`, and `Debug` masks it: it carries sealed blobs and the state's hash.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OAuthPendingRow {
+    pub id: OAuthPendingId,
+    pub workspace_id: WorkspaceId,
+    pub provider: Provider,
+    /// The capability kind being connected, e.g. `"facebook_page"`.
+    pub kind_key: String,
+    /// The hash of the signed state, unique across every workspace.
+    pub state_hash: String,
+    /// The user who started it (for an agent, the user who issued its key).
+    pub started_by: UserId,
+    /// The PKCE code verifier, sealed for the workspace.
+    pub pkce_verifier_sealed: Option<Vec<u8>>,
+    /// The assets the account can reach, credentials included, sealed for the workspace; set
+    /// once the provider has called back.
+    pub assets_sealed: Option<Vec<u8>>,
+    /// The non-secret facts of those assets, a JSON array (`[]` until then).
+    pub assets_public: Value,
+    /// When the flow stops being accepted.
+    pub expires_at: OffsetDateTime,
+    pub created_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for OAuthPendingRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthPendingRow")
+            .field("id", &self.id)
+            .field("workspace_id", &self.workspace_id)
+            .field("provider", &self.provider)
+            .field("kind_key", &self.kind_key)
+            .field("state_hash", &Masked)
+            .field("started_by", &self.started_by)
+            .field(
+                "pkce_verifier_sealed",
+                &self.pkce_verifier_sealed.as_ref().map(|_| Masked),
+            )
+            .field(
+                "assets_sealed",
+                &self.assets_sealed.as_ref().map(|_| Masked),
+            )
+            .field("assets_public", &self.assets_public)
+            .field("expires_at", &self.expires_at)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+/// The workspace's pending OAuth flows. Short-lived rows: a flow is deleted once confirmed, and
+/// expired flows are purged.
+#[async_trait]
+pub trait OAuthPendingRepo: Send + Sync {
+    /// Stores the flow. A `row.workspace_id` other than the bundle's is `INTERNAL`; a
+    /// `started_by` that names no user is `NOT_FOUND`; a taken id, or a state hash any workspace
+    /// already holds, is `CONFLICT`.
+    async fn insert(&mut self, row: OAuthPendingRow) -> Result<(), AppError>;
+    /// The workspace's flow with this state hash, expired ones included; the caller checks.
+    async fn find_by_state_hash(
+        &mut self,
+        state_hash: &str,
+    ) -> Result<Option<OAuthPendingRow>, AppError>;
+    /// Stores the assets the provider's callback found: `sealed` (credentials included, sealed
+    /// for the workspace) and their public facts. An unknown id is `NOT_FOUND`.
+    async fn set_assets(
+        &mut self,
+        id: OAuthPendingId,
+        sealed: Vec<u8>,
+        public: Value,
+    ) -> Result<(), AppError>;
+    /// Deletes the flow. An unknown id is `NOT_FOUND`.
+    async fn delete(&mut self, id: OAuthPendingId) -> Result<(), AppError>;
+    /// Deletes every flow that expired before `now` (`expires_at < now`: a flow is still
+    /// accepted at its expiry instant) and returns how many.
+    async fn purge_expired(&mut self, now: OffsetDateTime) -> Result<u64, AppError>;
+}
+
+define_id!(
+    /// A probe run.
+    ProbeRunId
+);
+
+/// One probe of a connector capability: when, whether it succeeded, why not (the
+/// [`jt_connector::ConnectorError::kind`] key, `None` when it succeeded or the adapter did not
+/// say), how long it took, and the non-secret facts it returned.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProbeRun {
+    pub id: ProbeRunId,
+    pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub ok: bool,
+    pub error_kind: Option<String>,
+    /// Stored as a 32-bit signed integer: a latency beyond `i32::MAX` milliseconds (24 days) is
+    /// stored, and read back, as `i32::MAX`.
+    pub latency_ms: u32,
+    pub facts: Value,
+}
+
+/// The most runs one [`ProbeRunRepo::list`] returns.
+pub const MAX_PROBE_PAGE: u32 = 500;
+
+/// The workspace's probe log. Runs are never changed or deleted (Postgres refuses it with a
+/// trigger).
+#[async_trait]
+pub trait ProbeRunRepo: Send + Sync {
+    /// Appends the run and returns its id. A `run.workspace_id` other than the bundle's is
+    /// `INTERNAL`; a capability that is not the workspace's is `NOT_FOUND`; a taken id is
+    /// `CONFLICT`; an `error_kind` that is not a `ConnectorError` kind key breaks a check
+    /// constraint and is `INTERNAL`.
+    async fn append(&mut self, run: ProbeRun) -> Result<ProbeRunId, AppError>;
+    /// The capability's newest run (`at`, then id), if any.
+    async fn latest(&mut self, capability_id: CapabilityId) -> Result<Option<ProbeRun>, AppError>;
+    /// The capability's runs newest first, ordered by `(at, id)` descending, at most `limit`
+    /// (clamped to `1..=MAX_PROBE_PAGE`); a capability that is not the workspace's has none.
+    async fn list(
+        &mut self,
+        capability_id: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<ProbeRun>, AppError>;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Platform repositories
 // ---------------------------------------------------------------------------------------------
 
@@ -1017,6 +1205,9 @@ pub trait TenantRepos: Send + Sync {
     fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo;
     fn budget(&mut self) -> &mut dyn BudgetRepo;
     fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo;
+    fn inbound_events(&mut self) -> &mut dyn InboundEventRepo;
+    fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo;
+    fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 
@@ -1103,6 +1294,17 @@ pub trait PlatformRepos: Send + Sync {
         &mut self,
         token_hash: &str,
     ) -> Result<Option<MembershipRow>, AppError>;
+    /// The live (not retired) capability, in whichever workspace it belongs to, whose kind is one
+    /// of `kind_keys` and whose external account id is `external_id`: where an inbound event for
+    /// that account is routed. `None` when no workspace holds the account live (the event is
+    /// routed nowhere, Review Focus 1). When several do (the same account connected in two
+    /// workspaces, or under two kinds), the most recently created one answers (`created_at`, then
+    /// id, both descending). Read as [`CapabilityRepo::find`] reads it.
+    async fn capability_by_external(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Option<Capability>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;

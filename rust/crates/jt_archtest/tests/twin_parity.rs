@@ -33,7 +33,9 @@ use jt_mcp::McpState;
 use jt_panel_http::AppState;
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_testkit::TestDb;
-use jt_testkit::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
+use jt_testkit::fakes::{
+    FakeAppConfig, PlainHasher, PlainSecretBox, RecordingTenantHosts, ScriptedRegistry,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -65,6 +67,8 @@ fn deps(db: &TestDb) -> Deps {
         channels: Arc::new(UowChannelCatalog::new(uow)),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(RecordingTenantHosts::new()),
+        apps: Arc::new(FakeAppConfig::default()),
+        connectors: Arc::new(ScriptedRegistry::new()),
     }
 }
 

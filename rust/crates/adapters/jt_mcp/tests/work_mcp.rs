@@ -18,7 +18,9 @@ use jt_mcp::{McpState, http_service};
 use jt_pg::{MAX_CONNECTIONS, PgStrategyGate, PgUnitOfWork};
 use jt_tenancy::{SystemRole, UserId, WorkspaceId};
 use jt_testkit::TestDb;
-use jt_testkit::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
+use jt_testkit::fakes::{
+    FakeAppConfig, PlainHasher, PlainSecretBox, RecordingTenantHosts, ScriptedRegistry,
+};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
     ProtocolVersion,
@@ -56,6 +58,8 @@ impl World {
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps: Arc::new(FakeAppConfig::default()),
+            connectors: Arc::new(ScriptedRegistry::new()),
         };
         let (ws, owner) = db.seed_workspace("alpha").await;
         let state = McpState::new(deps.clone(), Arc::new(PgStrategyGate::new(db.pool.clone())));
