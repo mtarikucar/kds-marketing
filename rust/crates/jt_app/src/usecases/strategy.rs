@@ -53,10 +53,9 @@ use jt_tenancy::{Email, MembershipStatus, Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
-use super::{Deps, acting_user, invalid, ledger_entry};
+use super::{Deps, acting_user, invalid, keyset_cursor, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{ChannelCatalog, StrategyArchivedHook, TenantRepos};
@@ -666,28 +665,16 @@ pub fn consultation_cursor(
     before_at: Option<&str>,
     before_id: Option<ConsultationEntryId>,
 ) -> Result<Option<(OffsetDateTime, ConsultationEntryId)>, AppError> {
-    match (before_at, before_id) {
-        (None, None) => Ok(None),
-        (Some(at), Some(id)) => {
-            let at = OffsetDateTime::parse(at, &Rfc3339).map_err(|_| {
-                invalid(
-                    "before_at",
-                    "before_at must be an RFC 3339 time, as an entry's `at` reads",
-                )
-            })?;
-            Ok(Some((at, id)))
-        }
-        (Some(_), None) => Err(invalid("before_id", "before_id must come with before_at")),
-        (None, Some(_)) => Err(invalid("before_at", "before_at must come with before_id")),
-    }
+    keyset_cursor(before_at, before_id)
 }
 
 // ---------------------------------------------------------------------------------------------
 // Defaults for the ports this module adds
 // ---------------------------------------------------------------------------------------------
 
-/// The channel catalog until the capability registry answers: no workspace has a channel kind,
-/// so only the `any` channel can be approved.
+/// A channel catalog in which no workspace has a channel kind, so only the `any` channel can be
+/// approved: for tests that need no capability registry. The binary reads the registry
+/// ([`super::capabilities::UowChannelCatalog`]).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoChannelsYet;
 

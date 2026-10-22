@@ -26,6 +26,8 @@ use jt_ledger::{Action, Actor, LedgerEntry, Subject};
 use jt_tenancy::{Permission, TenancyError, UserId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -129,6 +131,30 @@ pub(crate) fn refusal(ctx: &Ctx, e: TenancyError) -> AppError {
 /// `VALIDATION` naming `field` in `details.field`.
 pub(crate) fn invalid(field: &str, message: &str) -> AppError {
     AppError::validation(message, json!({ "field": field }))
+}
+
+/// A keyset cursor `(at, id)` from the two halves a caller sends: `before_at`, an RFC 3339 time
+/// as the previous page's last entry's `at` reads, and `before_id`, that entry's id. Both or
+/// neither, else `VALIDATION` naming the missing one; a `before_at` that does not parse is
+/// `VALIDATION` naming it.
+pub(crate) fn keyset_cursor<I>(
+    before_at: Option<&str>,
+    before_id: Option<I>,
+) -> Result<Option<(OffsetDateTime, I)>, AppError> {
+    match (before_at, before_id) {
+        (None, None) => Ok(None),
+        (Some(at), Some(id)) => {
+            let at = OffsetDateTime::parse(at, &Rfc3339).map_err(|_| {
+                invalid(
+                    "before_at",
+                    "before_at must be an RFC 3339 time, as an entry's `at` reads",
+                )
+            })?;
+            Ok(Some((at, id)))
+        }
+        (Some(_), None) => Err(invalid("before_id", "before_id must come with before_at")),
+        (None, Some(_)) => Err(invalid("before_at", "before_at must come with before_id")),
+    }
 }
 
 /// `raw` trimmed, or `VALIDATION` when nothing is left.

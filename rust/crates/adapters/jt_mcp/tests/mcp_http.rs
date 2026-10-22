@@ -2,7 +2,8 @@
 //! ephemeral port, backed by a fresh Postgres database. Bearer-key authentication, the
 //! connection an `initialize` records, tool listing by permission, workspace isolation, the
 //! ledger entry of every call, the strategy gate (behind a stub and the real one, opened by a
-//! consultation run over MCP) and the workspace-status gate.
+//! consultation run over MCP), the workspace-status gate, and the capability, group and budget
+//! tools a key sees and runs by its scopes.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -668,6 +669,13 @@ async fn tools_list_hides_tools_the_key_cannot_use() {
         "jeeta.strategy.get",
         "jeeta.strategy.list_versions",
         "jeeta.strategy.consultation",
+        "jeeta.capability.list",
+        "jeeta.capability.get",
+        "jeeta.capability.verify",
+        "jeeta.capability.groups_list",
+        "jeeta.budget.items_list",
+        "jeeta.budget.spend_record",
+        "jeeta.budget.spend_list",
         "jeeta.demo.gated",
     ]
     .into_iter()
@@ -857,6 +865,9 @@ async fn call_on_pending_payment_workspace_returns_workspace_inactive() {
         "jeeta.team.list",
         "jeeta.api_keys.list",
         "jeeta.ledger.list",
+        "jeeta.capability.list",
+        "jeeta.capability.groups_list",
+        "jeeta.budget.items_list",
     ] {
         let refused = err(&call(&client, tool, json!({})).await);
         assert_eq!(refused["code"], "WORKSPACE_INACTIVE", "{tool}");
@@ -1157,6 +1168,307 @@ async fn narrowed_owner_key_cannot_see_or_call_strategy_mutations() {
     assert_eq!(draft["consultation_count"], 1);
 }
 
+/// The capability, group and budget tools a key needs more than `workspace.read` for, with the
+/// permission each needs.
+const CAPABILITY_MUTATIONS: &[(&str, &str)] = &[
+    ("jeeta.capability.declare", "capabilities.manage"),
+    ("jeeta.capability.mark_unreachable", "capabilities.manage"),
+    ("jeeta.capability.set_policy", "capabilities.manage"),
+    ("jeeta.capability.retire", "capabilities.manage"),
+    ("jeeta.capability.link_budget", "capabilities.manage"),
+    ("jeeta.capability.unlink_budget", "capabilities.manage"),
+    ("jeeta.capability.groups_create", "capabilities.manage"),
+    ("jeeta.capability.groups_rename", "capabilities.manage"),
+    ("jeeta.capability.groups_delete", "capabilities.manage"),
+    ("jeeta.capability.groups_add_member", "capabilities.manage"),
+    (
+        "jeeta.capability.groups_remove_member",
+        "capabilities.manage",
+    ),
+    ("jeeta.budget.items_create", "budget.manage"),
+];
+
+#[tokio::test]
+async fn narrowed_key_cannot_see_capability_mutations() {
+    let w = World::new().await;
+    let reader = w.key(w.a, &["workspace.read"]).await;
+    let manager = w.key(w.a, &["workspace.read", "capabilities.manage"]).await;
+    let full = w.key(w.a, &[]).await;
+    let url = serve(w.served_state()).await;
+
+    let names = |client: Client| async move {
+        let names: BTreeSet<String> = client
+            .list_all_tools()
+            .await
+            .unwrap()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names
+    };
+
+    // The full key sees every mutation; the one holding capabilities.manage all but creating a
+    // budget item; the reader none.
+    let all = names(connect(&url, &full.plaintext, "acme-agent").await).await;
+    let managing = names(connect(&url, &manager.plaintext, "acme-agent").await).await;
+    let reading = names(connect(&url, &reader.plaintext, "acme-agent").await).await;
+    for (tool, permission) in CAPABILITY_MUTATIONS {
+        assert!(all.contains(*tool), "{tool}");
+        assert_eq!(
+            managing.contains(*tool),
+            *permission == "capabilities.manage",
+            "{tool}"
+        );
+        assert!(!reading.contains(*tool), "{tool} is hidden");
+    }
+    // Reading, and the agent's own report tools, stay visible to the reader.
+    for tool in [
+        "jeeta.capability.list",
+        "jeeta.capability.get",
+        "jeeta.capability.verify",
+        "jeeta.capability.groups_list",
+        "jeeta.budget.items_list",
+        "jeeta.budget.spend_record",
+        "jeeta.budget.spend_list",
+    ] {
+        assert!(reading.contains(tool), "{tool}");
+    }
+
+    // Called by name anyway, every mutation is refused with the permission it needs, and
+    // nothing is written.
+    let client = connect(&url, &reader.plaintext, "acme-agent").await;
+    let some_id = "0192f0c4-0000-7000-8000-000000000000";
+    for (tool, permission) in CAPABILITY_MUTATIONS {
+        let args = match *tool {
+            "jeeta.capability.declare" => json!({ "kind_key": "phone", "name": "Telefon" }),
+            "jeeta.capability.mark_unreachable" => {
+                json!({ "capability_id": some_id, "reason": "kapalı" })
+            }
+            "jeeta.capability.set_policy" => json!({ "capability_id": some_id, "policy": {} }),
+            "jeeta.capability.retire" => json!({ "capability_id": some_id, "confirm": true }),
+            "jeeta.capability.link_budget" | "jeeta.capability.unlink_budget" => {
+                json!({ "capability_id": some_id, "budget_item_id": some_id })
+            }
+            "jeeta.capability.groups_create" => json!({ "name": "Marka A" }),
+            "jeeta.capability.groups_rename" => json!({ "group_id": some_id, "name": "B" }),
+            "jeeta.capability.groups_delete" => json!({ "group_id": some_id }),
+            "jeeta.capability.groups_add_member" | "jeeta.capability.groups_remove_member" => {
+                json!({ "group_id": some_id, "capability_id": some_id })
+            }
+            "jeeta.budget.items_create" => json!({
+                "name": "Nakit",
+                "kind": "cash",
+                "unit": { "kind": "currency", "value": "TRY" },
+                "cap": 1000,
+                "period": "total",
+            }),
+            other => panic!("no arguments for {other}"),
+        };
+        let refused = err(&call(&client, tool, args).await);
+        assert_eq!(refused["code"], "FORBIDDEN", "{tool}");
+        assert_eq!(
+            refused["details"],
+            json!({ "permission": permission }),
+            "{tool}"
+        );
+    }
+    let listed = ok(&call(&client, "jeeta.capability.list", json!({})).await);
+    assert_eq!(listed, json!({ "capabilities": [] }));
+    assert!(w.entries(w.a, "capability.declare").await.is_empty());
+}
+
+#[tokio::test]
+async fn declare_then_list_over_mcp() {
+    let w = World::new().await;
+    let key = w.key(w.a, &[]).await;
+    let url = serve(w.served_state()).await;
+    let client = connect(&url, &key.plaintext, "acme-agent").await;
+
+    // The agent declares its hands: a phone, a tool of its own and a mailbox the system will
+    // reach through a connector.
+    let phone = ok(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({ "kind_key": "phone", "name": "Saha telefonu", "description": "Android 14" }),
+    )
+    .await);
+    assert_eq!(phone["capability"]["reach"], "device");
+    assert_eq!(phone["effective_status"], "declared");
+    let phone_id = phone["capability"]["id"].clone();
+    let tool = ok(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({
+            "kind_key": "other",
+            "key_detail": "airtable",
+            "name": "Airtable",
+            "policy": { "daily_ops_cap": 100 },
+        }),
+    )
+    .await);
+    assert_eq!(tool["capability"]["key_detail"], "airtable");
+    assert_eq!(tool["capability"]["policy"]["daily_ops_cap"], 100);
+    let mailbox = ok(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({
+            "kind_key": "mailbox",
+            "name": "Destek kutusu",
+            "external_id": "destek@alpha.example",
+            "connector_public": { "hosts": ["imap.alpha.example"] },
+        }),
+    )
+    .await);
+    assert_eq!(mailbox["capability"]["reach"], "connector");
+
+    // Refusals: a key_detail on another kind, an unknown kind, a misspelt policy field.
+    let refused = err(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({ "kind_key": "phone", "key_detail": "x1", "name": "Telefon" }),
+    )
+    .await);
+    assert_eq!(refused["code"], "VALIDATION");
+    assert_eq!(refused["details"], json!({ "field": "key_detail" }));
+    let refused = err(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({ "kind_key": "pager", "name": "Çağrı cihazı" }),
+    )
+    .await);
+    assert_eq!(refused["details"], json!({ "field": "kind_key" }));
+    let refused = err(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({ "kind_key": "phone", "name": "T", "policy": { "requires_human_aproval": true } }),
+    )
+    .await);
+    assert_eq!(refused["details"], json!({ "field": "policy" }));
+    // A connector is verified by its probe, never by a claim.
+    let refused = err(&call(
+        &client,
+        "jeeta.capability.verify",
+        json!({ "capability_id": mailbox["capability"]["id"], "evidence": { "text": "logged in" } }),
+    )
+    .await);
+    assert_eq!(refused["code"], "CONFLICT");
+
+    // The list, whole and filtered.
+    let all = ok(&call(&client, "jeeta.capability.list", json!({})).await);
+    let names: Vec<&str> = all["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["capability"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Saha telefonu", "Airtable", "Destek kutusu"]);
+    let devices = ok(&call(
+        &client,
+        "jeeta.capability.list",
+        json!({ "group": "device" }),
+    )
+    .await);
+    assert_eq!(devices["capabilities"].as_array().unwrap().len(), 1);
+    assert_eq!(devices["capabilities"][0]["capability"]["id"], phone_id);
+    let messaging = ok(&call(
+        &client,
+        "jeeta.capability.list",
+        json!({ "kind": "mailbox", "status": "declared" }),
+    )
+    .await);
+    assert_eq!(messaging["capabilities"].as_array().unwrap().len(), 1);
+    let refused = err(&call(&client, "jeeta.capability.list", json!({ "kind": "pager" })).await);
+    assert_eq!(refused["details"], json!({ "field": "kind" }));
+    let got = ok(&call(
+        &client,
+        "jeeta.capability.get",
+        json!({ "capability_id": phone_id }),
+    )
+    .await);
+    assert_eq!(got, phone);
+
+    // A group, a cash item, a link and a spend, all over MCP.
+    let group = ok(&call(
+        &client,
+        "jeeta.capability.groups_create",
+        json!({ "name": "Saha", "purpose": "sahadaki cihazlar" }),
+    )
+    .await);
+    let group_id = group["group"]["id"].clone();
+    let group = ok(&call(
+        &client,
+        "jeeta.capability.groups_add_member",
+        json!({ "group_id": group_id, "capability_id": phone_id }),
+    )
+    .await);
+    assert_eq!(group["members"][0]["capability"]["id"], phone_id);
+    let groups = ok(&call(&client, "jeeta.capability.groups_list", json!({})).await);
+    assert_eq!(groups["groups"].as_array().unwrap().len(), 1);
+    let item = ok(&call(
+        &client,
+        "jeeta.budget.items_create",
+        json!({
+            "name": "Nakit",
+            "kind": "cash",
+            "unit": { "kind": "currency", "value": "TRY" },
+            "cap": 50_000,
+            "period": "monthly",
+        }),
+    )
+    .await);
+    let item_id = item["item"]["id"].clone();
+    let linked = ok(&call(
+        &client,
+        "jeeta.capability.link_budget",
+        json!({ "capability_id": phone_id, "budget_item_id": item_id }),
+    )
+    .await);
+    assert_eq!(linked["capability"]["budget_item_ids"], json!([item_id]));
+    let spent = ok(&call(
+        &client,
+        "jeeta.budget.spend_record",
+        json!({ "budget_item_id": item_id, "amount": 1_200, "reference": "kontör" }),
+    )
+    .await);
+    assert_eq!(spent["remaining"], 48_800);
+    assert_eq!(spent["spend"]["source"], json!({ "kind": "agent" }));
+    let spend = ok(&call(
+        &client,
+        "jeeta.budget.spend_list",
+        json!({ "budget_item_id": item_id }),
+    )
+    .await);
+    assert_eq!(spend["spend"].as_array().unwrap().len(), 1);
+    let items = ok(&call(&client, "jeeta.budget.items_list", json!({})).await);
+    assert_eq!(items["items"][0]["spent_in_period"], 1_200);
+
+    // Deleting the group is confirmed; the phone stays.
+    let deleted = ok(&call(
+        &client,
+        "jeeta.capability.groups_delete",
+        json!({ "group_id": group_id }),
+    )
+    .await);
+    assert_eq!(deleted, json!({ "group_id": group_id, "deleted": true }));
+    let got = ok(&call(
+        &client,
+        "jeeta.capability.get",
+        json!({ "capability_id": phone_id }),
+    )
+    .await);
+    assert_eq!(got["capability"]["budget_item_ids"], json!([item_id]));
+
+    // Each declaration was ledgered as the agent's, in this workspace only.
+    let declared = w.entries(w.a, "capability.declare").await;
+    assert_eq!(declared.len(), 3);
+    assert!(
+        declared
+            .iter()
+            .all(|e| matches!(e.actor, Actor::Agent { .. }))
+    );
+    assert!(w.entries(w.b, "capability.declare").await.is_empty());
+}
+
 #[tokio::test]
 async fn call_ledger_list_returns_redacted_entries() {
     let w = World::new().await;
@@ -1308,7 +1620,7 @@ async fn stdio_transport_serves_the_same_handler_for_a_fixed_principal() {
         .expect("the client initialises over the pipe");
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 8, "only the workspace.read tools");
+    assert_eq!(tools.len(), 15, "only the workspace.read tools");
     let me = ok(&call(&client, "jeeta.agent.whoami", json!({})).await);
     assert_eq!(me["permissions"], json!(["workspace.read"]));
     let listed = agents::list(&w.deps, &w.owner_ctx(w.a)).await.unwrap();

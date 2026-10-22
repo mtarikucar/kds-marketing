@@ -121,7 +121,7 @@ açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/plat
 
 **Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
 `workspace.*`, `platform.*` ve `strategy.*` dışındaki her kullanım durumu (`team.*`, `roles.*`, `api_keys.*`,
-`agents.*`, `ledger.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
+`agents.*`, `ledger.*`, `capability.*`, `budget.*`), panelden de MCP'den de, alan `pending_payment` ya da `suspended` iken
 `423 {"code":"WORKSPACE_INACTIVE","details":{"status":"pending_payment"}}` alır. Yani ödeme bekleyen bir alan
 operatör onu etkinleştirene kadar üye davet edemez ve API anahtarı açamaz; giriş, çıkış, `GET /api/auth/me`,
 `GET /api/workspace`, alan değiştirme ve strateji istişaresi (bkz. [Strateji](#strateji)) çalışır. Askıya alınan bir alanda da aynısı geçerlidir; askıdaki bir
@@ -172,7 +172,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (25 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (44 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -205,8 +205,68 @@ kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get` açıklam
 Eksikleri olan bir taslak onaya sunulamaz: `422 VALIDATION`, `details.gaps` her eksiği alan yoluyla sayar.
 Arşivleme yalnızca adı verilen onaylı sürümü arşivler (başka bir sürüm yürürlükteyse `409`) ve kapıyı
 yeniden kapatır. Bir anahtarın kapsamları her zaman daraltır: `team.manage` taşımayan bir sahip anahtarı
-istişareyi yürütemez, onaylayamaz ve arşivleyemez. Kanal türleri kabiliyet kaydıyla gelene kadar
-strateji yalnızca `any` kanalıyla onaylanabilir.
+istişareyi yürütemez, onaylayamaz ve arşivleyemez. Stratejinin kanalları kabiliyet kaydından okunur
+(bkz. [Kabiliyetler](#kabiliyetler)): bir kanal `any` ya da alanın emekliye ayrılmamış bir kabiliyetinin
+türüyse (`phone`, `mailbox`, `instagram` …) onaylanabilir; bir kanalın daraltıldığı grup (`group_id`) alanın
+bir kabiliyet grubu olmalıdır.
+
+## Kabiliyetler
+
+Kabiliyet, alanın eylemde bulunabildiği her şeydir: bir hesap, bir cihaz, bir ajan bağlantısı, bilgisayar
+erişimi ya da üçüncü taraf bir araç. Türler kapalı bir listedir (`social_account`, `messaging`,
+`telephony`, `community`, `ads`, `calendar`, `device`, `agent_connection`, `computer_access`,
+`third_party` gruplarında); listede olmayan bir tür `422 VALIDATION` alır, `third_party` içindeki `other`
+türü ise aracın adını `key_detail` alanında ister. Kabiliyet araçları strateji kapısından muaftır (istişare
+alanın neye sahip olduğunu bilmek ister), çalışma alanı durumu denetiminden muaf değildir.
+
+**Ajan kendi ellerini nasıl bildirir.** Ajan, kendi tuttuğu bir cihazı (`phone`, `printer` …) ya da
+erişimi (`shell`, `adb`, `browser_profile` …) `jeeta.capability.declare` ile bildirir; kabiliyet
+`declared` durumunda başlar. Sonra `jeeta.capability.verify` ile kanıtını verir: ne çalıştırdığı ya da
+ne gördüğü (`evidence.text`) ve isteğe bağlı dayanaklar (`evidence.refs`: seri numarası, dosya ya da ekran
+görüntüsü kimliği). Kanıt ajanın beyanı olarak kaydedilir, sistem onu denetlemez; doğrulama, politikanın
+`verify_max_age_days` süresi (varsayılan 30 gün) dolunca `stale` okunur ve ajan yeniden doğrular. Bir ajan
+kendi ajan ya da cihaz kabiliyetini yalnızca `workspace.read` ile doğrulayabilir; panelde bir kişi
+`capabilities.manage` ister. Bağlayıcıyla (connector) ulaşılan hesaplar (`mailbox`, `instagram`, reklam
+hesapları …) bir beyanla doğrulanamaz (`409`), kendi yoklamalarıyla (probe) doğrulanır; bağlayıcılar M1b ile
+gelir. Bir bağlayıcının ulaşacağı adresler `connector_public.hosts` alanında bildirilir ve yalnızca genel
+(public) adresler kabul edilir.
+
+| Adım | Panel | MCP aracı | İzin |
+|---|---|---|---|
+| Liste (`group`, `kind`, `status`, `group_id` süzgeçleri) | `GET /api/capabilities` | `jeeta.capability.list` | `workspace.read` |
+| Okuma | `GET /api/capabilities/{capability_id}` | `jeeta.capability.get` | `workspace.read` |
+| Bildirme | `POST /api/capabilities` | `jeeta.capability.declare` | `capabilities.manage` |
+| Doğrulama (gövde `{"evidence": {"text": …, "refs": […]}}`) | `POST /api/capabilities/{capability_id}/verify` | `jeeta.capability.verify` | ajan: `workspace.read`; kişi: `capabilities.manage` |
+| Ulaşılamaz işaretleme (`{"reason": …}`) | `POST /api/capabilities/{capability_id}/unreachable` | `jeeta.capability.mark_unreachable` | `capabilities.manage` |
+| Politika (gövde politikanın kendisi) | `PUT /api/capabilities/{capability_id}/policy` | `jeeta.capability.set_policy` | `capabilities.manage` |
+| Emekliye ayırma (`{"confirm": true}`) | `POST /api/capabilities/{capability_id}/retire` | `jeeta.capability.retire` | `capabilities.manage` |
+| Bütçe kalemine bağlama | `POST /api/capabilities/{capability_id}/budget-links` | `jeeta.capability.link_budget` | `capabilities.manage` |
+| Bağı kaldırma | `DELETE /api/capabilities/{capability_id}/budget-links/{budget_item_id}` | `jeeta.capability.unlink_budget` | `capabilities.manage` |
+| Gruplar | `GET /api/capability-groups` | `jeeta.capability.groups_list` | `workspace.read` |
+| Grup açma, adlandırma, silme | `POST /api/capability-groups`, `PATCH`/`DELETE /api/capability-groups/{group_id}` | `jeeta.capability.groups_create`, `groups_rename`, `groups_delete` | `capabilities.manage` |
+| Grup üyeliği | `POST /api/capability-groups/{group_id}/members`, `DELETE …/members/{capability_id}` | `jeeta.capability.groups_add_member`, `groups_remove_member` | `capabilities.manage` |
+| Bütçe kalemleri | `GET /api/budget/items` | `jeeta.budget.items_list` | `workspace.read` |
+| Bütçe kalemi açma | `POST /api/budget/items` | `jeeta.budget.items_create` | `budget.manage` |
+| Harcama bildirme (`{"amount": …, "reference": …}`) | `POST /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_record` | `workspace.read` |
+| Harcamalar (`limit`, `before_at` + `before_id`) | `GET /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_list` | `workspace.read` |
+
+Bütçe kalemleri alanın kendi parası ve tavanlarıdır (sistemin kredisi değil); harcama tavanı aşsa da kaydedilir
+ve `budget.over_cap` kaydıyla işaretlenir. Emekliye ayırma kesindir: kabiliyet gruplarından ve bütçe
+kalemlerinden aynı işlemde çıkar, kaydı kalır.
+
+Sistem rollerinin izinleri:
+
+| İzin | Sahip | Yönetici | Temsilci |
+|---|---|---|---|
+| `workspace.read` | ✓ | ✓ | ✓ |
+| `team.manage` | ✓ | ✓ | — |
+| `api_keys.manage` | ✓ | ✓ | — |
+| `ledger.read` | ✓ | ✓ | — |
+| `capabilities.manage` (kabiliyetleri ve grupları değiştirme) | ✓ | ✓ | — |
+| `budget.manage` (bütçe kalemi açma) | ✓ | ✓ | — |
+
+Bir API anahtarının kapsamları sahibinin izinlerini daraltır: yalnızca `workspace.read` taşıyan bir anahtarla
+ajan okur, kendi kabiliyetini doğrular ve harcama bildirir, ama bildiremez, gruplayamaz ve kalem açamaz.
 
 ## stdio kipi
 

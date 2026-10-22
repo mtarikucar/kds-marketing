@@ -335,3 +335,22 @@ async fn spend_pages_newest_first_by_keyset() {
         "workspace.read",
     );
 }
+
+#[test]
+fn spend_cursor_takes_both_halves_or_neither() {
+    let id = BudgetSpendId::new_v7();
+    assert_eq!(budget::spend_cursor(None, None).unwrap(), None);
+    assert_eq!(
+        budget::spend_cursor(Some("2026-10-22T09:00:00Z"), Some(id)).unwrap(),
+        Some((FIXED_NOW, id))
+    );
+    for (at, id, field) in [
+        (Some("2026-10-22T09:00:00Z"), None, "before_id"),
+        (None, Some(id), "before_at"),
+        (Some("yesterday"), Some(id), "before_at"),
+    ] {
+        let e = budget::spend_cursor(at, id).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Validation);
+        assert_eq!(e.details, json!({ "field": field }));
+    }
+}

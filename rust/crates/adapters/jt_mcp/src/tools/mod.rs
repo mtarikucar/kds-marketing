@@ -7,6 +7,8 @@
 
 mod agents;
 mod api_keys;
+mod budget;
+mod capabilities;
 mod ledger;
 mod roles;
 mod strategy;
@@ -41,6 +43,8 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         api_keys::definitions(),
         ledger::definitions(),
         strategy::definitions(),
+        capabilities::definitions(),
+        budget::definitions(),
     ]
     .into_iter()
     .flatten()
@@ -70,6 +74,11 @@ pub(crate) fn to_json<T: Serialize>(value: &T) -> Result<Value, AppError> {
 /// `{ key: items }`, for a tool whose output is a list.
 pub(crate) fn listed<T: Serialize>(key: &str, items: &[T]) -> Result<Value, AppError> {
     Ok(json!({ key: to_json(&items)? }))
+}
+
+/// The JSON Schema of an RFC 3339 time, or null.
+pub(crate) fn optional_date_time_schema(_: &mut schemars::SchemaGenerator) -> Schema {
+    schemars::json_schema!({ "type": ["string", "null"], "format": "date-time" })
 }
 
 /// The JSON Schema of a list of permission keys, naming every key there is.

@@ -7,6 +7,8 @@
 //!   human's authority over MCP.
 //! - `strategy.get`: after an approval, `GET /api/strategy` and `jeeta.strategy.get` answer the
 //!   same JSON, field for field.
+//! - `capability.list`: after declarations, `GET /api/capabilities` answers the very list
+//!   `jeeta.capability.list` answers under `capabilities`.
 
 use std::sync::Arc;
 
@@ -16,7 +18,8 @@ use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
-use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
+use jt_app::usecases::capabilities::UowChannelCatalog;
+use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_mcp::McpState;
 use jt_panel_http::AppState;
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
@@ -39,16 +42,18 @@ fn app(db: &TestDb, deps: &Deps) -> Router {
     jt_panel_http::router(panel).merge(jt_mcp::http_service(mcp))
 }
 
-/// The ports over `db`'s pool, with a plain-text hasher and secret box.
+/// The ports over `db`'s pool, the channel catalog over the capability registry as the binary
+/// builds it, with a plain-text hasher and secret box.
 fn deps(db: &TestDb) -> Deps {
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
     Deps {
-        uow: Arc::new(PgUnitOfWork::new(db.pool.clone())),
+        uow: uow.clone(),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(PlainHasher),
         seal: Arc::new(PlainSecretBox),
-        channels: Arc::new(NoChannelsYet),
+        channels: Arc::new(UowChannelCatalog::new(uow)),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(RecordingTenantHosts::new()),
     }
@@ -317,4 +322,117 @@ async fn strategy_get_answers_the_same_over_the_panel_and_mcp() {
     );
     assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
     assert!(human["approved"]["id"].is_string());
+}
+
+#[tokio::test]
+async fn capability_list_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+
+    // The owner declares a phone and a mailbox, groups the phone and links it to a cash item,
+    // so that every field of the answer is filled somewhere.
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    let post = |path: String, body: Value| {
+        send(&app, panel(Method::POST, &path, Some(&cookie), Some(body)))
+    };
+    let phone = ok(post(
+        "/api/capabilities".into(),
+        json!({
+            "kind_key": "phone",
+            "name": "Saha telefonu",
+            "policy": { "daily_ops_cap": 40, "requires_human_approval": true },
+        }),
+    )
+    .await)
+    .await;
+    let phone_id = phone["capability"]["id"].as_str().unwrap().to_owned();
+    ok(post(
+        "/api/capabilities".into(),
+        json!({
+            "kind_key": "mailbox",
+            "name": "Destek kutusu",
+            "external_id": "destek@alpha.example",
+            "connector_public": { "hosts": ["imap.alpha.example"] },
+        }),
+    )
+    .await)
+    .await;
+    let group = ok(post("/api/capability-groups".into(), json!({ "name": "Saha" })).await).await;
+    let group_id = group["group"]["id"].as_str().unwrap().to_owned();
+    ok(post(
+        format!("/api/capability-groups/{group_id}/members"),
+        json!({ "capability_id": phone_id }),
+    )
+    .await)
+    .await;
+    let item = ok(post(
+        "/api/budget/items".into(),
+        json!({
+            "name": "Nakit",
+            "kind": "cash",
+            "unit": { "kind": "currency", "value": "TRY" },
+            "cap": 100000,
+            "period": "monthly",
+        }),
+    )
+    .await)
+    .await;
+    ok(post(
+        format!("/api/capabilities/{phone_id}/budget-links"),
+        json!({ "budget_item_id": item["item"]["id"] }),
+    )
+    .await)
+    .await;
+
+    // The panel surface, then the MCP surface with a key the same owner issued.
+    let human = ok(send(
+        &app,
+        panel(Method::GET, "/api/capabilities", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.capability.list", json!({})).await;
+
+    assert_eq!(agent, json!({ "capabilities": human }));
+    assert_eq!(human.as_array().unwrap().len(), 2);
+    assert_eq!(human[0]["capability"]["id"], json!(phone_id));
+    assert_eq!(human[0]["capability"]["policy"]["daily_ops_cap"], 40);
+    assert_eq!(
+        human[0]["capability"]["budget_item_ids"],
+        json!([item["item"]["id"]])
+    );
+    assert_eq!(human[1]["capability"]["reach"], "connector");
+
+    // Filtered the same way on both gates, the answers still agree.
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/capabilities?group_id={group_id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.list",
+        json!({ "group_id": group_id }),
+    )
+    .await;
+    assert_eq!(agent, json!({ "capabilities": human }));
+    assert_eq!(human.as_array().unwrap().len(), 1);
 }

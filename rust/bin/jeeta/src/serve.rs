@@ -20,7 +20,8 @@ use axum::response::Response;
 use jt_app::error::ErrorCode;
 use jt_app::gate::StrategyGate;
 use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
-use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
+use jt_app::usecases::capabilities::UowChannelCatalog;
+use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
 use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
@@ -143,18 +144,21 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 /// entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The connectors
 /// M1b adds must share this same client, so that what the registry allows is what they reach;
 /// the tier lives in memory, so it starts empty at every start.
+///
+/// The channel kinds a strategy may name are read from the capability registry, through the same
+/// unit of work: a workspace has a channel kind while it has a capability of that kind that is
+/// not retired.
 pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
+    let uow = Arc::new(PgUnitOfWork::new(pool));
     Deps {
-        uow: Arc::new(PgUnitOfWork::new(pool)),
+        uow: uow.clone(),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
         seal: Arc::new(AesSecretBox::new(*secret_key.bytes())),
-        // Until the capability registry answers, no workspace has a channel kind: a strategy can
-        // only be approved on the `any` channel.
-        channels: Arc::new(NoChannelsYet),
+        channels: Arc::new(UowChannelCatalog::new(uow)),
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(egress)),
@@ -352,6 +356,7 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
+    use jt_app::usecases::strategy::NoChannelsYet;
     use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts};
     use serde_json::{Value, json};
     use tower::ServiceExt;
@@ -529,6 +534,84 @@ mod tests {
             let (status, _, _) = call(&public, mcp_initialize(host, &key)).await;
             assert_eq!(status, expected, "{host}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_served_ports_read_channels_from_the_capability_registry_and_guard_hosts() {
+        // The production ports over a test database; only the hasher is swapped for speed.
+        let db = jt_testkit::TestDb::new().await;
+        let config = test_config(&[]);
+        let mut deps = deps(db.pool.clone(), &config.secret_key);
+        deps.hasher = Arc::new(PlainHasher);
+        let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
+
+        let (status, cookie, me) = call(
+            &app,
+            panel_post(
+                "/api/auth/register",
+                None,
+                json!({
+                    "email": "owner@example.test",
+                    "password": "correct horse battery",
+                    "display_name": "Owner",
+                    "workspace_name": "Acme"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let ws = jt_testkit::panel::workspace_of(&me);
+        jt_testkit::flows::activate_workspace(&deps, ws).await;
+        let cookie = cookie.unwrap();
+        let session = cookie.split(';').next().unwrap();
+
+        // No capability, no channel kind; a declared phone is one.
+        assert!(deps.channels.kinds_in_use(ws).await.unwrap().is_empty());
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                "/api/capabilities",
+                Some(session),
+                json!({ "kind_key": "phone", "name": "Saha telefonu" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let kinds: Vec<String> = deps
+            .channels
+            .kinds_in_use(ws)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(kinds, ["phone"]);
+
+        // The tenant hosts go through the egress guard: a loopback host is refused, a public one
+        // accepted.
+        let mailbox = |host: &str| {
+            json!({
+                "kind_key": "mailbox",
+                "name": "Destek",
+                "connector_public": { "hosts": [host] },
+            })
+        };
+        let (status, _, body) = call(
+            &app,
+            panel_post("/api/capabilities", Some(session), mailbox("127.0.0.1")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["message"], "host is not public");
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                "/api/capabilities",
+                Some(session),
+                mailbox("imap.example.com"),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
     }
 
     #[tokio::test]

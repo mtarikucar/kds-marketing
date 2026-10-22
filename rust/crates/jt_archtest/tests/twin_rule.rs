@@ -11,35 +11,8 @@ const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
 /// Catalog panel routes not served yet: a use case may enter the catalog before its route, while
 /// a plan lands it in steps. Each entry must still be unserved, so serving one fails this test
-/// until it is dropped from here. Now the capability, group and budget routes, whose use cases
-/// landed before their routes.
-const NOT_YET_SERVED: &[(&str, &str)] = &[
-    ("GET", "/api/capabilities"),
-    ("GET", "/api/capabilities/{capability_id}"),
-    ("POST", "/api/capabilities"),
-    ("POST", "/api/capabilities/{capability_id}/verify"),
-    ("POST", "/api/capabilities/{capability_id}/unreachable"),
-    ("PUT", "/api/capabilities/{capability_id}/policy"),
-    ("POST", "/api/capabilities/{capability_id}/retire"),
-    ("POST", "/api/capabilities/{capability_id}/budget-links"),
-    (
-        "DELETE",
-        "/api/capabilities/{capability_id}/budget-links/{budget_item_id}",
-    ),
-    ("GET", "/api/capability-groups"),
-    ("POST", "/api/capability-groups"),
-    ("PATCH", "/api/capability-groups/{group_id}"),
-    ("DELETE", "/api/capability-groups/{group_id}"),
-    ("POST", "/api/capability-groups/{group_id}/members"),
-    (
-        "DELETE",
-        "/api/capability-groups/{group_id}/members/{capability_id}",
-    ),
-    ("GET", "/api/budget/items"),
-    ("POST", "/api/budget/items"),
-    ("POST", "/api/budget/items/{budget_item_id}/spend"),
-    ("GET", "/api/budget/items/{budget_item_id}/spend"),
-];
+/// until it is dropped from here. Empty: every catalog route is served.
+const NOT_YET_SERVED: &[(&str, &str)] = &[];
 
 #[test]
 fn panel_routes_table_matches_catalog() {

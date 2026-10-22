@@ -10,6 +10,9 @@
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
+pub mod budget;
+pub mod capabilities;
+pub mod groups;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
@@ -61,6 +64,31 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/strategy/archive"),
     ("GET", "/api/strategy/versions"),
     ("GET", "/api/strategy/versions/{version_id}/consultation"),
+    ("GET", "/api/capabilities"),
+    ("GET", "/api/capabilities/{capability_id}"),
+    ("POST", "/api/capabilities"),
+    ("POST", "/api/capabilities/{capability_id}/verify"),
+    ("POST", "/api/capabilities/{capability_id}/unreachable"),
+    ("PUT", "/api/capabilities/{capability_id}/policy"),
+    ("POST", "/api/capabilities/{capability_id}/retire"),
+    ("POST", "/api/capabilities/{capability_id}/budget-links"),
+    (
+        "DELETE",
+        "/api/capabilities/{capability_id}/budget-links/{budget_item_id}",
+    ),
+    ("GET", "/api/capability-groups"),
+    ("POST", "/api/capability-groups"),
+    ("PATCH", "/api/capability-groups/{group_id}"),
+    ("DELETE", "/api/capability-groups/{group_id}"),
+    ("POST", "/api/capability-groups/{group_id}/members"),
+    (
+        "DELETE",
+        "/api/capability-groups/{group_id}/members/{capability_id}",
+    ),
+    ("GET", "/api/budget/items"),
+    ("POST", "/api/budget/items"),
+    ("POST", "/api/budget/items/{budget_item_id}/spend"),
+    ("GET", "/api/budget/items/{budget_item_id}/spend"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
     ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
@@ -230,6 +258,120 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/strategy/versions/{version_id}/consultation",
             "strategy.consultation",
             strategy::consultation,
+        ),
+        api_route(
+            "GET",
+            "/capabilities",
+            "capability.list",
+            capabilities::list,
+        ),
+        api_route(
+            "GET",
+            "/capabilities/{capability_id}",
+            "capability.get",
+            capabilities::get,
+        ),
+        api_route(
+            "POST",
+            "/capabilities",
+            "capability.declare",
+            capabilities::declare,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/verify",
+            "capability.verify",
+            capabilities::verify,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/unreachable",
+            "capability.mark_unreachable",
+            capabilities::mark_unreachable,
+        ),
+        api_route(
+            "PUT",
+            "/capabilities/{capability_id}/policy",
+            "capability.set_policy",
+            capabilities::set_policy,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/retire",
+            "capability.retire",
+            capabilities::retire,
+        ),
+        api_route(
+            "POST",
+            "/capabilities/{capability_id}/budget-links",
+            "capability.link_budget",
+            capabilities::link_budget,
+        ),
+        api_route(
+            "DELETE",
+            "/capabilities/{capability_id}/budget-links/{budget_item_id}",
+            "capability.unlink_budget",
+            capabilities::unlink_budget,
+        ),
+        api_route(
+            "GET",
+            "/capability-groups",
+            "capability.groups.list",
+            groups::list,
+        ),
+        api_route(
+            "POST",
+            "/capability-groups",
+            "capability.groups.create",
+            groups::create,
+        ),
+        api_route(
+            "PATCH",
+            "/capability-groups/{group_id}",
+            "capability.groups.rename",
+            groups::rename,
+        ),
+        api_route(
+            "DELETE",
+            "/capability-groups/{group_id}",
+            "capability.groups.delete",
+            groups::delete,
+        ),
+        api_route(
+            "POST",
+            "/capability-groups/{group_id}/members",
+            "capability.groups.add_member",
+            groups::add_member,
+        ),
+        api_route(
+            "DELETE",
+            "/capability-groups/{group_id}/members/{capability_id}",
+            "capability.groups.remove_member",
+            groups::remove_member,
+        ),
+        api_route(
+            "GET",
+            "/budget/items",
+            "budget.items.list",
+            budget::list_items,
+        ),
+        api_route(
+            "POST",
+            "/budget/items",
+            "budget.items.create",
+            budget::create_item,
+        ),
+        api_route(
+            "POST",
+            "/budget/items/{budget_item_id}/spend",
+            "budget.spend.record",
+            budget::record_spend,
+        ),
+        api_route(
+            "GET",
+            "/budget/items/{budget_item_id}/spend",
+            "budget.spend.list",
+            budget::spend,
         ),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(

@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 
-use super::Deps;
 use super::capabilities::{append, capability_error, version_in_force};
+use super::{Deps, keyset_cursor};
 use crate::ctx::Ctx;
 use crate::error::AppError;
 use crate::ports::TenantRepos;
@@ -252,6 +252,17 @@ pub async fn spend(
         return Err(AppError::not_found(NO_SUCH_BUDGET_ITEM));
     }
     repos.budget().list_spend(item, limit, before).await
+}
+
+/// The `before` cursor of [`spend`] from the two halves a caller sends: `before_at`, an RFC 3339
+/// time as a spend's `at` reads, and `before_id`, that spend's id. Both or neither, else
+/// `VALIDATION` naming the missing one; a `before_at` that does not parse is `VALIDATION` naming
+/// it. The panel and the MCP tool read their parameters through it alike.
+pub fn spend_cursor(
+    before_at: Option<&str>,
+    before_id: Option<BudgetSpendId>,
+) -> Result<Option<(OffsetDateTime, BudgetSpendId)>, AppError> {
+    keyset_cursor(before_at, before_id)
 }
 
 /// What `unit` counts, in words, for a message.

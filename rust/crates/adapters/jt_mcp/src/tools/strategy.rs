@@ -216,7 +216,7 @@ struct ConsultationArgs {
     limit: Option<u32>,
     /// The at of the previous page's last entry; given together with before_id.
     #[serde(default)]
-    #[schemars(schema_with = "optional_date_time_schema")]
+    #[schemars(schema_with = "super::optional_date_time_schema")]
     before_at: Option<String>,
     /// The id of the previous page's last entry; given together with before_at.
     before_id: Option<Uuid>,
@@ -232,11 +232,6 @@ fn optional_section_key_schema(_: &mut SchemaGenerator) -> Schema {
     let mut keys: Vec<Value> = Sections::KEYS.iter().map(|k| json!(k)).collect();
     keys.push(Value::Null);
     json_schema!({ "type": ["string", "null"], "enum": keys })
-}
-
-/// The JSON Schema of an RFC 3339 time, or null.
-fn optional_date_time_schema(_: &mut SchemaGenerator) -> Schema {
-    json_schema!({ "type": ["string", "null"], "format": "date-time" })
 }
 
 /// The JSON Schema of a list of hypotheses as written.

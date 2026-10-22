@@ -34,15 +34,31 @@ const TOOLS: &[&str] = &[
     "jeeta.strategy.archive",
     "jeeta.strategy.list_versions",
     "jeeta.strategy.consultation",
+    "jeeta.capability.list",
+    "jeeta.capability.get",
+    "jeeta.capability.declare",
+    "jeeta.capability.verify",
+    "jeeta.capability.mark_unreachable",
+    "jeeta.capability.set_policy",
+    "jeeta.capability.retire",
+    "jeeta.capability.link_budget",
+    "jeeta.capability.unlink_budget",
+    "jeeta.capability.groups_list",
+    "jeeta.capability.groups_create",
+    "jeeta.capability.groups_rename",
+    "jeeta.capability.groups_delete",
+    "jeeta.capability.groups_add_member",
+    "jeeta.capability.groups_remove_member",
+    "jeeta.budget.items_list",
+    "jeeta.budget.items_create",
+    "jeeta.budget.spend_record",
+    "jeeta.budget.spend_list",
 ];
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
-    let catalog: BTreeSet<&str> = CATALOG
-        .iter()
-        .filter_map(|uc| uc.mcp_tool)
-        .filter(|tool| !NOT_YET_DEFINED.contains(tool))
-        .collect();
+    assert!(NOT_YET_DEFINED.is_empty(), "{NOT_YET_DEFINED:?}");
+    let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
     let registered: BTreeSet<&str> = registry().iter().map(|t| t.name).collect();
     assert_eq!(registered, catalog);
     assert_eq!(registered, TOOLS.iter().copied().collect());
@@ -170,4 +186,96 @@ fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
     let schema = archive.input_schema.to_value();
     assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
     assert_eq!(schema["required"], serde_json::json!(["version_id"]));
+}
+
+#[test]
+fn capability_tools_need_the_permissions_their_use_cases_check() {
+    let specs: Vec<ToolSpec> = registry()
+        .into_iter()
+        .filter(|s| s.use_case.starts_with("capability.") || s.use_case.starts_with("budget."))
+        .collect();
+    assert_eq!(specs.len(), 19);
+    for spec in &specs {
+        let expected = match spec.name {
+            // Reading, and what an agent reports about its own hands and spend: the use cases
+            // decide per actor (a person verifies only with capabilities.manage).
+            "jeeta.capability.list"
+            | "jeeta.capability.get"
+            | "jeeta.capability.verify"
+            | "jeeta.capability.groups_list"
+            | "jeeta.budget.items_list"
+            | "jeeta.budget.spend_record"
+            | "jeeta.budget.spend_list" => Permission::WorkspaceRead,
+            "jeeta.budget.items_create" => Permission::BudgetManage,
+            _ => Permission::CapabilitiesManage,
+        };
+        assert_eq!(spec.permission, expected, "{}", spec.name);
+    }
+    let destructive: BTreeSet<&str> = specs
+        .iter()
+        .filter(|s| s.risk == Risk::Destructive)
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(
+        destructive,
+        BTreeSet::from(["jeeta.capability.retire", "jeeta.capability.groups_delete"])
+    );
+
+    let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
+    let declare = find("jeeta.capability.declare");
+    for group in jt_capability::KindGroup::all() {
+        assert!(
+            declare.description.contains(group.key()),
+            "the declare description names the kind group {}",
+            group.key()
+        );
+    }
+    assert!(
+        declare
+            .description
+            .contains("key_detail only for third_party.other"),
+        "{}",
+        declare.description
+    );
+    let schema = declare.input_schema.clone().to_value();
+    let kinds = schema["properties"]["kind_key"]["enum"].as_array().unwrap();
+    assert_eq!(kinds.len(), jt_capability::KINDS.len());
+    assert_eq!(required(&schema), BTreeSet::from(["kind_key", "name"]));
+
+    let verify = find("jeeta.capability.verify");
+    assert!(
+        verify.description.contains(
+            "for your own agent/device capabilities; connectors are verified by their probe"
+        ),
+        "{}",
+        verify.description
+    );
+    let schema = verify.input_schema.clone().to_value();
+    assert_eq!(
+        required(&schema["properties"]["evidence"]),
+        BTreeSet::from(["text"])
+    );
+    let retire = find("jeeta.capability.retire")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(retire["properties"]["confirm"]["type"], "boolean");
+    let create = find("jeeta.budget.items_create")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(
+        required(&create),
+        BTreeSet::from(["name", "kind", "unit", "cap", "period"])
+    );
+}
+
+/// The `required` property names of an object schema.
+fn required(schema: &Value) -> BTreeSet<&str> {
+    schema["required"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no required list in {schema}"))
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect()
 }

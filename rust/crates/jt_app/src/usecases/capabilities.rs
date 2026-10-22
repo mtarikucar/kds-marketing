@@ -615,6 +615,13 @@ pub struct UowChannelCatalog {
     pub uow: Arc<dyn UnitOfWork>,
 }
 
+impl UowChannelCatalog {
+    /// The catalog over `uow`.
+    pub fn new(uow: Arc<dyn UnitOfWork>) -> UowChannelCatalog {
+        UowChannelCatalog { uow }
+    }
+}
+
 #[async_trait]
 impl ChannelCatalog for UowChannelCatalog {
     async fn kinds_in_use(&self, ws: WorkspaceId) -> Result<BTreeSet<String>, AppError> {

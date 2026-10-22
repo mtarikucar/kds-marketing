@@ -15,7 +15,8 @@ use axum::response::Response;
 use jt_app::ports::PasswordHasher;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
-use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
+use jt_app::usecases::capabilities::UowChannelCatalog;
+use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_panel_http::{AppState, router};
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_tenancy::WorkspaceId;
@@ -32,9 +33,9 @@ pub const PASSWORD: &str = "correct horse battery";
 pub const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
 
 /// The panel router over a fresh test database, and the ports behind it: the real Postgres unit
-/// of work, clock, ids, tokens and strategy gate (as the binary serves them), with a plain-text
-/// hasher and secret box unless asked otherwise. No strategy is approved anywhere until a test
-/// approves one.
+/// of work, clock, ids, tokens, channel catalog and strategy gate (as the binary serves them),
+/// with a plain-text hasher (unless asked otherwise), a plain-text secret box and a tenant host
+/// registry that records. No strategy is approved anywhere until a test approves one.
 pub struct Panel {
     pub app: Router,
     pub deps: Deps,
@@ -58,14 +59,15 @@ impl Panel {
     ) -> Panel {
         let db = TestDb::new().await;
         let uow = PgUnitOfWork::new(db.pool.clone());
+        let shared: Arc<PgUnitOfWork> = Arc::new(uow.clone());
         let deps = Deps {
-            uow: Arc::new(uow.clone()),
+            uow: shared.clone(),
             clock: Arc::new(SystemClock),
             ids: Arc::new(UuidV7Gen),
             tokens: Arc::new(RandTokenGen),
             hasher,
             seal: Arc::new(PlainSecretBox),
-            channels: Arc::new(NoChannelsYet),
+            channels: Arc::new(UowChannelCatalog::new(shared)),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
         };
