@@ -36,6 +36,9 @@ pub const STDIO_API_KEY: &str = "JEETA_STDIO_API_KEY";
 pub const LOG: &str = "JEETA_LOG";
 /// `compact` (default) or `json`.
 pub const LOG_FORMAT: &str = "JEETA_LOG_FORMAT";
+/// Whether the database role may be a superuser or have `BYPASSRLS` (default `false`; local
+/// development only).
+pub const ALLOW_SUPERUSER: &str = "JEETA_ALLOW_SUPERUSER";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
@@ -50,6 +53,7 @@ const VARS: &[&str] = &[
     STDIO_API_KEY,
     LOG,
     LOG_FORMAT,
+    ALLOW_SUPERUSER,
 ];
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -148,6 +152,9 @@ pub struct Config {
     pub stdio_api_key: Option<String>,
     pub log_filter: String,
     pub log_format: LogFormat,
+    /// Start even when the database role bypasses row-level security (a superuser or
+    /// `BYPASSRLS`), with a warning; for local development only.
+    pub allow_superuser: bool,
 }
 
 impl fmt::Debug for Config {
@@ -163,6 +170,7 @@ impl fmt::Debug for Config {
             .field("stdio_api_key", &self.stdio_api_key.as_ref().map(|_| "***"))
             .field("log_filter", &self.log_filter)
             .field("log_format", &self.log_format)
+            .field("allow_superuser", &self.allow_superuser)
             .finish()
     }
 }
@@ -223,12 +231,8 @@ impl Config {
 
         let panel_dir = get(PANEL_DIR).map(|dir| PathBuf::from(dir.trim()));
 
-        let cookie_secure = match get(COOKIE_SECURE).map(str::trim) {
-            None => true,
-            Some(v) if v.eq_ignore_ascii_case("true") => true,
-            Some(v) if v.eq_ignore_ascii_case("false") => false,
-            Some(_) => return Err(ConfigError::new(COOKIE_SECURE, "must be true or false")),
-        };
+        let cookie_secure = parse_bool(COOKIE_SECURE, get(COOKIE_SECURE), true)?;
+        let allow_superuser = parse_bool(ALLOW_SUPERUSER, get(ALLOW_SUPERUSER), false)?;
 
         let allowed_hosts = parse_allowed_hosts(get(ALLOWED_HOSTS))?;
         if !bind.ip().is_loopback() && allowed_hosts.is_empty() {
@@ -286,7 +290,18 @@ impl Config {
             stdio_api_key,
             log_filter,
             log_format,
+            allow_superuser,
         })
+    }
+}
+
+/// `true` or `false` in any case, `default` when unset.
+fn parse_bool(var: &'static str, raw: Option<&str>, default: bool) -> Result<bool, ConfigError> {
+    match raw.map(str::trim) {
+        None => Ok(default),
+        Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
+        Some(v) if v.eq_ignore_ascii_case("false") => Ok(false),
+        Some(_) => Err(ConfigError::new(var, "must be true or false")),
     }
 }
 
@@ -419,6 +434,7 @@ mod tests {
         assert_eq!(config.log_filter, DEFAULT_LOG);
         assert_eq!(config.log_filter, "info,rmcp=warn");
         assert_eq!(config.log_format, LogFormat::Compact);
+        assert!(!config.allow_superuser, "off unless asked for");
     }
 
     #[test]
@@ -430,8 +446,10 @@ mod tests {
             (STDIO_API_KEY, " jt_live_abc "),
             (LOG, "jeeta=debug,info"),
             (LOG_FORMAT, "json"),
+            (ALLOW_SUPERUSER, "TRUE"),
         ]))
         .unwrap();
+        assert!(config.allow_superuser);
         assert_eq!(config.bind, "127.0.0.1:9090".parse::<SocketAddr>().unwrap());
         assert_eq!(config.panel_dir, Some(PathBuf::from("panel/dist")));
         assert!(!config.cookie_secure);
@@ -449,6 +467,7 @@ mod tests {
             (STDIO_API_KEY, ""),
             (LOG, ""),
             (LOG_FORMAT, ""),
+            (ALLOW_SUPERUSER, ""),
         ]))
         .unwrap();
         assert_eq!(blank, Config::from_map(&with(&[])).unwrap());
@@ -457,6 +476,7 @@ mod tests {
             (BIND, "localhost"),
             (BIND, "127.0.0.1"),
             (COOKIE_SECURE, "yes"),
+            (ALLOW_SUPERUSER, "1"),
             (LOG_FORMAT, "pretty"),
             (LOG, "jeeta=loud"),
         ] {

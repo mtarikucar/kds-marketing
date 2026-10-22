@@ -27,7 +27,8 @@ hatası tek, okunur bir satır yazdırır (`jeeta: JEETA_SECRET_KEY: must be 64 
 ## Yerelde çalıştırma
 
 1. Veritabanı ve uygulama rolü. Rol **süper kullanıcı olmamalı** ve `BYPASSRLS` taşımamalıdır (bkz.
-   [Satır düzeyi güvenlik](#satır-düzeyi-güvenlik-rls-ve-veritabanı-rolleri)). Yönetici olarak:
+   [Satır düzeyi güvenlik](#satır-düzeyi-güvenlik-rls-ve-veritabanı-rolleri)); öyleyse `jeeta` açılmayı
+   reddeder. Yönetici olarak:
 
    ```sh
    psql postgres://postgres@localhost:5432/postgres <<'SQL'
@@ -56,7 +57,8 @@ hatası tek, okunur bir satır yazdırır (`jeeta: JEETA_SECRET_KEY: must be 64 
    ```
 
    İkili önce `rust/.env`'i, yoksa çalışılan dizindeki `.env`'i okur; ortamda zaten tanımlı değişkenler
-   dosyadakileri ezer. Açılışta sırasıyla: veritabanına bağlanır, bekleyen göçleri uygular
+   dosyadakileri ezer. Açılışta sırasıyla: veritabanına bağlanır, rolün RLS'i atlamadığını denetler,
+   bekleyen göçleri uygular
    (`migrations are up to date applied=1 total=1`), yapılandırılmışsa ilk platform operatörünü açar,
    sonra dinlemeye başlar:
 
@@ -88,6 +90,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_STDIO_API_KEY` | — | `jeeta mcp-stdio` kipinin kullandığı API anahtarı (`jt_live_…`) |
 | `JEETA_LOG` | `info,rmcp=warn` | `tracing` süzgeci, ör. `info,rmcp=warn,jeeta=debug`. Kendi süzgecinizde `rmcp=warn`'u koruyun: rmcp her yeni MCP oturum kimliğini (`Mcp-Session-Id`) `info` düzeyinde yazar |
 | `JEETA_LOG_FORMAT` | `compact` | `compact` ya da `json`. Günlükler stderr'e yazılır |
+| `JEETA_ALLOW_SUPERUSER` | `false` | `true` ise veritabanı rolü süper kullanıcı ya da `BYPASSRLS` olsa da açılır ve bir `WARN` satırı yazar (çalışma alanı yalıtımı uygulanmaz). **Yalnızca yerel geliştirme için**; üretimde asla |
 
 Erişim günlüğü her istek için yalnızca yöntemi, rota şablonunu (`/api/team/{membership_id}`), durumu ve
 süreyi yazar; ham yol ve sorgu dizesi hiç yazılmaz. Rotası olmayan istekler (panel sayfaları ve dosyaları,
@@ -233,6 +236,17 @@ PostgreSQL, `FORCE` olsa bile süper kullanıcılara ve `BYPASSRLS` rollerine RL
 uygulama, `JEETA_DATABASE_URL` içinde süper kullanıcı olmayan ve `BYPASSRLS` taşımayan sıradan bir rolle
 bağlanmalıdır**; aksi halde çalışma alanları arasındaki yalıtım sessizce ortadan kalkar. Tabloların sahibi
 bu rol olabilir (`FORCE` sahibi de bağlar).
+
+Bu yüzden `jeeta serve` ve `jeeta mcp-stdio`, bağlandıktan hemen sonra ve göçlerden önce
+`select rolsuper or rolbypassrls from pg_roles where rolname = current_user` sorar; sonuç doğruysa rolü
+adıyla söyleyen tek satırı yazdırıp `1` koduyla çıkar:
+
+```text
+jeeta: the database role `postgres` in JEETA_DATABASE_URL is a superuser or has BYPASSRLS, so row-level security would not isolate workspaces; connect as an ordinary role (NOSUPERUSER NOBYPASSRLS, see rust/README.md), or set JEETA_ALLOW_SUPERUSER=true for local development only
+```
+
+`JEETA_ALLOW_SUPERUSER=true` bu denetimi yalnızca yerel geliştirme için geçer ve her açılışta yalıtımın
+uygulanmadığını söyleyen bir `WARN` satırı yazar.
 
 Hedef düzen iki roldür: şemanın sahibi olan ve göçleri uygulayan bir **göç rolü**, ve yalnızca veri
 işlemleri (`select`/`insert`/`update`/`delete`) yetkisi olan ayrı bir **çalışma rolü**. M0'da `jeeta serve`

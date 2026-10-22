@@ -1,9 +1,10 @@
 //! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz` and the MCP endpoint
 //! at `/mcp`, on one listener.
 //!
-//! Start order: connect to the database, apply pending migrations, create the first platform
-//! operator when configured, build the shared ports once, then serve until SIGINT or SIGTERM and
-//! drain open connections for at most [`DRAIN_TIMEOUT`].
+//! Start order: connect to the database, refuse a role that row-level security does not bind
+//! ([`check_database_role`]), apply pending migrations, create the first platform operator when
+//! configured, build the shared ports once, then serve until SIGINT or SIGTERM and drain open
+//! connections for at most [`DRAIN_TIMEOUT`].
 
 use std::future::IntoFuture;
 use std::path::Path;
@@ -41,6 +42,7 @@ const PLATFORM_LOGIN: &str = "/api/platform/login";
 /// Runs the server until a shutdown signal; any error before it listens stops the start.
 pub async fn run(config: Config) -> Result<()> {
     let pool = connect(&config).await?;
+    check_database_role(&pool, config.allow_superuser).await?;
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
@@ -82,6 +84,33 @@ pub(crate) async fn connect(config: &Config) -> Result<PgPool> {
         .with_context(context)?
         .options([("client_min_messages", "warning")]);
     jt_pg::connect_with(options).await.with_context(context)
+}
+
+/// Refuses to go on when the database role is a superuser or has `BYPASSRLS`: Postgres applies no
+/// row-level security to it, so workspaces would not be isolated. With `allow` (the
+/// [`config::ALLOW_SUPERUSER`] override, for local development only) it goes on and warns.
+pub(crate) async fn check_database_role(pool: &PgPool, allow: bool) -> Result<()> {
+    let context = || "cannot read the database role's attributes";
+    if !jt_pg::role_bypasses_rls(pool).await.with_context(context)? {
+        return Ok(());
+    }
+    let role = jt_pg::current_role(pool).await.with_context(context)?;
+    if allow {
+        tracing::warn!(
+            role,
+            "{}=true: the database role is a superuser or has BYPASSRLS, so tenant isolation is \
+             not enforced; for local development only",
+            config::ALLOW_SUPERUSER
+        );
+        return Ok(());
+    }
+    bail!(
+        "the database role `{role}` in {} is a superuser or has BYPASSRLS, so row-level security \
+         would not isolate workspaces; connect as an ordinary role (NOSUPERUSER NOBYPASSRLS, see \
+         rust/README.md), or set {}=true for local development only",
+        config::DATABASE_URL,
+        config::ALLOW_SUPERUSER
+    )
 }
 
 /// Applies every pending migration; returns how many it applied and how many are applied now.
@@ -460,6 +489,26 @@ mod tests {
             let (status, _, _) = call(&public, mcp_initialize(host, &key)).await;
             assert_eq!(status, expected, "{host}");
         }
+    }
+
+    #[tokio::test]
+    async fn boot_refuses_a_role_that_bypasses_rls_unless_allowed() {
+        // A test database's own role is an ordinary one.
+        let db = jt_testkit::TestDb::new().await;
+        check_database_role(&db.pool, false).await.unwrap();
+
+        // The administrator connection the tests use is a superuser.
+        let url = std::env::var(jt_testkit::db::TEST_DATABASE_URL_VAR).unwrap();
+        let admin = jt_pg::connect(&url).await.unwrap();
+        let role = jt_pg::current_role(&admin).await.unwrap();
+        let refused = check_database_role(&admin, false).await.unwrap_err();
+        let message = format!("{refused:#}");
+        assert!(message.contains(&format!("`{role}`")), "{message}");
+        assert!(message.contains(config::ALLOW_SUPERUSER), "{message}");
+        assert!(!message.contains(&url), "the URL never shows: {message}");
+        // The development override lets it start.
+        check_database_role(&admin, true).await.unwrap();
+        admin.close().await;
     }
 
     #[test]
