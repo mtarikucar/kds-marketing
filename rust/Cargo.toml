@@ -5,6 +5,7 @@ members = [
     "crates/domain/jt_ledger",
     "crates/domain/jt_strategy",
     "crates/domain/jt_capability",
+    "crates/domain/jt_connector",
     "crates/jt_app",
     "crates/adapters/jt_pg",
     "crates/adapters/jt_panel_http",
@@ -28,6 +29,7 @@ jt_tenancy = { path = "crates/domain/jt_tenancy" }
 jt_ledger = { path = "crates/domain/jt_ledger" }
 jt_strategy = { path = "crates/domain/jt_strategy" }
 jt_capability = { path = "crates/domain/jt_capability" }
+jt_connector = { path = "crates/domain/jt_connector" }
 jt_app = { path = "crates/jt_app" }
 jt_pg = { path = "crates/adapters/jt_pg" }
 jt_panel_http = { path = "crates/adapters/jt_panel_http" }
@@ -63,6 +65,9 @@ argon2 = "0.6"
 # keeps its pseudorandom key in (`jt_seal`).
 sha2 = { version = "0.11", features = ["zeroize"] }
 hex = "0.4"
+# HMAC-SHA256 for webhook signatures and the signed OAuth state (`jt_connector`); the release
+# hkdf 0.13 already uses. `zeroize`: the keyed state wipes itself when dropped.
+hmac = { version = "0.13", features = ["zeroize"] }
 rand = "0.10"
 base64 = "0.23"
 subtle = "2"
