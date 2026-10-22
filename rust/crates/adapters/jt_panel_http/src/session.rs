@@ -4,17 +4,16 @@
 //! `SameSite=Strict`, `Path=/`, lives as long as the session, and is `Secure` when
 //! [`AppState::cookie_secure`] is set.
 
-use axum::extract::{FromRequestParts, MatchedPath};
+use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, Method, header};
-use jt_app::catalog::{CATALOG, UseCase};
+use axum::http::{HeaderMap, HeaderValue, header};
 use jt_app::ctx::Ctx;
 use jt_app::error::AppError;
-use jt_app::gate::{StrategyGate, check_gate};
+use jt_app::gate::check_gate;
 use jt_app::usecases::auth::{self, Principal, SESSION_LIFETIME};
-use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 
 use crate::error::ApiError;
+use crate::routes::RouteUseCase;
 use crate::state::AppState;
 
 /// The name of the panel session cookie.
@@ -99,9 +98,9 @@ impl FromRequestParts<AppState> for Authed {
 /// The context of a call in the signed-in user's current workspace, admitted by the gate.
 ///
 /// `401` without a valid session; `409 CONFLICT` ("no current workspace") when the session has
-/// none. The route's use case is looked up in [`CATALOG`] by method and path and must pass
-/// [`check_gate`] (with the workspace's status and [`AppState::gate`]); a route missing from the
-/// catalog is refused as `INTERNAL`.
+/// none. The route's use case, resolved from the catalog when the router was built and attached
+/// to the request as a [`RouteUseCase`], must pass [`check_gate`] with the workspace's status
+/// and [`AppState::gate`]. The request method plays no part, so `HEAD` passes exactly as `GET`.
 #[derive(Clone, Debug)]
 pub struct WorkspaceCtx(pub Ctx);
 
@@ -117,50 +116,21 @@ impl FromRequestParts<AppState> for WorkspaceCtx {
             .map(|m| (m.workspace_id, m.workspace_status))
             .ok_or_else(|| AppError::conflict("no current workspace"))?;
         let ctx = auth::ctx_for(&principal, ws, state.deps.clock.now())?;
-        let path = parts
+        // Every API route carries its use case; only a misuse of this extractor outside the API
+        // could miss it.
+        let RouteUseCase(use_case) = parts
             .extensions
-            .get::<MatchedPath>()
-            .map(MatchedPath::as_str);
-        gate_route(
-            CATALOG,
-            &parts.method,
-            path,
-            status,
-            state.gate.as_ref(),
-            ws,
-        )
-        .await?;
+            .get::<RouteUseCase>()
+            .copied()
+            .ok_or_else(|| AppError::internal("WorkspaceCtx used on a route without a use case"))?;
+        check_gate(&use_case, status, state.gate.as_ref(), ws).await?;
         Ok(WorkspaceCtx(ctx))
     }
 }
 
-/// Runs [`check_gate`] for the use case whose panel route is `method path` in `catalog`.
-async fn gate_route(
-    catalog: &[UseCase],
-    method: &Method,
-    path: Option<&str>,
-    status: WorkspaceStatus,
-    gate: &dyn StrategyGate,
-    ws: WorkspaceId,
-) -> Result<(), AppError> {
-    let route = path.unwrap_or("<unmatched>");
-    let use_case = catalog
-        .iter()
-        .find(|uc| uc.panel_route == Some((method.as_str(), route)))
-        .ok_or_else(|| {
-            AppError::internal(format!(
-                "route {method} {route} has no use case in the catalog"
-            ))
-        })?;
-    check_gate(use_case, status, gate, ws).await
-}
-
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use jt_app::catalog::{GateMode, Risk};
     use jt_app::error::ErrorCode;
-    use jt_app::gate::NoStrategyYet;
 
     use super::*;
 
@@ -202,96 +172,5 @@ mod tests {
         let mut empty = HeaderMap::new();
         empty.insert(header::COOKIE, HeaderValue::from_static("jt_session="));
         assert_eq!(read_cookie(&empty, SESSION_COOKIE), None);
-    }
-
-    /// A gate under which every workspace has an approved strategy.
-    struct Approved;
-
-    #[async_trait]
-    impl StrategyGate for Approved {
-        async fn has_approved_strategy(&self, _ws: WorkspaceId) -> Result<bool, AppError> {
-            Ok(true)
-        }
-    }
-
-    const GATED: UseCase = UseCase {
-        id: "demo.run",
-        gate: GateMode::Gated,
-        mcp_tool: Some("jeeta.demo.run"),
-        panel_route: Some(("POST", "/api/demo")),
-        panel_only: false,
-        risk: Risk::Write,
-    };
-    const EXEMPT: UseCase = UseCase {
-        id: "demo.read",
-        gate: GateMode::Exempt,
-        mcp_tool: Some("jeeta.demo.read"),
-        panel_route: Some(("GET", "/api/demo")),
-        panel_only: false,
-        risk: Risk::Read,
-    };
-
-    #[tokio::test]
-    async fn routes_pass_the_gate_of_their_use_case() {
-        let catalog = [GATED, EXEMPT];
-        let ws = WorkspaceId::new_v7();
-        let code = |r: Result<(), AppError>| r.unwrap_err().code;
-        let post = Method::POST;
-        let get = Method::GET;
-        let path = Some("/api/demo");
-
-        let r = gate_route(
-            &catalog,
-            &post,
-            path,
-            WorkspaceStatus::Active,
-            &NoStrategyYet,
-            ws,
-        );
-        assert_eq!(code(r.await), ErrorCode::StrategyRequired);
-        let r = gate_route(
-            &catalog,
-            &post,
-            path,
-            WorkspaceStatus::PendingPayment,
-            &Approved,
-            ws,
-        );
-        assert_eq!(code(r.await), ErrorCode::WorkspaceInactive);
-        let r = gate_route(
-            &catalog,
-            &post,
-            path,
-            WorkspaceStatus::Active,
-            &Approved,
-            ws,
-        );
-        assert!(r.await.is_ok());
-        let r = gate_route(
-            &catalog,
-            &get,
-            path,
-            WorkspaceStatus::PendingPayment,
-            &NoStrategyYet,
-            ws,
-        );
-        assert!(r.await.is_ok(), "exempt use cases skip the gate");
-
-        // A route the catalog does not know fails closed.
-        for (method, path) in [
-            (&Method::DELETE, path),
-            (&get, Some("/api/other")),
-            (&get, None),
-        ] {
-            let r = gate_route(
-                &catalog,
-                method,
-                path,
-                WorkspaceStatus::Active,
-                &Approved,
-                ws,
-            );
-            assert_eq!(code(r.await), ErrorCode::Internal);
-        }
     }
 }

@@ -32,7 +32,7 @@ jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }
 
 # Third-party crates
-tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "signal", "sync"] }
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }

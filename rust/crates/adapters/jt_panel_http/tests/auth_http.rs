@@ -606,6 +606,37 @@ async fn workspace_routes_need_a_current_workspace() {
 }
 
 #[tokio::test]
+async fn head_on_workspace_route_passes_the_gate() {
+    let p = Panel::new().await;
+    let (cookie, _) = p.register("owner@alpha.example", "Alpha").await;
+
+    // HEAD is answered by the GET handler and passes the same gate, with an empty body.
+    for path in ["/api/workspace", "/api/auth/me"] {
+        let resp = p
+            .send(request(
+                Method::HEAD,
+                path,
+                Some(&cookie),
+                None,
+                String::new(),
+            ))
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK, "HEAD {path}");
+        assert_eq!(body_text(resp).await, "", "HEAD {path}");
+    }
+    let resp = p
+        .send(request(
+            Method::HEAD,
+            "/api/workspace",
+            None,
+            None,
+            String::new(),
+        ))
+        .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn healthz_ok() {
     let p = Panel::new().await;
     let resp = p.send(get("/healthz", None)).await;
