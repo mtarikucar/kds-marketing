@@ -10,6 +10,7 @@ use jt_tenancy::WorkspaceId;
 use url::{Host, Url};
 
 use crate::client::EgressScope;
+use crate::fixed_hosts::allow_plain_http;
 
 /// One host a connector may reach: an entry of the fixed tier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,13 +20,6 @@ pub struct AllowedHost {
     /// A hostname or IP literal (IPv6 in brackets), optionally with `:<port>`.
     pub host: &'static str,
 }
-
-/// The fixed tier: the provider hosts each connector may reach (spec §4.3, "sabit katman").
-///
-/// Empty in M0, because no connector exists yet. M1 fills it per connector, for example
-/// `AllowedHost { connector: "meta", host: "graph.facebook.com" }`. A connector scope reaches only
-/// the entries carrying its own name.
-pub const FIXED_HOSTS: &[AllowedHost] = &[];
 
 /// Parses an allowlist entry (`host` or `host:port`) into its canonical form, or `None` when it
 /// is not a valid host. An invalid entry is never stored, so it can never match anything.
@@ -69,22 +63,30 @@ fn entries_match(entries: &HashSet<String>, host: &str, url: &Url) -> bool {
         .is_some_and(|port| entries.contains(&format!("{host}:{port}")))
 }
 
-/// Plain http is tolerated only for loopback literals, and only in this crate's own unit-test
-/// build. A production build compiles the `cfg(not(test))` twin, so it has no code path that
-/// accepts plain http.
-#[cfg(test)]
+/// Plain http to this machine (`localhost`, `127.0.0.1`, `[::1]`) is tolerated only in a test
+/// build: this crate's own unit tests, or another crate's tests through the `test-loopback`
+/// feature. A production build compiles the twin below, so its only plain-http path is the
+/// provider exception ([`allow_plain_http`]).
+#[cfg(any(test, feature = "test-loopback"))]
 fn plain_http_allowed(host: &Host<&str>) -> bool {
+    is_loopback(host)
+}
+
+#[cfg(not(any(test, feature = "test-loopback")))]
+fn plain_http_allowed(_host: &Host<&str>) -> bool {
+    false
+}
+
+/// Whether `host` names this machine: `localhost` or the loopback literals `127.0.0.1` and
+/// `[::1]`.
+#[cfg(any(test, feature = "test-loopback"))]
+fn is_loopback(host: &Host<&str>) -> bool {
     use std::net::{Ipv4Addr, Ipv6Addr};
     match host {
         Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
         Host::Ipv4(ip) => *ip == Ipv4Addr::LOCALHOST,
         Host::Ipv6(ip) => *ip == Ipv6Addr::LOCALHOST,
     }
-}
-
-#[cfg(not(test))]
-fn plain_http_allowed(_host: &Host<&str>) -> bool {
-    false
 }
 
 /// Both tiers. Cheap to clone; clones share the tenant tier.
@@ -135,6 +137,49 @@ impl Allowlist {
         true
     }
 
+    /// Adds test hosts (`(connector, host)`, each `localhost`, `127.0.0.1` or `[::1]`, with or
+    /// without a port) to the fixed tier.
+    ///
+    /// # Panics
+    /// When a host is not one of those: the hook exists for in-process mocks only.
+    #[cfg(any(test, feature = "test-loopback"))]
+    pub(crate) fn add_test_hosts<S: AsRef<str>>(
+        &mut self,
+        extra: impl IntoIterator<Item = (&'static str, S)>,
+    ) {
+        let fixed = Arc::make_mut(&mut self.fixed);
+        for (connector, raw) in extra {
+            let raw = raw.as_ref();
+            let entry = canonical_entry(raw)
+                .filter(|entry| {
+                    split_port(entry).is_some_and(|(host, _)| {
+                        matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+                    })
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "test egress host {raw:?} of connector {connector:?} is not a loopback host"
+                    )
+                });
+            fixed.entry(connector).or_default().insert(entry);
+        }
+    }
+
+    /// Replaces the workspace's tenant tier with the valid hosts of `hosts` (invalid ones are
+    /// dropped, so they can never allow anything) and returns how many distinct hosts it now
+    /// holds. Nothing at all removes the workspace's tier.
+    pub(crate) fn replace_tenant(&self, ws: WorkspaceId, hosts: &[String]) -> usize {
+        let entries: HashSet<String> = hosts.iter().filter_map(|h| canonical_entry(h)).collect();
+        let count = entries.len();
+        let mut tenant = self.tenant.write().unwrap_or_else(PoisonError::into_inner);
+        if entries.is_empty() {
+            tenant.remove(&ws);
+        } else {
+            tenant.insert(ws, entries);
+        }
+        count
+    }
+
     /// Removes `host` from the workspace's tenant tier; a no-op for anything not present.
     pub(crate) fn revoke_tenant(&self, ws: WorkspaceId, host: &str) {
         let Some(entry) = canonical_entry(host) else {
@@ -151,20 +196,28 @@ impl Allowlist {
 
     /// Checks `url` against the tier `scope` selects. On refusal, returns the host to report
     /// (empty when the URL has none). Pure: no DNS lookup, no socket.
+    ///
+    /// Only `https` passes, but for plain `http` to a provider exception ([`allow_plain_http`])
+    /// and, in a test build, to this machine.
     pub(crate) fn check(&self, scope: EgressScope, url: &Url) -> Result<(), String> {
         let refused = || url.host_str().unwrap_or_default().to_owned();
-        let Some(host) = url.host() else {
+        let Some(parsed) = url.host() else {
             return Err(refused());
         };
+        let host = canonical_host(&parsed);
         let scheme_ok = match url.scheme() {
             "https" => true,
-            "http" => plain_http_allowed(&host),
+            "http" => {
+                plain_http_allowed(&parsed)
+                    || url
+                        .port_or_known_default()
+                        .is_some_and(|port| allow_plain_http(&scope, &host, port))
+            }
             _ => false,
         };
         if !scheme_ok {
             return Err(refused());
         }
-        let host = canonical_host(&host);
         let allowed = match scope {
             EgressScope::Connector(name) => self
                 .fixed
@@ -184,6 +237,7 @@ impl Allowlist {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FIXED_HOSTS;
 
     #[test]
     fn entries_are_canonicalised() {

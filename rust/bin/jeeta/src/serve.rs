@@ -157,6 +157,8 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 /// [`placeholder_public_base_url`]) and [`EmptyConnectorRegistry`] stand in until the provider
 /// configuration and the real registry land (M1b Task 11).
 pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
+    // TODO(Task 11): refill the tenant tier from the capability records at start-up, before the
+    // server takes requests, with `jt_outbound::rebuild_tenant_hosts(&egress, uow.as_ref())`.
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     Deps {

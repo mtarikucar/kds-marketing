@@ -6,15 +6,17 @@
 //! that it is on the public internet: never this machine, a private network or a special-purpose
 //! block, which a tenant could otherwise reach through the system (server-side request forgery).
 //!
-//! **What is checked, and what is not yet.** The check runs when a host is declared, on the
-//! text of the host alone, with no DNS lookup: IP literals in every non-public block, and the
-//! name patterns that only a private network resolves (`localhost`, single labels,
-//! [`PRIVATE_SUFFIXES`]). Nothing yet checks the addresses a name resolves to when the egress
-//! client connects: [`Egress::new`] builds a plain `reqwest` client, so a public name whose DNS
-//! answer is (or later becomes, by rebinding) a private address would be reached. That
-//! resolution-time guard (a resolver that refuses non-public answers for the tenant tier) comes
-//! with the first caller that sends to a tenant-tier host, in M1b; until then no code path sends
-//! to one.
+//! **Two checks, at two moments.** When a host is declared, [`validate_public_host`] reads its
+//! text alone, with no DNS lookup: IP literals in every non-public block, and the name patterns
+//! that only a private network resolves (`localhost`, single labels, [`PRIVATE_SUFFIXES`]). When
+//! the egress client connects, the DNS guard ([`crate::resolve_public`], installed as the
+//! client's resolver) checks the addresses the name resolves to with
+//! [`validate_public_address`], the same blocks, and drops every one that is not public; with
+//! none left the request fails before any socket opens. So a public name whose DNS answer is (or
+//! later becomes, by rebinding) a private address is never reached, whichever tier allowed it.
+//!
+//! The tier lives in memory and starts empty at every start; [`crate::rebuild_tenant_hosts`]
+//! fills it again from the capability records.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -54,6 +56,13 @@ pub enum HostError {
     /// An IP literal outside the public address space (see [`validate_public_host`]).
     #[error("{0} is not a public address")]
     NonPublicAddress(IpAddr),
+    /// The name did not resolve (the DNS guard, [`crate::resolve_public`]).
+    #[error("{0:?} does not resolve")]
+    Unresolvable(String),
+    /// The name resolved, but only to addresses outside the public address space (the DNS guard,
+    /// [`crate::resolve_public`]): a public-looking name pointed at a private network.
+    #[error("{0:?} resolves to no public address")]
+    NoPublicAddress(String),
 }
 
 impl HostError {
@@ -66,6 +75,8 @@ impl HostError {
             HostError::SingleLabel(_) => "single_label",
             HostError::PrivateSuffix(..) => "private_suffix",
             HostError::NonPublicAddress(_) => "non_public_address",
+            HostError::Unresolvable(_) => "unresolvable",
+            HostError::NoPublicAddress(_) => "no_public_address",
         }
     }
 }
@@ -97,15 +108,37 @@ pub fn validate_public_host(host: &str) -> Result<(), HostError> {
     let invalid = || HostError::Invalid(raw.to_owned());
     let (name, _port) = split_port(raw).ok_or_else(invalid)?;
     match Host::parse(name).map_err(|_| invalid())? {
-        Host::Ipv4(ip) => public_v4(ip),
-        Host::Ipv6(ip) => public_v6(ip),
-        Host::Domain(domain) => public_name(&domain).map_err(|e| match e {
-            NameError::Invalid => invalid(),
-            NameError::Localhost => HostError::Localhost(raw.to_owned()),
-            NameError::SingleLabel => HostError::SingleLabel(raw.to_owned()),
-            NameError::PrivateSuffix(suffix) => HostError::PrivateSuffix(raw.to_owned(), suffix),
-        }),
+        Host::Ipv4(ip) => validate_public_address(IpAddr::V4(ip)),
+        Host::Ipv6(ip) => validate_public_address(IpAddr::V6(ip)),
+        Host::Domain(domain) => check_public_name(raw, &domain),
     }
+}
+
+/// `Ok` when `ip` lies outside every block [`validate_public_host`] refuses, else
+/// `NonPublicAddress(ip)`: the check the DNS guard runs on every address a name resolves to. An
+/// IPv6 address that carries an IPv4 address (IPv4-mapped, NAT64, 6to4) is judged by that
+/// address.
+pub fn validate_public_address(ip: IpAddr) -> Result<(), HostError> {
+    let public = match ip {
+        IpAddr::V4(ip) => is_public_v4(ip),
+        IpAddr::V6(ip) => is_public_v6(ip),
+    };
+    if public {
+        Ok(())
+    } else {
+        Err(HostError::NonPublicAddress(ip))
+    }
+}
+
+/// `Ok` for a public domain name as the URL parser gives it (lowercase, IDNA labels in
+/// punycode); a refusal names the host as given (`raw`).
+pub(crate) fn check_public_name(raw: &str, domain: &str) -> Result<(), HostError> {
+    public_name(domain).map_err(|e| match e {
+        NameError::Invalid => HostError::Invalid(raw.to_owned()),
+        NameError::Localhost => HostError::Localhost(raw.to_owned()),
+        NameError::SingleLabel => HostError::SingleLabel(raw.to_owned()),
+        NameError::PrivateSuffix(suffix) => HostError::PrivateSuffix(raw.to_owned(), suffix),
+    })
 }
 
 /// Why a domain name is refused, before it is told in terms of the host given.
@@ -135,22 +168,6 @@ fn public_name(domain: &str) -> Result<(), NameError> {
     {
         Some(suffix) => Err(NameError::PrivateSuffix(suffix)),
         None => Ok(()),
-    }
-}
-
-fn public_v4(ip: Ipv4Addr) -> Result<(), HostError> {
-    if is_public_v4(ip) {
-        Ok(())
-    } else {
-        Err(HostError::NonPublicAddress(IpAddr::V4(ip)))
-    }
-}
-
-fn public_v6(ip: Ipv6Addr) -> Result<(), HostError> {
-    if is_public_v6(ip) {
-        Ok(())
-    } else {
-        Err(HostError::NonPublicAddress(IpAddr::V6(ip)))
     }
 }
 
@@ -248,6 +265,33 @@ impl TenantHostRegistry for EgressTenantHosts {
         self.egress.revoke_tenant_host(ws, host);
         Ok(())
     }
+
+    /// Never fails: a host [`validate_public_host`] refuses is skipped with a warning.
+    fn rebuild_from(&self, ws: WorkspaceId, hosts: Vec<String>) -> Result<usize, AppError> {
+        Ok(replace_with_public(&self.egress, ws, hosts))
+    }
+}
+
+/// Replaces workspace `ws`'s tenant tier with the hosts of `hosts` that [`validate_public_host`]
+/// accepts, logging a warning for each other one, and returns how many distinct hosts the tier
+/// now holds.
+pub(crate) fn replace_with_public(egress: &Egress, ws: WorkspaceId, hosts: Vec<String>) -> usize {
+    let public: Vec<String> = hosts
+        .into_iter()
+        .filter(|host| match validate_public_host(host) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    workspace_id = %ws,
+                    host = host.as_str(),
+                    reason = e.key(),
+                    "skipped a tenant egress host that is not public"
+                );
+                false
+            }
+        })
+        .collect();
+    egress.replace_tenant_hosts(ws, &public)
 }
 
 #[cfg(test)]

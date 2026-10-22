@@ -153,11 +153,14 @@ impl ChannelCatalog for FixedChannelCatalog {
 pub enum HostCall {
     Allow(WorkspaceId, String),
     Revoke(WorkspaceId, String),
+    /// A `rebuild_from`, with the hosts it kept (those not refused), in the order given.
+    Rebuild(WorkspaceId, Vec<String>),
 }
 
-/// A tenant host registry that records every `allow` and `revoke`, in order, and refuses (as
-/// `jt_outbound`'s adapter does, `VALIDATION` "host is not public" naming the host) only the
-/// hosts it was built [`refusing`](RecordingTenantHosts::refusing). Clones share the record.
+/// A tenant host registry that records every `allow`, `revoke` and `rebuild_from`, in order, and
+/// refuses (as `jt_outbound`'s adapter does, `VALIDATION` "host is not public" naming the host)
+/// only the hosts it was built [`refusing`](RecordingTenantHosts::refusing); `rebuild_from` skips
+/// those, as the adapter skips a host that is not public. Clones share the record.
 #[derive(Clone, Debug, Default)]
 pub struct RecordingTenantHosts {
     calls: Arc<Mutex<Vec<HostCall>>>,
@@ -178,7 +181,7 @@ impl RecordingTenantHosts {
         }
     }
 
-    /// Every `allow` and `revoke` so far, in order.
+    /// Every `allow`, `revoke` and `rebuild_from` so far, in order.
     pub fn calls(&self) -> Vec<HostCall> {
         lock(&self.calls).clone()
     }
@@ -204,6 +207,17 @@ impl TenantHostRegistry for RecordingTenantHosts {
     fn revoke(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError> {
         lock(&self.calls).push(HostCall::Revoke(ws, host.to_owned()));
         Ok(())
+    }
+
+    /// Records the hosts not refused and returns how many distinct ones there are.
+    fn rebuild_from(&self, ws: WorkspaceId, hosts: Vec<String>) -> Result<usize, AppError> {
+        let kept: Vec<String> = hosts
+            .into_iter()
+            .filter(|host| self.check(host).is_ok())
+            .collect();
+        let distinct = kept.iter().collect::<BTreeSet<_>>().len();
+        lock(&self.calls).push(HostCall::Rebuild(ws, kept));
+        Ok(distinct)
     }
 }
 
@@ -236,5 +250,39 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors: Arc::new(ScriptedRegistry::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebuild_from_records_the_hosts_it_keeps() {
+        let hosts = RecordingTenantHosts::refusing(&["127.0.0.1"]);
+        let ws = WorkspaceId::new_v7();
+        let kept = hosts
+            .rebuild_from(
+                ws,
+                vec![
+                    "imap.example.com".into(),
+                    "127.0.0.1".into(),
+                    "imap.example.com".into(),
+                    "smtp.example.com:465".into(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(kept, 2);
+        assert_eq!(
+            hosts.calls(),
+            [HostCall::Rebuild(
+                ws,
+                vec![
+                    "imap.example.com".into(),
+                    "imap.example.com".into(),
+                    "smtp.example.com:465".into(),
+                ]
+            )]
+        );
     }
 }

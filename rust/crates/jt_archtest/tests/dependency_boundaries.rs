@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use jt_archtest::{direct_deps, workspace_packages};
+use jt_archtest::{direct_deps, metadata, workspace_dir, workspace_packages};
 
 // What every domain crate may depend on: serialisation, ids, time, error derives, and the two
 // foundational domain crates. `jt_ledger` uses the ids of `jt_tenancy`, `jt_strategy` uses both
@@ -137,4 +137,84 @@ fn only_seal_uses_aes_gcm_and_hkdf() {
             "the crates depending on {krate}"
         );
     }
+}
+
+/// `jt_outbound`'s `test-loopback` feature lets plain http reach loopback literals and adds test
+/// hosts to the fixed tier: for the tests of other crates only. So `bin/jeeta` never enables it, in
+/// any section of its manifest, and elsewhere only a `[dev-dependencies]` entry may (a normal or
+/// build dependency, and a crate feature forwarding to it, would reach a production build). Read
+/// from `cargo metadata`, which resolves workspace-inherited dependencies.
+#[test]
+fn test_loopback_feature_is_dev_only() {
+    const FEATURE: &str = "test-loopback";
+    let metadata = metadata();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("`cargo metadata` has no `packages` array");
+    let outbound = packages
+        .iter()
+        .find(|p| p["name"] == "jt_outbound")
+        .expect("jt_outbound is a workspace package");
+    // The feature exists, so the rule is not vacuous, and no default turns it on.
+    assert!(
+        outbound["features"].get(FEATURE).is_some(),
+        "jt_outbound no longer declares `{FEATURE}`; update this rule"
+    );
+    let defaults = outbound["features"]["default"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !defaults.iter().any(|f| f == FEATURE),
+        "jt_outbound must not enable `{FEATURE}` by default"
+    );
+
+    for package in packages {
+        let name = package["name"].as_str().expect("package has no `name`");
+        let deps = package["dependencies"]
+            .as_array()
+            .expect("package has no `dependencies` array");
+        // The keys under which this package names jt_outbound (its name, or a rename).
+        let mut keys = BTreeSet::new();
+        for dep in deps.iter().filter(|d| d["name"] == "jt_outbound") {
+            keys.insert(dep["rename"].as_str().unwrap_or("jt_outbound").to_owned());
+            let enables = dep["features"]
+                .as_array()
+                .is_some_and(|features| features.iter().any(|f| f == FEATURE));
+            if !enables {
+                continue;
+            }
+            assert_ne!(
+                name, "jeeta",
+                "bin/jeeta must never enable jt_outbound's `{FEATURE}`"
+            );
+            assert_eq!(
+                dep["kind"], "dev",
+                "{name} enables jt_outbound's `{FEATURE}` outside [dev-dependencies]"
+            );
+        }
+        let features = package["features"]
+            .as_object()
+            .expect("package has no `features` object");
+        for (feature, enables) in features {
+            for entry in enables.as_array().into_iter().flatten() {
+                let entry = entry.as_str().unwrap_or_default();
+                let forwards = keys.iter().any(|key| {
+                    entry == format!("{key}/{FEATURE}") || entry == format!("{key}?/{FEATURE}")
+                });
+                assert!(
+                    !forwards,
+                    "feature `{feature}` of {name} turns on jt_outbound's `{FEATURE}`"
+                );
+            }
+        }
+    }
+
+    // And the binary's manifest does not name the feature at all.
+    let manifest = std::fs::read_to_string(workspace_dir().join("bin/jeeta/Cargo.toml"))
+        .expect("bin/jeeta/Cargo.toml is readable");
+    assert!(
+        !manifest.contains(FEATURE),
+        "bin/jeeta/Cargo.toml mentions `{FEATURE}`"
+    );
 }

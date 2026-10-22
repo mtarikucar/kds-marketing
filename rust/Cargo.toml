@@ -48,7 +48,8 @@ tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 # `sqlx::migrate!` and `#[derive(sqlx::FromRow)]`.
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "time", "json", "macros"] }
 rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "transport-io"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# `multipart`: provider uploads (NetGSM voice files, Meta media) through `jt_outbound::Prepared`.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a number read back from JSON text is exactly the `f64` that was written (the
 # default parser may be off by one unit in the last place), so MCP outputs, which go through

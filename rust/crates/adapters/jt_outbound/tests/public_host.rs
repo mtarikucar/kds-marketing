@@ -189,6 +189,11 @@ fn each_refusal_says_why() {
             HostError::NonPublicAddress("10.0.0.1".parse().unwrap()),
             "non_public_address",
         ),
+        (HostError::Unresolvable("nx.example".into()), "unresolvable"),
+        (
+            HostError::NoPublicAddress("public.example".into()),
+            "no_public_address",
+        ),
     ] {
         assert_eq!(err.key(), key);
         assert!(!err.to_string().is_empty());

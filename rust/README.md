@@ -396,10 +396,23 @@ her derinlikte, `422 VALIDATION` alır; bu, günlüğün maskeleme listesindeki 
 `api_key`, `plaintext` …) ile adında büyük/küçük harf ayırmadan `pass`, `secret`, `token`, `key`, `auth` ya
 da `credential` geçen her addır (`token_count`, `author` da reddedilir).
 
-**Çıkış (egress) denetimi.** Bir adres bildirildiği an yalnızca metniyle denetlenir (IP adresi yazımları ve
-yalnız özel ağların çözdüğü ad kalıpları); bir genel adın bağlanırken özel bir adrese çözülüp çözülmediğine
-(DNS yeniden bağlama) henüz bakılmaz. Bu çözümleme anı denetimi, kiracı adreslerine istek gönderen ilk
-kullanım durumuyla (M1b) gelir; o zamana dek hiçbir kod yolu kiracı adreslerine istek göndermez.
+**Çıkış (egress) denetimi.** Bir adres iki anda denetlenir. Bildirildiği an yalnızca metniyle (IP adresi
+yazımları ve yalnız özel ağların çözdüğü ad kalıpları); bağlanırken de DNS koruması, adın çözüldüğü
+adresleri aynı bloklara göre süzer: genel olmayan her adres (özel, geri döngü, bağlantı-yerel, CGNAT,
+belirtilmemiş, çoklu yayın, yayın ve belgeleme blokları, IPv6 ULA ve bağlantı-yerel adresler, IPv4 eşlemeli
+ve uyumlu biçimler) atılır; geriye adres kalmazsa ya da ad çözülmezse istek hiçbir soket açılmadan düşer
+(DNS korumasının reddi `HOST_NOT_ALLOWED`, `details.reason = "no_public_address"`). Koruma sağlayıcıların sabit
+adreslerine de uygulanır; böylece genel görünen bir ad özel bir adrese çözülse (DNS yeniden bağlama) bile
+ona ulaşılmaz. HTTP dışındaki bağlantılar (M2'nin SMTP/IMAP soketleri) aynı denetimi
+`jt_outbound::resolve_public` ile paylaşır. Kiracı adresleri bellekte tutulur;
+`jt_outbound::rebuild_tenant_hosts` onları kabiliyet kayıtlarından (emekliye ayrılmamış bağlayıcı
+kabiliyetlerinin `connector_public.hosts` alanı) yeniden kurar, açılışa bağlanması M1b'nin son adımıyla gelir.
+Yalnızca `https` kabul edilir; tek istisna bir sağlayıcı kısıtıdır: NetGSM Netsantral'in tıkla-ara ucu
+yalnız düz `http` sunar, bu yüzden `crmsntrl.netgsm.com.tr:9111` yalnızca `netgsm` bağlayıcısının kapsamında
+düz `http` ile çağrılır. Testler için `jt_outbound`'un `test-loopback` özelliği (feature), bu makinedeki
+sahte sunuculara (`127.0.0.1`) düz `http` ile ulaşmayı ve onları bir bağlayıcının sabit adreslerine
+eklemeyi (`Egress::with_test_hosts`) açar; yalnız `[dev-dependencies]` bölümleri açabilir, `bin/jeeta` hiç
+açmaz.
 
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
@@ -654,7 +667,8 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
   yalnızca `serde`, `serde_json`, `uuid`, `time`, `thiserror` ve birbirlerini (`jt_tenancy`, `jt_ledger`)
   kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca `jt_outbound`'da, `sqlx` yalnızca
   `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme ve anahtar türetme kütüphaneleri
-  (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur. Aynı crate kapı kurallarını da sabitler: strateji
+  (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur; `jt_outbound`'un `test-loopback` özelliğini yalnız
+  `[dev-dependencies]` bölümleri açar, `bin/jeeta` hiç açmaz. Aynı crate kapı kurallarını da sabitler: strateji
   kapısından yalnızca `auth.`, `workspace.`, `team.`, `roles.`, `api_keys.`, `agents.`, `platform.`,
   `strategy.`, `capability.`, `budget.`, `work.` önekli kullanım durumları ve `ledger.list` muaf olabilir;
   çalışma alanı durumu denetiminden her durumda tam olarak `auth.`, `workspace.`, `platform.` önekliler,

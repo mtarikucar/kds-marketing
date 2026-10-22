@@ -927,6 +927,10 @@ impl TenantHostRegistry for CommitWatch {
         self.seen.lock().unwrap().push((call, self.committed(host)));
         self.inner.revoke(ws, host)
     }
+
+    fn rebuild_from(&self, ws: WorkspaceId, hosts: Vec<String>) -> Result<usize, AppError> {
+        self.inner.rebuild_from(ws, hosts)
+    }
 }
 
 #[tokio::test]
@@ -1000,6 +1004,10 @@ impl TenantHostRegistry for FailingHosts {
     }
 
     fn revoke(&self, _ws: WorkspaceId, _host: &str) -> Result<(), AppError> {
+        Err(AppError::internal("the tenant tier is unreachable"))
+    }
+
+    fn rebuild_from(&self, _ws: WorkspaceId, _hosts: Vec<String>) -> Result<usize, AppError> {
         Err(AppError::internal("the tenant tier is unreachable"))
     }
 }

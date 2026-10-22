@@ -879,8 +879,10 @@ fn hosts_strict(connector_public: &Value) -> Result<Vec<String>, AppError> {
 
 /// The hosts a stored capability's connector reaches: the non-blank strings of
 /// `connector_public.hosts`, trimmed, for a capability reached through a connector; none for any
-/// other, or when there are none.
-fn declared_hosts(capability: &Capability) -> Vec<String> {
+/// other, or when there are none. Whether it is retired is the caller's concern. The egress
+/// adapter rebuilds the tenant tier at start-up with it, so the tier holds exactly what declaring
+/// allowed.
+pub fn declared_hosts(capability: &Capability) -> Vec<String> {
     if capability.reach != Reach::Connector {
         return Vec::new();
     }

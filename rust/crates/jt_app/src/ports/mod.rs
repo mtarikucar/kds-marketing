@@ -116,11 +116,12 @@ pub trait ChannelCatalog: Send + Sync {
 /// a single-label name, a private suffix such as `.local` or `.internal`, an IP literal in a
 /// loopback, private, link-local, shared or other special-purpose range) is refused, so a tenant
 /// cannot point the system at its own network. The check is on the text of the host; what a
-/// public name resolves to is the egress client's concern when it connects.
+/// public name resolves to is checked by the egress client's DNS guard when it connects.
 ///
 /// The tier is one set of hosts per workspace, not counted per capability: a caller revoking a
 /// host first makes sure no other capability of the workspace still needs it. It lives in memory,
-/// so every method is synchronous.
+/// so every method is synchronous, and it starts empty: it is rebuilt from the capability records
+/// at start-up (`rebuild_from`).
 pub trait TenantHostRegistry: Send + Sync {
     /// `Ok` when `host` (`host` or `host:port`, an IPv6 literal in brackets) may enter a tenant
     /// tier, else `VALIDATION` "host is not public" naming it in `details.host`. Changes nothing:
@@ -132,6 +133,12 @@ pub trait TenantHostRegistry: Send + Sync {
     /// Workspace `ws` may no longer reach `host`. A host it could not reach is a no-op: revoking
     /// only takes away, so it refuses nothing.
     fn revoke(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError>;
+    /// Replaces workspace `ws`'s whole tier with `hosts`: afterwards it reaches exactly those of
+    /// them `check` accepts, and nothing it reached before. A host `check` refuses is skipped
+    /// with a warning, not an error, so one bad stored host cannot keep the others out; an empty
+    /// list empties the tier. Returns how many distinct hosts the tier now holds. Used to rebuild
+    /// the tier from the capability records, which outlive it.
+    fn rebuild_from(&self, ws: WorkspaceId, hosts: Vec<String>) -> Result<usize, AppError>;
 }
 
 /// Told when a workspace's approved strategy version has been archived, after the archive is

@@ -18,9 +18,12 @@ doc:
 deny:
 	cargo deny --locked check
 
-# Needs JEETA_TEST_DATABASE_URL in the environment (see README).
+# Needs JEETA_TEST_DATABASE_URL in the environment (see README). The second run builds
+# jt_outbound alone: once a crate enables its `test-loopback` feature in [dev-dependencies], a
+# whole-workspace build unifies the feature in, and `tests/production_build.rs` compiles to nothing.
 test:
 	cargo test --locked --workspace
+	cargo test --locked -p jt_outbound --test production_build
 
 check: fmt lint doc deny test
 
