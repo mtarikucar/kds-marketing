@@ -47,7 +47,11 @@ impl Default for Policy {
 }
 
 /// A weekly window of working hours in a time zone: active from `from`:00 until `to`:00 (local
-/// time, `to` excluded) on each of `days`.
+/// time, `to` excluded) on each of `days`. `to = 24` means midnight at the end of the day, so
+/// `18` to `24` is the evening and `0` to `24` the whole day.
+///
+/// A window lies within one day: an overnight window (`from > to`, e.g. 22:00 to 02:00) is
+/// refused and is written as two days' windows instead (22 to 24 on one day, 0 to 2 on the next).
 ///
 /// Stored, so reading is tolerant: a missing field reads as its [`Default`] value, and the
 /// default window (`UTC`, 0 to 0, no days) is never open, so a damaged window allows nothing.
@@ -56,9 +60,9 @@ impl Default for Policy {
 pub struct Hours {
     /// `"UTC"` or an IANA zone name such as `Europe/Istanbul`.
     pub tz: String,
-    /// The first hour, `0..=23`.
+    /// The hour the window opens, `0..=23`.
     pub from: u8,
-    /// The hour the window closes, `0..=23`, after `from`.
+    /// The hour the window closes, `1..=24` (24 = midnight at the end of the day), after `from`.
     pub to: u8,
     /// ISO weekdays, 1 (Monday) to 7 (Sunday), each at most once.
     pub days: Vec<u8>,
@@ -93,8 +97,9 @@ fn looks_like_iana_zone(tz: &str) -> bool {
 }
 
 /// Every gap in a policy, under `policy.`: the hours' time zone looks like an IANA zone; `from`
-/// and `to` are `0..=23` with `from < to`; at least one day, each `1..=7` and listed once; the
-/// spend cap is not negative. Any ops cap and any verification age (0 = never stale) is valid.
+/// is `0..=23`, `to` is `1..=24` and `from < to` (no overnight window); at least one day, each
+/// `1..=7` and listed once; the spend cap is not negative. Any ops cap and any verification age
+/// (0 = never stale) is valid.
 pub fn validate_policy(p: &Policy) -> Vec<Gap> {
     // Destructured in full so a new field cannot be added without deciding its rules here.
     let Policy {
@@ -116,23 +121,26 @@ pub fn validate_policy(p: &Policy) -> Vec<Gap> {
             );
         }
         let from_ok = *from <= 23;
-        let to_ok = *to <= 23;
+        let to_ok = (1..=24).contains(to);
         if !from_ok {
             gaps.add(
                 "policy.active_hours.from",
-                format!("the hour must be 0 to 23, got {from}"),
+                format!("the opening hour must be 0 to 23, got {from}"),
             );
         }
         if !to_ok {
             gaps.add(
                 "policy.active_hours.to",
-                format!("the hour must be 0 to 23, got {to}"),
+                format!("the closing hour must be 1 to 24 (24 = midnight), got {to}"),
             );
         }
         if from_ok && to_ok && from >= to {
             gaps.add(
                 "policy.active_hours.to",
-                format!("the window must close after it opens ({from} to {to})"),
+                format!(
+                    "the window must close after it opens on the same day ({from} to {to}); \
+                     split an overnight window across two days"
+                ),
             );
         }
         if days.is_empty() {

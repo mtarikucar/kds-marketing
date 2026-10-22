@@ -998,26 +998,50 @@ fn hours_validation() {
         );
     }
 
-    // Hours are 0..=23 and `from` comes before `to`.
-    assert_eq!(
-        gaps_of(&with_hours("UTC", 9, 9, &[1])),
-        ["policy.active_hours.to"]
-    );
-    assert_eq!(
-        gaps_of(&with_hours("UTC", 18, 9, &[1])),
-        ["policy.active_hours.to"]
-    );
+    // `from` is 0..=23 and `to` is 1..=24 (24 = midnight at the end of the day), `from < to`.
+    for (from, to) in [(18, 24), (0, 24), (23, 24), (0, 1), (9, 17)] {
+        assert!(
+            validate_policy(&with_hours("Europe/Istanbul", from, to, &[5, 6])).is_empty(),
+            "{from} to {to}"
+        );
+    }
+    // An overnight window (`from > to`) is refused: it is split across two days instead.
+    for (from, to) in [(9, 9), (18, 9), (22, 2), (24, 24)] {
+        let expected: &[&str] = if from == 24 {
+            &["policy.active_hours.from"]
+        } else {
+            &["policy.active_hours.to"]
+        };
+        assert_eq!(
+            gaps_of(&with_hours("UTC", from, to, &[1])),
+            expected,
+            "{from} to {to}"
+        );
+    }
     assert_eq!(
         gaps_of(&with_hours("UTC", 24, 23, &[1])),
         ["policy.active_hours.from"]
     );
     assert_eq!(
-        gaps_of(&with_hours("UTC", 9, 24, &[1])),
+        gaps_of(&with_hours("UTC", 9, 25, &[1])),
         ["policy.active_hours.to"]
+    );
+    assert_eq!(
+        gaps_of(&with_hours("UTC", 0, 0, &[1])),
+        ["policy.active_hours.to"],
+        "to = 0 is not an hour a window can close at"
     );
     assert_eq!(
         gaps_of(&with_hours("UTC", 25, 30, &[1])),
         ["policy.active_hours.from", "policy.active_hours.to"]
+    );
+    // The default window is still never open, and not a valid one to write.
+    assert_eq!(
+        gaps_of(&Policy {
+            active_hours: Some(Hours::default()),
+            ..Policy::default()
+        }),
+        ["policy.active_hours.to", "policy.active_hours.days"]
     );
 
     // Days are ISO weekdays 1 (Monday) to 7 (Sunday), each once, at least one.

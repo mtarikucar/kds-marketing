@@ -49,6 +49,9 @@ pub struct Evidence {
 /// as its key so a capability whose kind later leaves [`crate::KINDS`] still reads;
 /// [`Capability::kind`] finds the kind itself. The sealed credentials are never part of it: only
 /// whether there are any (`has_sealed_config`).
+///
+/// Only [`Capability::new`] validates: a deserialised value is unchecked, so repositories and use
+/// cases must never trust one as input for a write.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Capability {
     pub id: CapabilityId,
