@@ -10,6 +10,7 @@
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
+pub mod ledger;
 pub mod roles;
 pub mod team;
 pub mod workspace;
@@ -46,6 +47,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/api-keys"),
     ("DELETE", "/api/api-keys/{key_id}"),
     ("GET", "/api/agents"),
+    ("GET", "/api/ledger"),
     ("GET", "/healthz"),
 ];
 
@@ -160,6 +162,7 @@ pub fn api_routes() -> Vec<ApiRoute> {
             api_keys::revoke,
         ),
         api_route("GET", "/agents", "agents.list", agents::list),
+        api_route("GET", "/ledger", "ledger.list", ledger::list),
     ]
 }
 

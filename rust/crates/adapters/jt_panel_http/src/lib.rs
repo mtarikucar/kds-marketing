@@ -21,7 +21,7 @@ use axum::{Extension, Router, middleware};
 use jt_app::catalog::{CATALOG, UseCase};
 use routes::{ApiRoute, RouteUseCase};
 
-pub use error::{ApiError, ApiJson, ApiPath};
+pub use error::{ApiError, ApiJson, ApiPath, ApiQuery};
 pub use routes::ROUTES;
 pub use session::{Authed, WorkspaceCtx};
 pub use state::AppState;

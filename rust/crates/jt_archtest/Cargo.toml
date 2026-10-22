@@ -8,5 +8,11 @@ publish.workspace = true
 [dependencies]
 serde_json.workspace = true
 
+# The twin-rule and gate-rule tests read the catalog, the panel route table and the MCP registry.
+[dev-dependencies]
+jt_app.workspace = true
+jt_panel_http.workspace = true
+jt_mcp.workspace = true
+
 [lints]
 workspace = true

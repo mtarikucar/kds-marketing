@@ -1,10 +1,10 @@
 //! Structured errors over HTTP: every failure is `{ "code", "message", "details" }` with the
 //! status [`status_of`] its code, including rejected JSON bodies, malformed path parameters and
-//! unknown API routes.
+//! query strings, and unknown API routes.
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, FromRequestParts, Path, Request};
+use axum::extract::{FromRequest, FromRequestParts, Path, Query, Request};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
@@ -95,6 +95,29 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         match Path::<T>::from_request_parts(parts, state).await {
             Ok(Path(value)) => Ok(ApiPath(value)),
+            Err(rejection) => Err(ApiError(AppError::validation(
+                rejection.body_text(),
+                json!({}),
+            ))),
+        }
+    }
+}
+
+/// A query string. Unlike `axum::extract::Query`, a parameter that does not parse (e.g. a
+/// `limit` that is not a number) is a structured `422 VALIDATION` error.
+#[derive(Debug)]
+pub struct ApiQuery<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for ApiQuery<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match Query::<T>::from_request_parts(parts, state).await {
+            Ok(Query(value)) => Ok(ApiQuery(value)),
             Err(rejection) => Err(ApiError(AppError::validation(
                 rejection.body_text(),
                 json!({}),

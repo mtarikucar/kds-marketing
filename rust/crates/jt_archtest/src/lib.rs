@@ -1,17 +1,31 @@
-//! Architecture tests: crate dependency boundaries read from `cargo metadata`.
+//! Architecture tests: crate dependency boundaries read from `cargo metadata`, tenant tables read
+//! from the migrations, and SQL statements read from the adapters' sources.
 //!
-//! The library only reads the workspace description; the rules themselves live in `tests/`.
+//! The library only reads the workspace (no database); the rules themselves live in `tests/`.
+
+mod literals;
+mod migrations;
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
 use serde_json::Value;
 
-/// The workspace manifest, two levels above this crate (`rust/crates/jt_archtest`).
-fn workspace_manifest() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml")
+pub use literals::{
+    PLATFORM_WIDE_MARKER, SqlLiteral, mentions_word, rust_sources_in, sql_literals_in,
+};
+pub use migrations::{tenant_tables, up_migrations};
+
+/// The Rust workspace root (`rust/`), two levels above this crate (`rust/crates/jt_archtest`).
+pub fn workspace_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// The workspace manifest.
+fn workspace_manifest() -> PathBuf {
+    workspace_dir().join("Cargo.toml")
 }
 
 /// Parsed output of `cargo metadata --format-version 1 --no-deps` for the workspace.
